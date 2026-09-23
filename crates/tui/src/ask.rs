@@ -15,12 +15,13 @@ use bravebot_core::ask::{Answer, Asking, Prompt, Row};
 use bravebot_i18n::t;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
-use ratatui::crossterm::event::{self, Event as TermEvent, KeyCode};
+use ratatui::crossterm::event::{self, KeyCode};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 
+use crate::input;
 use crate::theme;
 
 /// Longest answer the user can type.
@@ -104,12 +105,14 @@ pub fn ask<B: Backend>(terminal: &mut Terminal<B>, asking: &Asking) -> Vec<Answe
             return Vec::new();
         }
 
-        let key = match event::read() {
-            // Presses only. The interface asks the terminal for disambiguated keys, which reports
-            // releases too, and a release taken for a press answers the next question with the key
-            // that answered this one.
-            Ok(TermEvent::Key(key)) if key.kind == event::KeyEventKind::Press => key.code,
-            Ok(_) => continue,
+        let key = match input::read() {
+            Ok(taken) => match input::key_of(&taken) {
+                // Presses only. The interface asks the terminal for disambiguated keys, which
+                // reports releases too, and a release taken for a press answers the next question
+                // with the key that answered this one.
+                Some(key) if key.kind == event::KeyEventKind::Press => key.code,
+                _ => continue,
+            },
             // Losing the event stream must not invent an answer.
             Err(_) => return Vec::new(),
         };

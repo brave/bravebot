@@ -3217,6 +3217,13 @@ fn note_at_the_right(session: &Session) -> Option<String> {
         return Some("ctrl-c again to exit  ".to_string());
     }
 
+    // The same sentence for the same reason, on the rung where there was no line to take. Without
+    // it the press that offered the way out would have done nothing and said nothing, which reads
+    // as an interface that has stopped responding.
+    if session.offered_to_leave {
+        return Some("ctrl-c again to exit  ".to_string());
+    }
+
     // A copy is silent otherwise, and a clipboard that may or may not have taken something is
     // worse than no clipboard: the user pastes to find out. Right-aligned, out of the way of the
     // hints, where the answer to "did that work" belongs.

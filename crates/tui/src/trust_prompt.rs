@@ -30,13 +30,14 @@ use bravebot_core::trust::TrustStore;
 use bravebot_i18n::t;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
-use ratatui::crossterm::event::{self, Event as TermEvent, KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::event::{self, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 use std::path::Path;
 
+use crate::input;
 use crate::theme;
 
 /// What the user decided about the working directory.
@@ -61,12 +62,14 @@ pub enum Answer {
 ///
 /// `None` is the third answer: the user pressed Ctrl-C, which is neither trusting nor declining
 /// but a request to leave, so no session begins at all.
-pub fn ask<B: Backend>(terminal: &mut Terminal<B>, directory: &Path) -> Option<TrustStore> {
-    let answer = match terminal.draw(|frame| draw(frame, directory)) {
-        Ok(_) => read_answer(),
-        // A terminal that cannot be drawn to cannot carry the question.
-        Err(_) => Answer::Decline,
-    };
+pub fn ask<B: Backend>(
+    terminal: &mut Terminal<B>,
+    directory: &Path,
+    carried: &mut String,
+) -> Option<TrustStore> {
+    let answer = ask_one(terminal, carried, |frame, offered| {
+        draw(frame, directory, offered)
+    });
 
     trust_for(answer, directory)
 }
@@ -83,13 +86,12 @@ pub fn ask<B: Backend>(terminal: &mut Terminal<B>, directory: &Path) -> Option<T
 pub fn ask_named<B: Backend>(
     terminal: &mut Terminal<B>,
     directories: &[String],
+    carried: &mut String,
 ) -> Option<Vec<String>> {
     accepted(directories, |directory| {
-        match terminal.draw(|frame| draw_named(frame, directory)) {
-            Ok(_) => read_answer(),
-            // A terminal that cannot be drawn to cannot carry the question.
-            Err(_) => Answer::Decline,
-        }
+        ask_one(terminal, carried, |frame, offered| {
+            draw_named(frame, directory, offered)
+        })
     })
 }
 
@@ -110,13 +112,15 @@ pub fn ask_named<B: Backend>(
 /// began behind it is one nobody agreed to have.
 ///
 /// [PERM-14]: ../../docs/specs/permissions.md
-pub fn ask_granted<B: Backend>(terminal: &mut Terminal<B>, rules: &[Proposed]) -> Option<bool> {
+pub fn ask_granted<B: Backend>(
+    terminal: &mut Terminal<B>,
+    rules: &[Proposed],
+    carried: &mut String,
+) -> Option<bool> {
     granting(rules, || {
-        match terminal.draw(|frame| draw_granted(frame, rules)) {
-            Ok(_) => read_answer(),
-            // A terminal that cannot be drawn to cannot carry the question.
-            Err(_) => Answer::Decline,
-        }
+        ask_one(terminal, carried, |frame, offered| {
+            draw_granted(frame, rules, offered)
+        })
     })
 }
 
@@ -199,47 +203,147 @@ fn trusting_the_workspace(directory: &Path) -> TrustStore {
 }
 
 /// Block until the user answers.
-fn read_answer() -> Answer {
+fn ask_one<B: Backend>(
+    terminal: &mut Terminal<B>,
+    carried: &mut String,
+    mut draw_it: impl FnMut(&mut ratatui::Frame, bool),
+) -> Answer {
+    let mut offered_to_leave = false;
+
     loop {
-        match event::read() {
-            // Presses only: the interface asks for disambiguated keys, so a release arrives too,
-            // and answering a question twice grants standing permission on one keystroke.
-            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => continue,
-            Ok(TermEvent::Key(key)) => match answer_for(key) {
-                Some(answer) => return answer,
-                None => continue,
-            },
-            Ok(_) => continue,
+        // Drawn inside the loop rather than once before it, because the offer to leave is part of
+        // what the question says: a panel drawn once would take the first interrupt and then look as
+        // though nothing had happened.
+        //
+        // A terminal that cannot be drawn to cannot carry the question.
+        if terminal
+            .draw(|frame| draw_it(frame, offered_to_leave))
+            .is_err()
+        {
+            return Answer::Decline;
+        }
+
+        match input::read() {
+            // A paste answers nothing, and neither do words another program typed: both arrive as
+            // one event whatever they carry, and nothing in either is a key somebody pressed.
+            Ok(taken) => {
+                // Asked of the event just handed out, so it is read before the next one replaces it.
+                let arrived_alone = input::the_last_event_arrived_alone();
+                if withdraws_the_offer(&taken) {
+                    offered_to_leave = false;
+                }
+                match input::key_of(&taken) {
+                    // Presses only: the interface asks for disambiguated keys, so a release arrives
+                    // too, and answering twice grants standing permission on one keystroke.
+                    Some(key) if key.kind != event::KeyEventKind::Press => continue,
+                    Some(key) => match answer_for(key, offered_to_leave, arrived_alone) {
+                        Response::Answer(answer) => return answer,
+                        // Kept rather than dropped. What this refused to answer on was a run of keys
+                        // another program wrote, and words that vanish leave a person with no account
+                        // of what just happened: the question stayed up and their virtualenv
+                        // activated, with nothing on the screen joining the two. Carried to the box,
+                        // where they can read it and decide (#403).
+                        Response::Nothing if !arrived_alone => {
+                            carried.extend(input::text_of(&key));
+                            continue;
+                        }
+                        Response::Offer => {
+                            offered_to_leave = true;
+                            continue;
+                        }
+                        Response::Nothing => continue,
+                    },
+                    None => continue,
+                }
+            }
             Err(_) => return Answer::Decline,
         }
+    }
+}
+
+/// Whether an event withdraws an offer to leave that is standing.
+///
+/// Anything that is not the key that leaves. The offer answers the press just made, so a mouse
+/// report, a resize, and words another program typed all mean somebody is still here and has moved
+/// on. An offer left standing through one of those would let a byte written much later take it,
+/// which turns two presses back into one: the interrupt an editor writes ahead of a virtualenv
+/// activation arrives on its own (#403), so it arms the offer, and without this the offer was still
+/// armed whenever the next one arrived. The session's own ladder keeps the same rule for the same
+/// reason ([INPUT-4](../../../docs/specs/terminal-input.md)).
+///
+/// Separated from the loop so it can be tested without a terminal.
+fn withdraws_the_offer(taken: &event::Event) -> bool {
+    match input::key_of(taken) {
+        // A release is the tail of a press already answered rather than something somebody did next.
+        // Windows sends one for every keystroke, carrying the modifiers still held, so letting go of
+        // Ctrl before C arrives as a bare `c`; withdrawing on that took the way out of this question
+        // away from whoever lets go in that order, and this question is the first screen of a session.
+        Some(key) if key.kind == event::KeyEventKind::Release => false,
+        Some(key) => {
+            !(key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c'))
+        }
+        None => true,
     }
 }
 
 /// Interpret one key press, or `None` for a key that answers nothing.
 ///
 /// Separated from the loop so it can be tested without a terminal.
-fn answer_for(key: KeyEvent) -> Option<Answer> {
-    // Raw mode delivers Ctrl-C as a key rather than as a signal, so a prompt that ignored it
-    // would be a screen with no way out: the interrupt everyone reaches for would do nothing.
-    // It is not an answer to the question, so it starts nothing rather than declining.
+fn answer_for(key: KeyEvent, offered_to_leave: bool, arrived_alone: bool) -> Response {
+    // Raw mode delivers Ctrl-C as a key rather than as a signal, so a prompt that ignored it would
+    // be a screen with no way out: the interrupt everyone reaches for would do nothing. It is not an
+    // answer to the question, so it starts nothing rather than declining.
+    //
+    // **Twice, and neither press from a key that arrived with others.** Leaving here ends the
+    // session before it begins, which nothing undoes, and an interrupt is one byte another program
+    // can write into the terminal: the editor that activates a virtualenv writes one ahead of the
+    // line it types (#403), and on one press that byte closed a question nobody had read. This is
+    // the rule the session's own ladder keeps, kept here for the same reason (INPUT-4).
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         return match key.code {
-            KeyCode::Char('c') => Some(Answer::Leave),
-            _ => None,
+            KeyCode::Char('c') if !arrived_alone => Response::Nothing,
+            KeyCode::Char('c') if offered_to_leave => Response::Answer(Answer::Leave),
+            KeyCode::Char('c') => Response::Offer,
+            _ => Response::Nothing,
         };
     }
 
+    // **No answer at all from a key that arrived with others**, which is the whole of what stops a
+    // program answering this question. A terminal cannot say who wrote a byte, but it can say what
+    // was waiting together, and a person cannot fill the buffer between one read and the next: one
+    // event waiting is a keystroke, and several are a write. The line an editor types to activate a
+    // virtualenv spells an `n` on its way past (#403), and the question used to take it.
+    //
+    // This is asked here rather than by the reader, so nothing is withheld from anybody: a person's
+    // own typing and a person's own paste arrive untouched and are answered by whatever reads them.
+    // What the reader supplies is the fact, and what this does is decline to grant on it.
+    if !arrived_alone {
+        return Response::Nothing;
+    }
+
     match key.code {
-        KeyCode::Char('y' | 'Y') => Some(Answer::Trust),
-        KeyCode::Char('n' | 'N') | KeyCode::Esc => Some(Answer::Decline),
+        KeyCode::Char('y' | 'Y') => Response::Answer(Answer::Trust),
+        KeyCode::Char('n' | 'N') | KeyCode::Esc => Response::Answer(Answer::Decline),
         // Enter is deliberately not a yes: it is the key most likely to be pressed
         // out of habit, and this question grants standing permission.
-        _ => None,
+        _ => Response::Nothing,
     }
 }
 
+/// What one key press did to the question.
+#[derive(Debug, PartialEq, Eq)]
+enum Response {
+    /// The question is answered.
+    Answer(Answer),
+    /// The interrupt was pressed with nothing offered yet, so the way out is offered and the next
+    /// press of it takes it.
+    Offer,
+    /// Nothing, and the question stays on the screen.
+    Nothing,
+}
+
 /// Draw the question about the working directory.
-fn draw(frame: &mut ratatui::Frame, directory: &Path) {
+fn draw(frame: &mut ratatui::Frame, directory: &Path, offered_to_leave: bool) {
     let lines = vec![
         asking(
             t!(trust_directory_question),
@@ -255,14 +359,18 @@ fn draw(frame: &mut ratatui::Frame, directory: &Path) {
             Style::default().fg(theme::muted()),
         )),
         Line::raw(""),
-        keys(t!(trust_directory_yes), t!(trust_directory_no)),
+        keys(
+            t!(trust_directory_yes),
+            t!(trust_directory_no),
+            offered_to_leave,
+        ),
     ];
 
     panel(frame, t!(trust_directory_title), lines);
 }
 
 /// Draw the question about one directory a settings file named.
-fn draw_named(frame: &mut ratatui::Frame, directory: &str) {
+fn draw_named(frame: &mut ratatui::Frame, directory: &str, offered_to_leave: bool) {
     let lines = vec![
         asking(t!(named_directory_question), directory),
         Line::raw(""),
@@ -273,7 +381,11 @@ fn draw_named(frame: &mut ratatui::Frame, directory: &str) {
             Style::default().fg(theme::muted()),
         )),
         Line::raw(""),
-        keys(t!(named_directory_yes), t!(named_directory_no)),
+        keys(
+            t!(named_directory_yes),
+            t!(named_directory_no),
+            offered_to_leave,
+        ),
     ];
 
     panel(frame, t!(named_directory_title), lines);
@@ -285,7 +397,7 @@ fn draw_named(frame: &mut ratatui::Frame, directory: &str) {
 /// what makes this an acceptable gate at all: the answer is informed consent for specific grants
 /// rather than a general feeling about the tree, and a question that named none of them would be the
 /// defect wearing a consent story.
-fn draw_granted(frame: &mut ratatui::Frame, rules: &[Proposed]) {
+fn draw_granted(frame: &mut ratatui::Frame, rules: &[Proposed], offered_to_leave: bool) {
     let mut lines = vec![
         Line::from(Span::styled(
             t!(granted_rules_question),
@@ -316,7 +428,11 @@ fn draw_granted(frame: &mut ratatui::Frame, rules: &[Proposed]) {
             Style::default().fg(theme::muted()),
         )),
         Line::raw(""),
-        keys(t!(granted_rules_yes), t!(granted_rules_no)),
+        keys(
+            t!(granted_rules_yes),
+            t!(granted_rules_no),
+            offered_to_leave,
+        ),
     ]);
 
     panel(frame, t!(granted_rules_title), lines);
@@ -342,7 +458,7 @@ fn asking(question: &str, directory: &str) -> Line<'static> {
 }
 
 /// The answers on offer: the same two keys and the same way out at either question.
-fn keys(yes: &str, no: &str) -> Line<'static> {
+fn keys(yes: &str, no: &str, offered_to_leave: bool) -> Line<'static> {
     Line::from(vec![
         Span::styled(
             "  y",
@@ -364,8 +480,17 @@ fn keys(yes: &str, no: &str) -> Line<'static> {
                 .fg(theme::muted())
                 .add_modifier(Modifier::BOLD),
         ),
+        // Says which press leaves once the first has been made, because a press that appeared to do
+        // nothing and said nothing reads as a question that has stopped answering.
         Span::styled(
-            format!(" {}", t!(quit)),
+            format!(
+                " {}",
+                if offered_to_leave {
+                    t!(trust_quit_again)
+                } else {
+                    t!(quit)
+                }
+            ),
             Style::default().fg(theme::muted()),
         ),
     ])
@@ -421,6 +546,108 @@ mod tests {
     use super::*;
     use ratatui::backend::TestBackend;
     use ratatui::style::Color;
+
+    /// The reported failure, at the question it reaches first. An editor activating a virtualenv
+    /// types `source .../env/bin/activate` into the terminal it opened, and every character of it
+    /// arrives in one read: the `n` in the path used to answer this question, so the directory was
+    /// settled by a program and the rest of the path went into the box (#403).
+    #[test]
+    fn a_line_another_program_typed_answers_nothing() {
+        for c in " source /Users/me/project/env/bin/activate\r".chars() {
+            let key = match c {
+                '\r' => KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                c => KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
+            };
+            // Arriving with the rest of the line, which is what one read of a write looks like.
+            assert_eq!(
+                answer_for(key, false, false),
+                Response::Nothing,
+                "{c:?} out of a written line answered the question"
+            );
+        }
+    }
+
+    /// And a person's own press still answers it, which is the half that has to keep working.
+    #[test]
+    fn a_press_of_its_own_still_answers() {
+        assert_eq!(
+            answer_for(
+                KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
+                false,
+                true
+            ),
+            Response::Answer(Answer::Trust)
+        );
+        assert_eq!(
+            answer_for(
+                KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
+                false,
+                true
+            ),
+            Response::Answer(Answer::Decline)
+        );
+    }
+
+    /// What the question refuses is kept, not dropped. A line that vanished left a person with a
+    /// question still waiting and a virtualenv activated, and nothing on the screen joining the two.
+    #[test]
+    fn what_the_question_refuses_is_carried_for_the_box() {
+        let mut carried = String::new();
+        for c in " source /tmp/x/env/bin/activate".chars() {
+            let key = KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+            // Arriving with the rest of the line, so the question answers nothing on it.
+            assert_eq!(answer_for(key, false, false), Response::Nothing);
+            carried.extend(crate::input::text_of(&key));
+        }
+        assert_eq!(carried, " source /tmp/x/env/bin/activate");
+    }
+
+    /// A chord inside those words is not carried, since what a program wrote is words and a chord in
+    /// them was pressed by nobody.
+    #[test]
+    fn a_chord_among_the_carried_words_is_left_out() {
+        let interrupt = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(crate::input::text_of(&interrupt), None);
+    }
+
+    /// One key pressed at a question with nothing offered, arriving on its own.
+    fn pressing(code: KeyCode) -> Response {
+        answer_for(KeyEvent::new(code, KeyModifiers::NONE), false, true)
+    }
+
+    /// The rules question as it is first drawn, with no interrupt pressed yet.
+    fn draw_granted_at_rest(frame: &mut ratatui::Frame, rules: &[Proposed]) {
+        draw_granted(frame, rules, false);
+    }
+
+    /// The question as it is first drawn, with no interrupt pressed yet.
+    fn draw_at_rest(frame: &mut ratatui::Frame, directory: &Path) {
+        draw(frame, directory, false);
+    }
+
+    /// The same for a directory a settings file named.
+    fn draw_named_at_rest(frame: &mut ratatui::Frame, directory: &str) {
+        draw_named(frame, directory, false);
+    }
+
+    /// A press that appeared to do nothing and said nothing reads as a question that has stopped
+    /// answering, so the keys line says which press leaves once the first has been made.
+    #[test]
+    fn the_question_says_which_press_leaves_once_one_has_been_made() {
+        let at_rest = rendered(|frame| draw(frame, Path::new("/tmp/x"), false));
+        assert!(
+            at_rest.contains("ctrl-c quit"),
+            "the way out was not named at all: {at_rest}"
+        );
+
+        // Short enough to sit on the keys line at the narrow width this renders at, since a hint
+        // that wrapped across the border would say it worse than not saying it.
+        let offered = rendered(|frame| draw(frame, Path::new("/tmp/x"), true));
+        assert!(
+            offered.contains("ctrl-c again"),
+            "the press that offered the way out said nothing: {offered}"
+        );
+    }
 
     /// The working directory these answers are about.
     fn here() -> &'static Path {
@@ -509,7 +736,7 @@ mod tests {
 
     #[test]
     fn the_prompt_names_the_directory_and_both_answers() {
-        let output = rendered(|frame| draw(frame, Path::new("/home/me/project")));
+        let output = rendered(|frame| draw_at_rest(frame, Path::new("/home/me/project")));
         assert!(output.contains("/home/me/project"));
         assert!(output.contains("trust it"));
         assert!(output.contains("every write"));
@@ -519,7 +746,7 @@ mod tests {
     /// permission rather than approving one action.
     #[test]
     fn the_prompt_explains_the_consequence() {
-        let output = rendered(|frame| draw(frame, Path::new("/tmp/x")));
+        let output = rendered(|frame| draw_at_rest(frame, Path::new("/tmp/x")));
         assert!(output.contains("trusted"), "no mention of trust: {output}");
         // Wrapping can split a phrase across lines, so assert on a short fragment.
         assert!(
@@ -532,7 +759,7 @@ mod tests {
     /// so its chrome is the first thing that says the question is the system's own.
     #[test]
     fn the_prompt_paints_the_themes_background_inside_its_border() {
-        paints_the_themes_chrome(|frame| draw(frame, Path::new("/home/me/project")));
+        paints_the_themes_chrome(|frame| draw_at_rest(frame, Path::new("/home/me/project")));
     }
 
     /// A settings file arrives with whatever produced the checkout, so a directory named in one is
@@ -644,7 +871,7 @@ mod tests {
             ),
             ("/work/.bravebot/settings.local.json", "Edit(src/**)"),
         ]);
-        let output = rendered(|frame| draw_granted(frame, &rules));
+        let output = rendered(|frame| draw_granted_at_rest(frame, &rules));
 
         assert!(
             output.contains("Bash(bash scripts/check.sh)"),
@@ -672,7 +899,7 @@ mod tests {
             "/work/.bravebot/settings.json",
             "Bash(bash scripts/check.sh)",
         )]);
-        let output = rendered(|frame| draw_granted(frame, &rules));
+        let output = rendered(|frame| draw_granted_at_rest(frame, &rules));
 
         // Wrapping can split a phrase across lines, so assert on short fragments.
         assert!(
@@ -693,14 +920,14 @@ mod tests {
             "/work/.bravebot/settings.json",
             "Bash(bash scripts/check.sh)",
         )]);
-        paints_the_themes_chrome(|frame| draw_granted(frame, &rules));
+        paints_the_themes_chrome(|frame| draw_granted_at_rest(frame, &rules));
     }
 
     /// The path is the whole of what the answer is about, and it is the one thing a settings file
     /// chose rather than the person reading the box.
     #[test]
     fn the_named_prompt_shows_the_directory_it_would_open() {
-        let output = rendered(|frame| draw_named(frame, "/home/me/.ssh"));
+        let output = rendered(|frame| draw_named_at_rest(frame, "/home/me/.ssh"));
         assert!(output.contains("/home/me/.ssh"), "no path: {output}");
         assert!(output.contains("open it"));
         assert!(output.contains("leave it closed"));
@@ -711,7 +938,7 @@ mod tests {
     /// naming a directory the person has never typed is otherwise unexplained.
     #[test]
     fn the_named_prompt_explains_what_opening_does() {
-        let output = rendered(|frame| draw_named(frame, "/srv/shared"));
+        let output = rendered(|frame| draw_named_at_rest(frame, "/srv/shared"));
         // Wrapping can split a phrase across lines, so assert on short fragments.
         assert!(
             output.contains("settings file"),
@@ -725,7 +952,7 @@ mod tests {
     /// asking.
     #[test]
     fn the_named_prompt_paints_the_themes_background_inside_its_border() {
-        paints_the_themes_chrome(|frame| draw_named(frame, "/home/me/.ssh"));
+        paints_the_themes_chrome(|frame| draw_named_at_rest(frame, "/home/me/.ssh"));
     }
 
     /// All three questions, since any can be the first thing a session draws on a small terminal.
@@ -739,7 +966,7 @@ mod tests {
     fn a_tiny_terminal_still_renders() {
         let mut terminal = Terminal::new(TestBackend::new(24, 8)).expect("terminal");
         terminal
-            .draw(|frame| draw(frame, Path::new("/tmp/x")))
+            .draw(|frame| draw_at_rest(frame, Path::new("/tmp/x")))
             .expect("must not panic on a small area");
         assert!(
             drawn_on(&terminal).contains("Trust /tmp/x?"),
@@ -748,7 +975,7 @@ mod tests {
         );
 
         terminal
-            .draw(|frame| draw_named(frame, "/tmp/x"))
+            .draw(|frame| draw_named_at_rest(frame, "/tmp/x"))
             .expect("must not panic on a small area");
         assert!(
             drawn_on(&terminal).contains("Open /tmp/x?"),
@@ -761,7 +988,7 @@ mod tests {
             "Bash(bash scripts/check.sh)",
         )]);
         terminal
-            .draw(|frame| draw_granted(frame, &rules))
+            .draw(|frame| draw_granted_at_rest(frame, &rules))
             .expect("must not panic on a small area");
         assert!(
             drawn_on(&terminal).contains("This project"),
@@ -798,28 +1025,101 @@ mod tests {
     /// keystroke made without reading must not be the answer that costs the most to get wrong.
     #[test]
     fn only_y_trusts_and_enter_answers_nothing() {
-        let pressed = |code| KeyEvent::new(code, KeyModifiers::NONE);
-
-        assert_eq!(answer_for(pressed(KeyCode::Char('y'))), Some(Answer::Trust));
-        assert_eq!(answer_for(pressed(KeyCode::Char('Y'))), Some(Answer::Trust));
         assert_eq!(
-            answer_for(pressed(KeyCode::Char('n'))),
-            Some(Answer::Decline)
+            pressing(KeyCode::Char('y')),
+            Response::Answer(Answer::Trust)
         );
         assert_eq!(
-            answer_for(pressed(KeyCode::Char('N'))),
-            Some(Answer::Decline)
+            pressing(KeyCode::Char('Y')),
+            Response::Answer(Answer::Trust)
         );
-        assert_eq!(answer_for(pressed(KeyCode::Esc)), Some(Answer::Decline));
-        assert_eq!(answer_for(pressed(KeyCode::Enter)), None);
+        assert_eq!(
+            pressing(KeyCode::Char('n')),
+            Response::Answer(Answer::Decline)
+        );
+        assert_eq!(
+            pressing(KeyCode::Char('N')),
+            Response::Answer(Answer::Decline)
+        );
+        assert_eq!(pressing(KeyCode::Esc), Response::Answer(Answer::Decline));
+        assert_eq!(pressing(KeyCode::Enter), Response::Nothing);
     }
 
     /// Ctrl-C is the interrupt everyone reaches for, and raw mode turns it into an ordinary key
-    /// press. A prompt that ignored it would be a screen with no way out.
+    /// press. A prompt that ignored it would be a screen with no way out, so it still leaves; what
+    /// it takes is a second press.
     #[test]
-    fn ctrl_c_leaves_rather_than_answering_the_question() {
+    fn ctrl_c_leaves_on_the_second_press() {
         let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-        assert_eq!(answer_for(key), Some(Answer::Leave));
+        assert_eq!(answer_for(key, false, true), Response::Offer);
+        assert_eq!(answer_for(key, true, true), Response::Answer(Answer::Leave));
+    }
+
+    /// The reported case at the question nobody had answered yet. VS Code writes one interrupt ahead
+    /// of the virtualenv line, and on one press that byte ended the session before it began: the
+    /// person saw bravebot vanish and their shell run the activation (#403).
+    #[test]
+    fn one_interrupt_another_program_wrote_closes_nothing() {
+        let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_ne!(
+            answer_for(key, false, true),
+            Response::Answer(Answer::Leave),
+            "one byte ended the session before it began"
+        );
+    }
+
+    /// And two of them in one write are two key events rather than two presses, so neither half of
+    /// the gesture comes from a key that arrived with others.
+    #[test]
+    fn two_interrupts_that_arrived_together_close_nothing() {
+        let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(answer_for(key, false, false), Response::Nothing);
+        assert_eq!(answer_for(key, true, false), Response::Nothing);
+    }
+
+    /// And an offer does not stand about waiting to be taken. The interrupt an editor writes arrives
+    /// on its own, so it arms the offer; if anything happening afterwards left it armed, the next
+    /// such byte would leave, and the two presses would be one again.
+    #[test]
+    fn anything_but_the_key_that_leaves_withdraws_the_offer() {
+        let interrupt = event::Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(
+            !withdraws_the_offer(&interrupt),
+            "the second press of the gesture withdrew the offer it was answering"
+        );
+
+        for taken in [
+            event::Event::Key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE)),
+            event::Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+            event::Event::Resize(80, 24),
+            event::Event::FocusGained,
+            event::Event::Paste("source /tmp/x/env/bin/activate".to_owned()),
+        ] {
+            assert!(
+                withdraws_the_offer(&taken),
+                "{taken:?} left the offer standing"
+            );
+        }
+    }
+
+    /// Except a release, which is the tail of the press being answered. A terminal may report one for
+    /// every keystroke, and which modifiers it carries depends on the order somebody lets go of the
+    /// keys: letting go of Ctrl before C sends a bare `c`. Withdrawing on that meant the way out of
+    /// this question depended on how a person happened to release two keys, and for one of the two
+    /// orders there was no way out at all.
+    #[test]
+    fn a_key_release_does_not_withdraw_the_offer() {
+        for code in [KeyCode::Char('c'), KeyCode::Char('n')] {
+            let released = event::Event::Key(KeyEvent::new_with_kind(
+                code,
+                KeyModifiers::NONE,
+                event::KeyEventKind::Release,
+            ));
+            assert!(
+                !withdraws_the_offer(&released),
+                "letting go of {code:?} withdrew the offer"
+            );
+        }
     }
 
     /// Leaving is not a quiet decline: a session that started anyway would be one the user
@@ -834,12 +1134,20 @@ mod tests {
     #[test]
     fn only_ctrl_c_leaves() {
         assert_eq!(
-            answer_for(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE)),
-            None
+            answer_for(
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+                false,
+                true
+            ),
+            Response::Nothing
         );
         assert_eq!(
-            answer_for(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL)),
-            None
+            answer_for(
+                KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL),
+                false,
+                true
+            ),
+            Response::Nothing
         );
     }
 

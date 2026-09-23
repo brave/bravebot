@@ -427,6 +427,7 @@ trust-directory-regardless =
 trust-directory-yes = trust it
 trust-directory-no = ask me about every write
 quit = quit
+trust-quit-again = again
 
 
 ## Opening a directory a settings file named, asked once for each when a session starts
@@ -1359,6 +1360,10 @@ paste-with-the-first-tick =
     that picture goes with the first tick of this loop; the ones after it say it was pasted
 paste-too-large = that picture is { $size }, and a paste carries at most { $limit }
 paste-nothing-on-clipboard = there is nothing on the clipboard to paste
+return-not-pressed =
+    that return arrived with other keys, so it was not a press: press Enter to send this line, or Escape to clear it
+leave-not-pressed =
+    that arrived with other keys, so it was not a press: press it again to leave
 paste-folded = { $lines ->
     [one] [Pasted text #{ $number } +{ $lines } line]
    *[other] [Pasted text #{ $number } +{ $lines } lines]

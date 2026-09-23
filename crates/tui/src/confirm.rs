@@ -24,6 +24,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 
+use crate::input;
 use crate::render::{marked_rows, quarantined_rows};
 use crate::theme;
 
@@ -145,10 +146,12 @@ pub fn ask<B: Backend>(terminal: &mut Terminal<B>, request: &WriteRequest) -> An
             return Answer::Reject;
         }
 
-        match event::read() {
+        match input::read() {
             // Presses only: asking for disambiguated keys reports releases too, and a release
             // taken for a press approves whatever the press had just approved, twice.
-            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => continue,
+            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
+                continue;
+            }
             Ok(TermEvent::Key(key)) => match answer_for(key) {
                 Some(Response::Answer(answer)) => return answer,
                 Some(Response::Scroll(by)) => {
@@ -542,10 +545,12 @@ pub fn ask_run<B: Backend>(terminal: &mut Terminal<B>, request: &RunRequest) -> 
             return RunAnswer::Reject;
         }
 
-        match event::read() {
+        match input::read() {
             // Presses only: asking for disambiguated keys reports releases too, and a release
             // taken for a press approves whatever the press had just approved, twice.
-            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => continue,
+            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
+                continue;
+            }
             Ok(TermEvent::Key(key)) => match run_answer_for(key, request) {
                 Some(RunResponse::Answer(answer)) => return answer,
                 Some(RunResponse::Scroll(by)) => {
@@ -1048,10 +1053,12 @@ pub fn ask_output<B: Backend>(terminal: &mut Terminal<B>, request: &OutputReques
             return VetAnswer::Reject;
         }
 
-        match event::read() {
+        match input::read() {
             // Presses only: asking for disambiguated keys reports releases too, and a release
             // taken for a press approves whatever the press had just approved, twice.
-            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => continue,
+            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
+                continue;
+            }
             Ok(TermEvent::Key(key)) => match output_answer_for(key, request) {
                 Some(VetResponse::Answer(answer)) => return answer,
                 Some(VetResponse::Scroll(by)) => {
@@ -1337,10 +1344,12 @@ pub fn ask_vet<B: Backend>(terminal: &mut Terminal<B>, request: &VetRequest) -> 
             return VetAnswer::Reject;
         }
 
-        match event::read() {
+        match input::read() {
             // Presses only: asking for disambiguated keys reports releases too, and a release
             // taken for a press approves whatever the press had just approved, twice.
-            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => continue,
+            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
+                continue;
+            }
             Ok(TermEvent::Key(key)) => match vet_answer_for(key, request) {
                 Some(VetResponse::Answer(answer)) => return answer,
                 Some(VetResponse::Scroll(by)) => {
@@ -1526,8 +1535,10 @@ pub fn ask_fetch<B: Backend>(terminal: &mut Terminal<B>, request: &FetchRequest)
             return Answer::Reject;
         }
 
-        match event::read() {
-            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => continue,
+        match input::read() {
+            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
+                continue;
+            }
             Ok(TermEvent::Key(key)) => match answer_for(key) {
                 Some(Response::Answer(answer)) => return answer,
                 // Nothing here scrolls: a URL and a host are two lines, and there is no body to
@@ -1551,8 +1562,10 @@ pub fn ask_server<B: Backend>(terminal: &mut Terminal<B>, request: &ServerReques
             return Answer::Reject;
         }
 
-        match event::read() {
-            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => continue,
+        match input::read() {
+            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
+                continue;
+            }
             Ok(TermEvent::Key(key)) => match answer_for(key) {
                 Some(Response::Answer(answer)) => return answer,
                 // Nothing here scrolls: the whole question is a binary, a directory and two
@@ -1743,10 +1756,12 @@ pub fn ask_vouch<B: Backend>(terminal: &mut Terminal<B>, request: &VouchRequest)
             return Answer::Reject;
         }
 
-        match event::read() {
+        match input::read() {
             // Presses only: asking for disambiguated keys reports releases too, and a release
             // taken for a press approves whatever the press had just approved, twice.
-            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => continue,
+            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
+                continue;
+            }
             Ok(TermEvent::Key(key)) => match answer_for(key) {
                 Some(Response::Answer(answer)) => return answer,
                 Some(Response::Scroll(by)) => {
@@ -1917,8 +1932,10 @@ pub fn ask_manifest<B: Backend>(terminal: &mut Terminal<B>, request: &ManifestRe
             return Answer::Reject;
         }
 
-        match event::read() {
-            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => continue,
+        match input::read() {
+            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
+                continue;
+            }
             Ok(TermEvent::Key(key)) => match answer_for(key) {
                 Some(Response::Answer(answer)) => return answer,
                 // A plan longer than the box is the one most worth reading before answering, since

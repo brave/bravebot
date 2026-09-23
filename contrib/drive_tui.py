@@ -10,6 +10,10 @@ A pty is what makes this possible. The interface reads keys from a terminal rath
 standard input, so piping to it does nothing: the process has to be given a terminal of its own,
 which is what `pty.fork` does here.
 
+Keys are typed rather than written. A whole line written in one call is how another program types
+at a terminal, and the interface reads that as a paste rather than as typing, so the line would
+land in the box and the Enter at the end of it would not send. See `PACE` below.
+
 Waiting is by silence rather than by clock. While a turn runs the spinner animates several times
 a second, so the stream is never quiet; the moment it stops, the turn is over. So each step names
 the longest it will wait and returns as soon as the screen has been still for a moment, which is
@@ -88,6 +92,33 @@ def parse_script(text):
     return steps
 
 
+#: How long to leave between one character of a step and the next.
+#:
+#: The interface reads a run of keys that were all waiting together as a paste rather than as
+#: typing, which is what stops another program writing a command line into the terminal from
+#: answering a prompt or sending a turn (INPUT-34). A script that wrote a whole step in one call
+#: would be exactly that program: the words would land in the box and the Enter at the end of them
+#: would not send. So a step is typed rather than written, slowly enough that no two characters of
+#: it are ever waiting together.
+PACE = 0.02
+
+#: Keys that decide something rather than spelling something.
+#:
+#: Sent with a longer gap in front, so the characters before them have been read and the key that
+#: sends, stops or answers arrives on its own. That is what a person does and what the interface
+#: asks for: a burst never answers a question.
+DECIDING = "\r\n\t\x03\x04\x1b"
+
+
+def type_in(terminal, keys):
+    """Type a step in the way a person would, a character at a time."""
+    for character in keys:
+        if character in DECIDING:
+            time.sleep(PACE * 5)
+        os.write(terminal, character.encode())
+        time.sleep(PACE)
+
+
 def drive(argv, steps, env=None, cols=120, rows=40, quiet=1.5, settle=5.0):
     """Run `argv` under a pty, send each step, and return everything it wrote."""
     child, terminal = pty.fork()
@@ -126,7 +157,7 @@ def drive(argv, steps, env=None, cols=120, rows=40, quiet=1.5, settle=5.0):
     for timeout, keys in steps:
         if keys:
             try:
-                os.write(terminal, keys.encode())
+                type_in(terminal, keys)
             except OSError:
                 # The child is gone. Whatever it managed to say before it went is the reason, and
                 # it is already captured, so stop rather than raising over the top of it.

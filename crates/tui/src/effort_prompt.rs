@@ -15,12 +15,13 @@ use bravebot_i18n::t;
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
-use ratatui::crossterm::event::{self, Event as TermEvent, KeyCode, KeyModifiers};
+use ratatui::crossterm::event::{self, KeyCode, KeyModifiers};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 
+use crate::input;
 use crate::theme;
 
 /// One row of the list.
@@ -167,10 +168,10 @@ pub fn choose<B: Backend>(
             return None;
         }
 
-        let Ok(event) = event::read() else {
+        let Ok(event) = input::read() else {
             return None;
         };
-        let TermEvent::Key(key) = event else {
+        let Some(key) = input::key_of(&event) else {
             continue;
         };
         if key.kind != event::KeyEventKind::Press {

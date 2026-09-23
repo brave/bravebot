@@ -24,7 +24,7 @@ use bravebot_net::Egress;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{
-    self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
     EnableFocusChange, EnableMouseCapture, Event as TermEvent, KeyCode, KeyEvent, KeyEventKind,
     KeyModifiers, KeyboardEnhancementFlags, MouseButton, MouseEvent, MouseEventKind,
     PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
@@ -39,6 +39,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::input;
 use crate::render;
 use crate::select;
 use crate::state::{Session, Status};
@@ -978,6 +979,14 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
     // rather than after, so the Ctrl-C that puts it up survives its own press.
     session.cleared_by_interrupt = false;
 
+    // The offer to leave outlives its own press, because the press that takes it is the next one.
+    // Any other key withdraws it: somebody who went and did something else has moved on, and an
+    // offer still standing then would let one later byte end the session. Both keys that leave keep
+    // it, so the second press of either is the one that goes.
+    if !(ctrl && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('d'))) {
+        session.offered_to_leave = false;
+    }
+
     // Before the match, since a key that moves the caret cannot also be one of the keys below:
     // the ones this answers are exactly the ones nothing else claims.
     if !session.bindings().claims(&key) && edit_line(session, key) {
@@ -1018,9 +1027,41 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
             session.stop_watches();
             Action::Redraw
         }
+        // The bottom rung, and the only one that ends the session, so it is the one rung a single
+        // byte must not reach. An interrupt is one byte another program can write into the terminal,
+        // and the editor that activates a virtualenv writes one (#403), so the first press offers
+        // the way out and the second takes it. Every rung above this one stops something a person
+        // asked for and is unchanged: those are recoverable, and this is not.
+        // Neither half of the gesture is taken from a key that did not arrive on its own. A run of
+        // two or more events was available in the same instant, so `\x03\x03` in one write is two
+        // key events and not the two presses this asks for; without this the offer is armed and
+        // taken by one write, which is the channel the rest of this fix is about. The rungs above
+        // are untouched and still answer such a key, because each of them stops something and
+        // stays.
+        // Said rather than passed over in silence, for the reason the offer itself is said: a press
+        // that does nothing and explains nothing reads as an interface that has stopped answering,
+        // and a person whose two presses shared one read is exactly who is owed the account.
+        KeyCode::Char('c') if ctrl && !session.key_arrived_alone => {
+            session.note(t!(leave_not_pressed));
+            Action::Redraw
+        }
+        KeyCode::Char('c') if ctrl && !session.offered_to_leave => {
+            session.offered_to_leave = true;
+            Action::Redraw
+        }
         KeyCode::Char('c') if ctrl => {
             session.quit();
             Action::Quit
+        }
+        // Held to the same rule as the interrupt: end-of-transmission is also one byte, and a
+        // session ended by one byte is ended by whatever could write it.
+        KeyCode::Char('d') if ctrl && session.input().is_empty() && !session.key_arrived_alone => {
+            session.note(t!(leave_not_pressed));
+            Action::Redraw
+        }
+        KeyCode::Char('d') if ctrl && session.input().is_empty() && !session.offered_to_leave => {
+            session.offered_to_leave = true;
+            Action::Redraw
         }
         KeyCode::Char('d') if ctrl && session.input().is_empty() => {
             session.quit();
@@ -1080,6 +1121,19 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
         // mode too, where a multi-line command is a `for` loop somebody typed.
         _ if starts_a_line(key) => {
             session.type_newline();
+            Action::Redraw
+        }
+        // Before every arm that takes the line anywhere, shell mode and the command arms included.
+        // A return that arrived with other keys was part of a write rather than a press: an editor
+        // typing a virtualenv activation into the terminal ends the line with one, and taking it sent
+        // a line nobody wrote to the planner and spent a turn on it (#403). The same rule the question
+        // at startup keeps and the rung that leaves keeps, for the same reason (INPUT-34).
+        //
+        // The line stays exactly where it is, so somebody can read it and send it themselves or clear
+        // it. Said rather than ignored, since a key that does nothing and explains nothing reads as an
+        // interface that has stopped answering.
+        KeyCode::Enter if !session.key_arrived_alone => {
+            session.note(t!(return_not_pressed));
             Action::Redraw
         }
         // Before every command arm, because in shell mode the line is a command and nothing else.
@@ -1657,6 +1711,13 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     // prompt somebody wants back mid-turn is the one the turn they are watching came from.
     if session.bindings().is_history(&key) {
         session.open_history_search();
+        return Action::Redraw;
+    }
+
+    // For the reason the idle ladder refuses first: queueing is sending with a wait in front of it,
+    // so a return another program wrote would reach the planner when the turn in flight ended.
+    if key.code == KeyCode::Enter && !session.key_arrived_alone {
+        session.note(t!(return_not_pressed));
         return Action::Redraw;
     }
 
@@ -2606,10 +2667,16 @@ fn event_loop(
         Named::Opening(names) => named_to_open(&mut session, &workspace, &names),
         Named::Asking(names) => {
             let paths = named_to_open(&mut session, &workspace, &names);
-            match crate::trust_prompt::ask_named(terminal, &paths) {
+            // Carried for the reason the working directory's own question carries it.
+            let mut carried = String::new();
+            let accepted = match crate::trust_prompt::ask_named(terminal, &paths, &mut carried) {
                 Some(accepted) => accepted,
                 None => return Ok(left_behind(&stored)),
+            };
+            if !carried.is_empty() {
+                session.paste_text(&carried);
             }
+            accepted
         }
     };
     open_named(&mut session, &mut workspace, &mut trust, &opening);
@@ -2625,7 +2692,7 @@ fn event_loop(
         // Waiting for the burst to end, but not indefinitely: a drag that never pauses would
         // otherwise show nothing until it stopped.
         let waited_long_enough = drawn_at.elapsed() >= FRAME;
-        if needs_draw && (waited_long_enough || !event::poll(Duration::ZERO)?) {
+        if needs_draw && (waited_long_enough || !input::poll(Duration::ZERO)?) {
             redraw(terminal, &mut session)?;
             needs_draw = false;
             drawn_at = Instant::now();
@@ -2661,10 +2728,13 @@ fn event_loop(
                         ) {
                             needs_draw = true;
                         }
-                        if !event::poll(POLL)? {
+                        // Through the reader rather than the terminal, so a run is seen whole.
+                        if !input::poll(POLL)? {
                             continue;
                         }
-                        match event::read()? {
+                        let taken = input::read()?;
+                        took_input(&mut session, &taken);
+                        match taken {
                             // Presses only. Asking for disambiguated keys asks for releases as well, and a
                             // release handled as a press types every character twice.
                             TermEvent::Key(key) if key.kind == KeyEventKind::Release => {
@@ -3979,7 +4049,14 @@ fn grant_proposed_rules(
     if asking.is_empty() {
         return Some(granted);
     }
-    if !crate::trust_prompt::ask_granted(terminal, &asking)? {
+    // Carried for the reason the other two questions carry it: words another program typed while this
+    // was up are not dropped, they go to the box where somebody can read them.
+    let mut carried = String::new();
+    let granting = crate::trust_prompt::ask_granted(terminal, &asking, &mut carried);
+    if !carried.is_empty() {
+        session.paste_text(&carried);
+    }
+    if !granting? {
         return Some(granted);
     }
     if let Some(store) = grants {
@@ -4116,7 +4193,17 @@ fn opening_trust(
 ) -> Option<(TrustStore, Whence)> {
     let (trust, whence) = match opening_for(beginning, session.permission_mode(), root) {
         Opening::Settled(trust, whence) => (trust, whence),
-        Opening::Ask => (crate::trust_prompt::ask(terminal, root)?, Whence::Asked),
+        Opening::Ask => {
+            // What the question refused to answer on, which is words another program typed at the
+            // terminal while it was up. Put in the box rather than dropped, so a person who came back
+            // to a question still waiting and a virtualenv activated can see what did it (#403).
+            let mut carried = String::new();
+            let trust = crate::trust_prompt::ask(terminal, root, &mut carried)?;
+            if !carried.is_empty() {
+                session.paste_text(&carried);
+            }
+            (trust, Whence::Asked)
+        }
     };
 
     if !trust.is_trusted(".") {
@@ -4171,8 +4258,10 @@ fn run_command(
     while !worker.is_finished() {
         redraw(terminal, session)?;
 
-        while event::poll(Duration::ZERO)? {
-            match event::read()? {
+        while input::poll(Duration::ZERO)? {
+            let taken = input::read()?;
+            took_input(session, &taken);
+            match taken {
                 TermEvent::Key(key) if key.kind == KeyEventKind::Release => {}
                 // A running command is something to stop, so Ctrl-C stops it and stays, for the
                 // reason it stops a turn: the way out is the press after that, at the box.
@@ -4331,9 +4420,11 @@ fn compact_animated(
         // Input is still read, so a long summary does not leave the interface deaf, and the
         // frame's waiting is done here for the reason the turn loop does it here: a key press
         // has to wake the loop rather than queue behind it.
-        if event::poll(FRAME)? {
-            while event::poll(Duration::ZERO)? {
-                match event::read()? {
+        if input::poll(FRAME)? {
+            while input::poll(Duration::ZERO)? {
+                let taken = input::read()?;
+                took_input(session, &taken);
+                match taken {
                     // The one place Ctrl-C still leaves with something in flight, and what a mode
                     // standing over the session takes ahead of it, are both that function's.
                     TermEvent::Key(key) => {
@@ -4516,9 +4607,11 @@ fn aside_animated(
         // Input is still read for the reason a summary reads it: a long answer must not leave the
         // interface deaf, and the frame's waiting is done here so a key press wakes the loop
         // rather than queueing behind the worker.
-        if event::poll(FRAME)? {
-            while event::poll(Duration::ZERO)? {
-                match event::read()? {
+        if input::poll(FRAME)? {
+            while input::poll(Duration::ZERO)? {
+                let taken = input::read()?;
+                took_input(session, &taken);
+                match taken {
                     // The same shape as a summary's keys, and the same function reads them.
                     TermEvent::Key(key) => {
                         one_request_key(session, key, t!(btw_uninterruptible));
@@ -4748,9 +4841,11 @@ fn manifest_animated(
         // Read here rather than in the outer loop, which is blocked for the duration, and for the
         // reason a turn reads it here: a run that walks for ten minutes must not leave the
         // interface deaf, and the frame's waiting is done here so a key press wakes the loop.
-        if event::poll(FRAME)? {
-            while event::poll(Duration::ZERO)? {
-                match event::read()? {
+        if input::poll(FRAME)? {
+            while input::poll(Duration::ZERO)? {
+                let taken = input::read()?;
+                took_input(session, &taken);
+                match taken {
                     TermEvent::Key(key) if key.kind == KeyEventKind::Release => {}
                     // Both keys stop the run and neither leaves, exactly as in a turn. A person
                     // watching a plan go wrong is asking for the plan to stop; the next press, at
@@ -5074,9 +5169,11 @@ fn goal_check_animated(
         // Input is still read for the reason an aside reads it: a slow answer must not leave the
         // interface deaf, and the frame's waiting is done here so a key press wakes the loop
         // rather than queueing behind the worker.
-        if event::poll(FRAME)? {
-            while event::poll(Duration::ZERO)? {
-                match event::read()? {
+        if input::poll(FRAME)? {
+            while input::poll(Duration::ZERO)? {
+                let taken = input::read()?;
+                took_input(session, &taken);
+                match taken {
                     // Which of the goal, a mode over the session, and the session itself a stop
                     // key is asking about is that function's to say.
                     TermEvent::Key(key) => goal_check_key(session, key),
@@ -5394,9 +5491,11 @@ fn run_turn_animated(
         //
         // Everything waiting, not one event per pass: a drag read one event at a time would take
         // seconds to catch up with the pointer.
-        if event::poll(FRAME)? {
-            while event::poll(Duration::ZERO)? {
-                match event::read()? {
+        if input::poll(FRAME)? {
+            while input::poll(Duration::ZERO)? {
+                let taken = input::read()?;
+                took_input(session, &taken);
+                match taken {
                     // Presses only, for the reason the outer loop ignores releases: a release taken
                     // for a press would type every character twice, and cancel the turn on the way up
                     // from the Escape that already cancelled it.
@@ -5732,6 +5831,34 @@ fn drain_worker(
 /// separately: which of the two it means depends on whether there is anything to stop.
 fn wants_cancel(key: KeyEvent) -> bool {
     matches!(key.code, KeyCode::Esc)
+}
+
+/// Record what the reader just handed out, before any arm acts on it.
+///
+/// Two things the arms cannot work out for themselves. Whether the key arrived on its own, which only
+/// the reader knows and only the rung that ends the session asks about. And whether anything at all
+/// has happened since the way out was offered: the offer answers the press just made, so any other
+/// input withdraws it. A mouse report or a resize means somebody is still here and has moved on, and
+/// an offer left standing through one would let a byte written much later take it.
+fn took_input(session: &mut Session, taken: &TermEvent) {
+    // A release is the tail of a press that has already been answered, not something somebody did
+    // next, so it says nothing about either of the two things below. Windows reports a key-up for
+    // every keystroke and carries the modifiers still held at that moment, so letting go of Ctrl
+    // before C arrives here as a bare `c`: read as other input, it withdrew the offer that the same
+    // person's press had just armed, and no press of Ctrl-C ever reached the rung that leaves.
+    if input::key_of(taken).is_some_and(|key| key.kind == KeyEventKind::Release) {
+        return;
+    }
+
+    session.key_arrived_alone = input::the_last_event_arrived_alone();
+
+    let asks_to_leave = input::key_of(taken).is_some_and(|key| {
+        key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('d'))
+    });
+    if !asks_to_leave {
+        session.offered_to_leave = false;
+    }
 }
 
 /// Whether a key press is Ctrl-C.
@@ -8801,11 +8928,264 @@ mod tests {
         assert_eq!(session.status, Status::Idle);
     }
 
+    /// The second press leaves. The first offers, because ending the session is the one thing on
+    /// the interrupt ladder that cannot be undone and an interrupt is a single byte another program
+    /// can write into the terminal.
     #[test]
-    fn ctrl_c_quits() {
+    fn ctrl_c_quits_on_the_second_press() {
         let mut session = Session::new("none");
+        assert_eq!(handle_key(&mut session, ctrl('c')), Action::Redraw);
+        assert!(!session.is_quitting(), "one press ended the session");
         assert_eq!(handle_key(&mut session, ctrl('c')), Action::Quit);
         assert!(session.is_quitting());
+    }
+
+    /// Two interrupts in one write are two key events and not two presses. Without this the offer
+    /// is armed and taken by a single write, so the gesture meant to stop one byte ending a session
+    /// is defeated by two, through the same channel #403 is about.
+    #[test]
+    fn two_interrupts_that_arrived_together_do_not_end_the_session() {
+        let mut session = Session::new("none");
+        session.key_arrived_alone = false;
+        assert_ne!(handle_key(&mut session, ctrl('c')), Action::Quit);
+        assert_ne!(handle_key(&mut session, ctrl('c')), Action::Quit);
+        assert!(
+            !session.is_quitting(),
+            "one write of two interrupts ended the session"
+        );
+        assert!(
+            !session.offered_to_leave,
+            "a key that arrived in a run armed the offer"
+        );
+    }
+
+    /// The same for end-of-transmission, held to the rule for the same reason.
+    #[test]
+    fn two_end_of_transmissions_that_arrived_together_do_not_end_the_session() {
+        let mut session = Session::new("none");
+        session.key_arrived_alone = false;
+        assert_ne!(handle_key(&mut session, ctrl('d')), Action::Quit);
+        assert_ne!(handle_key(&mut session, ctrl('d')), Action::Quit);
+        assert!(!session.is_quitting());
+    }
+
+    /// The refusal is said, at the rung that leaves as at the return that sends. A person whose two
+    /// presses shared one read is the one this costs, and a key that does nothing without a word
+    /// reads as an interface that has stopped answering.
+    #[test]
+    fn a_refused_way_out_says_so() {
+        for pressed in [ctrl('c'), ctrl('d')] {
+            let mut session = Session::new("none");
+            session.key_arrived_alone = false;
+            let action = handle_key(&mut session, pressed);
+            assert_eq!(action, Action::Redraw, "{pressed:?} drew nothing back");
+            assert!(
+                session
+                    .transcript
+                    .iter()
+                    .any(|line| line.text.contains("press it again to leave")),
+                "{pressed:?} was refused in silence"
+            );
+        }
+    }
+
+    /// A key arriving on its own after a run still works, so the guard costs a person nothing: the
+    /// run they were sent has ended by the time they press anything.
+    #[test]
+    fn a_press_on_its_own_after_a_run_still_leaves() {
+        let mut session = Session::new("none");
+        session.key_arrived_alone = false;
+        handle_key(&mut session, ctrl('c'));
+        session.key_arrived_alone = true;
+        assert_eq!(handle_key(&mut session, ctrl('c')), Action::Redraw);
+        assert_eq!(handle_key(&mut session, ctrl('c')), Action::Quit);
+    }
+
+    /// The half of #403 that reaches the box rather than the question. The activation arrives after
+    /// somebody has answered, so its characters are typed into the live box and its trailing return
+    /// sent them: a line nobody wrote reached the planner and spent a turn on it.
+    #[test]
+    fn a_return_that_arrived_with_other_keys_does_not_send() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "source /tmp/x/env/bin/activate");
+
+        session.key_arrived_alone = false;
+        let action = handle_key(&mut session, key(KeyCode::Enter));
+
+        assert!(
+            !matches!(action, Action::Submit(_)),
+            "a return out of a write sent the line: {action:?}"
+        );
+        assert_eq!(
+            session.input(),
+            "source /tmp/x/env/bin/activate",
+            "the line went somewhere instead of staying to be read"
+        );
+        assert!(
+            session
+                .transcript
+                .iter()
+                .any(|line| line.text.contains("arrived with other keys")),
+            "the refusal explained nothing"
+        );
+    }
+
+    /// Every refusal, not the first one a session sees. `note_once` remembers a message for the life of
+    /// the session, so a second written return said nothing and the line sat in the box with no account
+    /// of why, which is the dead interface the rule exists to prevent.
+    #[test]
+    fn every_refused_return_is_said_and_not_just_the_first() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "one");
+        session.key_arrived_alone = false;
+        handle_key(&mut session, key(KeyCode::Enter));
+        let after_first = session
+            .transcript
+            .iter()
+            .filter(|line| line.text.contains("arrived with other keys"))
+            .count();
+        assert_eq!(after_first, 1, "the first refusal said nothing");
+
+        handle_key(&mut session, key(KeyCode::Enter));
+        let after_second = session
+            .transcript
+            .iter()
+            .filter(|line| line.text.contains("arrived with other keys"))
+            .count();
+        assert_eq!(after_second, 2, "the second refusal said nothing");
+    }
+
+    /// And a person's own return still sends, which is the half that has to keep working.
+    #[test]
+    fn a_return_of_its_own_still_sends() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "work");
+        assert!(matches!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit(_)
+        ));
+    }
+
+    /// The bypass a review found in the mark this replaces: a program wrote an arrow to make the line
+    /// look touched and a return to send it, in one four-byte write. Both arrive with each other, so
+    /// neither the arrow nor the return is a press, and the return no longer sends.
+    #[test]
+    fn a_program_cannot_send_its_own_line_with_an_arrow_and_a_return() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "source /tmp/x/env/bin/activate");
+
+        session.key_arrived_alone = false;
+        handle_key(&mut session, key(KeyCode::Left));
+        let action = handle_key(&mut session, key(KeyCode::Enter));
+
+        assert!(
+            !matches!(action, Action::Submit(_)),
+            "an arrow and a return in one write sent the line"
+        );
+    }
+
+    /// The reported case. VS Code writes a bare interrupt into the terminal before the virtualenv
+    /// line it types, and that byte fell to the rung that leaves: the session ended on its own, with
+    /// the activation command left for the shell to run once it was gone (#403).
+    #[test]
+    fn one_interrupt_another_program_wrote_does_not_end_the_session() {
+        let mut session = Session::new("none");
+        assert_ne!(handle_key(&mut session, ctrl('c')), Action::Quit);
+        assert!(!session.is_quitting(), "a program's single byte left");
+    }
+
+    /// Not only a key. The offer was withdrawn inside the key handler, so a mouse report, a resize
+    /// or words another program typed left it standing, and an interrupt written ten minutes later
+    /// still took it.
+    #[test]
+    fn input_that_is_not_a_key_withdraws_the_offer_to_leave() {
+        for taken in [
+            TermEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::ScrollUp,
+                column: 1,
+                row: 1,
+                modifiers: KeyModifiers::NONE,
+            }),
+            TermEvent::Resize(80, 24),
+            TermEvent::FocusGained,
+        ] {
+            let mut session = Session::new("none");
+            handle_key(&mut session, ctrl('c'));
+            assert!(session.offered_to_leave, "the offer was never made");
+
+            took_input(&mut session, &taken);
+            assert!(
+                !session.offered_to_leave,
+                "{taken:?} left the offer standing"
+            );
+        }
+    }
+
+    /// The offer answers the press just made, so anything else withdraws it. Otherwise a press now
+    /// and a byte written minutes later would be the two halves of one gesture.
+    #[test]
+    fn any_other_key_withdraws_the_offer_to_leave() {
+        let mut session = Session::new("none");
+        handle_key(&mut session, ctrl('c'));
+        handle_key(&mut session, key(KeyCode::Char('x')));
+        handle_key(&mut session, key(KeyCode::Backspace));
+        assert!(session.input().is_empty(), "the line was not cleared");
+        assert_ne!(
+            handle_key(&mut session, ctrl('c')),
+            Action::Quit,
+            "an offer made before other keys was still standing"
+        );
+    }
+
+    /// Whether somebody can leave must not depend on the order they let go of two keys. A terminal
+    /// may report a release for every keystroke, and the modifiers on it are the ones still held, so
+    /// letting go of Ctrl before C arrives as a bare `c`. Taken for other input, that withdrew the
+    /// offer the same person's press had just armed, so every Ctrl-C only re-armed it and the rung
+    /// that leaves could not be reached at all.
+    #[test]
+    fn letting_go_of_the_keys_in_either_order_still_leaves() {
+        for released in [
+            KeyEvent::new_with_kind(
+                KeyCode::Char('c'),
+                KeyModifiers::NONE,
+                KeyEventKind::Release,
+            ),
+            KeyEvent::new_with_kind(
+                KeyCode::Char('c'),
+                KeyModifiers::CONTROL,
+                KeyEventKind::Release,
+            ),
+        ] {
+            let mut session = Session::new("none");
+
+            took_input(&mut session, &TermEvent::Key(ctrl('c')));
+            session.key_arrived_alone = true;
+            handle_key(&mut session, ctrl('c'));
+            assert!(session.offered_to_leave, "the offer was never made");
+
+            took_input(&mut session, &TermEvent::Key(released));
+            assert!(session.offered_to_leave, "{released:?} withdrew the offer");
+
+            took_input(&mut session, &TermEvent::Key(ctrl('c')));
+            session.key_arrived_alone = true;
+            assert_eq!(
+                handle_key(&mut session, ctrl('c')),
+                Action::Quit,
+                "the second press did not leave, after {released:?}"
+            );
+        }
+    }
+
+    /// The rungs above the last one stop something and stay, and none of them is touched: a person
+    /// pressing the key to stop a turn must still stop it on the first press.
+    #[test]
+    fn an_interrupt_still_stops_a_turn_on_the_first_press() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "work");
+        session.submit().unwrap();
+        assert_eq!(session.status, Status::Working);
+        assert_eq!(handle_key(&mut session, ctrl('c')), Action::Cancel);
+        assert!(!session.is_quitting(), "stopping a turn left as well");
     }
 
     /// Escape on an empty line used to leave, which made every press a question of what was in
@@ -9453,6 +9833,8 @@ mod tests {
             session.input().is_empty(),
             "backspace did not clear the line"
         );
+        // Twice, for the reason the interrupt is twice: end-of-transmission is also one byte.
+        assert_eq!(handle_key(&mut session, ctrl('d')), Action::Redraw);
         assert_eq!(handle_key(&mut session, ctrl('d')), Action::Quit);
     }
 
@@ -10998,6 +11380,8 @@ mod tests {
             "the press that stopped it also left"
         );
 
+        // The rung that leaves offers first, so the press that takes it is a second one.
+        assert_eq!(handle_key(&mut session, ctrl('c')), Action::Redraw);
         assert_eq!(handle_key(&mut session, ctrl('c')), Action::Quit);
     }
 
@@ -11085,6 +11469,8 @@ mod tests {
             "the press that stopped them also left"
         );
 
+        // The rung that leaves offers first, so the press that takes it is a second one.
+        assert_eq!(handle_key(&mut session, ctrl('c')), Action::Redraw);
         assert_eq!(handle_key(&mut session, ctrl('c')), Action::Quit);
     }
 
@@ -11173,6 +11559,8 @@ mod tests {
         );
         assert!(!session.is_quitting(), "the session left as well");
 
+        // The rung that leaves offers first, so the press that takes it is a second one.
+        assert_eq!(handle_key(&mut session, ctrl('c')), Action::Redraw);
         assert_eq!(handle_key(&mut session, ctrl('c')), Action::Quit);
     }
 
@@ -11603,15 +11991,21 @@ mod tests {
         );
     }
 
-    /// A press that ends the session is not one to explain, and the hint is the answer to a line
-    /// having just gone. On an empty line nothing went, so there is nothing to answer.
+    /// This flag answers a line having just gone, and on an empty line nothing went. The way out is
+    /// still offered there, by [`Session::offered_to_leave`] and in the same words, because the rung
+    /// that leaves no longer leaves on one press; what this pins is that the two are not the same
+    /// state, so the hint about a lost line is not claimed where no line was lost.
     #[test]
-    fn the_way_out_is_offered_only_where_a_line_was_taken() {
+    fn a_taken_line_is_not_claimed_where_the_box_was_empty() {
         let mut session = Session::new("none");
         handle_key(&mut session, ctrl('c'));
         assert!(
             !session.cleared_by_interrupt,
-            "offered where nothing was cleared"
+            "claimed a line went where none did"
+        );
+        assert!(
+            session.offered_to_leave,
+            "the way out was not offered on an empty box"
         );
     }
 
@@ -11743,6 +12137,8 @@ mod tests {
         assert_eq!(handle_key(&mut session, ctrl('c')), Action::Redraw);
         assert!(!session.is_quitting());
 
+        // The rung that leaves offers first, so the press that takes it is a second one.
+        assert_eq!(handle_key(&mut session, ctrl('c')), Action::Redraw);
         assert_eq!(handle_key(&mut session, ctrl('c')), Action::Quit);
         assert!(session.is_quitting());
     }

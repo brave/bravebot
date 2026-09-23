@@ -18,12 +18,13 @@ use bravebot_aichat::models::Model;
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
-use ratatui::crossterm::event::{self, Event as TermEvent, KeyCode, KeyModifiers};
+use ratatui::crossterm::event::{self, KeyCode, KeyModifiers};
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 
+use crate::input;
 use crate::theme;
 use crate::wrap::display_width;
 use bravebot_i18n::t;
@@ -255,10 +256,10 @@ pub fn choose<B: Backend>(
             return None;
         }
 
-        let Ok(event) = event::read() else {
+        let Ok(event) = input::read() else {
             return None;
         };
-        let TermEvent::Key(key) = event else {
+        let Some(key) = input::key_of(&event) else {
             continue;
         };
         // A key event arrives twice on Windows, once pressed and once released, and the release

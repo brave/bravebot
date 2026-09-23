@@ -4,6 +4,7 @@ title: The input box
 status: normative
 governs:
   - crates/tui/src/app.rs
+  - crates/tui/src/input.rs
   - crates/tui/src/state.rs
   - crates/tui/src/wrap.rs
   - crates/tui/src/editor.rs
@@ -97,7 +98,50 @@ read against what is happening, in this order:
 |---|---|
 | a turn in flight, or a command running | stops it, and the session stays where it was |
 | nothing running, a line in the box | takes the line, and offers the way out |
-| nothing running, an empty box | ends the session |
+| nothing running, an empty box | offers the way out |
+| nothing running, an empty box, the way out already offered | ends the session |
+
+**Nothing on this ladder ends the session on one press.** An interrupt is a single byte, and a
+terminal delivers one byte stream without saying who wrote it, so a program able to write into the
+pty can press this key: the editor that activates a virtualenv writes one before the line it types
+(#403), and on the rung that left, that byte ended the session and handed the rest of the line back
+to the shell. Every rung above the last one stops something a person asked for and still answers on
+the first press, because those are recoverable and leaving is not. Ctrl-D is held to the same rule
+for the same reason, being one byte that leaves an empty box.
+
+**And neither half of that gesture is taken from a key that did not arrive on its own.** Asking for a
+second press buys nothing against a writer that sends two, and two bytes in one write are no harder
+to send than one: `\x03\x03` would otherwise arm the offer and take it. A run is one read of the
+terminal, so everything in it was available at the same instant and no part of it is evidence separate
+from the rest ([INPUT-34](#INPUT-34) is where a run is defined). A key that arrived with others
+therefore reaches the rungs that stop something, which are recoverable, and not the rung that leaves.
+This costs a person nothing, since the run a program sent has ended before they press anything.
+
+**The offer is withdrawn by any input that is not one of the two keys that leave**, a mouse report, a
+resize and words another program typed among them, not only by another key. It answers the press just
+made, and one left standing through ten minutes of scrolling would let a byte written at the end of
+them take it. **Letting go of a key is not such input**, whichever key it was and whichever modifiers
+it still carried: a release is the tail of the press being answered, and a person who lets go of the
+modifier before the letter must not thereby lose the way out.
+
+**What none of this buys: a program can still stop a turn in flight.** The guard is on the rung that
+leaves and on no other, and the reason is not that stopping a turn is cheap. It is what the guard would
+have to refuse to be worth having.
+
+A key that **starts** something can wait. The return that sends a line and the key that grants a
+directory both hand something to the rest of the program that was not there before, and refusing one
+costs a person one more press and a line saying which, with the line still in front of them. A key that
+**stops** something cannot wait: somebody watching a turn go wrong has to stop it on the first press,
+and refusing theirs because the terminal happened to deliver a resize in the same read would take the
+interrupt away at the moment it is most wanted. The asymmetry is in what the refusal costs, not in what
+the key costs.
+
+It would also buy nothing. The interrupt an editor writes arrives on its own, so a guard asking whether
+it arrived alone passes it, and Escape stops a turn on one byte as well. **So an editor writing `\x03`
+or `\x1b` into the terminal stops whatever is running, and nothing here prevents it.** What bounds the
+damage is that a stopped turn puts its prompt back where the box can take it, so the loss is the tokens
+and the time rather than the work. That is a bound and not a defence, and it is written here so nobody
+reads the rung that leaves as protecting the rest of the ladder.
 
 Escape only ever stops, and never leaves. A summary is the one exception to the table: it is a
 single request with no round for a stop to land between, so nothing there can stop it and Ctrl-C
@@ -108,8 +152,10 @@ does over a turn, and the press that reaches the request is the one after the mo
 
 Taking the line says so, on the line beneath the box, and says which key ends the session. The
 offer lives for exactly one press, since it answers the press just made and the next press is the
-answer to it. Nothing is said where the box was already empty: that press leaves, and a press that
-leaves is not one to explain.
+answer to it. **An empty box says the same thing**, in the same words and for a stronger reason: a
+press that appeared to do nothing and said nothing reads as an interface that has stopped
+responding. Any key that is not itself one of the two that leave withdraws the offer, so a press now
+and a byte written later are not the two halves of one gesture.
 
 **Stopping shows a cancelled status, and the prompt comes back when the box can take it.**
 The reply stops arriving. When no work followed the prompt, no prompts are queued, and the box is
@@ -157,11 +203,20 @@ the exit. One way out, and it is the one people already reach for.
 `verified-by: bravebot_tui::app::escape_clears_a_typed_line_without_quitting`
 `verified-by: bravebot_tui::app::escape_on_an_empty_line_does_not_quit`
 `verified-by: bravebot_tui::app::escape_twice_clears_and_stays`
-`verified-by: bravebot_tui::app::ctrl_c_quits`
+`verified-by: bravebot_tui::app::ctrl_c_quits_on_the_second_press`
+`verified-by: bravebot_tui::app::one_interrupt_another_program_wrote_does_not_end_the_session`
+`verified-by: bravebot_tui::app::any_other_key_withdraws_the_offer_to_leave`
+`verified-by: bravebot_tui::app::input_that_is_not_a_key_withdraws_the_offer_to_leave`
+`verified-by: bravebot_tui::app::two_interrupts_that_arrived_together_do_not_end_the_session`
+`verified-by: bravebot_tui::app::two_end_of_transmissions_that_arrived_together_do_not_end_the_session`
+`verified-by: bravebot_tui::app::a_refused_way_out_says_so`
+`verified-by: bravebot_tui::app::letting_go_of_the_keys_in_either_order_still_leaves`
+`verified-by: bravebot_tui::app::a_press_on_its_own_after_a_run_still_leaves`
+`verified-by: bravebot_tui::app::an_interrupt_still_stops_a_turn_on_the_first_press`
 `verified-by: bravebot_tui::app::ctrl_c_stops_a_turn_rather_than_leaving`
 `verified-by: bravebot_tui::app::ctrl_c_clears_the_line_before_it_leaves`
 `verified-by: bravebot_tui::app::ctrl_c_leaves_once_there_is_nothing_left_to_stop`
-`verified-by: bravebot_tui::app::the_way_out_is_offered_only_where_a_line_was_taken`
+`verified-by: bravebot_tui::app::a_taken_line_is_not_claimed_where_the_box_was_empty`
 `verified-by: bravebot_tui::app::the_way_out_stops_being_offered_at_the_next_press`
 `verified-by: bravebot_tui::render::the_way_out_is_offered_where_the_line_went`
 `verified-by: bravebot_tui::app::escape_only_stops_and_ctrl_c_is_read_against_what_is_happening`
@@ -1552,7 +1607,10 @@ found, and the same set is taken again on the way back.
 the transcript only while the mouse is reported, and all-motion reporting is narrowed away because
 a pointer merely crossing the window is an event and a redraw per pixel of travel, for a gesture
 nothing here reads. Bracketed paste is what stops a pasted prompt sending itself, since without it
-the newline most clipboards carry arrives as Enter. Focus reporting is what makes the clipboard
+the newline most clipboards carry arrives as Enter; it is also the only thing that says a paste came
+off a clipboard at all, so where a terminal does not send those markers a paste arrives as bare keys
+and nothing downstream can tell it from what a program wrote. Focus reporting is what makes the
+clipboard
 worth a look at the one moment a picture appears on it, rather than polled for ever. Disambiguated
 keys are what make Shift-Enter arrive at all, a terminal otherwise sending the same byte however
 Enter was pressed.
@@ -1568,3 +1626,63 @@ person than whatever error put it there.
 `verified-by: bravebot_tui::app::every_mode_a_session_asks_for_is_given_back`
 `verified-by: bravebot_tui::app::a_pushed_keyboard_mode_is_popped_and_an_unpushed_one_is_not`
 `verified-by: bravebot_tui::app::the_session_reads_a_drag_and_not_every_pointer_movement`
+
+<a id="INPUT-34"></a>
+### INPUT-34: what arrived together is not two presses
+
+A terminal delivers one byte stream and says nothing about who wrote it, so a person at a keyboard and
+a program holding the other end of the pty arrive identically and no reader can ask which it has.
+**Nothing here tries.** Every event is delivered exactly as the terminal reported it, and what is added
+is one fact beside each: whether it was the whole of what was waiting, or arrived together with others.
+
+One event waiting is what a person pressing a key looks like, since nothing fills the buffer between
+one read and the next. Two or more were available at the same instant, so **no one of them is evidence
+separate from the rest**, whatever they are: a key beside a resize is no more a separate press than two
+keys are.
+
+**A key release is the tail of a press and not a second arrival.** A terminal may report one, and
+Windows reports one for every keystroke, so there a press and the release of the same key land in one
+read whenever the interface was busy longer than somebody held the key down. Counted, that would make
+one keystroke look like two on a whole platform, and every guard below would refuse a press nobody
+shared with anything. A release is still delivered exactly as the terminal reported it, since nothing
+here withholds; it is only not counted, which it can afford to be because nothing answers one.
+
+**What asks for it is anything that decides, and nothing else.** The rung that ends a session
+([INPUT-4](#INPUT-4)), the question a session opens with ([PROMPT-7](prompting.md#PROMPT-7)), and the
+return that takes the line out of the box. Each of those grants or spends something a person cannot get
+back, and a program able to write bytes at the terminal writes the key that does it: an editor typing a
+virtualenv activation ends its line with a return, and taking that return sent a line nobody wrote to
+the planner. Every other reader answers the event it was given, exactly as before this existed, because
+moving the caret or narrowing a list costs nothing if a program does it.
+
+**The line stays where it is when the return is refused**, and the refusal is said. Words that vanish
+leave somebody with no account of what happened, and a key that does nothing without a word reads as an
+interface that has stopped answering. So the text can be read and then sent deliberately or cleared,
+which is also why a program cannot make it look touched: an arrow and a return in one write are two
+keys that arrived with each other, so neither is a press.
+
+**Why it is one reader.** What arrived together can only be seen where the whole of it is visible. A
+prompt reading the terminal itself takes the first key of a burst with nothing behind it and believes
+it arrived alone, which is the fact this exists to get right, so every reader in the interface goes
+through this one rather than calling the terminal.
+
+**What this deliberately does not do.** It does not decide that a person's keystrokes were a program's.
+A reader doing that is wrong about a fast typist behind a slow redraw, about tmux and about ssh, since
+what lands in one read is decided by everything between the keyboard and this program rather than by
+how fast anybody typed; and being wrong that way costs somebody their own line. Nothing is withheld,
+reclassified or delayed. **So this does not stop a program that writes at the terminal from answering a
+question**, and nothing here should be read as claiming it does: a question answered by a bare letter
+is answered by a bare letter whoever wrote it. What it buys is the one distinction a terminal leaves
+available, spent in the one place where a second press is the whole of what is being asked for.
+
+`verified-by: bravebot_tui::input::the_queue_is_answered_before_the_terminal_and_in_arrival_order`
+`verified-by: bravebot_tui::input::a_press_and_its_own_release_are_one_keystroke`
+`verified-by: bravebot_tui::input::two_keystrokes_in_one_read_arrived_together`
+`verified-by: bravebot_tui::app::two_interrupts_that_arrived_together_do_not_end_the_session`
+`verified-by: bravebot_tui::app::two_end_of_transmissions_that_arrived_together_do_not_end_the_session`
+`verified-by: bravebot_tui::app::a_press_on_its_own_after_a_run_still_leaves`
+`verified-by: bravebot_tui::app::a_return_that_arrived_with_other_keys_does_not_send`
+`verified-by: bravebot_tui::app::every_refused_return_is_said_and_not_just_the_first`
+`verified-by: bravebot_tui::app::a_refused_way_out_says_so`
+`verified-by: bravebot_tui::app::a_return_of_its_own_still_sends`
+`verified-by: bravebot_tui::app::a_program_cannot_send_its_own_line_with_an_arrow_and_a_return`

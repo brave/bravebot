@@ -7,13 +7,14 @@
 //! middle of it rather than as the way it starts. Escape leaves without resuming anything, which
 //! starts an ordinary session: nothing here can strand a user who opened it by mistake.
 
+use crate::input;
 use crate::theme;
 use bravebot_i18n::t;
 use bravebot_session::sessions::{self, Summary};
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
-use ratatui::crossterm::event::{self, Event as TermEvent, KeyCode, KeyModifiers};
+use ratatui::crossterm::event::{self, KeyCode, KeyModifiers};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -185,10 +186,10 @@ pub fn choose<B: Backend>(terminal: &mut Terminal<B>, project: &Path) -> Choice 
             return Choice::Fresh;
         }
 
-        let Ok(event) = event::read() else {
+        let Ok(event) = input::read() else {
             return Choice::Fresh;
         };
-        let TermEvent::Key(key) = event else {
+        let Some(key) = input::key_of(&event) else {
             continue;
         };
         // A key event arrives twice on Windows, once pressed and once released, and the release
