@@ -1127,6 +1127,8 @@ paste-too-large = cette image fait { $size }, et un collage en porte au plus { $
 paste-nothing-on-clipboard = il n'y a rien à coller dans le presse-papiers
 return-not-pressed =
     cette entrée est arrivée avec d'autres touches, donc ce n'était pas une frappe : appuyez sur Entrée pour envoyer cette ligne, ou Échap pour l'effacer
+leave-not-pressed =
+    cela est arrivé avec d'autres touches, donc ce n'était pas une frappe : appuyez à nouveau pour quitter
 paste-folded = { $lines ->
     [one] [Texte collé #{ $number } +{ $lines } ligne]
    *[other] [Texte collé #{ $number } +{ $lines } lignes]

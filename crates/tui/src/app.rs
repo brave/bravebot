@@ -979,7 +979,13 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
         // taken by one write, which is the channel the rest of this fix is about. The rungs above
         // are untouched and still answer such a key, because each of them stops something and
         // stays.
-        KeyCode::Char('c') if ctrl && !session.key_arrived_alone => Action::None,
+        // Said rather than passed over in silence, for the reason the offer itself is said: a press
+        // that does nothing and explains nothing reads as an interface that has stopped answering,
+        // and a person whose two presses shared one read is exactly who is owed the account.
+        KeyCode::Char('c') if ctrl && !session.key_arrived_alone => {
+            session.note(t!(leave_not_pressed));
+            Action::Redraw
+        }
         KeyCode::Char('c') if ctrl && !session.offered_to_leave => {
             session.offered_to_leave = true;
             Action::Redraw
@@ -991,7 +997,8 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
         // Held to the same rule as the interrupt: end-of-transmission is also one byte, and a
         // session ended by one byte is ended by whatever could write it.
         KeyCode::Char('d') if ctrl && session.input().is_empty() && !session.key_arrived_alone => {
-            Action::None
+            session.note(t!(leave_not_pressed));
+            Action::Redraw
         }
         KeyCode::Char('d') if ctrl && session.input().is_empty() && !session.offered_to_leave => {
             session.offered_to_leave = true;
@@ -8332,6 +8339,26 @@ mod tests {
         assert_ne!(handle_key(&mut session, ctrl('d')), Action::Quit);
         assert_ne!(handle_key(&mut session, ctrl('d')), Action::Quit);
         assert!(!session.is_quitting());
+    }
+
+    /// The refusal is said, at the rung that leaves as at the return that sends. A person whose two
+    /// presses shared one read is the one this costs, and a key that does nothing without a word
+    /// reads as an interface that has stopped answering.
+    #[test]
+    fn a_refused_way_out_says_so() {
+        for pressed in [ctrl('c'), ctrl('d')] {
+            let mut session = Session::new("none");
+            session.key_arrived_alone = false;
+            let action = handle_key(&mut session, pressed);
+            assert_eq!(action, Action::Redraw, "{pressed:?} drew nothing back");
+            assert!(
+                session
+                    .transcript
+                    .iter()
+                    .any(|line| line.text.contains("press it again to leave")),
+                "{pressed:?} was refused in silence"
+            );
+        }
     }
 
     /// A key arriving on its own after a run still works, so the guard costs a person nothing: the

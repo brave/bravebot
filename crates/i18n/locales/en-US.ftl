@@ -1275,6 +1275,8 @@ paste-too-large = that picture is { $size }, and a paste carries at most { $limi
 paste-nothing-on-clipboard = there is nothing on the clipboard to paste
 return-not-pressed =
     that return arrived with other keys, so it was not a press: press Enter to send this line, or Escape to clear it
+leave-not-pressed =
+    that arrived with other keys, so it was not a press: press it again to leave
 paste-folded = { $lines ->
     [one] [Pasted text #{ $number } +{ $lines } line]
    *[other] [Pasted text #{ $number } +{ $lines } lines]

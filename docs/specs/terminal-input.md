@@ -207,6 +207,7 @@ the exit. One way out, and it is the one people already reach for.
 `verified-by: bravebot_tui::app::input_that_is_not_a_key_withdraws_the_offer_to_leave`
 `verified-by: bravebot_tui::app::two_interrupts_that_arrived_together_do_not_end_the_session`
 `verified-by: bravebot_tui::app::two_end_of_transmissions_that_arrived_together_do_not_end_the_session`
+`verified-by: bravebot_tui::app::a_refused_way_out_says_so`
 `verified-by: bravebot_tui::app::a_press_on_its_own_after_a_run_still_leaves`
 `verified-by: bravebot_tui::app::an_interrupt_still_stops_a_turn_on_the_first_press`
 `verified-by: bravebot_tui::app::ctrl_c_stops_a_turn_rather_than_leaving`
@@ -1609,5 +1610,7 @@ available, spent in the one place where a second press is the whole of what is b
 `verified-by: bravebot_tui::app::two_end_of_transmissions_that_arrived_together_do_not_end_the_session`
 `verified-by: bravebot_tui::app::a_press_on_its_own_after_a_run_still_leaves`
 `verified-by: bravebot_tui::app::a_return_that_arrived_with_other_keys_does_not_send`
+`verified-by: bravebot_tui::app::every_refused_return_is_said_and_not_just_the_first`
+`verified-by: bravebot_tui::app::a_refused_way_out_says_so`
 `verified-by: bravebot_tui::app::a_return_of_its_own_still_sends`
 `verified-by: bravebot_tui::app::a_program_cannot_send_its_own_line_with_an_arrow_and_a_return`
