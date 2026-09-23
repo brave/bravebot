@@ -195,6 +195,54 @@ fn the_arrows_still_choose_a_row_over_a_finished_reference() {
     assert_eq!(session.input(), "explain @tests/", "the second entry");
 }
 
+/// A paste is not a choice among the rows. The cursor an arrow left behind belongs to the list
+/// that was on the screen when the arrow was pressed, and a paste narrows the list to something
+/// else: read as a choice, it takes a name the user finished typing and completes it away into
+/// whichever directory the stale row now lands on, so the finished sentence is not sent.
+#[test]
+fn a_paste_returns_the_cursor_to_the_top_so_enter_sends_a_finished_reference() {
+    let scratch = Scratch::new("prefix-pasted");
+    std::fs::write(scratch.path.join("test"), "a").expect("write");
+    std::fs::create_dir_all(scratch.path.join("tests")).expect("create");
+    std::fs::create_dir_all(scratch.path.join("test-utils")).expect("create");
+    let mut session = session(&scratch);
+    typing(&mut session, "explain @");
+
+    handle_key(&mut session, key(KeyCode::Down));
+    handle_paste(&mut session, "test");
+
+    assert_eq!(
+        handle_key(&mut session, key(KeyCode::Enter)),
+        Action::Submit("explain @test".to_string())
+    );
+}
+
+/// The row it returns to is the top of the list the paste narrowed to, rather than whichever row
+/// the stale index still fits inside. Reading the cursor against the new list rescues one that
+/// points past the end and nothing else: an index that still lands somewhere highlights a file
+/// nobody has looked at, and Tab takes it.
+#[test]
+fn a_paste_returns_the_cursor_to_the_top_of_the_narrowed_list() {
+    let scratch = Scratch::new("narrowed-under-a-cursor");
+    std::fs::write(scratch.path.join("test"), "a").expect("write");
+    std::fs::create_dir_all(scratch.path.join("tests")).expect("create");
+    std::fs::create_dir_all(scratch.path.join("test-utils")).expect("create");
+    let mut session = session(&scratch);
+    typing(&mut session, "explain @");
+
+    for _ in 0..2 {
+        handle_key(&mut session, key(KeyCode::Down));
+    }
+    handle_paste(&mut session, "test");
+    handle_key(&mut session, key(KeyCode::Tab));
+
+    assert_eq!(
+        session.input(),
+        "explain @test-utils/",
+        "the first entry of the narrowed list"
+    );
+}
+
 /// A reference finished by a space closes the list, so the arrows go back to history and scrolling
 /// and the rest of the sentence can be typed.
 #[test]
@@ -221,8 +269,10 @@ fn a_reference_cannot_climb_out_of_the_workspace() {
     assert!(!session.is_completing(), "an absolute path was offered");
 }
 
-/// A paste can narrow the list under a cursor that was further down, and reading the highlighted
-/// row must still name something rather than pointing past the end.
+/// The list is read from the workspace every time it is drawn, so a file that goes away while the
+/// list is up shortens it under a cursor already further down. Nothing about the line changed, so
+/// nothing put the cursor back, and reading the highlighted row must still name something rather
+/// than pointing past the end: Tab on a row that named nothing completed nothing at all.
 #[test]
 fn a_cursor_past_the_end_of_a_narrowed_list_still_names_a_file() {
     let scratch = Scratch::new("narrow");
@@ -232,9 +282,11 @@ fn a_cursor_past_the_end_of_a_narrowed_list_still_names_a_file() {
         handle_key(&mut session, key(KeyCode::Down));
     }
 
-    handle_paste(&mut session, "Car");
+    // Every row the list held but the first, so the cursor is left past the end of what is left.
+    std::fs::remove_file(scratch.path.join("Cargo.toml")).expect("remove");
+    std::fs::remove_file(scratch.path.join("README.md")).expect("remove");
     handle_key(&mut session, key(KeyCode::Tab));
-    assert_eq!(session.input(), "@Cargo.toml ");
+    assert_eq!(session.input(), "@src/");
 }
 
 /// An ordinary sentence containing an address is not a reference: only a word beginning with `@`

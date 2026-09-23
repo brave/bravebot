@@ -78,6 +78,7 @@ among what is offered.
 `verified-by: bravebot_tui::entries::a_prefix_narrows_the_list`
 `verified-by: bravebot_tui::entries::a_slash_lists_what_is_inside_that_directory`
 `verified-by: bravebot_tui::entries::noise_directories_are_not_offered`
+`verified-by: bravebot_tui::references::a_paste_returns_the_cursor_to_the_top_of_the_narrowed_list`
 
 <a id="NAME-5"></a>
 ### NAME-5: a name cannot leave the workspace
@@ -120,6 +121,8 @@ reference rather than sending the fragment.
 `verified-by: bravebot_tui::references::the_arrows_still_choose_a_row_over_a_finished_reference`
 `verified-by: bravebot_tui::references::the_files_a_submitted_line_would_include`
 `verified-by: bravebot_tui::references::a_cursor_past_the_end_of_a_narrowed_list_still_names_a_file`
+`verified-by: bravebot_tui::references::a_paste_returns_the_cursor_to_the_top_so_enter_sends_a_finished_reference`
+`verified-by: bravebot_tui::state::a_recalled_prompt_returns_the_cursor_to_the_top`
 
 ## Known costs
 
