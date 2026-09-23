@@ -86,6 +86,8 @@ pub enum WorkspaceError {
     Io { path: String, detail: String },
     /// The file changed after it was read, so the approved change no longer applies.
     Stale { path: String },
+    /// Another effect already holds the path, so this write was refused rather than interleaved.
+    Contended { path: String },
     /// The file is not text, so there is nothing useful to return.
     Binary { path: String },
     /// The attachment is larger than a request should carry.
@@ -107,6 +109,10 @@ impl fmt::Display for WorkspaceError {
             Self::Stale { path } => write!(
                 f,
                 "'{path}' changed after it was read; read it again before editing"
+            ),
+            Self::Contended { path } => write!(
+                f,
+                "another write to '{path}' is still in progress, so nothing was written"
             ),
             Self::Binary { path } => {
                 write!(f, "'{path}' is a binary file, so it cannot be read as text")
@@ -1235,9 +1241,11 @@ impl Workspace {
             } else {
                 bravebot_core::label::Integrity::Trusted
             };
-            let effect = capture.begin(&key).ok_or_else(|| WorkspaceError::Stale {
-                path: relative.clone(),
-            })?;
+            let effect = capture
+                .begin(&key)
+                .ok_or_else(|| WorkspaceError::Contended {
+                    path: relative.clone(),
+                })?;
             self.record_backup(&resolved, captured_trust);
             Ok::<_, WorkspaceError>(effect)
         })?;
@@ -2447,6 +2455,90 @@ mod tests {
             );
             std::fs::remove_dir_all(root).unwrap();
         }
+    }
+
+    /// A second write to a path an effect already holds is refused, in words about the reservation
+    /// rather than about a version.
+    ///
+    /// Two writers interleaved on one path leave one writer's bytes on disk under the other's
+    /// integrity, which is what the reservation exists to prevent. Reporting it as
+    /// [`WorkspaceError::Stale`] would say the version moved under this write and invite the caller
+    /// to read again and retry, which is advice for a write that lost a race. This one never
+    /// started, and the path is held by something still running.
+    #[test]
+    fn a_second_write_to_a_reserved_path_is_refused_as_contended() {
+        use bravebot_core::file_authority::FileAuthority;
+        use bravebot_core::{CapabilitySet, RecordingSink, ReleasePlan, Routing, TrustStore};
+        use std::sync::mpsc;
+        let root = crate::testutil::scratch_dir("bravebot-write-contended");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create scratch");
+        std::fs::write(root.join("shared.txt"), "original text").unwrap();
+        let workspace = Workspace::new(&root).unwrap();
+        let mut trust = TrustStore::new(workspace.root());
+        trust.trust(".");
+        let authority = FileAuthority::new(trust);
+        let (entered, observed) = mpsc::channel();
+        let (release, resume) = mpsc::channel();
+        *workspace.after_write.lock().unwrap() = Some(WriteInterruption { entered, resume });
+
+        fn writing(
+            authority: FileAuthority,
+            sink: &mut RecordingSink,
+        ) -> Policy<'_, RecordingSink> {
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "write");
+            Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead, Capability::FileWrite]),
+                sink,
+            )
+            .unwrap()
+            .with_file_authority(authority)
+        }
+
+        let child_workspace = workspace.clone();
+        let child_authority = authority.clone();
+        let writer = std::thread::spawn(move || {
+            let mut sink = RecordingSink::new();
+            let mut policy = writing(child_authority, &mut sink);
+            child_workspace.write(
+                &mut policy,
+                &Labelled::trusted("shared.txt".to_string()),
+                &Labelled::trusted("FIRST_WRITER".to_string()),
+            )
+        });
+        observed
+            .recv_timeout(Duration::from_secs(5))
+            .expect("effect reached disk");
+
+        let mut sink = RecordingSink::new();
+        let mut policy = writing(authority.clone(), &mut sink);
+        let refused = workspace
+            .write(
+                &mut policy,
+                &Labelled::trusted("shared.txt".to_string()),
+                &Labelled::trusted("SECOND_WRITER".to_string()),
+            )
+            .expect_err("a path another effect holds was written anyway");
+        assert!(
+            matches!(&refused, WorkspaceError::Contended { path } if path == "shared.txt"),
+            "the wrong refusal, so a caller cannot tell contention from a stale version: {refused:?}"
+        );
+        assert_eq!(
+            refused.to_string(),
+            "another write to 'shared.txt' is still in progress, so nothing was written"
+        );
+
+        release.send(false).unwrap();
+        writer.join().unwrap().expect("the first write finished");
+        assert_eq!(
+            std::fs::read_to_string(root.join("shared.txt")).unwrap(),
+            "FIRST_WRITER",
+            "the refused write reached the file anyway"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// A door that opens a directory by name hands the trust map the name it resolved to, so a name

@@ -1821,7 +1821,6 @@ fn backup_capture_trust_overrides_a_stale_pre_turn_grant() {
         &plan,
         &bravebot_core::Cancel::new(),
         std::time::Duration::from_secs(5),
-        &mut Vec::new(),
         None,
         None,
         &mut |path| {

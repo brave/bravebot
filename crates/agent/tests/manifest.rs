@@ -180,6 +180,21 @@ fn run(
     prompt: &str,
     sink: &mut RecordingSink,
 ) -> Result<bravebot_agent::Outcome, bravebot_agent::TurnError> {
+    run_with_trust(config, workspace, prompt, TrustStore::new("/work"), sink)
+}
+
+/// The same run with rules a settings file would have carried.
+///
+/// A default store trusts nothing, which is what most of these want. A test about what trust
+/// changes needs to say so, and needs to say it before the run rather than after: the map the run
+/// starts with is the one its first capture reads.
+fn run_with_trust(
+    config: &Config,
+    workspace: &Workspace,
+    prompt: &str,
+    trust: TrustStore,
+    sink: &mut RecordingSink,
+) -> Result<bravebot_agent::Outcome, bravebot_agent::TurnError> {
     manifest::run(
         config,
         &bravebot_net::Egress::new(),
@@ -188,7 +203,7 @@ fn run(
         skipping_permissions!(),
         &mut bravebot_agent::IgnoreReports,
         sink,
-        TrustStore::new("/work"),
+        trust,
         &bravebot_core::cancel::Cancel::new(),
     )
 }
@@ -863,6 +878,85 @@ fn a_planned_answer_cannot_be_written_to_a_file_it_is_not_about() {
         std::fs::read_to_string(scratch.path.join("in.md")).unwrap(),
         original,
         "the document it was about was changed instead"
+    );
+}
+
+/// A value that declares itself: AWS's own documentation key, which is the provider's prefix over
+/// the provider's alphabet at the provider's length. A refusal needs a declared kind, because a
+/// value merely inferred from its name goes to whoever is watching instead, and an unattended run
+/// with permissions skipped approves it.
+const DECLARED_KEY: &str = "AKIAIOSFODNN7EXAMPLE";
+
+/// A credential in a proposed body is the run's own unless the file already held it, and "already
+/// held it" means bytes something vouched for. A sibling effect leaves a path untrusted while it
+/// writes, so a pre-image taken then is content nobody stands behind, and excusing a finding
+/// against it would let a write plant a key by first arranging for the file to appear to hold one.
+///
+/// A manifest step is held to this exactly as a turn's write is. Before the pre-image was filtered
+/// this step wrote the key, because the untrusted bytes on disk answered for it.
+#[test]
+fn a_manifest_write_cannot_excuse_a_credential_against_untrusted_prior_bytes() {
+    let scratch = Scratch::new("credential-untrusted-preimage");
+    let before = format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n");
+    std::fs::write(scratch.path.join(".env"), &before).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let after = format!("PORT=8080\nAWS_ACCESS_KEY_ID={DECLARED_KEY}\n");
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_WRITE", "args": {"path": ".env", "contents": after}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+
+    let failure =
+        run(&config, &workspace, "add a port to .env", &mut sink).expect_err("must refuse");
+    assert!(
+        failure
+            .to_string()
+            .contains("would put a credential in the tree"),
+        "unhelpful message: {failure}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".env")).unwrap(),
+        before,
+        "a credential was excused by bytes nothing vouched for"
+    );
+}
+
+/// The same step over the same bytes, with the difference that decides it: the pre-image was
+/// trusted at capture, so the key is the file's own and carrying it along is ordinary work.
+///
+/// Without this the refusal above would be indistinguishable from a manifest that cannot write a
+/// credential-bearing file at all, which is not the rule and would refuse a person moving their
+/// own secret between two files they trust.
+#[test]
+fn a_manifest_write_carries_a_credential_its_trusted_pre_image_already_held() {
+    let scratch = Scratch::new("credential-trusted-preimage");
+    let before = format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n");
+    std::fs::write(scratch.path.join(".env"), &before).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let after = format!("PORT=8080\nAWS_ACCESS_KEY_ID={DECLARED_KEY}\n");
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_WRITE", "args": {"path": ".env", "contents": after}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+
+    let mut trust = TrustStore::new("/work");
+    trust.trust(".");
+    run_with_trust(&config, &workspace, "add a port to .env", trust, &mut sink).expect("runs");
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".env")).unwrap(),
+        after,
+        "a change carrying a credential the trusted file already held was refused"
     );
 }
 

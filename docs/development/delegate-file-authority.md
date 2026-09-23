@@ -1,10 +1,12 @@
 # Overlapping delegate writes: Item 01 evidence
 
 Implemented on `reconcile-delegate-writes`, starting at main
-`25bc43ca3810abad88d55e315668e97d250d3910` on 2026-09-23. The prerequisite is the notebook
-item 00 decision record at `7a6d16de75cc0dc53f29ea88f5a4bceb932680fc`, D1 and A1–A3/A12.
-The combined branch at `d9fc42c617d5ab8ac870da3ef201d13f8754898a` was left untouched.
-This document records this implementation's evidence, not the combined branch's results.
+`25bc43ca3810abad88d55e315668e97d250d3910` on 2026-09-23. The prerequisite is the item 00 decision
+record, D1 and A1–A3/A12, which is not in this repository. The combined branch that also carries
+items 02–10 was left untouched, and this document records this implementation's evidence rather
+than that branch's results. Neither is named by revision here: both live outside
+`brave/bravebot`, so a reader of this file cannot resolve such a name, and a reader who tries gets
+a 422 rather than an answer.
 
 ## Behavior
 
@@ -45,9 +47,11 @@ rewind are Item 02; ordinary interrupted caller retention and save/resume are It
 | Independent paths and supported alternate names retain correct decisions | `shared_file_authority_preserves_aliases_scratch_added_paths_and_independent_writes`: relative/absolute spellings, canonical added-directory and scratch names, untouched snapshot, trusted replacement after untrusted replacement | Tests pass. No separate fault mutation for each spelling. |
 | Foreground destinations stay untrusted while a process writes | `foreground_redirection_quarantines_live_reads_and_all_endings`: actual redirected process signals over a socket after writing, parent reads before release, command success/exit 7, parent failure and cancellation | Demonstrated through process and planner boundaries. Cancellation asserts `Ending::Stopped`; parent failure asserts `Unauthorized`; process EOF confirms cleanup. |
 | Untaken branches do not change trust | Existing `a_branch_that_does_not_run_leaves_its_destination_as_it_was` | Passes in the affected suite; disk and trust assertions remain intact. |
-| Background completion revalidates its proof | `an_ended_job_revalidates_its_file_proof_before_releasing_output`: real process output, unchanged control and intervening same-label effect | Tests pass. Explicit `job_output` revision checking and concurrent foreground input-proof invalidation are reasoned from code, not separately scheduled end-to-end race fixtures. Existing background and command-proof tests pass. |
+| Background completion revalidates its proof | `an_ended_job_revalidates_its_file_proof_before_releasing_output`: real process output, unchanged control and intervening same-label effect | Tests pass. Both delivery routes now ask one `Job::label_now`, so the explicit `job_output` path runs the decision this fixture covers rather than a second copy of it. Concurrent foreground input-proof invalidation is still reasoned from code, not a separately scheduled end-to-end race fixture. Existing background and command-proof tests pass. |
 | Stale pre-turn trust cannot authorize backup storage | `backup_capture_trust_overrides_a_stale_pre_turn_grant`: executor redirection through the real observer, Workspace backup capture, real session save/load, trusted backup control, raw/base64 sentinel exclusion | Demonstrated. Replacing capture integrity with the stale snapshot's grant saves the sentinel and fails the record assertion. Restored sources pass. The fixture wires the executor observer directly; the separate turn fixture exercises the tool's observer wiring. |
-| Preview approval cannot trust or overwrite a newer same-run version | Per-path revision check around vouch and whole-file write; trusted capture and revision check for edits | Reasoned from the lock and revision checks. Existing approval/stale-edit tests pass, and the paused-write test rejects a vouch during an active effect. No separately scheduled prompt-versus-completed-write race test. |
+| Preview approval cannot trust or overwrite a newer same-run version | `a_vouch_is_not_spent_on_a_version_nobody_was_shown` and `a_vouch_for_the_version_shown_is_spent_on_it`: a sibling effect entered and published on the path between the preview and the answer, and the same call with nothing intervening | Demonstrated. Ignoring the revision at the vouch spends the approval on bytes nobody read, and the refusal is recorded rather than silent. The edit path's own revision check remains reasoned from the code. |
+| A second writer to a path an effect holds is refused, as contention rather than staleness | `a_second_write_to_a_reserved_path_is_refused_as_contended`: a paused write holding the path, a second write to it, and the first writer's bytes on disk afterwards | Demonstrated. Reporting the refusal as `Stale` fails the fixture: the caller would read again and retry a path that is held rather than overtaken. |
+| Credential attribution for a whole-file write uses a pre-image only where its capture was trusted | `a_manifest_write_cannot_excuse_a_credential_against_untrusted_prior_bytes` and `a_manifest_write_carries_a_credential_its_trusted_pre_image_already_held`: the same step over the same bytes, differing only in what the map said about the path | Demonstrated. Without the trust filter, untrusted prior bytes excuse the key as carried and the write lands. |
 | Exact command scope remains unchanged | Existing core adoption and agent command-approval tests | Pass. File authority sharing does not share capability or one-use endorsement state. |
 
 Mutation experiments saved exact source contents, restored those contents, and reran the affected
@@ -65,17 +69,22 @@ from fault evidence. No mutation remains in the implementation.
   Already materialized slots keep the labels of their immutable bytes.
 - Vouch previews carry a path revision; a later version cannot use the earlier preview approval.
   Whole-file approvals do the same. Edit comparison uses `read_trusted_content` before comparing.
-  Credential attribution for interactive whole-file writes receives a pre-image only when its
-  capture was trusted. Three stale-edit fixtures and one credential fixture now grant that trust
-  explicitly; their original behavioral assertions remain.
+  Credential attribution for a whole-file write receives a pre-image only when its capture was
+  trusted, whether the write came from a turn or from a manifest step. Three stale-edit fixtures and
+  one credential fixture now grant that trust explicitly; their original behavioral assertions
+  remain.
 - LSP prose remains untrusted regardless of file trust. Structural locations use the existing
   sanitized location path on this main revision; they do not turn filesystem prose into trusted
   content. No LSP trust upgrade was added.
 - Foreground read proofs and both background output-delivery paths revalidate the authority
-  revision after output capture. No trust decision hashes or examines untrusted bytes.
-- Manifest file writes already use Workspace's effect path. Their redundant after-write
-  reconciliation was removed so a caller cannot republish a stale completion. This does not add
-  manifest recovery or Item 05 state retention.
+  revision after output capture. The two background routes share one method rather than repeating
+  the comparison, so the covered decision is the only one either can take. No trust decision hashes
+  or examines untrusted bytes.
+- Manifest file writes go through the same capture as a turn's: the pre-image and the version it
+  was read at are taken under one boundary, the credential scan is given the pre-image only when
+  that capture was trusted, and the write is refused if the path changed between the approval and
+  the write. Their redundant after-write reconciliation was removed so a caller cannot republish a
+  stale completion. This does not add manifest recovery or Item 05 state retention.
 - CLI, TUI and bridge continue consuming trust snapshots. The public `Policy::trust` accessor now
   returns an owned snapshot; delegates receive live authority separately. `Backup` constructors
   now supply capture integrity. TUI's session tests exercise the shared session storage boundary.

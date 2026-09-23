@@ -102,6 +102,36 @@ impl FileAuthority {
         self.state().trust.clone()
     }
 
+    /// One question about one path, answered under the state lock.
+    ///
+    /// A gate asking about a path does not need a copy of every rule, and a gate that asks
+    /// several times in a row would take one copy per question. See [`TrustStore::integrity_of`]
+    /// for what the answer means.
+    pub fn integrity_of(&self, path: &str) -> Option<Integrity> {
+        self.state().trust.integrity_of(path)
+    }
+
+    pub fn integrity_beneath(&self, path: &str) -> Option<Integrity> {
+        self.state().trust.integrity_beneath(path)
+    }
+
+    pub fn integrity_beneath_or(&self, path: &str, assumed: Integrity) -> Integrity {
+        self.state().trust.integrity_beneath_or(path, assumed)
+    }
+
+    pub fn is_trusted(&self, path: &str) -> bool {
+        self.state().trust.is_trusted(path)
+    }
+
+    /// The key `begin` and `publish` will file `path` under.
+    ///
+    /// For a caller keeping its own record of the effects it entered. Two spellings of one path are
+    /// one key, so a caller comparing the names it was handed would enter a second effect on a path
+    /// it is already writing and be refused by its own reservation.
+    pub fn key(&self, path: &str) -> String {
+        self.state().trust.key(path)
+    }
+
     /// Changes even when a write leaves the effective label unchanged.
     pub fn revision(&self) -> u64 {
         self.state().revision

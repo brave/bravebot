@@ -1240,6 +1240,24 @@ struct Job {
     reported: bool,
 }
 
+impl Job {
+    /// The label this job's output may carry now, rather than the one fixed before it started.
+    ///
+    /// A proof about the files a line was endorsed against says nothing about a tree something has
+    /// decided about since, and the delivery is where that shows. Both routes out of here ask this,
+    /// so they ask it in one place: a second copy of the question is a second chance for one of them
+    /// to stop asking it.
+    fn label_now(&self) -> Label {
+        if self.file_authority.is_current(self.file_revision) {
+            return self.label;
+        }
+        Label::new(
+            bravebot_core::label::Integrity::Untrusted,
+            self.label.confidentiality,
+        )
+    }
+}
+
 /// A background job's finish, as the turn is told about it (CMDLINE-14).
 ///
 /// The name and the outcome are the driver's own: a name this module minted, and a verdict read off
@@ -1323,12 +1341,7 @@ impl Jobs {
             }
             job.reported = true;
             let printed = job.running.since(&mut job.seen);
-            if !job.file_authority.is_current(job.file_revision) {
-                job.label = Label::new(
-                    bravebot_core::label::Integrity::Untrusted,
-                    job.label.confidentiality,
-                );
-            }
+            job.label = job.label_now();
             // Capped only where the planner may read it, exactly as a run's output is: what it may
             // not read is quarantined whole, and there is nothing of it in the conversation to
             // bound.
@@ -2356,6 +2369,11 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     let mut spent = Usage::default();
     let mut waited = None;
 
+    // Whether a yes was given and could not be spent, carried out of the block for the same
+    // reason: the person answered, and what they are told back has to say that their answer did
+    // not land rather than reading as the file simply being quarantined.
+    let mut approval_outlived = false;
+
     if policy.read_is_quarantined(&keyed)
         && media.is_none()
         && workspace.names_a_file(&proposed_path)
@@ -2421,11 +2439,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
             reason,
         };
         if confirmer.confirm_vouch(&request) == Decision::Approve {
-            policy.capture_files(|policy, capture| {
-                if capture.revision_of(&keyed) == preview_revision {
-                    policy.vouch_for_named_path(&keyed);
-                }
-            });
+            approval_outlived = !policy.vouch_if_unchanged(&keyed, preview_revision);
         }
     }
 
@@ -2433,6 +2447,21 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     // the ones that report a refusal: the request was made and somebody is paying for it whether or
     // not the read that followed handed anything over.
     let priced = |produced: Produced| produced.costing(spent).waiting(waited);
+
+    // A yes that arrived too late is said so, rather than left to read as a file nobody was asked
+    // about. The bytes the answer was about are gone, so the only thing to do with the answer is
+    // throw it away, and the person who gave it is owed the reason: reading again puts the question
+    // again, about what the file holds now.
+    if approval_outlived {
+        return priced(confirmed(
+            format!(
+                "{shown_path} changed while the user was being asked about it, so the answer they \
+                 gave was about text that is no longer there and nothing was trusted. Read it \
+                 again if you still need it, and they will be asked about what is in it now."
+            ),
+            format!("{shown_path} changed while it was being asked about"),
+        ));
+    }
 
     // A reference to a file the planner may not read already is that file, so reading it has
     // nothing to hand back but another name for the same thing, which reads as the read having
@@ -4429,16 +4458,6 @@ fn run<S: Sink, C: Confirmer>(
         };
     }
 
-    // A redirection is a write, so the map has to say what its destination holds once the line
-    // has run: untrusted bytes landing in a vouched-for tree must mark that path untrusted, or a
-    // later read hands them back to the planner as trusted.
-    //
-    // What the run reports opening, never the plan's write set. The set names every branch, so a
-    // destination a line decided against is in it, and a rule about a file nothing wrote would
-    // quarantine a file the planner can read today. Spelled the way a read of the file is
-    // spelled, because a name is reduced to the open directory it lands in before the map sees it
-    // and a rule written under an unreduced name decides nothing.
-    let mut opened: Vec<std::path::PathBuf> = Vec::new();
     // Unwrapped here and nowhere earlier: the endorsement has been consumed, so the line about to
     // read these bytes is one a person approved. The witness is what licenses the unwrapping, and
     // what it licenses is carrying them to a descriptor: no branch below reads them, and exec
@@ -4447,16 +4466,23 @@ fn run<S: Sink, C: Confirmer>(
         let proof = policy.authorise_program_input("run", &slot, content.label());
         (content.declassify(&proof), read)
     });
+    // A redirection is a write, so the destination is reserved and marked untrusted before the
+    // line may open it, and what it holds afterwards is decided when the line has stopped. Entered
+    // from what the run is about to open, never from the plan's write set: the set names every
+    // branch, so a destination a line decided against is in it, and a rule about a file nothing
+    // wrote would quarantine a file the planner can read today.
+    //
+    // Keyed the way the authority keys it, so the two spellings of one destination in
+    // `> out 2> ./out` are one effect rather than a second entry refused by the first.
     let mut effects = std::collections::BTreeMap::new();
     let ran = crate::exec::run_plan_observed(
         &plan,
         tools.cancel,
         limit,
-        &mut opened,
         tools.workspace.scratch(),
         supplied.as_ref().map(|(bytes, _)| bytes.as_str()),
         &mut |path| {
-            let key = tools.workspace.trust_key(&path.to_string_lossy());
+            let key = authority.key(&tools.workspace.trust_key(&path.to_string_lossy()));
             if effects.contains_key(&key) {
                 return Ok(());
             }
@@ -4745,14 +4771,7 @@ fn job_output<S: Sink>(
 
     let ran_for = job.running.ran_for();
     let line = job.line.clone();
-    let label = if job.file_authority.is_current(job.file_revision) {
-        job.label
-    } else {
-        Label::new(
-            bravebot_core::label::Integrity::Untrusted,
-            job.label.confidentiality,
-        )
-    };
+    let label = job.label_now();
 
     // Said from the clock and the exit codes, which are structure: nothing here reads a byte of
     // what the pipeline printed. Worked out before the kill below, so a job that had already ended

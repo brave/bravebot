@@ -292,7 +292,7 @@ redirection while allowing pipes would be refusing the easy half.
 `verified-by: bravebot_agent::turn::a_line_a_person_vouched_for_does_not_trust_the_file_it_wrote`
 `verified-by: bravebot_agent::turn::a_branch_that_does_not_run_leaves_its_destination_as_it_was`
 `verified-by: bravebot_agent::exec::a_line_reports_the_destinations_it_opened_and_no_others`
-`verified-by: bravebot_agent::exec::a_destination_that_cannot_be_opened_is_not_reported`
+`verified-by: bravebot_agent::exec::a_destination_that_cannot_be_opened_is_still_reported`
 `verified-by: bravebot_agent::cmdline::an_append_writes_and_an_input_reads`
 `verified-by: bravebot_agent::cmdline::an_input_redirection_is_private_input`
 `verified-by: bravebot_agent::cmdline::a_line_that_only_writes_releases_nothing`

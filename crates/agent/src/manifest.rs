@@ -1163,7 +1163,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
         }
     };
 
-    let trust = policy.trust().clone();
+    let trust = policy.trust();
     let programs = policy.programs().clone();
     let asked_about = policy.asked().clone();
     Ok(Outcome {
@@ -1582,7 +1582,18 @@ fn write<S: Sink, C: Confirmer>(
 
     let proof = policy.authorise_display_release("proposed write");
     let shown = body.clone().declassify(&proof);
-    let existing = workspace.peek_for_review(&path);
+    // The pre-image and the version it was read at, taken together, exactly as a turn's write
+    // takes them: prior bytes a sibling effect left untrusted cannot answer for a credential in
+    // this body, and the approval minted below is spent only on the version shown here.
+    let (existing, existing_trusted, approved_revision) =
+        policy.capture_files(|policy, capture| {
+            let key = workspace.trust_key(&path);
+            (
+                workspace.peek_for_review(&path),
+                !policy.read_is_quarantined(&key),
+                capture.revision_of(&key),
+            )
+        });
     let replaced_age = workspace.age_of(&path);
     let intent = if existing.is_some() {
         Intent::Overwrite
@@ -1593,7 +1604,12 @@ fn write<S: Sink, C: Confirmer>(
     // What this would leave in the tree, before anything is written and before anybody is asked.
     // A manifest run has no planner in the control path, so the refusal here is read by a person
     // and is the whole of what they are told about the step.
-    let scanned = policy.scan_a_write("write_file", &path, existing.as_deref(), &body);
+    let scanned = policy.scan_a_write(
+        "write_file",
+        &path,
+        existing.as_deref().filter(|_| existing_trusted),
+        &body,
+    );
     let refused = scanned.refused();
     if !refused.is_empty() {
         let found: Vec<String> = refused.iter().map(|finding| finding.describe()).collect();
@@ -1629,7 +1645,12 @@ fn write<S: Sink, C: Confirmer>(
 
     policy.issue_grant("file_write", "path", path.clone());
     workspace
-        .write_endorsed(policy, &Labelled::trusted(path.clone()), &body)
+        .write_endorsed_at_revision(
+            policy,
+            &Labelled::trusted(path.clone()),
+            &body,
+            Some(approved_revision),
+        )
         .map_err(|e| e.to_string())?;
 
     let (note, changes) =

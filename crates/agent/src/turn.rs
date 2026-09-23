@@ -3602,7 +3602,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
 
     // Taken before `finish` consumes the policy, since a write may have changed the map and an
     // approved run may have added to the programs.
-    let trust = policy.trust().clone();
+    let trust = policy.trust();
     let programs = policy.programs().clone();
     let asked_about = policy.asked().clone();
 

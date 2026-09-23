@@ -287,8 +287,9 @@ delegate, the planner has its round back, and the work goes on behind it. A turn
 number going at once, and what one is doing has no bearing on what another may do.
 
 Each holds its own conversation, quarantine, capabilities, routing grants and prompt history.
-They share live file authority because their effects touch the same filesystem. Short capture
-boundaries and active-path reservations do not serialize whole delegates.
+They share live file authority because their effects touch the same filesystem. A capture boundary
+spans one operation, so a large listing or search can delay other captures until it finishes.
+Reservations are per path, so writes to other paths proceed.
 
 **Why.** A turn that asked three questions waits on the slowest and not on the sum. Running them
 one at a time would also make the reading order the asking order, so a build would have to finish
