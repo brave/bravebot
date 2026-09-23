@@ -3672,11 +3672,18 @@ impl Session {
     /// over a line that arrived under it belongs to a press two prompts ago. Several callers took it
     /// down themselves and the ones that did not were the ones a person reached mid-turn: recalling
     /// an earlier prompt, and a stopped turn handing its prompt back.
+    ///
+    /// The cursor into what is offered goes with it too, for a reason the list of keys does not
+    /// have: a row is read as a choice somebody made. What is offered is a function of the line, so
+    /// a line that arrived whole is a new list and an index into the one before it stands for a row
+    /// nobody walked to. Recalling `look at @test` under a cursor an arrow had moved sent nothing
+    /// and left `look at @tests/` in the box, because a finished name loses to a chosen row.
     fn set_input(&mut self, line: impl Into<String>) {
         self.abandon_the_selection();
         self.input = line.into();
         self.caret = self.input.len();
         self.shortcuts = false;
+        self.completion = 0;
     }
 
     /// Whether the line has more than one line in it, which is what gives Up and Down something
@@ -4328,6 +4335,14 @@ impl Session {
         let text = normalised(text);
         self.input.insert_str(self.caret, &text);
         self.caret += text.len();
+        // Back to the top of whatever is now offered, for the reason [`Session::type_char`] goes
+        // back: the list is a function of the line, and this changed the line. A cursor left where
+        // an arrow put it would stand for a row of the list that was on the screen before the
+        // paste, and a row nobody walked to is read as a choice all the same, so Enter on a name
+        // the user had finished typing completes it away into whichever entry the stale index now
+        // lands on. Clamping when the cursor is read cannot stand in for this: the stale index is
+        // usually inside the narrowed list rather than past its end.
+        self.completion = 0;
     }
 
     /// Take text the user pasted, folding a long one behind a marker.
@@ -11399,6 +11414,39 @@ mod tests {
 
         s.recall_newer();
         assert!(s.input.is_empty(), "stepping forward did not come back");
+    }
+
+    /// A recalled prompt ending in a finished name is a finished sentence, and Enter sends it. The
+    /// prompt arrives whole rather than a character at a time, so the list under it is a new list:
+    /// a cursor an arrow left in the old one would stand for a row nobody walked to, and a chosen
+    /// row beats a finished name. The recalled line was rewritten to a directory instead of sent.
+    #[test]
+    fn a_recalled_prompt_returns_the_cursor_to_the_top() {
+        let directory = crate::testutil::scratch_dir("bravebot-state-recall-completion");
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(directory.join("tests")).expect("scratch");
+        std::fs::create_dir_all(directory.join("test-utils")).expect("scratch");
+        std::fs::write(directory.join("test"), "a").expect("write");
+
+        let mut s = session().in_workspace(&directory);
+        for c in "look at @test".chars() {
+            s.type_char(c);
+        }
+        s.submit().expect("submitted");
+        // The turn is nothing to do with the property, and only an idle session offers anything.
+        s.status = Status::Idle;
+
+        for c in "explain @t".chars() {
+            s.type_char(c);
+        }
+        s.next_completion();
+        s.recall_older();
+
+        assert_eq!(s.input, "look at @test", "the prompt did not come back");
+        assert!(
+            !s.completion_would_change_the_line(),
+            "the recalled line lost its finished name to a row nobody chose"
+        );
     }
 
     /// Reaching a prompt is not sending one. Whatever is in the box, a second turn must not begin

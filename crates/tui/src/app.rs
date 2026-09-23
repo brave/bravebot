@@ -10920,10 +10920,11 @@ mod tests {
         );
     }
 
-    /// A paste narrows the list without touching the cursor, so the cursor may be past the end of
-    /// what is left. Reading it must still name something, or Tab would complete nothing.
+    /// A paste narrows the list the way typing does, and the cursor goes back to the top of it for
+    /// the same reason: a row it was left on belongs to the list that was on the screen before the
+    /// paste, and Tab takes a row as the command somebody picked.
     #[test]
-    fn a_cursor_past_the_end_of_a_narrowed_list_still_names_a_command() {
+    fn a_paste_returns_the_cursor_to_the_top_of_the_narrowed_command_list() {
         let mut session = Session::new("none");
         handle_key(&mut session, key(KeyCode::Char('/')));
         // To the last of them, counted rather than named, so adding a command does not make this
@@ -10936,15 +10937,19 @@ mod tests {
             Some(commands()[commands().len() - 1].name)
         );
 
-        // Now one command matches, while the cursor still points at the last.
-        handle_paste(&mut session, "cl");
+        handle_paste(&mut session, "c");
+        // More than one, or the top row and whatever the old cursor was clamped to are the same
+        // row and the assertion below would hold with the cursor left where it was.
+        let matching = completions("/c");
+        assert!(
+            matching.len() > 1,
+            "one match cannot tell the top of the list from the end of it"
+        );
         assert_eq!(
             session.highlighted_completion().map(|c| c.name),
-            Some(CLEAR_COMMAND),
-            "the cursor pointed past the narrowed list"
+            matching.first().map(|command| command.name),
+            "the cursor did not return to the top of what now matches"
         );
-        handle_key(&mut session, key(KeyCode::Tab));
-        assert_eq!(session.input(), CLEAR_COMMAND);
     }
 
     /// With nothing being offered, Tab must not insert anything and the arrows go back to what they
