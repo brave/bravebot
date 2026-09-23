@@ -914,6 +914,17 @@ def test_pinned_images():
         str(kinds(found)),
     )
 
+    # A nested worktree is a second checkout of this repository, often parked several commits back.
+    # Its Makefile is not this tree's to pin: a finding against it names a file no commit here can
+    # fix, and it turns this check into one that passes or fails on whether the person running it
+    # happens to keep a worktree.
+    nested = in_tree({".claude/worktrees/old/Makefile": RUN_LINE.format(image="rust:slim")})
+    check(
+        "an image named by a nested worktree is not this tree's to answer for",
+        with_cwd(nested, lambda: list(audit.check_pinned_images())) == [],
+        str(kinds(with_cwd(nested, lambda: list(audit.check_pinned_images())))),
+    )
+
     # Every image in the tree names a digest today, and this is what keeps it that way.
     check(
         "the tree's own build images are pinned",
@@ -1650,6 +1661,49 @@ def test_posting_skips_what_the_tracker_already_holds():
     )
 
 
+def test_an_assignee_reaches_the_create():
+    """The login has to arrive at `gh issue create`, not just at the parser.
+
+    Nothing else in this file calls `post`, so an `--assignee` that is parsed and never threaded
+    through files every issue unassigned and still passes every other check here.
+    """
+    original = posting.gh
+    calls = []
+
+    def fake_gh(args, repo=None):
+        calls.append(list(args))
+        return "https://github.com/brave/bravebot/issues/1"
+
+    posting.gh = fake_gh
+    draft = {"title": "t", "body_file": "b", "labels": ["security"]}
+
+    posting.post("brave/bravebot", draft, "netzenbot")
+    passed = calls[-1]
+    check(
+        "the login a run was given is the one the create is passed",
+        "--assignee" in passed and passed[passed.index("--assignee") + 1] == "netzenbot",
+        str(passed),
+    )
+
+    posting.post("brave/bravebot", draft)
+    check(
+        "a run given no login names no assignee, so an unassigned issue stays the default",
+        "--assignee" not in calls[-1],
+        str(calls[-1]),
+    )
+
+    def refusing_gh(args, repo=None):
+        raise RuntimeError("Not Found")
+
+    posting.gh = refusing_gh
+    check(
+        "a login the repository would refuse is caught before anything is posted",
+        not posting.assignable("brave/bravebot", "nobody"),
+    )
+
+    posting.gh = original
+
+
 def test_a_run_writes_a_manifest_and_posts_nothing():
     """The mechanical half end to end, in a work directory, with no model anywhere in it."""
     def run():
@@ -1701,6 +1755,7 @@ def main():
         test_a_name_stays_a_name,
         test_bodies_say_where_and_why,
         test_posting_skips_what_the_tracker_already_holds,
+        test_an_assignee_reaches_the_create,
         test_a_run_writes_a_manifest_and_posts_nothing,
     ):
         print(test.__name__)
