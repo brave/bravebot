@@ -2,6 +2,7 @@
 """File the drafted issues, skipping the ones the tracker already holds.
 
     python3 agents/skills/security-audit/post-issues.py --work-dir "$WORK_DIR" [--dry-run]
+        [--assignee LOGIN]
 
 This posts. It is the one step of this skill that changes something outside the checkout, and the
 three things keeping that safe are here rather than in a prompt, because a model cannot be relied on
@@ -60,15 +61,18 @@ def significant(title):
     return {word for word in words if len(word) > 2 and word not in STOP}
 
 
-def gh(args, repo):
+def gh(args, repo=None):
     """A `gh` call, as JSON where it asked for JSON.
 
     Every argument is its own list element and no shell is involved, so a title or a search term is
     an argument whatever it holds. That matters more here than in most scripts: a title is written by
     a lane reading code that an attacker may have chosen the wording of.
+
+    `repo` is left out for the calls that name the repository in the path themselves, since `gh api`
+    takes no `--repo`.
     """
     result = subprocess.run(
-        ["gh", *args, "--repo", repo],
+        ["gh", *args, *(["--repo", repo] if repo else [])],
         capture_output=True,
         text=True,
         check=False,
@@ -83,6 +87,20 @@ def existing_labels(repo):
         gh(["label", "list", "--limit", "200", "--json", "name"], repo)
     )
     return {one["name"] for one in listed}
+
+
+def assignable(repo, login):
+    """Whether GitHub would accept this login as an assignee on this repository.
+
+    Checked before the first issue goes out, for the same reason a missing label is: `gh issue
+    create` fails on a login the repository would not take, and finding that out on the fourth of
+    six issues leaves half a report filed.
+    """
+    try:
+        gh(["api", f"repos/{repo}/assignees/{login}"])
+    except RuntimeError:
+        return False
+    return True
 
 
 def already_filed(repo, draft):
@@ -138,10 +156,12 @@ def already_filed(repo, draft):
     return None
 
 
-def post(repo, draft):
+def post(repo, draft, assignee=None):
     args = ["issue", "create", "--title", draft["title"], "--body-file", draft["body_file"]]
     for label in draft["labels"]:
         args += ["--label", label]
+    if assignee:
+        args += ["--assignee", assignee]
     return gh(args, repo).strip().splitlines()[-1]
 
 
@@ -170,6 +190,7 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="say what would be posted, post none")
     parser.add_argument("--max", type=int, default=CAP)
     parser.add_argument("--pace", type=float, default=PACE)
+    parser.add_argument("--assignee", default=None, help="the login every issue is assigned to")
     args = parser.parse_args()
 
     drafts = load_drafts(args.work_dir)
@@ -193,6 +214,13 @@ def main():
             print(f"  gh label create {label} --repo {args.repo} --description ... --color ...", file=sys.stderr)
         return 2
 
+    if args.assignee and not assignable(args.repo, args.assignee):
+        print(f"{args.repo} would not take {args.assignee} as an assignee", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("Nothing was posted. A login the repository refuses fails the create it is passed to,", file=sys.stderr)
+        print("so it is checked here rather than partway through a report.", file=sys.stderr)
+        return 2
+
     posted, skipped, left = [], [], []
     for draft in drafts:
         if len(posted) >= args.max:
@@ -214,12 +242,14 @@ def main():
             posted.append((draft, "(dry run)"))
             print(f"  would  {draft['title']}")
             print(f"         {', '.join(draft['labels'])}")
+            if args.assignee:
+                print(f"         assigned to {args.assignee}")
             continue
 
         if posted:
             time.sleep(args.pace + random.uniform(*JITTER))
         try:
-            url = post(args.repo, draft)
+            url = post(args.repo, draft, args.assignee)
         except RuntimeError as problem:
             print(f"could not file {draft['title']!r}: {problem}", file=sys.stderr)
             print(f"{len(posted)} posted before this; the rest were not attempted", file=sys.stderr)
