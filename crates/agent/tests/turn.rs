@@ -1578,6 +1578,8 @@ fn a_tick_the_person_timed_cannot_reschedule_itself() {
 /// cannot both read a file now and see it change later, so the turn that read it says when to look
 /// again. What the turn still may not do is say what that later turn asks; the person's line is
 /// what gets sent, and there is no field here for anything else.
+///
+/// The caller says it will send the line again, which is what makes the later look real.
 #[test]
 fn a_turn_that_is_not_a_tick_can_arrange_the_next_look() {
     let scratch = Scratch::new("schedule-next-outside-a-loop");
@@ -1591,7 +1593,7 @@ fn a_turn_that_is_not_a_tick_can_arrange_the_next_look() {
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
 
-    let task = Task::new("tell me when a.txt changes");
+    let task = Task::new("tell me when a.txt changes").looking_again(true);
     let outcome = turn::run(
         &config,
         &egress,
@@ -1614,6 +1616,60 @@ fn a_turn_that_is_not_a_tick_can_arrange_the_next_look() {
     assert!(
         !second.contains("no such tool"),
         "the call was refused as an unknown name: {second}"
+    );
+}
+
+/// And a turn nothing will ask again is offered nothing, whatever it was asked to watch. A
+/// one-shot run prints its reply and exits, and a session running a sentence this program wrote
+/// keeps no loop over it, so a wait asked for on either is discarded the moment the turn ends.
+/// Offered the tool, such a turn is told back that a later look is arranged and needs nothing
+/// from the person, and writes that into the answer somebody reads: a watch that does not exist,
+/// reported by the one thing in a position to know.
+///
+/// The default, because a caller that says nothing about sending the line again is one that will
+/// not: the one-shot run and the desktop bridge both build their task this way.
+#[test]
+fn a_turn_nothing_will_ask_again_cannot_arrange_a_later_look() {
+    let scratch = Scratch::new("schedule-next-no-later-look");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("schedule_next", r#"{"delay_seconds": 900, "noop": true}"#),
+        reply_with("read it once; nothing is watching it"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("tell me when a.txt changes");
+    let outcome = turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    assert!(
+        outcome.wakeup.is_none(),
+        "a turn nothing will ask again handed back a wait"
+    );
+
+    let first = received.recv().expect("first request");
+    assert!(
+        !first.contains("delay_seconds"),
+        "a turn nothing will ask again was offered the tool: {first}"
+    );
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("no such tool"),
+        "the call was answered rather than refused: {second}"
+    );
+    assert!(
+        !second.contains("needs nothing from the user"),
+        "the turn was told a later look is arranged: {second}"
     );
 }
 

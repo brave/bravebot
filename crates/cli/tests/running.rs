@@ -1477,6 +1477,42 @@ fn a_run_sends_a_level_the_roster_says_the_model_reads() {
     );
 }
 
+/// A one-shot run takes one turn and exits, so nothing is left holding the line to send it again:
+/// a tool for arranging a later look is not offered here (SCHED-6).
+///
+/// Offered it, the run answers a request to report a change by calling it, is told back that the
+/// next look is arranged and needs nothing from the user, writes that into its reply, prints the
+/// reply and exits. The person is told a watch exists and there is no watch and no next look.
+///
+/// A property of the process rather than of a task: which tools a surface offers is settled where
+/// that surface builds its turn, and only what went out on the wire says what it settled on.
+#[test]
+fn a_one_shot_run_offers_no_way_to_arrange_a_later_look() {
+    let gateway = a_gateway_listing(r#"["tools", "reasoning"]"#);
+    let scratch = Scratch::new("cli-running-no-later-look").with_settings(&settings_for(&gateway));
+
+    bravebot(
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["-p", "read a.txt, then tell me when it changes"],
+    );
+
+    let asked = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the run reached the gateway");
+    assert!(
+        !asked.contains("schedule_next"),
+        "a run that exits after one turn was offered a way to arrange a later look: {asked}"
+    );
+    // The table itself was sent, so the absence above is this tool being withheld rather than a
+    // request that carried no tools at all.
+    assert!(
+        asked.contains("read_file"),
+        "the request carried no tool table: {asked}"
+    );
+}
+
 /// The session in lines settles the level the same way, against the listing it fetches at startup.
 ///
 /// Its own test because it builds its own task, per prompt, out of its own state: the one-shot
