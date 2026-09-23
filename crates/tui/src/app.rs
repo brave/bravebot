@@ -534,6 +534,24 @@ fn stops_the_turn(session: &Session, key: KeyEvent) -> bool {
         && (is_ctrl_c(key) || wants_cancel(key))
 }
 
+/// Stop what is running, at the press that asked for it.
+///
+/// None of the places that answer such a press is a ladder: the loops running a turn, a plan or a
+/// command read the stopping keys against [`stops_the_turn`] themselves, and a Ctrl-C at an
+/// approval box is answered by the box. So what [`handle_key_while_working`] does for every other
+/// key has to be done here as well: the offer to leave lives for one press, and each of these is a
+/// press.
+///
+/// It can be standing when the press arrives, because a turn can begin with nobody pressing
+/// anything. A loop tick or a watch submits from the main loop, carrying an offer put up while the
+/// session was idle into the turn, and the press that stops the turn is the press that offer was
+/// waiting for. Left up, the hint row goes on saying the next Ctrl-C leaves over a box holding the
+/// line the stop put back, which the next Ctrl-C would only take.
+fn stop_what_is_running(session: &mut Session, cancel: &Cancel) {
+    session.cleared_by_interrupt = false;
+    cancel.cancel();
+}
+
 /// Interpret a key press while the scroller is open.
 ///
 /// Every key the scroller answers is answered here, and a key it does not name does nothing at
@@ -4122,7 +4140,7 @@ fn run_command(
                 // A running command is something to stop, so Ctrl-C stops it and stays, for the
                 // reason it stops a turn: the way out is the press after that, at the box.
                 TermEvent::Key(key) if stops_the_turn(session, key) => {
-                    cancel.cancel();
+                    stop_what_is_running(session, &cancel);
                 }
                 TermEvent::Mouse(mouse) => {
                     let action = handle_mouse(session, mouse);
@@ -4191,6 +4209,10 @@ fn one_request_key(session: &mut Session, key: KeyEvent, uninterruptible: &str) 
         act_while_working(session, action, crate::clipboard::paste);
         return;
     }
+
+    // The press is answered here rather than by the ladder that would have taken it down, so this
+    // does: as in [`stop_what_is_running`], the offer to leave lives for one press.
+    session.cleared_by_interrupt = false;
 
     if is_ctrl_c(key) {
         session.quit();
@@ -4680,7 +4702,7 @@ fn manifest_animated(
                     // watching a plan go wrong is asking for the plan to stop; the next press, at
                     // the box, is the one that leaves.
                     TermEvent::Key(key) if stops_the_turn(session, key) => {
-                        cancel.cancel();
+                        stop_what_is_running(session, &cancel);
                     }
                     TermEvent::Key(key) => {
                         let action = handle_key_while_working(session, key);
@@ -4709,7 +4731,7 @@ fn manifest_animated(
             crate::remote_confirm::ToMain::Manifest(request) => {
                 let answer = crate::confirm::ask_manifest(terminal, &request);
                 if answer == crate::confirm::Answer::Interrupt {
-                    cancel.cancel();
+                    stop_what_is_running(session, &cancel);
                 }
                 // Nothing is noted on the transcript, for the reason a turn notes nothing: the
                 // answer covers this plan and no other, so there is no standing decision to
@@ -4722,21 +4744,21 @@ fn manifest_animated(
             crate::remote_confirm::ToMain::Write(request) => {
                 let answer = crate::confirm::ask(terminal, &request);
                 if answer == crate::confirm::Answer::Interrupt {
-                    cancel.cancel();
+                    stop_what_is_running(session, &cancel);
                 }
                 let _ = answer_tx.send(crate::remote_confirm::Reply::Write(answer.decision()));
             }
             crate::remote_confirm::ToMain::Fetch(request) => {
                 let answer = crate::confirm::ask_fetch(terminal, &request);
                 if answer == crate::confirm::Answer::Interrupt {
-                    cancel.cancel();
+                    stop_what_is_running(session, &cancel);
                 }
                 let _ = answer_tx.send(crate::remote_confirm::Reply::Fetch(answer.decision()));
             }
             crate::remote_confirm::ToMain::Vouch(request) => {
                 let answer = crate::confirm::ask_vouch(terminal, &request);
                 if answer == crate::confirm::Answer::Interrupt {
-                    cancel.cancel();
+                    stop_what_is_running(session, &cancel);
                 }
                 let _ = answer_tx.send(crate::remote_confirm::Reply::Vouch(answer.decision()));
             }
@@ -4900,6 +4922,10 @@ fn goal_check_key(session: &mut Session, key: KeyEvent) {
         act_while_working(session, action, crate::clipboard::paste);
         return;
     }
+
+    // For the reason [`one_request_key`] does it: the press is answered here, and the offer to
+    // leave lives for one press wherever that press lands.
+    session.cleared_by_interrupt = false;
 
     if session.goal().is_some() {
         session.clear_goal();
@@ -5315,7 +5341,7 @@ fn run_turn_animated(
                     // box a moment later, which is both the answer and what the person wanted;
                     // a line saying "cancelling…" is a progress report on a key press.
                     TermEvent::Key(key) if stops_the_turn(session, key) => {
-                        cancel.cancel();
+                        stop_what_is_running(session, &cancel);
                     }
                     TermEvent::Key(key) => {
                         let action = handle_key_while_working(session, key);
@@ -5344,7 +5370,7 @@ fn run_turn_animated(
                 // Ctrl-C at the prompt is the same request it is anywhere else in a turn: stop.
                 // Set before the answer goes back, so the worker sees it as soon as it wakes.
                 if answer.stops_the_turn() {
-                    cancel.cancel();
+                    stop_what_is_running(session, &cancel);
                 }
                 // A closed channel means the worker is already gone, so there is nothing to
                 // answer and the loop below will collect its result.
@@ -5355,7 +5381,7 @@ fn run_turn_animated(
                 // Ctrl-C at the prompt is the same request it is anywhere else in a turn: stop.
                 // Set before the answer goes back, so the worker sees it as soon as it wakes.
                 if answer.stops_the_turn() {
-                    cancel.cancel();
+                    stop_what_is_running(session, &cancel);
                 }
                 // What was vouched for travels back with the turn's outcome, exactly as the
                 // trust map does: the tool records it on the policy, and the policy carries it
@@ -5366,7 +5392,7 @@ fn run_turn_animated(
             crate::remote_confirm::ToMain::ReadOutput(request) => {
                 let answer = crate::confirm::ask_output(terminal, &request);
                 if answer.stops_the_turn() {
-                    cancel.cancel();
+                    stop_what_is_running(session, &cancel);
                 }
                 // The standing key, handled as at the other vetting prompt and for the same
                 // reasons: the approval itself leaves no rule behind, and turning the mode on is
@@ -5383,7 +5409,7 @@ fn run_turn_animated(
             crate::remote_confirm::ToMain::Vet(request) => {
                 let answer = crate::confirm::ask_vet(terminal, &request);
                 if answer.stops_the_turn() {
-                    cancel.cancel();
+                    stop_what_is_running(session, &cancel);
                 }
                 // The approval itself is noted nowhere: it covers the bytes that were on the
                 // screen and leaves no rule behind, so there is no standing decision to record.
@@ -5401,7 +5427,7 @@ fn run_turn_animated(
             crate::remote_confirm::ToMain::Fetch(request) => {
                 let answer = crate::confirm::ask_fetch(terminal, &request);
                 if answer.stops_the_turn() {
-                    cancel.cancel();
+                    stop_what_is_running(session, &cancel);
                 }
                 // Nothing is noted on the transcript: an approval covers this one URL and leaves
                 // no standing permission behind, so there is no decision to record.
@@ -5410,7 +5436,7 @@ fn run_turn_animated(
             crate::remote_confirm::ToMain::Vouch(request) => {
                 let answer = crate::confirm::ask_vouch(terminal, &request);
                 if answer.stops_the_turn() {
-                    cancel.cancel();
+                    stop_what_is_running(session, &cancel);
                 }
                 if answer == crate::confirm::Answer::Approve {
                     // Said on the transcript because it is a standing decision the user will not
@@ -5422,7 +5448,7 @@ fn run_turn_animated(
             crate::remote_confirm::ToMain::Server(request) => {
                 let answer = crate::confirm::ask_server(terminal, &request);
                 if answer.stops_the_turn() {
-                    cancel.cancel();
+                    stop_what_is_running(session, &cancel);
                 }
                 if answer == crate::confirm::Answer::Approve {
                     // Said on the transcript for the reason vouching for a file is: it lasts the
@@ -5439,7 +5465,7 @@ fn run_turn_animated(
             crate::remote_confirm::ToMain::Manifest(request) => {
                 let answer = crate::confirm::ask_manifest(terminal, &request);
                 if answer.stops_the_turn() {
-                    cancel.cancel();
+                    stop_what_is_running(session, &cancel);
                 }
                 // Nothing is noted on the transcript. The answer covers this plan and no other, so
                 // there is no standing decision to record, and the plan itself is about to be
@@ -11224,6 +11250,75 @@ mod tests {
             !session.cleared_by_interrupt,
             "the hint outstayed its press"
         );
+    }
+
+    /// A press that stops is answered by the loop running the work, or by the approval box it was
+    /// made at, rather than by either ladder, so it is a press neither of them sees. It is the
+    /// press the offer is waiting for: a turn a tick began carries an offer put up while the
+    /// session was idle, and the key that stops it is the next thing pressed.
+    #[test]
+    fn stopping_the_work_takes_the_offer_to_leave_down_with_it() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "half a thought");
+        handle_key(&mut session, ctrl('c'));
+        session.start_loop(
+            crate::loops::request("30s check the deploy"),
+            Vec::new(),
+            Vec::new(),
+        );
+        assert_eq!(session.status, Status::Working);
+        assert!(session.cleared_by_interrupt, "the tick took the offer down");
+
+        let cancel = Cancel::new();
+        stop_what_is_running(&mut session, &cancel);
+
+        assert!(cancel.is_cancelled(), "the press did not stop the work");
+        assert!(
+            !session.cleared_by_interrupt,
+            "the hint outstayed the press that stopped the work"
+        );
+    }
+
+    /// A summary and an aside answer the press themselves as well, and nothing there can be
+    /// stopped, so the offer would otherwise still be up after a press that only said so. One of
+    /// those requests can be out with an offer standing over it for the reason a turn can: the
+    /// exchange that led to it was begun by a tick rather than by a key.
+    #[test]
+    fn stopping_a_single_request_takes_the_offer_to_leave_down() {
+        let mut session = having_sent(&["first question"]);
+        type_line(&mut session, "half a thought");
+        handle_key(&mut session, ctrl('c'));
+        assert!(session.cleared_by_interrupt);
+
+        session.begin_aside();
+        one_request_key(&mut session, key(KeyCode::Esc), "nothing to interrupt");
+
+        assert!(
+            !session.cleared_by_interrupt,
+            "the hint outstayed the press the request answered"
+        );
+        assert!(!session.is_quitting(), "escape ended the session");
+    }
+
+    /// The goal check is the third of those, and the press there takes the goal off rather than
+    /// leaving, so what the hint says about the next press is wrong for as long as it stands.
+    #[test]
+    fn stopping_a_goal_check_takes_the_offer_to_leave_down() {
+        let mut session = having_sent(&["first question"]);
+        type_line(&mut session, "half a thought");
+        handle_key(&mut session, ctrl('c'));
+        assert!(session.cleared_by_interrupt);
+
+        session.begin_aside();
+        session.start_goal("cargo test exits 0".to_string());
+        goal_check_key(&mut session, key(KeyCode::Esc));
+
+        assert!(session.goal().is_none(), "escape left the goal armed");
+        assert!(
+            !session.cleared_by_interrupt,
+            "the hint outstayed the press the goal check answered"
+        );
+        assert!(!session.is_quitting(), "escape ended the session");
     }
 
     /// The whole ladder, nearest first: the turn, then the line the stop put back, then the

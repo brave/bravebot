@@ -166,6 +166,9 @@ the exit. One way out, and it is the one people already reach for.
 `verified-by: bravebot_tui::render::the_way_out_is_offered_where_the_line_went`
 `verified-by: bravebot_tui::app::escape_only_stops_and_ctrl_c_is_read_against_what_is_happening`
 `verified-by: bravebot_tui::app::a_single_request_says_it_cannot_be_stopped_and_leaves_on_ctrl_c`
+`verified-by: bravebot_tui::app::stopping_the_work_takes_the_offer_to_leave_down_with_it`
+`verified-by: bravebot_tui::app::stopping_a_single_request_takes_the_offer_to_leave_down`
+`verified-by: bravebot_tui::app::stopping_a_goal_check_takes_the_offer_to_leave_down`
 `verified-by: bravebot_aichat::client::a_stopped_stream_stops_before_the_reply_is_over`
 `verified-by: bravebot_aichat::client::a_stream_stopped_before_it_starts_reports_nothing`
 `verified-by: bravebot_aichat::client::a_stop_does_not_wait_out_the_pause_between_attempts`
