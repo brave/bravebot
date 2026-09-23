@@ -914,6 +914,17 @@ def test_pinned_images():
         str(kinds(found)),
     )
 
+    # A nested worktree is a second checkout of this repository, often parked several commits back.
+    # Its Makefile is not this tree's to pin: a finding against it names a file no commit here can
+    # fix, and it turns this check into one that passes or fails on whether the person running it
+    # happens to keep a worktree.
+    nested = in_tree({".claude/worktrees/old/Makefile": RUN_LINE.format(image="rust:slim")})
+    check(
+        "an image named by a nested worktree is not this tree's to answer for",
+        with_cwd(nested, lambda: list(audit.check_pinned_images())) == [],
+        str(kinds(with_cwd(nested, lambda: list(audit.check_pinned_images())))),
+    )
+
     # Every image in the tree names a digest today, and this is what keeps it that way.
     check(
         "the tree's own build images are pinned",

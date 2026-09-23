@@ -1116,8 +1116,11 @@ ARG_DEFAULT = re.compile(r"^\s*ARG\s+([A-Za-z_][A-Za-z0-9_]*)=(\S+)\s*$", re.IGN
 YAML_IMAGE = re.compile(r"^\s*image:\s*([^\s#]+)")
 BY_DIGEST = re.compile(r"@sha256:[0-9a-f]{64}$")
 ASSIGNMENT = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*[:?]?=\s*(.*?)\s*$")
-# Directories that name no image this tree decides, and that walking costs minutes.
-NOT_WALKED = {".git", "target", "node_modules", "dist", ".venv"}
+# Directories that name no image this tree decides, and that walking costs minutes. `.claude` holds
+# the generated discovery links and, under `worktrees`, whole second checkouts of this repository:
+# an image named in one of those is another commit's to pin, so reporting it names a file nothing
+# here can fix and fails the check on a clean tree.
+NOT_WALKED = {".git", ".claude", "target", "node_modules", "dist", ".venv"}
 # The `docker run` options that take the token after them as their value. An option missing from
 # this set is read as taking none, so its value is reported as an unpinned image: a false report
 # somebody answers by adding the option here. The other direction -- reading past the image and
