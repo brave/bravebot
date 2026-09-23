@@ -255,7 +255,8 @@ which an editor activating a virtualenv does ahead of the line it types
 withdrawn by anything that is not that key**, a resize and words another program typed among them: the
 interrupt an editor writes does arrive on its own and so arms it, and an offer left standing through
 whatever happened next would let the next such byte take it, which is two presses turned back into
-one.
+one. **Letting go of a key is not that**, since a release is the tail of the press being answered and
+the way out of the first screen of a session cannot depend on the order somebody releases two keys.
 
 **Why.** A refusal the agent can carry on past is how a person steers without starting over.
 
@@ -269,6 +270,7 @@ one.
 `verified-by: bravebot_tui::trust_prompt::one_interrupt_another_program_wrote_closes_nothing`
 `verified-by: bravebot_tui::trust_prompt::two_interrupts_that_arrived_together_close_nothing`
 `verified-by: bravebot_tui::trust_prompt::anything_but_the_key_that_leaves_withdraws_the_offer`
+`verified-by: bravebot_tui::trust_prompt::a_key_release_does_not_withdraw_the_offer`
 `verified-by: bravebot_tui::trust_prompt::only_ctrl_c_leaves`
 `verified-by: bravebot_tui::trust_prompt::leaving_starts_no_session`
 `verified-by: bravebot_tui::trust_prompt::leaving_at_one_of_the_questions_opens_nothing`

@@ -120,7 +120,9 @@ This costs a person nothing, since the run a program sent has ended before they 
 **The offer is withdrawn by any input that is not one of the two keys that leave**, a mouse report, a
 resize and words another program typed among them, not only by another key. It answers the press just
 made, and one left standing through ten minutes of scrolling would let a byte written at the end of
-them take it.
+them take it. **Letting go of a key is not such input**, whichever key it was and whichever modifiers
+it still carried: a release is the tail of the press being answered, and a person who lets go of the
+modifier before the letter must not thereby lose the way out.
 
 **What none of this buys: a program can still stop a turn in flight.** The guard is on the rung that
 leaves and on no other, and the reason is not that stopping a turn is cheap. It is what the guard would
@@ -208,6 +210,7 @@ the exit. One way out, and it is the one people already reach for.
 `verified-by: bravebot_tui::app::two_interrupts_that_arrived_together_do_not_end_the_session`
 `verified-by: bravebot_tui::app::two_end_of_transmissions_that_arrived_together_do_not_end_the_session`
 `verified-by: bravebot_tui::app::a_refused_way_out_says_so`
+`verified-by: bravebot_tui::app::letting_go_of_the_keys_in_either_order_still_leaves`
 `verified-by: bravebot_tui::app::a_press_on_its_own_after_a_run_still_leaves`
 `verified-by: bravebot_tui::app::an_interrupt_still_stops_a_turn_on_the_first_press`
 `verified-by: bravebot_tui::app::ctrl_c_stops_a_turn_rather_than_leaving`
@@ -1577,6 +1580,13 @@ one read and the next. Two or more were available at the same instant, so **no o
 separate from the rest**, whatever they are: a key beside a resize is no more a separate press than two
 keys are.
 
+**A key release is the tail of a press and not a second arrival.** A terminal may report one, and
+Windows reports one for every keystroke, so there a press and the release of the same key land in one
+read whenever the interface was busy longer than somebody held the key down. Counted, that would make
+one keystroke look like two on a whole platform, and every guard below would refuse a press nobody
+shared with anything. A release is still delivered exactly as the terminal reported it, since nothing
+here withholds; it is only not counted, which it can afford to be because nothing answers one.
+
 **What asks for it is anything that decides, and nothing else.** The rung that ends a session
 ([INPUT-4](#INPUT-4)), the question a session opens with ([PROMPT-7](prompting.md#PROMPT-7)), and the
 return that takes the line out of the box. Each of those grants or spends something a person cannot get
@@ -1606,6 +1616,8 @@ is answered by a bare letter whoever wrote it. What it buys is the one distincti
 available, spent in the one place where a second press is the whole of what is being asked for.
 
 `verified-by: bravebot_tui::input::the_queue_is_answered_before_the_terminal_and_in_arrival_order`
+`verified-by: bravebot_tui::input::a_press_and_its_own_release_are_one_keystroke`
+`verified-by: bravebot_tui::input::two_keystrokes_in_one_read_arrived_together`
 `verified-by: bravebot_tui::app::two_interrupts_that_arrived_together_do_not_end_the_session`
 `verified-by: bravebot_tui::app::two_end_of_transmissions_that_arrived_together_do_not_end_the_session`
 `verified-by: bravebot_tui::app::a_press_on_its_own_after_a_run_still_leaves`

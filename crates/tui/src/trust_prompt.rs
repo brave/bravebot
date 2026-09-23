@@ -273,9 +273,17 @@ fn ask_one<B: Backend>(
 ///
 /// Separated from the loop so it can be tested without a terminal.
 fn withdraws_the_offer(taken: &event::Event) -> bool {
-    !input::key_of(taken).is_some_and(|key| {
-        key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c')
-    })
+    match input::key_of(taken) {
+        // A release is the tail of a press already answered rather than something somebody did next.
+        // Windows sends one for every keystroke, carrying the modifiers still held, so letting go of
+        // Ctrl before C arrives as a bare `c`; withdrawing on that took the way out of this question
+        // away from whoever lets go in that order, and this question is the first screen of a session.
+        Some(key) if key.kind == event::KeyEventKind::Release => false,
+        Some(key) => {
+            !(key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c'))
+        }
+        None => true,
+    }
 }
 
 /// Interpret one key press, or `None` for a key that answers nothing.
@@ -1090,6 +1098,26 @@ mod tests {
             assert!(
                 withdraws_the_offer(&taken),
                 "{taken:?} left the offer standing"
+            );
+        }
+    }
+
+    /// Except a release, which is the tail of the press being answered. A terminal may report one for
+    /// every keystroke, and which modifiers it carries depends on the order somebody lets go of the
+    /// keys: letting go of Ctrl before C sends a bare `c`. Withdrawing on that meant the way out of
+    /// this question depended on how a person happened to release two keys, and for one of the two
+    /// orders there was no way out at all.
+    #[test]
+    fn a_key_release_does_not_withdraw_the_offer() {
+        for code in [KeyCode::Char('c'), KeyCode::Char('n')] {
+            let released = event::Event::Key(KeyEvent::new_with_kind(
+                code,
+                KeyModifiers::NONE,
+                event::KeyEventKind::Release,
+            ));
+            assert!(
+                !withdraws_the_offer(&released),
+                "letting go of {code:?} withdrew the offer"
             );
         }
     }

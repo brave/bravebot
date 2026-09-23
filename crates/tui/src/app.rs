@@ -5746,6 +5746,15 @@ fn wants_cancel(key: KeyEvent) -> bool {
 /// input withdraws it. A mouse report or a resize means somebody is still here and has moved on, and
 /// an offer left standing through one would let a byte written much later take it.
 fn took_input(session: &mut Session, taken: &TermEvent) {
+    // A release is the tail of a press that has already been answered, not something somebody did
+    // next, so it says nothing about either of the two things below. Windows reports a key-up for
+    // every keystroke and carries the modifiers still held at that moment, so letting go of Ctrl
+    // before C arrives here as a bare `c`: read as other input, it withdrew the offer that the same
+    // person's press had just armed, and no press of Ctrl-C ever reached the rung that leaves.
+    if input::key_of(taken).is_some_and(|key| key.kind == KeyEventKind::Release) {
+        return;
+    }
+
     session.key_arrived_alone = input::the_last_event_arrived_alone();
 
     let asks_to_leave = input::key_of(taken).is_some_and(|key| {
@@ -8823,6 +8832,45 @@ mod tests {
             Action::Quit,
             "an offer made before other keys was still standing"
         );
+    }
+
+    /// Whether somebody can leave must not depend on the order they let go of two keys. A terminal
+    /// may report a release for every keystroke, and the modifiers on it are the ones still held, so
+    /// letting go of Ctrl before C arrives as a bare `c`. Taken for other input, that withdrew the
+    /// offer the same person's press had just armed, so every Ctrl-C only re-armed it and the rung
+    /// that leaves could not be reached at all.
+    #[test]
+    fn letting_go_of_the_keys_in_either_order_still_leaves() {
+        for released in [
+            KeyEvent::new_with_kind(
+                KeyCode::Char('c'),
+                KeyModifiers::NONE,
+                KeyEventKind::Release,
+            ),
+            KeyEvent::new_with_kind(
+                KeyCode::Char('c'),
+                KeyModifiers::CONTROL,
+                KeyEventKind::Release,
+            ),
+        ] {
+            let mut session = Session::new("none");
+
+            took_input(&mut session, &TermEvent::Key(ctrl('c')));
+            session.key_arrived_alone = true;
+            handle_key(&mut session, ctrl('c'));
+            assert!(session.offered_to_leave, "the offer was never made");
+
+            took_input(&mut session, &TermEvent::Key(released));
+            assert!(session.offered_to_leave, "{released:?} withdrew the offer");
+
+            took_input(&mut session, &TermEvent::Key(ctrl('c')));
+            session.key_arrived_alone = true;
+            assert_eq!(
+                handle_key(&mut session, ctrl('c')),
+                Action::Quit,
+                "the second press did not leave, after {released:?}"
+            );
+        }
     }
 
     /// The rungs above the last one stop something and stay, and none of them is touched: a person

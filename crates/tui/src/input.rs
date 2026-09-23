@@ -29,7 +29,7 @@
 //! prompt reading the terminal itself would take the first key of a burst with nothing behind it and
 //! believe it arrived alone.
 
-use ratatui::crossterm::event::{self, Event as TermEvent, KeyEvent};
+use ratatui::crossterm::event::{self, Event as TermEvent, KeyEvent, KeyEventKind};
 use std::collections::VecDeque;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -102,7 +102,7 @@ pub fn key_of(event: &TermEvent) -> Option<KeyEvent> {
 /// dropping them would join two lines into one. Every chord stands for no text: what a program wrote
 /// is words, and a chord inside words was not typed by anybody.
 pub fn text_of(key: &KeyEvent) -> Option<char> {
-    use ratatui::crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
+    use ratatui::crossterm::event::{KeyCode, KeyModifiers};
     if key.kind == KeyEventKind::Release {
         return None;
     }
@@ -168,22 +168,45 @@ fn gather() -> io::Result<()> {
 
 /// What a read of the terminal becomes: each event, and whether it was the whole of the read.
 ///
-/// One event means it was all that was waiting, which is what a person pressing a key looks like.
-/// Two or more were available together, whatever they are: a key beside a resize is no more a
+/// One thing to answer means it was all that was waiting, which is what a person pressing a key looks
+/// like. Two or more were available together, whatever they are: a key beside a resize is no more a
 /// separate press than two keys.
 ///
 /// Separated from the reading so both halves of the promise can be tested without a terminal. The
 /// halves are that every event is handed back, which is what lets [`read`] be called after [`poll`]
 /// has said one is waiting, and that what the tag says matches how many arrived.
 fn tagged(taken: Vec<TermEvent>) -> Vec<(TermEvent, bool)> {
-    let on_its_own = taken.len() == 1;
+    let on_its_own = taken.iter().filter(|event| answerable(event)).count() <= 1;
     taken.into_iter().map(|event| (event, on_its_own)).collect()
+}
+
+/// Whether an event is one anything downstream could answer.
+///
+/// Everything except a key release. A release is the tail of a press that has already been answered
+/// rather than a second thing arriving, and counting it as one would make a keystroke look like two.
+/// That matters because a terminal is free to report releases and some do: Windows sends a key-up for
+/// every keystroke, so there a press and its own release land in one read whenever the interface was
+/// busy longer than somebody held the key down, and every guard that asks whether a key arrived alone
+/// would refuse a press nobody shared with anything.
+///
+/// Nothing is withheld by this: the release is still handed out, exactly as the terminal reported it.
+/// It is only not counted, which it can afford to be because no reader in this crate answers one.
+fn answerable(event: &TermEvent) -> bool {
+    !matches!(event, TermEvent::Key(key) if key.kind == KeyEventKind::Release)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+
+    fn released(code: KeyCode) -> TermEvent {
+        TermEvent::Key(KeyEvent::new_with_kind(
+            code,
+            KeyModifiers::NONE,
+            KeyEventKind::Release,
+        ))
+    }
 
     fn key(code: KeyCode) -> TermEvent {
         TermEvent::Key(KeyEvent::new(code, KeyModifiers::NONE))
@@ -208,6 +231,38 @@ mod tests {
         assert_eq!(
             tagged(vec![interrupt.clone(), interrupt.clone()]),
             vec![(interrupt.clone(), false), (interrupt, false)]
+        );
+    }
+
+    /// One keystroke is one arrival even where the terminal reports it as two events. Windows sends a
+    /// key-up for every keystroke, and a press that shared its read with its own release used to be
+    /// read as crowded: the line would not send and the rung that leaves could not be reached, on a
+    /// platform where nobody had typed anything twice.
+    #[test]
+    fn a_press_and_its_own_release_are_one_keystroke() {
+        let tags: Vec<bool> = tagged(vec![key(KeyCode::Enter), released(KeyCode::Enter)])
+            .into_iter()
+            .map(|(_, alone)| alone)
+            .collect();
+        assert_eq!(
+            tags,
+            vec![true, true],
+            "a keystroke reported as a press and a release was counted as two"
+        );
+    }
+
+    /// And two whole keystrokes in one read are still two, which is the case the fact exists for.
+    #[test]
+    fn two_keystrokes_in_one_read_arrived_together() {
+        let taken = vec![
+            key(KeyCode::Char('c')),
+            released(KeyCode::Char('c')),
+            key(KeyCode::Char('c')),
+            released(KeyCode::Char('c')),
+        ];
+        assert!(
+            tagged(taken).into_iter().all(|(_, alone)| !alone),
+            "two presses in one write were read as having arrived on their own"
         );
     }
 
