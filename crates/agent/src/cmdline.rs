@@ -171,6 +171,35 @@ pub struct Refused {
     pub reason: Reason,
 }
 
+/// Why a line will not run: the compiler would not have it, or a rule covers one of its steps.
+///
+/// Two kinds rather than one, because what the planner is owed differs. A compile refusal names a
+/// span to rewrite. A rule is a decision the person made in advance, so there is nothing to
+/// rewrite and retrying is not the answer, which is what the caller says on this arm and only on
+/// this one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Stopped {
+    /// The line does not compile.
+    Compile(Refused),
+    /// A `deny` rule in the settings file covers a step of the line.
+    Rule(bravebot_core::policy::Denial),
+}
+
+impl From<Refused> for Stopped {
+    fn from(refused: Refused) -> Self {
+        Self::Compile(refused)
+    }
+}
+
+impl fmt::Display for Stopped {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Compile(refused) => refused.fmt(f),
+            Self::Rule(denial) => denial.fmt(f),
+        }
+    }
+}
+
 /// What was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reason {
@@ -1707,16 +1736,39 @@ fn class_matches(body: &str, c: char) -> bool {
     hit != negated
 }
 
+/// What the rules say about one step, asked with the name the line used and its argv.
+///
+/// A parameter rather than something the compiler reaches for, because `bravebot-core` is where a
+/// rule is decided and this module is the one that knows the argv. It is an argument rather than
+/// an option so that a caller has to say what the rules are, which is where the ordering this
+/// exists for gets decided; a caller answering that nothing is ruled on is saying there are no
+/// rules, which is what a test holding no settings file says.
+/// [`bravebot_core::policy::Policy::before_command_rules`] is what the run tool passes, and
+/// `Policy::before_plan_rules` rules on the compiled plan afterwards whatever is passed here.
+pub type Rules<'r> = dyn FnMut(&str, &[String]) -> Result<(), bravebot_core::policy::Denial> + 'r;
+
 /// Compile `line` into the plan that would run it in `directory`.
 ///
 /// Every branch is compiled, whether or not it would be reached, so that a person answering one
 /// question has been shown everything the line could do. Anything the compiler cannot fully
 /// resolve is a refusal, and a refusal yields no plan.
-pub fn compile(line: &str, directory: &Path, home: Option<&Path>) -> Result<Plan, Refused> {
+///
+/// `rules` is consulted for each step as soon as the step's name and argv are known and before
+/// the name is looked up, so a denied line is refused by the rule rather than by whatever `$PATH`
+/// had to say about it (PERM-7). It is the same ordering the interactive check below already has,
+/// and for the same reason: the answer does not depend on what happens to be installed on this
+/// machine.
+pub fn compile(
+    line: &str,
+    directory: &Path,
+    home: Option<&Path>,
+    rules: &mut Rules<'_>,
+) -> Result<Plan, Stopped> {
     let node = parse(line)?;
     let mut compiler = Compiler {
         directory,
         home,
+        rules,
         writes: Vec::new(),
         reads: Vec::new(),
     };
@@ -1732,15 +1784,16 @@ pub fn compile(line: &str, directory: &Path, home: Option<&Path>) -> Result<Plan
 }
 
 /// One compile in progress: where it runs, and what the plan has named so far.
-struct Compiler<'a> {
+struct Compiler<'a, 'r> {
     directory: &'a Path,
     home: Option<&'a Path>,
+    rules: &'a mut Rules<'r>,
     writes: Vec<PathBuf>,
     reads: Vec<PathBuf>,
 }
 
-impl Compiler<'_> {
-    fn node(&mut self, node: &Node) -> Result<Steps, Refused> {
+impl Compiler<'_, '_> {
+    fn node(&mut self, node: &Node) -> Result<Steps, Stopped> {
         match node {
             Node::Command(command) => Ok(Steps::Pipeline(vec![self.step(command)?])),
             Node::Pipeline(commands) => {
@@ -1767,7 +1820,7 @@ impl Compiler<'_> {
         }
     }
 
-    fn step(&mut self, command: &Command) -> Result<Step, Refused> {
+    fn step(&mut self, command: &Command) -> Result<Step, Stopped> {
         let word = command.program();
         let one_program = || Refused {
             span: word.span,
@@ -1778,11 +1831,11 @@ impl Compiler<'_> {
         // redirection target is: a program worked out from what is on disk is a program that
         // changes when the tree does.
         if word.pieces.iter().any(is_pattern) {
-            return Err(one_program());
+            return Err(one_program().into());
         }
         let expanded = expand(word, self.directory, self.home)?;
         let [program] = expanded.as_slice() else {
-            return Err(one_program());
+            return Err(one_program().into());
         };
 
         // Before the name is looked up, so that the answer does not depend on whether the editor
@@ -1792,15 +1845,9 @@ impl Compiler<'_> {
                 span: command.span,
                 text: program.clone(),
                 reason: Reason::Interactive(alternative),
-            });
+            }
+            .into());
         }
-
-        let resolved =
-            crate::programs::resolve(program, self.directory).ok_or_else(|| Refused {
-                span: word.span,
-                text: program.clone(),
-                reason: Reason::NotFound,
-            })?;
 
         let mut args = Vec::new();
         for operand in &command.words[1..] {
@@ -1814,11 +1861,27 @@ impl Compiler<'_> {
                         span: operand.span,
                         text: expanded,
                         reason: Reason::Interactive(TERMINAL_DEVICE),
-                    });
+                    }
+                    .into());
                 }
                 args.push(expanded);
             }
         }
+
+        // The argv is final here and the name has not been looked up yet, which is the one point
+        // in the compile where the rules can be asked the question they are written about. A rule
+        // names a line, so it needs the operands expanded; and PERM-7 puts its refusal before the
+        // program is looked for, so it has to come before the lookup below. A line this refuses
+        // never reaches `$PATH`, and the planner is told the rule rather than what this machine
+        // happens to have installed.
+        (self.rules)(program, &args).map_err(Stopped::Rule)?;
+
+        let resolved =
+            crate::programs::resolve(program, self.directory).ok_or_else(|| Refused {
+                span: word.span,
+                text: program.clone(),
+                reason: Reason::NotFound,
+            })?;
 
         let mut routes = Vec::new();
         for redirection in &command.redirections {
@@ -2630,13 +2693,24 @@ mod tests {
         assert_eq!(expanded("ls '*.rs'", 1, &tree.root), ["*.rs"]);
     }
 
+    /// A compile with no rules in play, which is what a settings file holding none says.
+    ///
+    /// Spelled out at every call rather than defaulted, because a compile that could be asked for
+    /// without answering for the rules is the ordering PERM-7 is about.
+    fn without_rules(_: &str, _: &[String]) -> Result<(), bravebot_core::policy::Denial> {
+        Ok(())
+    }
+
     fn compiled(line: &str, at: &Path) -> Plan {
-        compile(line, at, None)
+        compile(line, at, None, &mut without_rules)
             .unwrap_or_else(|e| panic!("`{line}` should compile, and was refused: {e}"))
     }
 
     fn compile_refused(line: &str, at: &Path) -> Refused {
-        compile(line, at, None).expect_err("should have been refused")
+        match compile(line, at, None, &mut without_rules).expect_err("should have been refused") {
+            Stopped::Compile(refused) => refused,
+            Stopped::Rule(denial) => panic!("`{line}` was refused by a rule: {denial}"),
+        }
     }
 
     /// The plan is the routing field a raw string did not have, so a step has to carry the file
@@ -2787,6 +2861,59 @@ mod tests {
         );
     }
 
+    /// A rule is a decision about the line, so it answers before `$PATH` is asked what the name
+    /// means (PERM-7). The line here names no program this machine has, so the rule is the only
+    /// thing that could have refused it: looking the name up first would answer with a fact about
+    /// the software installed here in place of the decision the person wrote down, and would
+    /// invite the planner to try the same line again somewhere else.
+    ///
+    /// The rules are asked with the argv the line compiled to rather than the words it was
+    /// written in, because that is the shape a rule is written in. A rule naming a file cannot
+    /// match a line that spelled it as a pattern otherwise.
+    #[test]
+    fn a_rule_refuses_a_line_before_its_program_is_looked_for() {
+        let tree = Tree::new("ruled-before-lookup");
+        tree.file("notes.md");
+        let line = "bravebot-no-such-program-anywhere *.md";
+
+        let mut asked = Vec::new();
+        let stopped = compile(line, &tree.root, None, &mut |program, args| {
+            asked.push((program.to_string(), args.to_vec()));
+            Err(bravebot_core::policy::Denial {
+                principle: bravebot_core::event::Principle::Capability,
+                message: "a deny rule in the settings file covers it".to_string(),
+            })
+        })
+        .expect_err("a denied line should not compile");
+
+        assert!(
+            matches!(stopped, Stopped::Rule(_)),
+            "a denied line was refused by the program lookup instead of by the rule: {stopped:?}"
+        );
+        assert_eq!(
+            asked,
+            [(
+                "bravebot-no-such-program-anywhere".to_string(),
+                vec!["notes.md".to_string()]
+            )],
+            "the rules were not asked about the argv the line compiled to"
+        );
+
+        // The boundary: it is the rule that refused this, not the asking. The same line with
+        // nothing ruling on it is refused for the name, which is the answer this one replaced.
+        assert!(
+            matches!(
+                compile(line, &tree.root, None, &mut without_rules)
+                    .expect_err("an unknown program should not compile"),
+                Stopped::Compile(Refused {
+                    reason: Reason::NotFound,
+                    ..
+                })
+            ),
+            "the line was refused by something other than the lookup with no rule in play"
+        );
+    }
+
     /// A program that would sit waiting for a terminal holds the turn open until the deadline and
     /// prints nothing useful. Refusing it up front costs a message and saves the wait.
     #[test]
@@ -2863,10 +2990,13 @@ mod tests {
     fn the_same_program_without_the_interactive_part_is_not_refused() {
         let tree = Tree::new("noninteractive");
         for line in ["git rebase --continue", "git add .", "git commit -m done"] {
-            let refusal = compile(line, &tree.root, None);
+            let refusal = compile(line, &tree.root, None, &mut without_rules);
             let interactive = matches!(
-                refusal.as_ref().err().map(|e| &e.reason),
-                Some(Reason::Interactive(_))
+                refusal.as_ref().err(),
+                Some(Stopped::Compile(Refused {
+                    reason: Reason::Interactive(_),
+                    ..
+                }))
             );
             assert!(!interactive, "`{line}` was refused as interactive");
         }
