@@ -12,7 +12,7 @@ use crate::protocol::{
     RpcRequest, RpcResponse, ToolDescriptor, ToolList, ToolResult, call_params, initialize_params,
 };
 use crate::{McpError, McpResult};
-use bravebot_core::capability::Capability;
+use bravebot_core::capability::{Capability, ServerAlias};
 use bravebot_core::event::Sink;
 use bravebot_core::policy::Policy;
 use bravebot_core::value::Labelled;
@@ -47,6 +47,11 @@ impl HttpServer {
 
     pub fn url(&self) -> &str {
         &self.url
+    }
+
+    /// The capability a call to this server needs, which names this server and no other.
+    fn capability(&self) -> Capability {
+        Capability::McpCall(ServerAlias::new(self.name.clone()))
     }
 
     fn send<S: Sink>(
@@ -151,7 +156,7 @@ impl HttpServer {
         arguments: Value,
     ) -> McpResult<Labelled<String>> {
         policy
-            .before_capability(Capability::McpCall)
+            .before_capability(self.capability())
             .map_err(McpError::Denied)?;
 
         let result = self.send(
@@ -165,7 +170,7 @@ impl HttpServer {
             .map_err(|e| McpError::Transport(format!("malformed tool result: {e}")))?;
 
         let label = policy
-            .observe(Capability::McpCall)
+            .observe(self.capability())
             .map_err(McpError::Denied)?;
 
         if parsed.is_error {

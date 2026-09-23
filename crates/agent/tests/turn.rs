@@ -15548,10 +15548,14 @@ fn a_definition_names_the_delegate_a_turn_runs_and_says_what_it_is_for() {
     )
     .expect("turn runs");
 
+    // The delegate's own request, which is the one that carries the task and not the marker the
+    // spawning turn was given: the turn is not blocked while a delegate works, so its next round
+    // goes out carrying the transcript of the call that spawned it, task and all, and whichever
+    // of the two the server reads first is a matter of timing.
     let requests: Vec<String> = received.try_iter().collect();
     let delegate = requests
         .iter()
-        .find(|body| body.contains("CHECK-THE-DIFF"))
+        .find(|body| body.contains("CHECK-THE-DIFF") && !body.contains("DELEGATE-SOMETHING"))
         .expect("the delegate never ran, so the definition never selected one");
 
     assert!(

@@ -3,7 +3,7 @@
 //! Confirms the gate sees MCP traffic like any other egress, that results are labelled
 //! untrusted, and that a redirecting server is revalidated rather than followed blindly.
 
-use bravebot_core::capability::{Capability, CapabilitySet};
+use bravebot_core::capability::{Capability, CapabilitySet, ServerAlias};
 use bravebot_core::event::{Event, RecordingSink};
 use bravebot_core::label::Label;
 use bravebot_core::policy::{Policy, ReleasePlan, Routing};
@@ -100,7 +100,10 @@ fn a_handshake_and_tool_list_round_trip() {
     let mut policy = Policy::begin(
         routing(),
         ReleasePlan::new(),
-        CapabilitySet::from_iter([Capability::WebFetch, Capability::McpCall]),
+        CapabilitySet::from_iter([
+            Capability::WebFetch,
+            Capability::McpCall(ServerAlias::new("remote")),
+        ]),
         &mut sink,
     )
     .expect("policy");
@@ -129,7 +132,10 @@ fn a_tool_result_is_labelled_untrusted() {
     let mut policy = Policy::begin(
         routing(),
         ReleasePlan::new(),
-        CapabilitySet::from_iter([Capability::WebFetch, Capability::McpCall]),
+        CapabilitySet::from_iter([
+            Capability::WebFetch,
+            Capability::McpCall(ServerAlias::new("remote")),
+        ]),
         &mut sink,
     )
     .expect("policy");
@@ -161,7 +167,10 @@ fn an_sse_framed_reply_is_handled() {
     let mut policy = Policy::begin(
         routing(),
         ReleasePlan::new(),
-        CapabilitySet::from_iter([Capability::WebFetch, Capability::McpCall]),
+        CapabilitySet::from_iter([
+            Capability::WebFetch,
+            Capability::McpCall(ServerAlias::new("remote")),
+        ]),
         &mut sink,
     )
     .expect("policy");
@@ -185,7 +194,10 @@ fn mcp_traffic_passes_through_the_network_gate() {
     let mut policy = Policy::begin(
         routing(),
         ReleasePlan::new(),
-        CapabilitySet::from_iter([Capability::WebFetch, Capability::McpCall]),
+        CapabilitySet::from_iter([
+            Capability::WebFetch,
+            Capability::McpCall(ServerAlias::new("remote")),
+        ]),
         &mut sink,
     )
     .expect("policy");
@@ -217,7 +229,7 @@ fn mcp_over_http_requires_the_fetch_capability() {
     let mut policy = Policy::begin(
         routing(),
         ReleasePlan::new(),
-        CapabilitySet::from_iter([Capability::McpCall]),
+        CapabilitySet::from_iter([Capability::McpCall(ServerAlias::new("remote"))]),
         &mut sink,
     )
     .expect("policy");
@@ -253,6 +265,40 @@ fn a_tool_call_requires_the_mcp_capability() {
     assert!(error.to_string().contains("mcp_call"), "got: {error}");
 }
 
+/// SERVERS-9 over the other transport. The gate is written out once per transport, so a
+/// stdio test says nothing about this one. The fault this rejects is the same: a gate that
+/// reads only the protocol out of the capability lets a grant for `weather` call `remote`.
+#[test]
+fn a_grant_for_one_server_does_not_reach_another() {
+    let (url, _received) = serve(vec![json_response(INIT_OK)]);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([
+            Capability::WebFetch,
+            Capability::McpCall(ServerAlias::new("weather")),
+        ]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let mut server = HttpServer::new("remote", &url);
+    server
+        .initialize(&mut policy, &egress, "bravebot", "0.1.0")
+        .expect("handshake needs only fetch");
+
+    let error = server
+        .call_tool(&mut policy, &egress, "lookup", serde_json::json!({}))
+        .expect_err("a grant for weather must not reach remote");
+    // The server that was asked for, not the one that was granted.
+    assert!(
+        error.to_string().contains("mcp_call:remote"),
+        "got: {error}"
+    );
+}
+
 /// A redirecting server is revalidated per hop, so both destinations reach the gate.
 #[test]
 fn a_redirecting_server_is_revalidated() {
@@ -271,7 +317,10 @@ fn a_redirecting_server_is_revalidated() {
     let mut policy = Policy::begin(
         routing(),
         ReleasePlan::new(),
-        CapabilitySet::from_iter([Capability::WebFetch, Capability::McpCall]),
+        CapabilitySet::from_iter([
+            Capability::WebFetch,
+            Capability::McpCall(ServerAlias::new("remote")),
+        ]),
         &mut sink,
     )
     .expect("policy");
@@ -313,7 +362,10 @@ fn a_tool_level_error_is_reported_as_a_failure() {
     let mut policy = Policy::begin(
         routing(),
         ReleasePlan::new(),
-        CapabilitySet::from_iter([Capability::WebFetch, Capability::McpCall]),
+        CapabilitySet::from_iter([
+            Capability::WebFetch,
+            Capability::McpCall(ServerAlias::new("remote")),
+        ]),
         &mut sink,
     )
     .expect("policy");
@@ -347,7 +399,10 @@ fn a_server_error_is_reported() {
     let mut policy = Policy::begin(
         routing(),
         ReleasePlan::new(),
-        CapabilitySet::from_iter([Capability::WebFetch, Capability::McpCall]),
+        CapabilitySet::from_iter([
+            Capability::WebFetch,
+            Capability::McpCall(ServerAlias::new("remote")),
+        ]),
         &mut sink,
     )
     .expect("policy");
@@ -371,7 +426,10 @@ fn a_non_json_reply_is_an_error() {
     let mut policy = Policy::begin(
         routing(),
         ReleasePlan::new(),
-        CapabilitySet::from_iter([Capability::WebFetch, Capability::McpCall]),
+        CapabilitySet::from_iter([
+            Capability::WebFetch,
+            Capability::McpCall(ServerAlias::new("remote")),
+        ]),
         &mut sink,
     )
     .expect("policy");

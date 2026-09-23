@@ -81,9 +81,9 @@ leave it to whoever asked.";
 /// paragraph it would plan around a write it is not offered and cannot make, which is the
 /// opposite of what saying this is for.
 fn limits(held: &CapabilitySet) -> &'static str {
-    let kind = if held.contains(Capability::FileWrite) {
+    let kind = if held.contains(&Capability::FileWrite) {
         Kind::Worker
-    } else if held.contains(Capability::ShellExec) {
+    } else if held.contains(&Capability::ShellExec) {
         Kind::Checker
     } else {
         Kind::Reader

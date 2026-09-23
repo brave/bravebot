@@ -117,6 +117,13 @@ impl StdioServer {
         &self.name
     }
 
+    /// The capability a call to this server needs, which names this server and no other.
+    fn capability(&self) -> bravebot_core::capability::Capability {
+        bravebot_core::capability::Capability::McpCall(bravebot_core::capability::ServerAlias::new(
+            self.name.clone(),
+        ))
+    }
+
     fn send_request(&mut self, method: &str, params: Option<Value>) -> McpResult<Value> {
         let id = self.next_id;
         self.next_id += 1;
@@ -210,7 +217,7 @@ impl StdioServer {
         arguments: Value,
     ) -> McpResult<Labelled<String>> {
         policy
-            .before_capability(bravebot_core::capability::Capability::McpCall)
+            .before_capability(self.capability())
             .map_err(McpError::Denied)?;
 
         let result = self.send_request("tools/call", Some(call_params(tool, arguments)))?;
@@ -219,7 +226,7 @@ impl StdioServer {
             .map_err(|e| McpError::Transport(format!("malformed tool result: {e}")))?;
 
         let label = policy
-            .observe(bravebot_core::capability::Capability::McpCall)
+            .observe(self.capability())
             .map_err(McpError::Denied)?;
 
         if parsed.is_error {
