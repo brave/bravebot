@@ -79,8 +79,14 @@ pub fn matching(root: &Path, typed: &str) -> Vec<Entry> {
                 return None;
             }
             // Skipped rather than offered: a reference into `.git` is never what was meant, and
-            // offering the whole of it buries everything else.
-            if is_noise(&name) {
+            // offering the whole of it buries everything else. The names come from the walk's own
+            // list so that what a person is shown and what a search covers are one idea of the
+            // tree, rather than two that disagree about `.hg`.
+            //
+            // Decided from the name alone, without asking what the entry is. A worktree's `.git`
+            // is a regular file holding a pointer to the real one, and a `node_modules` a person
+            // symlinked elsewhere is a symlink, so a type test would offer both of them back.
+            if bravebot_agent::workspace::is_ignored_directory(&name) {
                 return None;
             }
             let is_directory = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
@@ -109,11 +115,6 @@ pub fn matching(root: &Path, typed: &str) -> Vec<Entry> {
     });
     entries.truncate(MAX_ENTRIES);
     entries
-}
-
-/// Directories nobody means to reference, and which would bury everything else.
-fn is_noise(name: &str) -> bool {
-    matches!(name, ".git" | "node_modules" | "target")
 }
 
 /// What follows an `@` at the end of the line, if the line is being typed towards a reference.
@@ -184,8 +185,13 @@ mod tests {
             std::fs::create_dir_all(path.join("target")).expect("create");
             std::fs::create_dir_all(path.join(".git")).expect("create");
             std::fs::create_dir_all(path.join("node_modules")).expect("create");
+            std::fs::create_dir_all(path.join(".hg")).expect("create");
+            std::fs::create_dir_all(path.join("dist")).expect("create");
             std::fs::write(path.join("Cargo.toml"), "").expect("write");
             std::fs::write(path.join("Makefile"), "").expect("write");
+            // What a worktree or a submodule has in place of the directory: a file naming the
+            // real one.
+            std::fs::write(path.join("crates/tui/.git"), "gitdir: /elsewhere\n").expect("write");
             std::fs::write(path.join("crates/tui/lib.rs"), "").expect("write");
             Self { path }
         }
@@ -234,6 +240,9 @@ mod tests {
     }
 
     /// Build output and history are never what a reference means, and offering them buries the rest.
+    ///
+    /// The names withheld are the ones every walk of the tree steps over, so a Mercurial checkout
+    /// and a JavaScript project get as readable a list as a git checkout of this repository does.
     #[test]
     fn noise_directories_are_not_offered() {
         let scratch = Scratch::new("noise");
@@ -244,6 +253,13 @@ mod tests {
         assert!(
             !root.contains(&"node_modules/"),
             "dependencies were offered"
+        );
+        assert!(!root.contains(&".hg/"), "version control was offered");
+        assert!(!root.contains(&"dist/"), "build output was offered");
+        // Withheld under the name a checkout of this shape gives it, which is a file.
+        assert!(
+            !paths(&matching(&scratch.path, "crates/tui/")).contains(&"crates/tui/.git"),
+            "version control was offered"
         );
     }
 
