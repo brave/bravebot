@@ -313,13 +313,16 @@ impl fmt::Display for Secret {
 /// The obligation is detection followed by something a person can act on. An expiry, which is all
 /// that was kept before, says when a credential stops working and nothing about how to stop it
 /// working sooner; removing the file it came from ends this run's custody and leaves it live at its
-/// issuer. What is enumerated here is what this program holds for itself. A credential a gateway
-/// block names or carries is not in this list, and a block that wrote one into a settings file is
-/// genuinely one this configuration holds: `provider.rs` is outside the paths CRED governs, and
-/// what would end such a credential is the gateway's answer rather than one this build has, since
-/// a block names a host and a variable and never an issuer.
+/// issuer.
+///
+/// A gateway's bearer token is in this list on the same footing as the rest. It is not this
+/// build's own credential, but a block that named a variable or wrote a token into a settings
+/// file is one this configuration holds for the length of a run, and `provider.rs` is the third
+/// path CRED governs, so the clause reaches it. That the block names no issuer is the answer to a
+/// different question: the host it names is the surface the token is presented to and the only one
+/// that revokes it, which is the address the clause asks be written down.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Held {
+pub enum Held<'a> {
     /// The HMAC signing key baked into this build, which signs every request to the Brave backend.
     ///
     /// Held. It carries no expiry, and one build's key is every install's, so nothing on this
@@ -336,11 +339,35 @@ pub enum Held {
     /// Held briefly. It states an expiry and stops working at it; ending it before that is done at
     /// its issuer, because `aws sso logout` clears this machine's copy rather than the session.
     AwsSession,
+    /// The bearer token a `provider` block carries or names a variable for, held for the run.
+    ///
+    /// Held. It carries no expiry and nothing on this machine ends it: `host` is where the token
+    /// is presented, so it is both the issuer as far as this program can know one and the only
+    /// surface that revokes it. Deleting the value from the settings file, or unsetting the
+    /// variable, ends this machine's custody and leaves the token live there.
+    ///
+    /// The host rather than the block's id, because the id is a name somebody chose for a section
+    /// of their own file and the report is read by somebody going to the gateway to end a token.
+    GatewayToken {
+        /// The host the block's endpoint names, from [`provider::Provider::host`].
+        host: &'a str,
+    },
 }
 
-impl Held {
+impl<'a> Held<'a> {
     /// Every credential this program can hold, so something reporting them cannot omit one.
-    pub const ALL: [Self; 3] = [Self::SigningKey, Self::AwsAccessKey, Self::AwsSession];
+    ///
+    /// The gateway arrangement is a credential plus the host that would end it, so a list of the
+    /// kinds has to be given one: a caller walking this is asking which arrangements exist rather
+    /// than which are configured, and the host it passes is what the gateway entry will name.
+    pub const fn all(gateway_host: &'a str) -> [Self; 4] {
+        [
+            Self::SigningKey,
+            Self::AwsAccessKey,
+            Self::AwsSession,
+            Self::GatewayToken { host: gateway_host },
+        ]
+    }
 
     /// Whether revoking this credential at its issuer leaves something minted from it working.
     ///
@@ -348,6 +375,10 @@ impl Held {
     /// the one somebody acting on a leak gets wrong: deleting an access key is the obvious move,
     /// and it does not reach the session credentials STS has already handed out under it, each of
     /// which runs to its own expiry.
+    ///
+    /// False for a gateway token: the gateway that revokes it is the only place it is presented,
+    /// and nothing here mints anything from it. A copy of the same token in a file or a shell
+    /// profile is that credential rather than something derived from it, so revoking reaches it.
     pub fn outlives_revocation(self) -> bool {
         matches!(self, Self::AwsAccessKey)
     }
@@ -752,7 +783,15 @@ impl Config {
     /// the build-from-source case [`Config::serves_aichat`] describes: the field is blank there,
     /// and listing a credential this install does not have would send somebody to retire a key id
     /// on the strength of a leak that cannot have come from here.
-    pub fn held(&self) -> Vec<Held> {
+    ///
+    /// Then one entry per gateway whose block says anywhere a token lives, which is custody this
+    /// configuration arranged however the value arrives. Whether the variable a block names is
+    /// set is a fact about an environment this reads none of, and asking would make the record
+    /// differ between two runs of the same configuration; the AWS pair above is listed on the
+    /// same footing, for the same reason. A block naming nowhere for a token has said none is
+    /// needed and is left out, as is one reaching Bedrock, whose credentials are the AWS pair and
+    /// would otherwise be counted twice.
+    pub fn held(&self) -> Vec<Held<'_>> {
         let mut held = Vec::new();
         if self.serves_aichat() {
             held.push(Held::SigningKey);
@@ -761,6 +800,14 @@ impl Config {
             held.push(Held::AwsAccessKey);
             held.push(Held::AwsSession);
         }
+        held.extend(
+            self.providers
+                .iter()
+                .filter(|provider| provider.bedrock.is_none() && provider.names_a_credential())
+                .map(|provider| Held::GatewayToken {
+                    host: provider.host(),
+                }),
+        );
         held
     }
 
@@ -1057,6 +1104,64 @@ mod tests {
         assert!(Held::AwsAccessKey.outlives_revocation());
         assert!(!Held::AwsSession.outlives_revocation());
         assert!(!Held::SigningKey.outlives_revocation());
+    }
+
+    /// CRED-25: a gateway's bearer token is a credential this configuration holds, so it is in the
+    /// record with the host that would end it. Left out, the person whose gateway key appears in a
+    /// pasted log is given nothing to act on, which the clause's Why calls a notification.
+    ///
+    /// Four blocks rather than one, because the shapes that must not be recorded are what a rule
+    /// reading "every provider" would get wrong: a block naming nowhere for a token has said none
+    /// is needed, and a block reaching Bedrock holds the AWS pair above rather than a bearer token
+    /// of its own, so recording one for it would count the same credentials twice and send
+    /// somebody to revoke a token at an endpoint that issues none. The two that are recorded
+    /// differ in where the value sits, the file and a variable, since custody is the same either
+    /// way and a rule reading only `apiKey` would pass on the one the report is read from most.
+    #[test]
+    fn a_gateway_token_is_a_credential_this_configuration_holds() {
+        let settings = Settings::parse(
+            r#"{"provider": {
+                "in-the-file": {
+                    "options": {"baseURL": "https://in-the-file.invalid/v1", "apiKey": "sk-live"}
+                },
+                "in-a-variable": {
+                    "env": ["A_GATEWAY_TOKEN"],
+                    "options": {"baseURL": "https://in-a-variable.invalid/v1"}
+                },
+                "needs-none": {"options": {"baseURL": "http://localhost:11434/v1"}},
+                "amazon-bedrock": {"options": {"region": "us-west-2"}, "models": {"an-arn": {}}}
+            }}"#,
+        );
+        let config =
+            Config::from_lookup_with_providers(complete_env, settings.providers().to_vec())
+                .expect("configured");
+
+        // The gateways in the order the blocks are read, which is by id.
+        assert_eq!(
+            config.held(),
+            [
+                Held::SigningKey,
+                Held::AwsAccessKey,
+                Held::AwsSession,
+                Held::GatewayToken {
+                    host: "in-a-variable.invalid"
+                },
+                Held::GatewayToken {
+                    host: "in-the-file.invalid"
+                },
+            ],
+            "the record is not the credentials this configuration holds"
+        );
+
+        // Nothing is minted from a bearer token here, so revoking it at the gateway reaches every
+        // copy of it. A line saying otherwise would send somebody chasing a session that does not
+        // exist.
+        assert!(
+            !Held::GatewayToken {
+                host: "in-the-file.invalid"
+            }
+            .outlives_revocation()
+        );
     }
 
     /// Without Bedrock the aichat credentials are still required. Relaxing them for everyone would

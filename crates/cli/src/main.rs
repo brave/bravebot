@@ -2160,11 +2160,19 @@ fn gateway_credential(
 /// Separate from the printing so each credential's account is testable, and a `match` over the
 /// record rather than a field on it because `bravebot-config` holds no words a person reads: a
 /// credential added there does not compile until it has one here.
-fn what_would_end(held: bravebot_config::Held) -> &'static str {
+///
+/// A `String` rather than a `&'static str` because one of the accounts names a host, which is the
+/// address somebody acts on and belongs in the sentence rather than in the line above it: the
+/// report lists every gateway a settings file configured, and a sentence that named none of them
+/// would leave the reader of a machine with two to guess which one it meant.
+fn what_would_end(held: bravebot_config::Held<'_>) -> String {
     match held {
-        bravebot_config::Held::SigningKey => t!(doctor_ends_signing_key),
-        bravebot_config::Held::AwsAccessKey => t!(doctor_ends_aws_access_key),
-        bravebot_config::Held::AwsSession => t!(doctor_ends_aws_session),
+        bravebot_config::Held::SigningKey => t!(doctor_ends_signing_key).to_string(),
+        bravebot_config::Held::AwsAccessKey => t!(doctor_ends_aws_access_key).to_string(),
+        bravebot_config::Held::AwsSession => t!(doctor_ends_aws_session).to_string(),
+        bravebot_config::Held::GatewayToken { host } => {
+            t!(doctor_ends_gateway_token, gateway = host)
+        }
     }
 }
 
@@ -2177,10 +2185,12 @@ fn what_would_end(held: bravebot_config::Held) -> &'static str {
 /// Which credentials those are is [`bravebot_config::Held::outlives_revocation`], not this match.
 /// The record is the fact and this is the words for it, so a credential whose record says
 /// something survives and whose report says nothing is a disagreement a test can see.
-fn what_outlives_revoking(held: bravebot_config::Held) -> Option<&'static str> {
+fn what_outlives_revoking(held: bravebot_config::Held<'_>) -> Option<&'static str> {
     match held {
         bravebot_config::Held::AwsAccessKey => Some(t!(doctor_outlives_aws_access_key)),
-        bravebot_config::Held::SigningKey | bravebot_config::Held::AwsSession => None,
+        bravebot_config::Held::SigningKey
+        | bravebot_config::Held::AwsSession
+        | bravebot_config::Held::GatewayToken { .. } => None,
     }
 }
 
@@ -2966,6 +2976,38 @@ mod tests {
         }
     }
 
+    /// A host to stand in for a configured gateway in the accounts below. One that cannot resolve,
+    /// so a test that started reaching it would fail rather than reach somebody's service.
+    const GATEWAY_HOST: &str = "gateway.invalid";
+
+    /// CRED-25: a gateway token is ended at the gateway, so its account names which one. A
+    /// sentence that left the host out would be a record of the same arrangement for every
+    /// gateway a settings file configured, which is the fact the person going to revoke it needs
+    /// and the one a machine with two gateways cannot supply from the rest of the report: the
+    /// lines above it name each gateway by the id somebody chose for a section of their own file.
+    #[test]
+    fn a_gateway_token_is_accounted_for_at_the_gateway_that_would_end_it() {
+        let one = what_would_end(bravebot_config::Held::GatewayToken {
+            host: "gateway-one.invalid",
+        });
+        let two = what_would_end(bravebot_config::Held::GatewayToken {
+            host: "gateway-two.invalid",
+        });
+
+        assert!(
+            one.contains("gateway-one.invalid"),
+            "the account does not name the gateway that would end the token: {one}"
+        );
+        assert!(
+            two.contains("gateway-two.invalid"),
+            "the account does not name the gateway that would end the token: {two}"
+        );
+        assert_ne!(
+            one, two,
+            "two gateways are given one account of what would end their tokens"
+        );
+    }
+
     /// CRED-25: each credential this build holds gets its own account of what would end it. One
     /// arm copied to the next is the failure this catches, and it is the failure the report
     /// already had before this existed: the sentences a person was shown named `aws sso login`
@@ -2973,12 +3015,10 @@ mod tests {
     /// one, so the three arrangements were answered identically and none of them was answered.
     #[test]
     fn every_held_credential_has_its_own_account_of_what_would_end_it() {
-        let accounts: Vec<&str> = bravebot_config::Held::ALL
-            .iter()
-            .map(|held| what_would_end(*held))
-            .collect();
+        let every = bravebot_config::Held::all(GATEWAY_HOST);
+        let accounts: Vec<String> = every.iter().map(|held| what_would_end(*held)).collect();
 
-        for (held, account) in bravebot_config::Held::ALL.iter().zip(&accounts) {
+        for (held, account) in every.iter().zip(&accounts) {
             assert!(!account.is_empty(), "{held:?} is reported with nothing");
         }
         for (at, account) in accounts.iter().enumerate() {
@@ -2997,7 +3037,7 @@ mod tests {
     /// live credential behind after the leak has been dealt with.
     #[test]
     fn what_survives_revoking_is_reported_for_exactly_the_credentials_that_have_one() {
-        for held in bravebot_config::Held::ALL {
+        for held in bravebot_config::Held::all(GATEWAY_HOST) {
             assert_eq!(
                 what_outlives_revoking(held).is_some(),
                 held.outlives_revocation(),

@@ -695,13 +695,16 @@ exists and refuses, but it reports the finding and reaches no part of this recor
 credential would have landed in a file is not thereby told what would end the one they already
 hold. CRED-15's scan of the tree before a run does not exist, and nor does the place CRED-19 would
 write a finding. What exists is the record and one surface that reads it, `doctor`, which reports
-what would end each credential this build holds. A scan reaching it later reads that record rather
-than writing a second one.
+what would end each credential this configuration holds, a gateway's bearer token included. A scan
+reaching it later reads that record rather than writing a second one.
 
 `verified-by: bravebot_config::lib::a_build_that_cannot_sign_for_itself_holds_no_signing_key_to_account_for`
 `verified-by: bravebot_config::lib::an_aws_account_holds_both_arrangements_and_they_end_differently`
+`verified-by: bravebot_config::lib::a_gateway_token_is_a_credential_this_configuration_holds`
+`verified-by: bravebot_config::provider::the_host_a_token_would_be_ended_at_carries_no_other_part_of_the_endpoint`
 `verified-by: bravebot_bedrock::credentials::a_session_token_is_what_says_what_would_end_a_credential`
 `verified-by: bravebot_cli::main::every_held_credential_has_its_own_account_of_what_would_end_it`
+`verified-by: bravebot_cli::main::a_gateway_token_is_accounted_for_at_the_gateway_that_would_end_it`
 `verified-by: bravebot_cli::main::what_survives_revoking_is_reported_for_exactly_the_credentials_that_have_one`
 
 ## Why the gate safehouse builds is not available here

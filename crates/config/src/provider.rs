@@ -227,6 +227,29 @@ impl Provider {
         self.name.as_deref().unwrap_or(&self.id)
     }
 
+    /// The host this gateway is reached at, which is what would end a token it carries.
+    ///
+    /// Recorded beside the credential for [`crate::Held::GatewayToken`]: a bearer token is ended
+    /// where it is presented, and the endpoint is the only thing a block states that names that
+    /// place. The path is dropped because a report a person acts on names the service rather than
+    /// one of its routes.
+    ///
+    /// Userinfo is dropped with it. A `baseURL` may state credentials, and this string is written
+    /// into a diagnostic people paste into issues, so the one part of a URL that can be a secret
+    /// does not travel with the host.
+    pub fn host(&self) -> &str {
+        let authority = self
+            .base_url
+            .split_once("://")
+            .map_or(self.base_url.as_str(), |(_, rest)| rest)
+            .split('/')
+            .next()
+            .unwrap_or_default();
+        authority
+            .rsplit_once('@')
+            .map_or(authority, |(_, host)| host)
+    }
+
     /// The model this provider offers under `id`, if it offers one.
     ///
     /// Used to check a remembered choice before it becomes a request, and to find the window a
@@ -264,7 +287,7 @@ impl Provider {
     }
 
     /// Whether the block says anywhere a token could live.
-    fn names_a_credential(&self) -> bool {
+    pub(crate) fn names_a_credential(&self) -> bool {
         !self.env.is_empty() || self.api_key.is_some()
     }
 }
@@ -712,6 +735,32 @@ mod tests {
             provider.chat_completions_url(),
             "https://example.invalid/v1/chat/completions"
         );
+    }
+
+    /// CRED-25: the host is what would end a token this block carries, and it is written into a
+    /// diagnostic people paste into issues. The scheme and the path say nothing about which
+    /// service revokes it, and userinfo is the one part of a URL that can be a credential, so a
+    /// record built by naming the endpoint would carry a second secret out of the same block that
+    /// carried the first.
+    #[test]
+    fn the_host_a_token_would_be_ended_at_carries_no_other_part_of_the_endpoint() {
+        for (stated, host) in [
+            ("https://gateway.invalid/v1", "gateway.invalid"),
+            ("http://localhost:11434/v1", "localhost:11434"),
+            (
+                "https://sk-live-secret@gateway.invalid/v1",
+                "gateway.invalid",
+            ),
+            (
+                "https://user:sk-live-secret@gateway.invalid",
+                "gateway.invalid",
+            ),
+        ] {
+            let provider = one(&format!(
+                r#"{{"provider": {{"gw": {{"options": {{"baseURL": "{stated}"}}}}}}}}"#
+            ));
+            assert_eq!(provider.host(), host, "the host read from {stated}");
+        }
     }
 
     /// A variable is preferred to a value in the file, so that naming one does not have the value
