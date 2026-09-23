@@ -122,21 +122,24 @@ resize and words another program typed among them, not only by another key. It a
 made, and one left standing through ten minutes of scrolling would let a byte written at the end of
 them take it.
 
-**What none of this buys: a program can still stop a turn in flight.** The guard above is on the rung
-that leaves and on no other, and the reason is not that the rungs above it matter less. It is that the
-rung that leaves asks for *two* presses, which makes "did these arrive together" the question, and that
-is the one question a terminal leaves answerable. Every rung above it answers one press, because a
-person watching a turn go wrong has to stop it on the first, and one byte another program wrote is
-indistinguishable from one a person pressed. So an editor writing `\x03` into the terminal stops
-whatever is running, and an editor writing `\x1b` does the same through Escape; extending the guard
-upward would buy nothing against either, since both arrive on their own, and would cost a person their
-interrupt whenever it happened to share a read with a resize or a mouse report, which is the moment
-they need it most.
+**What none of this buys: a program can still stop a turn in flight.** The guard is on the rung that
+leaves and on no other, and the reason is not that stopping a turn is cheap. It is what the guard would
+have to refuse to be worth having.
 
-What bounds the damage is elsewhere: **a stopped turn puts its prompt back** where the box can take it,
-so what a written interrupt costs is the tokens the turn spent and the time it took, not the work. That
-is a bound on the loss rather than a defence, and it is written here so nobody reads the rung that
-leaves as protecting the rest of the ladder.
+A key that **starts** something can wait. The return that sends a line and the key that grants a
+directory both hand something to the rest of the program that was not there before, and refusing one
+costs a person one more press and a line saying which, with the line still in front of them. A key that
+**stops** something cannot wait: somebody watching a turn go wrong has to stop it on the first press,
+and refusing theirs because the terminal happened to deliver a resize in the same read would take the
+interrupt away at the moment it is most wanted. The asymmetry is in what the refusal costs, not in what
+the key costs.
+
+It would also buy nothing. The interrupt an editor writes arrives on its own, so a guard asking whether
+it arrived alone passes it, and Escape stops a turn on one byte as well. **So an editor writing `\x03`
+or `\x1b` into the terminal stops whatever is running, and nothing here prevents it.** What bounds the
+damage is that a stopped turn puts its prompt back where the box can take it, so the loss is the tokens
+and the time rather than the work. That is a bound and not a defence, and it is written here so nobody
+reads the rung that leaves as protecting the rest of the ladder.
 
 Escape only ever stops, and never leaves. A summary is the one exception to the table: it is a
 single request with no round for a stop to land between, so nothing there can stop it and Ctrl-C

@@ -1067,7 +1067,7 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
         // it. Said rather than ignored, since a key that does nothing and explains nothing reads as an
         // interface that has stopped answering.
         KeyCode::Enter if !session.key_arrived_alone => {
-            session.note_once(t!(return_not_pressed));
+            session.note(t!(return_not_pressed));
             Action::Redraw
         }
         // Before every command arm, because in shell mode the line is a command and nothing else.
@@ -1621,7 +1621,7 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     // For the reason the idle ladder refuses first: queueing is sending with a wait in front of it,
     // so a return another program wrote would reach the planner when the turn in flight ended.
     if key.code == KeyCode::Enter && !session.key_arrived_alone {
-        session.note_once(t!(return_not_pressed));
+        session.note(t!(return_not_pressed));
         return Action::Redraw;
     }
 
@@ -2633,10 +2633,6 @@ fn event_loop(
                             TermEvent::Key(key) => handle_key(&mut session, key),
                             TermEvent::Mouse(mouse) => handle_mouse(&mut session, mouse),
                             TermEvent::Paste(text) => handle_paste(&mut session, &text),
-                            // Shown in the box like a paste, and refused by the Enter ladder rather
-                            // than dropped here: a person has to be able to read what was written at
-                            // their terminal, and deciding it is not worth showing would hide the
-                            // one thing that explains what just happened.
                             // Coming back from copying something is the moment a picture appears on the
                             // clipboard, and the cheapest moment to notice: once per switch away and back,
                             // rather than a clipboard tool spawned on a timer for the whole life of the
@@ -4310,9 +4306,6 @@ fn compact_animated(
                     TermEvent::Key(key) => {
                         one_request_key(session, key, t!(compact_uninterruptible));
                     }
-                    // Words another program typed reach the box mid-turn the way a paste does, and are
-                    // refused by the same guard when Enter comes: a queued line is a sent line with a
-                    // wait in front of it.
                     TermEvent::Paste(text) => {
                         let action = handle_paste_while_working(session, &text);
                         act_while_working(session, action, crate::clipboard::paste);
@@ -4463,9 +4456,6 @@ fn aside_animated(
                     TermEvent::Key(key) => {
                         one_request_key(session, key, t!(btw_uninterruptible));
                     }
-                    // Words another program typed reach the box mid-turn the way a paste does, and are
-                    // refused by the same guard when Enter comes: a queued line is a sent line with a
-                    // wait in front of it.
                     TermEvent::Paste(text) => {
                         let action = handle_paste_while_working(session, &text);
                         act_while_working(session, action, crate::clipboard::paste);
@@ -4681,9 +4671,6 @@ fn manifest_animated(
                         let action = handle_key_while_working(session, key);
                         act_while_working(session, action, crate::clipboard::paste);
                     }
-                    // Words another program typed reach the box mid-turn the way a paste does, and are
-                    // refused by the same guard when Enter comes: a queued line is a sent line with a
-                    // wait in front of it.
                     TermEvent::Paste(text) => {
                         let action = handle_paste_while_working(session, &text);
                         act_while_working(session, action, crate::clipboard::paste);
@@ -4990,9 +4977,6 @@ fn goal_check_animated(
                     // Which of the goal, a mode over the session, and the session itself a stop
                     // key is asking about is that function's to say.
                     TermEvent::Key(key) => goal_check_key(session, key),
-                    // Words another program typed reach the box mid-turn the way a paste does, and are
-                    // refused by the same guard when Enter comes: a queued line is a sent line with a
-                    // wait in front of it.
                     TermEvent::Paste(text) => {
                         let action = handle_paste_while_working(session, &text);
                         act_while_working(session, action, crate::clipboard::paste);
@@ -5325,9 +5309,6 @@ fn run_turn_animated(
                         let action = handle_key_while_working(session, key);
                         act_while_working(session, action, crate::clipboard::paste);
                     }
-                    // Words another program typed reach the box mid-turn the way a paste does, and are
-                    // refused by the same guard when Enter comes: a queued line is a sent line with a
-                    // wait in front of it.
                     TermEvent::Paste(text) => {
                         let action = handle_paste_while_working(session, &text);
                         act_while_working(session, action, crate::clipboard::paste);
@@ -8389,9 +8370,34 @@ mod tests {
             session
                 .transcript
                 .iter()
-                .any(|line| line.text.contains("another program")),
+                .any(|line| line.text.contains("arrived with other keys")),
             "the refusal explained nothing"
         );
+    }
+
+    /// Every refusal, not the first one a session sees. `note_once` remembers a message for the life of
+    /// the session, so a second written return said nothing and the line sat in the box with no account
+    /// of why, which is the dead interface the rule exists to prevent.
+    #[test]
+    fn every_refused_return_is_said_and_not_just_the_first() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "one");
+        session.key_arrived_alone = false;
+        handle_key(&mut session, key(KeyCode::Enter));
+        let after_first = session
+            .transcript
+            .iter()
+            .filter(|line| line.text.contains("arrived with other keys"))
+            .count();
+        assert_eq!(after_first, 1, "the first refusal said nothing");
+
+        handle_key(&mut session, key(KeyCode::Enter));
+        let after_second = session
+            .transcript
+            .iter()
+            .filter(|line| line.text.contains("arrived with other keys"))
+            .count();
+        assert_eq!(after_second, 2, "the second refusal said nothing");
     }
 
     /// And a person's own return still sends, which is the half that has to keep working.

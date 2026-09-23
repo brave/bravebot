@@ -6,17 +6,23 @@
 //! terminal reported it**, and what this adds is one fact beside each: whether it was the whole of
 //! what was waiting, or arrived together with others.
 //!
-//! That fact is worth having because it is the only thing a terminal leaves answerable, and one
-//! decision needs it. A gesture that asks for a second press is asking for a second press, and two
-//! bytes in one write are no harder to send than one: `\x03\x03` is two key events and not two
-//! presses. So the rung that ends a session asks for a key that arrived on its own
-//! ([INPUT-4](../../../docs/specs/terminal-input.md)), and nothing else asks at all.
+//! That fact is worth having because it is the only thing a terminal leaves answerable, and three
+//! decisions ask for it: the rung that ends a session, the questions a session opens with, and the
+//! return that takes the line out of the box. Each starts or ends something on one key, and a
+//! gesture asking for a second press is asking for a press: two bytes in one write are no harder to
+//! send than one, so `\x03\x03` is two key events and not two presses. Every other reader answers
+//! the event it was given, because moving a caret costs nothing if a program does it.
 //!
-//! **Nothing is withheld, reclassified or delayed.** A reader that decided a person's keystrokes
-//! were a program's would be wrong about a fast typist behind a slow redraw, about tmux, and about
-//! ssh, and being wrong that way costs somebody their own line. Whether text a program wrote into
-//! the terminal may become a prompt is a question about the box rather than about the reader, and it
-//! is not answered here.
+//! **Nothing is withheld, reclassified or delayed here.** A reader that held a person's keystrokes
+//! back would be wrong about a fast typist behind a slow redraw, about tmux and about ssh, and being
+//! wrong that way costs somebody their own line and their own paste. So the refusing is done by the
+//! three above, where it costs one key and says so, rather than by this module, where it would cost
+//! text nobody gets back.
+//!
+//! What that leaves is a narrower version of the same mistake, said plainly rather than denied: a
+//! keystroke of a person's own that a terminal delivered alongside something else is refused by
+//! those three, and over an intermediary that coalesces, an Enter can be one. The refusal is one key
+//! and a line saying which, and the line stays where it was, which is the difference.
 //!
 //! Every reader in this crate goes through [`read`] and [`poll`] rather than calling crossterm
 //! directly, because what arrived together can only be seen where the whole of it is visible: a
@@ -153,20 +159,83 @@ fn gather() -> io::Result<()> {
         taken.push(event::read()?);
     }
 
-    // One event means it was the whole of what was waiting. Two or more means they were available
-    // together, whatever they are: a key beside a resize is no more a separate press than two keys.
-    let on_its_own = taken.len() == 1;
-
     let mut queue = pending();
-    for event in taken {
-        queue.push_back((event, on_its_own));
+    for pair in tagged(taken) {
+        queue.push_back(pair);
     }
     Ok(())
+}
+
+/// What a read of the terminal becomes: each event, and whether it was the whole of the read.
+///
+/// One event means it was all that was waiting, which is what a person pressing a key looks like.
+/// Two or more were available together, whatever they are: a key beside a resize is no more a
+/// separate press than two keys.
+///
+/// Separated from the reading so both halves of the promise can be tested without a terminal. The
+/// halves are that every event is handed back, which is what lets [`read`] be called after [`poll`]
+/// has said one is waiting, and that what the tag says matches how many arrived.
+fn tagged(taken: Vec<TermEvent>) -> Vec<(TermEvent, bool)> {
+    let on_its_own = taken.len() == 1;
+    taken.into_iter().map(|event| (event, on_its_own)).collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+
+    fn key(code: KeyCode) -> TermEvent {
+        TermEvent::Key(KeyEvent::new(code, KeyModifiers::NONE))
+    }
+
+    /// One event waiting is what a person pressing a key looks like, since nothing fills the buffer
+    /// between one read and the next. This is the fact the three decisions rest on.
+    #[test]
+    fn one_event_in_a_read_arrived_on_its_own() {
+        assert_eq!(
+            tagged(vec![key(KeyCode::Char('y'))]),
+            vec![(key(KeyCode::Char('y')), true)]
+        );
+    }
+
+    /// Two or more were available at the same instant, so neither is evidence separate from the
+    /// other. `\x03\x03` in one write is this, and it is what stops the offer being armed and taken
+    /// by one write.
+    #[test]
+    fn several_events_in_a_read_arrived_together() {
+        let interrupt = TermEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert_eq!(
+            tagged(vec![interrupt.clone(), interrupt.clone()]),
+            vec![(interrupt.clone(), false), (interrupt, false)]
+        );
+    }
+
+    /// Whatever they are. A key beside a resize is no more a separate press than two keys, so the
+    /// tag is about how many arrived rather than about what they were.
+    #[test]
+    fn a_key_beside_something_that_is_not_one_arrived_together() {
+        let tags: Vec<bool> = tagged(vec![key(KeyCode::Enter), TermEvent::Resize(80, 24)])
+            .into_iter()
+            .map(|(_, alone)| alone)
+            .collect();
+        assert_eq!(tags, vec![false, false]);
+    }
+
+    /// Every event is handed back, which is what lets [`read`] be called after [`poll`] has said one
+    /// is waiting and be sure of getting one. A read that swallowed an event would send `read` back
+    /// to block in the terminal, stalling every loop shaped `while poll(ZERO) { read() }`.
+    #[test]
+    fn nothing_read_from_the_terminal_is_swallowed() {
+        for count in 1..=5 {
+            let read: Vec<TermEvent> = (0..count).map(|_| key(KeyCode::Down)).collect();
+            assert_eq!(
+                tagged(read).len(),
+                count,
+                "a read of {count} event(s) handed back a different number"
+            );
+        }
+    }
 
     /// The reader adds a fact and takes nothing away, so there is nothing here that decides what an
     /// event is. What the fact is used for is tested where it is used, at the rung that leaves.
