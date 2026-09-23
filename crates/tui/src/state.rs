@@ -3553,24 +3553,24 @@ impl Session {
             self.move_right();
         }
         if self.at_input_end() {
-            self.caret = was.max(self.last_caret_position());
+            // There is no further word end, so the caret comes back to the last position it can
+            // hold. Reached by stepping back from the end of the input rather than by subtracting
+            // the final character's width: where the line ends in a marker that byte offset is a
+            // position inside it, and `move_left` is the step that knows a marker is one character.
+            self.caret = self.input.len();
+            self.move_left();
             // The final character of the input is a newline where the input ends with one, and that
             // is the column after the line above it rather than a character to land on.
             self.step_back_off_the_end();
+            // Never behind where the motion started: a key that reaches forwards and finds nothing
+            // leaves the caret alone rather than walking it back a word.
+            self.caret = self.caret.max(was);
         }
     }
 
     /// Whether the caret is at the end of the whole input.
     fn at_input_end(&self) -> bool {
         self.caret >= self.input.len()
-    }
-
-    /// The last position the caret can hold in NORMAL mode: on the final character, not past it.
-    fn last_caret_position(&self) -> usize {
-        match self.input.chars().next_back() {
-            Some(c) => self.input.len() - c.len_utf8(),
-            None => 0,
-        }
     }
 
     /// Jump to a character on the line the caret is on, if it holds one.
@@ -13375,16 +13375,21 @@ mod tests {
     /// which is what makes this hold for all of them rather than for the ones somebody remembered.
     #[test]
     fn a_motion_crosses_a_marker_whole() {
-        /// A line with a marker in the middle of it, in NORMAL mode with the caret at `at`, and where
-        /// the marker begins and ends. Words on both sides, so the caret has somewhere to be on the far
-        /// side and what is measured is the crossing rather than the end of the line.
-        fn staged(at: impl Fn(usize, usize) -> usize) -> (Session, usize, usize) {
+        /// A line with a marker in it and `tail` after it, in NORMAL mode with the caret at `at`, and
+        /// where the marker begins and ends.
+        ///
+        /// Words on both sides measure the crossing: the caret has somewhere to be on the far side, so
+        /// what a forward press does is walk over the marker. An empty tail measures the other half of
+        /// every forward motion, the clamp it ends with when there is no further word to reach, which
+        /// is a second piece of arithmetic in each of them and the place a caret lands inside a marker
+        /// without ever having stepped into one.
+        fn staged(tail: &str, at: impl Fn(usize, usize) -> usize) -> (Session, usize, usize) {
             let mut s = vi();
             for c in "look at ".chars() {
                 s.type_char(c);
             }
             s.attach(picture(b"pixels"));
-            for c in " and say".chars() {
+            for c in tail.chars() {
                 s.type_char(c);
             }
             let opens = s.input.find('[').expect("the marker is in the line");
@@ -13408,17 +13413,56 @@ mod tests {
             ("0", false),
         ];
         for (keys, forwards) in crossings {
-            let (mut s, opens, closes) =
-                staged(|opens, closes| if forwards { opens } else { closes });
-            for c in keys.chars() {
-                s.type_char(c);
+            for tail in [" and say", ""] {
+                // A backward press starts past the end of the marker, and a marker ending the input
+                // has no such position: the caret cannot begin where there is no character.
+                if !forwards && tail.is_empty() {
+                    continue;
+                }
+                let (mut s, opens, closes) =
+                    staged(tail, |opens, closes| if forwards { opens } else { closes });
+                for c in keys.chars() {
+                    s.type_char(c);
+                }
+                assert!(
+                    s.caret <= opens || s.caret >= closes,
+                    "{keys} over a line ending {tail:?} left the caret at {} \
+                     inside the marker {opens}..{closes}",
+                    s.caret
+                );
             }
-            assert!(
-                s.caret <= opens || s.caret >= closes,
-                "{keys} left the caret at {} inside the marker {opens}..{closes}",
-                s.caret
-            );
         }
+    }
+
+    /// What a caret inside a marker costs, for the word motion that runs out of line. The next
+    /// character typed splits the marker, and a line that no longer spells it is a line carrying
+    /// nothing: the picture is gone from the turn with nothing on the screen saying so.
+    ///
+    /// `i` rather than `a`, because the press that opens INSERT mode after the caret is itself marker
+    /// aware and would paper over the caret it was handed.
+    #[test]
+    fn typing_after_the_word_end_motion_leaves_the_picture_attached() {
+        let mut s = vi();
+        for c in "see ".chars() {
+            s.type_char(c);
+        }
+        s.attach(picture(b"pixels"));
+        s.enter_vi_normal();
+        s.caret = 0;
+
+        // To the end of `see`, and then on to the marker, which is the last word of the input.
+        s.type_char('e');
+        s.type_char('e');
+        s.type_char('i');
+        s.type_char('x');
+
+        let sent = s.submit().expect("submitted");
+        assert_eq!(
+            s.sent_pasted().len(),
+            1,
+            "the picture stopped being attached, the line reading {sent:?}"
+        );
+        assert_eq!(sent, "see x[Image #1]");
     }
 
     /// `k` and `j` are Up and Down, and `/` is the chord that searches the prompts already sent. What
