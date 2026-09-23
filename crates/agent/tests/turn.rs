@@ -22,6 +22,33 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread;
 
+/// Owns a mock server until the test has finished reading its requests.
+struct MockRequests {
+    receiver: mpsc::Receiver<String>,
+    stopped: Arc<AtomicBool>,
+    port: u16,
+    worker: Option<thread::JoinHandle<()>>,
+}
+
+impl std::ops::Deref for MockRequests {
+    type Target = mpsc::Receiver<String>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.receiver
+    }
+}
+
+impl Drop for MockRequests {
+    fn drop(&mut self) {
+        self.stopped.store(true, Ordering::Release);
+        // Wake accept so the listener is closed before the next test needs a socket.
+        let _ = std::net::TcpStream::connect(("127.0.0.1", self.port));
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
 struct Scratch {
     path: PathBuf,
 }
@@ -42,8 +69,23 @@ impl Drop for Scratch {
 }
 
 /// Serve one canned reply, returning the base URL and the request body received.
-fn serve(reply: &str) -> (String, mpsc::Receiver<String>) {
+fn serve(reply: &str) -> (String, MockRequests) {
     serve_sequence(vec![reply.to_string()])
+}
+
+/// Finished tests must release their mock listeners even when a script allows retries.
+#[test]
+fn dropping_mock_requests_releases_each_server_listener() {
+    for (url, requests) in [
+        serve_sequence(Vec::new()),
+        serve_by_marker(Vec::new()),
+        serve_pages(Vec::new()),
+        serve_script(Vec::new()),
+    ] {
+        drop(requests);
+        let address = url.strip_prefix("http://").expect("mock URL");
+        let _listener = TcpListener::bind(address).expect("the previous listener was released");
+    }
 }
 
 /// Re-express a whole chat response as the SSE stream that would have delivered it.
@@ -586,7 +628,7 @@ fn a_missing_file_fails_the_turn() {
 /// test here say something about a conversation it is not about; instead a check is answered with
 /// [`a_check_finding_nothing`] and the script stays a script of the turn's own rounds. The check's
 /// request is still reported on the channel, so a test asserting on what went out sees it.
-fn serve_sequence(replies: Vec<String>) -> (String, mpsc::Receiver<String>) {
+fn serve_sequence(replies: Vec<String>) -> (String, MockRequests) {
     serve_sequence_answering_checks(Vec::new(), 0, replies)
 }
 
@@ -595,7 +637,7 @@ fn serve_sequence(replies: Vec<String>) -> (String, mpsc::Receiver<String>) {
 fn serve_sequence_answering_checks_with(
     checks: Vec<String>,
     replies: Vec<String>,
-) -> (String, mpsc::Receiver<String>) {
+) -> (String, MockRequests) {
     serve_sequence_answering_checks(checks, 0, replies)
 }
 
@@ -604,7 +646,7 @@ fn serve_sequence_answering_checks_with(
 /// What a backend that is down looks like to a check, which is not the same failure as a check
 /// that answered something no verdict could be read out of: no reply arrives at all, every
 /// attempt is lost, and the call itself fails.
-fn serve_sequence_losing_every_check(replies: Vec<String>) -> (String, mpsc::Receiver<String>) {
+fn serve_sequence_losing_every_check(replies: Vec<String>) -> (String, MockRequests) {
     serve_sequence_answering(Vec::new(), 0, replies, true)
 }
 
@@ -612,10 +654,7 @@ fn serve_sequence_losing_every_check(replies: Vec<String>) -> (String, mpsc::Rec
 ///
 /// What a connection that died looks like from the client's side: the request went out and
 /// nothing came back.
-fn serve_sequence_losing_the_first(
-    dropped: usize,
-    replies: Vec<String>,
-) -> (String, mpsc::Receiver<String>) {
+fn serve_sequence_losing_the_first(dropped: usize, replies: Vec<String>) -> (String, MockRequests) {
     serve_sequence_answering_checks(Vec::new(), dropped, replies)
 }
 
@@ -623,7 +662,7 @@ fn serve_sequence_answering_checks(
     checks: Vec<String>,
     dropped: usize,
     replies: Vec<String>,
-) -> (String, mpsc::Receiver<String>) {
+) -> (String, MockRequests) {
     serve_sequence_answering(checks, dropped, replies, false)
 }
 
@@ -632,7 +671,7 @@ fn serve_sequence_answering(
     dropped: usize,
     replies: Vec<String>,
     lose_every_check: bool,
-) -> (String, mpsc::Receiver<String>) {
+) -> (String, MockRequests) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().expect("addr").port();
     let (sender, receiver) = mpsc::channel();
@@ -641,7 +680,9 @@ fn serve_sequence_answering(
         .chain(replies.into_iter().map(Some))
         .collect();
 
-    thread::spawn(move || {
+    let stopped = Arc::new(AtomicBool::new(false));
+    let stopping = Arc::clone(&stopped);
+    let worker = thread::spawn(move || {
         let mut attempts = attempts.into_iter();
         let mut checks = checks.into_iter();
         // The listener outlives the script rather than going away with the last reply in it. The
@@ -650,6 +691,9 @@ fn serve_sequence_answering(
         // calls permanent: the turn then fails naming neither the first failure nor its cause.
         let mut answered: Option<(String, String)> = None;
         while let Ok((mut stream, _)) = listener.accept() {
+            if stopping.load(Ordering::Acquire) {
+                break;
+            }
             let mut reader = BufReader::new(stream.try_clone().expect("clone"));
 
             let mut line = String::new();
@@ -728,7 +772,13 @@ fn serve_sequence_answering(
         }
     });
 
-    (format!("http://127.0.0.1:{port}"), receiver)
+    let requests = MockRequests {
+        receiver,
+        stopped,
+        port,
+        worker: Some(worker),
+    };
+    (format!("http://127.0.0.1:{port}"), requests)
 }
 
 /// What a request the script has no reply for is told.
@@ -820,7 +870,7 @@ fn a_request_the_script_cannot_answer_is_told_so() {
 /// sent it, in order. The first rule whose marker appears and still has a reply left answers, so
 /// a turn's own marker goes before the tasks it hands out: a turn replays the arguments it called
 /// with, and so holds every task it asked for as well as its own prompt.
-fn serve_by_marker(rules: Vec<(&'static str, Vec<String>)>) -> (String, mpsc::Receiver<String>) {
+fn serve_by_marker(rules: Vec<(&'static str, Vec<String>)>) -> (String, MockRequests) {
     let (endpoint, received, _) = serve_by_marker_meeting(rules, &[]);
     (endpoint, received)
 }
@@ -836,7 +886,7 @@ fn serve_by_marker(rules: Vec<(&'static str, Vec<String>)>) -> (String, mpsc::Re
 fn serve_by_marker_meeting(
     rules: Vec<(&'static str, Vec<String>)>,
     meet: &'static [&'static str],
-) -> (String, mpsc::Receiver<String>, Arc<AtomicBool>) {
+) -> (String, MockRequests, Arc<AtomicBool>) {
     use std::collections::{BTreeSet, VecDeque};
     use std::sync::{Condvar, Mutex};
 
@@ -858,8 +908,13 @@ fn serve_by_marker_meeting(
     ));
 
     let reached = Arc::clone(&met);
-    thread::spawn(move || {
+    let stopped = Arc::new(AtomicBool::new(false));
+    let stopping = Arc::clone(&stopped);
+    let worker = thread::spawn(move || {
         while let Ok((mut stream, _)) = listener.accept() {
+            if stopping.load(Ordering::Acquire) {
+                break;
+            }
             let waiting = Arc::clone(&waiting);
             let sender = sender.clone();
             let arrived = Arc::clone(&arrived);
@@ -954,7 +1009,13 @@ fn serve_by_marker_meeting(
         }
     });
 
-    (format!("http://127.0.0.1:{port}"), receiver, met)
+    let requests = MockRequests {
+        receiver,
+        stopped,
+        port,
+        worker: Some(worker),
+    };
+    (format!("http://127.0.0.1:{port}"), requests, met)
 }
 
 /// Every request the model was sent, however many runs sent them, once no more are coming.
@@ -962,7 +1023,7 @@ fn serve_by_marker_meeting(
 /// Collected by waiting for the turn to be over rather than for a count: with delegates in
 /// flight there is no count known in advance, since a round the turn spends being told what came
 /// back is a round that exists only if something came back in time.
-fn every_request(received: &mpsc::Receiver<String>) -> Vec<String> {
+fn every_request(received: &MockRequests) -> Vec<String> {
     let mut bodies = Vec::new();
     while let Ok(body) = received.try_recv() {
         bodies.push(body);
@@ -17028,15 +17089,20 @@ fn the_middle_of_a_capped_output_stays_reachable() {
 ///
 /// Keeps listening past the end of its replies for the reason the chat server does: a fetch that is
 /// retried should meet the page again rather than a closed port.
-fn serve_pages(replies: Vec<String>) -> (String, mpsc::Receiver<String>) {
+fn serve_pages(replies: Vec<String>) -> (String, MockRequests) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().expect("addr").port();
     let (sender, receiver) = mpsc::channel();
 
-    thread::spawn(move || {
+    let stopped = Arc::new(AtomicBool::new(false));
+    let stopping = Arc::clone(&stopped);
+    let worker = thread::spawn(move || {
         let mut replies = replies.into_iter();
         let mut answered: Option<(String, String)> = None;
         while let Ok((mut stream, _)) = listener.accept() {
+            if stopping.load(Ordering::Acquire) {
+                break;
+            }
             let mut reader = BufReader::new(stream.try_clone().expect("clone"));
             let mut request = String::new();
             let _ = reader.read_line(&mut request);
@@ -17074,7 +17140,13 @@ fn serve_pages(replies: Vec<String>) -> (String, mpsc::Receiver<String>) {
         }
     });
 
-    (format!("http://127.0.0.1:{port}"), receiver)
+    let requests = MockRequests {
+        receiver,
+        stopped,
+        port,
+        worker: Some(worker),
+    };
+    (format!("http://127.0.0.1:{port}"), requests)
 }
 
 fn page(body: &str) -> String {
@@ -19558,14 +19630,19 @@ enum Served {
     Unfinished,
 }
 
-fn serve_script(script: Vec<Served>) -> (String, mpsc::Receiver<String>) {
+fn serve_script(script: Vec<Served>) -> (String, MockRequests) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().expect("addr").port();
     let (sender, receiver) = mpsc::channel();
 
-    thread::spawn(move || {
+    let stopped = Arc::new(AtomicBool::new(false));
+    let stopping = Arc::clone(&stopped);
+    let worker = thread::spawn(move || {
         let mut script = script.into_iter();
         while let Ok((mut stream, _)) = listener.accept() {
+            if stopping.load(Ordering::Acquire) {
+                break;
+            }
             let mut reader = BufReader::new(stream.try_clone().expect("clone"));
             let mut line = String::new();
             let _ = reader.read_line(&mut line);
@@ -19653,7 +19730,13 @@ fn serve_script(script: Vec<Served>) -> (String, mpsc::Receiver<String>) {
         }
     });
 
-    (format!("http://127.0.0.1:{port}"), receiver)
+    let requests = MockRequests {
+        receiver,
+        stopped,
+        port,
+        worker: Some(worker),
+    };
+    (format!("http://127.0.0.1:{port}"), requests)
 }
 
 fn take_a_turn_reporting(
@@ -19876,7 +19959,7 @@ fn a_stop_between_attempts_is_a_stop_rather_than_a_failure() {
 fn nothing_recorded_about_a_request_carries_the_credential_in_its_url() {
     let scratch = Scratch::new("review-audit-secret");
     let workspace = Workspace::new(&scratch.path).unwrap();
-    let (url, _) = serve_script(vec![Served::Status(401)]);
+    let (url, _requests) = serve_script(vec![Served::Status(401)]);
     let mut sink = RecordingSink::new();
     turn::run(
         &config_for(&format!("{url}/?api_key=REVIEW_SECRET")),
@@ -19896,7 +19979,7 @@ fn nothing_recorded_about_a_request_carries_the_credential_in_its_url() {
 fn what_the_planner_is_told_about_a_failed_delegate_carries_nothing_of_the_endpoint() {
     let scratch = Scratch::new("review-delegate-leak");
     let workspace = Workspace::new(&scratch.path).unwrap();
-    let (url, _) = serve_by_marker(vec![(
+    let (url, _requests) = serve_by_marker(vec![(
         "REVIEW-PARENT-LEAK",
         vec![
             tool_request_with_usage(
@@ -19927,7 +20010,7 @@ fn what_the_planner_is_told_about_a_failed_delegate_carries_nothing_of_the_endpo
 fn compaction_failure_narration_keeps_credentials_out() {
     let scratch = Scratch::new("compaction-diagnostic");
     let workspace = Workspace::new(&scratch.path).unwrap();
-    let (url, _) = serve_script(vec![
+    let (url, _requests) = serve_script(vec![
         Served::Status(401),
         Served::Reply(reply_with_usage("done", 20, 2)),
     ]);
