@@ -171,6 +171,31 @@ pub fn row(row: &Row) -> Value {
     json!({ "content": row.content, "status": status(row.status) })
 }
 
+/// A whole transcript, each prompt carrying the ordinal `session.fork` cuts on.
+///
+/// The ordinal is counted here because it is the agent's own count of what the user said, and
+/// [`crate::fork::cut`] resolves it against that count. A client that counts instead holds a
+/// second copy of the rule, and the two agree only for as long as nobody adds a kind of user
+/// message: a turn nudged for spending its tool budget and a shell line a person ran themselves
+/// are both `Said::User` here, neither is drawn as a prompt by a window watching a live session,
+/// and a fork of anything after one of them arrives short and is refused.
+///
+/// Sent beside each thing said rather than composed from the list, so that a client drawing one
+/// kind of user message differently costs nobody a working fork.
+pub fn recounted(said: &[Said]) -> Vec<Value> {
+    let mut prompt = 0usize;
+    said.iter()
+        .map(|entry| {
+            let mut value = self::said(entry);
+            if matches!(entry, Said::User(_)) {
+                value["prompt"] = json!(prompt);
+                prompt += 1;
+            }
+            value
+        })
+        .collect()
+}
+
 /// One thing said, from a conversation nobody watched happen.
 ///
 /// A `Tool` line says only that a call happened and what it was about. The record does
@@ -183,7 +208,7 @@ pub fn row(row: &Row) -> Value {
 /// transcript that draws the message plainly, and this client does not draw one: sending both would
 /// offer a choice between a tag and a sentence, and the sentence is the one whose words came out of
 /// a file.
-pub fn said(said: &Said) -> Value {
+fn said(said: &Said) -> Value {
     match said {
         Said::User(text) => json!({ "kind": "user", "text": text }),
         Said::Assistant(text) => json!({ "kind": "assistant", "text": text }),

@@ -419,7 +419,7 @@ mod tests {
             credentials: vec![bravebot_skus::store::Credential {
                 // Not a real token, so presenting it fails. That is what the error paths below
                 // exercise, without needing a signed batch from the service.
-                unblinded: "not-a-token".to_string(),
+                unblinded: bravebot_skus::Secret::new("not-a-token"),
                 valid_from: "2026-08-22T00:00:00".to_string(),
                 valid_to: "2026-08-23T00:00:00".to_string(),
                 spent: false,

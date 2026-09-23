@@ -209,7 +209,7 @@ fn a_subscription_imported_for_another_environment_is_reported() {
             item_id: "b7114ccc-b3a5-4951-9a5d-8b7a28731111".to_string(),
             issuer: "brave.com?sku=brave-leo-premium".to_string(),
             credentials: vec![bravebot_skus::store::Credential {
-                unblinded: "token".to_string(),
+                unblinded: bravebot_skus::Secret::new("token"),
                 valid_from: "2026-08-22T00:00:00".to_string(),
                 valid_to: "2099-08-23T00:00:00".to_string(),
                 spent: false,

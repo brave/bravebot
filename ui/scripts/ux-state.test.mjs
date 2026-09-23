@@ -42,16 +42,47 @@ test('a replayed transcript draws the record, not what a message says about itse
   assert.equal(drawn[0].path, 'readme.md')
   assert.equal(drawn[3].text, 'File watch 1: src/main.rs')
   assert.equal(drawn[4].text, 'still said', 'a tag this build does not know is quoted, not dropped')
-  assert.equal(drawn.filter(t.isPrompt).length, 3, 'the prompts upstream counts, and no others')
 
-  // The one message this window still recognises by its prose is the one it wrote itself, and it
-  // is a prompt in the conversation, so it is one in the count a fork travels as.
+  // The one message this window still recognises by its prose is the one it wrote itself.
   const marked = t.fromSaid([
     { kind: 'user', text: `${CONSOLIDATION_MARK}\n\nthe conversation was compacted` },
     { kind: 'user', text: 'and now carry on' },
   ])
   assert.deepEqual(marked.map((entry) => entry.kind), ['consolidation', 'user'])
-  assert.equal(marked.filter(t.isPrompt).length, 2)
+})
+
+test('a prompt keeps the ordinal it arrived with, whatever row it is drawn on', () => {
+  const t = load('src/renderer/transcript.ts')
+  const { CONSOLIDATION_MARK } = load('src/shared/bots.ts')
+  // The ordinals are upstream's, over its user messages: the attachment and the watch are
+  // messages the agent composed and are prompts to neither side, and the consolidation is a
+  // message this window composed and is a prompt to both. Nothing here recounts any of that. An
+  // implementation that dropped the field would leave every prompt unforkable, and one that used
+  // the row's position would offer the agent 5 for the last one.
+  const entries = t.fromSaid([
+    { kind: 'attached', path: 'notes.md' },
+    { kind: 'user', text: 'first', prompt: 0 },
+    { kind: 'watch', number: 2, path: 'notes.md' },
+    { kind: 'user', text: `${CONSOLIDATION_MARK} Bring it up to date.`, prompt: 1 },
+    { kind: 'assistant', text: 'Done' },
+    { kind: 'user', text: 'second', prompt: 2 },
+  ])
+  assert.deepEqual(entries.map(entry => entry.kind), ['attached', 'user', 'watch', 'consolidation', 'assistant', 'user'])
+  assert.equal(entries[1].prompt, 0)
+  assert.equal(entries[5].prompt, 2, 'the ordinal upstream minted, not this row’s position')
+})
+
+test('a prompt this window has just sent is numbered by the agent, and is not forkable until it is', () => {
+  const t = load('src/renderer/transcript.ts')
+  const said = t.userSaid('Do the work')
+  const other = t.userSaid('And again')
+  assert.equal(said.prompt, undefined, 'nothing here knows where the turn will put it')
+  assert.equal(t.number([said, other], said.id, 7)[0].prompt, 7)
+  assert.equal(t.number([said, other], said.id, 7)[1].prompt, undefined, 'only the row the answer names')
+  // A turn nobody in this window asked for reports no ordinal, and must not take the ordinal of
+  // whatever prompt happens to be above it.
+  assert.equal(t.number([said], said.id, null)[0].prompt, undefined)
+  assert.equal(t.number([said], said.id, undefined)[0].prompt, undefined)
 })
 
 test('drafts, archives and pins survive process reload and unrelated preference writes', () => {

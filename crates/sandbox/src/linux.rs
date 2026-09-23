@@ -215,7 +215,7 @@ impl Sandbox for LandlockSandbox {
         if let Some(e) = policy
             .readable
             .iter()
-            .chain(policy.writable.iter())
+            .chain(policy.writable.iter().map(|row| &row.path))
             .find_map(|path| PathFd::new(path).err())
         {
             return Err(SandboxError::SetupFailed {
@@ -231,7 +231,7 @@ impl Sandbox for LandlockSandbox {
         command.args(args);
 
         let readable: Vec<_> = policy.readable.clone();
-        let writable: Vec<_> = policy.writable.clone();
+        let writable: Vec<_> = policy.writable.iter().map(|row| row.path.clone()).collect();
 
         // Landlock applies to the calling thread and is inherited across exec, so the
         // ruleset is installed in the child between fork and exec.
@@ -666,7 +666,7 @@ mod tests {
         let resolved = wanted.nameable_under(&sandbox.capabilities());
         assert_eq!(resolved.omitted, vec![absent]);
         assert!(
-            resolved.policy.writable.contains(&dir),
+            resolved.policy.writable.iter().any(|row| row.path == dir),
             "the path that is there went with the one that is not"
         );
         let mut confined = sandbox

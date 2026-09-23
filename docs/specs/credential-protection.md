@@ -11,6 +11,10 @@ governs:
   - crates/bedrock/src/credentials.rs
   - crates/core/src/credentials.rs
   - crates/sandbox/src/crash.rs
+  - crates/skus/src/device.rs
+  - crates/skus/src/profile.rs
+  - crates/skus/src/secret.rs
+  - crates/skus/src/store.rs
 guards:
   - symbol: Secret::expose
 documented-by:
@@ -592,15 +596,23 @@ program does not own and cannot clear, so what is promised is the buffers it doe
 defend against a debugger attached to a live process, which is the same account and is answered by
 the authority holding the value instead.
 
-**What holds today.** The core dumps, the buffers a `Secret` owns, and the buffers reading a settings
-file makes on the way to one. The process lowers its core dump limit to nothing before it reads the
-first credential, and every credential the backend configuration resolves is kept in a `Secret`, the
-gateway token in a settings file included. Reading that file fills buffers of its own: the text it
-was read into, the document the parse made of it, and whatever a stronger layer displaced by
-restating a gateway a weaker one had stated. The text is cleared as the parse answers, whatever it
-answered, and the document clears itself and what it displaced when it goes. Every reader of a
-settings file holds the document rather than a bare parse, the front end's check of a file somebody
-chose included, so none of them has a clearing to remember.
+**What holds today.** The core dumps, the buffers a `Secret` owns, the buffers reading a settings
+file makes on the way to one, and the buffers an imported subscription's credentials pass through.
+The process lowers its core dump limit to nothing before it reads the first credential, and every
+credential the backend configuration resolves is kept in a `Secret`, the gateway token in a settings
+file included. Reading that file fills buffers of its own: the text it was read into, the document
+the parse made of it, and whatever a stronger layer displaced by restating a gateway a weaker one
+had stated. The text is cleared as the parse answers, whatever it answered, and the document clears
+itself and what it displaced when it goes. Every reader of a settings file holds the document rather
+than a bare parse, the front end's check of a file somebody chose included, so none of them has a
+clearing to remember. The single-use credentials of an imported subscription are in a `Secret` too,
+and so is every buffer they pass through on the way there: the batch a session spends from, the text
+of the file it was read out of and the document that parse made, the document a write serialises,
+the reply a registration decodes its signed tokens from, and the browser preferences file an import
+reads an order id out of, which holds that install's own credentials. `bravebot-skus` has its own,
+because [LAYER-1](layering.md#LAYER-1) gives that crate no dependency on another crate here; what
+has to hold across the two is that the bytes are overwritten where they lie and that reading them is
+visible at the call site.
 
 **What does not, and why.** Three things.
 
@@ -611,9 +623,11 @@ every later allocation becomes unswappable, so an agent asked to read a large fi
 allocate rather than being paged out. Doing this properly means an allocator for credential
 buffers, which is a decision rather than an omission.
 
-The single-use credentials of an imported subscription are plain strings. They live in
-`bravebot-skus`, which [LAYER-1](layering.md#LAYER-1) gives no dependency on any other crate here,
-so reaching `Secret` from there is a layering change rather than a line.
+What the cryptography turns a subscription credential into is not cleared. The token values the
+library hands back from an unblinding are its buffers rather than this program's, and the
+presentation a spend derives is an ordinary string: single-use, bound to one issuer, built to be a
+request header, and copied from there into the buffers the paragraph above says are not this
+program's either.
 
 What a settings file's `env` block sets is a plain string for the length of the run. `Settings` keeps
 what each layer said so that the configuration can be built out of it and `doctor` can report which
@@ -627,9 +641,15 @@ region and a model name, and the answer to what a person may put there is anythi
 `verified-by: bravebot_config::lib::scrubbing_a_document_reaches_a_token_inside_the_blocks_it_was_written_in`
 `verified-by: bravebot_config::settings::the_text_a_layer_was_parsed_from_is_cleared`
 `verified-by: bravebot_config::settings::a_merge_keeps_the_entry_a_stronger_layer_displaced`
+`verified-by: bravebot_skus::secret::scrubbing_overwrites_the_bytes_where_they_lie`
+`verified-by: bravebot_skus::secret::scrubbing_counts_the_bytes_rather_than_the_characters`
+`verified-by: bravebot_skus::secret::scrubbing_a_document_reaches_a_token_inside_the_blocks_it_was_written_in`
+`verified-by: bravebot_skus::secret::a_secret_prints_as_redacted_rather_than_as_its_value`
+`verified-by: bravebot_skus::store::a_stored_batch_does_not_print_its_tokens`
 `verified-by: bravebot_sandbox::crash::disabling_core_dumps_leaves_the_kernel_unable_to_write_one`
 `verified-by: bravebot_sandbox::crash::disabling_core_dumps_does_not_lower_the_hard_limit`
 `verified-by: by-construction (the buffer a Secret owns is unreachable once the Secret is gone, so what a test can run is the scrub rather than the drop; the drop body is one call to the scrub the two tests above pin and does nothing else)`
+`verified-by: by-construction (the text a subscription batch is read from, the document it is parsed into and the document it is written back as are each held in a guard for the whole of the call that makes one, so every way out clears it; each guard's drop body is one call to a scrub the tests above pin and does nothing else)`
 `verified-by: by-construction (both entry points that hold a credential, the terminal binary and the graphical front end's transport, call the core dump limit down as their first statement, before the argument vector is read and so before the signing key is unmasked)`
 `verified-by: by-construction (a parsed settings document clears itself when it goes, its drop being one call to each of the two scrubs the tests above pin and nothing else; the four readers of a settings file, the layered read, the single-file parse, the managed layer and the front end's check of a chosen file, each hold one of these and so clear what they parsed by going out of scope)`
 
