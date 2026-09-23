@@ -334,3 +334,25 @@ fn asking_for_no_effort_is_read_back_as_no_choice() {
         assert_eq!(store::load_effort(), None);
     });
 }
+
+/// CHECK-11: the standing answer about auto-vetting outlives the session that gave it, which is
+/// the whole of what the key at a vetting prompt offers: somebody who pressed it once is not asked
+/// again tomorrow. Turning it back off is written rather than the file being removed, because the
+/// absent file and the chosen absence are not the same request here: a settings file may say `on`,
+/// and removing the record would let it answer for somebody who decided otherwise.
+#[test]
+fn a_recorded_answer_about_vetting_outlives_the_session_that_gave_it() {
+    with_temp_home("vetting", || {
+        assert_eq!(store::load_vetting(), None, "started with an answer");
+
+        store::save_vetting(true);
+        assert_eq!(store::load_vetting(), Some(true), "on was not read back");
+
+        store::save_vetting(false);
+        assert_eq!(
+            store::load_vetting(),
+            Some(false),
+            "off was read back as no answer at all"
+        );
+    });
+}
