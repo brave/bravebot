@@ -3655,9 +3655,13 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// branching on what it found.
     ///
     /// **The pre-image is read to place the value, not to decide the effect.** It is the file's
-    /// own current contents, which the driver already holds to draw a diff with. All it can do
-    /// here is excuse a value that is *already* at this exact path, so the worst it produces is
-    /// a change that leaves the tree holding what it held before.
+    /// own current contents, and it arrives labelled: the driver carries those bytes and this is
+    /// where they are read, because the policy layer is the only part of this program that may
+    /// read content at all. All it can do here is excuse a value that is *already* at this exact
+    /// path, so the worst it produces is a change that leaves the tree holding what it held
+    /// before. Whether a pre-image is handed over is the caller's decision, taken from the trust
+    /// map rather than from this label, which a peek for review sets pessimistically whatever
+    /// the map says.
     ///
     /// Nothing about a finding reaches the planner: see [`crate::credentials`] for what a
     /// finding is allowed to hold, and the caller for which half of its result is said to whom.
@@ -3665,7 +3669,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         &mut self,
         tool: &str,
         path: &str,
-        existing: Option<&str>,
+        existing: Option<&Labelled<String>>,
         proposed: &Labelled<String>,
     ) -> Scanned {
         let label = proposed.label();
@@ -3684,12 +3688,22 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         };
 
         let salt = crate::credentials::run_salt();
-        let already: std::collections::BTreeSet<String> = existing
-            .map(|text| crate::credentials::scan(path, text, salt))
-            .unwrap_or_default()
-            .into_iter()
-            .map(|finding| finding.fingerprint)
-            .collect();
+        let already: std::collections::BTreeSet<String> = match existing {
+            None => Default::default(),
+            Some(pre_image) => {
+                self.allow(
+                    "credential-scan",
+                    format!("{tool}: {path} read as it stands, to place a value already in it"),
+                );
+                let proof =
+                    Declassification::authorise("a write's pre-image, to place a value in it");
+                let text = pre_image.clone().declassify(&proof);
+                crate::credentials::scan(path, &text, salt)
+                    .into_iter()
+                    .map(|finding| finding.fingerprint)
+                    .collect()
+            }
+        };
 
         let (carried, authored) = crate::credentials::scan(path, &body, salt)
             .into_iter()

@@ -6452,6 +6452,190 @@ fn the_model_is_told_when_a_write_replaced_something() {
     );
 }
 
+/// The file a write replaces is untrusted content like any other, so the driver carries it and
+/// asks a gate for whatever it needs out of it: the credential scan reads it inside the policy
+/// layer, and the copy the reviewer is shown is released for that screen. Both are recorded. A
+/// read taken in the driver instead leaves bytes nobody vouched for in `bravebot-agent` with no
+/// label, no witness and nothing in the trail, which is what `docs/specs/labels.md#LABEL-4`
+/// refuses.
+///
+/// The path is trusted so the scan is handed the pre-image, and a rule asks about it so there is
+/// a screen to release it for: a write nobody is asked about releases none of it.
+#[test]
+fn a_write_reads_the_file_it_replaces_through_a_gate_that_records_it() {
+    let scratch = Scratch::new("write-pre-image-recorded");
+    std::fs::write(scratch.path.join("notes.md"), "what was there before\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2(
+            "write_file",
+            r#"{"path":"notes.md","contents":"what is there now"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("bring the notes up to date").with_permissions(rules(
+            &[],
+            &["Edit(notes.md)"],
+            &[],
+        )),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert!(
+        sink.events().iter().any(|e| matches!(
+            e,
+            Event::GatePassed { gate: "credential-scan", detail }
+                if detail.contains("notes.md") && detail.contains("read as it stands")
+        )),
+        "the scan read the file it replaces without the read being recorded: {:?}",
+        sink.events()
+    );
+    assert!(
+        sink.events().iter().any(|e| matches!(
+            e,
+            Event::GatePassed { gate: "display", detail }
+                if detail.contains("the file a write replaces")
+        )),
+        "what the reviewer is shown was not released for a screen: {:?}",
+        sink.events()
+    );
+    assert_eq!(
+        confirmer
+            .seen
+            .first()
+            .expect("the rule asked about the write")
+            .existing
+            .as_deref(),
+        Some("what was there before\n"),
+        "the reviewer was not shown the file they are about to lose"
+    );
+}
+
+/// Nothing is released where there is nothing to replace. A witness minted for a file that is
+/// not there would put a release in the trail for a read that never happened, and the trail is
+/// where a reviewer counts what this program looked at. A rule asks about the write, so there is
+/// a screen something could have been released for.
+#[test]
+fn a_write_creating_a_file_releases_nothing_of_the_file_it_does_not_replace() {
+    let scratch = Scratch::new("write-pre-image-absent");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2(
+            "write_file",
+            r#"{"path":"notes.md","contents":"the first thing here"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start the notes").with_permissions(rules(&[], &["Edit(notes.md)"], &[])),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("notes.md")).unwrap(),
+        "the first thing here",
+        "the file was not written"
+    );
+    assert_eq!(
+        confirmer
+            .seen
+            .first()
+            .expect("the rule asked about the write")
+            .existing,
+        None,
+        "the reviewer was shown a file that was never there"
+    );
+    assert!(
+        !sink.events().iter().any(|e| matches!(
+            e,
+            Event::GatePassed { gate: "display", detail }
+                if detail.contains("the file a write replaces")
+        )),
+        "a file that was never there was released for a screen: {:?}",
+        sink.events()
+    );
+}
+
+/// Whether a write creates a file or replaces one is answered from the path and `stat`, never
+/// from what the file turned out to hold. A labelled peek reports a file it could not decode as
+/// text the same way it reports one that is not there, so deciding this from the peek would tell
+/// the model and the person that a file they are about to lose had just been created.
+#[test]
+fn a_write_over_a_file_that_is_not_text_says_it_replaced_it() {
+    let scratch = Scratch::new("write-over-binary");
+    std::fs::write(scratch.path.join("notes.md"), [0xff, 0xfe, 0x00, 0x01]).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "write_file",
+            r#"{"path":"notes.md","contents":"words, this time"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("write the notes"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("a first request");
+    let second = received.recv().expect("a second request");
+    assert!(
+        second.contains("which was already there"),
+        "the model was left thinking it had created the file: {second}"
+    );
+    let finished = reporter.finished.first().expect("the write was summarised");
+    let note = finished.note.as_deref().expect("a note");
+    assert!(
+        note.starts_with("replaced a file written "),
+        "the note says a file that was already there was created: {note}"
+    );
+}
+
 /// The scenario this project exists to make possible: an ordinary edit to a file nobody
 /// vouched for, which the planner is therefore not allowed to read.
 ///
