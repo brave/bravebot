@@ -17,7 +17,7 @@ make bump-version BUMP=bugfix   # or minor, major
 # review the commit it made, land it on main
 make github-release
 # later: Jenkins job bravebot-build with UPLOAD and RELEASE
-# later: Actions → Publish npm, with tag v<version>
+# later: make publish-npm TAG=v<version>
 ```
 
 `bump-version` rewrites the version in `Cargo.toml`, `Cargo.lock`, `package.json`,
@@ -54,10 +54,12 @@ points at that commit, then creates a GitHub release of that name and attaches t
 binaries plus the `.sha256` files written after signing. `gh release create` fails if that
 release already exists.
 
-After Jenkins has created that GitHub release, dispatch `publish-npm.yml` with the same tag to
-publish `@brave/bravebot`. OIDC trusted publishing; there is no `NPM_TOKEN`. The trusted
-publisher on npmjs.com must name that workflow file. Run the workflow from the version tag
-(Use workflow from / `--ref`). The npm `postinstall` verifies the binary against its published
+After Jenkins has created that GitHub release, `make publish-npm TAG=v<version>` dispatches
+`publish-npm.yml` from that tag to publish `@brave/bravebot`. Without `TAG` it takes the latest
+GitHub release rather than the version in the tree, which may already be bumped past it. The
+workflow, not the target, refuses a tag that does not match its tree or a release missing an
+asset. OIDC trusted publishing; there is no `NPM_TOKEN`. The trusted publisher on npmjs.com must
+name that workflow file. The npm `postinstall` verifies the binary against its published
 `.sha256` before writing it.
 
 `BRAVEBOT_ALLOW_UNCONFIGURED_BUILD` is set in GitHub Actions so forks and PRs compile without

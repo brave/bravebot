@@ -642,6 +642,33 @@ fn command_approval_preserves_plan_shape_environment_and_redirections() {
     assert_ne!(value["plan"], "context only");
     assert_eq!(value["writes"], json!(["/tmp/result.txt"]));
     assert_eq!(value["stdin"], "ref:3");
+    // This line reaches nothing that is on no tier, so the desktop front end is given an empty
+    // list and draws nothing. The field is sent either way: a front end reading it has to be able
+    // to tell a line that reaches nothing from a build that does not send the field at all.
+    assert_eq!(value["ambient"], json!([]));
+}
+
+/// The desktop application asks the same question as the two terminal front ends, so it is given
+/// the same answer to "what does a yes hand over". A container daemon runs anything as root on
+/// the machine, nobody is asked at the moment it is used, and nothing here takes the access back.
+///
+/// The kind and the word that named it, not a sentence: the words belong to whichever front end
+/// draws them, and what crosses the wire is what a front end matches on.
+#[test]
+fn a_command_that_spends_an_ambient_authority_says_so_across_the_bridge() {
+    use bravebot_agent::confirm::RunRequest;
+    use bravebot_core::command::{Pipeline, Stage};
+    let request = RunRequest::from_pipeline(
+        &Pipeline::new(vec![Stage::new("docker", vec!["ps".into()])]),
+        &["/usr/bin/docker".into()],
+        "/tmp",
+    );
+
+    let value = wire::run_request(7, &request);
+    assert_eq!(
+        value["ambient"],
+        json!([{ "authority": "container-daemon", "named": "docker" }])
+    );
 }
 
 #[test]

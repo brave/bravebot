@@ -516,7 +516,7 @@ pub fn run<S: Sink, C: Confirmer, R: Reporter>(
     confirmer: &mut C,
     reporter: &mut R,
     sink: &mut S,
-    trust: TrustStore,
+    mut trust: TrustStore,
     cancel: &Cancel,
 ) -> Result<Outcome, TurnError> {
     // A pipe is quarantined context in a turn. Here it would be dropped: the plan is frozen
@@ -546,7 +546,12 @@ pub fn run<S: Sink, C: Confirmer, R: Reporter>(
     // planner cannot read. What a person dropped onto the line is read here instead, under a policy
     // of its own, and the plan is still fixed before anything the plan itself could look at. See
     // [`crate::attached`].
-    let dropped = match crate::attached::read(workspace, &task.attachments, trust.clone(), sink) {
+    //
+    // The run's own map, lent rather than copied, because dropping a file records a rule for it
+    // (`dropping.md` DROP-2) and that rule is the person's rather than this read's: a copy left
+    // behind here would make the file trusted for the length of the read and untrusted for every
+    // step of the plan that touches it afterwards.
+    let dropped = match crate::attached::read(workspace, &task.attachments, &mut trust, sink) {
         Ok(dropped) => dropped,
         Err(error) => return Err(stopped(attempt, error)),
     };
@@ -599,6 +604,10 @@ pub fn run<S: Sink, C: Confirmer, R: Reporter>(
         config,
         egress,
         workspace,
+        crate::findings::Recording {
+            home: task.home.as_deref(),
+            session: task.remembering.as_deref(),
+        },
         planned,
         confirmer,
         reporter,
@@ -955,6 +964,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
     config: &Config,
     egress: &Egress,
     workspace: &Workspace,
+    recording: crate::findings::Recording<'_>,
     planned: Planned,
     confirmer: &mut C,
     reporter: &mut R,
@@ -1101,6 +1111,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
             run_step(
                 &mut policy,
                 workspace,
+                recording,
                 &mut slots,
                 &mut chat,
                 &mut asking,
@@ -1264,6 +1275,7 @@ fn slot_to_fill(step: &Step) -> Result<SlotId, String> {
 fn run_step<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
+    recording: crate::findings::Recording<'_>,
     slots: &mut SlotStore,
     chat: &mut Chat<'_>,
     confirmer: &mut C,
@@ -1440,7 +1452,7 @@ fn run_step<S: Sink, C: Confirmer>(
                 ..Done::default()
             })
         }
-        "write_file" => write(policy, workspace, slots, confirmer, index, step),
+        "write_file" => write(policy, workspace, recording, slots, confirmer, index, step),
         manifest::ANSWER => {
             let Some(slot) = step.reads().first().cloned() else {
                 return Err("no slot to answer from".to_string());
@@ -1535,6 +1547,7 @@ fn locked_filter<S: Sink>(
 fn write<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
+    recording: crate::findings::Recording<'_>,
     slots: &SlotStore,
     confirmer: &mut C,
     index: usize,
@@ -1583,20 +1596,21 @@ fn write<S: Sink, C: Confirmer>(
     // The pre-image and the version it was read at, taken together, exactly as a turn's write
     // takes them: prior bytes a sibling effect left untrusted cannot answer for a credential in
     // this body, and the approval minted below is spent only on the version shown here.
-    let (existing, existing_trusted, approved_revision) =
+    let (existing, replaces, existing_trusted, approved_revision) =
         policy.capture_files(|policy, capture| {
             let key = workspace.trust_key(&path);
             (
-                workspace.peek_for_review(&path),
+                workspace.peek_labelled_for_review(&path),
+                workspace.names_a_file(&path),
                 !policy.read_is_quarantined(&key),
                 capture.revision_of(&key),
             )
         });
-    // Labelled from the one peek, as a turn's write does it, so the comparison below can be
-    // made inside the kernel on a value the driver never holds as a string.
-    let replaced = crate::workspace::peeked_for_review(existing.clone());
+    // Taken from the one peek, as a turn's write does it, so the comparison below can be made
+    // inside the kernel on a value the driver never holds as a string.
+    let replaced = crate::workspace::peeked_for_review(&existing, replaces);
     let replaced_age = workspace.age_of(&path);
-    let intent = if existing.is_some() {
+    let intent = if replaces {
         Intent::Overwrite
     } else {
         Intent::Create
@@ -1608,9 +1622,13 @@ fn write<S: Sink, C: Confirmer>(
     let scanned = policy.scan_a_write(
         "write_file",
         &path,
-        existing.as_deref().filter(|_| existing_trusted),
+        (replaces && existing_trusted).then_some(&existing),
         &body,
     );
+    // Written down before the step is refused or put to anybody, exactly as a turn's write does
+    // it: what a planned run found in its own body is as much a thing to read afterwards as what
+    // a turn found (CRED-19).
+    recording.record(workspace.root(), &scanned.all());
     let refused = scanned.refused();
     if !refused.is_empty() {
         let found: Vec<String> = refused.iter().map(|finding| finding.describe()).collect();
@@ -1641,9 +1659,15 @@ fn write<S: Sink, C: Confirmer>(
             let proof = policy.authorise_display_release("proposed write");
             body.clone().declassify(&proof)
         };
+        // The file this replaces, released for the same screen, exactly as a turn's write
+        // releases it.
+        let existing = replaces.then(|| {
+            let proof = policy.authorise_display_release("the file a write replaces");
+            existing.declassify(&proof)
+        });
         let request = WriteRequest {
             intent,
-            existing: existing.clone(),
+            existing,
             path: path.clone(),
             contents: shown,
             diff: reviewed.diff.clone(),

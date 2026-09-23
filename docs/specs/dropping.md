@@ -6,13 +6,16 @@ governs:
   - crates/tui/src/dropped.rs
   - crates/tui/src/app.rs
   - crates/agent/src/attached.rs
+  - crates/ui-bridge/src/bridge.rs
 documented-by: docs/website/docs/using/context.md
 ---
 
 ## Scope
 
-What happens when a person drags a file onto the terminal, and on what footing it enters the turn.
-What the box does with the marker afterwards is [terminal-input.md](terminal-input.md).
+What happens when a person drags a file onto a window, and on what footing it enters the turn.
+What the box does with the marker afterwards is [terminal-input.md](terminal-input.md). The
+terminal is where the gesture is handled and most of this describes it; a front end reaching the
+same grant over the protocol is [DROP-10](#DROP-10).
 
 Three gestures put content into a turn on the user's own footing, and each has its own spec:
 [naming-files.md](naming-files.md) for `@` in a prompt, [pasting.md](pasting.md) for Ctrl-V, and
@@ -34,8 +37,9 @@ contains can put one there.
 ### DROP-1: only a file a person dropped
 
 Never a path a model proposed, never one read out of a file, never one a processor produced. The
-justification cannot be checked from the bytes, so it lives at the call site: today that is the
-terminal's drop handling and nothing else.
+justification cannot be checked from the bytes, so it lives at the call site. Two call sites mint
+the grant: the terminal's drop handling, and the `dropped` list a front end sends with `turn.send`,
+whose caller owes what [DROP-10](#DROP-10) states. Nothing else mints it.
 
 `verified-by: bravebot_tui::drop::dropping_an_image_puts_a_marker_in_the_line`
 `verified-by: bravebot_agent::workspace::an_untrusted_path_is_not_read_as_a_drop`
@@ -50,6 +54,9 @@ dropped file is trusted even inside a directory marked untrusted.
 
 `verified-by: bravebot_agent::turn::attaching_a_file_vouches_for_it_the_way_naming_one_does`
 `verified-by: bravebot_agent::attached::a_dropped_picture_is_shown_even_from_a_directory_nobody_vouched_for`
+`verified-by: bravebot_agent::attached::a_drop_records_its_rule_in_the_callers_map`
+`verified-by: bravebot_agent::attached::a_drop_before_one_that_could_not_be_read_keeps_its_rule`
+`verified-by: bravebot_agent::manifest::a_dropped_picture_is_still_trusted_when_a_step_of_the_plan_reads_it`
 
 <a id="DROP-3"></a>
 ### DROP-3: a drop makes that file reachable, wherever on the disk it is
@@ -208,8 +215,47 @@ dropped onto a line queued mid-turn already relies on.
 
 `verified-by: bravebot_tui::drop::a_dropped_file_is_recalled_by_name_rather_than_by_its_marker`
 
+<a id="DROP-10"></a>
+### DROP-10: a front end sending a drop over the protocol accounts for the path
+
+`turn.send` carries a `dropped` list, and every path in it is read the way a text file dropped onto
+the terminal is: an unconfined read, and a rule in the session's trust map. That and nothing else.
+The list carries no type of its own, so [DROP-4](#DROP-4) is the terminal's alone and a picture
+named here fails the turn rather than reaching the model as bytes.
+
+The caller is a separate process, so the gesture is not visible to the bridge and what the caller
+sends is the whole of the justification. A front end putting a path there is saying that a person's
+gesture produced it, or that the file is one the front end composed itself out of what it already
+speaks for.
+
+What the bridge decides is the half a string can be held to: each entry is an absolute path naming
+a file that is there. A directory is refused, on [DROP-5](#DROP-5)'s reasoning. A path naming
+nothing is refused, on [DROP-7](#DROP-7)'s: guessing in the permissive direction admits a path
+nobody's gesture put there. A relative path is refused because `files` is the list for a path
+inside the project, and the two lists differ in nothing else a caller can see, so admitting one
+would mint the unconfined grant for a file its caller meant as an ordinary one. An operating system
+reports a drop as an absolute path, so a front end loses nothing by it.
+
+**Why a refusal rather than an entry left out.** A turn that lost the file it was sent with is not
+a smaller turn: it answers without what it was asked about, and reports success. The caller knows
+what the path was for and can say so; the turn cannot.
+
+`verified-by: bravebot_ui_bridge::dispatch::a_dropped_path_that_names_no_file_is_refused`
+`verified-by: bravebot_ui_bridge::dispatch::a_relative_dropped_path_is_refused`
+`verified-by: bravebot_ui_bridge::dispatch::a_turn_may_name_files_or_none_and_none_is_the_default`
+
 ## Known costs
 
+- **A front end has no way to carry a picture over the protocol.** The `dropped` list is read as
+  text and nothing beside it takes bytes, so a graphical front end that wants a dropped screenshot
+  in front of the model has nowhere to put it, and naming it in the list ends the turn in an error
+  about binary content. What the terminal does with a recognised type has no counterpart here.
+- **A front end's word is the whole of a protocol drop's justification.** The checks
+  [DROP-10](#DROP-10) puts on a `dropped` entry establish that a file is there, not that anybody
+  dragged it: a path the caller invented and a path a person dropped are the same string on the
+  wire, and no check over a pipe tells them apart. A front end that mints one carelessly grants
+  its session a trusted, unconfined read of that file, which is the grant the terminal's gesture
+  buys and the only thing the bridge cannot ask for evidence of.
 - **A screenshot somebody sent you is content you have not read and are vouching for.** It goes
   into the turn as trusted input, on the strength of the gesture alone. Be as careful about a drop
   as about answering yes to a directory.

@@ -547,9 +547,19 @@ fn stops_the_turn(session: &Session, key: KeyEvent) -> bool {
 /// session was idle into the turn, and the press that stops the turn is the press that offer was
 /// waiting for. Left up, the hint row goes on saying the next Ctrl-C leaves over a box holding the
 /// line the stop put back, which the next Ctrl-C would only take.
+///
+/// A half-typed vi instruction goes for the same reason: it waits for a character, and neither
+/// stopping key is one.
 fn stop_what_is_running(session: &mut Session, cancel: &Cancel) {
     session.cleared_by_interrupt = false;
+    session.abandon_half_typed();
     cancel.cancel();
+}
+
+/// Whether a press is a character typed, which is the only kind of press a half-typed vi
+/// instruction waits for.
+fn types_a_character(key: KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Char(_)) && key.modifiers.difference(KeyModifiers::SHIFT).is_empty()
 }
 
 /// Interpret a key press while the scroller is open.
@@ -817,10 +827,11 @@ fn history_search_key(session: &mut Session, key: KeyEvent) -> Action {
 /// otherwise go into a box they cannot see, to be sent to a turn they are not looking at.
 ///
 /// Two levels, and the key that leaves is read against the nearer one: from a delegate it goes
-/// back to the list, and from the list it closes. Ctrl-L and Ctrl-C leave the mode outright from
-/// either, because a person who wants out of a mode wants out of the mode.
+/// back to the list, and from the list it closes. The chord that opened it and Ctrl-C leave the
+/// mode outright from either, because a person who wants out of a mode wants out of the mode.
 fn watching_key(session: &mut Session, key: KeyEvent) -> Action {
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    // Ctrl alone: a settings file can give Ctrl-Alt-U to an action, and that is not the view's key.
+    let ctrl = key.modifiers == KeyModifiers::CONTROL;
     let listing = session.listing_delegates();
 
     match key.code {
@@ -829,8 +840,8 @@ fn watching_key(session: &mut Session, key: KeyEvent) -> Action {
         // delegate was doing is not asking for the turn to end when they come back out.
         //
         // The chord that opened the view is read off the bindings, and before every other arm: the
-        // keys that walk the list are bare letters matched whatever is held with them, so one moved
-        // onto `j` would walk the list instead of leaving.
+        // arm below refuses every chord but the view's own, so one moved onto `alt-j` would do
+        // nothing instead of leaving.
         _ if session.bindings().is_watch(&key) => {
             session.stop_watching();
             Action::Redraw
@@ -839,6 +850,27 @@ fn watching_key(session: &mut Session, key: KeyEvent) -> Action {
             session.stop_watching();
             Action::Redraw
         }
+
+        // Half a screen, and a whole one back, in the scroller's chords (SCROLL-3). They are the
+        // view's own, so they are read before the arm that refuses every other chord.
+        KeyCode::Char('u') if ctrl => {
+            session.scroll_up(session.half_screen());
+            Action::Redraw
+        }
+        KeyCode::Char('d') if ctrl => {
+            session.scroll_down(session.half_screen());
+            Action::Redraw
+        }
+        KeyCode::Char('b') if ctrl => {
+            session.scroll_up(session.whole_screen());
+            Action::Redraw
+        }
+
+        // Every other chord does nothing. The arms below match the key and not what is held with
+        // it, and a chord read as the key it carries is a key nobody gave the view: the Ctrl-L an
+        // action was moved off of would still open the delegate the list is on. Shift is let
+        // through, since it is how a terminal spells Shift-Tab.
+        _ if !key.modifiers.difference(KeyModifiers::SHIFT).is_empty() => Action::None,
 
         // Back one level, or out where there is no level to go back to.
         KeyCode::Char('q') | KeyCode::Esc => {
@@ -890,14 +922,6 @@ fn watching_key(session: &mut Session, key: KeyEvent) -> Action {
             session.scroll_down(1);
             Action::Redraw
         }
-        KeyCode::Char('u') if ctrl => {
-            session.scroll_up(session.half_screen());
-            Action::Redraw
-        }
-        KeyCode::Char('d') if ctrl => {
-            session.scroll_down(session.half_screen());
-            Action::Redraw
-        }
         KeyCode::PageUp | KeyCode::Char('b') => {
             session.scroll_up(session.whole_screen());
             Action::Redraw
@@ -940,6 +964,13 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
     // transcript; `/` opens the search Ctrl-R opens. Translated to the key rather than answered a
     // second time, so a letter cannot come to disagree with the chord it stands for.
     let key = spelled_by_vi(session, key).unwrap_or(key);
+
+    // A press that is not a character cannot be the key a half-typed vi instruction waits for. Left
+    // standing, the wait would take the next letter instead, so `d`, Left, `w` would delete a word
+    // from wherever the arrow had put the caret.
+    if !types_a_character(key) {
+        session.abandon_half_typed();
+    }
 
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
@@ -1582,6 +1613,11 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     // prompt history and the search, neither of which sends anything, so a running turn refuses
     // nothing here.
     let key = spelled_by_vi(session, key).unwrap_or(key);
+
+    // Where the idle path abandons it, and for the reason that path does.
+    if !types_a_character(key) {
+        session.abandon_half_typed();
+    }
 
     // Where the idle path clears it, and for the reason that path clears it: the hint offering the
     // way out lives for one press, and this is it. A turn a loop tick or a watch began started
@@ -2875,7 +2911,7 @@ fn event_loop(
                         &mut session,
                         config,
                         &conversation,
-                        &trust,
+                        &mut trust,
                         &question,
                         &pasted,
                         &attached,
@@ -2932,7 +2968,7 @@ fn event_loop(
                         &task,
                         &pasted,
                         &attached,
-                        &trust,
+                        &mut trust,
                         &permissions,
                         settings.attribution(),
                     )?;
@@ -4381,7 +4417,7 @@ fn aside_animated(
     session: &mut Session,
     config: &Config,
     conversation: &Conversation,
-    trust: &TrustStore,
+    trust: &mut TrustStore,
     question: &str,
     pasted: &[crate::state::AttachedImage],
     attached: &[crate::state::Attached],
@@ -4394,7 +4430,7 @@ fn aside_animated(
     let (to_main, from_worker) = mpsc::channel::<crate::remote_confirm::ToMain>();
 
     let worker_config = config.clone();
-    let worker_trust = trust.clone();
+    let mut worker_trust = trust.clone();
     let worker_workspace = workspace.clone();
     let model = session.model().map(str::to_string);
     // Taken here, before the worker starts, because that is what crosses to it: the request, not
@@ -4440,16 +4476,20 @@ fn aside_animated(
         // Before the question's own policy exists, which is the whole point: that one holds
         // `WebFetch` alone and reaches no workspace, so what reads a dropped file is a policy of its
         // own holding `FileRead` and nothing else. See `bravebot_agent::attached`.
+        // The map is lent to the read rather than copied for it, so the rule each drop records is
+        // in it afterwards: the question's own policy is built from it, and the main thread takes it
+        // as the session's below. A read that failed part way still recorded rules for the files it
+        // got to, so it travels back from here too.
         let asking = match bravebot_agent::attached::read(
             &worker_workspace,
             &dropped,
-            worker_trust.clone(),
+            &mut worker_trust,
             &mut sink,
         ) {
             Ok(carried) => asking.carrying(carried),
             // Reduced to a sentence here for the reason the answer is below: the error types are the
             // kernel's, and this thread is the only place they mean anything.
-            Err(error) => return (Err(error.to_string()), sink),
+            Err(error) => return (Err(error.to_string()), sink, Some(worker_trust)),
         };
         // Reduced to what a person can be told before it crosses back, since the error types are
         // the kernel's and this thread is the only place they mean anything.
@@ -4460,14 +4500,14 @@ fn aside_animated(
             model.as_deref(),
             &mut reporter,
             &mut sink,
-            worker_trust,
+            worker_trust.clone(),
             // Taken and dropped. An answer has to be released to be looked at, and the one place
             // this side could draw it as it arrives is the tail the turn's own half-written reply
             // fills, which is among the turn's own lines.
             |_written| {},
         )
         .map_err(|e| e.to_string());
-        (done, sink)
+        (done, sink, Some(worker_trust))
     });
 
     loop {
@@ -4507,9 +4547,22 @@ fn aside_animated(
         }
     }
 
-    let (done, sink) = worker
-        .join()
-        .unwrap_or_else(|_| (Err(t!(btw_ended_unexpectedly).to_string()), Trail::new()));
+    let (done, sink, vouched) = worker.join().unwrap_or_else(|_| {
+        (
+            Err(t!(btw_ended_unexpectedly).to_string()),
+            Trail::new(),
+            None,
+        )
+    });
+
+    // What the question read is not the question's to keep. Dropping a file is the grant and the
+    // grant lasts the rest of the session (`dropping.md` DROP-2), so the map the read recorded its
+    // rules in becomes the session's, exactly as a turn's does. Without this the read would happen
+    // against a clone nothing ever looks at again, and the next prompt naming the same picture would
+    // be handed a sentence about one.
+    if let Some(vouched) = vouched {
+        *trust = vouched;
+    }
 
     match done {
         Ok(answered) => aside_answered(session, asked, answered),
@@ -4591,7 +4644,7 @@ fn manifest_animated(
     task: &str,
     pasted: &[crate::state::AttachedImage],
     attached: &[crate::state::Attached],
-    trust: &TrustStore,
+    trust: &mut TrustStore,
     permissions: &Permissions,
     attribution: &Attribution,
 ) -> io::Result<Vec<Stamped>> {
@@ -4831,6 +4884,15 @@ fn manifest_animated(
     });
 
     let stopped_by_the_person = was_stopped(&outcome, &cancel);
+
+    // What the run decided about the tree is the session's, the way a turn's is. A file dropped on
+    // the line was vouched for by the gesture that put it there, and `dropping.md` DROP-2 has that
+    // rule hold for the rest of the session rather than for the run; the rules the run's own writes
+    // recorded belong to the same tree the next turn reads. Nothing here on a run that failed: an
+    // error carries what it produced and no map.
+    if let Ok(finished) = &outcome {
+        *trust = finished.trust.clone();
+    }
 
     // Only from a run that finished. A run that stopped comes back as an error carrying what it
     // produced (MANIFEST-3) and no figures, so the tokens it did spend are not recoverable here,
@@ -6681,8 +6743,8 @@ mod tests {
         }
 
         /// The chord that opened the view leaves it, wherever it has been moved to. Bound onto `j`
-        /// on purpose: the keys that walk the list are bare letters matched whatever is held with
-        /// them, so a chord read after them would walk the list instead of leaving.
+        /// on purpose: `j` walks the list and every chord but the view's own is refused, so a chord
+        /// read after either would walk the list or do nothing instead of leaving.
         #[test]
         fn a_moved_chord_leaves_the_view_it_opened() {
             let mut session = Session::new("kernel-enforced");
@@ -6708,6 +6770,195 @@ mod tests {
             assert!(
                 session.watching().is_none(),
                 "the old chord still opened it"
+            );
+        }
+
+        /// A turn with two delegates and the actions on `moved`, standing at each of the view's
+        /// three places: the list on a delegate, the list on the session, and one delegate's lines.
+        fn at_every_place_in_the_view(moved: &[(&str, &str)]) -> Vec<(&'static str, Session)> {
+            let bindings: std::collections::BTreeMap<String, String> = moved
+                .iter()
+                .map(|(action, chord)| (action.to_string(), chord.to_string()))
+                .collect();
+            let opened = || {
+                let mut session = Session::new("kernel-enforced");
+                session.status = Status::Working;
+                session.adopt_keybindings(&bindings);
+                spawn(&mut session, "reader", "find the parser");
+                spawn(&mut session, "checker", "run the build");
+                assert!(session.watch(), "there was nothing to watch");
+                session
+            };
+
+            let on_a_delegate = opened();
+            assert!(on_a_delegate.listing_delegates() && !on_a_delegate.listing_on_the_session());
+
+            let mut on_the_session = opened();
+            on_the_session.watch_previous();
+            on_the_session.watch_previous();
+            assert!(on_the_session.listing_on_the_session());
+
+            let mut inside_one = opened();
+            inside_one.open_watched();
+            assert!(inside_one.watching_a_delegate());
+
+            vec![
+                ("on the list", on_a_delegate),
+                ("on the session row", on_the_session),
+                ("inside a delegate", inside_one),
+            ]
+        }
+
+        /// Somebody who moved Watch off Ctrl-L presses it from habit, and the view walks the list
+        /// with bare letters: read as the `l` it carries, the chord opened the delegate the list
+        /// was on, or closed the view from the session row. Every default is vacated, so a letter
+        /// the view comes to read is held to this too.
+        #[test]
+        fn the_chord_an_action_was_moved_off_does_nothing_inside_the_view() {
+            let moved = [
+                ("editor", "alt-e"),
+                ("history", "alt-r"),
+                ("paste", "alt-v"),
+                ("scroller", "alt-o"),
+                ("stash", "alt-s"),
+                ("trail", "alt-t"),
+                ("watch", "alt-w"),
+            ];
+            let handlers: [fn(&mut Session, KeyEvent) -> Action; 2] =
+                [handle_key, handle_key_while_working];
+            for handler in handlers {
+                for (place, mut session) in at_every_place_in_the_view(&moved) {
+                    for vacated in ['g', 'l', 'o', 'r', 's', 't', 'v'].map(ctrl) {
+                        assert!(
+                            !session.bindings().claims(&vacated),
+                            "{vacated:?} was not vacated"
+                        );
+                        let before = (session.watching(), session.scroll);
+
+                        let action = handler(&mut session, vacated);
+
+                        assert_eq!(action, Action::None, "{vacated:?} answered {place}");
+                        assert_eq!(
+                            (session.watching(), session.scroll),
+                            before,
+                            "{vacated:?} moved the view {place}"
+                        );
+                    }
+                }
+            }
+        }
+
+        /// The view asks the bindings about Watch alone, so the other six chords are nobody's in
+        /// here. Moved onto the keys the view walks with, one read as its key would open, close or
+        /// move the view on a chord the person gave to something else. The second set is the
+        /// view's own chords with Alt added, and keys that are not letters.
+        #[test]
+        fn a_chord_moved_onto_a_key_the_view_reads_is_not_that_key() {
+            let onto_letters = [
+                ("editor", "alt-l"),
+                ("history", "alt-q"),
+                ("paste", "alt-j"),
+                ("scroller", "alt-k"),
+                ("stash", "alt-n"),
+                ("trail", "alt-p"),
+                ("watch", "alt-w"),
+            ];
+            let onto_the_rest = [
+                ("editor", "ctrl-alt-u"),
+                ("history", "ctrl-alt-d"),
+                ("paste", "ctrl-alt-c"),
+                ("scroller", "alt-b"),
+                ("stash", "ctrl-down"),
+                ("trail", "alt-esc"),
+                ("watch", "alt-w"),
+            ];
+            for moved in [onto_letters, onto_the_rest] {
+                for (place, mut session) in at_every_place_in_the_view(&moved) {
+                    for (action, spelling) in moved.iter().filter(|(action, _)| *action != "watch")
+                    {
+                        let chord = crate::keybindings::KeyChord::parse(spelling)
+                            .expect("the spelling should parse");
+                        let chord = KeyEvent::new(chord.code, chord.modifiers);
+                        assert!(
+                            session.bindings().claims(&chord),
+                            "{action} did not take {spelling}"
+                        );
+                        let before = (session.watching(), session.scroll);
+
+                        let answer = handle_key_while_working(&mut session, chord);
+
+                        assert_eq!(answer, Action::None, "{spelling} answered {place}");
+                        assert_eq!(
+                            (session.watching(), session.scroll),
+                            before,
+                            "{spelling} was read as the key it carries {place}"
+                        );
+                    }
+                }
+            }
+        }
+
+        /// A terminal speaking the keyboard protocol this client asks for reports Super, Hyper and
+        /// Meta as well. No action can be moved onto them, and a letter held with one is still not
+        /// the letter: Super-L opened the delegate the list was on.
+        #[test]
+        fn a_letter_held_with_any_other_modifier_is_not_that_letter() {
+            for held in [KeyModifiers::SUPER, KeyModifiers::HYPER, KeyModifiers::META] {
+                for (place, mut session) in at_every_place_in_the_view(&[]) {
+                    for letter in ['l', 'q', 'j', 'k', 'n', 'p', 'b'] {
+                        let chord = KeyEvent::new(KeyCode::Char(letter), held);
+                        let before = (session.watching(), session.scroll);
+
+                        let answer = handle_key_while_working(&mut session, chord);
+
+                        assert_eq!(answer, Action::None, "{chord:?} answered {place}");
+                        assert_eq!(
+                            (session.watching(), session.scroll),
+                            before,
+                            "{chord:?} was read as {letter:?} {place}"
+                        );
+                    }
+                }
+            }
+        }
+
+        /// Refusing chords stops at the ones the view answers itself: Ctrl-U and Ctrl-D move a
+        /// delegate's lines half a screen and Ctrl-B a whole one, as they move the scroller's, and
+        /// a terminal reports Shift-Tab as BackTab with Shift held.
+        #[test]
+        fn the_keys_the_view_reads_with_a_modifier_held_still_answer() {
+            let mut session = Session::new("kernel-enforced");
+            session.status = Status::Working;
+            spawn(&mut session, "reader", "find the parser");
+            spawn(&mut session, "checker", "run the build");
+            assert!(session.watch(), "there was nothing to watch");
+            session.open_watched();
+            session.note_layout(crate::state::Laid {
+                width: 80,
+                height: 10,
+                rows: 100,
+                prompts: Vec::new(),
+                matches: Vec::new(),
+            });
+
+            handle_key_while_working(&mut session, ctrl('u'));
+            assert_eq!(session.scroll, 5, "ctrl-u did not move half a screen back");
+            handle_key_while_working(&mut session, ctrl('d'));
+            assert_eq!(session.scroll, 0, "ctrl-d did not move half a screen on");
+            handle_key_while_working(&mut session, ctrl('b'));
+            assert_eq!(
+                session.scroll, 10,
+                "ctrl-b did not move a whole screen back"
+            );
+
+            let shift_tab = KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT);
+            handle_key_while_working(&mut session, shift_tab);
+            assert_eq!(
+                session
+                    .watched_delegate()
+                    .map(|delegate| delegate.kind.as_str()),
+                Some("reader"),
+                "shift-tab did not step back a delegate"
             );
         }
 
@@ -8661,6 +8912,123 @@ mod tests {
             Some(crate::vim::Mode::Insert),
             "the press that stopped the turn also changed the mode"
         );
+    }
+
+    /// Escape is how vi abandons an instruction still waiting for a key, so the key after it is read
+    /// on its own: `d`, Escape, `w` moves a word rather than deleting one. Both spellings, being one
+    /// request.
+    #[test]
+    fn escape_abandons_an_instruction_still_waiting_for_a_key() {
+        for escape in [key(KeyCode::Esc), ctrl('[')] {
+            for (first, second, line) in [
+                ('d', 'w', "one two three"),
+                ('c', 'w', "one two three"),
+                ('f', 't', "one two three"),
+                ('g', 'g', "one\ntwo"),
+            ] {
+                let started = |keys: &[KeyEvent]| {
+                    let mut session = in_normal_mode(line);
+                    handle_key(&mut session, key(KeyCode::Char('0')));
+                    for pressed in keys {
+                        handle_key(&mut session, *pressed);
+                    }
+                    session
+                };
+                let alone = started(&[key(KeyCode::Char(second))]);
+                let session = started(&[
+                    key(KeyCode::Char(first)),
+                    escape,
+                    key(KeyCode::Char(second)),
+                ]);
+
+                let keys = format!("{first}, {escape:?}, {second}");
+                assert_eq!(session.input(), line, "{keys} edited the line");
+                assert_eq!(session.vi_mode(), Some(crate::vim::Mode::Normal), "{keys}");
+                assert_eq!(session.caret(), alone.caret(), "{keys}");
+                assert_eq!(session.half_typed(), alone.half_typed(), "{keys}");
+            }
+        }
+    }
+
+    /// A press that is not a character cannot be the key a half-typed instruction waits for, so it
+    /// abandons the wait and does what it does alone: `d`, Left, `w` moves back and then a word on,
+    /// rather than deleting the space the arrow left the caret on.
+    #[test]
+    fn a_press_that_is_not_a_character_abandons_an_instruction_still_waiting_for_a_key() {
+        let pressed_keys = [
+            KeyCode::Left,
+            KeyCode::Right,
+            KeyCode::Home,
+            KeyCode::End,
+            KeyCode::Backspace,
+            KeyCode::Delete,
+        ];
+        for pressed in pressed_keys {
+            for first in ['d', 'c', 'f', 'g', 'm'] {
+                let started = |keys: &[KeyEvent]| {
+                    let mut session = in_normal_mode("one two three");
+                    handle_key(&mut session, key(KeyCode::Char('0')));
+                    handle_key(&mut session, key(KeyCode::Char('w')));
+                    for pressed in keys {
+                        handle_key(&mut session, *pressed);
+                    }
+                    session
+                };
+                let keys = format!("{first}, {pressed:?}");
+                let waited = started(&[key(KeyCode::Char(first)), key(pressed)]);
+                assert_eq!(waited.half_typed(), None, "{keys}");
+
+                let alone = started(&[key(pressed), key(KeyCode::Char('w'))]);
+                let session = started(&[
+                    key(KeyCode::Char(first)),
+                    key(pressed),
+                    key(KeyCode::Char('w')),
+                ]);
+                assert_eq!(session.input(), alone.input(), "{keys}, w");
+                assert_eq!(session.caret(), alone.caret(), "{keys}, w");
+                assert_eq!(session.vi_mode(), alone.vi_mode(), "{keys}, w");
+            }
+        }
+    }
+
+    /// Enter sends the line with an instruction still waiting, and the wait does not ride into the
+    /// turn: a letter typed while the answer arrives is read on its own rather than as the stretch a
+    /// `d` typed before the send deletes.
+    #[test]
+    fn sending_the_line_abandons_an_instruction_still_waiting_for_a_key() {
+        let mut session = in_normal_mode("a question");
+        handle_key(&mut session, key(KeyCode::Char('d')));
+        assert_eq!(session.half_typed(), Some("d"));
+
+        handle_key(&mut session, key(KeyCode::Enter));
+
+        assert_eq!(session.status, Status::Working);
+        assert_eq!(session.half_typed(), None);
+    }
+
+    /// While a turn runs the box is still NORMAL mode's, and a press that is not a character still
+    /// abandons the wait. So does stopping the turn, which Escape and Ctrl-C do before any ladder
+    /// reads them.
+    #[test]
+    fn a_press_while_a_turn_runs_abandons_an_instruction_still_waiting_for_a_key() {
+        let working = || {
+            let mut session = editing_vis_way();
+            type_line(&mut session, "a question");
+            handle_key(&mut session, key(KeyCode::Enter));
+            assert_eq!(session.status, Status::Working);
+            handle_key_while_working(&mut session, ctrl('['));
+            handle_key_while_working(&mut session, key(KeyCode::Char('d')));
+            assert_eq!(session.half_typed(), Some("d"));
+            session
+        };
+
+        let mut session = working();
+        handle_key_while_working(&mut session, key(KeyCode::Left));
+        assert_eq!(session.half_typed(), None, "Left");
+
+        let mut session = working();
+        stop_what_is_running(&mut session, &Cancel::new());
+        assert_eq!(session.half_typed(), None, "stopping the turn");
     }
 
     /// A session in NORMAL mode over a paragraph, which is what gives the row keys somewhere to go.

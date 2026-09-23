@@ -243,7 +243,9 @@ somebody reading an older one. Nor does anything else that happens without a pre
 queue starts as the one before it ends, a tick of a loop coming due, a watch firing, a goal sending
 the work back, a command line that waited being run, and what that command printed each leave an
 open view where its reader put it. Where no view is open the tail is where the session's own view
-belongs, so every one of them still takes the transcript there.
+belongs, so every one of those still takes the transcript there. A delegate starting is the running
+turn adding to the transcript, which [VIEW-1](terminal-transcript.md#VIEW-1) holds a scrolled-back
+view through.
 
 **Why.** Several delegates report at once, so a view that followed the newest event would move
 under the reader several times a second, and the run somebody opened would be the one run they

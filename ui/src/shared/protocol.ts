@@ -134,6 +134,13 @@ export interface OpenedSession {
    * said again when this has gone up since it last looked.
    */
   archived: number
+  /**
+   * Whether a check that finds nothing reads quarantined content to the model with nobody asked.
+   *
+   * Settled by the agent when the session opened and not changed while it is open, so a window
+   * says it once at the top of the transcript and goes on showing it (CHECK-11).
+   */
+  autoVetting: boolean
 }
 
 export interface ModelOption {
@@ -173,6 +180,8 @@ export interface ForkedSession {
   turns: number
   todos: Record<string, TodoRow[]>
   trust: { known: boolean; rules: { path: string; integrity: string }[] | null }
+  /** The parent's, as it opened: the child carries on its conversation. */
+  autoVetting: boolean
   parent: {
     id: string
     directory: string
@@ -289,6 +298,19 @@ export interface RunRequest {
    * governing.
    */
   releasesPrivate: boolean
+  /**
+   * Access the command reaches that nothing in the agent holds.
+   *
+   * A container daemon, a tool that is already logged in, the ssh agent, the metadata service
+   * of this machine: nothing is handed over when one is used, nobody is asked at that moment,
+   * and the agent cannot take the access back afterwards. So the one thing available is that
+   * whoever approves the command is told what they are approving.
+   *
+   * `authority` is the kind, which is what to match on, and `named` is the word that named it:
+   * a program, an address, a socket or a variable. The sentence is the front end's, because the
+   * words a person reads belong to the surface drawing them. Empty for nearly every command.
+   */
+  ambient?: { authority: string; named: string }[]
   /** What approving *and remembering* would cover — the thing the second answer is about. */
   vouches: { program: string; args: string[]; display: string }[]
   summary: string

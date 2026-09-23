@@ -8,20 +8,14 @@
 # lines, or read the warnings check-spec prints.
 
 docs/specs/credential-protection.md:CRED-2: every credential carries a tier, and the tier is where its gate walk stopped
-docs/specs/credential-protection.md:CRED-3: a gate fails only for a stated reason, and dropping pays what the gate says it costs
 docs/specs/credential-protection.md:CRED-4: nothing climbs a tier without the arrangement changing
-docs/specs/credential-protection.md:CRED-5: authority with no custody and no refusal leaves the scale, and is declared where it is granted
 docs/specs/credential-protection.md:CRED-6: a handle the agent can redeem alone is not a handle
 docs/specs/credential-protection.md:CRED-7: a bound is decided before issue and enforced beyond the agent's reach
 docs/specs/credential-protection.md:CRED-8: a bound with no end does not pass gate 2
 docs/specs/credential-protection.md:CRED-9: the issuer ends the credential's life, and refresh without authority is not expiry
-docs/specs/credential-protection.md:CRED-10: a brief window is sized against detection, and the size is recorded
-docs/specs/credential-protection.md:CRED-11: a turn does not copy a credential somewhere weaker than where it was
-docs/specs/credential-protection.md:CRED-13: a credential a turn creates is created into the authority
 docs/specs/credential-protection.md:CRED-15: the tree is scanned before it is vouched for
 docs/specs/credential-protection.md:CRED-17: no gate passes because the scan ran
 docs/specs/credential-protection.md:CRED-18: no part of the scan discloses the tree off this machine
-docs/specs/credential-protection.md:CRED-19: a finding carries no credential value, and is written where the planner does not read
 docs/specs/credential-protection.md:CRED-20: a disposition moves a tier only by passing the gate it attempts
 docs/specs/credential-protection.md:CRED-21: accepting a finding expires
 docs/specs/credential-protection.md:CRED-22: the baseline is not writable by a turn

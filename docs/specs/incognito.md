@@ -84,24 +84,38 @@ hold gate names and paths, which is a record of a session having happened and wh
 `verified-by: bravebot_tui::incognito::no_audit_trail_is_written`
 
 <a id="INCOG-5"></a>
-### INCOG-5: reading is unchanged
+### INCOG-5: reading is unchanged, apart from the one answer named here
 
 An incognito session reads the settings, the recorded model and theme, the standing instructions,
-the skills and the imported credentials, exactly as an ordinary one does. No read is refused, and
-what is refused is writing, apart from the one file [INCOG-8](#INCOG-8) names. The record of
+the skills and the imported credentials, exactly as an ordinary one does. What is refused is
+writing, apart from the one file [INCOG-8](#INCOG-8) names, and one read, named below. The record of
 command lines somebody asked to be remembered past a session, which [tools/run.md](tools/run.md)
 governs, is read here on the same terms: a line already in it stops the asking as it does anywhere,
 and the key that would add one is not offered.
 
+**The one read refused is the standing answer about whether a check answers in somebody's place.**
+The word a person's own directory holds about that is not read in this mode, so a session here asks
+as one on a machine with nothing recorded does, unless the command line or the home settings layer
+says otherwise for this run. [vetting.md](vetting.md) owns that answer and decides the refusal; what
+puts it on this side of the line is what it does rather than where it is kept. Reading the model and
+the theme back is what makes this the session somebody configured, because those decide what it
+looks like. That one decides whether they are asked before content nobody vouched for reaches the
+planner, and a private session inheriting it would have stopped asking without having been told to.
+
 **Why.** A session that could not read its own configuration would not be private, it would be
 broken, and one that could not read a credential could not reach a backend at all. This is the same
 division a browser's private window makes: the promise is about what survives, not about what the
-session may know.
+session may know. The exception is the one place that division does not hold. A standing answer
+about what to ask is not something the session knows, it is a decision somebody made in a session
+that recorded decisions, and inheriting it changes what this one does rather than what it knows.
 
 The split is in the source rather than in a convention: `home::directory` is the reading answer and
 `home::writable` is the writing one, so a call site says which it is doing and a new write site that
-reaches for the wrong one is visible in review.
+reaches for the wrong one is visible in review. The refused read resolves through the writing answer,
+and is the only read that does, which is what makes it one site to review rather than a convention
+to remember.
 
+`verified-by: bravebot_tui::incognito::the_standing_answer_about_vetting_is_not_read`
 `verified-by: bravebot_tui::incognito::no_prompt_is_written_down`
 `verified-by: bravebot_tui::incognito::a_choice_applies_to_the_session_and_is_not_recorded`
 `verified-by: bravebot_agent::incognito::no_remembered_line_is_written_down`

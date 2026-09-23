@@ -171,7 +171,8 @@ doctor-key = { $key } (never transmitted)
 # because the moment somebody needs it is the moment it is too late to work out, and because the
 # disposition people reach for, deleting the local copy, ends this machine's custody and nothing
 # else. One line per credential, and both AWS arrangements where an account is configured, since
-# which one a profile resolves to is the AWS CLI's answer and this report does not run it.
+# which one a profile resolves to is the AWS CLI's answer and this report does not run it. One
+# per gateway a settings file configured too, so each names the host that would end its token.
 doctor-ends = ends
 doctor-ends-signing-key =
     the signing key: issued by the Brave backend, which derives its copy from a master seed and this key id; ended only by retiring that id there and shipping another build, since one build's key is every install's
@@ -179,11 +180,52 @@ doctor-ends-aws-access-key =
     a long-lived access key: issued by AWS IAM to the user the profile names; ended with `aws iam delete-access-key`
 doctor-ends-aws-session =
     a session credential: issued by AWS STS for the profile and ends at its own expiry; ended sooner only at its issuer, since `aws sso logout` clears this machine's copy rather than the session behind it
+doctor-ends-gateway-token =
+    a gateway bearer token: issued by { $gateway }, which is also the only surface that revokes it; deleting it from the settings file or unsetting the variable ends this machine's custody and leaves the token live there
+# How quickly a leak of a credential would be noticed and acted on, shown for the one arrangement
+# whose bound is a window rather than a revocation. The figure is this deployment's judgement and
+# not a fact about the credential: it decides whether the window is short enough for what the
+# credential reaches, and it neither sets the tier nor moves it.
+doctor-noticed = noticed
+doctor-noticed-aws-session =
+    within about { $minutes } minutes, and only where somebody is reading the account's trail: a call made with the session appears there rather than here, nothing on this machine watches for one, and ending it before its expiry is a request at its issuer
 # Shown only for a credential something is minted from that ending it would not reach, because
 # a line reading "nothing" for the other two is the one people learn to skip.
 doctor-outlives = outlives
 doctor-outlives-aws-access-key =
     a session credential STS already issued under that access key, which runs to its own expiry: deleting the key does not reach it
+# How each credential reached the tier it stands at: one line per gate its walk failed, naming
+# the gate, whether the counterparty refused or nobody attempted it, and the condition that was
+# not met. A tier on its own says where a credential stands and nothing about whether it could
+# have stood anywhere else, and the two answers are what tells a fact about the world from a
+# decision made here. The gate number is passed from the record, so a line cannot name a gate the
+# walk did not fail. No line names a host: a walk is an account of an arrangement, and the address
+# somebody acts on is on the 'ends' line above it.
+doctor-dropped = dropped
+doctor-dropped-refused = the counterparty refused
+doctor-dropped-not-attempted = nobody attempted it
+doctor-dropped-signing-key-nothing-decides-each-use =
+    gate { $gate }, { $answer }: nothing the agent cannot impersonate decides each use, since the key signs the request digest in this process and nothing else is asked to sign one
+doctor-dropped-signing-key-no-bound-fixed-before-issue =
+    gate { $gate }, { $answer }: no bound on what the key may do is fixed before it is issued, since the backend derives its copy from a master seed and this key id and is asked for nothing narrower
+doctor-dropped-signing-key-not-minted-for-one-step =
+    gate { $gate }, { $answer }: it is not minted for one step, since it is baked into the build and one build's key is every install's
+doctor-dropped-aws-access-key-nothing-decides-each-use =
+    gate { $gate }, { $answer }: nothing the agent cannot impersonate decides each use, since this process signs each request with the key itself
+doctor-dropped-aws-access-key-no-bound-fixed-before-issue =
+    gate { $gate }, { $answer }: no bound on what the key may do is fixed before it is issued, since STS mints a session bounded by a policy AWS enforces and the agent cannot widen, and nothing here asks for one
+doctor-dropped-aws-access-key-not-minted-for-one-step =
+    gate { $gate }, { $answer }: it is not minted for one step, since the profile's key is used as the AWS CLI resolved it and IAM ends it only when somebody deletes it
+doctor-dropped-aws-session-nothing-decides-each-use =
+    gate { $gate }, { $answer }: nothing the agent cannot impersonate decides each use, since this process signs each request with the session credential itself
+doctor-dropped-aws-session-no-bound-fixed-before-issue =
+    gate { $gate }, { $answer }: no bound on what the session may do is fixed before it is issued, since it carries whatever the profile's role or SSO grant allows and nothing here asks STS to narrow it to this run
+doctor-dropped-gateway-token-nothing-decides-each-use =
+    gate { $gate }, { $answer }: nothing the agent cannot impersonate decides each use, since the token goes in a header this process sends and no performer exists for the request
+doctor-dropped-gateway-token-no-bound-fixed-before-issue =
+    gate { $gate }, { $answer }: no bound on what the token may do is fixed before it is issued, since the block names a host and a variable and never an issuer, so there is nothing here to ask for a narrower one
+doctor-dropped-gateway-token-not-minted-for-one-step =
+    gate { $gate }, { $answer }: it is not minted for one step, since the token is whatever the settings file carries or the variable holds, and it is held for the whole run
 # Both are reported when both are reachable, so this names one of the two rather than the backend.
 doctor-backend = offers
 doctor-backend-bedrock = AWS Bedrock
@@ -543,6 +585,16 @@ run-line-sent = the model wrote:
 run-writes = it writes these files:
 run-is-fed = it is fed the contents of:
 run-not-sandboxed = this is not sandboxed: it runs with the access your own shell has
+# Said above the list of what a line reaches that nothing here holds: no credential is handed
+# over, nobody is asked at the moment it is used, and nothing here can take the access back. Said
+# only where a line reaches one, so the list is never empty and never noise. The line above is
+# said either way: this names what is being granted, rather than replacing what confinement there
+# is with a list.
+run-spends-authority = it also spends access that is yours elsewhere, which nobody is asked for and nothing here takes back:
+run-authority-container = { $named }: the container daemon, which runs anything as root on this machine
+run-authority-logged-in = { $named }: already logged in, so it acts as you without asking you
+run-authority-agent = { $named }: your ssh agent, which signs with keys it never hands over
+run-authority-metadata = { $named }: this machine's metadata service, which hands out the credentials of the role it runs as
 run-releases-private = it is also being fed your own data, which leaves here with it
 run-always-explained = a: trust this exact command for the rest of this session
 run-always-means-both = which means both:
@@ -634,6 +686,12 @@ vet-always-covers =
 fetch-title = fetch this?
 fetch-verb = Fetch
 fetch-host = talking to { $host }
+# Said where the host is the metadata service of the machine this is running on, which is a host
+# like any other to everything in between: it asks for no credential and hands out the ones of
+# the role this machine runs as. A person shown the address alone has been shown a number.
+fetch-authority-metadata =
+    this is this machine's own metadata service: it asks nothing of whoever reaches it and
+    answers with the credentials of the role this machine runs as.
 fetch-explained =
     what comes back stays quarantined however you answer: the model can pass it to a
     processor or write it to a file, and cannot read it or be told what it says.

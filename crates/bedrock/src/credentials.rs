@@ -108,7 +108,10 @@ impl Credentials {
     /// would report an unreadable session credential as a key in a file and answer a leak of one
     /// with `aws iam delete-access-key`, for a key that does not exist. A session token is present
     /// only for a credential STS issued, which is exactly the distinction being drawn.
-    pub fn held(&self) -> Held {
+    ///
+    /// `'static` because neither arm names a host: the lifetime on [`Held`] is for the gateway
+    /// arrangement, whose record borrows the endpoint the block stated.
+    pub fn held(&self) -> Held<'static> {
         match self.session_token {
             Some(_) => Held::AwsSession,
             None => Held::AwsAccessKey,
@@ -807,6 +810,14 @@ mod tests {
         // expiry. The session credential has nothing under it in turn.
         assert!(long_lived.held().outlives_revocation());
         assert!(!session.held().outlives_revocation());
+
+        // CRED-10: the session credential is the one whose bound is a window, so it is the one
+        // the record owes a detection figure for. A resolver that called it a long-lived key
+        // would take the obligation off it along with the expiry.
+        assert!(session.held().held_briefly());
+        assert!(session.held().noticed_within().is_some());
+        assert!(!long_lived.held().held_briefly());
+        assert!(long_lived.held().noticed_within().is_none());
     }
 
     /// The expiry is what lets a caller answer "is this still good" without running the CLI again,

@@ -750,10 +750,13 @@ flight, which is aimed at something else entirely and costs the answer being wri
   session record to pick up again. So the cost is having to choose, and neither half is the whole
   program.
 - **Vi's editing is what this box does with the keys, not what vi does with a file.** There is one
-  register rather than named ones, undo is a single step (INPUT-28), counts do not prefix a command,
-  and there is no `:` line. Each of those is machinery for a file being edited over an afternoon,
-  where this is a prompt being written over a minute, and every one of them is a key that does nothing
-  rather than one that does something unexpected.
+  register rather than named ones, no macro and no mark, undo is a single step (INPUT-28), counts do
+  not prefix a command, and there is no `:` line. Each of those is machinery for a file being edited
+  over an afternoon, where this is a prompt being written over a minute. The keys that reach for a
+  register, a macro or a mark do nothing, and nor does the key after them (INPUT-23). A count and a
+  `:` line are the exceptions: a digit and `:` do nothing, `0` is the start of the line, and what is
+  typed after them is read as the instructions it spells, so `3j` moves one row and `d2w` moves the
+  caret a word.
 
 <a id="INPUT-19"></a>
 ### INPUT-19: Ctrl-R searches every prompt sent, and what is chosen goes into the box
@@ -962,11 +965,22 @@ neither stops anything from starting.
 **A choice is made from a panel `/config` opens**, over the transcript, listing the styles with what
 each one means and marking the one in force. Enter takes the row under the cursor and says so on the
 transcript; Escape leaves the style alone. Whichever style is chosen, the box comes back taking
-letters as letters.
+letters as letters, with no instruction left waiting for a key.
 
 Vi editing has two modes over the same line. INSERT is the box everybody has, where a typed
 character lands at the caret. NORMAL takes a letter as an instruction, and a letter it has no
 instruction for does nothing at all rather than being typed. Every session opens in INSERT.
+
+A key beginning one of vi's instructions that this box does not have does nothing either, and nor
+does the key vi would give it. `"`, `q`, `@`, `m`, `'`, `` ` ``, `z`, `Z`, `[`, `]`, `r` and `R`
+each take one more key, and so do `g'`, `` g` `` and `gr`. `R` begins vi's replace mode, which this
+box does not have, and takes one key the way `r` does rather than every key up to Escape. The
+operators vi spells after `g`, which are `gu`, `gU`, `g~`, `g?`, `gq`, `gw` and `g@`, take the
+stretch they would act on, the way `d` does. After an operator, `'`, `` ` ``, `[`, `]` and `z` still
+take their key, so `d'a` does nothing. The other prefixes end the operator there, as they do in vi,
+and the key after `dm` is read on its own. VISUAL mode reads the prefixes the same way, except that
+`r` and `gr` there replace the selection (INPUT-30), and the operators under `g` and `R` take no key,
+since the selection is already the stretch they act on.
 
 The ordinary box is in neither mode, and nothing about a mode is drawn at it.
 
@@ -983,14 +997,30 @@ A letter with no instruction does nothing because the mode is not typing. Fallin
 it would make NORMAL mode a place where half the alphabet quietly edits the prompt, and the person
 would find out by reading the line rather than by pressing the key.
 
+A prefix is the same promise one key later. `ma` is one instruction, and a box that did nothing with
+the `m` alone would read the `a` as the next one and open INSERT mode. For the same reason `rx` would
+delete a character and `guiw` would type a `w`. Taking the key vi would give the prefix keeps the
+box doing nothing for the whole of an instruction it does not have. Taking more than that is the
+opposite failure: after an operator vi gives `m` no key, and a box that waited for one would swallow
+the instruction typed next. One key after `R` is the least wait that keeps `Rx` from deleting, and
+every key up to Escape would be replace mode without the replacing.
+
 `verified-by: bravebot_tui::vim::the_configured_word_for_vi_editing_is_the_one_other_tools_use`
 `verified-by: bravebot_tui::vim::the_configured_word_is_read_whatever_its_case`
 `verified-by: bravebot_tui::vim::a_word_naming_no_style_is_no_choice_at_all`
 `verified-by: bravebot_tui::state::a_box_that_edits_vis_way_still_opens_taking_letters_as_letters`
 `verified-by: bravebot_tui::state::the_ordinary_box_is_in_no_vi_mode_and_cannot_enter_one`
 `verified-by: bravebot_tui::state::a_letter_typed_in_normal_mode_does_not_reach_the_line`
+`verified-by: bravebot_tui::vim::a_prefix_this_box_has_no_instruction_for_waits_for_its_key_and_then_does_nothing`
+`verified-by: bravebot_tui::vim::an_operator_vi_spells_after_g_waits_for_the_stretch_it_would_take`
+`verified-by: bravebot_tui::vim::an_operator_waits_for_the_key_after_a_prefix_only_where_vi_reads_one`
+`verified-by: bravebot_tui::vim::visual_mode_gives_an_operator_under_g_no_stretch_and_capital_r_no_key`
+`verified-by: bravebot_tui::state::a_prefix_this_box_has_no_instruction_for_changes_nothing_whatever_follows_it`
+`verified-by: bravebot_tui::state::a_prefix_this_box_has_no_instruction_for_takes_the_key_vi_would_give_it_and_no_more`
+`verified-by: bravebot_tui::state::visual_mode_leaves_the_key_after_an_operator_under_g_or_capital_r_to_act_on_its_own`
 `verified-by: bravebot_tui::state::a_configured_style_is_adopted_and_an_unknown_word_is_not`
 `verified-by: bravebot_tui::state::choosing_a_style_of_editing_leaves_the_box_taking_letters`
+`verified-by: bravebot_tui::state::choosing_a_style_abandons_an_instruction_still_waiting_for_a_key`
 `verified-by: bravebot_session::store::a_stored_style_of_editing_is_read_back_without_its_newline`
 `verified-by: bravebot_session::store::a_file_naming_no_style_of_editing_is_not_a_choice`
 `verified-by: bravebot_tui::persist::a_recorded_style_of_editing_is_read_back_and_a_word_naming_none_is_not`
@@ -1010,13 +1040,18 @@ would find out by reading the line rather than by pressing the key.
 
 In vi's style Escape enters NORMAL mode and leaves the line exactly as it was. Ctrl-`[` is the same
 request from a terminal that reports the modifier rather than sending the byte Escape already is,
-and both are answered. Pressed in NORMAL mode the key is claimed and does nothing.
+and both are answered. Escape abandons an instruction still waiting for a key, so `d`, Escape, `w`
+moves a word rather than deleting one. So does every other press that is not a character, such as
+an arrow, Backspace or Enter, which then does what it does alone, and so does the press that stops a
+turn. Pressed in NORMAL mode with nothing waiting, Escape is claimed and does nothing.
 
 A turn in flight is still stopped first, and discarding a half-typed line is still Ctrl-C. In the
 ordinary style Escape discards the line as it always has (INPUT-4).
 
 The mode the box is in is drawn beneath it, beside the mode that says what the session asks before
-it acts, and is given up only after everything that is not a mode.
+it acts, and is given up only after everything that is not a mode. The keys of an instruction still
+waiting for more follow the mode word, as vi's `showcmd` draws them: `NORMAL d`, then `NORMAL di`,
+and the word alone once the instruction is whole or abandoned.
 
 **Why.** These are two presses of one key in the same box, and a key that both entered a mode and
 threw a paragraph away would be one nobody could press safely. Somebody reaching for NORMAL mode
@@ -1029,8 +1064,21 @@ The mode earns its place beneath the box because it decides whether the next let
 person who cannot see that they are in NORMAL mode is looking at a box that has apparently stopped
 taking what they type, and that is the same failure opening in NORMAL would cause.
 
+An instruction still waiting decides what the next letter does as much as the mode does, so it is
+drawn for the same reason and abandoned by the key a vi user presses to mean "not that". A `d` that
+survived Escape would make the next motion a deletion, and one drawn nowhere would be found out that
+way. Any other press that is not a character cannot be the key the instruction waits for, and a `d`
+that survived an arrow would delete from wherever the arrow had put the caret. vi reads an arrow
+after `d` as the motion it names; here the arrows belong to the line, so the arrow moves the caret
+alone.
+
 `verified-by: bravebot_tui::app::escape_enters_normal_mode_without_discarding_the_line`
 `verified-by: bravebot_tui::app::either_spelling_of_escape_enters_normal_mode`
+`verified-by: bravebot_tui::app::escape_abandons_an_instruction_still_waiting_for_a_key`
+`verified-by: bravebot_tui::app::a_press_that_is_not_a_character_abandons_an_instruction_still_waiting_for_a_key`
+`verified-by: bravebot_tui::app::sending_the_line_abandons_an_instruction_still_waiting_for_a_key`
+`verified-by: bravebot_tui::app::a_press_while_a_turn_runs_abandons_an_instruction_still_waiting_for_a_key`
+`verified-by: bravebot_tui::render::the_hint_line_draws_an_instruction_still_waiting_beside_the_mode`
 `verified-by: bravebot_tui::app::the_chord_that_enters_normal_mode_does_nothing_to_the_ordinary_box`
 `verified-by: bravebot_tui::app::escape_still_stops_a_turn_before_it_enters_normal_mode`
 `verified-by: bravebot_tui::state::leaving_insert_mode_puts_the_caret_on_a_character`
@@ -1420,11 +1468,14 @@ them in, which is nothing a person could predict from what they wrote, so neithe
 **A mode reads the chord that opened it.** Inside the search over prompts, the chord that puts a line
 away narrows the scope and the one that opened the search closes it (INPUT-19, INPUT-31); inside the
 view of what a delegate is doing, the chord that opened the view leaves it. Ctrl-C keeps its own
-meaning in both, and the chord an action was moved off of does nothing.
+meaning in both, and the chord an action was moved off of does nothing. In the view so does every
+other key held with a modifier but Shift, the chord an action was moved onto among them, save the
+scroller's Ctrl-U, Ctrl-D and Ctrl-B ([SCROLL-3](scroller.md#SCROLL-3)), which the view borrows.
 
 **Why.** Every character narrows the prompt search and bare letters walk the delegate list, so a
 chord these modes did not ask the bindings about is not merely unanswered: it is read as the letter
 it carries, and the search a person moved a chord to open narrows itself to prompts holding an `s`.
+Shift is spared because Shift-Tab arrives carrying it.
 
 **A configured chord takes precedence over line editing.** When a chord is moved onto one of the
 readline editing keys (such as `ctrl-u` or `alt-b`), the action answers rather than the line
@@ -1472,6 +1523,10 @@ is worse than either, because the words around it are the reason somebody believ
 `verified-by: bravebot_tui::render::a_picture_on_the_clipboard_says_which_key_carries_it`
 `verified-by: bravebot_tui::app::a_moved_chord_is_read_inside_the_search_it_opened`
 `verified-by: bravebot_tui::app::a_moved_chord_leaves_the_view_it_opened`
+`verified-by: bravebot_tui::app::the_chord_an_action_was_moved_off_does_nothing_inside_the_view`
+`verified-by: bravebot_tui::app::a_chord_moved_onto_a_key_the_view_reads_is_not_that_key`
+`verified-by: bravebot_tui::app::a_letter_held_with_any_other_modifier_is_not_that_letter`
+`verified-by: bravebot_tui::app::the_keys_the_view_reads_with_a_modifier_held_still_answer`
 `verified-by: bravebot_tui::app::custom_keybindings_route_actions_and_old_chords_are_ignored`
 `verified-by: bravebot_tui::app::custom_keybindings_work_while_a_turn_runs`
 `verified-by: bravebot_tui::app::vi_mode_search_prompts_uses_configured_history_chord`

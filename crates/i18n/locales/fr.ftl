@@ -172,9 +172,39 @@ doctor-ends-aws-access-key =
     une clé d'accès permanente : émise par AWS IAM à l'utilisateur nommé par le profil ; supprimée avec `aws iam delete-access-key`
 doctor-ends-aws-session =
     une identification de session : émise par AWS STS pour le profil et prend fin à sa propre expiration ; on ne peut y mettre fin plus tôt qu'auprès de son émetteur, car `aws sso logout` efface la copie de cette machine et non la session elle-même
+doctor-ends-gateway-token =
+    un jeton porteur de passerelle : émis par { $gateway }, qui est aussi la seule surface qui le révoque ; le supprimer du fichier de réglages ou effacer la variable met fin à la garde de cette machine et laisse le jeton actif là-bas
+doctor-noticed = détection
+doctor-noticed-aws-session =
+    en { $minutes } minutes environ, et seulement si quelqu'un lit le journal du compte : un appel fait avec cette session y apparaît et non ici, rien sur cette machine ne guette un tel appel, et y mettre fin avant son expiration demande une requête auprès de son émetteur
 doctor-outlives = survit
 doctor-outlives-aws-access-key =
     une identification de session déjà émise par STS sous cette clé d'accès, qui court jusqu'à sa propre expiration : la suppression de la clé ne l'atteint pas
+doctor-dropped = descente
+doctor-dropped-refused = la contrepartie a refusé
+doctor-dropped-not-attempted = personne ne l'a demandé
+doctor-dropped-signing-key-nothing-decides-each-use =
+    porte { $gate }, { $answer } : rien que l'agent ne puisse usurper ne décide de chaque usage, car la clé signe l'empreinte de la requête dans ce processus et rien d'autre n'est appelé à la signer
+doctor-dropped-signing-key-no-bound-fixed-before-issue =
+    porte { $gate }, { $answer } : aucune limite sur ce que la clé peut faire n'est fixée avant son émission, car le service dérive sa copie d'une graine maîtresse et de cet id de clé, et on ne lui en demande pas de plus étroite
+doctor-dropped-signing-key-not-minted-for-one-step =
+    porte { $gate }, { $answer } : elle n'est pas émise pour une seule étape, car elle est intégrée à la version et la clé d'une version est celle de toutes les installations
+doctor-dropped-aws-access-key-nothing-decides-each-use =
+    porte { $gate }, { $answer } : rien que l'agent ne puisse usurper ne décide de chaque usage, car ce processus signe chaque requête avec la clé elle-même
+doctor-dropped-aws-access-key-no-bound-fixed-before-issue =
+    porte { $gate }, { $answer } : aucune limite sur ce que la clé peut faire n'est fixée avant son émission, car STS émet une session bornée par une politique qu'AWS applique et que l'agent ne peut élargir, et rien ici ne la demande
+doctor-dropped-aws-access-key-not-minted-for-one-step =
+    porte { $gate }, { $answer } : elle n'est pas émise pour une seule étape, car la clé du profil est utilisée telle que l'interface AWS l'a résolue et IAM n'y met fin que lorsque quelqu'un la supprime
+doctor-dropped-aws-session-nothing-decides-each-use =
+    porte { $gate }, { $answer } : rien que l'agent ne puisse usurper ne décide de chaque usage, car ce processus signe chaque requête avec l'identification de session elle-même
+doctor-dropped-aws-session-no-bound-fixed-before-issue =
+    porte { $gate }, { $answer } : aucune limite sur ce que la session peut faire n'est fixée avant son émission, car elle porte tout ce que le rôle ou l'accès SSO du profil autorise et rien ici ne demande à STS de la restreindre à cette exécution
+doctor-dropped-gateway-token-nothing-decides-each-use =
+    porte { $gate }, { $answer } : rien que l'agent ne puisse usurper ne décide de chaque usage, car le jeton part dans un en-tête envoyé par ce processus et aucun mandataire n'existe pour la requête
+doctor-dropped-gateway-token-no-bound-fixed-before-issue =
+    porte { $gate }, { $answer } : aucune limite sur ce que le jeton peut faire n'est fixée avant son émission, car le bloc nomme un hôte et une variable et jamais un émetteur, donc rien ici ne peut en demander un plus étroit
+doctor-dropped-gateway-token-not-minted-for-one-step =
+    porte { $gate }, { $answer } : il n'est pas émis pour une seule étape, car le jeton est ce que porte le fichier de réglages ou la variable, et il est gardé pendant toute l'exécution
 doctor-backend = service
 doctor-backend-bedrock = AWS Bedrock
 doctor-backend-aichat = Brave Leo
@@ -480,6 +510,12 @@ run-writes = il écrit ces fichiers :
 run-is-fed = le contenu de ceci lui est fourni :
 run-not-sandboxed =
     ceci n'est pas isolé : l'exécution a les mêmes accès que votre propre shell
+run-spends-authority =
+    elle dépense aussi des accès qui sont déjà les vôtres ailleurs, que personne ne redemande et que rien ici ne reprend :
+run-authority-container = { $named } : le démon de conteneurs, qui exécute n'importe quoi en root sur cette machine
+run-authority-logged-in = { $named } : déjà connecté, il agit donc en votre nom sans rien vous demander
+run-authority-agent = { $named } : votre agent ssh, qui signe avec des clés qu'il ne livre jamais
+run-authority-metadata = { $named } : le service de métadonnées de cette machine, qui délivre les identifiants du rôle sous lequel elle tourne
 run-releases-private =
     vos propres données lui sont aussi fournies, et elles partent d'ici avec elle
 run-always-explained = a : approuver cette commande exacte pour le reste de cette session
@@ -570,6 +606,9 @@ vet-always-covers =
 fetch-title = récupérer ceci ?
 fetch-verb = Récupérer
 fetch-host = communication avec { $host }
+fetch-authority-metadata =
+    il s'agit du service de métadonnées de cette machine : il ne demande rien à qui le
+    joint et répond avec les identifiants du rôle sous lequel elle tourne.
 fetch-explained =
     ce qui revient reste en quarantaine quelle que soit votre réponse : le modèle peut le
     confier à un processeur ou l'écrire dans un fichier, et ne peut ni le lire ni savoir

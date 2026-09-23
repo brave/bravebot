@@ -24,6 +24,7 @@
     "drive:resize": "npm run bridge && electron-vite build && node scripts/drive-resize.mjs",
     "drive:panels": "npm run bridge && electron-vite build && node scripts/drive-panels.mjs",
     "drive:columns": "npm run bridge && electron-vite build && node scripts/drive-columns.mjs",
+    "drive:vetting": "npm run bridge && electron-vite build && node scripts/drive-vetting.mjs",
     "drive:run": "npm run bridge && electron-vite build && node scripts/drive-run.mjs",
     "drive:ask": "npm run bridge && electron-vite build && node scripts/drive-ask.mjs",
     "package": "npm run bridge && electron-vite build && node scripts/package.mjs",
@@ -46,7 +47,7 @@
   },
   "devDependencies": {
     "@electron/packager": "^20.3.0",
-    "@types/node": "^22.10.2",
+    "@types/node": "^22.20.1",
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",
     "@types/three": "^0.185.4",

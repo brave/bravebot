@@ -350,6 +350,13 @@ configured rather than a fresh install. The record of command lines you asked to
 session is read on the same terms: a line already in it still stops the asking, and the key that would
 add one is not offered.
 
+**One thing is not read: your standing answer about [vetting](../security/vetting.md).** If you have
+pressed the key that stops bravebot asking before content nobody vouched for reaches the planner,
+an incognito session asks anyway. A model and a theme decide what a session looks like, and that one
+decides whether you are asked, which is not a decision to inherit into a session you asked to leave
+nothing behind. `--vet` and the `vetting.auto` key in your settings still work here, so you can say
+what you want of this run.
+
 The flag may go anywhere in the command line and combines with `-p`, `--resume`, `--mode` and a
 bare invocation alike. It cannot be turned off once the session has started.
 

@@ -3634,11 +3634,59 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         needed
     }
 
+    /// What a command line the planner wrote carries that would authenticate somewhere.
+    ///
+    /// The same question [`Policy::scan_a_write`] asks, about the one thing a turn writes that
+    /// is a place as well as an instruction. A line is not a body and there is nothing to
+    /// compare it against, so everything found is the turn's own: the planner composed the line
+    /// in this round, out of nothing that was there before.
+    ///
+    /// `line` is what [`Policy::read_planner_argument`] handed back for this same field, which
+    /// is the whole of what makes reading it here allowed: the planner's own words, out of a
+    /// context that has met nothing untrusted, are the one kind of content the driver may take a
+    /// decision from. What a *program* prints or leaves is not, which is why the scan of what a
+    /// line left at a destination goes through the write gate and is answered there.
+    ///
+    /// A value found here has already been in more places than a refusal can take it out of:
+    /// the planner composed it, so it is in that context and in the record of this round. What
+    /// the refusal stops is the rest, which is every place the clause names: the file the line
+    /// would have opened, the approval prompt the line would have been drawn on, the terminal
+    /// the program would have echoed it to, and whatever the program would have done with it.
+    pub fn scan_a_command_line(&mut self, tool: &str, line: &str) -> Scanned {
+        let scanned = Scanned {
+            authored: crate::credentials::scan(
+                "the command line",
+                line,
+                crate::credentials::run_salt(),
+            ),
+            carried: Vec::new(),
+            // A line is a program and its arguments, so it is never the one thing that answer is
+            // about, which is a file whose whole contents is the value. What the planner is told
+            // to do instead is therefore always the one for a value written into something else.
+            only_the_value: false,
+        };
+        self.allow(
+            "credential-scan",
+            format!(
+                "{tool}: the command line scanned, {} found in it",
+                scanned.authored.len()
+            ),
+        );
+        scanned
+    }
+
     /// What a write would leave in the tree, scanned before the change is recorded as complete.
     ///
     /// The scan runs before the bytes reach the file rather than over the file afterwards, so a
     /// value a turn is refused for never lands anywhere: deleting it after the write would leave
     /// it in whatever the filesystem did with those blocks, and in any watcher that saw them.
+    ///
+    /// **A redirection is the one destination that cannot be true of.** The program opens the
+    /// file itself, so there is no moment in which the driver holds the bytes and the file does
+    /// not, and the caller asks this over what the line left once it has stopped. Everything
+    /// below reads the same for that caller, and only the remedy differs: what a finding buys
+    /// there is the value being put back out of the tree rather than never reaching it, which is
+    /// weaker and is written down as such in the credential spec.
     ///
     /// Two answers come back, and the difference between them is authorship rather than severity.
     /// A value already in the file at this path is *carried*: a turn that reformats or moves a
@@ -3655,9 +3703,18 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// branching on what it found.
     ///
     /// **The pre-image is read to place the value, not to decide the effect.** It is the file's
-    /// own current contents, which the driver already holds to draw a diff with. All it can do
-    /// here is excuse a value that is *already* at this exact path, so the worst it produces is
-    /// a change that leaves the tree holding what it held before.
+    /// own current contents, and it arrives labelled: the driver carries those bytes and this is
+    /// where they are read, because the policy layer is the only part of this program that may
+    /// read content at all. All it can do here is excuse a value that is *already* at this exact
+    /// path, so the worst it produces is a change that leaves the tree holding what it held
+    /// before. Whether a pre-image is handed over is the caller's decision, taken from the trust
+    /// map rather than from this label, which a peek for review sets pessimistically whatever
+    /// the map says.
+    ///
+    /// **What the file would hold is read here too, and it is not a finding.** Whether the body
+    /// is one value and nothing else is the difference between a credential copied into a
+    /// document and one created as a file, and the two are answered differently: see
+    /// [`Scanned::only_the_value`].
     ///
     /// Nothing about a finding reaches the planner: see [`crate::credentials`] for what a
     /// finding is allowed to hold, and the caller for which half of its result is said to whom.
@@ -3665,7 +3722,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         &mut self,
         tool: &str,
         path: &str,
-        existing: Option<&str>,
+        existing: Option<&Labelled<String>>,
         proposed: &Labelled<String>,
     ) -> Scanned {
         let label = proposed.label();
@@ -3684,18 +3741,32 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         };
 
         let salt = crate::credentials::run_salt();
-        let already: std::collections::BTreeSet<String> = existing
-            .map(|text| crate::credentials::scan(path, text, salt))
-            .unwrap_or_default()
-            .into_iter()
-            .map(|finding| finding.fingerprint)
-            .collect();
+        let already: std::collections::BTreeSet<String> = match existing {
+            None => Default::default(),
+            Some(pre_image) => {
+                self.allow(
+                    "credential-scan",
+                    format!("{tool}: {path} read as it stands, to place a value already in it"),
+                );
+                let proof =
+                    Declassification::authorise("a write's pre-image, to place a value in it");
+                let text = pre_image.clone().declassify(&proof);
+                crate::credentials::scan(path, &text, salt)
+                    .into_iter()
+                    .map(|finding| finding.fingerprint)
+                    .collect()
+            }
+        };
 
         let (carried, authored) = crate::credentials::scan(path, &body, salt)
             .into_iter()
             .partition(|finding| already.contains(&finding.fingerprint));
 
-        let scanned = Scanned { authored, carried };
+        let scanned = Scanned {
+            authored,
+            carried,
+            only_the_value: crate::credentials::stands_alone(&body),
+        };
         self.allow(
             "credential-scan",
             format!(
@@ -4297,6 +4368,30 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// not one running in another directory.
     pub fn endorse_plan(&mut self, plan: &crate::command::Plan) {
         self.issue_grant("run", "plan", plan.canonical());
+    }
+
+    /// Record that an authority nothing here holds has been spent.
+    ///
+    /// A container daemon, a tool that is already logged in, the ssh agent and a machine's
+    /// metadata service are reached rather than held, so there is no custody to record and
+    /// nothing to take back afterwards. What there is is that it happened, and the trail is the
+    /// one record of a session that outlives the process: a person accounting for what an agent
+    /// did with their account has nothing else to read.
+    ///
+    /// Said where the authority is spent rather than where it was granted. A grant is a sentence
+    /// on a prompt somebody may answer and never act on, and the two are different facts.
+    ///
+    /// Nothing is recorded for a plan that reaches none, which is nearly all of them: an entry
+    /// saying so on every line would bury the ones that say something.
+    pub fn record_ambient(&mut self, spent: &[crate::ambient::Spent]) {
+        if spent.is_empty() {
+            return;
+        }
+        let named: Vec<String> = spent
+            .iter()
+            .map(|spent| format!("{} ({})", spent.authority.name(), spent.named))
+            .collect();
+        self.allow("ambient", named.join(", "));
     }
 
     /// The gate a command line passes immediately before anything executes. Returns the label its

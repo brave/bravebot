@@ -12,8 +12,8 @@ guards:
     sites:
       - crates/agent/src/lsp.rs: 4
       - crates/agent/src/manifest.rs: 3
-      - crates/agent/src/tools.rs: 20
-      - crates/agent/src/workspace.rs: 8
+      - crates/agent/src/tools.rs: 22
+      - crates/agent/src/workspace.rs: 7
       - crates/agent/tests/workspace.rs: 28
       - crates/aichat/src/lib.rs: 4
       - crates/bedrock/src/lib.rs: 5
@@ -27,16 +27,16 @@ guards:
   - symbol: Labelled::declassify
     sites:
       - crates/agent/src/aside.rs: 2
-      - crates/agent/src/manifest.rs: 4
+      - crates/agent/src/manifest.rs: 5
       - crates/agent/src/processor.rs: 1
-      - crates/agent/src/tools.rs: 28
+      - crates/agent/src/tools.rs: 29
       - crates/agent/src/turn.rs: 4
       - crates/agent/src/vet.rs: 1
       - crates/agent/src/workspace.rs: 1
       - crates/agent/tests/workspace.rs: 41
       - crates/aichat/tests/client.rs: 2
       - crates/bedrock/src/lib.rs: 1
-      - crates/core/src/policy.rs: 50
+      - crates/core/src/policy.rs: 51
       - crates/core/src/value.rs: 1
       - crates/mcp/tests/http.rs: 1
       - crates/mcp/tests/stdio.rs: 2
@@ -63,7 +63,7 @@ guards:
       - crates/core/src/value.rs: 4
   - symbol: Declassification::authorise
     sites:
-      - crates/core/src/policy.rs: 47
+      - crates/core/src/policy.rs: 48
   - symbol: SlotStore::path_of
     sites:
       - crates/core/src/policy.rs: 5
@@ -236,6 +236,7 @@ into the other does not remove it.
 `verified-by: bravebot_core::value::debug_redacts_the_value`
 `verified-by: bravebot_core::value::content_can_be_measured_without_being_read`
 `verified-by: bravebot_core::policy::reading_an_argument_is_recorded`
+`verified-by: bravebot_agent::turn::a_write_reads_the_file_it_replaces_through_a_gate_that_records_it`
 `verified-by: bravebot_core::policy::decoding_a_transport_envelope_is_recorded_and_hands_back_the_label`
 `verified-by: by-construction (Deref, PartialEq and Display are not implemented for Labelled, and its only witness-free accessor returns Err on anything but (T,pub))`
 `verified-by: by-construction (Declassification::authorise is pub(in crate::policy), so no other module of bravebot-core and no crate downstream of it can mint a witness)`

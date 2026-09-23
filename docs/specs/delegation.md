@@ -157,12 +157,20 @@ the moment either could be narrowed: a `worker` spawned by a run that cannot wri
 definition named only read tools, holds no write. Told its kind's paragraph it would plan around
 a write it is not offered and could not make, which is the opposite of what saying this is for.
 
+**And composed from that set rather than picked from the kind nearest to it.** A held set is not a
+point on the ladder of kinds: writing without running is a set a definition naming one write tool
+produces and no kind has, and the nearest kind to it holds both. So reading, running and writing
+are asked about separately, and what a delegate is told it can do is what it is offered.
+
 `verified-by: bravebot_agent::delegate::each_kind_is_told_what_it_cannot_do`
 `verified-by: bravebot_agent::delegate::every_kind_is_told_the_guidance_the_planner_is_told`
 `verified-by: bravebot_agent::delegate::a_body_cannot_displace_what_a_kind_cannot_do`
 `verified-by: bravebot_agent::delegate::a_definition_with_no_body_leaves_the_prompt_as_it_was`
 `verified-by: bravebot_agent::delegate::a_narrowed_delegate_is_told_what_it_holds_rather_than_what_its_kind_holds`
 `verified-by: bravebot_agent::turn::a_definition_names_the_delegate_a_turn_runs_and_says_what_it_is_for`
+`verified-by: bravebot_agent::delegate::a_delegate_holding_writing_and_not_running_is_told_it_cannot_run_a_program`
+`verified-by: bravebot_agent::delegate::what_a_delegate_is_told_it_can_do_is_what_it_is_offered`
+`verified-by: bravebot_agent::delegate::a_delegate_holding_no_reading_is_not_told_it_may_read`
 
 <a id="DELEGATE-6"></a>
 ### DELEGATE-6: a delegate is bounded, and the bound is its kind's

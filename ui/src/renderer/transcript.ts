@@ -465,3 +465,31 @@ export function numberedDiffLines(changes: Change[]): (ReturnType<typeof diffLin
 export function interruptPending(entries: Entry[]): Entry[] {
   return entries.map((entry) => isAsking(entry) && unanswered(entry) ? { ...entry, interrupted: true } : entry)
 }
+
+/**
+ * What one ambient authority a command reaches costs, in the words a person reads.
+ *
+ * A sentence per kind rather than one with the name substituted into it, because what each of
+ * them hands over is different: a container daemon is root on this machine, a logged-in tool is
+ * an account somewhere else, the agent is a signature, a metadata service is the role this
+ * machine runs as. The agent sends the kind and the word that named it and no sentence at all,
+ * so this is where the desktop window says what it means.
+ *
+ * A kind this build does not know still says something. The list is the agent's and this window
+ * may be older than it, and a row drawn with no sentence would be a grant with nothing said
+ * about it, which is the one outcome the question exists to avoid.
+ */
+export function ambientSentence(authority: string): string {
+  switch (authority) {
+    case 'container-daemon':
+      return 'the container daemon, which runs anything as root on this machine'
+    case 'logged-in-tool':
+      return 'already logged in, so it acts as you without asking you'
+    case 'agent-socket':
+      return 'your ssh agent, which signs with keys it never hands over'
+    case 'metadata-service':
+      return "this machine's metadata service, which hands out the credentials of the role it runs as"
+    default:
+      return 'access this window has no account of, which nobody is asked for and nothing here takes back'
+  }
+}

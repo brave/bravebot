@@ -944,8 +944,12 @@ pub struct Session {
     ///
     /// `f` alone says to jump to a character nobody has named yet, so nothing happens until the next
     /// press names it. Held rather than acted on, and cleared by the press that completes or abandons
-    /// it: a wait that outlived the pair would swallow letters typed later.
+    /// it, and by Escape: a wait that outlived the pair would swallow letters typed later.
     half_typed: Option<crate::vim::Pending>,
+    /// The keys typed of the instruction `half_typed` holds, for the hint line to draw.
+    ///
+    /// Read only while that is set, so what an abandoned wait leaves here is never drawn.
+    typed_so_far: String,
     /// The last jump to a character, for the keys that repeat one.
     ///
     /// Remembered because `;` and `,` mean nothing on their own: they say "that again", and there is
@@ -1351,6 +1355,7 @@ impl Session {
             bindings: crate::keybindings::Keybindings::default(),
             mode: crate::vim::Mode::default(),
             half_typed: None,
+            typed_so_far: String::new(),
             last_find: None,
             anchor: None,
             register: None,
@@ -1963,17 +1968,17 @@ impl Session {
         self.streaming.push_str(text);
     }
 
-    /// Put the turn's own view back at its tail for something the turn has just done.
+    /// Put the turn's own view back at its tail as a piece of work begins or a command line lands.
     ///
     /// Nothing while the delegate view is open, because `scroll` is that view's position then and
     /// the turn's own is held aside until it closes. A person who went to read a delegate or what
     /// a command printed asked for that screen, and a row arriving under the turn is not them
     /// asking for another.
     ///
-    /// For a one-off event only: a delegate starting, a preview released, a queued prompt taken, an
-    /// aside going out. Each happens once and changes what the session is doing, so the tail is
-    /// where its own view belongs afterwards. The reply arriving is not one of them, and
-    /// [`Session::streaming`] says why.
+    /// Each of those happens once and changes what the session is doing, so the tail is where its
+    /// own view belongs afterwards. Nothing a running turn adds below the view is one of them: a
+    /// person who scrolled back while it runs asked to read that place, and with nothing open over
+    /// it a view at the tail follows what arrives unmoved, since `scroll` is 0 there.
     fn back_to_the_tail(&mut self) {
         if self.watching.is_none() {
             self.scroll = 0;
@@ -2078,7 +2083,6 @@ impl Session {
         {
             watching.at += 1;
         }
-        self.back_to_the_tail();
         let mut entry = Entry::system("");
         entry.speaker = Speaker::Delegate;
         entry.delegate = Some(Delegate {
@@ -2421,8 +2425,9 @@ impl Session {
     /// something the session said. Where there is no such line, which should not happen, it goes
     /// on its own rather than being dropped: content released for a screen and then not drawn is
     /// the worst of both.
+    ///
+    /// Nothing about the view moves for it, for the reason [`Session::back_to_the_tail`] gives.
     pub fn show(&mut self, shown: Shown) {
-        self.back_to_the_tail();
         match self.working_lines().last_mut() {
             Some(entry) if entry.speaker == Speaker::Tool && entry.shown.is_none() => {
                 entry.shown = Some(shown);
@@ -2638,6 +2643,9 @@ impl Session {
         // draw one: what is left otherwise is a reversed run of characters in a box whose keys
         // cannot account for it.
         self.anchor = None;
+        // An instruction waiting for its next key goes with the mode it was typed in, for the same
+        // reason: INSERT mode would draw it beside a box that is typing its letters.
+        self.half_typed = None;
     }
 
     /// Which vi mode the box is in, or `None` where vi is not the style.
@@ -2658,6 +2666,16 @@ impl Session {
     pub fn vi_normal(&self) -> bool {
         self.vi_mode()
             .is_some_and(crate::vim::Mode::takes_instructions)
+    }
+
+    /// The keys typed so far of a vi instruction still waiting for more, or `None` where none is.
+    pub fn half_typed(&self) -> Option<&str> {
+        self.half_typed.map(|_| self.typed_so_far.as_str())
+    }
+
+    /// Drops a vi instruction still waiting for its next key, for a press that cannot be that key.
+    pub fn abandon_half_typed(&mut self) {
+        self.half_typed = None;
     }
 
     /// The stretch VISUAL mode has marked out, as byte offsets, or `None` where it is not open.
@@ -2732,6 +2750,10 @@ impl Session {
     /// A letter vi does not use does nothing at all, which is the mode's whole bargain: the box is
     /// not typing, so an instruction it does not recognise is not text to fall back on.
     fn obey(&mut self, c: char) {
+        if self.half_typed.is_none() {
+            self.typed_so_far.clear();
+        }
+        self.typed_so_far.push(c);
         // A key that was waiting for one more takes this press and nothing else looks at it. Cleared
         // first, so a pair that means nothing ends the wait rather than holding it open: one stray
         // press would otherwise swallow every letter after it until something happened to match.
@@ -5161,16 +5183,15 @@ impl Session {
     /// The oldest prompt rather than the oldest line, because neither a command nor a command line
     /// was ever offered to the turn: what the turn just took is the oldest line that had a copy in
     /// the buffer, and either of those queued ahead of it has one waiting there still.
+    ///
+    /// Nothing about the view moves for it, for the reason [`Session::back_to_the_tail`] gives: the
+    /// prompt was sent rounds ago, and the turn taking it is the turn's doing rather than a press.
     pub fn interjected(&mut self) {
         let Some(taken) = self.queued.iter().position(|line| line.waiting.is_sent()) else {
             return;
         };
         let gone = self.queued.remove(taken);
         self.transcript.push(Entry::user(gone.prompt));
-        // Through [`Session::back_to_the_tail`], so an open view stays where its reader put it.
-        // The turn taking a queued prompt is the turn's own doing and nobody pressed anything for
-        // it, and while a view is open `scroll` is that view's position rather than the turn's.
-        self.back_to_the_tail();
     }
 
     /// Begin the turn for the prompt queued longest ago, if the session is free to start one.
@@ -7143,8 +7164,7 @@ mod tests {
         }
 
         /// The turn taking a queued prompt is the turn's doing and not a press: the prompt was
-        /// sent rounds ago and the person has been reading a view since. Both states again, for
-        /// the reason above.
+        /// sent rounds ago and the person has been reading a view since.
         #[test]
         fn a_turn_taking_a_queued_prompt_leaves_an_open_view_where_its_reader_put_it() {
             let mut session = Session::new("none");
@@ -7158,16 +7178,55 @@ mod tests {
                 session.scroll, 6,
                 "the turn taking a queued prompt pulled the open view back to its tail"
             );
+        }
 
-            let mut session = Session::new("none");
-            queue(&mut session, "and tidy up");
-            session.scroll_up(6);
+        /// The same holds with no view open, where `scroll` is the transcript's own place, at rest
+        /// and under the scroller alike. Each of these lands below somebody reading further up
+        /// while the turn runs, and each moving the view would cost them their place once per
+        /// event, with nothing pressed to ask for it.
+        #[test]
+        fn nothing_a_running_turn_adds_moves_a_scrolled_back_view() {
+            type Lands = fn(&mut Session);
+            let events: [(&str, Lands); 3] = [
+                ("a released preview", |session| {
+                    session.show(quarantined("notes0.md"))
+                }),
+                ("a delegate starting", |session| {
+                    spawn(session, "reader", "find the parser");
+                }),
+                ("the turn taking a queued prompt", Session::interjected),
+            ];
+            for (event, lands) in events {
+                for (place, scroller) in [("at rest", false), ("under the scroller", true)] {
+                    let mut session = Session::new("none");
+                    queue(&mut session, "and tidy up");
+                    session.note_layout(Laid {
+                        width: 80,
+                        height: 10,
+                        rows: 100,
+                        ..Laid::default()
+                    });
+                    if scroller {
+                        session.open_scroller();
+                    }
+                    session.scroll_up(40);
+                    let looking_at = session.top_row();
+                    assert_eq!(looking_at, 50, "the view is not scrolled back off the tail");
 
-            session.interjected();
-            assert_eq!(
-                session.scroll, 0,
-                "the turn taking a queued prompt left the transcript short of its tail"
-            );
+                    lands(&mut session);
+                    session.note_layout(Laid {
+                        width: 80,
+                        height: 10,
+                        rows: 130,
+                        ..Laid::default()
+                    });
+                    assert_eq!(
+                        session.top_row(),
+                        looking_at,
+                        "{event} moved a view scrolled back {place}"
+                    );
+                }
+            }
         }
 
         /// A prompt typed and sent while a turn is running, which is what the turn later takes.
@@ -13347,6 +13406,108 @@ mod tests {
         // The next press is read on its own rather than as a third key of the pair.
         s.type_char('0');
         assert_eq!(s.caret, 4);
+    }
+
+    /// A key beginning an instruction this box does not have changes nothing, and nor does the key vi
+    /// would give it: `ma` must not open INSERT mode on the `a`, nor `mw` move on the `w`, nor `rx`
+    /// delete on the `x`. Every prefix, after an operator and after none, against every key that can
+    /// be typed after it, and in VISUAL mode the prefixes that mean there what they mean here.
+    #[test]
+    fn a_prefix_this_box_has_no_instruction_for_changes_nothing_whatever_follows_it() {
+        let in_both_modes = [
+            "\"", "q", "@", "m", "'", "`", "z", "Z", "[", "]", "g'", "g`",
+        ];
+        // In VISUAL mode `r` and `gr` replace the selection, and the operators under `g` and `R`
+        // act on it and take no key.
+        let in_normal_mode = [
+            "r", "R", "gr", "gu", "gU", "g~", "g?", "gq", "gw", "g@", "gui", "guf",
+        ];
+        let after_an_operator = ["d'", "c`", "y[", "d]", "dz", "gu'"];
+        for prefix in in_both_modes
+            .iter()
+            .chain(&in_normal_mode)
+            .chain(&after_an_operator)
+        {
+            for follower in ' '..='~' {
+                let mut s = normal("one two", 0);
+                for c in prefix.chars().chain([follower]) {
+                    s.type_char(c);
+                }
+                assert_eq!(s.input, "one two", "{prefix}{follower} edited the line");
+                assert_eq!(s.caret, 0, "{prefix}{follower} moved the caret");
+                assert_eq!(
+                    s.vi_mode(),
+                    Some(crate::vim::Mode::Normal),
+                    "{prefix}{follower} left NORMAL mode"
+                );
+            }
+        }
+        for prefix in in_both_modes {
+            for follower in ' '..='~' {
+                let mut s = normal("one two", 0);
+                for c in ['v'].into_iter().chain(prefix.chars()).chain([follower]) {
+                    s.type_char(c);
+                }
+                assert_eq!(s.input, "one two", "v{prefix}{follower} edited the line");
+                assert_eq!(s.caret, 0, "v{prefix}{follower} moved the caret");
+                assert_eq!(
+                    s.vi_mode(),
+                    Some(crate::vim::Mode::Visual { lines: false }),
+                    "v{prefix}{follower} left VISUAL mode"
+                );
+            }
+        }
+    }
+
+    /// With a selection on the screen, an operator under `g` and `R` take no key of their own, so
+    /// the motion after them moves the end of the selection as it would have without them. `gr` is
+    /// `r` there, as it is in vi.
+    #[test]
+    fn visual_mode_leaves_the_key_after_an_operator_under_g_or_capital_r_to_act_on_its_own() {
+        let pressed = |keys: &str| {
+            let mut s = normal("one two", 0);
+            for c in keys.chars() {
+                s.type_char(c);
+            }
+            (s.input.clone(), s.caret, s.vi_selection(), s.vi_mode())
+        };
+        assert_eq!(pressed("vl").1, 1);
+        for prefix in ["gu", "gU", "g~", "g?", "gq", "gw", "g@", "R"] {
+            assert_eq!(pressed(&format!("v{prefix}l")), pressed("vl"), "v{prefix}l");
+        }
+        assert_eq!(pressed("vlgrx").0, "xxe two");
+        assert_eq!(pressed("vlgrx"), pressed("vlrx"));
+    }
+
+    /// Exactly the key vi would give the prefix and no more, so the press after it is read on its
+    /// own: the `x` after `ma` deletes the character under the caret. A wait held open past that key
+    /// would swallow letters typed later, and one that ended short of it would run the `a`. After an
+    /// operator vi gives most prefixes no key, so the `x` after `dm` is read on its own too.
+    #[test]
+    fn a_prefix_this_box_has_no_instruction_for_takes_the_key_vi_would_give_it_and_no_more() {
+        for keys in [
+            "ma", "rx", "\"a", "zz", "]]", "Rx", "g'a", "g`a", "grx", "guw", "guu", "guiw", "gufa",
+            "gugg", "gu'a", "d'a", "dzz", "dm", "c\"", "yq", "d@", "dr", "dZ", "dR",
+        ] {
+            assert_eq!(
+                edited("one two", 0, &format!("{keys}x")),
+                "ne two",
+                "{keys} took the wrong number of keys"
+            );
+        }
+    }
+
+    /// Choosing a style comes back to INSERT mode, and an instruction still waiting for its next key
+    /// goes with the mode it was typed in rather than being drawn beside a box typing letters.
+    #[test]
+    fn choosing_a_style_abandons_an_instruction_still_waiting_for_a_key() {
+        let mut s = normal("one two", 0);
+        s.type_char('d');
+        assert_eq!(s.half_typed(), Some("d"));
+
+        s.choose_editing(crate::vim::Editing::Vi);
+
+        assert_eq!(s.half_typed(), None);
     }
 
     /// `f` and `t` search forwards, `F` and `T` back, and the short pair stop one character before

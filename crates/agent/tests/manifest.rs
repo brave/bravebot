@@ -548,6 +548,66 @@ fn a_picture_dropped_onto_the_task_reaches_the_planner() {
     }
 }
 
+/// Dropping the file is the grant and the grant is the person's, so it holds for the rest of the
+/// run and not for the read that spent it (DROP-2). The step reads the same file the drop named,
+/// which is the case a rule recorded in a clone gets wrong: the picture reaches the planner and
+/// then the plan's own read of it is quarantined, so the answer is a sentence about a file instead
+/// of the file.
+///
+/// The map starts with a rule against that exact path, which is what a turn writing fetched bytes
+/// there leaves behind, because a file inside the session's own directory is read as trusted
+/// otherwise and the drop would not be what decided it. Its bytes are text so a step can read them
+/// back; nothing here looks at a picture's bytes, and the drop is what this is about.
+#[test]
+fn a_dropped_picture_is_still_trusted_when_a_step_of_the_plan_reads_it() {
+    let scratch = Scratch::new("dropped-task-trusted");
+    std::fs::write(scratch.path.join("shot.png"), "three stripes").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "shot.png", "out_slot": "doc"}},
+            {"capability": "ANSWER", "args": {"from_slot": "doc"}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let task = Task::new("what is in [Image #1]?").with_attachment("shot.png", "image/png");
+
+    let mut trust = TrustStore::new(&scratch.path);
+    trust.distrust("shot.png");
+
+    let outcome = manifest::run(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &task,
+        skipping_permissions!(),
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        trust,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("runs");
+
+    assert!(
+        outcome.answer.label().is_trusted(),
+        "the plan's own read of the dropped file was quarantined: {:?}",
+        outcome.answer
+    );
+    assert!(
+        outcome.reply_for_display().contains("three stripes"),
+        "the file's own bytes are not what came back: {}",
+        outcome.reply_for_display()
+    );
+    assert!(
+        outcome.trust.is_trusted("shot.png"),
+        "the rule the drop recorded did not reach the run: {:?}",
+        outcome.trust.rules().collect::<Vec<_>>()
+    );
+}
+
 /// A picture is an input, and the record says what arrived however it arrived. A plan is the one
 /// place a picture is read by something that cannot be asked about it afterwards, so the trail is
 /// the only account of what the plan was made from.
@@ -957,6 +1017,81 @@ fn a_manifest_write_carries_a_credential_its_trusted_pre_image_already_held() {
         std::fs::read_to_string(scratch.path.join(".env")).unwrap(),
         after,
         "a change carrying a credential the trusted file already held was refused"
+    );
+}
+
+/// A manifest step replacing a file reads it the way a turn's write does: the bytes are carried
+/// labelled, the credential scan reads them inside the policy layer, and the copy a person
+/// approves the step on is released for a screen. A step that peeked at the file in the driver
+/// instead would leave content nobody vouched for in `bravebot-agent` with nothing recorded,
+/// which `docs/specs/labels.md#LABEL-4` refuses whichever mode the write is run in.
+///
+/// Two runs, because no one step does both. The scan is handed the pre-image only on a path
+/// somebody vouched for, and a trusted body on a trusted path is put to nobody, so there is no
+/// screen to release it for. On a path nobody vouched for the step is put to a person.
+#[test]
+fn a_manifest_write_reads_the_file_it_replaces_through_a_gate_that_records_it() {
+    let replacing = |name: &str, trust: TrustStore| {
+        let scratch = Scratch::new(name);
+        std::fs::write(scratch.path.join("notes.md"), "what was there before\n").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+        let (endpoint, _received) = serve(vec![
+            any_shape(),
+            plan(json!([
+                {"capability": "FILE_WRITE", "args": {"path": "notes.md", "contents": "what is there now\n"}},
+            ])),
+        ]);
+        let config = config_for(&endpoint);
+        let mut sink = RecordingSink::new();
+        let mut confirmer = RecordsEveryQuestion::default();
+        manifest::run(
+            &config,
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("bring the notes up to date"),
+            &mut confirmer,
+            &mut bravebot_agent::IgnoreReports,
+            &mut sink,
+            trust,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("runs");
+        (sink, confirmer)
+    };
+
+    let mut trust = TrustStore::new("/work");
+    trust.trust(".");
+    let (sink, _) = replacing("write-pre-image-scanned", trust);
+    assert!(
+        sink.events().iter().any(|event| matches!(
+            event,
+            Event::GatePassed { gate: "credential-scan", detail }
+                if detail.contains("notes.md") && detail.contains("read as it stands")
+        )),
+        "the scan read the file the step replaces without the read being recorded: {:?}",
+        sink.events()
+    );
+
+    let (sink, confirmer) = replacing("write-pre-image-shown", TrustStore::new("/work"));
+    assert_eq!(
+        confirmer
+            .writes
+            .first()
+            .expect("nobody was asked about a path nobody vouched for")
+            .existing
+            .as_deref(),
+        Some("what was there before\n"),
+        "the person was not shown the file the step replaces"
+    );
+    assert!(
+        sink.events().iter().any(|event| matches!(
+            event,
+            Event::GatePassed { gate: "display", detail }
+                if detail.contains("the file a write replaces")
+        )),
+        "what the person approves the step on was not released for a screen: {:?}",
+        sink.events()
     );
 }
 

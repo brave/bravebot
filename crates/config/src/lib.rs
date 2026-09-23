@@ -10,6 +10,7 @@
 
 use std::env;
 use std::fmt;
+use std::time::Duration;
 
 /// Environment variable names, kept together so the set is auditable at a glance.
 pub mod env_var {
@@ -302,6 +303,137 @@ impl fmt::Display for Secret {
     }
 }
 
+/// Which of the three gates between the tiers a credential's walk failed at.
+///
+/// Numbered top down from Delegated, as the walk asks them: gate 1 separates Delegated from
+/// Granted, gate 2 Granted from Held briefly, gate 3 Held briefly from Held. A drop names the
+/// gate rather than the tier it landed on because the gate is the question that was answered,
+/// and the tier is only where answering it left the credential.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Gate {
+    /// Can something the agent cannot impersonate decide each use, and refuse?
+    One,
+    /// Can the issuer mint a bounded derivative, enforced beyond the agent's reach?
+    Two,
+    /// Can the issuer mint on demand and enforce death, unrefreshable without authority?
+    Three,
+}
+
+impl Gate {
+    /// The number the walk asks this gate at, which is what a report states.
+    ///
+    /// Taken from the record rather than written into each sentence a person reads, so a report
+    /// cannot name a gate the record did not fail.
+    pub const fn number(self) -> u8 {
+        match self {
+            Self::One => 1,
+            Self::Two => 2,
+            Self::Three => 3,
+        }
+    }
+}
+
+/// One condition of one gate, which is what CRED-3 asks a drop to name.
+///
+/// The set is the questions the gates ask rather than the answers this configuration happens to
+/// record: a gate fails on a condition, and a record holding only the conditions something fails
+/// on today could not say that a second one had started failing too.
+///
+/// Which gate a condition belongs to is [`Condition::gate`] and not a field beside it, since a
+/// condition is a condition of exactly one gate and a pair of fields can be set to disagree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Condition {
+    /// Gate 1: nothing the agent cannot impersonate decides each use.
+    ///
+    /// CRED-6 is what this asks: where the agent can redeem what it holds unaided, the thing it
+    /// holds is the credential under another name.
+    NothingDecidesEachUse,
+    /// Gate 1: what decides each use cannot refuse one.
+    ///
+    /// Separate from the condition above because a performer that cannot say no is an
+    /// authorisation step that always authorises.
+    NothingCanRefuseAUse,
+    /// Gate 2: no bound on what the value may do is fixed before it is issued.
+    ///
+    /// CRED-7's first half. A value that arrives carrying whatever its holder already had is
+    /// unbounded whoever minted it.
+    NoBoundFixedBeforeIssue,
+    /// Gate 2: the bound is checked within the agent's reach.
+    ///
+    /// CRED-7's second half: a program running as the person presents itself as any other, so a
+    /// bound the agent's own code enforces answers to whoever is asking.
+    BoundEnforcedWithinReach,
+    /// Gate 2: the bound has no end.
+    ///
+    /// CRED-8. Narrow and permanent is a static secret with a small reach.
+    BoundWithNoEnd,
+    /// Gate 3: the value is not minted for one named step.
+    NotMintedForOneStep,
+    /// Gate 3: the issuer puts no end on it.
+    IssuerEndsNothing,
+    /// Gate 3: the agent can renew it without further authority.
+    ///
+    /// CRED-9's false pass: a fifteen-minute token the agent refreshes by itself is a permanent
+    /// credential with extra steps.
+    RenewableWithoutAuthority,
+}
+
+impl Condition {
+    /// Every condition a gate asks about, so something reporting a walk can be held to all of
+    /// them rather than to the ones a credential happens to fail on today.
+    pub const fn all() -> [Self; 8] {
+        [
+            Self::NothingDecidesEachUse,
+            Self::NothingCanRefuseAUse,
+            Self::NoBoundFixedBeforeIssue,
+            Self::BoundEnforcedWithinReach,
+            Self::BoundWithNoEnd,
+            Self::NotMintedForOneStep,
+            Self::IssuerEndsNothing,
+            Self::RenewableWithoutAuthority,
+        ]
+    }
+
+    /// The gate this condition is a condition of.
+    pub const fn gate(self) -> Gate {
+        match self {
+            Self::NothingDecidesEachUse | Self::NothingCanRefuseAUse => Gate::One,
+            Self::NoBoundFixedBeforeIssue
+            | Self::BoundEnforcedWithinReach
+            | Self::BoundWithNoEnd => Gate::Two,
+            Self::NotMintedForOneStep
+            | Self::IssuerEndsNothing
+            | Self::RenewableWithoutAuthority => Gate::Three,
+        }
+    }
+}
+
+/// Whether a condition went unmet because the counterparty refused or because nobody attempted it.
+///
+/// CRED-3 keeps these apart because they end at the same tier and mean opposite things. A refusal
+/// is a fact about the world, and nothing on this side changes it by trying harder. An unattempted
+/// gate is a decision somebody made here, and it is the one that is ours to revisit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Attempt {
+    /// The counterparty offers the arrangement to nobody, so asking for it changes nothing.
+    Refused,
+    /// The counterparty offers the arrangement, or could, and nothing here asks for it.
+    NotAttempted,
+}
+
+/// One drop of a credential's gate walk: the condition of the gate that failed, and whether the
+/// counterparty refused or nobody attempted it.
+///
+/// Both halves, because CRED-3 asks for both and a tier without them is an assertion: Held says
+/// where a credential stands and says nothing about whether it could have stood anywhere else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GateDrop {
+    /// Which of the gate's conditions was not met. The gate is [`Condition::gate`].
+    pub condition: Condition,
+    /// Which of the two answers the condition has.
+    pub attempt: Attempt,
+}
+
 /// A credential this program holds itself, and so owes an account of what would end it.
 ///
 /// CRED-25 asks three things about every credential at Held or Held briefly: who issued it, the
@@ -310,16 +442,31 @@ impl fmt::Display for Secret {
 /// is recorded beside the value is which arrangement it is, and the three answers follow from that.
 /// The words a person reads are in the message catalog, since this crate holds none of its own.
 ///
+/// CRED-10 asks a fourth thing, of the credentials at Held briefly alone: how quickly a leak of one
+/// would be noticed and acted on. That figure is a judgement about the deployment rather than a
+/// fact about the arrangement, and it establishes no tier and moves none, so it is recorded here
+/// beside the tier rather than derived from it: [`Held::held_briefly`] and
+/// [`Held::noticed_within`].
+///
+/// CRED-3 asks a fifth thing, of every credential here: how it reached the tier it stands at. Each
+/// drop of the walk down from Delegated records which of the gate's conditions failed and whether
+/// the counterparty refused or nobody attempted it, which is [`Held::walk`]. A tier without that
+/// is an assertion, and the two answers matter separately: a gate the counterparty refused is a
+/// fact about the world, and a gate nobody attempted is a decision made here.
+///
 /// The obligation is detection followed by something a person can act on. An expiry, which is all
 /// that was kept before, says when a credential stops working and nothing about how to stop it
 /// working sooner; removing the file it came from ends this run's custody and leaves it live at its
-/// issuer. What is enumerated here is what this program holds for itself. A credential a gateway
-/// block names or carries is not in this list, and a block that wrote one into a settings file is
-/// genuinely one this configuration holds: `provider.rs` is outside the paths CRED governs, and
-/// what would end such a credential is the gateway's answer rather than one this build has, since
-/// a block names a host and a variable and never an issuer.
+/// issuer.
+///
+/// A gateway's bearer token is in this list on the same footing as the rest. It is not this
+/// build's own credential, but a block that named a variable or wrote a token into a settings
+/// file is one this configuration holds for the length of a run, and `provider.rs` is the third
+/// path CRED governs, so the clause reaches it. That the block names no issuer is the answer to a
+/// different question: the host it names is the surface the token is presented to and the only one
+/// that revokes it, which is the address the clause asks be written down.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Held {
+pub enum Held<'a> {
     /// The HMAC signing key baked into this build, which signs every request to the Brave backend.
     ///
     /// Held. It carries no expiry, and one build's key is every install's, so nothing on this
@@ -336,11 +483,164 @@ pub enum Held {
     /// Held briefly. It states an expiry and stops working at it; ending it before that is done at
     /// its issuer, because `aws sso logout` clears this machine's copy rather than the session.
     AwsSession,
+    /// The bearer token a `provider` block carries or names a variable for, held for the run.
+    ///
+    /// Held. It carries no expiry and nothing on this machine ends it: `host` is where the token
+    /// is presented, so it is both the issuer as far as this program can know one and the only
+    /// surface that revokes it. Deleting the value from the settings file, or unsetting the
+    /// variable, ends this machine's custody and leaves the token live there.
+    ///
+    /// The host rather than the block's id, because the id is a name somebody chose for a section
+    /// of their own file and the report is read by somebody going to the gateway to end a token.
+    GatewayToken {
+        /// The host the block's endpoint names, from [`provider::Provider::host`].
+        host: &'a str,
+    },
 }
 
-impl Held {
+impl<'a> Held<'a> {
     /// Every credential this program can hold, so something reporting them cannot omit one.
-    pub const ALL: [Self; 3] = [Self::SigningKey, Self::AwsAccessKey, Self::AwsSession];
+    ///
+    /// The gateway arrangement is a credential plus the host that would end it, so a list of the
+    /// kinds has to be given one: a caller walking this is asking which arrangements exist rather
+    /// than which are configured, and the host it passes is what the gateway entry will name.
+    pub const fn all(gateway_host: &'a str) -> [Self; 4] {
+        [
+            Self::SigningKey,
+            Self::AwsAccessKey,
+            Self::AwsSession,
+            Self::GatewayToken { host: gateway_host },
+        ]
+    }
+
+    /// Every drop of this credential's walk down from Delegated, in the order the gates are asked.
+    ///
+    /// CRED-2 puts a credential's tier at where its walk stopped, and CRED-3 asks each drop to say
+    /// which of that gate's conditions failed and whether the counterparty refused or nobody
+    /// attempted it. Recorded per credential rather than per tier, because two credentials at Held
+    /// can have got there for opposite reasons and only one of them is worth revisiting.
+    ///
+    /// The length is the tier: failing a gate drops exactly one tier and nothing skips one, so two
+    /// drops is Held briefly and three is Held. That is the same claim [`Held::held_briefly`]
+    /// makes, and the two are pinned against each other rather than derived from one another, so a
+    /// walk revised without the tier fails rather than quietly restating it.
+    ///
+    /// Every drop here is one nobody attempted. Each of these credentials is handed over whole and
+    /// used directly, and at each gate the counterparty either offers the stronger arrangement
+    /// already, as AWS does in minting a bounded session, or has never been asked for it. None of
+    /// them is a refusal, so none of them is excused by the world being as it is.
+    pub fn walk(self) -> &'static [GateDrop] {
+        match self {
+            // The key signs the request digest in this process, so nothing decides a use. The
+            // backend derives its copy from a master seed and the key id and offers nothing
+            // narrower and nothing shorter, and it is this project's own backend: what stops each
+            // of these gates is that nobody has built the other side of it.
+            Self::SigningKey => &[
+                GateDrop {
+                    condition: Condition::NothingDecidesEachUse,
+                    attempt: Attempt::NotAttempted,
+                },
+                GateDrop {
+                    condition: Condition::NoBoundFixedBeforeIssue,
+                    attempt: Attempt::NotAttempted,
+                },
+                GateDrop {
+                    condition: Condition::NotMintedForOneStep,
+                    attempt: Attempt::NotAttempted,
+                },
+            ],
+            // AWS mints a session bounded by a policy it enforces and the agent cannot widen, and
+            // ends it, which is gates 2 and 3 both answered on the counterparty's side. What this
+            // program does with a long-lived key is sign with it, so all three drops are ours.
+            Self::AwsAccessKey => &[
+                GateDrop {
+                    condition: Condition::NothingDecidesEachUse,
+                    attempt: Attempt::NotAttempted,
+                },
+                GateDrop {
+                    condition: Condition::NoBoundFixedBeforeIssue,
+                    attempt: Attempt::NotAttempted,
+                },
+                GateDrop {
+                    condition: Condition::NotMintedForOneStep,
+                    attempt: Attempt::NotAttempted,
+                },
+            ],
+            // Two drops, because gate 3 passes: STS mints the session for the profile and ends it
+            // at an expiry AWS enforces. Gate 2 fails on the bound rather than on the lifetime,
+            // which is the whole of the difference between Granted and Held briefly: the session
+            // carries whatever the profile's role or SSO grant allows, and nothing here asks STS
+            // to narrow it to this run.
+            Self::AwsSession => &[
+                GateDrop {
+                    condition: Condition::NothingDecidesEachUse,
+                    attempt: Attempt::NotAttempted,
+                },
+                GateDrop {
+                    condition: Condition::NoBoundFixedBeforeIssue,
+                    attempt: Attempt::NotAttempted,
+                },
+            ],
+            // A block names a host and a variable and never an issuer, so there is nothing here
+            // to ask for a performer, a narrower token or a shorter one. Not attempted rather
+            // than refused: what the gateway at the other end offers is not something this
+            // program has been told.
+            Self::GatewayToken { .. } => &[
+                GateDrop {
+                    condition: Condition::NothingDecidesEachUse,
+                    attempt: Attempt::NotAttempted,
+                },
+                GateDrop {
+                    condition: Condition::NoBoundFixedBeforeIssue,
+                    attempt: Attempt::NotAttempted,
+                },
+                GateDrop {
+                    condition: Condition::NotMintedForOneStep,
+                    attempt: Attempt::NotAttempted,
+                },
+            ],
+        }
+    }
+
+    /// Whether this credential stands at Held briefly rather than at Held.
+    ///
+    /// The tier decides which obligations a credential carries, and CRED-10 asks a figure of the
+    /// credentials at Held briefly and of no others, so which tier a credential stands at has to
+    /// be a question the record answers rather than one a reader answers from the prose above
+    /// each variant.
+    ///
+    /// A claim about the arrangement, so it moves only when the arrangement does: CRED-4. A
+    /// session credential is minted for an occasion by an issuer that ends it, and none of the
+    /// others has an issuer that ends anything on its own.
+    pub fn held_briefly(self) -> bool {
+        matches!(self, Self::AwsSession)
+    }
+
+    /// How quickly a leak of this credential would be noticed and acted on, which CRED-10 asks the
+    /// record to say for every credential at Held briefly.
+    ///
+    /// `None` for a credential at Held, where the figure would mean nothing: a permanent
+    /// credential is bounded by the surface that revokes it rather than by a window, and that
+    /// surface is what [`Held`] already records. The figure is owed exactly where the window is
+    /// the bound, so it is `Some` for exactly the credentials [`Held::held_briefly`] names, and
+    /// the two are pinned together rather than derived from one another.
+    ///
+    /// It does not establish the tier and cannot move it. A rota that stopped watching would make
+    /// this number larger and leave the session credential exactly where the gate walk left it.
+    ///
+    /// **Where the fifteen minutes comes from.** It is a judgement about this deployment, which is
+    /// one person's machine, and not a property of the arrangement. Nothing here watches for a use
+    /// of a credential this program holds: the notice comes from the AWS account's own trail,
+    /// where a call made with the session appears rather than here, and ending the session before
+    /// its expiry is then one request at its issuer. Fifteen minutes is how long that takes
+    /// somebody who is reading the trail. Where nobody reads it, nothing notices at all and the
+    /// expiry is the only bound, which is the judgement this figure exists to let a person make.
+    pub fn noticed_within(self) -> Option<Duration> {
+        match self {
+            Self::AwsSession => Some(Duration::from_secs(15 * 60)),
+            Self::SigningKey | Self::AwsAccessKey | Self::GatewayToken { .. } => None,
+        }
+    }
 
     /// Whether revoking this credential at its issuer leaves something minted from it working.
     ///
@@ -348,6 +648,10 @@ impl Held {
     /// the one somebody acting on a leak gets wrong: deleting an access key is the obvious move,
     /// and it does not reach the session credentials STS has already handed out under it, each of
     /// which runs to its own expiry.
+    ///
+    /// False for a gateway token: the gateway that revokes it is the only place it is presented,
+    /// and nothing here mints anything from it. A copy of the same token in a file or a shell
+    /// profile is that credential rather than something derived from it, so revoking reaches it.
     pub fn outlives_revocation(self) -> bool {
         matches!(self, Self::AwsAccessKey)
     }
@@ -752,7 +1056,15 @@ impl Config {
     /// the build-from-source case [`Config::serves_aichat`] describes: the field is blank there,
     /// and listing a credential this install does not have would send somebody to retire a key id
     /// on the strength of a leak that cannot have come from here.
-    pub fn held(&self) -> Vec<Held> {
+    ///
+    /// Then one entry per gateway whose block says anywhere a token lives, which is custody this
+    /// configuration arranged however the value arrives. Whether the variable a block names is
+    /// set is a fact about an environment this reads none of, and asking would make the record
+    /// differ between two runs of the same configuration; the AWS pair above is listed on the
+    /// same footing, for the same reason. A block naming nowhere for a token has said none is
+    /// needed and is left out, as is one reaching Bedrock, whose credentials are the AWS pair and
+    /// would otherwise be counted twice.
+    pub fn held(&self) -> Vec<Held<'_>> {
         let mut held = Vec::new();
         if self.serves_aichat() {
             held.push(Held::SigningKey);
@@ -761,6 +1073,14 @@ impl Config {
             held.push(Held::AwsAccessKey);
             held.push(Held::AwsSession);
         }
+        held.extend(
+            self.providers
+                .iter()
+                .filter(|provider| provider.bedrock.is_none() && provider.names_a_credential())
+                .map(|provider| Held::GatewayToken {
+                    host: provider.host(),
+                }),
+        );
         held
     }
 
@@ -1057,6 +1377,161 @@ mod tests {
         assert!(Held::AwsAccessKey.outlives_revocation());
         assert!(!Held::AwsSession.outlives_revocation());
         assert!(!Held::SigningKey.outlives_revocation());
+    }
+
+    /// CRED-25: a gateway's bearer token is a credential this configuration holds, so it is in the
+    /// record with the host that would end it. Left out, the person whose gateway key appears in a
+    /// pasted log is given nothing to act on, which the clause's Why calls a notification.
+    ///
+    /// Four blocks rather than one, because the shapes that must not be recorded are what a rule
+    /// reading "every provider" would get wrong: a block naming nowhere for a token has said none
+    /// is needed, and a block reaching Bedrock holds the AWS pair above rather than a bearer token
+    /// of its own, so recording one for it would count the same credentials twice and send
+    /// somebody to revoke a token at an endpoint that issues none. The two that are recorded
+    /// differ in where the value sits, the file and a variable, since custody is the same either
+    /// way and a rule reading only `apiKey` would pass on the one the report is read from most.
+    #[test]
+    fn a_gateway_token_is_a_credential_this_configuration_holds() {
+        let settings = Settings::parse(
+            r#"{"provider": {
+                "in-the-file": {
+                    "options": {"baseURL": "https://in-the-file.invalid/v1", "apiKey": "sk-live"}
+                },
+                "in-a-variable": {
+                    "env": ["A_GATEWAY_TOKEN"],
+                    "options": {"baseURL": "https://in-a-variable.invalid/v1"}
+                },
+                "needs-none": {"options": {"baseURL": "http://localhost:11434/v1"}},
+                "amazon-bedrock": {"options": {"region": "us-west-2"}, "models": {"an-arn": {}}}
+            }}"#,
+        );
+        let config =
+            Config::from_lookup_with_providers(complete_env, settings.providers().to_vec())
+                .expect("configured");
+
+        // The gateways in the order the blocks are read, which is by id.
+        assert_eq!(
+            config.held(),
+            [
+                Held::SigningKey,
+                Held::AwsAccessKey,
+                Held::AwsSession,
+                Held::GatewayToken {
+                    host: "in-a-variable.invalid"
+                },
+                Held::GatewayToken {
+                    host: "in-the-file.invalid"
+                },
+            ],
+            "the record is not the credentials this configuration holds"
+        );
+
+        // Nothing is minted from a bearer token here, so revoking it at the gateway reaches every
+        // copy of it. A line saying otherwise would send somebody chasing a session that does not
+        // exist.
+        assert!(
+            !Held::GatewayToken {
+                host: "in-the-file.invalid"
+            }
+            .outlives_revocation()
+        );
+    }
+
+    /// CRED-3: a credential's walk holds one drop per gate it failed, asked in order from the top,
+    /// and stops where its tier says it stopped. A walk that skipped a gate, repeated one or ran
+    /// past the tier would be a record of a different credential than the one standing there, and
+    /// the tier is the one thing about the walk anything else already reads.
+    ///
+    /// Each drop's gate comes from the condition it names, so a condition filed under the wrong
+    /// gate arrives here as a walk whose gates are out of order.
+    #[test]
+    fn a_credentials_walk_holds_one_drop_per_gate_it_failed_and_stops_at_its_tier() {
+        for held in Held::all("gateway.invalid") {
+            let gates: Vec<Gate> = held
+                .walk()
+                .iter()
+                .map(|drop| drop.condition.gate())
+                .collect();
+
+            assert_eq!(
+                gates,
+                [Gate::One, Gate::Two, Gate::Three][..gates.len()],
+                "{held:?} records a walk that skips a gate or asks them out of order"
+            );
+            assert_eq!(
+                held.walk().len(),
+                match held.held_briefly() {
+                    true => 2,
+                    false => 3,
+                },
+                "{held:?} stands at one tier and records the walk of another"
+            );
+        }
+    }
+
+    /// CRED-3: a drop says whether the counterparty refused or nobody attempted it, and every drop
+    /// this configuration records is one nobody attempted. The two answers end at the same tier
+    /// and only the second is ours to revisit, so recording a refusal where the arrangement is
+    /// available files a decision made here as a fact about the world, and the credential stops
+    /// being worth looking at again.
+    ///
+    /// True of all four: AWS mints a bounded session and ends it, this project's own backend
+    /// issues the signing key, and a gateway block names no issuer for anything to have asked.
+    /// None of those is a counterparty saying no.
+    #[test]
+    fn every_drop_this_configuration_records_is_one_nobody_attempted() {
+        for held in Held::all("gateway.invalid") {
+            for drop in held.walk() {
+                assert_eq!(
+                    drop.attempt,
+                    Attempt::NotAttempted,
+                    "{held:?} excuses gate {} as refused",
+                    drop.condition.gate().number()
+                );
+            }
+        }
+    }
+
+    /// CRED-10: a credential the record stands at Held briefly is owed a figure for how quickly a
+    /// leak of it would be noticed and acted on, and one at Held is not. The window is the whole
+    /// of what bounds the first, so a window nobody sized is a number somebody liked; the second
+    /// is bounded by the surface that revokes it, which the record already names, and giving it a
+    /// figure too would say a window bounds a credential that has none.
+    ///
+    /// The two are kept apart and pinned together here so that a credential standing at Held
+    /// briefly and left unsized fails rather than passing quietly.
+    #[test]
+    fn a_credential_at_held_briefly_is_sized_against_detection_and_one_at_held_is_not() {
+        let gateway = Held::GatewayToken {
+            host: "gateway.invalid",
+        };
+        for held in Held::all("gateway.invalid") {
+            assert_eq!(
+                held.noticed_within().is_some(),
+                held.held_briefly(),
+                "{held:?} stands at one tier and is sized for the other"
+            );
+        }
+
+        assert!(Held::AwsSession.held_briefly());
+        assert!(!Held::SigningKey.held_briefly());
+        assert!(!Held::AwsAccessKey.held_briefly());
+        assert!(!gateway.held_briefly());
+
+        let window = Held::AwsSession
+            .noticed_within()
+            .expect("a session credential stands at Held briefly");
+        assert!(
+            window >= Duration::from_secs(60),
+            "a figure under a minute is the unsized case wearing a number: {window:?}"
+        );
+        // Whole minutes, because minutes are what the report states: a figure of ninety seconds
+        // would reach a person as one minute, which is a smaller window than anybody recorded.
+        assert_eq!(
+            window.as_secs() % 60,
+            0,
+            "a figure that is not whole minutes is reported as a shorter one: {window:?}"
+        );
     }
 
     /// Without Bedrock the aichat credentials are still required. Relaxing them for everyone would

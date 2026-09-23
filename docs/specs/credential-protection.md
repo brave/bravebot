@@ -3,6 +3,7 @@ id: CRED
 title: Credential protection
 status: proposed
 governs:
+  - crates/core/src/ambient.rs
   - crates/config/src/lib.rs
   - crates/config/src/env_var.rs
   - crates/config/src/provider.rs
@@ -10,6 +11,7 @@ governs:
   - crates/ui-bridge/src/settings.rs
   - crates/bedrock/src/credentials.rs
   - crates/core/src/credentials.rs
+  - crates/agent/src/findings.rs
   - crates/sandbox/src/crash.rs
   - crates/skus/src/device.rs
   - crates/skus/src/profile.rs
@@ -281,7 +283,18 @@ nobody attempted it. Those are different answers and they end at the same tier.
 the world and a gate nobody attempted is a decision somebody made, and only the second is ours to
 revisit.
 
-`verified-by: none`
+**Where it is recorded.** Beside the tier, on the record [CRED-25](#CRED-25) uses and read by the
+same surface: a credential's walk is the drops it took, in the order the gates are asked, and
+`doctor` prints one line per drop under the account of what would end it. The number of drops is
+the tier, since failing a gate drops exactly one and nothing skips one, so a walk and a tier that
+disagree are a disagreement rather than a silence.
+
+`verified-by: bravebot_config::lib::a_credentials_walk_holds_one_drop_per_gate_it_failed_and_stops_at_its_tier`
+`verified-by: bravebot_config::lib::every_drop_this_configuration_records_is_one_nobody_attempted`
+`verified-by: bravebot_cli::main::a_reason_is_reported_for_exactly_the_drops_the_record_holds`
+`verified-by: bravebot_cli::main::a_drop_is_reported_with_the_gate_and_the_answer_the_record_holds`
+`verified-by: bravebot_cli::main::every_drop_has_its_own_account_of_the_condition_it_failed`
+`verified-by: bravebot_cli::running::doctor_accounts_for_every_drop_of_each_credentials_walk`
 
 <a id="CRED-4"></a>
 ### CRED-4: nothing climbs a tier without the arrangement changing
@@ -304,7 +317,12 @@ where the capability is granted and recorded when it is used.
 bound to enforce, so placing them on the scale would put unbounded authority at the top of it. The
 one thing available before confinement is that nobody grants it thinking they granted less.
 
-`verified-by: none`
+`verified-by: bravebot_core::ambient::a_line_that_reaches_a_container_daemon_names_it`
+`verified-by: bravebot_core::ambient::a_tool_that_spends_on_one_command_is_named_for_that_command_alone`
+`verified-by: bravebot_core::ambient::the_metadata_service_is_named_by_the_address_and_not_by_the_argument`
+`verified-by: bravebot_tui::confirm::a_run_prompt_names_the_ambient_authority_a_line_reaches`
+`verified-by: bravebot_tui::confirm::a_fetch_prompt_says_what_the_metadata_service_is`
+`verified-by: bravebot_agent::turn::spending_an_ambient_authority_is_recorded_in_the_trail_and_an_ordinary_line_is_not`
 
 <a id="CRED-6"></a>
 ### CRED-6: a handle the agent can redeem alone is not a handle
@@ -370,7 +388,14 @@ arrangement.
 depended on it could be lost by a rota change. The obligation stays because a window nobody sized is
 a number somebody liked.
 
-`verified-by: none`
+**Where it is recorded.** Beside the tier, on the same record [CRED-25](#CRED-25) uses, and read by
+the same surface: `doctor` prints the figure under the account of what would end the credential. The
+tier and the figure are separate answers on that record, so a credential standing at Held briefly
+with nothing sized is a disagreement rather than a silence.
+
+`verified-by: bravebot_config::lib::a_credential_at_held_briefly_is_sized_against_detection_and_one_at_held_is_not`
+`verified-by: bravebot_cli::main::how_soon_a_leak_is_noticed_is_reported_for_exactly_the_credentials_the_record_sizes`
+`verified-by: bravebot_bedrock::credentials::a_session_token_is_what_says_what_would_end_a_credential`
 
 <a id="CRED-11"></a>
 ### CRED-11: a turn does not copy a credential somewhere weaker than where it was
@@ -385,7 +410,19 @@ causes. Everything after it follows on its own: a secret in a file is read back 
 reaches the planner once the tree is vouched for, survives in a backup nobody deletes, and is pushed
 like any other change.
 
-`verified-by: none`
+**A line a turn runs is one of the ways it writes.** The check does not belong to the write tools:
+a command line reaches a file through a redirection, and the line itself is a place, since it is
+drawn on a screen, kept in the record of the round and readable by every account on the machine
+while the program lives. So the line is scanned as the turn's own words before anything is
+compiled or shown, and what the line left at each destination it opened is scanned once it has
+stopped, at the label that destination's own effect is recorded under. The second of those two
+cannot refuse before the fact, because the program opens the file itself: what it buys is the
+value being taken back out of the tree rather than never reaching it, and the costs below say
+what that is worth and where it stops.
+
+`verified-by: bravebot_agent::turn::a_credential_the_line_itself_carries_stops_the_line`
+`verified-by: bravebot_agent::turn::a_credential_a_run_line_redirects_into_the_tree_does_not_stay_there`
+`verified-by: bravebot_agent::turn::a_credential_the_destination_already_held_does_not_refuse_the_line_carrying_it`
 
 <a id="CRED-12"></a>
 ### CRED-12: withdrawn, replaced by CRED-13
@@ -414,7 +451,18 @@ on the machine is at Held before anyone has walked a gate, and the walk then rat
 value already sits instead of deciding it. Creating into the authority is what leaves the walk
 something to decide.
 
-`verified-by: none`
+**What the refusal says.** A credential created as a file is the value and nothing else, so there
+is no room in it for the reference CRED-11's refusal asks for, and a planner told to write one
+there writes it into the file a framework reads as the key. What that turn is told instead is that
+nothing was created, that generating another and writing it elsewhere is the same refusal again,
+and that the person is the one who creates the value. Telling the two apart is a question about the
+body rather than about the finding: a value inside a document was copied from wherever it already
+sat, and a value that is the whole file had no prior location.
+
+`verified-by: bravebot_agent::turn::a_credential_created_as_a_whole_file_is_not_created_and_the_planner_is_told_so`
+`verified-by: bravebot_core::credentials::a_generated_key_standing_as_a_whole_file_is_recognised`
+`verified-by: bravebot_core::credentials::a_file_that_is_the_value_is_told_from_one_that_mentions_it`
+`verified-by: bravebot_core::credentials::blank_lines_around_the_value_are_not_contents`
 
 <a id="CRED-14"></a>
 ### CRED-14: the credentials this agent holds for itself reach no program, no prompt and no record
@@ -488,6 +536,11 @@ catches an inline Kubernetes `Secret`, a local development password and a test f
 all four with no override would stop ordinary work over a guess, and a scan people have to fight is
 a scan they turn off. The prompt names the finding, so the question can be answered.
 
+A value standing as the whole of a file, with no name beside it and no provider prefix on it, is
+inferred the same way and raised the same way. The file being nothing else is what stands in for
+the name, which is weaker than a name: a commit id, a machine identifier and a digest are written
+in that shape too.
+
 A finding raised this way goes to the person and never to the planner, which is what CRED-19
 requires of a finding however it is answered.
 
@@ -503,6 +556,9 @@ requires of a finding however it is answered.
 `verified-by: bravebot_core::credentials::a_password_in_a_connection_string_is_a_finding`
 `verified-by: bravebot_core::credentials::each_shape_matches_at_its_minimum_and_not_below_it`
 `verified-by: bravebot_core::credentials::one_key_in_a_json_field_is_one_finding`
+`verified-by: bravebot_core::credentials::a_provider_key_standing_alone_is_one_finding_and_not_two`
+`verified-by: bravebot_core::credentials::a_rare_token_with_a_document_around_it_is_not_a_whole_file`
+`verified-by: bravebot_core::credentials::a_value_standing_as_a_whole_file_is_a_question_and_not_a_rule`
 `verified-by: bravebot_core::credentials::an_armoured_private_key_is_one_finding_over_its_whole_body`
 `verified-by: bravebot_core::credentials::nothing_a_finding_says_repeats_the_value`
 
@@ -541,7 +597,37 @@ shown to the person by a path the planner does not read.
 called it a feature. Writing the findings into the tree hands a map of every credential in the
 repository to the next thing that reads it.
 
-`verified-by: none`
+**Where it is written.** One file per workspace under the state directory, beside the record of
+granted rules and keyed the same way, holding one entry per finding: the kind, the path, the line,
+the fingerprint and the preview. A finding is written whatever was done about it, because what was
+refused, what was approved and what the person declined are equally things in their tree. The
+screen alone is not enough: a line drawn while nobody was looking is gone when the turn ends, and
+the scan exists to tell a person what their own repository holds.
+
+The record is best effort and fails toward silence. No state directory, a full disk, a read-only
+home: each means the findings do not outlive the session, which is where they were before the
+record existed, and none of them refuses a write the person approved. An
+[incognito](incognito.md#INCOG-5) session writes none, and reads the ones an earlier ordinary
+session left.
+
+`verified-by: bravebot_agent::findings::a_finding_one_session_recorded_is_read_back_by_another`
+`verified-by: bravebot_agent::findings::nothing_in_the_record_repeats_the_value`
+`verified-by: bravebot_agent::findings::a_finding_made_in_one_workspace_is_not_read_back_in_another`
+`verified-by: bravebot_agent::findings::a_workspace_sharing_a_key_with_another_does_not_read_its_findings`
+`verified-by: bravebot_agent::findings::a_second_finding_is_added_rather_than_replacing_the_first`
+`verified-by: bravebot_agent::findings::a_record_that_cannot_be_read_holds_nothing`
+`verified-by: bravebot_agent::findings::a_line_nothing_can_read_leaves_the_rest_of_the_record_readable`
+`verified-by: bravebot_agent::findings::an_entry_this_build_does_not_fully_understand_is_not_read`
+`verified-by: bravebot_agent::findings::a_scan_that_found_nothing_leaves_no_record`
+`verified-by: bravebot_agent::findings::a_turn_with_no_session_to_name_still_records_what_it_found`
+`verified-by: bravebot_agent::turn::a_finding_is_written_outside_the_tree_and_outlives_the_turn`
+`verified-by: bravebot_agent::turn::a_credential_a_line_left_at_a_destination_is_written_to_the_record`
+`verified-by: bravebot_agent::turn::a_credential_in_the_line_itself_is_written_to_the_record`
+`verified-by: bravebot_agent::turn::what_the_scan_found_is_told_to_the_person_and_not_to_the_planner`
+`verified-by: bravebot_agent::incognito::no_credential_finding_is_written_down`
+`verified-by: bravebot_agent::incognito::a_finding_an_earlier_session_recorded_is_still_read`
+`verified-by: bravebot_core::credentials::nothing_a_finding_says_repeats_the_value`
+`verified-by: bravebot_core::credentials::a_preview_is_no_part_of_the_value_it_describes`
 
 <a id="CRED-20"></a>
 ### CRED-20: a disposition moves a tier only by passing the gate it attempts
@@ -569,7 +655,8 @@ An acceptance carries an expiry, and lapses into a finding again when it passes.
 
 Entries are added by a person, carry a fingerprint and a reason and an expiry rather than a value,
 and stop applying when the fingerprint stops matching. They live where CRED-19 puts a finding,
-outside the tree, because an allowlist in the tree is the same map CRED-19 refuses to write.
+outside the tree, because an allowlist in the tree is the same map CRED-19 refuses to write. That
+record exists; what an entry cannot yet be matched on is a fingerprint, which is salted per run.
 
 **Why.** An allowlist is necessary or the scan becomes noise everybody clicks through, and it is the
 obvious target: a turn that can add to the baseline can clear its own leak. A fingerprint that no
@@ -695,13 +782,16 @@ exists and refuses, but it reports the finding and reaches no part of this recor
 credential would have landed in a file is not thereby told what would end the one they already
 hold. CRED-15's scan of the tree before a run does not exist, and nor does the place CRED-19 would
 write a finding. What exists is the record and one surface that reads it, `doctor`, which reports
-what would end each credential this build holds. A scan reaching it later reads that record rather
-than writing a second one.
+what would end each credential this configuration holds, a gateway's bearer token included. A scan
+reaching it later reads that record rather than writing a second one.
 
 `verified-by: bravebot_config::lib::a_build_that_cannot_sign_for_itself_holds_no_signing_key_to_account_for`
 `verified-by: bravebot_config::lib::an_aws_account_holds_both_arrangements_and_they_end_differently`
+`verified-by: bravebot_config::lib::a_gateway_token_is_a_credential_this_configuration_holds`
+`verified-by: bravebot_config::provider::the_host_a_token_would_be_ended_at_carries_no_other_part_of_the_endpoint`
 `verified-by: bravebot_bedrock::credentials::a_session_token_is_what_says_what_would_end_a_credential`
 `verified-by: bravebot_cli::main::every_held_credential_has_its_own_account_of_what_would_end_it`
+`verified-by: bravebot_cli::main::a_gateway_token_is_accounted_for_at_the_gateway_that_would_end_it`
 `verified-by: bravebot_cli::main::what_survives_revoking_is_reported_for_exactly_the_credentials_that_have_one`
 
 ## Why the gate safehouse builds is not available here
@@ -763,6 +853,12 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
 - **The off-scale case is visible, not bounded.** CRED-5 makes ambient authority declared. There is
   no credential to withhold and no environment to scrub, and confinement is the only fix.
 
+- **What names an ambient authority is a list, and a list has an end.** A container daemon, a
+  logged-in tool, the agent socket and a metadata address are recognised by the words a line
+  writes, so a client nobody listed is granted with only the blanket line about confinement said
+  of it. Nothing is refused on the list, so what a gap costs is a sentence rather than a boundary,
+  and the direction to be wrong in is naming something a line was not going to spend.
+
 - **The scan misses things, and silence proves nothing.** The rarity layer is advisory, history
   beyond the working tree is off by default, and a credential nobody has a pattern for is a
   credential the scan does not find. A clean result means nothing was matched.
@@ -777,6 +873,29 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   it could not do, and the person completes it. This breaks scaffolding written on the assumption
   that generated secrets land in a file.
 
+- **There is nothing to create a credential into, so creation is refused rather than performed.**
+  CRED-13 asks for the value to reach an authority in the same step and its tier to be recorded
+  then. No authority exists, so what runs is the clause's other half: the creation does not happen
+  and the turn says so. Nothing records a tier for a credential a turn created, because there is no
+  such credential to record one for.
+
+- **A credential created as a file is inferred, so the refusal can be overridden.** The shape is a
+  file whose whole contents is one rare value, which is what says it is a value rather than a
+  document. A commit id, a machine identifier and a digest are written that way too, so the finding
+  goes to the person on the approval the write already needs rather than refusing outright, and a
+  person who says yes gets the write. Where the value also declares itself under CRED-16, it is
+  refused with nobody asked, as any declared value is. What would close the gap is an authority to
+  create into, which is the entry above.
+
+- **A value a command generates gets less than one a write tool creates.** CRED-16 reads what a
+  turn wrote in its own words, and a redirection is a file a program the turn started opened for
+  itself: `openssl rand -hex 32 > config/master.key` puts the value in the tree without a byte of
+  it passing through a layer on the way. What the line left at that destination is read back
+  afterwards, under the two bounds the entries below record: nothing is read where the line's own
+  output is content nobody vouched for, and a value only the third layer recognises has no prompt
+  to go to at this tool. So a generated key written this way is reported to the person where it is
+  seen at all, and a person deciding about it is what is missing.
+
 - **Gate 2 is usually failed by the counterparty.** Most SaaS keys, most package registries and most
   webhook secrets have no derived form to ask for. The tier is honest about it and cannot fix it.
 
@@ -790,6 +909,35 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   of a file nobody vouched for reaches the tree through a reference. What would close it is a scan
   whose finding nothing here has to branch on.
 
+- **What a line left is scanned only where somebody vouched for the line.** The same cost as the
+  entry above, reached by the other route. A program may print anything, so what a line prints is
+  content nobody vouched for unless every step of it was vouched for in this tree or is an audited
+  call over paths the person opened; below that, the destination is carried to the filesystem and
+  not read. So a turn copying `.env` to `.env.bak` before editing it is refused in a tree where
+  the person has vouched for the line and not in one where they have not. Closing it needs the
+  same thing the entry above does.
+
+- **A path a program writes without the line naming it is not scanned at all.** The destinations
+  a line opens are the ones a redirection names, which is the set the driver reserves as file
+  effects before anything runs. `cp .env .env.bak`, `tee`, `git commit` and an installer writing
+  its own config are outside it: the path is the program's business and the driver never learns
+  it. What would close this is a scan of the whole tree diff a turn produced, which needs the
+  record of what was there before it, which is CRED-15's scan and CRED-22's baseline.
+
+- **A destination past the scan's budget is passed over.** What a line left is read back for the
+  scan, and what it held beforehand is kept so a refused destination can be put back; both are
+  bounded, and past the bound neither is done. A finding that could not be acted on would stop a
+  line and leave the value where it landed, which is worse than saying nothing, so nothing is
+  said. A turn that wanted to get past this would arrange for the destination to be large first.
+
+- **A line gets the refusal and not the question.** A value that declared itself is refused at the
+  run tool as it is at a write tool, but the inferred layer's finding has nowhere to be put to
+  anybody: the run approval carries no finding, and by the time the destination can be read the
+  line has already run. So a name that sounds like a secret beside a value that looks rare is
+  reported to the person afterwards rather than decided by them beforehand, which is a notice and
+  not a judgement. Building the other half means the run prompt carrying what a write prompt
+  already carries, and it can only cover a value the line itself holds.
+
 - **A file a turn creates is attributed to it whole.** A carried value is told from an authored one
   by what the file at that path already held, and a file that did not exist held nothing. So a turn
   that moves a file already holding a key is refused, where the clause above says that case is
@@ -798,8 +946,9 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
 
 - **A fingerprint is salted per run and kept nowhere.** It tells two findings in one run apart and
   says nothing between runs, so an acceptance cannot be carried forward and the baseline has
-  nothing to match against. A salt that outlives the run is a file somebody has to keep, and it
-  belongs with the store a finding is written to.
+  nothing to match against. A salt that outlives the run is a file somebody has to keep. The store
+  CRED-19 writes to now exists and holds the fingerprint each run made, so what a durable salt is
+  still waiting on is the decision to keep one rather than somewhere to keep it.
 
   One consequence is worth naming: an inferred finding is re-raised every run, because nothing
   remembers that somebody already said a development password was a development password. A person
@@ -819,8 +968,9 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   redaction rests on the type it is held in; neither is pinned by a test that scans a record or a
   screen for every secret the process holds, which is what the clause says is owed.
 
-- **Most of this is not implemented.** What runs is the scan of what a turn writes, and one
-  performer: a credential a vault obtained itself, and a mail send carried out against it so that
-  the asking agent never holds the token. There is no scan of the tree before it is vouched for, no
-  store a finding is written to and no baseline over one, and no authority at the tier these clauses
-  describe. The rest of every clause here is a target.
+- **Most of this is not implemented.** What runs is the scan of what a turn writes, at the three
+  write tools and at the two places a `run` line writes, and one performer: a credential a vault
+  obtained itself, and a mail send carried out against it so that the asking agent never holds the
+  token, and the record CRED-19 writes each finding to. There is no scan of the tree before it is
+  vouched for, no baseline over that record, and no authority at the tier these clauses describe.
+  The rest of every clause here is a target.

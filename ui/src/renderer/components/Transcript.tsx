@@ -38,6 +38,7 @@ interface Live {
   askingTrust: string | null
   forkedFrom: { directory: string; id: string; title: string; prompt: number } | null
   focus: number | null
+  autoVetting?: boolean
 }
 
 /**
@@ -382,6 +383,7 @@ export function Transcript({
         <button disabled={!matches.length} onClick={() => setMatch((n) => n + 1)} aria-label="Next match">↓</button>
         <button onClick={() => setSearching(false)} aria-label="Close search">×</button>
       </div>}
+      {live?.autoVetting && <VettingBanner />}
       {live?.forkedFrom && <ForkBanner from={live.forkedFrom} onOpen={onOpenParent} />}
     </header>
   )
@@ -866,6 +868,23 @@ function ForkBanner({
   )
 }
 
+/**
+ * That this session opened with auto-vetting on, which CHECK-11 has said at the top and kept said.
+ *
+ * In the header for the reason `ForkBanner` is: it stays on screen however far the transcript
+ * scrolls, and it is not a `t.Entry`, so no export carries it. The mode's whole effect is a
+ * question that never appears, which nothing else on screen could show. Nothing is drawn when the
+ * mode is off, since asking is the ordinary state.
+ */
+function VettingBanner(): React.JSX.Element {
+  return (
+    <p className="fork-banner vetting-banner" role="note">
+      <strong>Auto-vetting is on.</strong> A check that finds nothing reads content to the model
+      without asking you. Kept in <code>~/.bravebot/vetting</code>.
+    </p>
+  )
+}
+
 /** What somebody answered, in words, for the record left in the transcript. */
 function describe(prompt: AskPrompt, answer: AskAnswer | undefined): string {
   if (!answer) return 'Declined'
@@ -1095,6 +1114,19 @@ export function Row({
 
           <p className="permission-scope">Run this command in the project folder shown above. “Run once” approves only this execution.</p>
           {decision === null && <p className="permission-scope"><strong>Remembered approval:</strong> {request.vouches.map((v) => v.display).join('; ')}. Covers these exact commands and trusts their output for this conversation, including after reopening it. Revoke through Permissions.</p>}
+          {!!request.ambient?.length && (
+            <div className="warn">
+              This spends access that is yours elsewhere. Nobody is asked for it at the moment it
+              is used, and nothing here takes it back afterwards.
+              <ul>
+                {request.ambient.map((spent) => (
+                  <li key={`${spent.authority}:${spent.named}`}>
+                    <code>{spent.named}</code>: {t.ambientSentence(spent.authority)}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {request.releasesPrivate && (
             <p className="warn">
               This hands your own data to the program. Whatever it does with those bytes
