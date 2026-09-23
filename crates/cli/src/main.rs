@@ -749,6 +749,9 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
             workspace.root(),
             &task.prompt,
             &outcome,
+            // The same surface the full-screen interface records: one binary, one terminal, and a
+            // run started from a session written down the same way as one started from here.
+            bravebot_session::sessions::Front::Terminal,
             bravebot_stamp::BUILD,
         );
     }

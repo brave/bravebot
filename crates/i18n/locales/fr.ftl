@@ -778,6 +778,9 @@ session-branch-gone =
 session-branch-new =
     cette session ne tournait sur aucune branche ; cette copie de travail est sur { $now }
 session-build-differs = cette session tournait sous bravebot { $was } ; celle-ci est { $now }
+session-front-differs = cette session a été écrite dans { $was } ; celle-ci l'est dans { $now }
+session-front-terminal = le terminal
+session-front-desktop = l'application de bureau
 
 
 ## Thèmes

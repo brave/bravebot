@@ -120,7 +120,12 @@ impl State {
             trust,
             programs: record.trusted_programs(project),
             directories: record.directories.iter().map(PathBuf::from).collect(),
-            handle: Some(Handle::resuming(project, record, crate::agent_build())),
+            handle: Some(Handle::resuming(
+                project,
+                record,
+                crate::FRONT,
+                crate::agent_build(),
+            )),
             turns: record.turns,
             tokens: record.tokens,
             spend: record.spend.clone(),

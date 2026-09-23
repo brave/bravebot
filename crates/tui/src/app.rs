@@ -2332,7 +2332,11 @@ fn event_loop(
         // Already answered before the loop was entered: the picker runs once, in `run`.
         Start::Fresh | Start::Choose => (
             Conversation::new(),
-            bravebot_session::sessions::Handle::begin(workspace.root(), bravebot_stamp::BUILD),
+            bravebot_session::sessions::Handle::begin(
+                workspace.root(),
+                bravebot_session::sessions::Front::Terminal,
+                bravebot_stamp::BUILD,
+            ),
             // A session that was never asked vouches for nothing, exactly as with the map.
             TrustedPrograms::new(),
         ),
@@ -2340,6 +2344,7 @@ fn event_loop(
             let handle = bravebot_session::sessions::Handle::resuming(
                 workspace.root(),
                 &record,
+                bravebot_session::sessions::Front::Terminal,
                 bravebot_stamp::BUILD,
             );
             let conversation = Conversation::restored(record.conversation.clone());
@@ -2371,6 +2376,15 @@ fn event_loop(
             if let Some(note) = bravebot_session::sessions::build_note(
                 record.build.as_deref(),
                 bravebot_stamp::BUILD,
+            ) {
+                session.note(note);
+            }
+            // And the third of them: which surface drew the transcript above. The other one
+            // renders the same session differently, so a detail being read as a symptom of the
+            // work may be a symptom of the program that showed it.
+            if let Some(note) = bravebot_session::sessions::front_note(
+                record.front.as_deref(),
+                bravebot_session::sessions::Front::Terminal,
             ) {
                 session.note(note);
             }
@@ -2916,6 +2930,7 @@ fn event_loop(
                 conversation = Conversation::new();
                 stored = bravebot_session::sessions::Handle::begin(
                     workspace.root(),
+                    bravebot_session::sessions::Front::Terminal,
                     bravebot_stamp::BUILD,
                 );
                 session.note(t!(session_cleared));
@@ -4725,6 +4740,7 @@ fn manifest_animated(
             workspace.root(),
             &asked,
             &outcome,
+            bravebot_session::sessions::Front::Terminal,
             bravebot_stamp::BUILD,
         ),
     };
@@ -13185,7 +13201,11 @@ mod tests {
         let conversation = Conversation::new();
         let trust = TrustStore::new("/work");
         let programs = TrustedPrograms::new();
-        let stored = bravebot_session::sessions::Handle::begin(&root, bravebot_stamp::BUILD);
+        let stored = bravebot_session::sessions::Handle::begin(
+            &root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
 
         type_line(&mut session, "delete the tests");
         session.submit().expect("the prompt is sent");
@@ -13261,7 +13281,8 @@ mod tests {
         let workspace = Workspace::new(&root).expect("a workspace");
         let mut trust = TrustStore::new(&root);
         let mut programs = TrustedPrograms::new();
-        let mut stored = sessions::Handle::begin(&root, bravebot_stamp::BUILD);
+        let mut stored =
+            sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
         let mut session = Session::new("none");
         let mut conversation = Conversation::new();
 
@@ -13390,7 +13411,8 @@ mod tests {
         let workspace = Workspace::new(&root).expect("a workspace");
         let mut trust = TrustStore::new(&root);
         let mut programs = TrustedPrograms::new();
-        let mut stored = sessions::Handle::begin(&root, bravebot_stamp::BUILD);
+        let mut stored =
+            sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
         let mut session = Session::new("none");
         let mut conversation = Conversation::new();
 
@@ -14457,7 +14479,8 @@ mod tests {
         let workspace = Workspace::new(&root).unwrap();
         let mut trust = TrustStore::new(&root);
         let mut programs = TrustedPrograms::new();
-        let mut stored = sessions::Handle::begin(&root, bravebot_stamp::BUILD);
+        let mut stored =
+            sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
         let mut session = Session::new("test");
         let mut conversation = Conversation::new();
         for (index, prompt) in ["kept", "failed", "cancelled"].into_iter().enumerate() {
