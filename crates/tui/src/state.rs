@@ -961,7 +961,10 @@ pub struct Session {
     history_search: Option<crate::history_search::Search>,
     /// What the last frame laid the transcript out to.
     pub laid: Laid,
-    /// Confinement in force, reported so the user knows what they have.
+    /// What this platform can confine a process to, reported so the user knows what it offers.
+    ///
+    /// Not a boundary this session is inside: it confines a process running code we did not write,
+    /// and the session starts none of those. The words the screen draws say so.
     pub confinement: String,
     /// How much this session asks before it acts, which one key cycles.
     ///
@@ -1622,8 +1625,8 @@ impl Session {
     /// asked.
     ///
     /// What stays is what belongs to the user rather than to the session: the model, the prompt
-    /// history, and the confinement in force. Re-answering those would be the interface forgetting
-    /// something it was told once, and none of them is a permission over the workspace.
+    /// history, and what the platform can confine. Re-answering those would be the interface
+    /// forgetting something it was told once, and none of them is a permission over the workspace.
     ///
     /// Deliberately not touching the input line, so a prompt half-typed when the user cleared is
     /// still there to send.

@@ -269,7 +269,15 @@ pub fn report(facts: &Facts<'_>) -> Report {
         ),
     );
 
-    lines.push(Line::new(t!(status_confinement), facts.confinement));
+    // The level is what the platform can enforce over a process running code we did not write, and
+    // a session that starts none of those is inside no such boundary. Reported with the note rather
+    // than dropped, because which of the three a machine offers is the question somebody asks this
+    // panel; reported without it, the same line reads as a guarantee over the reads, writes and
+    // programs the session does run, which have never been confined.
+    lines.push(
+        Line::new(t!(status_confinement), facts.confinement)
+            .with_note(t!(status_confinement_nothing_confined)),
+    );
 
     // Only where the mode is not the ordinary one. A line saying "asking" on every session would
     // teach people to skim past exactly the one that matters. Beside confinement because it is the
@@ -1423,6 +1431,32 @@ mod tests {
             !shown.contains("chosen with /effort, but this model reads none")
                 || !shown.contains("whatever the service"),
             "{shown}"
+        );
+    }
+
+    /// The level is a fact about the platform, and nothing this session runs is confined with it,
+    /// so the level standing alone tells somebody their reads, writes and programs sit inside a
+    /// kernel boundary that nothing has put them in.
+    #[test]
+    fn the_confinement_is_reported_as_available_rather_than_in_force() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+
+        let report = report(&facts(&config, &trust));
+        let line = report
+            .lines
+            .iter()
+            .find(|line| line.label.trim() == t!(status_confinement))
+            .expect("the confinement is on the report");
+
+        assert_eq!(
+            line.value, "kernel-enforced",
+            "the level itself was dropped"
+        );
+        assert_eq!(
+            line.note,
+            t!(status_confinement_nothing_confined),
+            "the level stands alone, so the panel reads as a boundary the session is inside"
         );
     }
 

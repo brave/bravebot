@@ -137,9 +137,14 @@ already let it see.
 
 ## Confinement
 
-`bravebot doctor` reports the operating-system confinement available on your platform, the level in
-force and whether the kernel enforces the network denial, printed rather than assumed, because the
-guarantee differs by platform and kernel.
+`bravebot doctor` reports the operating-system confinement available on your platform and whether
+the kernel enforces the network denial, printed rather than assumed, because the guarantee differs
+by platform and kernel.
+
+The opening screen and `/status` name that same platform level, and `/status` says beside it that
+nothing in the session is confined. Confinement bounds a process started to run code Brave Bot did
+not write, so a session that starts none of those is inside no such boundary, and the level is what
+your machine offers rather than something holding the session back.
 
 Where confinement is used, it **fails closed**: if it cannot be established the process does not run,
 rather than running unconfined. A profile starts denying everything and grants accumulate onto it, and

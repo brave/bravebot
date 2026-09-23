@@ -686,6 +686,7 @@ status-premium-in-use = premium, un jeton a été dépensé
 status-premium-not-spent = aucun abonnement utilisé
 status-no-subscription = aucun abonnement configuré
 status-confinement = Confinement
+status-confinement-nothing-confined = cette session ne confine rien
 status-loop = Boucle
 status-loop-every = toutes les { $every }
 status-loop-self-paced = cadencée par chaque tour
@@ -1164,7 +1165,7 @@ manifest-recorded = enregistré sous { $id } ; à relire avec bravebot --resume 
 
 ## L'écran d'accueil
 
-opening-confinement = confinement { $level }
+opening-confinement = confinement disponible : { $level }
 opening-invitation = Posez une question sur cet espace de travail.
 
 
