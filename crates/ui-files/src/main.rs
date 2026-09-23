@@ -247,21 +247,13 @@ mod posix {
                 }
                 Ok(json!({"seeded": seeded}))
             }
-            "hooks.read" | "hooks.replace" => {
+            // Writing only. What the file says is asked of the agent, which is the reader a turn
+            // fires hooks out of, so nothing here decides what one is.
+            "hooks.replace" => {
                 if request.path != "hooks.json" {
                     return Err(invalid("Only the hooks file is allowed"));
                 }
                 let (parent, leaf) = parent_directory(&request.root, "hooks.json", false)?;
-                if request.operation == "hooks.read" {
-                    return match read_at(&parent, &leaf, TEXT_MAX) {
-                        Ok((_, true)) => Err(invalid("Hooks exceed 64 KB")),
-                        Ok((text, false)) => Ok(json!({"text": text})),
-                        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                            Ok(json!({"text": null}))
-                        }
-                        Err(error) => Err(error),
-                    };
-                }
                 let text = request.text.ok_or_else(|| invalid("Missing hooks"))?;
                 if text.len() > TEXT_MAX || text.contains('\0') {
                     return Err(invalid("Hooks must be text under 64 KB"));
@@ -649,7 +641,9 @@ mod posix {
                     ignore: None,
                 })
             };
-            assert!(call("hooks.read", "hooks.json", None, None).unwrap()["text"].is_null());
+            // This channel writes hooks and does not read them: a second reader of that file is a
+            // second answer to what a hook is.
+            assert!(call("hooks.read", "hooks.json", None, None).is_err());
             assert!(call("hooks.replace", "other.json", Some("{}"), None).is_err());
             assert!(call("hooks.replace", "hooks.json", Some("first"), None).is_ok());
             assert!(call("hooks.replace", "hooks.json", Some("overwrite"), None).is_err());

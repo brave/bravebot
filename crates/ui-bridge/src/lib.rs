@@ -21,6 +21,7 @@
 pub mod bridge;
 pub mod emit;
 pub mod fork;
+pub mod hooks;
 pub mod models;
 pub mod protocol;
 pub mod running;

@@ -19,7 +19,7 @@ try {
   page.on('pageerror', e => errors.push(e.message))
   await app.evaluate(({ ipcMain, BrowserWindow }, directory) => {
     const report = { build: 'bravebot 0.9.0 fixture', configured: true, problem: null, model: 'local/test', brave: false, bedrock: false, providers: [{ name: 'Local', credential: 'not required' }], selected: null, layers: [], overrides: [], managed: { path: '/etc/bravebot/managed.json', keys: ['provider'] }, network: { roots: ['/test/roots.pem'], problem: null, trustsNothing: false, proxy: 'proxy.example:8080', authenticated: true, unusableProxy: null, noProxy: 'localhost' } }
-    const state = { report, hooks: { path: '/test/.bravebot/hooks.json', text: '{"hooks":[]}', hooks: [] }, watches: [], replies: [], turns: 0, conflict: false }
+    const state = { report, hooks: { path: '/test/.bravebot/hooks.json', text: '{"hooks":[]}', entire: true, hooks: [] }, watches: [], replies: [], turns: 0, conflict: false, unreadable: false }
     const emit = (event, data, session = 's-a') => BrowserWindow.getAllWindows()[0].webContents.send('bravebot:event', { event, data, session })
     globalThis.agentSettingsFixture = { state, emit }
     const replace = (name, fn) => { ipcMain.removeHandler(name); ipcMain.handle(name, fn) }
@@ -30,6 +30,8 @@ try {
       if (method === 'session.open') return { ok: { session: `s-${params.id}`, model: 'local/test', record: { ...rows.find(r => r.id === params.id), turns: 0, tokens: 0 }, said: [], todos: {}, trust: { known: true, rules: [] }, archived: 0, contextTokens: 0 } }
       if (method === 'models.list') return { ok: { models: [{ id: 'local/test', name: 'Test model', provider: 'Local', premium: false, contextWindow: 32000 }], defaultModel: 'local/test', warnings: [] } }
       if (method === 'settings.inspect') return { ok: report }
+      // Stands in for the agent's reader: the panel is told what a hook is rather than deciding.
+      if (method === 'hooks.inspect') return state.unreadable ? { error: { code: 'internal', message: 'The hooks file could not be read back.' } } : { ok: state.hooks }
       if (method === 'watches.add') { state.watches.push({ number: 1, path: params.path, state: 'watching', remainingSeconds: 604800, armedBy: 0 }) }
       if (method === 'watches.stop') state.watches = params.all ? [] : state.watches.filter(w => w.number !== params.number)
       if (method.startsWith('watches.')) return { ok: { watches: state.watches, busy: false } }
@@ -38,10 +40,9 @@ try {
       return { ok: {} }
     })
     replace('bravebot:settings:select', (_, clear) => { report.selected = clear ? null : '/test/override.json'; report.layers = clear ? [] : [report.selected]; return report })
-    replace('bravebot:hooks:read', () => state.hooks)
     replace('bravebot:hooks:save', (_, text, expected) => {
-      if (state.conflict || expected !== state.hooks.text) throw new Error('Hooks changed on disk. Reload before saving.')
-      state.hooks = { ...state.hooks, text, hooks: JSON.parse(text).hooks }; return state.hooks
+      if (state.conflict || expected !== state.hooks.text) throw new Error('File changed since this editor opened. Reopen it to review the latest version.')
+      state.hooks = { ...state.hooks, text, hooks: JSON.parse(text).hooks.map(hook => ({ tool: null, ...hook, firesForNothing: Boolean(hook.tool) && hook.on !== 'tool-finished' })) }
     })
     replace('bravebot:files:list', () => ({ path: '', rows: [], truncated: false }))
   }, directory)
@@ -63,6 +64,10 @@ try {
   await dialog.getByRole('tab', { name: 'Hooks', exact: true }).click()
   await dialog.getByText('No hooks configured.', { exact: true }).waitFor()
   await dialog.getByRole('button', { name: 'Add hook', exact: true }).click()
+  // An entry with no program is one the agent reads no hook out of, and a file this panel wrote and
+  // the agent cannot read whole is a file this panel then refuses to edit.
+  await dialog.getByRole('button', { name: 'Save hooks', exact: true }).click()
+  await dialog.getByRole('alert').filter({ hasText: 'Enter a program for every hook' }).waitFor()
   await dialog.getByLabel('Program', { exact: true }).fill('/usr/bin/notify-send')
   await dialog.getByRole('button', { name: 'Add argument', exact: true }).click()
   await dialog.getByLabel('Argument 1', { exact: true }).fill('Done; $(never execute)')
@@ -73,10 +78,41 @@ try {
   await app.evaluate(() => { globalThis.agentSettingsFixture.state.conflict = true })
   await dialog.getByLabel('Program', { exact: true }).fill('/usr/bin/echo')
   await dialog.getByRole('button', { name: 'Save hooks', exact: true }).click()
-  await dialog.getByRole('alert').filter({ hasText: 'changed on disk' }).waitFor()
+  await dialog.getByRole('alert').filter({ hasText: 'changed since this editor opened' }).waitFor()
   await app.evaluate(() => { globalThis.agentSettingsFixture.state.conflict = false })
   await dialog.getByRole('button', { name: 'Save hooks', exact: true }).click()
   await dialog.getByText('Hooks saved. They apply when the next turn starts.').waitFor()
+  // A write that landed and a reading that did not is not a stale editor: what the next save
+  // expects to find is the text this one wrote.
+  await app.evaluate(() => { globalThis.agentSettingsFixture.state.unreadable = true })
+  await dialog.getByLabel('Program', { exact: true }).fill('/usr/bin/true')
+  await dialog.getByRole('button', { name: 'Save hooks', exact: true }).click()
+  await dialog.getByRole('alert').filter({ hasText: 'could not be read back' }).waitFor()
+  await app.evaluate(() => { globalThis.agentSettingsFixture.state.unreadable = false })
+  await dialog.getByRole('button', { name: 'Save hooks', exact: true }).click()
+  await dialog.getByText('Hooks saved. They apply when the next turn starts.').waitFor()
+  // An entry naming a tool on a turn moment is inert, and the agent is what says so.
+  await app.evaluate(() => { globalThis.agentSettingsFixture.state.hooks = { path: '/test/.bravebot/hooks.json', text: '{"hooks":[{"on":"turn-started","tool":"write_file","run":["fmt"]}]}', entire: true, hooks: [{ on: 'turn-started', tool: 'write_file', run: ['fmt'], firesForNothing: true }] } })
+  await dialog.getByRole('button', { name: 'Reload hooks', exact: true }).click()
+  await dialog.getByRole('alert').filter({ hasText: 'This hook fires for nothing' }).waitFor()
+  // Taking the advice keeps the filter the notice was about. The notice is the agent's answer about
+  // the file on disk, so an edit clears it until the file has been read again.
+  await dialog.locator('.hook-editor select').selectOption('tool-finished')
+  assert.equal(await dialog.getByLabel('Tool filter (optional)', { exact: true }).inputValue(), 'write_file', 'choosing the moment the filter works at keeps the filter')
+  await dialog.getByRole('alert').filter({ hasText: 'This hook fires for nothing' }).waitFor({ state: 'detached' })
+  await dialog.getByRole('button', { name: 'Save hooks', exact: true }).click()
+  await dialog.getByText('Hooks saved. They apply when the next turn starts.').waitFor()
+  assert.deepEqual(await app.evaluate(() => globalThis.agentSettingsFixture.state.hooks.hooks[0]), { on: 'tool-finished', tool: 'write_file', run: ['fmt'], firesForNothing: false })
+  // A file the agent only partly read is the person's to edit: a form composing it back from the
+  // entries it did read would drop the rest.
+  await app.evaluate(() => { globalThis.agentSettingsFixture.state.hooks = { path: '/test/.bravebot/hooks.json', text: '{"hooks":[{"on":"turn-started","run":["x"]}],"later":true}', entire: false, hooks: [{ on: 'turn-started', tool: null, run: ['x'], firesForNothing: false }] } })
+  await dialog.getByRole('button', { name: 'Reload hooks', exact: true }).click()
+  await dialog.getByRole('alert').filter({ hasText: 'did not read all of this file' }).waitFor()
+  assert.equal(await dialog.getByLabel('Program', { exact: true }).isDisabled(), true, 'the entries of a file the agent did not wholly read cannot be edited')
+  for (const name of ['Add hook', 'Save hooks']) {
+    assert.equal(await dialog.getByRole('button', { name, exact: true }).isDisabled(), true, `${name} is refused for a file the agent did not wholly read`)
+  }
+  await snap('02b-hooks-unread')
   await page.keyboard.press('Escape')
   await dialog.waitFor({ state: 'hidden' })
   assert.equal(await page.getByRole('button', { name: 'Agent settings', exact: true }).evaluate(el => el === document.activeElement), true)
@@ -128,7 +164,9 @@ try {
   await page.locator('.session').filter({ hasText: 'Agent settings a' }).click()
   await page.getByText('background.md', { exact: true }).waitFor()
   await emit('turn.error', { turn: 3, kind: 'cancelled', message: 'cancelled', id: 'a' })
-  assert.equal(await page.getByRole('button', { name: 'Let the planner read once', exact: true }).count(), 0)
+  // Polled rather than read once: the cancellation reaches the renderer over the event channel, so
+  // counting on the next line is a race this script used to win by accident.
+  await page.waitForFunction(() => ![...document.querySelectorAll('button')].some(b => b.textContent === 'Let the planner read once'))
   await page.setViewportSize({ width: 560, height: 780 })
   assert(await page.locator('.conversation-toolbar').evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'toolbar fits narrow layout')
   // The settings dialog is also accessible from the persistent sidebar on small screens.
