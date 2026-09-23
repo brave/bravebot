@@ -1872,6 +1872,9 @@ fn doctor() -> ExitCode {
             // all anything here kept before.
             for held in config.held() {
                 fact(t!(doctor_ends), what_would_end(held));
+                if let Some(noticed) = how_soon_a_leak_is_noticed(held) {
+                    fact(t!(doctor_noticed), noticed);
+                }
                 if let Some(survives) = what_outlives_revoking(held) {
                     fact(t!(doctor_outlives), survives);
                 }
@@ -2173,6 +2176,30 @@ fn what_would_end(held: bravebot_config::Held<'_>) -> String {
         bravebot_config::Held::GatewayToken { host } => {
             t!(doctor_ends_gateway_token, gateway = host)
         }
+    }
+}
+
+/// What `doctor` says about how quickly a leak of a credential would be noticed and acted on,
+/// which CRED-10 asks of a credential standing at Held briefly.
+///
+/// Beside the 'ends' line rather than instead of it: the two answer different questions, and a
+/// person reading them after a key appears somewhere public needs both. What would end it is where
+/// to go; this is how long the leak runs before anybody goes there, and it is the number that says
+/// whether the window is short enough for what the credential reaches.
+///
+/// The figure itself is [`bravebot_config::Held::noticed_within`] and not a number here, so the
+/// sentence a person reads cannot state one the record disagrees with. Which credentials get a
+/// sentence is the record's answer too, and this match is kept separate from it so the two can
+/// disagree and a test can see that they have.
+fn how_soon_a_leak_is_noticed(held: bravebot_config::Held<'_>) -> Option<String> {
+    let minutes = held.noticed_within()?.as_secs() as i64 / 60;
+    match held {
+        bravebot_config::Held::AwsSession => {
+            Some(t!(doctor_noticed_aws_session, minutes = minutes))
+        }
+        bravebot_config::Held::SigningKey
+        | bravebot_config::Held::AwsAccessKey
+        | bravebot_config::Held::GatewayToken { .. } => None,
     }
 }
 
@@ -3042,6 +3069,31 @@ mod tests {
                 what_outlives_revoking(held).is_some(),
                 held.outlives_revocation(),
                 "{held:?} is reported and recorded differently"
+            );
+        }
+    }
+
+    /// CRED-10: the figure for how quickly a leak would be noticed and acted on is reported for
+    /// the credentials the record sizes and no others, and the number a person reads is the one
+    /// the record holds. A sentence stating its own figure drifts from the record the first time
+    /// either is revised, and the reader has no way to tell which of the two they are holding.
+    #[test]
+    fn how_soon_a_leak_is_noticed_is_reported_for_exactly_the_credentials_the_record_sizes() {
+        for held in bravebot_config::Held::all(GATEWAY_HOST) {
+            let reported = how_soon_a_leak_is_noticed(held);
+            assert_eq!(
+                reported.is_some(),
+                held.noticed_within().is_some(),
+                "{held:?} is reported and recorded differently"
+            );
+
+            let (Some(sentence), Some(window)) = (reported, held.noticed_within()) else {
+                continue;
+            };
+            let minutes = (window.as_secs() / 60).to_string();
+            assert!(
+                sentence.contains(&minutes),
+                "{held:?} is reported with a figure the record does not hold: {sentence}"
             );
         }
     }

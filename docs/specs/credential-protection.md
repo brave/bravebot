@@ -371,7 +371,14 @@ arrangement.
 depended on it could be lost by a rota change. The obligation stays because a window nobody sized is
 a number somebody liked.
 
-`verified-by: none`
+**Where it is recorded.** Beside the tier, on the same record [CRED-25](#CRED-25) uses, and read by
+the same surface: `doctor` prints the figure under the account of what would end the credential. The
+tier and the figure are separate answers on that record, so a credential standing at Held briefly
+with nothing sized is a disagreement rather than a silence.
+
+`verified-by: bravebot_config::lib::a_credential_at_held_briefly_is_sized_against_detection_and_one_at_held_is_not`
+`verified-by: bravebot_cli::main::how_soon_a_leak_is_noticed_is_reported_for_exactly_the_credentials_the_record_sizes`
+`verified-by: bravebot_bedrock::credentials::a_session_token_is_what_says_what_would_end_a_credential`
 
 <a id="CRED-11"></a>
 ### CRED-11: a turn does not copy a credential somewhere weaker than where it was

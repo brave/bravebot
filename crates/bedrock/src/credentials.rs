@@ -810,6 +810,14 @@ mod tests {
         // expiry. The session credential has nothing under it in turn.
         assert!(long_lived.held().outlives_revocation());
         assert!(!session.held().outlives_revocation());
+
+        // CRED-10: the session credential is the one whose bound is a window, so it is the one
+        // the record owes a detection figure for. A resolver that called it a long-lived key
+        // would take the obligation off it along with the expiry.
+        assert!(session.held().held_briefly());
+        assert!(session.held().noticed_within().is_some());
+        assert!(!long_lived.held().held_briefly());
+        assert!(long_lived.held().noticed_within().is_none());
     }
 
     /// The expiry is what lets a caller answer "is this still good" without running the CLI again,

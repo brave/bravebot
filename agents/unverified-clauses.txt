@@ -15,7 +15,6 @@ docs/specs/credential-protection.md:CRED-6: a handle the agent can redeem alone 
 docs/specs/credential-protection.md:CRED-7: a bound is decided before issue and enforced beyond the agent's reach
 docs/specs/credential-protection.md:CRED-8: a bound with no end does not pass gate 2
 docs/specs/credential-protection.md:CRED-9: the issuer ends the credential's life, and refresh without authority is not expiry
-docs/specs/credential-protection.md:CRED-10: a brief window is sized against detection, and the size is recorded
 docs/specs/credential-protection.md:CRED-11: a turn does not copy a credential somewhere weaker than where it was
 docs/specs/credential-protection.md:CRED-15: the tree is scanned before it is vouched for
 docs/specs/credential-protection.md:CRED-17: no gate passes because the scan ran

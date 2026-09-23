@@ -182,6 +182,13 @@ doctor-ends-aws-session =
     a session credential: issued by AWS STS for the profile and ends at its own expiry; ended sooner only at its issuer, since `aws sso logout` clears this machine's copy rather than the session behind it
 doctor-ends-gateway-token =
     a gateway bearer token: issued by { $gateway }, which is also the only surface that revokes it; deleting it from the settings file or unsetting the variable ends this machine's custody and leaves the token live there
+# How quickly a leak of a credential would be noticed and acted on, shown for the one arrangement
+# whose bound is a window rather than a revocation. The figure is this deployment's judgement and
+# not a fact about the credential: it decides whether the window is short enough for what the
+# credential reaches, and it neither sets the tier nor moves it.
+doctor-noticed = noticed
+doctor-noticed-aws-session =
+    within about { $minutes } minutes, and only where somebody is reading the account's trail: a call made with the session appears there rather than here, nothing on this machine watches for one, and ending it before its expiry is a request at its issuer
 # Shown only for a credential something is minted from that ending it would not reach, because
 # a line reading "nothing" for the other two is the one people learn to skip.
 doctor-outlives = outlives
