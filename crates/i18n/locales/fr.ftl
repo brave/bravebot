@@ -1119,6 +1119,10 @@ watches-replaced = { $count ->
     [one] { $count } veille active a pris fin : une session n'en fait qu'une à la fois
    *[other] { $count } veilles actives ont pris fin : une session n'en fait qu'une à la fois
     }
+watches-cleared = { $count ->
+    [one] { $count } veille active a pris fin avec la conversation où elle a été posée
+   *[other] { $count } veilles actives ont pris fin avec la conversation où elles ont été posées
+    }
 
 
 ## Coller, déposer et joindre

@@ -1278,6 +1278,10 @@ watches-replaced = { $count ->
     [one] { $count } live watch has ended: a session does one such thing at a time
    *[other] { $count } live watches have ended: a session does one such thing at a time
     }
+watches-cleared = { $count ->
+    [one] { $count } live watch has ended with the conversation it was armed in
+   *[other] { $count } live watches have ended with the conversation they were armed in
+    }
 
 ## Pasting, dropping and attaching
 
