@@ -6,7 +6,8 @@
 //!
 //! - **Its capabilities**, which its kind asked for and the parent's own set narrowed.
 //! - **Its tools**, derived from those capabilities, minus the four a delegate never gets.
-//! - **Its prompt**, which is its kind's and which the planner cannot write a word of.
+//! - **Its prompt**, which its definition and what it holds decide and which the planner cannot
+//!   write a word of.
 //! - **Its bound**, which is its kind's, because nobody is watching a delegate the way a person
 //!   watches a turn: the person is watching the turn, and the turn is blocked.
 //!
@@ -22,7 +23,7 @@
 
 use bravebot_aichat::protocol::Usage;
 use bravebot_core::capability::{Capability, CapabilitySet};
-use bravebot_core::delegate::{DelegateSpec, Kind};
+use bravebot_core::delegate::DelegateSpec;
 use bravebot_core::event::Sink;
 use bravebot_core::policy::{Policy, Vouched};
 use bravebot_core::value::Labelled;
@@ -75,46 +76,108 @@ leave it to whoever asked.";
 /// than one that discovers it by being refused. The absence is what makes it true; this only
 /// makes it legible.
 ///
-/// **Chosen from what the delegate holds rather than from its kind**, because the two stopped
-/// agreeing the moment either could narrow the other. A `worker` spawned by a run that cannot
-/// write, or one whose definition named only read tools, holds no `FileWrite`; told its kind's
-/// paragraph it would plan around a write it is not offered and cannot make, which is the
-/// opposite of what saying this is for.
-fn limits(held: &CapabilitySet) -> &'static str {
-    let kind = if held.contains(&Capability::FileWrite) {
-        Kind::Worker
-    } else if held.contains(&Capability::ShellExec) {
-        Kind::Checker
-    } else {
-        Kind::Reader
-    };
-    match kind {
-        Kind::Reader => {
-            "\n\nYou can read, list, search and hand quarantined files to processors. You cannot \
-             write a file and you cannot run a program, so do not plan around either: what you \
-             produce is the answer, and a change somebody else has to make belongs in it as a \
-             description precise enough to act on."
-        }
-        Kind::Checker => {
-            "\n\nYou can read, list, search, hand quarantined files to processors, and run \
-             programs. You cannot write a file. So you can find out whether this project builds \
-             and what its tests say, and you cannot fix what you find: report the failure with \
-             the command that produced it and enough of what it printed to act on, and leave the \
-             fixing to whoever asked."
-        }
-        Kind::Worker => {
-            "\n\nYou can read, list, search, hand quarantined files to processors, run programs \
-             and write files. Every write is still shown to a person for approval before it \
-             happens, exactly as it would be for the agent that asked you, so say what you \
-             intend to change before you change it and do not retry a write that was refused."
-        }
+/// **Composed from what the delegate holds, one capability at a time.** Not chosen from its kind,
+/// because the two stopped agreeing the moment either could narrow the other, and not chosen from
+/// the nearest kind to what it holds either: a held set is not a point on the ladder of kinds. A
+/// definition naming `edit_file` alone holds writing and no running, which no kind does, and the
+/// nearest kind to it has both. Told that kind's paragraph it would be promised a `run` it is not
+/// offered and could not make, and never told it cannot run one, which is the opposite of what
+/// saying this is for. So reading, running and writing are asked about separately and a set that
+/// is no kind's own is described as it is.
+fn limits(held: &CapabilitySet) -> String {
+    let reads = held.contains(&Capability::FileRead);
+    let runs = held.contains(&Capability::ShellExec);
+    let writes = held.contains(&Capability::FileWrite);
+
+    let mut can = Vec::new();
+    if reads {
+        can.extend([
+            "read",
+            "list",
+            "search",
+            "hand quarantined files to processors",
+        ]);
+    }
+    if runs {
+        can.push("run programs");
+    }
+    if writes {
+        can.push("write files");
+    }
+
+    let mut cannot = Vec::new();
+    if !reads {
+        cannot.push("you cannot read a file, list a directory or search this project");
+    }
+    if !writes {
+        cannot.push("you cannot write a file");
+    }
+    if !runs {
+        cannot.push("you cannot run a program");
+    }
+
+    let mut sentences = Vec::new();
+    if !can.is_empty() {
+        sentences.push(format!("You can {}.", listed(&can)));
+    }
+    if !cannot.is_empty() {
+        let mut sentence = listed(&cannot);
+        // Every fragment above is ASCII and starts with `you`, so the first byte is the whole of
+        // the first character. Capitalised here rather than written twice per fragment, because
+        // which of them opens the sentence is decided by the held set.
+        sentence[..1].make_ascii_uppercase();
+        sentences.push(format!("{sentence}."));
+    }
+    // What follows from the two that are effects. Reading is left out of this: a delegate that
+    // cannot read has nothing to plan around either way, and the sentences below are about what
+    // it may do to the project rather than what it may learn about it.
+    match (writes, runs) {
+        (false, false) => sentences.push(
+            "So do not plan around a write or a run: what you produce is the answer, and a \
+             change somebody else has to make belongs in it as a description precise enough to \
+             act on."
+                .to_string(),
+        ),
+        (false, true) => sentences.push(
+            "So you can find out whether this project builds and what its tests say, and you \
+             cannot fix what you find: report the failure with the command that produced it and \
+             enough of what it printed to act on, and leave the fixing to whoever asked."
+                .to_string(),
+        ),
+        (true, false) => sentences.push(
+            "So you can change a file and you cannot find out whether the change builds or what \
+             the tests say: say in the answer what you changed, and leave the checking to \
+             whoever asked."
+                .to_string(),
+        ),
+        (true, true) => {}
+    }
+    if writes {
+        sentences.push(
+            "Every write is still shown to a person for approval before it happens, exactly as \
+             it would be for the agent that asked you, so say what you intend to change before \
+             you change it and do not retry a write that was refused."
+                .to_string(),
+        );
+    }
+
+    format!("\n\n{}", sentences.join(" "))
+}
+
+/// The items in order, as a sentence reads a list: `and` before the last and commas before the
+/// rest.
+fn listed(items: &[&str]) -> String {
+    match items {
+        [] => String::new(),
+        [only] => (*only).to_string(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
     }
 }
 
 /// The whole of what a delegate is told.
 ///
 /// Its own introduction, then the guidance every planner here gets, then the standing
-/// instruction its definition carried, then what its kind cannot do.
+/// instruction its definition carried, then what it cannot do.
 ///
 /// The middle is shared with the turn a person is watching rather than copied: reading a
 /// workspace, changing a file it may not see, and reporting only what it actually knows are the
@@ -122,9 +185,9 @@ fn limits(held: &CapabilitySet) -> &'static str {
 ///
 /// **The planner still writes no word of this.** What changes with a definition is where the
 /// constant comes from, not who chose it: a definition is trusted configuration or it does not
-/// load, and the driver's own brackets stay outside it. `limits(kind)` goes last so a body cannot
+/// load, and the driver's own brackets stay outside it. `limits(held)` goes last so a body cannot
 /// displace it, which is the difference between a file saying what a delegate is for and a file
-/// telling one it may do what its kind cannot.
+/// telling one it may do what it cannot.
 pub fn prompt_for(held: &CapabilitySet, standing_instruction: &str) -> String {
     format!(
         "{DELEGATED}{}{}{}",
@@ -377,6 +440,7 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bravebot_core::delegate::{Definition, Kind};
 
     /// The middle of a delegate's prompt is the planner's own, so guidance improved for one is
     /// improved for the other. A copy would drift, and what it would drift away from is the
@@ -503,6 +567,109 @@ mod tests {
             "a delegate holding shell_exec was not told it could run one: {prompt}"
         );
         assert!(prompt.contains("You cannot write a file"));
+    }
+
+    /// A held set is not a point on the ladder of kinds, so the paragraph has to be composed
+    /// from the set rather than picked from the nearest kind. A definition naming one write tool
+    /// holds writing and no running, which no kind does, and the nearest kind to it has both:
+    /// handed that kind's paragraph the delegate is promised a `run` it is not offered and could
+    /// not make, and spends its rounds planning around one.
+    #[test]
+    fn a_delegate_holding_writing_and_not_running_is_told_it_cannot_run_a_program() {
+        let fixer = Definition::from_file(
+            "fixer",
+            "fixes one file",
+            Kind::Worker,
+            Some(vec!["edit_file".to_string()]),
+            "",
+            "test",
+        );
+
+        let held = fixer.capabilities();
+        assert!(
+            held.contains(&Capability::FileWrite) && !held.contains(&Capability::ShellExec),
+            "the definition this is about does not hold writing without running: {held:?}"
+        );
+
+        let said = limits(&held);
+        assert!(
+            said.contains("cannot run a program"),
+            "a delegate that cannot run a program was never told so: {said}"
+        );
+        assert!(
+            !said.contains("run programs"),
+            "a delegate holding no shell_exec was told it may run programs: {said}"
+        );
+        assert!(
+            said.contains("write files"),
+            "a delegate holding file_write was not told it may write one: {said}"
+        );
+    }
+
+    /// What a delegate is told it can do and what it is handed are two readings of one held set,
+    /// and the paragraph is the one it plans from: a tool it is promised and not offered costs it
+    /// the round that discovers the absence, and one it holds and is not told about goes unused.
+    #[test]
+    fn what_a_delegate_is_told_it_can_do_is_what_it_is_offered() {
+        for effects in [
+            vec![],
+            vec![Capability::ShellExec],
+            vec![Capability::FileWrite],
+            vec![Capability::FileWrite, Capability::ShellExec],
+        ] {
+            let held: CapabilitySet = [Capability::WebFetch, Capability::FileRead]
+                .into_iter()
+                .chain(effects)
+                .collect();
+            let offered: Vec<String> = crate::tools::for_delegate(&held, None)
+                .into_iter()
+                .map(|tool| tool.function.name)
+                .collect();
+            let said = limits(&held);
+
+            let runs = offered.iter().any(|name| name == "run");
+            assert_eq!(
+                runs,
+                said.contains("run programs"),
+                "offered {offered:?} and told: {said}"
+            );
+            assert_eq!(
+                !runs,
+                said.contains("cannot run a program"),
+                "offered {offered:?} and told: {said}"
+            );
+
+            let writes = offered
+                .iter()
+                .any(|name| name == "write_file" || name == "edit_file");
+            assert_eq!(
+                writes,
+                said.contains("write files"),
+                "offered {offered:?} and told: {said}"
+            );
+            assert_eq!(
+                !writes,
+                said.contains("cannot write a file"),
+                "offered {offered:?} and told: {said}"
+            );
+        }
+    }
+
+    /// Reading is asked about beside the other two rather than assumed, so the paragraph is true
+    /// of any set and not only of the four a definition can produce. A delegate told it may
+    /// search a project it cannot read plans a search and answers from the refusal.
+    #[test]
+    fn a_delegate_holding_no_reading_is_not_told_it_may_read() {
+        let said = limits(&CapabilitySet::from_iter([Capability::WebFetch]));
+
+        assert!(
+            !said.contains("You can "),
+            "a delegate holding nothing it could be offered was told it can do something: {said}"
+        );
+        assert!(
+            said.contains("cannot read a file, list a directory or search this project"),
+            "a delegate that cannot read was never told so: {said}"
+        );
     }
 
     /// A definition that carried no body is the prompt every delegate had before definitions
