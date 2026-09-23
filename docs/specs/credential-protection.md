@@ -10,6 +10,7 @@ governs:
   - crates/ui-bridge/src/settings.rs
   - crates/bedrock/src/credentials.rs
   - crates/core/src/credentials.rs
+  - crates/agent/src/findings.rs
   - crates/sandbox/src/crash.rs
   - crates/skus/src/device.rs
   - crates/skus/src/profile.rs
@@ -541,7 +542,35 @@ shown to the person by a path the planner does not read.
 called it a feature. Writing the findings into the tree hands a map of every credential in the
 repository to the next thing that reads it.
 
-`verified-by: none`
+**Where it is written.** One file per workspace under the state directory, beside the record of
+granted rules and keyed the same way, holding one entry per finding: the kind, the path, the line,
+the fingerprint and the preview. A finding is written whatever was done about it, because what was
+refused, what was approved and what the person declined are equally things in their tree. The
+screen alone is not enough: a line drawn while nobody was looking is gone when the turn ends, and
+the scan exists to tell a person what their own repository holds.
+
+The record is best effort and fails toward silence. No state directory, a full disk, a read-only
+home: each means the findings do not outlive the session, which is where they were before the
+record existed, and none of them refuses a write the person approved. An
+[incognito](incognito.md#INCOG-5) session writes none, and reads the ones an earlier ordinary
+session left.
+
+`verified-by: bravebot_agent::findings::a_finding_one_session_recorded_is_read_back_by_another`
+`verified-by: bravebot_agent::findings::nothing_in_the_record_repeats_the_value`
+`verified-by: bravebot_agent::findings::a_finding_made_in_one_workspace_is_not_read_back_in_another`
+`verified-by: bravebot_agent::findings::a_workspace_sharing_a_key_with_another_does_not_read_its_findings`
+`verified-by: bravebot_agent::findings::a_second_finding_is_added_rather_than_replacing_the_first`
+`verified-by: bravebot_agent::findings::a_record_that_cannot_be_read_holds_nothing`
+`verified-by: bravebot_agent::findings::a_line_nothing_can_read_leaves_the_rest_of_the_record_readable`
+`verified-by: bravebot_agent::findings::an_entry_this_build_does_not_fully_understand_is_not_read`
+`verified-by: bravebot_agent::findings::a_scan_that_found_nothing_leaves_no_record`
+`verified-by: bravebot_agent::findings::a_turn_with_no_session_to_name_still_records_what_it_found`
+`verified-by: bravebot_agent::turn::a_finding_is_written_outside_the_tree_and_outlives_the_turn`
+`verified-by: bravebot_agent::turn::what_the_scan_found_is_told_to_the_person_and_not_to_the_planner`
+`verified-by: bravebot_agent::incognito::no_credential_finding_is_written_down`
+`verified-by: bravebot_agent::incognito::a_finding_an_earlier_session_recorded_is_still_read`
+`verified-by: bravebot_core::credentials::nothing_a_finding_says_repeats_the_value`
+`verified-by: bravebot_core::credentials::a_preview_is_no_part_of_the_value_it_describes`
 
 <a id="CRED-20"></a>
 ### CRED-20: a disposition moves a tier only by passing the gate it attempts
@@ -569,7 +598,8 @@ An acceptance carries an expiry, and lapses into a finding again when it passes.
 
 Entries are added by a person, carry a fingerprint and a reason and an expiry rather than a value,
 and stop applying when the fingerprint stops matching. They live where CRED-19 puts a finding,
-outside the tree, because an allowlist in the tree is the same map CRED-19 refuses to write.
+outside the tree, because an allowlist in the tree is the same map CRED-19 refuses to write. That
+record exists; what an entry cannot yet be matched on is a fingerprint, which is salted per run.
 
 **Why.** An allowlist is necessary or the scan becomes noise everybody clicks through, and it is the
 obvious target: a turn that can add to the baseline can clear its own leak. A fingerprint that no
@@ -798,8 +828,9 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
 
 - **A fingerprint is salted per run and kept nowhere.** It tells two findings in one run apart and
   says nothing between runs, so an acceptance cannot be carried forward and the baseline has
-  nothing to match against. A salt that outlives the run is a file somebody has to keep, and it
-  belongs with the store a finding is written to.
+  nothing to match against. A salt that outlives the run is a file somebody has to keep. The store
+  CRED-19 writes to now exists and holds the fingerprint each run made, so what a durable salt is
+  still waiting on is the decision to keep one rather than somewhere to keep it.
 
   One consequence is worth naming: an inferred finding is re-raised every run, because nothing
   remembers that somebody already said a development password was a development password. A person
@@ -821,6 +852,6 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
 
 - **Most of this is not implemented.** What runs is the scan of what a turn writes, and one
   performer: a credential a vault obtained itself, and a mail send carried out against it so that
-  the asking agent never holds the token. There is no scan of the tree before it is vouched for, no
-  store a finding is written to and no baseline over one, and no authority at the tier these clauses
-  describe. The rest of every clause here is a target.
+  the asking agent never holds the token, and the record CRED-19 writes each finding to. There is no
+  scan of the tree before it is vouched for, no baseline over that record, and no authority at the
+  tier these clauses describe. The rest of every clause here is a target.

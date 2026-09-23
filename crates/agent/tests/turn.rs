@@ -23725,3 +23725,114 @@ fn what_an_edit_changed_is_diffed_inside_the_kernel_before_it_is_released() {
         sink.events()
     );
 }
+
+/// CRED-19's other half: a finding is written outside the tree, so it outlives the turn that made
+/// it. A line on a screen lasts as long as somebody is looking at it, and the scan exists to tell
+/// a person what is in their own tree: one who had scrolled past, or who was not at the terminal,
+/// had been told nothing at all before this record existed.
+///
+/// Both directions of the split matter here. The refused write is the case where nothing landed
+/// and the finding is all there is to keep, and the approved one is the case where the person said
+/// yes and may still want to know afterwards what they said yes to. A record that held only what
+/// was refused would be a record of this program's decisions rather than of the tree.
+///
+/// What is written down is a finding and nothing more: the record itself would be a map of every
+/// secret in the tree if it quoted one, which is the reason it is not in the tree either.
+#[test]
+fn a_finding_is_written_outside_the_tree_and_outlives_the_turn() {
+    // The state directory, which is somewhere else entirely: a record of where the credentials
+    // are is the one thing that must not be committed alongside them.
+    let home = Scratch::new("credential-finding-home");
+
+    // Refused: the value declared itself, so nothing is written and the finding is the whole of
+    // what is left of the turn.
+    let scratch = Scratch::new("credential-finding-recorded");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2(
+            "write_file",
+            &format!(r#"{{"path":".env","contents":"AWS_ACCESS_KEY_ID={DECLARED_KEY}\n"}}"#),
+        ),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("set the project up").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let store = bravebot_agent::findings::Store::new(&home.path, workspace.root());
+    let recorded = store.recorded();
+    assert_eq!(
+        recorded.len(),
+        1,
+        "the turn found a credential and wrote nothing down: {recorded:?}"
+    );
+    let finding = &recorded[0];
+    assert_eq!(finding.kind, bravebot_core::credentials::Kind::AwsAccessKey);
+    assert_eq!(finding.path, ".env");
+    assert_eq!(finding.line, 1);
+    assert!(
+        !store.path().starts_with(&scratch.path),
+        "the record of what is in the tree was written into the tree: {}",
+        store.path().display()
+    );
+    // No part of the value either: a prefix or a suffix is most of what somebody needs to
+    // recognise a key they already hold.
+    let written = std::fs::read_to_string(store.path()).expect("the record");
+    for run in DECLARED_KEY.as_bytes().windows(4) {
+        let piece = std::str::from_utf8(run).expect("the value is ASCII");
+        assert!(
+            !written.contains(piece),
+            "the record carried a piece of the value ({piece}): {written}"
+        );
+    }
+
+    // Approved: the write lands, and the finding is still written down. A person who approves a
+    // development password today is the one who may want the list of them next month.
+    let scratch = Scratch::new("credential-finding-recorded-approved");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2(
+            "write_file",
+            &format!(r#"{{"path":".env","contents":"SECRET_KEY_BASE={GENERATED_SECRET}\n"}}"#),
+        ),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("set the project up").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+    assert!(
+        scratch.path.join(".env").exists(),
+        "the person approved the write and it did not happen, so this half proves nothing"
+    );
+
+    let store = bravebot_agent::findings::Store::new(&home.path, workspace.root());
+    let recorded = store.recorded();
+    assert_eq!(
+        recorded.len(),
+        1,
+        "a write the person approved was not written down: {recorded:?}"
+    );
+    assert_eq!(recorded[0].kind, bravebot_core::credentials::Kind::Assigned);
+    let written = std::fs::read_to_string(store.path()).expect("the record");
+    for run in GENERATED_SECRET.as_bytes().windows(4) {
+        let piece = std::str::from_utf8(run).expect("the value is ASCII");
+        assert!(
+            !written.contains(piece),
+            "the record carried a piece of the value ({piece}): {written}"
+        );
+    }
+}

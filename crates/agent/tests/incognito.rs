@@ -1,10 +1,10 @@
-//! An incognito session adds no remembered line and no granted rule to `~/.bravebot`, and still
-//! honours the ones already there.
+//! An incognito session adds no remembered line, no granted rule and no credential finding to
+//! `~/.bravebot`, and still honours the ones already there.
 //!
-//! Two halves of INCOG-5 over two records. What the mode promises is about what survives a session,
-//! so an answer given in this one does not reach either record, while an answer somebody gave in an
-//! earlier one still stops a prompt: a private session still reads the model and the theme, and
-//! this is the same kind of read.
+//! Two halves of INCOG-5 over three records. What the mode promises is about what survives a
+//! session, so what this one produces does not reach any of them, while what somebody left in an
+//! earlier one is still read: a private session still reads the model and the theme, and these are
+//! the same kind of read.
 //!
 //! # Why a binary of its own
 //!
@@ -38,6 +38,10 @@ impl Scratch {
 
     fn grants(&self) -> bravebot_agent::granted::Store {
         bravebot_agent::granted::Store::new(&self.home, Path::new("/work"))
+    }
+
+    fn findings(&self) -> bravebot_agent::findings::Store {
+        bravebot_agent::findings::Store::new(&self.home, Path::new("/work"))
     }
 }
 
@@ -174,5 +178,69 @@ fn a_rule_an_earlier_session_granted_is_still_honoured() {
         store.granted(std::slice::from_ref(&rule)),
         [&rule],
         "an incognito session read no grant back"
+    );
+}
+
+/// The finding these two tests are about, taken from the scanner so it is the shape a real one has.
+fn a_finding() -> bravebot_core::credentials::Finding {
+    bravebot_core::credentials::scan(".env", "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE", 17)
+        .into_iter()
+        .next()
+        .expect("a finding over the key")
+}
+
+/// INCOG-5, CRED-19: a private session scans what it writes, refuses what it would refuse and puts
+/// the finding on the screen, and none of that reaches the record. The finding is a list of where
+/// the credentials in this tree are, which is exactly the kind of thing a session that leaves
+/// nothing behind may not leave behind.
+#[test]
+fn no_credential_finding_is_written_down() {
+    let scratch = Scratch::new("finds-nothing");
+    assert!(
+        !bravebot_agent::findings::may_be_added_to(),
+        "the record would still have been offered the finding"
+    );
+
+    let finding = a_finding();
+    scratch
+        .findings()
+        .record(&[&finding], Some("a-private-session"));
+
+    assert!(
+        !scratch.findings().path().exists(),
+        "an incognito session wrote a finding into the record"
+    );
+    assert!(scratch.findings().recorded().is_empty());
+}
+
+/// INCOG-5: reading is unchanged here too. A finding an earlier ordinary session recorded in this
+/// workspace is still there to read, for the reason the chosen model and theme are: the promise is
+/// about what survives a session rather than about what the session may know.
+#[test]
+fn a_finding_an_earlier_session_recorded_is_still_read() {
+    let scratch = Scratch::new("still-reads-findings");
+
+    // Seeded as an ordinary session would have left it, past the write this mode declines.
+    let store = scratch.findings();
+    std::fs::create_dir_all(store.path().parent().expect("a parent")).expect("seed the directory");
+    let finding = a_finding();
+    std::fs::write(
+        store.path(),
+        format!(
+            concat!(
+                r#"{{"workspace":"/work","session":"an-earlier-session","#,
+                r#""kind":"aws-access-key","path":".env","line":1,"#,
+                r#""fingerprint":"{}","preview":"{}"}}"#,
+                "\n"
+            ),
+            finding.fingerprint, finding.preview
+        ),
+    )
+    .expect("seed a record");
+
+    assert_eq!(
+        store.recorded(),
+        [finding],
+        "an incognito session read no finding back"
     );
 }

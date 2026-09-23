@@ -155,6 +155,16 @@ impl Scanned {
             .filter(|finding| !finding.kind.is_declared())
             .collect()
     }
+
+    /// Every finding the scan made, whoever put the value in the file.
+    ///
+    /// The two lists above answer "who is asked, and what is refused", which is a question about
+    /// the write. This one answers "what is in this file", which is a question about the tree, and
+    /// a record of findings holds all of them: what was refused, what was approved and what the
+    /// person declined are equally things they may want to read again afterwards.
+    pub fn all(&self) -> Vec<&Finding> {
+        self.authored.iter().chain(self.carried.iter()).collect()
+    }
 }
 
 /// The salt every fingerprint in this run is taken under.

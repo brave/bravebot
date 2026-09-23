@@ -1297,6 +1297,23 @@ pub struct Tools<'a> {
     pub remembering: Option<&'a str>,
 }
 
+impl<'a> Tools<'a> {
+    /// Where this turn's credential findings are written, and under whose name.
+    ///
+    /// Both halves are already here for other reasons, and putting them together in one place is
+    /// what stops a second scan site pairing the state directory with the wrong session.
+    ///
+    /// The answer outlives the borrow taken to ask for it, because both halves are the turn's and
+    /// neither is read from this structure again. That is what lets a call take this and a slot
+    /// store in the same expression.
+    fn recording(&self) -> crate::findings::Recording<'a> {
+        crate::findings::Recording {
+            home: self.home,
+            session: self.remembering,
+        }
+    }
+}
+
 /// The background pipelines a turn has started.
 ///
 /// Dropping this kills whatever is still running, so the turn ending is the end of them.
@@ -2113,7 +2130,14 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         "search" => search(policy, tools.workspace, &arguments),
         "lsp" => lsp(policy, tools, confirmer, &arguments),
         "write_file" => write_file(policy, tools, confirmer, &arguments),
-        "edit_file" => edit_file(policy, tools.workspace, tools.slots, confirmer, &arguments),
+        "edit_file" => edit_file(
+            policy,
+            tools.workspace,
+            tools.slots,
+            tools.recording(),
+            confirmer,
+            &arguments,
+        ),
         // The list on the screen belongs to the turn the person is watching, so a delegate that
         // names this is answered the way any other unknown name is rather than replacing what
         // they were reading with the steps of a sub-task they did not ask about.
@@ -3325,6 +3349,11 @@ fn write_file<S: Sink, C: Confirmer>(
         (replaces && existing_trusted).then_some(&existing),
         &body,
     );
+    // And written down, which is the other half of where a finding goes: a line drawn while
+    // nobody was looking is gone when the turn ends, and the scan exists to tell a person what is
+    // in their own tree (CRED-19). Written before the refusal below and before anybody is asked,
+    // because a refusal, an approval and a decline are equally findings.
+    tools.recording().record(workspace.root(), &scanned.all());
     if !scanned.refused().is_empty() {
         return credential_refusal(&shown_path, &scanned);
     }
@@ -3430,10 +3459,14 @@ fn write_file<S: Sink, C: Confirmer>(
 /// The file is read through the gates rather than peeked at, so the read is recorded and
 /// the contents carry their label. The replacement then happens on released bytes, and the
 /// result is written back only if the file still matches what was read.
+///
+/// `recording` reaches no further than the scan below: an edit's findings are written to the same
+/// record a whole-file write's are.
 fn edit_file<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
     slots: &SlotStore,
+    recording: crate::findings::Recording<'_>,
     confirmer: &mut C,
     arguments: &Value,
 ) -> Produced {
@@ -3513,6 +3546,8 @@ fn edit_file<S: Sink, C: Confirmer>(
     // lands in the tree exactly as one written whole does. The pre-image here is the text the
     // passage was located in, which the edit already read.
     let scanned = policy.scan_a_write("edit_file", &shown_path, Some(&source), &body);
+    // And written down where a whole-file write's findings are, for the same reason (CRED-19).
+    recording.record(workspace.root(), &scanned.all());
     if !scanned.refused().is_empty() {
         return credential_refusal(&shown_path, &scanned);
     }
@@ -8853,6 +8888,10 @@ mod tests {
                 policy,
                 workspace,
                 &SlotStore::new(),
+                // No state directory, so these tests write no findings record. What an edit's
+                // scan records is `crate::findings`'s own tests and the turn-level one beside
+                // them; the question here is about the arguments.
+                crate::findings::Recording::default(),
                 &mut crate::confirm::ApproveWrites,
                 &json!({"path": "a.txt", "old_text": "old", "new_text": "new"}),
             );

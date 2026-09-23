@@ -75,6 +75,7 @@ Everything that should outlive a session lives here:
 | `~/.bravebot/skills/<name>/SKILL.md` | skills available in every project |
 | `~/.bravebot/sessions/<directory>/` | session records and audit trails |
 | `~/.bravebot/lsp/<workspace>/` | a language server's index, one per workspace ([`lsp`](../reference/tools.md#the-index-is-cached-and-it-is-not-small)) |
+| `~/.bravebot/findings/<workspace>.jsonl` | the credentials a turn's own writes were found to hold, one per workspace |
 | `~/.bravebot/history` | prompts you have sent |
 | `~/.bravebot/model` | the model chosen with `/model` |
 | `~/.bravebot/effort` | the effort level chosen with `/effort` |

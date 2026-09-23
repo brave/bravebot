@@ -599,6 +599,10 @@ pub fn run<S: Sink, C: Confirmer, R: Reporter>(
         config,
         egress,
         workspace,
+        crate::findings::Recording {
+            home: task.home.as_deref(),
+            session: task.remembering.as_deref(),
+        },
         planned,
         confirmer,
         reporter,
@@ -955,6 +959,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
     config: &Config,
     egress: &Egress,
     workspace: &Workspace,
+    recording: crate::findings::Recording<'_>,
     planned: Planned,
     confirmer: &mut C,
     reporter: &mut R,
@@ -1101,6 +1106,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
             run_step(
                 &mut policy,
                 workspace,
+                recording,
                 &mut slots,
                 &mut chat,
                 &mut asking,
@@ -1264,6 +1270,7 @@ fn slot_to_fill(step: &Step) -> Result<SlotId, String> {
 fn run_step<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
+    recording: crate::findings::Recording<'_>,
     slots: &mut SlotStore,
     chat: &mut Chat<'_>,
     confirmer: &mut C,
@@ -1440,7 +1447,7 @@ fn run_step<S: Sink, C: Confirmer>(
                 ..Done::default()
             })
         }
-        "write_file" => write(policy, workspace, slots, confirmer, index, step),
+        "write_file" => write(policy, workspace, recording, slots, confirmer, index, step),
         manifest::ANSWER => {
             let Some(slot) = step.reads().first().cloned() else {
                 return Err("no slot to answer from".to_string());
@@ -1535,6 +1542,7 @@ fn locked_filter<S: Sink>(
 fn write<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
+    recording: crate::findings::Recording<'_>,
     slots: &SlotStore,
     confirmer: &mut C,
     index: usize,
@@ -1612,6 +1620,10 @@ fn write<S: Sink, C: Confirmer>(
         (replaces && existing_trusted).then_some(&existing),
         &body,
     );
+    // Written down before the step is refused or put to anybody, exactly as a turn's write does
+    // it: what a planned run found in its own body is as much a thing to read afterwards as what
+    // a turn found (CRED-19).
+    recording.record(workspace.root(), &scanned.all());
     let refused = scanned.refused();
     if !refused.is_empty() {
         let found: Vec<String> = refused.iter().map(|finding| finding.describe()).collect();

@@ -17,6 +17,7 @@ pub mod conversation;
 pub mod delegate;
 pub mod diff;
 pub mod exec;
+pub mod findings;
 pub mod glob;
 pub mod goal;
 pub mod granted;
