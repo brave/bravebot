@@ -229,6 +229,9 @@ fn ask_one<B: Backend>(
             Ok(taken) => {
                 // Asked of the event just handed out, so it is read before the next one replaces it.
                 let arrived_alone = input::the_last_event_arrived_alone();
+                if withdraws_the_offer(&taken) {
+                    offered_to_leave = false;
+                }
                 match input::key_of(&taken) {
                     // Presses only: the interface asks for disambiguated keys, so a release arrives
                     // too, and answering twice grants standing permission on one keystroke.
@@ -256,6 +259,23 @@ fn ask_one<B: Backend>(
             Err(_) => return Answer::Decline,
         }
     }
+}
+
+/// Whether an event withdraws an offer to leave that is standing.
+///
+/// Anything that is not the key that leaves. The offer answers the press just made, so a mouse
+/// report, a resize, and words another program typed all mean somebody is still here and has moved
+/// on. An offer left standing through one of those would let a byte written much later take it,
+/// which turns two presses back into one: the interrupt an editor writes ahead of a virtualenv
+/// activation arrives on its own (#403), so it arms the offer, and without this the offer was still
+/// armed whenever the next one arrived. The session's own ladder keeps the same rule for the same
+/// reason ([INPUT-4](../../../docs/specs/terminal-input.md)).
+///
+/// Separated from the loop so it can be tested without a terminal.
+fn withdraws_the_offer(taken: &event::Event) -> bool {
+    !input::key_of(taken).is_some_and(|key| {
+        key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c')
+    })
 }
 
 /// Interpret one key press, or `None` for a key that answers nothing.
@@ -1047,6 +1067,31 @@ mod tests {
         let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         assert_eq!(answer_for(key, false, false), Response::Nothing);
         assert_eq!(answer_for(key, true, false), Response::Nothing);
+    }
+
+    /// And an offer does not stand about waiting to be taken. The interrupt an editor writes arrives
+    /// on its own, so it arms the offer; if anything happening afterwards left it armed, the next
+    /// such byte would leave, and the two presses would be one again.
+    #[test]
+    fn anything_but_the_key_that_leaves_withdraws_the_offer() {
+        let interrupt = event::Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(
+            !withdraws_the_offer(&interrupt),
+            "the second press of the gesture withdrew the offer it was answering"
+        );
+
+        for taken in [
+            event::Event::Key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE)),
+            event::Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+            event::Event::Resize(80, 24),
+            event::Event::FocusGained,
+            event::Event::Paste("source /tmp/x/env/bin/activate".to_owned()),
+        ] {
+            assert!(
+                withdraws_the_offer(&taken),
+                "{taken:?} left the offer standing"
+            );
+        }
     }
 
     /// Leaving is not a quiet decline: a session that started anyway would be one the user

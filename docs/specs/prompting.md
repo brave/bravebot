@@ -251,7 +251,11 @@ Leaving at such a question ends the session and opens nothing, and only Ctrl-C l
 presses there**, and neither from a key that arrived with others: leaving before a session begins is the one
 outcome nothing undoes, and an interrupt is a single byte another program can write into the terminal,
 which an editor activating a virtualenv does ahead of the line it types
-([INPUT-4](terminal-input.md#INPUT-4) keeps the same rule for the same reason).
+([INPUT-4](terminal-input.md#INPUT-4) keeps the same rule for the same reason). **The offer is
+withdrawn by anything that is not that key**, a resize and words another program typed among them: the
+interrupt an editor writes does arrive on its own and so arms it, and an offer left standing through
+whatever happened next would let the next such byte take it, which is two presses turned back into
+one.
 
 **Why.** A refusal the agent can carry on past is how a person steers without starting over.
 
@@ -264,6 +268,7 @@ which an editor activating a virtualenv does ahead of the line it types
 `verified-by: bravebot_tui::trust_prompt::what_the_question_refuses_is_carried_for_the_box`
 `verified-by: bravebot_tui::trust_prompt::one_interrupt_another_program_wrote_closes_nothing`
 `verified-by: bravebot_tui::trust_prompt::two_interrupts_that_arrived_together_close_nothing`
+`verified-by: bravebot_tui::trust_prompt::anything_but_the_key_that_leaves_withdraws_the_offer`
 `verified-by: bravebot_tui::trust_prompt::only_ctrl_c_leaves`
 `verified-by: bravebot_tui::trust_prompt::leaving_starts_no_session`
 `verified-by: bravebot_tui::trust_prompt::leaving_at_one_of_the_questions_opens_nothing`
