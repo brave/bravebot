@@ -56,6 +56,7 @@ help:
 	@echo "  make check-reviewdog       The PR security scan, on this branch's changes"
 	@echo "  make check-reviewdog-full  The same scan, over the whole tree"
 	@echo "  make check-npm             Install from the lockfile and lint it, as CI does"
+	@echo "  make check-ui              The front end's Node tests, which pin what its renderer marks"
 	@echo "  make check-deps            Advisories, licences, duplicate versions, and sources"
 	@echo "  make check-msrv            Build against the declared minimum toolchain ($(MSRV))"
 	@echo "  make check-windows         Lint the Windows target that ships, cross-compiled"
@@ -227,6 +228,33 @@ check-npm:
 	npm run lint:lockfile
 	npm run lint:lockfile:ui
 
+# The node half of the Front end job. Two of these files are the only thing pinning what the
+# desktop renderer owes the layering spec: that released content is marked by a container it
+# cannot forge, reaches no raw markup and makes the app fetch nothing, and that a replayed
+# message is drawn from the record rather than from its own words. Both are properties of a
+# surface this workspace does not compile, so no Rust test can cite them and nothing here ran
+# them: a renderer change that dropped the marking passed every target this repository has.
+#
+# --ignore-scripts, so no Electron runtime is fetched. None of these tests opens a window: they
+# render through react-dom and load the main-process modules directly. What it costs is that this
+# install also removes a runtime already there, since npm ci empties node_modules and the setup
+# step that puts it back is one of the scripts being skipped: run `npm run setup:electron` in ui/
+# before the next `npm run dev`. The one thing these tests need built is the secure-file helper,
+# which six of them spawn for real rather than stub, so the cargo build is part of the target
+# rather than a prerequisite left to whoever reads a failure.
+#
+# `ls` ahead of the tests because `node --test` given a pattern matching nothing exits 0 having
+# run nothing, so the renamed-away case would pass rather than fail. Two of these files are named
+# in the layering spec's `governs` list and check-spec fails when one goes, which leaves the other
+# eight; this covers all ten without a list here to keep in step.
+#
+# Not part of `check`, which needs no Node and no registry, and not the whole of that CI job
+# either: the Electron build and the walkthrough do fetch the runtime and do open a window.
+.PHONY: check-ui
+check-ui:
+	cargo build -p bravebot-ui-files
+	cd ui && npm ci --ignore-scripts && ls scripts/*.test.mjs >/dev/null && node --test scripts/*.test.mjs
+
 # The dependency policy in deny.toml. CI runs this target rather than cargo-deny's action,
 # so the version below is the only one anywhere and a pass here means what it means there.
 #
@@ -303,7 +331,7 @@ docs-updated-to-sha:
 # container builds and a scan -- so `check` stays the inner loop and this is the
 # before-you-push pass.
 .PHONY: check-all
-check-all: check check-spec check-security check-locales check-versions check-docs check-npm check-deps check-msrv check-windows check-reviewdog
+check-all: check check-spec check-security check-locales check-versions check-docs check-npm check-ui check-deps check-msrv check-windows check-reviewdog
 
 # What each catalog has of the reference, and what it is missing. The build says so too, in a
 # warning, but a warning is only printed when the build script actually runs, so a translator

@@ -151,7 +151,7 @@ from the planner. Giving quarantined content that vocabulary would hand it the s
 is meant to trust, an inch above them.
 
 `verified-by: bravebot_cli::layering::every_presentation_crate_is_named_by_the_clause_that_marks_content`
-`verified-by: by-construction (a surface this workspace compiles is one of its crates, and the test above holds the clause naming them to every row of the table whose constraint opens on presentation, in both directions; the desktop renderer is not one of its crates and is pinned instead by ui/scripts/marking.test.mjs, which renders the real components through react-dom and asserts the three properties above on the markup that comes out, for every card of the transcript that shows released content, and which the Front end CI job runs, while the governs list above holds the file's existence to make check-spec; a surface in neither place has no run to check, which is the known cost below)`
+`verified-by: by-construction (a surface this workspace compiles is one of its crates, and the test above holds the clause naming them to every row of the table whose constraint opens on presentation, in both directions; the desktop renderer is not one of its crates and is pinned instead by ui/scripts/marking.test.mjs, which renders the real components through react-dom and asserts the three properties above on the markup that comes out, for every card of the transcript that shows released content, and which make check-ui and the Front end CI job both run, while the governs list above holds the file's existence to make check-spec; a surface in neither place has no run to check, which is the known cost below)`
 
 <a id="LAYER-6"></a>
 ### LAYER-6: what a message is comes from the record, not from its words
@@ -193,7 +193,7 @@ turn it is the context that turn worked from.
 `verified-by: bravebot_tui::state::a_replayed_composed_message_is_drawn_as_the_message_it_was`
 `verified-by: bravebot_ui_bridge::fork::a_file_the_agent_put_in_front_of_the_planner_is_not_a_prompt`
 `verified-by: bravebot_ui_bridge::fork::a_prompt_that_reads_like_a_composed_message_is_still_where_the_cut_lands`
-`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so it is pinned instead by ui/scripts/ux-state.test.mjs, which loads the real transcript module and asserts that a tagged message is drawn from its fields, that a typed prompt imitating one is drawn as the prompt somebody typed, that a tag the build does not know is quoted rather than dropped, and that the two places counting prompts count the same list; the Front end CI job runs it, while the governs list above holds the file's existence to make check-spec)`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so it is pinned instead by ui/scripts/ux-state.test.mjs, which loads the real transcript module and asserts that a tagged message is drawn from its fields, that a typed prompt imitating one is drawn as the prompt somebody typed, that a tag the build does not know is quoted rather than dropped, and that the two places counting prompts count the same list; make check-ui and the Front end CI job both run it, while the governs list above holds the file's existence to make check-spec)`
 
 ## Open questions
 
@@ -248,13 +248,11 @@ turn it is the context that turn worked from.
   depending on `bravebot-net` keeps this crate at no dependencies, which is what makes "auth only"
   checkable by reading its manifest.
 
-- **What the desktop renderer is held to is pinned outside `make check`.** The three properties
-  [LAYER-5](#LAYER-5) states for it are asserted by `ui/scripts/marking.test.mjs`, and what
-  [LAYER-6](#LAYER-6) asks of a surface by `ui/scripts/ux-state.test.mjs`. No Makefile target runs
-  either: they need the front end's own dependency tree, so the Front end CI job is what runs them,
-  after an `npm ci` and a build. A renderer change that drops the marking, or that goes back to
-  reading a message's words to decide what it is, therefore passes every check this repository
-  documents for a commit, and a pull request is the first thing to say so.
+- **What the desktop renderer is held to is not in `make check`.** The properties
+  [LAYER-5](#LAYER-5) and [LAYER-6](#LAYER-6) state for it are asserted by Node tests rather than
+  Rust ones, so they are gated by `make check-ui`, which is in `check-all` and not in `check`. A
+  renderer change that drops the marking, or that goes back to reading a message's words to decide
+  what a row is, therefore passes the check a commit is expected to pass.
 
 - **A front end in another repository reaches nothing here.** The clause about marking is addressed
   to any surface, and the surfaces checked against it are the crates in this workspace and the

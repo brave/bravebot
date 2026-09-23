@@ -29,7 +29,8 @@ advice, and write approvals show the processor's remark beside the diff.
   a local fake gateway, real lifecycle hook subprocesses, context measurements and stop/close.
   Uses an isolated agent home; no paid inference or real credentials.
 - `npm run build`: bridge and secure-file helper builds, TypeScript, and Electron bundles.
-- After building, `node --test scripts/*.test.mjs`: renderer state, models, file access,
+- `make check-ui` from the repository root, or `node --test scripts/*.test.mjs` here after an
+  install and a `cargo build -p bravebot-ui-files`: renderer state, models, file access,
   memory retention, bot grounding, avatar motion and traits. File tests use the actual
   secure-file helper, the grounding tests included: they assert that a briefing names the
   memory file and quotes no byte of it, and that a link at the memory path or at the
@@ -172,9 +173,11 @@ table above. Two jobs:
 - **Lint and test the bridge** is the repository's own `check` job, which runs
   `cargo clippy --all-targets --all-features -- -D warnings` and `cargo test --all --locked`
   over every workspace member. The `Front end` job adds the desktop build, Node regression tests, and
-  the real manual walkthrough under Xvfb with a local model fixture. That job is the only thing
-  that runs `marking.test.mjs`, so it is the gate on the marking rule: no Makefile target reaches
-  it, because it needs this package's dependency tree.
+  the real manual walkthrough under Xvfb with a local model fixture. `make check-ui` at the
+  repository root runs the Node tests on their own, `marking.test.mjs` among them, so the marking
+  rule has a local gate as well as this job: it installs with `--ignore-scripts` and builds only
+  `bravebot-ui-files`, since nothing in that set opens a window. What stays this job's alone is the
+  Electron build and the walkthrough.
 
 The workflow does not run the other Electron drivers, packaged-app checks, or the
 upstream agent's full test suite. Run the applicable local checks above.

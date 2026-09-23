@@ -73,6 +73,19 @@ check` runs it and so does CI, because the tagging path's own refusal fires on r
 is long after the pull request that moved one file and not the others. It carries a `--selftest`,
 which `make check-versions` runs first.
 
+`make check-ui` runs the front end's own Node tests, which are the only thing pinning what the
+desktop renderer owes the layering spec: that released content is marked by a container it cannot
+forge, reaches no raw markup and makes the app fetch nothing, and that a replayed message is drawn
+from the record rather than from its own words. Those are properties of a surface this workspace does
+not compile, so no Rust test can observe them and `make check` never did. It builds
+`bravebot-ui-files` first, because six of these tests spawn that helper for real, and installs with
+`--ignore-scripts`, because none of them opens a window and the Electron runtime is a hundred
+megabytes. That install also removes a runtime already installed, so run `npm run setup:electron` in
+`ui/` before the next `npm run dev`. Run this for a change under `ui/`. It is not part of `make
+check`, which needs no Node and no registry, and it is not the whole of the Front end CI job either:
+the Electron build and the walkthrough do fetch the runtime and do open a window, so CI is still
+where those are decided.
+
 `make check-npm` installs from the lockfile and lints it, as CI does. `make check-deps` decides
 `deny.toml`: an advisory against anything in the tree, a licence the binary cannot ship, a crate the
 build compiles at two versions without a recorded reason, and a dependency from anywhere but
