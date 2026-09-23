@@ -268,6 +268,8 @@ enum WrittenKind {
     UrlPassword,
     #[serde(rename = "assigned")]
     Assigned,
+    #[serde(rename = "standalone")]
+    Standalone,
 }
 
 impl WrittenKind {
@@ -282,6 +284,7 @@ impl WrittenKind {
             Kind::PrivateKey => Self::PrivateKey,
             Kind::UrlPassword => Self::UrlPassword,
             Kind::Assigned => Self::Assigned,
+            Kind::Standalone => Self::Standalone,
         }
     }
 
@@ -296,6 +299,7 @@ impl WrittenKind {
             Self::PrivateKey => Kind::PrivateKey,
             Self::UrlPassword => Kind::UrlPassword,
             Self::Assigned => Kind::Assigned,
+            Self::Standalone => Kind::Standalone,
         }
     }
 }
@@ -386,6 +390,27 @@ mod tests {
         let scratch = Scratch::new("findings-across-sessions");
         let finding = found("config.yml", 3);
         scratch.store("/work").record(&[&finding], Some("first"));
+
+        assert_eq!(scratch.store("/work").recorded(), [finding]);
+    }
+
+    /// CRED-19: a key standing as a whole file is recorded as that, not dropped or read back as a
+    /// kind the scanner did not report.
+    #[test]
+    fn a_key_standing_as_a_whole_file_is_read_back_as_one() {
+        let scratch = Scratch::new("findings-standalone");
+        let finding = bravebot_core::credentials::scan(
+            "config/master.key",
+            "c8f1a0b4d2e6f7a9c3b5d8e0f2a4c6b8d1e3f5a7\n",
+            17,
+        )
+        .into_iter()
+        .next()
+        .expect("a finding over the whole file");
+        assert_eq!(finding.kind, Kind::Standalone);
+        scratch
+            .store("/work")
+            .record(&[&finding], Some("a-session"));
 
         assert_eq!(scratch.store("/work").recorded(), [finding]);
     }
