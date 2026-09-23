@@ -136,6 +136,55 @@ pub struct RewindPoint {
 /// Where sessions live inside the state directory.
 const SESSIONS: &str = "sessions";
 
+/// Which front end wrote a record.
+///
+/// Two programs share `~/.bravebot` and each writes the same kind of record into it, so a
+/// transcript read after the fact is a transcript of one of them and there is nothing in the
+/// content to say which. The build stamp answers which code ran; this answers which of the two
+/// surfaces that code drew, and the pair is what a reader needs before treating the transcript as
+/// evidence of anything.
+///
+/// Supplied by the caller for the same reason the build is: this crate is below both front ends
+/// and cannot see which one is calling it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Front {
+    /// The `bravebot` command: its full-screen interface, and the runs it takes from the command
+    /// line without drawing one.
+    ///
+    /// One variant rather than two, because both are the same binary reading the same terminal,
+    /// and a manifest run started from a session and one started from the command line are
+    /// deliberately written down the same way.
+    Terminal,
+    /// The desktop application, through the bridge it links the agent into.
+    Desktop,
+}
+
+impl Front {
+    /// The word written into the record.
+    ///
+    /// Stable across releases: a record outlives the build that wrote it, and a word that changed
+    /// would make every record written before the change read as a front end nothing recognises.
+    pub fn recorded(self) -> &'static str {
+        match self {
+            Self::Terminal => "terminal",
+            Self::Desktop => "desktop",
+        }
+    }
+
+    /// What to call it to a person, for a word read back out of a record.
+    ///
+    /// A word this build does not know is shown as it was written rather than dropped. Such a
+    /// record comes from a front end added after this build, and naming it as it named itself says
+    /// more than saying nothing does.
+    fn named(word: &str) -> String {
+        match word {
+            "terminal" => t!(session_front_terminal).to_string(),
+            "desktop" => t!(session_front_desktop).to_string(),
+            other => other.to_string(),
+        }
+    }
+}
+
 /// A session as it is written down.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Record {
@@ -244,6 +293,16 @@ pub struct Record {
     /// `None` for a record written before this was kept.
     #[serde(default)]
     pub build: Option<String>,
+    /// Which front end wrote this record: the word [`Front::recorded`] gives for it.
+    ///
+    /// Beside the build rather than folded into it, because the two go stale independently: the
+    /// same build ships both surfaces, and the same surface is shipped by every build. A reader
+    /// asking why a transcript looks the way it does needs both answers, and a resume in the
+    /// other surface is as much a caveat on what is above it as a resume on other code is.
+    ///
+    /// `None` for a record written before this was kept, which is not read as either surface.
+    #[serde(default)]
+    pub front: Option<String>,
     /// The conversation, which is what resuming restores.
     pub conversation: Snapshot,
     /// Explicit display history; absent in older records.
@@ -677,6 +736,7 @@ pub fn record_manifest_run(
     project: &Path,
     prompt: &str,
     outcome: &Result<bravebot_agent::Outcome, bravebot_agent::TurnError>,
+    front: Front,
     build: &str,
 ) -> Option<String> {
     let (stored, trust) = match outcome {
@@ -709,7 +769,7 @@ pub fn record_manifest_run(
     // matters most: a run nobody is watching that spent its afternoon blocked on an approval
     // nobody was there to give leaves this as the only trace of it.
     let timing = BTreeMap::from([(1, outcome.as_ref().map(|o| o.timing).unwrap_or_default())]);
-    let mut handle = Handle::begin(project, build);
+    let mut handle = Handle::begin(project, front, build);
     handle.save(
         prompt,
         Standing {
@@ -1010,14 +1070,20 @@ pub struct Handle {
     /// Supplied rather than read here because this crate cannot see the one that knows: the front
     /// ends depend on it, not the other way round.
     build: String,
+    /// Which of the two front ends is doing the writing.
+    ///
+    /// Stated when the session opens, like the build and for the same reason, and required of
+    /// every caller rather than defaulted: a surface that forgot to say would be recorded as the
+    /// other one, which is worse than a record that says nothing.
+    front: Front,
 }
 
 impl Handle {
-    /// Begin a session for work in `project`, written down as recorded by `build`.
+    /// Begin a session for work in `project`, written down as recorded by `front` at `build`.
     ///
     /// Nothing is written yet: a session that is opened and abandoned should not leave a record,
     /// or the list fills with launches nobody meant.
-    pub fn begin(project: &Path, build: &str) -> Self {
+    pub fn begin(project: &Path, front: Front, build: &str) -> Self {
         Self {
             id: new_id(),
             project: project.to_path_buf(),
@@ -1026,15 +1092,16 @@ impl Handle {
             title: String::new(),
             wrote: false,
             build: build.to_string(),
+            front,
         }
     }
 
     /// Continue the session a record came from, writing back to the same files.
     ///
-    /// Stamped with the build now running rather than the one in the record: what the rest of this
-    /// session writes is written by this program, and what wrote the turns before it is the caveat
-    /// the record it came from already carries.
-    pub fn resuming(project: &Path, record: &Record, build: &str) -> Self {
+    /// Stamped with the build and the front end now running rather than the ones in the record:
+    /// what the rest of this session writes is written by this program, and what wrote the turns
+    /// before it is the caveat the record it came from already carries.
+    pub fn resuming(project: &Path, record: &Record, front: Front, build: &str) -> Self {
         Self {
             id: record.id.clone(),
             project: project.to_path_buf(),
@@ -1044,6 +1111,7 @@ impl Handle {
             // The record it came from is the one being written back to.
             wrote: true,
             build: build.to_string(),
+            front,
         }
     }
 
@@ -1196,6 +1264,7 @@ impl Handle {
                 .map(|d| d.display().to_string())
                 .collect(),
             build: Some(self.build.clone()),
+            front: Some(self.front.recorded().to_string()),
             conversation: standing.conversation.clone(),
             history: standing.history.map(<[StoredTurn]>::to_vec),
             asides: standing.asides.iter().map(StoredAside::of).collect(),
@@ -1502,6 +1571,27 @@ pub fn branch_note(was: Option<&str>, now: Option<&str>) -> Option<String> {
 pub fn build_note(was: Option<&str>, now: &str) -> Option<String> {
     let was = was?;
     (was != now).then(|| t!(session_build_differs, was = was, now = now))
+}
+
+/// What to say when the front end that recorded a session is not the one resuming it.
+///
+/// The third caveat of the same kind, beside [`branch_note`] and [`build_note`]: the transcript
+/// above was drawn by the other surface, so what a person remembers seeing is not what this one
+/// shows, and a detail they are reading as a symptom may be the other surface's rendering.
+///
+/// Silent for a record with no front end written down, which is one from before this was kept and
+/// has nothing to compare. A word this build does not recognise is remarked on rather than passed
+/// over: it is a surface this build has never heard of, which is at least as much worth saying as
+/// the one it has.
+pub fn front_note(was: Option<&str>, now: Front) -> Option<String> {
+    let was = was?;
+    (was != now.recorded()).then(|| {
+        t!(
+            session_front_differs,
+            was = Front::named(was),
+            now = Front::named(now.recorded())
+        )
+    })
 }
 
 pub fn branch_of(directory: &Path) -> Option<String> {
@@ -2401,7 +2491,7 @@ mod tests {
 
         let root = an_empty_project("bravebot-session-build-stamp");
 
-        let mut handle = Handle::begin(&root, A_BUILD);
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
         save_a_turn_session(&mut handle);
 
         let record = load(&root, handle.id()).expect("the record was not written");
@@ -2411,7 +2501,7 @@ mod tests {
             "the record does not say which build wrote it"
         );
 
-        let mut resumed = Handle::resuming(&root, &record, LATER);
+        let mut resumed = Handle::resuming(&root, &record, Front::Terminal, LATER);
         save_a_turn_session(&mut resumed);
         let again = load(&root, resumed.id()).expect("the record was not written back");
         assert_eq!(
@@ -2436,6 +2526,62 @@ mod tests {
         );
         // Nothing recorded is nothing to compare, rather than something to remark on.
         assert_eq!(build_note(None, "0.1.0 (bbbbbbb)"), None);
+    }
+
+    /// Two programs write into one store, so a record is evidence about whichever of them wrote
+    /// it, and nothing in what a session holds says which. Writing the surface on the way out is
+    /// what makes the word there at all; writing the one now running rather than the one the
+    /// record arrived with is what keeps it about the turns it stands beside, which is the same
+    /// reason the build stamp is taken from the program resuming.
+    #[test]
+    fn a_record_says_which_front_end_wrote_it() {
+        let root = an_empty_project("bravebot-session-front-stamp");
+
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        save_a_turn_session(&mut handle);
+
+        let record = load(&root, handle.id()).expect("the record was not written");
+        assert_eq!(
+            record.front.as_deref(),
+            Some("terminal"),
+            "the record does not say which front end wrote it"
+        );
+
+        let mut resumed = Handle::resuming(&root, &record, Front::Desktop, A_BUILD);
+        save_a_turn_session(&mut resumed);
+        let again = load(&root, resumed.id()).expect("the record was not written back");
+        assert_eq!(
+            again.front.as_deref(),
+            Some("desktop"),
+            "the record names the front end that wrote the turns before the resume"
+        );
+
+        forget_the_project(&root);
+    }
+
+    /// Resuming in the other surface is a caveat on the transcript above it, exactly as resuming
+    /// on other code or another branch is: what a person remembers seeing was drawn by a program
+    /// that is not the one about to draw the rest.
+    #[test]
+    fn a_session_written_in_the_other_front_end_says_so() {
+        assert_eq!(front_note(Some("terminal"), Front::Terminal), None);
+        assert_eq!(front_note(Some("desktop"), Front::Desktop), None);
+
+        let note = front_note(Some("desktop"), Front::Terminal)
+            .expect("the other front end is worth saying");
+        assert!(
+            note.contains("desktop app") && note.contains("terminal"),
+            "the note names neither surface: {note}"
+        );
+
+        // Nothing recorded is nothing to compare, rather than something to remark on.
+        assert_eq!(front_note(None, Front::Terminal), None);
+
+        // A surface added after this build is still not this one, and a word it does not know is
+        // shown as it was written rather than swallowed.
+        let unknown = front_note(Some("hologram"), Front::Terminal)
+            .expect("a front end this build has never heard of is worth saying");
+        assert!(unknown.contains("hologram"), "{unknown}");
     }
 
     /// A point whose contents a rewind cannot produce must not read as a file that was never
@@ -2516,6 +2662,7 @@ mod tests {
             programs: Vec::new(),
             directories: Vec::new(),
             build: None,
+            front: None,
             asides: Vec::new(),
             conversation: Snapshot {
                 messages: Vec::new(),
@@ -2748,11 +2895,17 @@ mod tests {
     fn a_manifest_run_is_recorded_apart_from_the_session() {
         let root = an_empty_project("bravebot-session-manifest-run");
 
-        let mut session = Handle::begin(&root, A_BUILD);
+        let mut session = Handle::begin(&root, Front::Terminal, A_BUILD);
         save_a_turn_session(&mut session);
 
-        let run = record_manifest_run(&root, "summarise the specs", &a_failed_run(), A_BUILD)
-            .expect("the run was not written down");
+        let run = record_manifest_run(
+            &root,
+            "summarise the specs",
+            &a_failed_run(),
+            Front::Terminal,
+            A_BUILD,
+        )
+        .expect("the run was not written down");
 
         assert_ne!(run, session.id(), "the run took the session's own record");
 
@@ -2783,10 +2936,16 @@ mod tests {
     fn a_session_that_started_a_run_can_still_be_resumed() {
         let root = an_empty_project("bravebot-session-manifest-resumable");
 
-        let mut session = Handle::begin(&root, A_BUILD);
+        let mut session = Handle::begin(&root, Front::Terminal, A_BUILD);
         save_a_turn_session(&mut session);
-        record_manifest_run(&root, "summarise the specs", &a_failed_run(), A_BUILD)
-            .expect("written");
+        record_manifest_run(
+            &root,
+            "summarise the specs",
+            &a_failed_run(),
+            Front::Terminal,
+            A_BUILD,
+        )
+        .expect("written");
 
         let record = load(&root, session.id()).expect("the session does not load");
         assert!(
@@ -2813,7 +2972,16 @@ mod tests {
         let root = an_empty_project("bravebot-session-manifest-cancelled");
 
         let cancelled = Err(bravebot_agent::TurnError::Cancelled { attempts: None });
-        assert!(record_manifest_run(&root, "summarise the specs", &cancelled, A_BUILD).is_none());
+        assert!(
+            record_manifest_run(
+                &root,
+                "summarise the specs",
+                &cancelled,
+                Front::Terminal,
+                A_BUILD
+            )
+            .is_none()
+        );
         assert!(list(&root).is_empty(), "a stopped run was written down");
 
         forget_the_project(&root);
@@ -2857,7 +3025,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("create");
 
-        let handle = Handle::begin(&root, A_BUILD);
+        let handle = Handle::begin(&root, Front::Terminal, A_BUILD);
         let stamped = crate::audit::Stamped {
             at: 1,
             from: None,
@@ -2891,7 +3059,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("create");
 
-        let mut handle = Handle::begin(&root, A_BUILD);
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
         let empty = bravebot_agent::Conversation::new().snapshot();
         handle.save(
             "delete the tests",
@@ -2946,7 +3114,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("create");
 
-        let mut handle = Handle::begin(&root, A_BUILD);
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
         assert!(handle.rename("release audit"), "the name was refused");
 
         handle.discard_unwritten("release audit");

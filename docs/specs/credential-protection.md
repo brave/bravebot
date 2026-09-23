@@ -6,6 +6,8 @@ governs:
   - crates/config/src/lib.rs
   - crates/config/src/env_var.rs
   - crates/config/src/provider.rs
+  - crates/config/src/settings.rs
+  - crates/ui-bridge/src/settings.rs
   - crates/bedrock/src/credentials.rs
   - crates/core/src/credentials.rs
   - crates/sandbox/src/crash.rs
@@ -590,9 +592,15 @@ program does not own and cannot clear, so what is promised is the buffers it doe
 defend against a debugger attached to a live process, which is the same account and is answered by
 the authority holding the value instead.
 
-**What holds today.** The core dumps, and the buffers a `Secret` owns. The process lowers its core
-dump limit to nothing before it reads the first credential, and every credential the backend
-configuration resolves is kept in a `Secret`, the gateway token in a settings file included.
+**What holds today.** The core dumps, the buffers a `Secret` owns, and the buffers reading a settings
+file makes on the way to one. The process lowers its core dump limit to nothing before it reads the
+first credential, and every credential the backend configuration resolves is kept in a `Secret`, the
+gateway token in a settings file included. Reading that file fills buffers of its own: the text it
+was read into, the document the parse made of it, and whatever a stronger layer displaced by
+restating a gateway a weaker one had stated. The text is cleared as the parse answers, whatever it
+answered, and the document clears itself and what it displaced when it goes. Every reader of a
+settings file holds the document rather than a bare parse, the front end's check of a file somebody
+chose included, so none of them has a clearing to remember.
 
 **What does not, and why.** Three things.
 
@@ -607,16 +615,23 @@ The single-use credentials of an imported subscription are plain strings. They l
 `bravebot-skus`, which [LAYER-1](layering.md#LAYER-1) gives no dependency on any other crate here,
 so reaching `Secret` from there is a layering change rather than a line.
 
-A token read out of a settings file is in the parsed document before it is in a `Secret`, and that
-copy goes back to the allocator intact. The value the program then holds for the run is cleared;
-the one the parse produced on the way to it is not.
+What a settings file's `env` block sets is a plain string for the length of the run. `Settings` keeps
+what each layer said so that the configuration can be built out of it and `doctor` can report which
+file won a name, and a signing key set there is a credential in that map: the `Secret` the
+configuration builds out of it is cleared, and the map it was read out of has no `Drop` and is not.
+Giving that map one means deciding which names in it are credentials, since the same block carries a
+region and a model name, and the answer to what a person may put there is anything.
 
 `verified-by: bravebot_config::lib::scrubbing_overwrites_the_bytes_where_they_lie`
 `verified-by: bravebot_config::lib::scrubbing_counts_the_bytes_rather_than_the_characters`
+`verified-by: bravebot_config::lib::scrubbing_a_document_reaches_a_token_inside_the_blocks_it_was_written_in`
+`verified-by: bravebot_config::settings::the_text_a_layer_was_parsed_from_is_cleared`
+`verified-by: bravebot_config::settings::a_merge_keeps_the_entry_a_stronger_layer_displaced`
 `verified-by: bravebot_sandbox::crash::disabling_core_dumps_leaves_the_kernel_unable_to_write_one`
 `verified-by: bravebot_sandbox::crash::disabling_core_dumps_does_not_lower_the_hard_limit`
 `verified-by: by-construction (the buffer a Secret owns is unreachable once the Secret is gone, so what a test can run is the scrub rather than the drop; the drop body is one call to the scrub the two tests above pin and does nothing else)`
 `verified-by: by-construction (both entry points that hold a credential, the terminal binary and the graphical front end's transport, call the core dump limit down as their first statement, before the argument vector is read and so before the signing key is unmasked)`
+`verified-by: by-construction (a parsed settings document clears itself when it goes, its drop being one call to each of the two scrubs the tests above pin and nothing else; the four readers of a settings file, the layered read, the single-file parse, the managed layer and the front end's check of a chosen file, each hold one of these and so clear what they parsed by going out of scope)`
 
 <a id="CRED-24"></a>
 ### CRED-24: a credential never travels as a command-line argument

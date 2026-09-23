@@ -146,6 +146,7 @@ impl Bridge {
                 self.settings = path;
                 Ok(crate::settings::report(None, self.settings.as_deref()))
             }
+            "hooks.inspect" => crate::hooks::inspect(),
             "doctor" => Ok(
                 json!({"found": true, "structured": true, "text": serde_json::to_string_pretty(&crate::settings::report(None, self.settings.as_deref())).unwrap_or_default()}),
             ),
@@ -261,6 +262,7 @@ impl Bridge {
                 "turns": record.turns,
                 "tokens": record.tokens,
                 "build": record.build,
+                "front": record.front,
             },
             "said": said,
             "context": record.conversation.context,
@@ -286,6 +288,10 @@ impl Bridge {
             "buildNote": bravebot_session::sessions::build_note(
                 record.build.as_deref(),
                 crate::agent_build(),
+            ),
+            "frontNote": bravebot_session::sessions::front_note(
+                record.front.as_deref(),
+                crate::FRONT,
             ),
         })
     }
@@ -1032,7 +1038,7 @@ impl Bridge {
             if attempt > 0 {
                 thread::sleep(std::time::Duration::from_millis(250));
             }
-            let handle = Handle::begin(project, crate::agent_build());
+            let handle = Handle::begin(project, crate::FRONT, crate::agent_build());
             if !self.id_taken(project, handle.id()) {
                 return Ok(handle);
             }
@@ -1337,7 +1343,7 @@ fn save(
 ) -> usize {
     let handle = state
         .handle
-        .get_or_insert_with(|| Handle::begin(project, crate::agent_build()));
+        .get_or_insert_with(|| Handle::begin(project, crate::FRONT, crate::agent_build()));
 
     let first = state.first_prompt.clone().unwrap_or_default();
     // Taken once and lent to both readers below. A snapshot copies the whole conversation, and

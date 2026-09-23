@@ -542,10 +542,20 @@ pub fn run<S: Sink, C: Confirmer, R: Reporter>(
     // with everything that got as far as existing.
     let mut attempt = Attempt::default();
 
+    // Before the planner's policy exists, because that policy is the network and nothing else: a
+    // planner cannot read. What a person dropped onto the line is read here instead, under a policy
+    // of its own, and the plan is still fixed before anything the plan itself could look at. See
+    // [`crate::attached`].
+    let dropped = match crate::attached::read(workspace, &task.attachments, trust.clone(), sink) {
+        Ok(dropped) => dropped,
+        Err(error) => return Err(stopped(attempt, error)),
+    };
+
     let planned = match plan(
         config,
         egress,
         task,
+        &dropped,
         reporter,
         sink,
         subscription.as_mut(),
@@ -714,6 +724,7 @@ fn plan<S: Sink, R: Reporter>(
     config: &Config,
     egress: &Egress,
     task: &Task,
+    dropped: &[crate::attached::Carried],
     reporter: &mut R,
     sink: &mut S,
     mut subscription: Option<&mut crate::ImportedSubscription>,
@@ -756,16 +767,24 @@ fn plan<S: Sink, R: Reporter>(
     // message, because a screenshot of the thing to be built is the task. It is the user's own
     // keystroke and not something observed, which is why manifest.md MANIFEST-1 admits it and
     // MANIFEST-9 still refuses a pipe.
+    //
+    // One dropped on it goes in the same message and for the same reason: the person dragged that
+    // file onto the window and let the line go, so the path was fixed by their gesture before any
+    // request went out (dropping.md DROP-2). What is different is that a file has to be read, and
+    // the read has already happened, above and outside this policy.
     let mut history = Conversation::new();
-    history.push(match task.images.is_empty() {
-        true => Message::user(opening),
-        false => {
-            // One record per picture, so the trail says what arrived: pasting.md PASTE-8.
+    history.push(match (task.images.is_empty(), dropped.is_empty()) {
+        (true, true) => Message::user(opening),
+        _ => {
+            // One record per picture, so the trail says what arrived: pasting.md PASTE-8. A dropped
+            // file is named in the trail by the read that took it, which is a stronger record than
+            // this and is why nothing is taken for one here.
             for image in &task.images {
                 policy.admit_pasted_image(image.media_type, image.bytes.len());
             }
             Message::user_parts(
                 std::iter::once(Part::Text { text: opening })
+                    .chain(dropped.iter().map(crate::attached::Carried::part))
                     .chain(task.images.iter().map(crate::turn::PastedImage::part))
                     .collect(),
             )

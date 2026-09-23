@@ -5972,13 +5972,21 @@ mod tests {
         // state the part says one word in, so the whole of it is a fixed string rather than a
         // countdown moving while the test reads it.
         let mut looping = Session::new("kernel").allowing_bypass();
-        looping.start_loop(crate::loops::request("5m check the deploy"), Vec::new());
+        looping.start_loop(
+            crate::loops::request("5m check the deploy"),
+            Vec::new(),
+            Vec::new(),
+        );
         // The third is between ticks, where the part is at its longest: the countdown is the widest
         // thing this row ever has to fit, so a sweep that only ever saw the bare word would pass
         // while the form people spend most of a loop looking at was cut in half. Two days out, so
         // `1d 23h` is what it says for the hour after this line rather than something that moves.
         let mut counting_down = Session::new("kernel").allowing_bypass();
-        counting_down.start_loop(crate::loops::request("2d check the deploy"), Vec::new());
+        counting_down.start_loop(
+            crate::loops::request("2d check the deploy"),
+            Vec::new(),
+            Vec::new(),
+        );
         counting_down.complete("done", Vec::new(), 0);
         counting_down.loop_turn_ended(None);
         let counting = t!(loop_hint_next, next = "1d 23h");
@@ -6024,7 +6032,11 @@ mod tests {
     #[test]
     fn the_hint_line_says_a_loop_is_live() {
         let mut session = Session::new("kernel-enforced");
-        session.start_loop(crate::loops::request("5m check the deploy"), Vec::new());
+        session.start_loop(
+            crate::loops::request("5m check the deploy"),
+            Vec::new(),
+            Vec::new(),
+        );
         let word = t!(loop_hint).to_string();
         let hint = hint_row_at(&session, 120, 24);
         assert!(hint.contains(&word), "{hint}");
@@ -6055,7 +6067,11 @@ mod tests {
     fn the_hint_line_says_a_loop_is_live_in_shell_mode_too() {
         let mut session = Session::new("kernel-enforced");
         session.shell = true;
-        session.start_loop(crate::loops::request("5m check the deploy"), Vec::new());
+        session.start_loop(
+            crate::loops::request("5m check the deploy"),
+            Vec::new(),
+            Vec::new(),
+        );
         let hint = hint_row_at(&session, 120, 24);
         assert!(hint.contains(&t!(loop_hint).to_string()), "{hint}");
         assert!(
@@ -6105,7 +6121,11 @@ mod tests {
     #[test]
     fn a_narrow_terminal_gives_up_a_reading_before_the_loop_and_the_loop_before_the_mode() {
         let mut session = Session::new("kernel").allowing_bypass();
-        session.start_loop(crate::loops::request("5m check the deploy"), Vec::new());
+        session.start_loop(
+            crate::loops::request("5m check the deploy"),
+            Vec::new(),
+            Vec::new(),
+        );
         let word = t!(loop_hint).to_string();
 
         // Room for the mode and the loop and not for the reading beside them.

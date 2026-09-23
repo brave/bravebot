@@ -792,6 +792,32 @@ place it genuinely is.
 `verified-by: bravebot_ui_bridge::interop::every_project_is_listed_in_one_order_rather_than_project_by_project`
 `verified-by: bravebot_ui_bridge::dispatch::listing_sessions_never_fails_however_little_is_on_disk`
 
+<a id="SESSION-29"></a>
+### SESSION-29: a record says which surface wrote it, and resuming in the other says so
+
+Beside the build that produced a record, the record names which of the two front ends wrote it.
+The surface is the one doing the writing rather than the one the record arrived with, so a
+resumed session's word describes the turns being added to it and not the turns already there,
+exactly as the build stamp does. Every caller states it, since a surface that could leave it out
+would be recorded as the other one.
+
+Resuming a session the other surface wrote says so, beside the caveats about a different build
+and a different branch. A record with no surface written down says nothing, because it is one
+from before this was kept and has nothing to compare. A word this build does not recognise is
+said as it was written rather than passed over: a front end added later is still not this one.
+
+**Why.** SESSION-28 has both surfaces reading and writing one store, and nothing in what a session
+holds says which of them produced it. A transcript is read after the fact, usually because
+something in it looks wrong, and a detail being read as the agent's behaviour may be the other
+surface's rendering of the same record. Without the word, that has to be inferred from the
+transcript's own symptoms, which is the inference the build stamp exists to remove and the same
+inference in a second dimension. Folding it into the build string instead would tie two facts that
+go stale independently: one build ships both surfaces, and every build ships the same two.
+
+`verified-by: bravebot_session::sessions::a_record_says_which_front_end_wrote_it`
+`verified-by: bravebot_session::sessions::a_session_written_in_the_other_front_end_says_so`
+`verified-by: bravebot_ui_bridge::interop::opening_a_session_the_terminal_wrote_says_which_surface_drew_it`
+
 ## Known costs
 
 - **Two working directories can share a session store.** The directory name is derived by mapping

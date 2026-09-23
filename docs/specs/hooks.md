@@ -7,6 +7,11 @@ governs:
   - crates/agent/src/hooks.rs
   - crates/agent/src/turn.rs
   - crates/agent/src/delegate.rs
+  - crates/ui-bridge/src/hooks.rs
+  - crates/ui-files/src/main.rs
+  - ui/src/shared/agent-settings.ts
+  - ui/src/main/agent-settings.ts
+  - ui/src/renderer/components/AgentSettings.tsx
 documented-by: docs/website/docs/customize/hooks.md
 ---
 
@@ -14,7 +19,7 @@ documented-by: docs/website/docs/customize/hooks.md
 
 A command a person asked to have run when something happens: format after an edit, notify when a
 turn is over. This file covers where one is declared, which moments exist, what a hook is handed,
-what it may decide, and what happens when one goes wrong.
+what it may decide, what happens when one goes wrong, and who reads the declarations back.
 
 What a hook is *not* is a way to write policy. Rules decided in advance about what to ask about and
 what to refuse are [permissions.md](permissions.md), and they are rules rather than programs for
@@ -209,6 +214,40 @@ by hand, and the failure it most often has is a typo.
 `verified-by: bravebot_config::hooks::an_unusable_entry_leaves_the_others_firing`
 `verified-by: bravebot_config::hooks::an_unparseable_file_declares_no_hooks`
 `verified-by: bravebot_config::hooks::an_oversized_file_declares_no_hooks`
+
+<a id="HOOK-8"></a>
+### HOOK-8: one reader decides what a hook is, and what it read is what is shown
+
+The declarations are read in one place. A surface offering somebody their own hooks is told what that
+reader made of the file rather than reading the text itself: the entries, which of them names a call
+that does not happen at its moment, and whether anything in the file was passed over. A surface
+composing the file back from the entries it was given does that only where it was told the whole file
+was read, and otherwise says so and leaves the file to be edited by hand. It may decline to send a
+field somebody left empty, and decides nothing else about what a hook is: a form that wrote an entry
+this reader takes nothing from would have written a file it then refuses to edit.
+
+**Why.** The rules above are lenient deliberately, and [HOOK-7](#HOOK-7) is why: an unknown moment,
+a key this build does not read and an unusable entry are each that much of the file not applying,
+because a mistake in it must not be a program that will not open. A second reader written for an
+editor cannot hold that. Written strictly it refuses files a turn runs, so somebody is shown an error
+about a hook that is firing; written leniently it drops whatever it did not recognise the next time
+this file grows a key, which is somebody's own file rewritten without being asked. The desktop
+interface had the first: its own parser, refusing any file carrying a key this reader passes over, and
+its own pair of file operations to read one through.
+
+Writing the file is a different question and stays where it is. Replacing a fixed name under a pinned
+directory without following a link out of it is machinery, not a second opinion about what a hook is,
+and what it writes is read back by the reader above, so what somebody is shown after saving is what a
+turn would fire.
+
+`verified-by: bravebot_config::hooks::a_file_read_for_showing_reports_the_text_it_was_read_from`
+`verified-by: bravebot_config::hooks::whatever_went_unread_leaves_the_file_not_wholly_read`
+`verified-by: bravebot_config::hooks::a_file_that_is_not_there_is_wholly_read_and_one_too_large_is_not`
+`verified-by: bravebot_config::hooks::an_entry_says_whether_it_fires_for_nothing`
+`verified-by: bravebot_ui_bridge::hooks::a_front_end_is_told_the_entries_the_agent_read`
+`verified-by: bravebot_ui_bridge::hooks::a_file_the_agent_did_not_wholly_read_says_so`
+`verified-by: bravebot_ui_bridge::dispatch::the_hooks_file_is_read_through_the_bridge`
+`verified-by: by-construction (the desktop interface parses no hooks file: ui/src/shared/agent-settings.ts composes one out of the entries the agent reported and reads none, its main process offers a save channel and no read channel, and the helper binary that writes the file answers no read operation for it, which its own test asserts; ui/scripts/drive-agent-settings.mjs drives the panel against a file the agent reports it did not wholly read and asserts the form refuses it, and ui/scripts/drive-manual-walkthrough.mjs edits, fires and removes a real hook through that panel under CI)`
 
 ## The file
 

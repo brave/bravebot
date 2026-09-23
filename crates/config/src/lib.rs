@@ -26,7 +26,8 @@ mod testutil;
 
 pub use managed::{Managed, managed_file};
 pub use settings::{
-    Attribution, PermissionLists, Settings, name_a_settings_file, user_settings_file,
+    Attribution, NotADocument, PermissionLists, Settings, check_document, name_a_settings_file,
+    user_settings_file,
 };
 
 pub mod bedrock;
@@ -260,6 +261,33 @@ pub(crate) fn scrub(value: &mut String) {
     value.clear();
     value.extend(std::iter::repeat_n('\0', length));
     std::hint::black_box(value.as_bytes());
+}
+
+/// Overwrite every value in a parsed settings document, which is where the copy of a credential the
+/// parse made lives until the document goes.
+///
+/// Every value rather than the names a credential is known to arrive under: whoever wrote the file
+/// chose where a token went, and by the time this runs the document has been read and nothing will
+/// ask it anything again. What a map's keys are cannot be reached through one and is a name rather
+/// than a value, so what this covers is what each name was set to.
+///
+/// Assigning `Value::Null` over a string is the mistake available here: it drops the string, which
+/// is the thing that leaves the bytes where the allocator can hand them on.
+pub(crate) fn scrub_document(root: &mut serde_json::Map<String, serde_json::Value>) {
+    root.values_mut().for_each(scrub_value);
+}
+
+/// One value of a document, and whatever is under it.
+///
+/// Recursive over a shape a parse produced, which is a shape [`serde_json`] refused past 128 levels
+/// of nesting, so the depth here is the parser's bound rather than the file's.
+pub(crate) fn scrub_value(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::String(text) => scrub(text),
+        serde_json::Value::Array(values) => values.iter_mut().for_each(scrub_value),
+        serde_json::Value::Object(map) => map.values_mut().for_each(scrub_value),
+        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {}
+    }
 }
 
 impl fmt::Debug for Secret {
@@ -2231,6 +2259,40 @@ mod tests {
             value.as_bytes(),
             vec![0u8; length],
             "the buffer the credential was in still holds bytes of it"
+        );
+    }
+
+    /// A token is where whoever wrote the settings file put it, which is inside two blocks rather
+    /// than at the root of the document.
+    ///
+    /// The value has to stay a string of the same length for the bytes to have been written over:
+    /// a name set to null, or to a shorter string, is a name whose buffer was dropped instead, and
+    /// dropping it is what leaves the token for the allocator.
+    #[test]
+    fn scrubbing_a_document_reaches_a_token_inside_the_blocks_it_was_written_in() {
+        let token = "sk-live-0123456789abcdef";
+        let mut root = match serde_json::from_str(
+            &serde_json::json!({
+                "provider": {"gw": {"options": {"apiKey": token}, "models": [token]}}
+            })
+            .to_string(),
+        ) {
+            Ok(serde_json::Value::Object(root)) => root,
+            _ => panic!("the fixture is not a document"),
+        };
+
+        scrub_document(&mut root);
+
+        let gateway = &root["provider"]["gw"];
+        assert_eq!(
+            gateway["options"]["apiKey"].as_str().expect("a string"),
+            "\0".repeat(token.len()),
+            "the token is still in the buffer the parse put it in"
+        );
+        assert_eq!(
+            gateway["models"][0].as_str().expect("a string"),
+            "\0".repeat(token.len()),
+            "a value inside a list was not reached, and a list is one of the shapes a file states"
         );
     }
 

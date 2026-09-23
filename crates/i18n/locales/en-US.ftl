@@ -750,6 +750,10 @@ status-premium-in-use = premium, a credential was spent
 status-premium-not-spent = no subscription was spent
 status-no-subscription = no subscription configured
 status-confinement = Confinement
+# Beside the level, because the level alone reads as a boundary the session is inside. The level
+# is what this platform can enforce over a process running code we did not write, and the session
+# starts none of those.
+status-confinement-nothing-confined = this session confines nothing
 status-loop = Loop
 status-loop-every = every { $every }
 status-loop-self-paced = paced by each turn
@@ -871,6 +875,9 @@ session-branch-moved = this session ran on { $was }; this checkout is on { $now 
 session-branch-gone = this session ran on { $was }; this checkout is not on a branch
 session-branch-new = this session ran on no branch; this checkout is on { $now }
 session-build-differs = that session ran on bravebot { $was }; this is { $now }
+session-front-differs = that session was written in { $was }; this is { $now }
+session-front-terminal = the terminal
+session-front-desktop = the desktop app
 
 
 ## Themes
@@ -1316,7 +1323,10 @@ manifest-recorded = recorded as { $id }; read it again with bravebot --resume { 
 
 ## The opening screen
 
-opening-confinement = confinement { $level }
+# What this platform can enforce over a process that runs code we did not write, not something the
+# session is running inside: the agent's own work and the programs a person asks for are outside any
+# such boundary. /status carries the second half of that, which there is no room for here.
+opening-confinement = confinement available: { $level }
 opening-invitation = Ask a question about this workspace.
 
 

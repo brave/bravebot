@@ -749,6 +749,9 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
             workspace.root(),
             &task.prompt,
             &outcome,
+            // The same surface the full-screen interface records: one binary, one terminal, and a
+            // run started from a session written down the same way as one started from here.
+            bravebot_session::sessions::Front::Terminal,
             bravebot_stamp::BUILD,
         );
     }
@@ -1467,8 +1470,9 @@ fn interactive(start: bravebot_tui::app::Start, skip_permissions: bool) -> ExitC
         Err(err) => return fail(Ending::Failed, t!(cli_workspace_problem, problem = err)),
     };
 
-    // Reported in the status bar so the guarantee in force is visible for the whole
-    // session rather than assumed.
+    // What the platform offers, which is what the session reports: this confines a process running
+    // code we did not write, and a session starts none of those. Read once here because the answer
+    // cannot change while the session runs.
     let confinement = match bravebot_sandbox::for_current_platform() {
         Ok(sandbox) => named(sandbox.capabilities().level),
         Err(_) => named(bravebot_sandbox::policy::ConfinementLevel::None),

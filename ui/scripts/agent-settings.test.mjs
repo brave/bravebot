@@ -12,33 +12,39 @@ function load(path) {
   new Function('require', 'module', 'exports', source)(id => id === 'electron' ? { app: { getAppPath: () => process.cwd(), isPackaged: false } } : require(id), module, module.exports)
   return module.exports
 }
-const { parseHooks } = load('src/shared/agent-settings.ts')
-const { readHooks, saveHooks } = load('src/main/agent-settings.ts')
+const { composeHooks } = load('src/shared/agent-settings.ts')
+const { saveHooks } = load('src/main/agent-settings.ts')
 const t = load('src/renderer/transcript.ts')
 
-test('hook arguments stay literal and unsupported documents cannot be silently rewritten', () => {
-  const text = JSON.stringify({ hooks: [{ on: 'tool-finished', tool: 'write_file', run: ['formatter', 'two words', '$(touch nope)', ''] }] })
-  assert.deepEqual(parseHooks(text)[0].run, ['formatter', 'two words', '$(touch nope)', ''])
-  for (const document of [[], { hooks: [{ on: 'other', run: ['x'] }] }, { hooks: [{ on: 'turn-started', run: 'x y' }] }, { hooks: [{ on: 'turn-started', tool: 'write_file', run: ['x'] }] }, { hooks: [], extra: true }]) {
-    assert.throws(() => parseHooks(JSON.stringify(document)))
-  }
+test('an edit writes the words as typed and carries nothing the agent does not read', () => {
+  const text = composeHooks([
+    { on: 'tool-finished', tool: 'write_file', run: ['formatter', 'two words', '$(touch nope)', ''], firesForNothing: false },
+    { on: 'turn-started', tool: null, run: ['begin'], firesForNothing: false },
+  ])
+  // The agent's own answer about an entry is not written back into the file it was read from.
+  assert.deepEqual(JSON.parse(text), {
+    hooks: [
+      { on: 'tool-finished', tool: 'write_file', run: ['formatter', 'two words', '$(touch nope)', ''] },
+      { on: 'turn-started', run: ['begin'] },
+    ],
+  })
 })
 
 test('hook saves are explicit, reject conflicts and refuse symlinks', () => {
   const directory = mkdtempSync(join(tmpdir(), 'bravebot-hooks-test-'))
   try {
-    const before = readHooks(directory)
-    const text = JSON.stringify({ hooks: [{ on: 'turn-finished', run: ['echo', 'literal;argument'] }] })
-    const after = saveHooks(directory, text, before.text)
-    assert.equal(after.text, text)
-    assert.throws(() => saveHooks(directory, '{"hooks":[]}', before.text), /changed on disk/)
-    assert.equal(readFileSync(after.path, 'utf8'), text)
-    rmSync(after.path)
+    const path = join(directory, 'hooks.json')
+    const text = composeHooks([{ on: 'turn-finished', tool: null, run: ['echo', 'literal;argument'], firesForNothing: false }])
+    saveHooks(directory, text, null)
+    assert.equal(readFileSync(path, 'utf8'), text)
+    // `expected` is the text the agent last reported, and a file that has moved since is refused.
+    assert.throws(() => saveHooks(directory, composeHooks([]), null), /changed since this editor opened/)
+    assert.equal(readFileSync(path, 'utf8'), text)
+    rmSync(path)
     const outside = join(directory, 'other.json')
     writeFileSync(outside, text)
-    symlinkSync(outside, after.path)
-    assert.throws(() => readHooks(directory))
-    assert.throws(() => saveHooks(directory, '{"hooks":[]}', text))
+    symlinkSync(outside, path)
+    assert.throws(() => saveHooks(directory, composeHooks([]), text))
     assert.equal(readFileSync(outside, 'utf8'), text)
   } finally { rmSync(directory, { recursive: true, force: true }) }
 })

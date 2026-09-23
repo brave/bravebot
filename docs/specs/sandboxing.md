@@ -117,7 +117,7 @@ confined program is told to do.
 
 A backend says what it can enforce rather than what it was asked for, and a policy demanding
 something the backend cannot deliver is refused. Which paths it can name is reported the same way.
-`bravebot doctor` reports the level in force.
+`bravebot doctor` reports the level this platform can enforce.
 
 **Why.** An overstated capability is the same failure as a silent fallback, reached by a different
 road. An understated one costs the caller a grant it did not mean: a caller that cannot ask whether
@@ -249,6 +249,30 @@ decided on and the grant a program got is visible where it can be acted on.
 `verified-by: bravebot_sandbox::policy::resolution_carries_the_network_and_subprocess_grants_unchanged`
 `verified-by: bravebot_sandbox::policy::a_path_wanted_for_reading_and_for_writing_is_named_once_when_it_is_left_out`
 `verified-by: bravebot_sandbox::linux::a_policy_refused_over_an_absent_path_is_one_this_backend_installs_once_it_is_resolved`
+
+<a id="SANDBOX-10"></a>
+### SANDBOX-10: a session reports the confinement this platform offers, not one it is under
+
+The opening screen and `/status` name the level this platform can enforce over a process running
+code we did not write. Neither reports the session as running inside it, and `/status` says beside
+the level that the session confines nothing.
+
+**Why.** The level is a fact about the machine, read before the session opens. What it bounds is a
+process started to run somebody else's code, and a session that starts none of those is inside no
+boundary at all: the agent's own reads and writes are held by the capability set and the label on a
+value, and a program a person asks for runs with the access their own shell would give it. A level
+drawn with nothing beside it is read as a guarantee over all of that, which is
+[SANDBOX-5](#SANDBOX-5)'s overstated capability told to a person instead of to a caller, and the
+person is the one with no backend to check it against.
+
+**The line is a statement, not a count.** Nothing in a session starts a process for confinement to
+bound, so there is nothing to count and the panel says so outright. What it costs is a line that
+whatever first gives a session such a process has to revisit, rather than one that already accounts
+for it.
+
+`verified-by: bravebot_tui::status::the_confinement_is_reported_as_available_rather_than_in_force`
+`verified-by: bravebot_tui::logo::the_mark_names_the_agent_its_confinement_and_its_tier`
+`verified-by: bravebot_tui::logo::a_narrow_pane_still_reports_the_confinement_and_the_tier`
 
 ## Programs a person asked for
 

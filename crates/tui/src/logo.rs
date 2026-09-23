@@ -155,6 +155,10 @@ fn mark_row(row: &str) -> Line<'static> {
 /// `width` and `available` are the transcript area's. The first decides whether the mark is drawn
 /// at all and the second how far down it floats. A terminal too short for the padding gets none.
 ///
+/// `confinement` is what the platform can enforce over a process that runs code we did not write,
+/// and is deliberately about the platform rather than about this session: nothing the session runs
+/// is inside that boundary. The words say so, and `/status` has the room to say the rest.
+///
 /// `tier` says whether this build can reach the premium host, and is deliberately about the
 /// configuration rather than about the credentials: a batch on disk may be expired, exhausted, or
 /// issued for another environment, so finding one would not settle the tier either. What was
@@ -250,7 +254,9 @@ mod tests {
     }
 
     /// The mark says nothing a screen reader or a narrow pane can use, so the name is written
-    /// out too, next to the confinement the session is running under.
+    /// out too, next to the confinement this platform offers. Offers rather than applies: a person
+    /// who reads a level here as a boundary around the session has been told the opposite of what
+    /// is true of every read, write and program it runs.
     ///
     /// The tier is beside it because a person who is paying for premium wants to know at a glance
     /// that this session can reach it. Learning otherwise from a worse answer several turns in is
@@ -259,18 +265,24 @@ mod tests {
     fn the_mark_names_the_agent_its_confinement_and_its_tier() {
         let all = rows(WIDE, 24).join("\n");
         assert!(all.contains("bravebot"), "{all}");
-        assert!(all.contains("confinement kernel-enforced"), "{all}");
+        assert!(
+            all.contains("confinement available: kernel-enforced"),
+            "{all}"
+        );
         assert!(all.contains("premium available"), "{all}");
         assert!(all.contains("Ask a question"), "{all}");
     }
 
-    /// A pane too narrow for the mark still has to say what the session is running under, since
-    /// dropping the mark must not take the tier and the confinement with it.
+    /// A pane too narrow for the mark still has to say what the platform offers, since dropping
+    /// the mark must not take the tier and the confinement with it.
     #[test]
     fn a_narrow_pane_still_reports_the_confinement_and_the_tier() {
         let narrow = (INDENT.len() + mark_width() - 1) as u16;
         let all = rows(narrow, 24).join("\n");
-        assert!(all.contains("confinement kernel-enforced"), "{all}");
+        assert!(
+            all.contains("confinement available: kernel-enforced"),
+            "{all}"
+        );
         assert!(all.contains("premium available"), "{all}");
     }
 

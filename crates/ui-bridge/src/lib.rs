@@ -21,6 +21,7 @@
 pub mod bridge;
 pub mod emit;
 pub mod fork;
+pub mod hooks;
 pub mod models;
 pub mod protocol;
 pub mod running;
@@ -38,3 +39,10 @@ pub mod wire;
 pub fn agent_build() -> &'static str {
     bravebot_stamp::BUILD
 }
+
+/// Which front end this is, written into every record a turn here saves.
+///
+/// Stated once rather than at each call site, so every record the app writes says the same thing
+/// and the answer sits beside the build it is read with. The terminal writes the other word, and
+/// a resume across the two says so.
+pub const FRONT: bravebot_session::sessions::Front = bravebot_session::sessions::Front::Desktop;

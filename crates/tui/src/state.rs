@@ -439,6 +439,12 @@ pub struct Commanded {
     pub line: String,
     /// The pictures pasted into it, in the order the markers number them.
     pub pasted: Vec<AttachedImage>,
+    /// The files dropped onto it, in the order the markers number them.
+    ///
+    /// Beside the pictures rather than folded into them, because the two reach a request by
+    /// different routes: a picture is bytes that never touched the filesystem, and a dropped file is
+    /// a path something has to read through a gate.
+    pub attached: Vec<Attached>,
 }
 
 /// What the session is doing.
@@ -631,6 +637,50 @@ fn put_back_to_words(line: &str, carried: &[AttachedImage], why: &str) -> String
         settled = settled.replace(&picture.marker, &picture.in_words(why));
     }
     settled
+}
+
+/// A line with every marker in it standing for one of `dropped` replaced by that file's name.
+///
+/// What a file becomes wherever the thing being built cannot be handed the file itself. A name is
+/// enough for that: the planner reads it and goes to the file through the same gate it reads any
+/// other file through, which is what a file dropped onto a line queued mid-turn and a prompt
+/// recalled from the history both already rely on (`dropping.md` DROP-8, DROP-9).
+///
+/// Unlike a picture there is no sentence to write, because the name is the honest answer rather than
+/// a report that the honest answer is missing.
+fn put_back_to_names(line: &str, dropped: &[Attached]) -> String {
+    let mut settled = line.to_string();
+    for file in dropped {
+        settled = settled.replace(&file.marker, &file.name);
+    }
+    settled
+}
+
+/// The same command with the text files it named put back to their names.
+///
+/// What a command whose argument reaches a planner outside any turn is sent as, which is `/btw` and
+/// `/manifest`. A picture and a PDF are read and carried as bytes, because bytes are what the
+/// request can hold. A text file's contents would be a context message, and both of those planners
+/// are precommitted to a context holding the task and the driver's own words and nothing read out
+/// of the tree, so what a text file becomes here is its name.
+///
+/// Nothing is said about it, unlike a picture the command cannot carry: the name is what the file
+/// is, so the planner is given something it can act on and the person reads the question they asked
+/// with the file named in it. A picture is the case where no such name exists, which is why that one
+/// is spoken of and this one is not.
+///
+/// A free function, and beside [`put_back_to_names`] rather than on the session, because it reads
+/// the line and writes nothing: there is nothing here for the box to be told.
+pub fn without_text_files(commanded: Commanded) -> Commanded {
+    let (text, carried) = commanded
+        .attached
+        .into_iter()
+        .partition::<Vec<_>, _>(|file| file.kind == crate::dropped::Kind::Text);
+    Commanded {
+        line: put_back_to_names(&commanded.line, &text),
+        pasted: commanded.pasted,
+        attached: carried,
+    }
 }
 
 /// A paragraph pasted into the line, standing behind the marker written in its place.
@@ -961,7 +1011,10 @@ pub struct Session {
     history_search: Option<crate::history_search::Search>,
     /// What the last frame laid the transcript out to.
     pub laid: Laid,
-    /// Confinement in force, reported so the user knows what they have.
+    /// What this platform can confine a process to, reported so the user knows what it offers.
+    ///
+    /// Not a boundary this session is inside: it confines a process running code we did not write,
+    /// and the session starts none of those. The words the screen draws say so.
     pub confinement: String,
     /// How much this session asks before it acts, which one key cycles.
     ///
@@ -1622,8 +1675,8 @@ impl Session {
     /// asked.
     ///
     /// What stays is what belongs to the user rather than to the session: the model, the prompt
-    /// history, and the confinement in force. Re-answering those would be the interface forgetting
-    /// something it was told once, and none of them is a permission over the workspace.
+    /// history, and what the platform can confine. Re-answering those would be the interface
+    /// forgetting something it was told once, and none of them is a permission over the workspace.
     ///
     /// Deliberately not touching the input line, so a prompt half-typed when the user cleared is
     /// still there to send.
@@ -4871,44 +4924,55 @@ impl Session {
 
     /// Take the current line as a command to carry out now.
     ///
-    /// The line comes off the box with the pictures it named, the way [`Session::submit`] takes a
-    /// prompt: the box is about to be empty, and a picture left staged behind an empty box is one no
-    /// line can name again. What becomes of them is the caller's, since the caller is what knows
-    /// which command this is.
+    /// The line comes off the box with everything it named, the way [`Session::submit`] takes a
+    /// prompt: the box is about to be empty, and a picture or a dropped file left staged behind an
+    /// empty box is one no line can name again. What becomes of them is the caller's, since the
+    /// caller is what knows which command this is.
     ///
-    /// A folded paste is put back to its words here, unlike a picture. That marker is a handle on
-    /// text only the session holding it can undo, so it goes no further than the box whatever the
-    /// command does with its argument.
+    /// Both are read back out of the line and then cleared, which is what makes deleting a marker
+    /// the way to change your mind on a command line as much as on a prompt (`dropping.md` DROP-6).
+    ///
+    /// A folded paste is put back to its words here, unlike a picture or a dropped file. That marker
+    /// is a handle on text only the session holding it can undo, so it goes no further than the box
+    /// whatever the command does with its argument.
     pub fn take_command(&mut self) -> Commanded {
         let typed = self.input.clone();
         let pasted = self.pasted_named(&typed);
+        let attached = self.attachments_named(&typed);
         let line = self.unfolded(&typed);
         self.pasted.clear();
+        self.attached.clear();
         self.clear_input();
-        Commanded { line, pasted }
+        Commanded {
+            line,
+            pasted,
+            attached,
+        }
     }
 
-    /// The same command with the pictures it named put back to words.
+    /// The same command with everything it named put back to words and names.
     ///
-    /// What a command that has nowhere to put one is carried out as. It is carried out rather than
+    /// What a command that has nowhere to put either is carried out as. It is carried out rather than
     /// sent, so unless its argument goes to a planner there is no request for a picture to travel in:
     /// a marker left in the line would name a screenshot nothing came with, which is the same thing
     /// [`Session::resolved`] keeps a queued prompt from doing. What a command does with its argument
     /// is not something the box knows, so which commands those are is the caller's to say.
     ///
-    /// The person is told, because the picture they pasted did not go where they put it.
-    pub fn without_pictures(&mut self, commanded: Commanded) -> Commanded {
-        if commanded.pasted.is_empty() {
-            return commanded;
+    /// A dropped file becomes its name, which is what it becomes everywhere the file itself cannot
+    /// travel. A picture becomes words saying it was pasted and cannot be shown, and the person is
+    /// told, because a picture is the one thing no name stands in for.
+    pub fn without_what_it_cannot_carry(&mut self, commanded: Commanded) -> Commanded {
+        if !commanded.pasted.is_empty() {
+            self.note(t!(paste_not_with_a_command));
         }
-        self.note(t!(paste_not_with_a_command));
         Commanded {
             line: put_back_to_words(
-                &commanded.line,
+                &put_back_to_names(&commanded.line, &commanded.attached),
                 &commanded.pasted,
                 "a picture cannot join that command",
             ),
             pasted: Vec::new(),
+            attached: Vec::new(),
         }
     }
 
@@ -5086,9 +5150,9 @@ impl Session {
 
     /// Take the command waiting longest, if the session is free to carry one out.
     ///
-    /// The line as it was typed, with the pictures it named, for the caller to dispatch exactly as it
+    /// The line as it was typed, with everything it named, for the caller to dispatch exactly as it
     /// dispatches one typed at rest: waiting changes nothing about what a command can carry, so the
-    /// same caller settles the same pictures for the same commands. Nothing here decides what any
+    /// same caller settles the same markers for the same commands. Nothing here decides what any
     /// command does and nothing here is written down: a command is not part of the conversation, and
     /// it was not while it waited either.
     ///
@@ -5103,6 +5167,7 @@ impl Session {
         Some(Commanded {
             line: taken.prompt,
             pasted: taken.pasted,
+            attached: taken.attached,
         })
     }
 
@@ -5147,6 +5212,7 @@ impl Session {
         &mut self,
         request: crate::loops::Request,
         pasted: Vec<AttachedImage>,
+        attached: Vec<Attached>,
     ) -> Option<String> {
         if self.status != Status::Idle {
             self.note(t!(loop_busy));
@@ -5187,12 +5253,17 @@ impl Session {
         let mut running = crate::loops::Running::begin(request);
         if !pasted.is_empty() {
             self.note(t!(paste_with_the_first_tick));
+        }
+        if !pasted.is_empty() || !attached.is_empty() {
+            // Nothing is said about a dropped file, because a later tick is sent its name and a name
+            // is something the turn can act on: it reads the file through the gate it reads any other
+            // file through, so what the later ticks lose is a round trip rather than the file.
             let settled = put_back_to_words(
-                running.prompt(),
+                &put_back_to_names(running.prompt(), &attached),
                 &pasted,
                 "a picture goes with the first tick of a loop, and this is a later one",
             );
-            running = running.carrying(pasted, settled);
+            running = running.carrying(pasted, attached, settled);
         }
         self.looping = Some(running);
         self.dispatch_tick()
@@ -5620,7 +5691,7 @@ impl Session {
     /// every tick, the way it is for any other prompt.
     fn dispatch_tick(&mut self) -> Option<String> {
         let running = self.looping.as_mut()?;
-        let (prompt, pasted) = running.dispatching();
+        let (prompt, pasted, attached) = running.dispatching();
         let count = running.ticks();
         let quiet = running.quiet();
         if quiet > 0 {
@@ -5628,7 +5699,7 @@ impl Session {
         } else {
             self.note(t!(loop_tick, count = count));
         }
-        Some(self.begin_turn(prompt, (Vec::new(), pasted), None))
+        Some(self.begin_turn(prompt, (attached, pasted), None))
     }
 
     /// Take every waiting prompt back out of the queue and into the box.
@@ -8915,7 +8986,7 @@ mod tests {
         let request = crate::loops::request("5m check the deploy");
 
         assert_eq!(
-            s.start_loop(request, Vec::new()).as_deref(),
+            s.start_loop(request, Vec::new(), Vec::new()).as_deref(),
             Some("check the deploy")
         );
         assert_eq!(s.status, Status::Working);
@@ -8944,6 +9015,7 @@ mod tests {
         let sent = s.start_loop(
             crate::loops::request("15m look at [Image #1]"),
             commanded.pasted,
+            commanded.attached,
         );
 
         assert_eq!(sent.as_deref(), Some("look at [Image #1]"));
@@ -8975,6 +9047,7 @@ mod tests {
         s.start_loop(
             crate::loops::request("15m look at [Image #1]"),
             commanded.pasted,
+            commanded.attached,
         );
         s.complete("the first answer", Vec::new(), 0);
         s.loop_turn_ended(None);
@@ -8991,6 +9064,51 @@ mod tests {
             s.sent_pasted().is_empty(),
             "a later tick carried the picture again"
         );
+    }
+
+    /// A dropped file goes with the first tick and its name with every tick after it, which is the
+    /// difference from a picture: a name is something a turn can act on, so nothing has to be said
+    /// about the later ticks losing anything.
+    ///
+    /// Driven through a real drop rather than a hand-built record, because the name is the thing
+    /// under test and only a drop against a real file produces one.
+    #[test]
+    fn a_later_tick_of_a_loop_names_the_file_the_first_one_carried() {
+        let directory = crate::testutil::scratch_dir("bravebot-state-loop-drop");
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("scratch");
+        std::fs::write(directory.join("shot.png"), [0x89u8, 0x50]).expect("write");
+
+        let mut s = session().in_workspace(&directory);
+        for c in "/loop 15m look at ".chars() {
+            s.type_char(c);
+        }
+        s.drop_files(&directory.join("shot.png").to_string_lossy());
+        let commanded = s.take_command();
+        let sent = s.start_loop(
+            crate::loops::request("15m look at [Image #1]"),
+            commanded.pasted,
+            commanded.attached,
+        );
+
+        assert_eq!(sent.as_deref(), Some("look at [Image #1]"));
+        assert_eq!(
+            s.sent_attachments().len(),
+            1,
+            "the first tick went without the file"
+        );
+        assert_eq!(s.sent_attachments()[0].name, "shot.png");
+
+        s.complete("the first answer", Vec::new(), 0);
+        s.loop_turn_ended(None);
+
+        assert_eq!(s.dispatch_tick().as_deref(), Some("look at shot.png"));
+        assert!(
+            s.sent_attachments().is_empty(),
+            "a later tick carried the file again"
+        );
+
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     /// A watch a turn arranged sends nothing now. The turn asking for it has just taken the look
@@ -9046,7 +9164,7 @@ mod tests {
             ("8d watch", t!(loop_interval_capped, every = "7d")),
         ] {
             let mut s = session();
-            s.start_loop(crate::loops::request(typed), Vec::new());
+            s.start_loop(crate::loops::request(typed), Vec::new(), Vec::new());
 
             assert!(
                 s.transcript.iter().any(|entry| entry.text == said),
@@ -9067,7 +9185,7 @@ mod tests {
         let request = crate::loops::request("5m /status");
 
         assert_eq!(
-            s.start_loop(request, Vec::new()).as_deref(),
+            s.start_loop(request, Vec::new(), Vec::new()).as_deref(),
             Some("/status")
         );
         assert_eq!(s.looping().expect("a loop").prompt(), "/status");
@@ -9153,7 +9271,7 @@ mod tests {
     #[test]
     fn a_watch_asked_for_under_a_loop_or_a_goal_is_refused_and_says_why() {
         let mut under_a_loop = session();
-        under_a_loop.start_loop(crate::loops::request("5m watch"), Vec::new());
+        under_a_loop.start_loop(crate::loops::request("5m watch"), Vec::new(), Vec::new());
         under_a_loop.arm_watch("notes.md", ARMED_IN, saw("first"));
         assert!(under_a_loop.watches().is_empty());
         assert!(
@@ -9184,7 +9302,7 @@ mod tests {
     fn a_person_starting_a_loop_or_a_goal_is_told_the_watches_have_ended() {
         for start in [
             &mut (|s: &mut Session| {
-                s.start_loop(crate::loops::request("5m watch"), Vec::new());
+                s.start_loop(crate::loops::request("5m watch"), Vec::new(), Vec::new());
             }) as &mut dyn FnMut(&mut Session),
             &mut |s: &mut Session| s.start_goal("cargo test exits 0".to_string()),
         ] {
@@ -9238,7 +9356,7 @@ mod tests {
         assert_eq!(s.arming(), Arming::Allowed { free: 7 });
 
         let mut looping = session();
-        looping.start_loop(crate::loops::request("5m watch"), Vec::new());
+        looping.start_loop(crate::loops::request("5m watch"), Vec::new(), Vec::new());
         assert_eq!(looping.arming(), Arming::UnderALoop);
 
         let mut goal = session();
@@ -9392,7 +9510,7 @@ mod tests {
     #[test]
     fn a_tick_waits_for_the_turn_in_flight_and_for_what_is_queued() {
         let mut s = session();
-        s.start_loop(crate::loops::request("5m watch"), Vec::new());
+        s.start_loop(crate::loops::request("5m watch"), Vec::new(), Vec::new());
         s.complete("done", Vec::new(), 0);
 
         // Due, but the person has started something of their own.
@@ -9415,7 +9533,7 @@ mod tests {
     #[test]
     fn a_prompt_typed_during_a_loop_is_not_a_tick_of_it() {
         let mut s = session();
-        s.start_loop(crate::loops::request("watch"), Vec::new());
+        s.start_loop(crate::loops::request("watch"), Vec::new(), Vec::new());
         assert!(s.looping().expect("a loop").ticking());
         s.complete("done", Vec::new(), 0);
         s.loop_turn_ended(Some(crate::loops::Wakeup::asked(120, false)));
@@ -9438,7 +9556,11 @@ mod tests {
     #[test]
     fn a_tick_that_says_when_to_wake_arms_the_next_one() {
         let mut s = session();
-        s.start_loop(crate::loops::request("watch the build"), Vec::new());
+        s.start_loop(
+            crate::loops::request("watch the build"),
+            Vec::new(),
+            Vec::new(),
+        );
         s.complete("done", Vec::new(), 0);
         s.loop_turn_ended(Some(crate::loops::Wakeup::asked(900, false)));
 
@@ -9457,7 +9579,7 @@ mod tests {
     #[test]
     fn clearing_the_session_ends_the_loop() {
         let mut s = session();
-        s.start_loop(crate::loops::request("5m watch"), Vec::new());
+        s.start_loop(crate::loops::request("5m watch"), Vec::new(), Vec::new());
         s.clear();
         assert!(s.looping().is_none());
     }
@@ -9468,7 +9590,7 @@ mod tests {
         assert!(!s.stop_loop());
         assert!(s.transcript.is_empty());
 
-        s.start_loop(crate::loops::request("5m watch"), Vec::new());
+        s.start_loop(crate::loops::request("5m watch"), Vec::new(), Vec::new());
         assert!(s.stop_loop());
         assert!(s.looping().is_none());
     }
@@ -9479,7 +9601,11 @@ mod tests {
     #[test]
     fn the_loop_report_says_what_is_repeating_and_how_to_end_it() {
         let mut s = session();
-        s.start_loop(crate::loops::request("5m check the deploy"), Vec::new());
+        s.start_loop(
+            crate::loops::request("5m check the deploy"),
+            Vec::new(),
+            Vec::new(),
+        );
         s.complete("done", Vec::new(), 0);
         s.loop_turn_ended(None);
         s.transcript.clear();
@@ -9584,14 +9710,14 @@ mod tests {
     #[test]
     fn a_goal_and_a_loop_are_never_both_running() {
         let mut s = session();
-        s.start_loop(crate::loops::request("5m watch"), Vec::new());
+        s.start_loop(crate::loops::request("5m watch"), Vec::new(), Vec::new());
         s.start_goal("cargo test exits 0".to_string());
         assert!(s.looping().is_none(), "the loop outlived the goal");
         assert!(s.goal().is_some());
 
         let mut s = session();
         s.start_goal("cargo test exits 0".to_string());
-        s.start_loop(crate::loops::request("5m watch"), Vec::new());
+        s.start_loop(crate::loops::request("5m watch"), Vec::new(), Vec::new());
         assert!(s.goal().is_none(), "the goal outlived the loop");
         assert!(s.looping().is_some());
     }
