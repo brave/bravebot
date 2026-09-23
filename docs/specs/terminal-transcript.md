@@ -30,6 +30,8 @@ A wrapped reply shows its end as it lands. Scrolling back changes the view and h
 
 `verified-by: bravebot_tui::render::the_end_of_a_wrapped_reply_is_visible_when_it_arrives`
 `verified-by: bravebot_tui::render::scrolling_back_changes_the_view`
+`verified-by: bravebot_tui::render::a_reply_arriving_does_not_drag_a_scrolled_back_view_to_the_tail`
+`verified-by: bravebot_tui::state::a_chunk_of_the_reply_leaves_a_view_scrolled_back_at_rest_where_it_was`
 
 
 <a id="VIEW-2"></a>
