@@ -617,7 +617,10 @@ what each layer said so the configuration can be built out of it and `doctor` ca
 won a name, and a signing key written there is a credential in that map, so the map is overwritten
 when the settings go. Every value in it rather than the names a credential is known to arrive under,
 which is the reading a parsed document already gets and is here for the same reason: the same block
-carries a region and a model name, and what a person may put in it is anything.
+carries a region and a model name, and what a person may put in it is anything. Nothing holds a
+`Settings` for the length of the run, which would be a map that never goes: the one place that used
+to, the list of variables a subprocess is not handed, keeps the names it read out of one rather than
+the settings themselves, and a name is not a credential.
 
 **What does not, and why.** Two things.
 
@@ -640,6 +643,7 @@ program's either.
 `verified-by: bravebot_config::settings::the_text_a_layer_was_parsed_from_is_cleared`
 `verified-by: bravebot_config::settings::a_merge_keeps_the_entry_a_stronger_layer_displaced`
 `verified-by: bravebot_config::settings::what_the_env_block_was_set_to_is_overwritten_where_it_lies`
+`verified-by: bravebot_config::scrub::the_names_a_settings_file_added_are_what_is_kept_rather_than_the_settings`
 `verified-by: bravebot_skus::secret::scrubbing_overwrites_the_bytes_where_they_lie`
 `verified-by: bravebot_skus::secret::scrubbing_counts_the_bytes_rather_than_the_characters`
 `verified-by: bravebot_skus::secret::scrubbing_a_document_reaches_a_token_inside_the_blocks_it_was_written_in`

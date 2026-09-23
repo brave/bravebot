@@ -602,6 +602,14 @@ impl Settings {
             .chain(self.search.time.is_some().then_some("search.maxSeconds"))
             .chain(self.env.keys().map(String::as_str))
     }
+
+    /// Overwrite what the `env` block was set to, which is what the [`Drop`] below is.
+    ///
+    /// A method rather than the body of that drop, because a buffer this owns is unreachable once
+    /// this is gone: what a test can run is the overwriting, and the drop calling it is one line.
+    fn scrub_env(&mut self) {
+        self.env.values_mut().for_each(crate::scrub);
+    }
 }
 
 /// Clear the `env` block rather than return a credential in it to the allocator.
@@ -611,26 +619,17 @@ impl Settings {
 /// it was read out of is a second buffer holding the same bytes for as long as the settings live
 /// ([CRED-23](../../../docs/specs/credential-protection.md#CRED-23)).
 ///
-/// Every value rather than the names a credential is known to arrive under, which is the reading
-/// [`crate::scrub_document`] gives a parsed file and is here for the same reason: the same block
-/// carries a region and a model name, and what a person may put in it is anything. The names are
-/// left alone, a name being what a value was called rather than the value.
+/// Every value rather than the names a credential is known to arrive under, which is the reading a
+/// parsed document already gets and is here for the same reason: the same block carries a region and
+/// a model name, and what a person may put in it is anything. The names are left alone, a name being
+/// what a value was called rather than the value.
 ///
-/// The other fields are not credentials. A gateway token among them is already in a `Secret`, which
-/// clears itself as this goes.
+/// The other fields hold no credential of their own. A gateway token among them is in a
+/// [`crate::Secret`], which clears its own buffer as this goes, and so does each copy of one a
+/// caller cloned out of here.
 impl Drop for Settings {
     fn drop(&mut self) {
         self.scrub_env();
-    }
-}
-
-impl Settings {
-    /// Overwrite what the `env` block was set to, which is what [`Drop`] above is.
-    ///
-    /// A method rather than the body of that drop, because a buffer this owns is unreachable once
-    /// this is gone: what a test can run is the overwriting, and the drop calling it is one line.
-    fn scrub_env(&mut self) {
-        self.env.values_mut().for_each(crate::scrub);
     }
 }
 

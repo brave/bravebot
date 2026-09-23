@@ -38,16 +38,26 @@
 use crate::Settings;
 use std::sync::OnceLock;
 
-/// The settings file, read once per process.
+/// What the settings file named in `run.scrubEnv`, read once per process.
 ///
 /// A file on disk rather than something threaded through every caller: what it holds is a property
 /// of the machine, not of a turn, and a path from here to the turn loop would put a configuration
 /// argument on a dozen signatures that have no other use for one. Read once because a person who
 /// edits it mid-session is describing the next session, and a run whose filtering changed halfway
 /// through a turn would be the harder thing to explain.
-fn settings() -> &'static Settings {
-    static SETTINGS: OnceLock<Settings> = OnceLock::new();
-    SETTINGS.get_or_init(Settings::load)
+///
+/// The names out of the settings rather than the settings themselves, which is all this module wants
+/// of them and is what lets them go. A `Settings` clears its `env` block when it is dropped
+/// ([CRED-23](../../../docs/specs/credential-protection.md#CRED-23)), and one kept in a `static` is
+/// never dropped at all, so caching the whole of it would hold a signing key written into that block
+/// for the length of the run. A name is not a credential: it is what a value was called.
+///
+/// Only the file's half is cached. Whether the filtering is on at all is [`enabled`], which reads
+/// the process environment every time it is asked, so a caller that changes that variable is
+/// answered rather than told what the first call decided.
+fn named_in_the_settings_file() -> &'static Vec<String> {
+    static NAMED: OnceLock<Vec<String>> = OnceLock::new();
+    NAMED.get_or_init(|| Settings::load().scrubbed().map(str::to_string).collect())
 }
 
 /// The credentials this agent holds for itself, which no program it starts is handed.
@@ -65,18 +75,21 @@ pub fn own_credentials() -> Vec<&'static str> {
 
 /// Every variable withheld from a program somebody asked for, as this machine is configured.
 pub fn withheld() -> Vec<String> {
-    names(settings())
+    with_own_credentials(named_in_the_settings_file().iter().map(String::as_str))
 }
 
 /// [`withheld`], against named settings rather than the file, so a test needs no ambient one.
-///
-/// The built-in credentials, then whatever the settings file added.
 pub fn names(settings: &Settings) -> Vec<String> {
+    with_own_credentials(settings.scrubbed())
+}
+
+/// The built-in credentials, then whatever a settings file added that is not already among them.
+fn with_own_credentials<'a>(named: impl Iterator<Item = &'a str>) -> Vec<String> {
     if !enabled() {
         return Vec::new();
     }
     let mut names: Vec<String> = own_credentials().into_iter().map(str::to_string).collect();
-    for named in settings.scrubbed() {
+    for named in named {
         if !names.iter().any(|already| already == named) {
             names.push(named.to_string());
         }
@@ -157,6 +170,32 @@ mod tests {
         assert!(
             !own_credentials().contains(&"AWS_PROFILE"),
             "a settings file decided what this agent withholds from its own credential resolution"
+        );
+    }
+
+    /// CRED-23: what this module caches for the length of the run is names, so that the settings
+    /// they came out of can be dropped and clear their `env` block.
+    ///
+    /// A `static` is never dropped, so a `Settings` in one would hold a signing key written into
+    /// that block until the process exited. The list the two entry points build has to be the same
+    /// either way, which is what makes caching the names rather than the settings a saving and not
+    /// a second answer: [`withheld`] reads the cache and [`names`] reads a `Settings` handed to it,
+    /// and a reader of this module needs them to agree.
+    #[test]
+    fn the_names_a_settings_file_added_are_what_is_kept_rather_than_the_settings() {
+        let listed = "MY_TOKEN";
+        let settings = Settings::parse(&format!(r#"{{"run": {{"scrubEnv": ["{listed}"]}}}}"#));
+
+        let asked = names(&settings);
+        let cached = with_own_credentials(std::iter::once(listed));
+
+        assert_eq!(
+            cached, asked,
+            "the cached route answers differently from the one a Settings is handed to"
+        );
+        assert!(
+            asked.iter().any(|name| name == listed),
+            "the fixture's own name is missing, so the comparison says nothing"
         );
     }
 
