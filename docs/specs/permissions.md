@@ -305,6 +305,7 @@ allow rule quietly removed a deny rule's protection.
 `verified-by: bravebot_agent::permissions::a_blank_rule_is_reported_as_empty`
 `verified-by: bravebot_agent::permissions::every_reason_a_rule_is_dropped_for_says_something_of_its_own`
 `verified-by: bravebot_cli::running::doctor_names_a_permission_entry_that_is_not_a_rule`
+`verified-by: bravebot_agent::permissions::a_checkouts_unreadable_allow_entry_is_named_to_a_run_nobody_is_watching`
 
 <a id="PERM-12"></a>
 ### PERM-12: no rules means no change
@@ -381,6 +382,9 @@ silence reads to whoever wrote it as one in force.
 `verified-by: bravebot_agent::permissions::a_checkout_cannot_write_a_rule_that_answers_a_prompt`
 `verified-by: bravebot_config::settings::a_blank_allow_entry_is_not_reported_as_a_rule_that_was_withheld`
 `verified-by: bravebot_cli::running::doctor_names_an_allow_rule_a_checkout_wrote`
+`verified-by: bravebot_agent::permissions::an_allow_entry_a_checkout_wrote_is_proposed_only_where_it_is_a_rule`
+`verified-by: bravebot_cli::running::doctor_names_a_checkouts_unreadable_allow_entry_rather_than_offering_it`
+`verified-by: bravebot_cli::running::a_session_in_lines_names_an_allow_rule_a_checkout_wrote`
 
 <a id="PERM-15"></a>
 ### PERM-15: a checkout proposes an allow rule, and a question naming every one grants them
@@ -438,6 +442,7 @@ record in the person's own directory rather than in the tree it governs is [PERM
 level up: a grant written inside the checkout could be committed.
 
 `verified-by: bravebot_tui::trust_prompt::the_rules_are_granted_only_where_the_person_accepts_them`
+`verified-by: bravebot_tui::app::a_checkouts_entry_is_proposed_here_only_where_it_is_a_rule`
 `verified-by: bravebot_tui::trust_prompt::nothing_is_asked_where_there_is_nothing_to_grant`
 `verified-by: bravebot_tui::trust_prompt::leaving_at_the_rules_question_grants_nothing_and_starts_no_session`
 `verified-by: bravebot_tui::trust_prompt::the_rules_prompt_names_every_rule_and_the_file_it_came_from`
