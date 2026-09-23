@@ -27,7 +27,10 @@ and take about half a minute. No model is involved, so both are deterministic.
 
 A runner failure makes the check fail, including a scanner failure hidden by a later
 formatter in its pipeline or by reviewdog filtering out all of its findings. Runner stderr
-also fails the check so a partial scan cannot report a clean result. Both scan targets first
+also fails the check so a partial scan cannot report a clean result. The one line it may
+carry is security-action's `with-sandbox: ...; running unsandboxed (local mode).`: outside CI
+there is no Landlock sandbox (never on macOS), so the wrapper says so and runs the scanner
+anyway. In CI the same wrapper fails closed instead. Both scan targets first
 run `make check-reviewdog-selftest` to test empty scans, findings, and scanner failures.
 `make check-scripts` also tests check orchestration. A full scan clears any inherited branch baseline.
 Failure to list the files or set the baseline also fails the scan.

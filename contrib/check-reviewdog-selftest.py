@@ -59,6 +59,14 @@ case ENV.fetch('SCENARIO')
 when 'exit_failure'; exit 2
 when 'stderr_failure'; File.write('reviewdog.opengrep.stderr.log', 'scanner failed'); exit
 when 'reported_failure'; warn 'failed with zero findings: The command itself failed'; exit
+when 'sandbox_notice', 'sandbox_notice_and_failure'
+  log = "with-sandbox: landrun binary not found; running unsandboxed (local mode).\\n" \\
+        "with-sandbox: Landlock not enabled on this kernel; running unsandboxed (local mode).\\n"
+  log += "scanner failed\\n" if ENV['SCENARIO'] == 'sandbox_notice_and_failure'
+  File.write('reviewdog.opengrep.stderr.log', log); exit
+when 'sandbox_unavailable'
+  File.write('reviewdog.opengrep.stderr.log', "with-sandbox: Landlock sandbox unavailable: " \\
+             "landrun binary not found (install it via src/installLandrun.js).\\n"); exit
 end
 config = ARGV.find { |arg| arg.start_with?('-conf=') }.split('=', 2)[1]
 runners = YAML.load_file(config).fetch('runner')
@@ -252,6 +260,19 @@ exec "{real_git}" "$@"
                             self.assertIn("a finding without a bracket prefix", output)
                         else:
                             self.assertIn("security scan failed", output)
+
+    def test_an_unsandboxed_local_run_is_not_a_failed_runner(self):
+        """Outside CI the sandbox wrapper says it ran a scanner unsandboxed; the scan still completed."""
+        for full in (False, True):
+            for scenario, passes in (("sandbox_notice", True), ("sandbox_notice_and_failure", False),
+                                     ("sandbox_unavailable", False)):
+                with self.subTest(full=full, scenario=scenario):
+                    result = self.scan(scenario, full)
+                    output = result.stdout + result.stderr
+                    self.assertEqual(result.returncode == 0, passes, output)
+                    self.assertIn("no findings" if passes else "security scan failed", output)
+                    if scenario == "sandbox_notice_and_failure":
+                        self.assertIn("scanner failed", output)
 
 
 if __name__ == "__main__":
