@@ -244,6 +244,7 @@ is most likely to notice first.
 `verified-by: bravebot_tui::logo::a_narrow_pane_still_reports_the_confinement_and_the_tier`
 `verified-by: bravebot_tui::status::a_substituted_model_is_reported_beside_the_one_asked_for`
 `verified-by: bravebot_tui::status::automatic_being_resolved_to_a_real_model_is_not_a_substitution`
+`verified-by: bravebot_tui::status::picking_a_model_after_a_turn_reports_the_turn_that_ran`
 `verified-by: bravebot_tui::state::picking_automatic_and_being_answered_by_a_model_is_not_a_substitution`
 `verified-by: bravebot_tui::status::the_opening_screen_draws_the_tier_the_configuration_settles`
 `verified-by: bravebot_tui::app::a_model_the_configuration_named_is_reported_as_substituted_too`

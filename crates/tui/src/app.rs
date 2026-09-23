@@ -2782,6 +2782,7 @@ fn event_loop(
                     effort: session.effort(),
                     model_reads_effort: session.model_reads_effort(),
                     served_model: session.served_model(),
+                    substituted_model: session.substituted_model(),
                     premium: session.premium(),
                     theme: &theme,
                     config,

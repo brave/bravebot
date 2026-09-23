@@ -82,6 +82,13 @@ pub struct Facts<'a> {
     /// it will not serve by substituting a weaker one, so what was asked for does not establish what
     /// answered.
     pub served_model: Option<&'a str>,
+    /// What that same turn asked the service for, where the server answered with something else.
+    ///
+    /// `None` on the ordinary path, and wherever the two names were never comparable. Recorded by
+    /// the turn that ran rather than worked out here, because the model field above is the choice
+    /// in force for the *next* turn: `/model` moves it and leaves the served name alone, so a panel
+    /// that compares the two is comparing two different turns.
+    pub substituted_model: Option<&'a str>,
     /// Whether the last turn actually spent a subscription credential.
     ///
     /// `None` before any turn has run. Three states rather than a bool because "not yet known" is
@@ -213,22 +220,16 @@ pub fn report(facts: &Facts<'_>) -> Report {
     // model it will not serve rather than refusing, so the line above can name Opus for a whole
     // session that was answered by something else every turn. Reported beside it, since the two
     // together are the fact and either alone is misleading.
-    if let Some(served) = facts.served_model.filter(|served| {
-        let chosen = facts.model.unwrap_or(&facts.config.default_model);
-        // Against the name the service was asked for, not the one a session holds. A gateway is
-        // asked for the part of a qualified name it knows the model by, and an inference-profile ARN
-        // stands for whatever it resolves to today: compared as held, either would report a
-        // substitution on every turn.
-        let asked = bravebot_agent::backend::Backend::name_as_asked(facts.config, chosen);
-        let comparable = bravebot_agent::backend::Backend::reports_the_model_it_was_asked_for(
-            facts.config,
-            chosen,
+    //
+    // Both halves are the one turn's: what it asked for and what came back. The model line above
+    // is not the first half, because it is the choice the next turn will be sent and `/model`
+    // moves it without a turn running. Comparing the two names a model nothing was asked of as the
+    // one that was asked for, and puts the line on a session that got exactly what it wanted.
+    if let (Some(asked), Some(served)) = (facts.substituted_model, facts.served_model) {
+        lines.push(
+            Line::new(t!(status_served), served)
+                .with_note(t!(status_served_instead, asked = asked)),
         );
-        // `automatic` is the server's choice by definition, so a concrete name coming back is the
-        // feature working rather than a substitution worth flagging.
-        comparable && asked != *served && asked != bravebot_config::DEFAULT_MODEL
-    }) {
-        lines.push(Line::new(t!(status_served), served).with_note(t!(status_served_instead)));
     }
 
     // Beside the model, because the two together are what a turn costs: the same question asked of
@@ -645,6 +646,7 @@ mod tests {
             // Nothing observed, which is what a session looks like before its first turn. Tests
             // about the tier and the served model set these themselves.
             served_model: None,
+            substituted_model: None,
             premium: None,
             theme: "brave",
             config,
@@ -675,6 +677,32 @@ mod tests {
             // about that line build their own record and set it.
             remembered: None,
         }
+    }
+
+    /// A session that has run one turn, holding the pair a finished turn records: the name the
+    /// service was actually sent, and whether that name and a reply's are drawn from one roster.
+    /// Both come from the backend, asked as `app` asks them, so a test here drives the derivation a
+    /// real turn drives rather than a bool it picked for itself.
+    fn after_a_turn(config: &Config, chosen: Option<&str>, served: &str) -> crate::state::Session {
+        let mut session = crate::state::Session::new("kernel-enforced");
+        if let Some(model) = chosen {
+            session.choose_model(model.to_string());
+        }
+        let in_force = chosen.unwrap_or(&config.default_model);
+        session.served(
+            bravebot_agent::backend::Backend::name_as_asked(config, in_force),
+            served,
+            false,
+            bravebot_agent::backend::Backend::reports_the_model_it_was_asked_for(config, in_force),
+        );
+        session
+    }
+
+    /// Point the panel's three model fields at one session, as `app` does.
+    fn as_of<'a>(facts: &mut Facts<'a>, session: &'a crate::state::Session) {
+        facts.model = session.model();
+        facts.served_model = session.served_model();
+        facts.substituted_model = session.substituted_model();
     }
 
     /// What is going to happen without anybody typing is the one thing about a session that
@@ -1312,21 +1340,52 @@ mod tests {
         let config = config_for("https://ai-chat.bsg.brave.com", None);
         let trust = trusting();
 
+        let session = after_a_turn(&config, Some("claude-opus"), "qwen-14b-instruct");
         let mut substituted = facts(&config, &trust);
-        substituted.model = Some("claude-opus");
-        substituted.served_model = Some("qwen-14b-instruct");
+        as_of(&mut substituted, &session);
         let shown = rendered(&report(&substituted));
-        // Both halves: what was chosen, and what actually answered.
+        // Both halves: what was asked for, and what actually answered.
         assert!(shown.contains("claude-opus"), "{shown}");
         assert!(shown.contains("qwen-14b-instruct"), "{shown}");
         assert!(shown.contains("served instead"), "{shown}");
 
         // Served what was asked for: nothing to report, or the line would be on every session.
+        let session = after_a_turn(&config, Some("claude-opus"), "claude-opus");
         let mut honoured = facts(&config, &trust);
-        honoured.model = Some("claude-opus");
-        honoured.served_model = Some("claude-opus");
+        as_of(&mut honoured, &session);
         let shown = rendered(&report(&honoured));
         assert!(!shown.contains("served instead"), "{shown}");
+    }
+
+    /// `/model` moves the choice the next turn will be sent and leaves the last turn's record
+    /// alone, so the choice and the served name are from different turns. Read as a pair, a
+    /// session answered by exactly the model it asked for reports a substitution, and the model it
+    /// names as the one asked for is one nothing was ever asked of.
+    #[test]
+    fn picking_a_model_after_a_turn_reports_the_turn_that_ran() {
+        let config = config_for("https://ai-chat.bsg.brave.com", None);
+        let trust = trusting();
+
+        // Asked for claude-opus and got it, then picked something else for the next turn.
+        let mut honoured = after_a_turn(&config, Some("claude-opus"), "claude-opus");
+        honoured.choose_model("claude-sonnet".to_string());
+        let mut shown = facts(&config, &trust);
+        as_of(&mut shown, &honoured);
+        let shown = rendered(&report(&shown));
+        assert!(!shown.contains("served instead"), "{shown}");
+
+        // The other direction: the turn really was substituted, and picking the model that
+        // answered it does not make the substitution stop having happened.
+        let mut substituted = after_a_turn(&config, Some("claude-opus"), "qwen-14b-instruct");
+        substituted.choose_model("qwen-14b-instruct".to_string());
+        let mut shown = facts(&config, &trust);
+        as_of(&mut shown, &substituted);
+        let shown = rendered(&report(&shown));
+        assert!(shown.contains("served instead"), "{shown}");
+        assert!(
+            shown.contains("claude-opus"),
+            "the model the turn asked for is not named: {shown}"
+        );
     }
 
     /// A gateway answers under the name it knows the model by, while a session holds that name
@@ -1346,16 +1405,16 @@ mod tests {
         config.providers = bravebot_config::provider::Provider::all(&root);
         let trust = trusting();
 
+        let session = after_a_turn(&config, Some("openrouter/z-ai/glm-4.6"), "z-ai/glm-4.6");
         let mut gateway = facts(&config, &trust);
-        gateway.model = Some("openrouter/z-ai/glm-4.6");
-        gateway.served_model = Some("z-ai/glm-4.6");
+        as_of(&mut gateway, &session);
         let shown = rendered(&report(&gateway));
         assert!(!shown.contains("served instead"), "{shown}");
 
         // A gateway that really did answer with a different model still says so.
+        let session = after_a_turn(&config, Some("openrouter/z-ai/glm-4.6"), "moonshot/kimi-k2");
         let mut elsewhere = facts(&config, &trust);
-        elsewhere.model = Some("openrouter/z-ai/glm-4.6");
-        elsewhere.served_model = Some("moonshot/kimi-k2");
+        as_of(&mut elsewhere, &session);
         let shown = rendered(&report(&elsewhere));
         assert!(shown.contains("served instead"), "{shown}");
     }
@@ -1366,9 +1425,9 @@ mod tests {
     fn automatic_being_resolved_to_a_real_model_is_not_a_substitution() {
         let config = config_for("https://ai-chat.bsg.brave.com", None);
         let trust = trusting();
+        let session = after_a_turn(&config, None, "claude-3-haiku");
         let mut automatic = facts(&config, &trust);
-        automatic.model = None;
-        automatic.served_model = Some("claude-3-haiku");
+        as_of(&mut automatic, &session);
 
         let shown = rendered(&report(&automatic));
         assert!(!shown.contains("served instead"), "{shown}");

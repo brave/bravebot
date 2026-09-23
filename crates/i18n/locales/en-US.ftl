@@ -742,7 +742,7 @@ status-effort-not-read = chosen with /effort, but this model reads none
 status-theme = Theme
 status-theme-chosen = chosen with /theme
 status-served = Answered by
-status-served-instead = served instead of the model asked for
+status-served-instead = served instead of { $asked }, which that turn asked for
 status-endpoint = Endpoint
 # Which tier the last turn actually ran on, not what this build was compiled knowing about.
 status-premium-available = premium available, nothing sent yet
