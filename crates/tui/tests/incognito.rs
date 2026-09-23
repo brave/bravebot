@@ -3,7 +3,9 @@
 //! These run against a real directory, redirected by `HOME`, because the claim is about the
 //! filesystem afterwards rather than about which branch some function took. Every test here asks
 //! the same question in a different place: after doing the thing that ordinarily writes, is there
-//! anything on disk that was not there before?
+//! anything on disk that was not there before? The one exception is the standing answer about
+//! auto-vetting, which this mode refuses to read as well as to write, so the test for it asserts a
+//! read that came back empty against a file that was there to be read.
 //!
 //! # Why a binary of its own
 //!
@@ -309,4 +311,41 @@ fn the_answer_about_updating_is_still_read() {
         "1700000000\treleases\t99.0.0\n",
         "an incognito session overwrote the recorded answer"
     );
+}
+
+/// INCOG-5, CHECK-11: the standing answer about auto-vetting is the one read this mode refuses.
+///
+/// Reading the model back is what makes a private session the one somebody configured, because the
+/// model decides what it looks like. This answer decides whether they are asked before content
+/// nobody vouched for reaches the planner, so a session that inherited it would have stopped asking
+/// without having been told to, and the person would never see the question that was not put. The
+/// seeded model is read back in the same process so that `None` here means the read was refused
+/// rather than that the directory under test was somewhere else.
+#[test]
+fn the_standing_answer_about_vetting_is_not_read() {
+    let scratch = Scratch::incognito("vetting");
+    scratch.seed("model", "claude-sonnet-4-5\n");
+    scratch.seed("vetting", "on\n");
+
+    assert_eq!(
+        store::load_model().as_deref(),
+        Some("claude-sonnet-4-5"),
+        "the seeded directory is not the one being read"
+    );
+    assert_eq!(
+        store::load_vetting(),
+        None,
+        "an incognito session inherited a standing answer about auto-vetting"
+    );
+
+    // And an answer given here reaches the file no more than a model chosen here does.
+    store::save_vetting(false);
+    assert_eq!(
+        std::fs::read_to_string(scratch.own_directory().join("vetting")).expect("the seeded file"),
+        "on\n",
+        "an incognito session overwrote the recorded answer about auto-vetting"
+    );
+    let mut expected = vec!["model".to_string(), "vetting".to_string()];
+    expected.sort();
+    assert_eq!(scratch.contents(), expected);
 }

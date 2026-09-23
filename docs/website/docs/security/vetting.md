@@ -145,6 +145,10 @@ back on for you tomorrow. There is no flag the other way.
 
 Nothing writes your settings file. The standing key writes `~/.bravebot/vetting` instead.
 
+**An [incognito](../using/sessions.md#a-session-that-leaves-nothing-behind) session does not read that
+file.** It is the one thing such a session reads differently, because the answer in it decides whether
+you are asked rather than what the session looks like. The other two routes work there as anywhere.
+
 **The settings key is read from the home layer and no other.** A project `.bravebot/settings.json`
 naming it, a machine-local one, and a file the command line named are each reported by `doctor` and not
 obeyed. Every other name in those files decides where a request goes or how the interface behaves; this

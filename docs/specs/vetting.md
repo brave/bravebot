@@ -342,6 +342,10 @@ comments and key order.
 The recorded choice is read only by a session that records one. A session asked to leave nothing
 behind reads the model and the theme, because those decide what it looks like; this decides whether
 somebody is asked, and a private session inheriting that answer is the one read worth refusing.
+[incognito.md](incognito.md) names it as the one read that mode refuses, so the exception is stated
+where somebody reading about that mode finds it and not only here. The other two routes are
+unaffected there: a flag names what somebody wants of the run in front of them, and the settings key
+is not a decision a session recorded.
 
 **A session that opened with the mode on says so, and goes on saying so.** It is said once at the
 top of the transcript, before the first slot can reach it, and reported in `/status` for the rest
@@ -369,6 +373,8 @@ does not know, and a value that is not a boolean, are no answer at all rather th
 `verified-by: bravebot_config::settings::a_project_layer_does_not_override_what_the_home_layer_said_about_vetting`
 `verified-by: bravebot_config::settings::a_vetting_key_that_is_not_a_boolean_says_nothing`
 `verified-by: bravebot_session::store::a_recorded_answer_about_vetting_is_read_back_both_ways`
+`verified-by: bravebot_tui::persist::a_recorded_answer_about_vetting_outlives_the_session_that_gave_it`
+`verified-by: bravebot_tui::incognito::the_standing_answer_about_vetting_is_not_read`
 `verified-by: bravebot_session::store::a_file_naming_no_answer_about_vetting_is_not_a_choice`
 `verified-by: bravebot_tui::state::a_session_asks_until_something_says_otherwise`
 `verified-by: bravebot_tui::state::the_flag_and_the_settings_key_each_reach_the_session`
