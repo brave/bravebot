@@ -2391,14 +2391,26 @@ fn rewind(
     session.restore_cache(snapshot.cached);
     session.written = 0;
     session.finished = None;
-    *trust = snapshot.trust;
+    if refused.is_empty() {
+        *trust = snapshot.trust;
+    } else {
+        let paths: Vec<_> = trust
+            .keyed()
+            .chain(snapshot.trust.keyed())
+            .map(|(path, _)| path.to_string())
+            .collect();
+        for path in paths {
+            trust.distrust(&path);
+        }
+        session.close_rewind_window();
+    }
     *programs = snapshot.programs;
 
     session.transcript.truncate(snapshot.transcript_len);
     session.rewind_history();
     stored.truncate_audit(session.turns + 1);
 
-    if snapshot.turns == 0 && !snapshot.was_wrote {
+    if snapshot.turns == 0 && !snapshot.was_wrote && refused.is_empty() {
         stored.discard_unwritten(&snapshot.title);
     } else {
         stored.save(
@@ -2435,6 +2447,7 @@ fn rewind(
             .collect::<Vec<_>>()
             .join(", ");
         session.note(t!(session_rewound_partly, turn = turn, paths = paths));
+        session.note(t!(session_rewind_grants_withdrawn));
     }
 }
 
@@ -3144,8 +3157,9 @@ fn event_loop(
                 while let Some((prompt, wrote)) = sending {
                     let history_start = conversation.recounted().len();
                     let point = rewind_point(&session, &conversation, &trust, &programs, &stored);
-                    session.open_rewind_point(point, prompt.clone());
                     let _ = workspace.take_backups();
+                    session.open_rewind_point(point, prompt.clone());
+                    session.bind_rewind_coverage(&workspace);
 
                     // Everything the session holds is lent for the turn and taken back: a turn that
                     // writes untrusted data into a trusted path records that, and the next turn must
@@ -16658,3 +16672,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "undo_tests.rs"]
+mod undo_tests;

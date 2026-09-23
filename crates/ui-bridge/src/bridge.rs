@@ -634,7 +634,10 @@ impl Bridge {
         let watches = Arc::clone(&open.watches);
         let (turn_number, directories) = state
             .lock()
-            .map(|s| (s.turns + 1, s.directories.clone()))
+            .map(|mut s| {
+                s.rewind.clear();
+                (s.turns + 1, s.directories.clone())
+            })
             .unwrap_or((1, Vec::new()));
 
         // A workspace is built per turn and opens the project only, so the directories a

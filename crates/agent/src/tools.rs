@@ -5064,6 +5064,7 @@ fn run<S: Sink, C: Confirmer>(
             }
         };
 
+        tools.workspace.invalidate_rewind();
         return match crate::exec::start_steps(steps, &plan.directory, tools.workspace.scratch()) {
             Ok(running) => {
                 // Spent at the moment the programs start, which for a background line is here:
@@ -5113,6 +5114,7 @@ fn run<S: Sink, C: Confirmer>(
     // and for the credential scan below: there is no later moment to ask, because afterwards
     // every answer is the line's own.
     let mut standing: Vec<Standing> = Vec::new();
+    tools.workspace.invalidate_rewind();
     let ran = crate::exec::run_plan_observed(
         &plan,
         tools.cancel,
@@ -6295,6 +6297,7 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
             character,
             query: query.as_deref(),
         },
+        tools.workspace,
     ) {
         Ok(answer) => answer,
         // LSP-6: every one of these says which failure it was, and none of them reads as a

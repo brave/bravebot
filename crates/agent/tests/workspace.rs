@@ -4483,6 +4483,8 @@ fn a_write_in_the_sessions_own_directory_is_not_kept_for_an_undo() {
     )
     .expect("policy");
 
+    let older = workspace.rewind_coverage();
+    let newest = workspace.rewind_coverage();
     for name in ["workings.txt", "another.txt"] {
         let named = given.path().join(name).display().to_string();
         policy.issue_grant("file_write", "path", named.clone());
@@ -4495,6 +4497,8 @@ fn a_write_in_the_sessions_own_directory_is_not_kept_for_an_undo() {
             .expect("a write in the session's own directory");
     }
 
+    assert!(!older.is_valid());
+    assert!(!newest.is_valid());
     assert!(
         workspace.take_backups().is_empty(),
         "an intermediate file was kept for an undo nobody would ask for"

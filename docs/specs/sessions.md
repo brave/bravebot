@@ -58,8 +58,9 @@ gate names with no content in it.
 A rewind point is the one part of a record built from bytes no message carried: it keeps what the
 files a turn wrote over held, read off the disk rather than out of the conversation, so a later
 session can put them back. Those bytes are written down only where the map that stood before the
-turn vouched for the path, which is the map that labelled them. What a file nobody vouched for held
-is written down as contents this session did not keep, and a resumed session says that path did not
+turn vouched for the path and the backup records trusted capture provenance. A stale pre-turn
+grant alone cannot authorize bytes captured after another writer changed them. What a file nobody
+vouched for held is written down as contents this session did not keep, and a resumed session says that path did not
 go back rather than putting it back.
 
 **Why.** A record is read back into a later turn's context. Anything written that the planner could
@@ -450,11 +451,15 @@ preserving the conversation transcript, spend history, and audit trail while res
 time and marking the title. Manifest runs plan their entire sequence and cannot be forked, matching
 the continuation rule in SESSION-10.
 
+Both full-record and mid-history forks keep the source's current file decisions and inherit no
+rewind points. Forking does not rewind disk. The source record stays unchanged.
+
 **Why.** Exploring an alternative technical path from a shared prefix preserves the expensive
 context already built up without polluting the original session. Refusing manifest runs maintains
 the invariant that finished autonomous runs have a definite end.
 
 `verified-by: bravebot_session::sessions::forking_a_manifest_session_is_refused`
+`verified-by: bravebot_tui::undo_tests::terminal_bridge_terminal_handoff_and_both_forks_keep_current_file_decisions`
 
 <a id="SESSION-19"></a>
 ### SESSION-19: turns can be rewound, on disk and in the conversation together
@@ -464,8 +469,8 @@ goes back another. Every path in the project that a rewound turn wrote through a
 back to what it held first, and one such a turn created is removed; where two of the rewound
 turns wrote the same path, it goes back to what it held before the first of them. The
 conversation returns to the snapshot taken before the earliest rewound turn, and with it the turn
-count, the spend, the timing, the trust map, the trusted programs, and the transcript. Those
-turns' audit lines are dropped, since they decided about turns that are no longer in the
+count, the spend, the timing, the trusted programs, and the transcript. The trust map returns
+only when every required file restoration succeeds. Those turns' audit lines are dropped, since they decided about turns that are no longer in the
 conversation. Their display prompts, outcomes, and task lists are removed with them. Saving and
 reopening after rewind must not restore them, and a new turn that reuses a removed turn number
 inherits none of its metadata.
@@ -473,14 +478,14 @@ inherits none of its metadata.
 `verified-by: bravebot_tui::sessions::reopened_history_stays_rewound_after_another_save_and_new_turn`
 `verified-by: bravebot_tui::app::rewinding_reopened_history_removes_outcomes_plans_and_audit_before_reuse`
 
-A rewind that goes back past the session's first turn removes its record rather than
-leaving one with nothing in it, and a name the user gave the session before that turn stays with
+A complete rewind that goes back past the session's first turn removes its record rather than
+leaving one with nothing in it. A partial rewind saves its withdrawn file decisions even there, and a name the user gave the session before that turn stays with
 it: the name was not the turn's to give, so it is not the rewind's to take. The directory the
 session was given of its own is not in the project: what a turn wrote there is neither put back nor
 counted against the budget below, for the reasons [trust-map.md](trust-map.md) gives.
 
-A standing permission goes back with the turn that granted it. The map and the programs restored
-are the ones that stood before the earliest turn being rewound, so a path or a command vouched
+After complete restoration, a standing permission goes back with the turn that granted it.
+The map and the programs restored are the ones that stood before the earliest turn being rewound, so a path or a command vouched
 for during any of those turns is vouched for no longer, and one vouched for before them is
 untouched.
 
@@ -490,7 +495,20 @@ back are dropped whole, and the most recent is kept whatever it cost. Inside a t
 budget decides a path: past it the path is still remembered, but what it held is not, and a
 rewind treats it as a path that will not go back rather than as a file that was never there. A
 path that will not go back is named on the line that reports the rewind, and the rest of the
-rewind still happens.
+rewind still happens. On incomplete restoration, combine the current and selected snapshot's
+known file rules and convert every grant to explicit distrust. Keep both sets of explicit
+distrust, discard every older checkpoint, report the partial restoration and grant withdrawal,
+and save the resulting state. Do not compare file contents to recover trust.
+
+Every attempted tracked mutation records coverage, including same-label writes, partial failures
+and files whose original bytes were not kept. A backup lock failure invalidates the window.
+All live points become ineligible before an approved program starts, including a background job
+or a foreground redirection, before a matching configured hook starts, and before a scratch write.
+No new point opens while such a job can still write. Jobs are currently owned by the turn and
+killed and reaped before it returns. An approved language-server launch disables all current and
+future checkpoints for that workspace, even after the server set is dropped: its build-tool
+children may outlive it, and their termination is not tracked. A declined launch leaves coverage
+unchanged.
 
 Anything that changes the session outside a turn gives up every point at once: `/clear`,
 `/compact`, `/btw`, `/rename`, `/add-dir`, `/cd`, and a shell-mode command, whose writes the
@@ -533,6 +551,16 @@ whether or not it is ever read.
 `verified-by: bravebot_tui::state::a_session_keeps_no_more_points_than_it_may`
 `verified-by: bravebot_tui::state::one_turns_writes_can_cost_the_session_the_turns_behind_it`
 `verified-by: bravebot_tui::state::backups_with_no_point_to_hang_them_on_are_dropped`
+
+`verified-by: bravebot_tui::undo_tests::oversized_original_withdraws_grants_after_live_and_resumed_successful_undo`
+`verified-by: bravebot_tui::undo_tests::oversized_original_withdraws_grants_after_failed_and_cancelled_undo`
+`verified-by: bravebot_tui::undo_tests::complete_and_failed_restores_keep_files_trust_programs_and_history_aligned`
+`verified-by: bravebot_tui::undo_tests::programs_close_all_points_before_the_next_planner_round`
+`verified-by: bravebot_tui::undo_tests::matching_hooks_close_all_points_in_memory_and_after_resume`
+`verified-by: bravebot_agent::workspace::a_failed_backup_lock_invalidates_every_checkpoint`
+`verified-by: bravebot_agent::lsp::a_server_approved_in_one_turn_answers_the_next`
+`verified-by: bravebot_agent::lsp::a_turn_that_is_handed_no_set_starts_a_server_of_its_own`
+`verified-by: bravebot_agent::lsp::a_declined_language_server_preserves_rewind_coverage`
 
 <a id="SESSION-20"></a>
 ### SESSION-20: a question asked beside the work is recorded, and comes back into the view alone
@@ -609,7 +637,13 @@ takes a number cannot also have it, so the number is on a word that has one.
 A session's rewind points are written into its record along with the conversation, and a resume
 brings them back: the exchange each one goes back to, the counts, the trust map and the programs
 that stood before its turn, what that turn was asked, and what its writes overwrote. `/undo` and
-`/rewind` after a resume reach the same turns they reached before the program was closed.
+`/rewind` after a resume reach only points with positive versioned coverage. Version 1 records
+the paths that require restoration independently of the backup payloads. Missing payloads become
+unavailable restorations; an empty backup list alone proves nothing. Missing or unknown coverage
+disables that point and every older point, while current decisions and conversation still load.
+Legacy records therefore lose undo. Older binaries do not enforce this contract; a round trip
+that loses coverage disables undo when read by a new binary. These markers use the existing
+local-record trust model and do not protect against deliberate record tampering.
 
 What a path held is written base64 in the record, so the record carries the rewind budget as well
 as the conversation. Only where the map that stood before the turn vouches for the path and the
@@ -657,6 +691,9 @@ names it on the line that reports the rewind.
 `verified-by: bravebot_tui::app::a_resumed_session_whose_record_was_renamed_has_nothing_to_undo`
 `verified-by: bravebot_session::sessions::a_kept_file_this_build_cannot_read_will_not_go_back_rather_than_being_deleted`
 `verified-by: bravebot_tui::state::a_restored_point_finds_its_place_in_the_transcript_it_comes_back_into`
+
+`verified-by: bravebot_session::sessions::checkpoints_require_known_coverage_even_after_a_marker_losing_round_trip`
+`verified-by: bravebot_session::sessions::required_paths_missing_from_backup_entries_are_unavailable_restorations`
 
 <a id="SESSION-23"></a>
 ### SESSION-23: the record says where each turn began and ended, and what came of it
@@ -774,6 +811,10 @@ resumed and continued by the other. Everything above decides what a record holds
 found, whichever surface is asking: one directory per working directory, the naming, the ordering,
 the modes, and degrading to nothing where there is no directory to write into.
 
+Before bridge engine execution begins, every imported rewind point is discarded, even for a
+read-only turn. The bridge does not collect the terminal's byte backups. Saving a later bridge
+turn must not let terminal undo restore grants from before an uncovered write.
+
 A surface showing one list across every project asks a question a terminal never asks, and that
 question is the whole of what it adds. Which projects have sessions is read from the store rather
 than reconstructed from a directory name, because the name a working directory reduces to is lossy
@@ -790,6 +831,7 @@ it opens on the machine rather than in a checkout, so it needs a list a terminal
 ask about. Adding the discovery and borrowing the listing is what keeps that difference to the one
 place it genuinely is.
 
+`verified-by: bravebot_tui::undo_tests::terminal_bridge_terminal_handoff_and_both_forks_keep_current_file_decisions`
 `verified-by: bravebot_ui_bridge::interop::a_record_written_here_is_read_back_by_the_agents_own_reader`
 `verified-by: bravebot_ui_bridge::interop::resuming_a_session_writes_back_to_it_rather_than_forking`
 `verified-by: bravebot_ui_bridge::interop::every_project_is_listed_in_one_order_rather_than_project_by_project`

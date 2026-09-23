@@ -2023,6 +2023,10 @@ fn fire_hooks<R: Reporter + ?Sized>(
     workspace: &Workspace,
     reporter: &mut R,
 ) -> Vec<String> {
+    // Hook programs can write files outside the backup journal, regardless of their outcome.
+    if hooks.firing(moment, tool).next().is_some() {
+        workspace.invalidate_rewind();
+    }
     let mut said = Vec::new();
     for fired in crate::hooks::fire(hooks, moment, tool, workspace.root()) {
         let Some(trouble) = fired.trouble else {

@@ -1207,6 +1207,7 @@ session-rewound = rewound the session to before turn { $turn }
 session-rewound-partly =
     rewound the session to before turn { $turn }, but these files still hold what was
     written: { $paths }
+session-rewind-grants-withdrawn = File trust grants and older undo points were withdrawn because restoration was incomplete.
 session-nothing-to-undo = nothing left to undo in this session
 session-rewind-points = a rewind goes back to one of these, putting back every row down to it:
 # One point a rewind could reach: how many turns back it is, which turn it would land before,

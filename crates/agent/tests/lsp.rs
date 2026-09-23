@@ -145,6 +145,7 @@ fn starts(at: &Path) -> usize {
 /// Answers every question with a yes, and counts the times it was asked about a server.
 struct AskedAboutServers {
     asked: usize,
+    reject: bool,
 }
 
 impl bravebot_agent::Confirmer for AskedAboutServers {
@@ -153,7 +154,11 @@ impl bravebot_agent::Confirmer for AskedAboutServers {
         _request: &bravebot_agent::confirm::ServerRequest,
     ) -> bravebot_agent::Decision {
         self.asked += 1;
-        bravebot_agent::Decision::Approve
+        if self.reject {
+            bravebot_agent::Decision::Reject
+        } else {
+            bravebot_agent::Decision::Approve
+        }
     }
 
     fn confirm_write(
@@ -253,10 +258,15 @@ fn a_server_approved_in_one_turn_answers_the_next() {
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
-    let mut asking = AskedAboutServers { asked: 0 };
+    let mut asking = AskedAboutServers {
+        asked: 0,
+        reject: false,
+    };
 
     // The session owns the set, which is the whole of the fix: the turns borrow it.
     let mut servers = LanguageServers::new(workspace.root().to_path_buf(), None);
+    let points = [workspace.rewind_coverage(), workspace.rewind_coverage()];
+    assert!(points.iter().all(|point| point.is_valid()));
     let mut conversation = Conversation::new();
     for prompt in ["where is Held declared", "and again"] {
         turn::resume(
@@ -274,7 +284,18 @@ fn a_server_approved_in_one_turn_answers_the_next() {
             &Cancel::new(),
         )
         .expect("the turn runs");
+        assert!(points.iter().all(|point| !point.is_valid()));
+        assert!(
+            !workspace.clone().rewind_coverage().is_valid(),
+            "later turns cannot capture coverage while server effects remain untracked"
+        );
     }
+
+    drop(servers);
+    assert!(
+        !workspace.rewind_coverage().is_valid(),
+        "server shutdown does not prove its build-tool children stopped"
+    );
 
     assert_eq!(
         asking.asked, 1,
@@ -318,8 +339,13 @@ fn a_turn_that_is_handed_no_set_starts_a_server_of_its_own() {
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
-    let mut asking = AskedAboutServers { asked: 0 };
+    let mut asking = AskedAboutServers {
+        asked: 0,
+        reject: false,
+    };
 
+    let points = [workspace.rewind_coverage(), workspace.rewind_coverage()];
+    assert!(points.iter().all(|point| point.is_valid()));
     let mut conversation = Conversation::new();
     for prompt in ["where is Held declared", "and again"] {
         turn::resume(
@@ -337,6 +363,11 @@ fn a_turn_that_is_handed_no_set_starts_a_server_of_its_own() {
             &Cancel::new(),
         )
         .expect("the turn runs");
+        assert!(points.iter().all(|point| !point.is_valid()));
+        assert!(
+            !workspace.clone().rewind_coverage().is_valid(),
+            "later turns cannot capture coverage while server effects remain untracked"
+        );
     }
 
     assert_eq!(
@@ -516,7 +547,10 @@ fn a_name_the_server_reported_cannot_forge_a_line_in_the_planners_context() {
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
-    let mut asking = AskedAboutServers { asked: 0 };
+    let mut asking = AskedAboutServers {
+        asked: 0,
+        reject: false,
+    };
 
     let mut conversation = Conversation::new();
     turn::resume(
@@ -579,4 +613,40 @@ fn tool_result_in(request: &str) -> String {
         .find(|content| content.starts_with("Result of lsp"))
         .unwrap_or_else(|| panic!("no lsp result in {request}"))
         .to_string()
+}
+
+/// A declined server launch has no untracked effect and must leave undo available.
+#[test]
+fn a_declined_language_server_preserves_rewind_coverage() {
+    let _path = PATH_LOCK.lock().unwrap_or_else(|held| held.into_inner());
+    let scratch = Scratch::new("agent-lsp-declined-undo");
+    let (workspace, recorded) = a_workspace_with_a_server(&scratch);
+    let (endpoint, _received) = serve_sequence(vec![
+        a_question_about_a_symbol(),
+        reply_with("server declined"),
+    ]);
+    let mut asking = AskedAboutServers {
+        asked: 0,
+        reject: true,
+    };
+    let point = workspace.rewind_coverage();
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("where is Held declared"),
+        &mut Conversation::new(),
+        &mut asking,
+        &mut bravebot_agent::IgnoreReports,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(&workspace),
+        TrustedPrograms::new(),
+        None,
+        &Cancel::new(),
+    )
+    .expect("the refusal still lets the turn answer");
+    assert_eq!(asking.asked, 1);
+    assert_eq!(starts(&recorded), 0);
+    assert!(point.is_valid());
+    assert!(workspace.rewind_coverage().is_valid());
 }

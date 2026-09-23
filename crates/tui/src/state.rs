@@ -1732,14 +1732,33 @@ impl Session {
         self.rewind_points.clear();
     }
 
+    fn close_invalid_rewind_window(&mut self) {
+        if self
+            .rewind_points
+            .iter()
+            .any(|point| !point.coverage.is_valid())
+        {
+            self.close_rewind_window();
+        }
+    }
+
     /// Open a point for the turn about to begin.
     pub fn open_rewind_point(&mut self, snapshot: TurnSnapshot, prompt: String) {
         self.rewind_points.push(RewindPoint {
+            coverage: Default::default(),
             snapshot,
             backups: Vec::new(),
             prompt,
         });
         self.hold_rewind_points();
+    }
+
+    /// Bind resumed and newly opened points to the workspace before the next turn.
+    pub fn bind_rewind_coverage(&mut self, workspace: &bravebot_agent::Workspace) {
+        self.close_invalid_rewind_window();
+        for point in &mut self.rewind_points {
+            point.coverage = workspace.rewind_coverage();
+        }
     }
 
     /// Keep what the turn that just ended wrote over, against the point it opened.
@@ -1748,6 +1767,7 @@ impl Session {
     /// ran: the backups belong to a point nothing can rewind to, and holding them would spend
     /// the budget on bytes no rewind will ever read.
     pub fn keep_backups(&mut self, backups: Vec<bravebot_agent::workspace::Backup>) {
+        self.close_invalid_rewind_window();
         let Some(point) = self.rewind_points.last_mut() else {
             return;
         };
@@ -1828,6 +1848,7 @@ impl Session {
         &mut self,
         steps: usize,
     ) -> Option<(TurnSnapshot, Vec<bravebot_agent::workspace::Backup>)> {
+        self.close_invalid_rewind_window();
         if steps == 0 || steps > self.rewind_points.len() {
             return None;
         }
@@ -10842,6 +10863,7 @@ mod tests {
         // Recorded against a transcript that opened with the prompt, where the second turn
         // began at entry two. This one opens with the resumed line, so it begins at entry three.
         let mut point = RewindPoint {
+            coverage: Default::default(),
             snapshot: snapshot_before(1),
             backups: Vec::new(),
             prompt: "add a second line".into(),
@@ -10895,6 +10917,7 @@ mod tests {
         );
 
         let mut point = RewindPoint {
+            coverage: Default::default(),
             snapshot: snapshot_before(1),
             backups: Vec::new(),
             prompt: "add a second line".into(),

@@ -22,6 +22,7 @@ use bravebot_core::value::Labelled;
 use std::ffi::OsString;
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -234,6 +235,8 @@ pub struct Workspace {
     /// rewind has to see what that copy wrote. Nothing here is read: the bytes are carried back to
     /// the path they came from and never inspected.
     backups: Arc<Mutex<Vec<Backup>>>,
+    rewind_epoch: Arc<AtomicU64>,
+    rewind_disabled: Arc<AtomicBool>,
 }
 
 #[cfg(test)]
@@ -241,6 +244,21 @@ pub struct Workspace {
 struct WriteInterruption {
     entered: std::sync::mpsc::Sender<()>,
     resume: std::sync::mpsc::Receiver<bool>,
+}
+
+/// Live evidence that no effect outside the backup domain has begun since a checkpoint.
+#[derive(Debug, Clone, Default)]
+pub struct RewindCoverage {
+    epoch: Arc<AtomicU64>,
+    disabled: Arc<AtomicBool>,
+    captured: u64,
+}
+
+impl RewindCoverage {
+    /// Whether every effect since this point remains in the tracked domain.
+    pub fn is_valid(&self) -> bool {
+        !self.disabled.load(Ordering::SeqCst) && self.epoch.load(Ordering::SeqCst) == self.captured
+    }
 }
 
 /// What a path held before a turn wrote to it.
@@ -391,6 +409,8 @@ impl Workspace {
             search_files: MAX_SEARCH_FILES,
             search_time: MAX_SEARCH_TIME,
             backups: Arc::new(Mutex::new(Vec::new())),
+            rewind_epoch: Arc::new(AtomicU64::new(0)),
+            rewind_disabled: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -1379,9 +1399,11 @@ impl Workspace {
     /// the next file in the project the turn writes.
     fn record_backup(&self, resolved: &Path, captured_trust: bravebot_core::label::Integrity) {
         if self.reaches_scratch(resolved) {
+            self.invalidate_rewind();
             return;
         }
         let Ok(mut backups) = self.backups.lock() else {
+            self.invalidate_rewind();
             return;
         };
         if backups.iter().any(|backup| backup.path == resolved) {
@@ -1404,9 +1426,30 @@ impl Workspace {
         });
     }
 
+    /// Close all checkpoints before an effect whose original bytes are not tracked.
+    pub fn invalidate_rewind(&self) {
+        self.rewind_epoch.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Stop issuing coverage when a process or its children may keep writing across turns.
+    /// There is no reset: this workspace cannot prove those descendants have stopped.
+    pub(crate) fn disable_rewind(&self) {
+        self.rewind_disabled.store(true, Ordering::SeqCst);
+    }
+
+    /// Capture evidence for a new checkpoint. Background jobs must have ended first.
+    pub fn rewind_coverage(&self) -> RewindCoverage {
+        RewindCoverage {
+            epoch: Arc::clone(&self.rewind_epoch),
+            disabled: Arc::clone(&self.rewind_disabled),
+            captured: self.rewind_epoch.load(Ordering::SeqCst),
+        }
+    }
+
     /// What this turn has written so far, clearing it so the next turn starts with none.
     pub fn take_backups(&self) -> Vec<Backup> {
         let Ok(mut guard) = self.backups.lock() else {
+            self.invalidate_rewind();
             return Vec::new();
         };
         std::mem::take(&mut *guard)
@@ -2509,6 +2552,33 @@ fn written_below(named: &Path, opened: &Path) -> Option<PathBuf> {
 mod tests {
     use super::*;
 
+    /// Losing the journal lock cannot turn an attempted mutation into an empty complete backup.
+    #[test]
+    fn a_failed_backup_lock_invalidates_every_checkpoint() {
+        let root = crate::testutil::scratch_dir("rewind-poisoned-backups");
+        std::fs::create_dir_all(&root).unwrap();
+        let workspace = Workspace::new(&root).unwrap();
+        let old = workspace.rewind_coverage();
+        let recent = workspace.clone().rewind_coverage();
+        let journal = Arc::clone(&workspace.backups);
+        assert!(
+            std::thread::spawn(move || {
+                let _held = journal.lock().unwrap();
+                panic!("injected journal lock failure");
+            })
+            .join()
+            .is_err()
+        );
+        workspace.record_backup(
+            &root.join("output"),
+            bravebot_core::label::Integrity::Trusted,
+        );
+        assert!(!old.is_valid());
+        assert!(!recent.is_valid());
+        assert!(workspace.take_backups().is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     /// Reads during an entered effect cannot use the previous grant, and an error cannot promote it.
     #[test]
     fn reads_before_write_publication_and_failed_replacements_remain_untrusted() {
@@ -2527,6 +2597,7 @@ mod tests {
             let (entered, observed) = mpsc::channel();
             let (release, resume) = mpsc::channel();
             *workspace.after_write.lock().unwrap() = Some(WriteInterruption { entered, resume });
+            let coverage = workspace.rewind_coverage();
             let child_workspace = workspace.clone();
             let child_authority = authority.clone();
             let writer = std::thread::spawn(move || {
@@ -2606,6 +2677,30 @@ mod tests {
                 std::fs::read_to_string(root.join("shared.txt")).unwrap(),
                 "PUBLICATION_SENTINEL"
             );
+            assert!(
+                coverage.is_valid(),
+                "an entered tracked write keeps known coverage even on failure"
+            );
+            let backups = workspace.take_backups();
+            assert_eq!(
+                backups.len(),
+                2,
+                "same-label repeated writes must keep the first capture"
+            );
+            let shared = backups
+                .iter()
+                .find(|backup| backup.path.ends_with("shared.txt"))
+                .unwrap();
+            assert_eq!(shared.was, Before::Bytes(b"original trusted text".to_vec()));
+            assert_eq!(
+                shared.captured_trust,
+                bravebot_core::label::Integrity::Trusted
+            );
+            let independent = backups
+                .iter()
+                .find(|backup| backup.path.ends_with("independent.txt"))
+                .unwrap();
+            assert_eq!(independent.was, Before::Nothing);
             std::fs::remove_dir_all(root).unwrap();
         }
     }

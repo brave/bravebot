@@ -121,6 +121,8 @@ pub const MAX_REWIND_POINTS: usize = 5;
 /// exists for the whole of the turn it describes and is only complete afterwards.
 #[derive(Debug, Clone)]
 pub struct RewindPoint {
+    /// Positive evidence that no uncovered effect has begun.
+    pub coverage: bravebot_agent::workspace::RewindCoverage,
     /// What the session held before the turn.
     pub snapshot: TurnSnapshot,
     /// What the files that turn wrote to held before it wrote to them.
@@ -387,6 +389,9 @@ pub enum StoredOutcome {
 /// nothing rather than what a session that is no longer running read.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredRewind {
+    /// Versioned coverage; absent or unknown evidence disables this and older points.
+    #[serde(default, deserialize_with = "read_coverage")]
+    pub coverage: Option<StoredCoverage>,
     /// The exchange as it stood before the turn.
     pub conversation: Snapshot,
     /// Completed turns before the turn.
@@ -417,6 +422,21 @@ pub struct StoredRewind {
     /// What the files the turn wrote to held before it wrote to them.
     #[serde(default)]
     pub wrote_over: Vec<StoredBackup>,
+}
+
+/// Required restorations, recorded independently of the backup payloads.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredCoverage {
+    pub version: u32,
+    pub paths: Vec<String>,
+}
+
+// A later coverage format must disable undo without making current state unreadable.
+fn read_coverage<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<StoredCoverage>, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).ok())
 }
 
 /// What one path held before a turn wrote to it, as it is written down.
@@ -471,6 +491,21 @@ impl StoredRewind {
 
         let snapshot = &point.snapshot;
         Self {
+            coverage: Some(StoredCoverage {
+                version: 1,
+                paths: point
+                    .backups
+                    .iter()
+                    .map(|backup| {
+                        backup
+                            .path
+                            .strip_prefix(project)
+                            .unwrap_or(&backup.path)
+                            .display()
+                            .to_string()
+                    })
+                    .collect(),
+            }),
             conversation: snapshot.conversation.clone(),
             turns: snapshot.turns,
             tokens: snapshot.tokens,
@@ -535,6 +570,18 @@ impl StoredRewind {
         use base64::Engine;
         use bravebot_agent::workspace::{Backup, Before};
 
+        let mut wrote_over = self.wrote_over;
+        if let Some(coverage) = self.coverage {
+            for path in coverage.paths {
+                if !wrote_over.iter().any(|backup| backup.path == path) {
+                    wrote_over.push(StoredBackup {
+                        path,
+                        before: NOT_KEPT.into(),
+                        bytes: None,
+                    });
+                }
+            }
+        }
         let mut trust = TrustStore::new(root);
         for rule in self.trust.iter().flatten() {
             if rule.integrity == TRUSTED {
@@ -548,6 +595,7 @@ impl StoredRewind {
         }
 
         RewindPoint {
+            coverage: Default::default(),
             snapshot: TurnSnapshot {
                 conversation: self.conversation,
                 turns: self.turns,
@@ -561,8 +609,7 @@ impl StoredRewind {
                 title: self.title,
                 was_wrote: self.wrote,
             },
-            backups: self
-                .wrote_over
+            backups: wrote_over
                 .into_iter()
                 .map(|held| {
                     let was = match held.before.as_str() {
@@ -1007,7 +1054,17 @@ impl Record {
     /// come back under it, as the trust map's rules do: a rewind is about the files this
     /// checkout has, not the ones the machine that wrote the record had.
     pub fn rewind_points(&self, root: impl AsRef<std::path::Path>) -> Vec<RewindPoint> {
-        self.rewind
+        let start = self
+            .rewind
+            .iter()
+            .rposition(|point| {
+                !point
+                    .coverage
+                    .as_ref()
+                    .is_some_and(|coverage| coverage.version == 1)
+            })
+            .map_or(0, |index| index + 1);
+        self.rewind[start..]
             .iter()
             .cloned()
             .map(|point| point.into_point(root.as_ref()))
@@ -1314,6 +1371,7 @@ impl Handle {
             rewind: standing
                 .rewind
                 .iter()
+                .filter(|point| point.coverage.is_valid())
                 .map(|point| StoredRewind::of(point, &self.project))
                 .collect(),
         };
@@ -1868,6 +1926,7 @@ pub fn fork(project: &Path, source_id: &str) -> Option<Record> {
     record.started = now();
     record.updated = now();
     record.title = format!("{} (fork)", record.title);
+    record.rewind.clear();
 
     if let Some(directory) = writable_project_directory(project) {
         let path = directory.join(format!("{}.json", record.id));
@@ -2668,9 +2727,72 @@ mod tests {
         );
     }
 
+    /// Missing evidence cannot mean that an old transcript can restore grants over current files.
+    #[test]
+    fn checkpoints_require_known_coverage_even_after_a_marker_losing_round_trip() {
+        let mut record = a_record();
+        record.trust = Some(vec![StoredRule {
+            path: "output".into(),
+            integrity: UNTRUSTED.into(),
+        }]);
+        record.rewind = vec![a_stored_point(vec![]), a_stored_point(vec![])];
+        assert_eq!(record.rewind_points("/work").len(), 2);
+        record.rewind[1].coverage.as_mut().unwrap().version = 99;
+        assert!(record.rewind_points("/work").is_empty());
+        record.rewind[1].coverage.as_mut().unwrap().version = 1;
+        let mut encoded = serde_json::to_value(&record).unwrap();
+        for point in encoded["rewind"].as_array_mut().unwrap() {
+            point.as_object_mut().unwrap().remove("coverage");
+        }
+        for unknown in [
+            serde_json::json!({"version": 2, "different": []}),
+            serde_json::json!("future format"),
+            serde_json::json!({"version": 1}),
+        ] {
+            let mut future = encoded.clone();
+            future["rewind"][1]["coverage"] = unknown;
+            let loaded: Record = serde_json::from_value(future).unwrap();
+            assert!(loaded.rewind_points("/work").is_empty());
+            assert_eq!(loaded.title, record.title);
+        }
+        let loaded: Record = serde_json::from_value(encoded).unwrap();
+        assert!(loaded.rewind_points("/work").is_empty());
+        assert_eq!(loaded.trust.as_ref().unwrap()[0].integrity, UNTRUSTED);
+        assert_eq!(loaded.title, record.title);
+        let roundtrip: Record =
+            serde_json::from_slice(&serde_json::to_vec(&loaded).unwrap()).unwrap();
+        assert!(roundtrip.rewind_points("/work").is_empty());
+    }
+
+    /// A missing payload is not evidence that a path never changed.
+    #[test]
+    fn required_paths_missing_from_backup_entries_are_unavailable_restorations() {
+        let mut point = a_stored_point(vec![]);
+        point
+            .coverage
+            .as_mut()
+            .unwrap()
+            .paths
+            .push("missing.txt".into());
+        let restored = point.into_point(Path::new("/work"));
+        assert_eq!(restored.backups.len(), 1);
+        assert_eq!(restored.backups[0].path, Path::new("/work/missing.txt"));
+        assert_eq!(
+            restored.backups[0].was,
+            bravebot_agent::workspace::Before::NotKept
+        );
+    }
+
     /// One point as a record holds it, with the paths a test wants to read back.
     fn a_stored_point(wrote_over: Vec<StoredBackup>) -> StoredRewind {
         StoredRewind {
+            coverage: Some(StoredCoverage {
+                version: 1,
+                paths: wrote_over
+                    .iter()
+                    .map(|backup| backup.path.clone())
+                    .collect(),
+            }),
             conversation: bravebot_agent::Conversation::new().snapshot(),
             turns: 1,
             tokens: 0,
