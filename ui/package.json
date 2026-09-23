@@ -8,9 +8,12 @@
   "scripts": {
     "postinstall": "npm run setup:electron",
     "name-dev-app": "node scripts/name-dev-app.mjs",
+    "deps": "node scripts/check-deps.mjs",
+    "prebridge": "npm run deps",
     "bridge": "./scripts/build-bridge.sh",
-    "dev": "npm run setup:electron && npm run bridge && electron-vite dev",
+    "dev": "npm run deps && npm run setup:electron && npm run bridge && electron-vite dev",
     "build": "npm run bridge && tsc --noEmit && electron-vite build",
+    "pretypecheck": "npm run deps",
     "typecheck": "tsc --noEmit",
     "start": "electron-vite preview",
     "drive:smoke": "node scripts/drive-smoke.mjs",
@@ -36,7 +39,7 @@
     "drive:packaged": "node scripts/drive-packaged.mjs",
     "demo": "npm run bridge && electron-vite build && node scripts/demo.mjs",
     "setup:electron": "node scripts/setup-electron.mjs && node scripts/name-dev-app.mjs",
-    "prestart": "npm run setup:electron",
+    "prestart": "npm run deps && npm run setup:electron",
     "drive:manual-walkthrough": "npm run build && node scripts/drive-manual-walkthrough.mjs",
     "drive:agent-settings": "npm run build && node scripts/drive-agent-settings.mjs",
     "drive:agent-rpc": "npm run bridge && node scripts/drive-agent-rpc.mjs"
