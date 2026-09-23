@@ -1580,8 +1580,6 @@ fn write<S: Sink, C: Confirmer>(
     };
     let body_label = body.label();
 
-    let proof = policy.authorise_display_release("proposed write");
-    let shown = body.clone().declassify(&proof);
     // The pre-image and the version it was read at, taken together, exactly as a turn's write
     // takes them: prior bytes a sibling effect left untrusted cannot answer for a credential in
     // this body, and the approval minted below is spent only on the version shown here.
@@ -1594,6 +1592,9 @@ fn write<S: Sink, C: Confirmer>(
                 capture.revision_of(&key),
             )
         });
+    // Labelled from the one peek, as a turn's write does it, so the comparison below can be
+    // made inside the kernel on a value the driver never holds as a string.
+    let replaced = crate::workspace::peeked_for_review(existing.clone());
     let replaced_age = workspace.age_of(&path);
     let intent = if existing.is_some() {
         Intent::Overwrite
@@ -1627,13 +1628,25 @@ fn write<S: Sink, C: Confirmer>(
         .iter()
         .map(|finding| finding.describe())
         .collect();
+    // What the step would change, compared inside the kernel and released once, exactly as a
+    // turn's write does it.
+    let reviewed =
+        crate::tools::review_a_write(policy, "write_file", intent, &replaced, &body, replaced_age);
+
     if policy.write_needs_approval(&path, body_label, Destination::Named) || !to_approve.is_empty()
     {
+        // Released for display only, and inside the branch because there is no screen on the
+        // other one, exactly as a turn's write does it.
+        let shown = {
+            let proof = policy.authorise_display_release("proposed write");
+            body.clone().declassify(&proof)
+        };
         let request = WriteRequest {
             intent,
             existing: existing.clone(),
             path: path.clone(),
-            contents: shown.clone(),
+            contents: shown,
+            diff: reviewed.diff.clone(),
             untrusted: !body_label.is_trusted(),
             remark,
             credentials: to_approve,
@@ -1653,8 +1666,7 @@ fn write<S: Sink, C: Confirmer>(
         )
         .map_err(|e| e.to_string())?;
 
-    let (note, changes) =
-        crate::tools::change_report(intent, existing.as_deref(), &shown, replaced_age);
+    let crate::tools::Reviewed { note, changes, .. } = reviewed;
     Ok(Done {
         note: crate::tools::carried_note(note, &scanned),
         changes,

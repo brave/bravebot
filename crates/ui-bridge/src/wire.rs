@@ -240,7 +240,7 @@ fn said(said: &Said) -> Value {
 /// person. Leaving it off the wire would send a front-end an approval prompt for an
 /// ordinary-looking write with the reason for it removed.
 pub fn write_request(id: u64, request: &WriteRequest) -> Value {
-    let diff = request.diff();
+    let diff = &request.diff;
     json!({
         "request": id,
         "path": request.path,
@@ -331,7 +331,7 @@ pub fn output_request(id: u64, request: &OutputRequest) -> Value {
         "request": id,
         "command": request.command,
         "reference": request.reference,
-        "lines": request.lines(),
+        "lines": request.lines,
         "output": request.output,
         "vetting": vetting(request.verdict, request.reason.as_deref()),
         "summary": request.summary(),
@@ -482,6 +482,6 @@ fn vetting(verdict: bravebot_core::vetting::Verdict, reason: Option<&str>) -> Va
 
 pub fn vet_request(id: u64, request: &VetRequest) -> Value {
     json!({ "request": id, "origin": request.origin, "expects": request.expects,
-        "content": request.content, "lines": request.lines(),
+        "content": request.content, "lines": request.lines,
         "vetting": vetting(request.verdict, request.reason.as_deref()) })
 }

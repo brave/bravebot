@@ -1942,37 +1942,76 @@ const DIFF_CONTEXT: usize = 3;
 /// The decision being asked for is about the path, not about these lines.
 const VOUCH_PREVIEW: usize = 20;
 
+/// What a write would do, told three ways, all of them built in one place.
+///
+/// The sentence and the hunks are what a person is told afterwards; the diff is what the
+/// question before it is drawn from. All three are the same comparison, so all three are made
+/// together, inside the gate, and released once.
+#[derive(Debug, Clone)]
+pub(crate) struct Reviewed {
+    /// The line saying how much changed.
+    pub note: String,
+    /// The hunks, condensed to what is worth the room in a transcript.
+    pub changes: Vec<crate::diff::Change>,
+    /// The whole comparison, for the prompt a person approves from.
+    pub diff: Diff,
+}
+
+/// Compare what a write would leave against what is there, and release the result for the
+/// screen.
+///
+/// The comparison happens inside [`Policy::render_pair_in_place`], on the body while it is still
+/// labelled and on a labelled peek of the file it replaces, and what is released is the finished
+/// rows. The order is the whole point. A driver that released the body first and diffed it
+/// afterwards would be counting and searching bytes under a witness minted to put them on a
+/// screen, which is the read `docs/specs/labels.md` LABEL-6 refuses: reshaping content for
+/// display is not a fourth destination, and it is not a read a driver may do for itself.
+pub(crate) fn review_a_write<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    tool: &str,
+    intent: Intent,
+    existing: &Labelled<String>,
+    body: &Labelled<String>,
+    replaced_age: Option<std::time::Duration>,
+) -> Reviewed {
+    let reviewed = policy.render_pair_in_place(tool, existing, body, |existing, written| {
+        let diff = Diff::compute(&existing, &written);
+        let (note, changes) = change_report(intent, &diff, replaced_age);
+        Reviewed {
+            note,
+            changes,
+            diff,
+        }
+    });
+    let proof = policy.authorise_display_release("what a write would change");
+    reviewed.declassify(&proof)
+}
+
 /// What a write did, for the person watching: a line saying how much changed, and the hunks
 /// themselves where showing them is worth the room.
 ///
-/// Both sides are strings already released to a screen, so this reasons about no labels, the
-/// same footing [`crate::diff`] has always been on.
+/// Reads the comparison rather than the two sides of it, and is reached only from inside the
+/// reshape [`review_a_write`] runs. Neither side is ever a string this crate holds outside that
+/// gate.
 ///
 /// A new file says it is new and shows what it now holds. It used to show a line count and
 /// nothing else, on the grounds that every line of it is an addition and the body would fill the
 /// screen. The display trims what it draws, so it does not; and in a directory the user has
 /// vouched for a create is never reviewed either, so that count was the only thing they were
 /// ever going to be told about a file that had just appeared in their workspace.
-pub(crate) fn change_report(
+fn change_report(
     intent: Intent,
-    existing: Option<&str>,
-    written: &str,
+    diff: &Diff,
     replaced_age: Option<std::time::Duration>,
 ) -> (String, Vec<crate::diff::Change>) {
+    let changes = diff.condensed(DIFF_CONTEXT);
     if intent == Intent::Create {
         return (
-            format!(
-                "new file, {}",
-                tally(written.lines().count(), "line", "lines")
-            ),
-            written
-                .lines()
-                .map(|line| crate::diff::Change::Added(line.to_string()))
-                .collect(),
+            format!("new file, {}", tally(diff.added(), "line", "lines")),
+            changes,
         );
     }
 
-    let diff = Diff::compute(existing.unwrap_or(""), written);
     let changed = format!(
         "added {}, removed {}",
         tally(diff.added(), "line", "lines"),
@@ -1994,7 +2033,7 @@ pub(crate) fn change_report(
         (Intent::Overwrite, None) => format!("replaced the file, {changed}"),
         _ => changed,
     };
-    (note, diff.condensed(DIFF_CONTEXT))
+    (note, changes)
 }
 
 /// Run one tool call the model asked for.
@@ -3229,13 +3268,6 @@ fn write_file<S: Sink, C: Confirmer>(
     };
     let body_label = body.label();
 
-    // Released for display only, and released whether or not anyone is asked: the reviewer sees
-    // it before approving, and the same text is what the finished line reports having written.
-    // A display release cannot feed an effect.
-    let shown = {
-        let proof = policy.authorise_display_release("proposed write");
-        body.clone().declassify(&proof)
-    };
     let (existing, existing_trusted, approved_revision) =
         policy.capture_files(|policy, capture| {
             let key = workspace.trust_key(&proposed_path);
@@ -3245,6 +3277,11 @@ fn write_file<S: Sink, C: Confirmer>(
                 capture.revision_of(&key),
             )
         });
+    // The same bytes, with a label on, so the comparison below can be made inside the kernel.
+    // Labelled from the one peek rather than read a second time: two reads of a file somebody
+    // else may be writing can disagree, and then the diff a person approves is of a version
+    // that never existed.
+    let replaced = crate::workspace::peeked_for_review(existing.clone());
     // Read before the write, since afterwards the age is the age of this write.
     let replaced_age = workspace.age_of(&proposed_path);
     let intent = if existing.is_some() {
@@ -3286,14 +3323,29 @@ fn write_file<S: Sink, C: Confirmer>(
     // it to them, so a body the scan has doubts about is a body somebody looks at even where the
     // path's own rule would not have asked.
     let to_approve = describe_all(&scanned.to_approve());
+
+    // What the write would change, compared inside the kernel and released once. The question
+    // below is drawn from it and so is the line the person is told afterwards, which is the
+    // same comparison and so is made once.
+    let reviewed = review_a_write(policy, "write_file", intent, &replaced, &body, replaced_age);
+
     if policy.write_needs_approval(&proposed_path, body_label, destination)
         || !to_approve.is_empty()
     {
+        // Released for display only, and inside the branch because there is no screen on the
+        // other one: the reviewer reads this before approving, and nothing after the write
+        // reads it, so releasing it where nobody is asked would put a declassification in the
+        // trail with no audience for it. A display release cannot feed an effect.
+        let shown = {
+            let proof = policy.authorise_display_release("proposed write");
+            body.clone().declassify(&proof)
+        };
         let request = WriteRequest {
             intent,
             existing: existing.clone(),
             path: proposed_path.clone(),
-            contents: shown.clone(),
+            contents: shown,
+            diff: reviewed.diff.clone(),
             // The reviewer is the only one who will read this. Say what they are reading.
             untrusted: !body_label.is_trusted(),
             remark,
@@ -3311,7 +3363,7 @@ fn write_file<S: Sink, C: Confirmer>(
 
     match workspace.write_endorsed_at_revision(policy, &path, &body, Some(approved_revision)) {
         Ok(_) => {
-            let (note, changes) = change_report(intent, existing.as_deref(), &shown, replaced_age);
+            let Reviewed { note, changes, .. } = reviewed;
 
             // What the model is told, which is what its own account of the turn will repeat. It
             // used to be told "wrote" either way, and would go on to say it had created a file
@@ -3434,11 +3486,6 @@ fn edit_file<S: Sink, C: Confirmer>(
     let body = policy.label_model_output("edit_file", replaced.contents);
     let body_label = body.label();
 
-    let shown = {
-        let proof = policy.authorise_display_release("proposed edit");
-        body.clone().declassify(&proof)
-    };
-
     // The same scan a whole-file write goes through, for the same reason and at the same moment:
     // an edit is a write of the file with a passage swapped, and a secret pasted into a passage
     // lands in the tree exactly as one written whole does. The pre-image here is the text the
@@ -3451,13 +3498,26 @@ fn edit_file<S: Sink, C: Confirmer>(
     // As in a whole-file write: a guess is put to a person rather than deciding on its own, and
     // asking is the only way to put it.
     let to_approve = describe_all(&scanned.to_approve());
+
+    // The same comparison the question is drawn from and the line afterwards states, made once
+    // and inside the kernel. The pre-image is the labelled value the read produced rather than
+    // the copy released to locate the passage in.
+    let reviewed = review_a_write(policy, "edit_file", Intent::Edit, &source, &body, None);
+
     if policy.write_needs_approval(&proposed_path, body_label, destination)
         || !to_approve.is_empty()
     {
+        // Released for display only, and inside the branch for the reason a whole-file write
+        // releases inside its own: nothing past the question reads it.
+        let shown = {
+            let proof = policy.authorise_display_release("proposed edit");
+            body.clone().declassify(&proof)
+        };
         let request = WriteRequest {
             path: proposed_path.clone(),
-            contents: shown.clone(),
+            contents: shown,
             existing: Some(current.clone()),
+            diff: reviewed.diff.clone(),
             intent: Intent::Edit,
             untrusted: !body_label.is_trusted(),
             // An edit is the planner's own words over a file it read. No processor was involved,
@@ -3484,7 +3544,7 @@ fn edit_file<S: Sink, C: Confirmer>(
     // on a promoted value would be routed by the model's own proposal.
     match workspace.write_endorsed_if_unchanged(policy, &proposed, &body, &current) {
         Ok(_) => {
-            let (note, changes) = change_report(Intent::Edit, Some(&current), &shown, None);
+            let Reviewed { note, changes, .. } = reviewed;
             let note = carried_note(note, &scanned);
             let headline = format!("edited {shown_path}: {occurrences} replacement(s)");
 
@@ -3927,15 +3987,24 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
         // Bypassing is the standing exception, as it was before screening existed: the mode answers
         // this without drawing anything, so the branch means a prompt would be drawn wherever there
         // is anybody to draw it for, and never that somebody read what was released.
-        let shown = {
+        // The count is taken here, inside the reshape, rather than off the bytes afterwards.
+        // Counting released bytes is the read LABEL-6 refuses, and it is the same question the
+        // kernel already answers for a slot: how much there is, not what it says.
+        let (shown, lines) = {
             let content = match policy.resolve("read_output", &slot, tools.slots) {
                 Ok(content) => content,
                 Err(denial) => return problem(format!("refused: {denial}")),
             };
+            let measured = policy.render_in_place("read_output", &content, |text| {
+                let lines = text.lines().count();
+                (text, lines)
+            });
             let proof =
                 policy.authorise_display_release("command output the planner asked to read");
-            content.declassify(&proof)
+            measured.declassify(&proof)
         };
+
+        counted = lines;
 
         let request = crate::confirm::OutputRequest {
             command: tools
@@ -3944,12 +4013,11 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
                 .unwrap_or("a command")
                 .to_string(),
             output: shown,
+            lines,
             reference: slot.to_string(),
             verdict,
             reason,
         };
-
-        counted = request.lines();
 
         // Says the bytes are not coming and not who decided that. Under bypass with screening asked
         // for, nobody was asked and a check answered in their place, so naming the user would be a
@@ -4099,13 +4167,20 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
         // Bypassing is the standing exception, as it was before screening existed: the mode answers
         // this without drawing anything, so the branch means a prompt would be drawn wherever there
         // is anybody to draw it for, and never that somebody read what was released.
-        let shown = {
+        // Counted inside the reshape, as `read_output` counts what it shows, and for the same
+        // reason: the bytes below are released for a screen and nothing in this crate may read
+        // them, a count included.
+        let (shown, lines) = {
             let content = match policy.resolve("vet_content", &slot, tools.slots) {
                 Ok(content) => content,
                 Err(denial) => return problem(format!("refused: {denial}")),
             };
+            let measured = policy.render_in_place("vet_content", &content, |text| {
+                let lines = text.lines().count();
+                (text, lines)
+            });
             let proof = policy.authorise_display_release("content the planner asked to be shown");
-            content.declassify(&proof)
+            measured.declassify(&proof)
         };
         let reason = said.map(|reason| {
             let proof = policy.authorise_display_release("what a check said about content");
@@ -4136,15 +4211,16 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
             }
         };
 
+        counted = lines;
+
         let request = crate::confirm::VetRequest {
             origin,
             expects,
             content: shown,
+            lines,
             verdict,
             reason,
         };
-
-        counted = request.lines();
 
         // Says the bytes are not coming and not who decided that, for the reason `read_output`
         // carries: under bypass with screening asked for the answer came from a check rather than
@@ -7256,7 +7332,11 @@ mod tests {
         /// directory they have vouched for nothing else will tell them either.
         #[test]
         fn a_new_file_says_it_is_new_and_shows_what_it_holds() {
-            let (note, changes) = change_report(Intent::Create, None, "one\ntwo\nthree\n", None);
+            let (note, changes) = change_report(
+                Intent::Create,
+                &Diff::compute("", "one\ntwo\nthree\n"),
+                None,
+            );
             assert_eq!(note, "new file, 3 lines");
             assert_eq!(
                 changes,
@@ -7275,16 +7355,17 @@ mod tests {
         /// lines looks exactly like a two-line edit.
         #[test]
         fn an_overwrite_says_it_replaced_a_file_and_an_edit_does_not() {
-            let (overwritten, _) = change_report(Intent::Overwrite, Some("old\n"), "new\n", None);
+            let (overwritten, _) =
+                change_report(Intent::Overwrite, &Diff::compute("old\n", "new\n"), None);
             assert_eq!(
                 overwritten,
                 "replaced the file, added 1 line, removed 1 line"
             );
 
-            let (edited, _) = change_report(Intent::Edit, Some("old\n"), "new\n", None);
+            let (edited, _) = change_report(Intent::Edit, &Diff::compute("old\n", "new\n"), None);
             assert_eq!(edited, "added 1 line, removed 1 line");
 
-            let (created, _) = change_report(Intent::Create, None, "new\n", None);
+            let (created, _) = change_report(Intent::Create, &Diff::compute("", "new\n"), None);
             assert_eq!(created, "new file, 1 line");
         }
 
@@ -7295,8 +7376,7 @@ mod tests {
         fn an_overwrite_says_how_old_the_file_it_replaced_was() {
             let (note, _) = change_report(
                 Intent::Overwrite,
-                Some("old\n"),
-                "new\n",
+                &Diff::compute("old\n", "new\n"),
                 Some(std::time::Duration::from_secs(12 * 60)),
             );
             assert_eq!(
@@ -7311,8 +7391,7 @@ mod tests {
         fn an_edit_is_reported_by_what_it_changed() {
             let (note, changes) = change_report(
                 Intent::Edit,
-                Some("keep\nold\n"),
-                "keep\nnew\nextra\n",
+                &Diff::compute("keep\nold\n", "keep\nnew\nextra\n"),
                 None,
             );
             assert_eq!(note, "added 2 lines, removed 1 line");
@@ -7326,7 +7405,7 @@ mod tests {
         /// read as though the whole file had been rewritten.
         #[test]
         fn an_edit_that_changes_nothing_says_nothing_changed() {
-            let (note, _) = change_report(Intent::Edit, Some("same\n"), "same\n", None);
+            let (note, _) = change_report(Intent::Edit, &Diff::compute("same\n", "same\n"), None);
             assert_eq!(note, "added 0 lines, removed 0 lines");
         }
 

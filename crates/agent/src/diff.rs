@@ -5,8 +5,11 @@
 //! head and spot the difference. So the confirmation shows a diff, and the parts that did
 //! not change are collapsed to keep the question on screen.
 //!
-//! Both sides arrive here as plain strings. They have already been through the gates and
-//! released for display, so nothing in this module needs to reason about labels.
+//! Both sides arrive here as plain strings, and this module reasons about no labels, because it
+//! is reached from inside the gate rather than after it. A diff counts and compares content, so
+//! computing one from bytes already released for a screen would be the read
+//! [LABEL-6](../../../docs/specs/labels.md#LABEL-6) refuses. `Policy::render_pair_in_place` is
+//! what hands the two sides over, and what comes back out is labelled by the taint of both.
 
 /// One line of a rendered diff.
 #[derive(Debug, Clone, PartialEq, Eq)]

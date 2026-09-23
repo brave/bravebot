@@ -23198,3 +23198,346 @@ fn a_credential_pasted_by_an_edit_leaves_the_file_as_it_was() {
         "a credential an edit pasted in was written to the tree"
     );
 }
+
+// ------------------------------------------------- reshaping a write for the screen
+
+/// Where the trail says a gate ran, by index, so two of them can be put in order.
+///
+/// Panics naming the gate it could not find, because an absent gate is the failure these tests
+/// are looking for: a driver doing the reshape itself records nothing, so the fault shows up as
+/// a gate that is not there rather than as one in the wrong place.
+fn gate_at(sink: &RecordingSink, gate: &str, detail: &str) -> usize {
+    sink.events()
+        .iter()
+        .position(|event| match event {
+            Event::GatePassed {
+                gate: passed,
+                detail: said,
+            } => *passed == gate && said.contains(detail),
+            _ => false,
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "no {gate} gate saying {detail:?} in the trail: {:?}",
+                sink.events()
+            )
+        })
+}
+
+/// What a write changed is counted and diffed inside the kernel, and only then released.
+///
+/// The note a person reads and the hunks beside it are a search of the body: its lines are
+/// counted and compared, one at a time, against the file being replaced. LABEL-6 says minting a
+/// witness is not permission to inspect, so a driver that released the body for the screen and
+/// then diffed what it was handed would be reading content under a witness minted to put it
+/// somewhere else. The trail is what tells the two apart, and the order is the whole of the
+/// difference: the reshape is recorded before the release rather than after it.
+#[test]
+fn what_a_write_changed_is_diffed_inside_the_kernel_before_it_is_released() {
+    let scratch = Scratch::new("label6-write-reshape");
+    std::fs::write(scratch.path.join("notes.md"), "one\ntwo\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2(
+            "write_file",
+            r#"{"path":"notes.md","contents":"one\ntwo\nthree\n"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("add a line"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("notes.md")).unwrap(),
+        "one\ntwo\nthree\n",
+        "the write did not land, so nothing was reshaped for anybody"
+    );
+
+    let reshaped = gate_at(
+        &sink,
+        "render",
+        "write_file: two pieces of content reshaped together",
+    );
+    let released = gate_at(&sink, "display", "what a write would change");
+    assert!(
+        reshaped < released,
+        "the change was released before it was built, so the driver diffed bytes it had been \
+         handed for a screen: {:?}",
+        sink.events()
+    );
+}
+
+/// The reshape carries both sides, so the file being replaced taints the result.
+///
+/// A diff shows the old lines as the removed ones, so the rows are a function of the file on
+/// disk as much as of the body. A reshape over the body alone would record the whole comparison
+/// at the body's own label, which for the planner's own words is trusted, and the removed lines
+/// would have been laundered on the way to the screen. Nothing else in the trail would say so.
+///
+/// Both directions, because one of them passes without the pre-image: creating a file compares
+/// against nothing, and nothing has no provenance to carry.
+#[test]
+fn a_writes_reshape_is_labelled_by_the_file_it_replaces_and_not_by_the_body_alone() {
+    let mut recorded = Vec::new();
+    for (name, path, existing) in [
+        ("label6-write-taint-over", "notes.md", Some("one\ntwo\n")),
+        ("label6-write-taint-new", "fresh.md", None),
+    ] {
+        let scratch = Scratch::new(name);
+        if let Some(existing) = existing {
+            std::fs::write(scratch.path.join(path), existing).unwrap();
+        }
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+        let (endpoint, _received) = serve_sequence(vec![
+            tool_request_2(
+                "write_file",
+                &format!(r#"{{"path":"{path}","contents":"one\ntwo\nthree\n"}}"#),
+            ),
+            reply_with("done"),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+
+        turn::run(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("write the notes"),
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut sink,
+        )
+        .expect("turn runs");
+
+        let said = sink
+            .events()
+            .iter()
+            .find_map(|event| match event {
+                Event::GatePassed { gate, detail }
+                    if *gate == "render"
+                        && detail
+                            .contains("write_file: two pieces of content reshaped together") =>
+                {
+                    Some(detail.clone())
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no reshape of the write in the trail: {:?}", sink.events()));
+        recorded.push(said);
+    }
+
+    // The planner's own body over a file nobody vouched for. The lines being removed came off
+    // that file, so the comparison is untrusted however trusted the body is.
+    assert!(
+        recorded[0].ends_with("(U,priv)"),
+        "an overwrite's comparison was recorded at the body's label, so the lines it removes \
+         were laundered: {}",
+        recorded[0]
+    );
+    // Nothing was there, so nothing is being compared against and the rows are the body's own.
+    assert!(
+        recorded[1].ends_with("(T,pub)"),
+        "a create's comparison was tainted by a file that does not exist: {}",
+        recorded[1]
+    );
+}
+
+/// The line count on an output prompt is measured inside the kernel, not off the released bytes.
+///
+/// The prompt says how much the planner is being let read, and that number is a count of the
+/// content. Counting it in the driver after releasing it for the screen is the read LABEL-6
+/// refuses, so the count is taken in the same reshape the rows come out of, and the request
+/// carries it rather than working it out.
+#[test]
+fn the_lines_an_output_prompt_states_are_counted_inside_the_kernel() {
+    let scratch = Scratch::new("label6-output-count");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "first\nsecond\nthird\n").unwrap();
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cat where.txt"}"#),
+        tool_request("read_output", r#"{"ref":"ref:1"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ReadsWhatItRan::new(true);
+    let shown = confirmer.shown.clone();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    let asked = shown.lock().unwrap();
+    let request = asked.first().expect("the output prompt was put");
+    assert_eq!(
+        request.lines, 3,
+        "the prompt would say the wrong amount was being let through"
+    );
+
+    // Matched with the label on, as the vetting prompt's twin is: this tool reshapes the
+    // planner's own (U,pub) words too, to name the reference on its call line.
+    let counted = gate_at(
+        &sink,
+        "render",
+        "read_output: content reshaped without being read, still (U,priv)",
+    );
+    let released = gate_at(&sink, "display", "command output the planner asked to read");
+    assert!(
+        counted < released,
+        "the output was released before it was measured, so the driver counted bytes it had \
+         been handed for a screen: {:?}",
+        sink.events()
+    );
+}
+
+/// The same, on the other prompt that puts a slot's bytes on a screen.
+///
+/// `vet_content` is a second call site with a release of its own, and shared code is no evidence
+/// that both callers use it. So this asks the same question of it: the count the prompt states
+/// is taken while the content is still labelled, and the trail says so by having the reshape
+/// before the release rather than after it.
+#[test]
+fn the_lines_a_vetting_prompt_states_are_counted_inside_the_kernel() {
+    let scratch = Scratch::new("label6-vet-count");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "first\nsecond\nthird\n").unwrap();
+
+    let (endpoint, _received) = serve_sequence_answering_checks_with(
+        vec![reply_with(
+            r#"{"verdict": "safe", "reason": "three paths"}"#,
+        )],
+        vec![
+            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request(
+                "vet_content",
+                r#"{"ref":"ref:1","expects":"the paths the file records"}"#,
+            ),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ShownAfterAVet::new(true);
+    let shown = confirmer.shown.clone();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    let asked = shown.lock().unwrap();
+    let request = asked.first().expect("the user was asked");
+    assert_eq!(
+        request.lines, 3,
+        "the prompt would say the wrong amount was being let through"
+    );
+    drop(asked);
+
+    // The label is part of what is matched, because this tool reshapes twice: the call line
+    // naming the reference is a reshape of the planner's own (U,pub) words, and would answer a
+    // looser match whatever happened to the content.
+    let counted = gate_at(
+        &sink,
+        "render",
+        "vet_content: content reshaped without being read, still (U,priv)",
+    );
+    let released = gate_at(&sink, "display", "content the planner asked to be shown");
+    assert!(
+        counted < released,
+        "the content was released before it was measured, so the driver counted bytes it had \
+         been handed for a screen: {:?}",
+        sink.events()
+    );
+}
+
+/// And on the other tool that writes, because it is a third call site with a release of its own.
+///
+/// An edit reports what it changed exactly as a whole-file write does, off the same comparison,
+/// so it is the same read and needs the same order. The pre-image here is the labelled value the
+/// read produced rather than the copy released to locate the passage in.
+#[test]
+fn what_an_edit_changed_is_diffed_inside_the_kernel_before_it_is_released() {
+    let scratch = Scratch::new("label6-edit-reshape");
+    std::fs::write(scratch.path.join("notes.md"), "one\ntwo\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2(
+            "edit_file",
+            r#"{"path":"notes.md","old_text":"two","new_text":"three"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("rename the line"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("notes.md")).unwrap(),
+        "one\nthree\n",
+        "the edit did not land, so nothing was reshaped for anybody"
+    );
+
+    let reshaped = gate_at(
+        &sink,
+        "render",
+        "edit_file: two pieces of content reshaped together",
+    );
+    let released = gate_at(&sink, "display", "what a write would change");
+    assert!(
+        reshaped < released,
+        "the change was released before it was built, so the driver diffed bytes it had been \
+         handed for a screen: {:?}",
+        sink.events()
+    );
+}

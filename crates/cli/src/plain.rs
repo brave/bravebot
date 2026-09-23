@@ -670,7 +670,7 @@ fn change(request: &WriteRequest) -> Vec<String> {
         lines.extend(request.credentials.iter().map(|found| shown(found)));
     }
 
-    let diff = request.diff();
+    let diff = &request.diff;
     // A change too large to diff says so rather than showing a guess at it, which is what the
     // panel does with the same diff. The summary above still counts the lines.
     if !diff.is_exact() {
@@ -1166,6 +1166,7 @@ mod tests {
             path: "notes.md".to_string(),
             contents: "kept\nwritten\x1b[2J".to_string(),
             existing: Some("kept\nreplaced".to_string()),
+            diff: bravebot_agent::diff::Diff::compute("kept\nreplaced", "kept\nwritten\x1b[2J"),
             intent: bravebot_agent::confirm::Intent::Edit,
             untrusted: false,
             remark: None,
@@ -1196,6 +1197,7 @@ mod tests {
             path: "notes.md".to_string(),
             contents: "written\n".to_string(),
             existing: None,
+            diff: bravebot_agent::diff::Diff::compute("", "written\n"),
             intent: bravebot_agent::confirm::Intent::Create,
             untrusted: true,
             remark: Some(bravebot_agent::confirm::Remark {

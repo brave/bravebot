@@ -384,6 +384,7 @@ impl Reporter for RemoteReporter {
 mod tests {
     use super::*;
     use bravebot_agent::confirm::Intent;
+    use bravebot_agent::diff::Diff;
     use bravebot_core::todo::{Item, List, Status, rows};
     use std::sync::mpsc::channel;
     use std::thread;
@@ -393,6 +394,7 @@ mod tests {
             path: "notes.md".into(),
             contents: "body\n".into(),
             existing: None,
+            diff: Diff::compute("", "body\n"),
             intent: Intent::Create,
             untrusted: false,
             remark: None,
@@ -562,6 +564,7 @@ mod tests {
             origin: "example.com/notes".into(),
             expects: "the release notes".into(),
             content: "the notes".into(),
+            lines: 1,
             verdict: bravebot_core::vetting::Verdict::Safe,
             reason: None,
         }
