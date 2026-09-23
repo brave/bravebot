@@ -4873,10 +4873,14 @@ impl Session {
     }
 
     /// Note that a command is running, so the box shows it rather than an empty prompt.
+    ///
+    /// Through [`Session::back_to_the_tail`], because the command starting is not always a press:
+    /// one that waited in the queue is run as the turn ends, and nothing closes a view when a turn
+    /// ends.
     pub fn begin_command(&mut self) {
         self.status = Status::Running;
         self.started = Some(Instant::now());
-        self.scroll = 0;
+        self.back_to_the_tail();
     }
 
     /// Note that it finished, whatever came of it.
@@ -4886,13 +4890,17 @@ impl Session {
     }
 
     /// Show what a command printed, or that it printed nothing.
+    ///
+    /// Through [`Session::back_to_the_tail`], for the reason [`Session::begin_command`] is: what a
+    /// command captured lands when it finishes rather than when anybody asks to see it, and a person
+    /// who opened a view while it ran is reading that view.
     pub fn printed(&mut self, text: &str) {
         if text.trim().is_empty() {
             self.transcript.push(Entry::system(t!(session_no_output)));
         } else {
             self.transcript.push(Entry::output(text.trim_end()));
         }
-        self.scroll = 0;
+        self.back_to_the_tail();
     }
 
     /// Take the current input as a prompt, if there is one.
@@ -5187,7 +5195,10 @@ impl Session {
         }
         let line = self.queued.remove(0).prompt;
         self.transcript.push(Entry::shell(line.clone()));
-        self.scroll = 0;
+        // Through [`Session::back_to_the_tail`], so an open view stays where its reader put it. The
+        // queue giving this line up is the turn ending rather than a press: the line was typed
+        // rounds ago and nothing closes a view when a turn ends.
+        self.back_to_the_tail();
         Some(line)
     }
 
@@ -5780,6 +5791,12 @@ impl Session {
     }
 
     /// Start a turn for a prompt, whether it was sent just now or waited for its turn.
+    ///
+    /// Four of the five ways in here are nobody's press: a prompt the queue gives up when the turn
+    /// ends, a loop's tick, a watch firing, and a goal sending the work back. The fifth is
+    /// [`Session::submit`], and while a view is open there is no box to press Enter in, since every
+    /// key belongs to the mode. So the view is put back to its tail through
+    /// [`Session::back_to_the_tail`], which leaves an open one where its reader put it.
     fn begin_turn(
         &mut self,
         prompt: String,
@@ -5799,7 +5816,7 @@ impl Session {
             .insert(self.turns + 1, self.transcript.len());
         self.transcript.push(Entry::user(prompt.clone()));
         self.status = Status::Working;
-        self.scroll = 0;
+        self.back_to_the_tail();
         self.turns += 1;
         // The last turn's figures are not this one's, and a line reporting a finished turn while
         // another is running is a line about the wrong turn.
@@ -7112,6 +7129,213 @@ mod tests {
             session.status = Status::Working;
             session.input = prompt.to_string();
             assert!(session.queue(), "the prompt was not taken as a queued one");
+        }
+
+        /// The other half of the same queued prompt: where the turn ended before it was taken, the
+        /// prompt becomes a turn of its own instead of an interjection. Nobody pressed anything for
+        /// that either, and it is the loop draining the queue as the turn finishes, so a view
+        /// opened during the turn is still standing over the session when it happens.
+        #[test]
+        fn a_turn_the_queue_starts_leaves_an_open_view_where_its_reader_put_it() {
+            let mut session = Session::new("none");
+            spawn(&mut session, "reader", "find the parser");
+            queue(&mut session, "and tidy up");
+            session.watch();
+            session.complete("an answer", Vec::new(), 0);
+            session.scroll_up(6);
+
+            session
+                .send_queued()
+                .expect("the queued prompt did not begin a turn");
+            assert_eq!(
+                session.scroll, 6,
+                "the queue starting a turn pulled the open view back to its tail"
+            );
+
+            let mut session = Session::new("none");
+            queue(&mut session, "and tidy up");
+            session.complete("an answer", Vec::new(), 0);
+            session.scroll_up(6);
+
+            session
+                .send_queued()
+                .expect("the queued prompt did not begin a turn");
+            assert_eq!(
+                session.scroll, 0,
+                "the queue starting a turn left the transcript short of its tail"
+            );
+        }
+
+        /// A tick of a loop is the clock's doing: the person asked for a prompt every so often
+        /// once, rounds ago, and the tick that comes due while they are reading a delegate is not
+        /// them asking for the screen back.
+        #[test]
+        fn a_loop_tick_leaves_an_open_view_where_its_reader_put_it() {
+            let mut session = Session::new("none");
+            spawn(&mut session, "reader", "find the parser");
+            session.start_loop(crate::loops::request("5m /status"), Vec::new(), Vec::new());
+            session.complete("an answer", Vec::new(), 0);
+            session.watch();
+            session.scroll_up(6);
+
+            session
+                .dispatch_tick()
+                .expect("the tick did not begin a turn");
+            assert_eq!(
+                session.scroll, 6,
+                "a loop's tick pulled the open view back to its tail"
+            );
+
+            let mut session = Session::new("none");
+            session.start_loop(crate::loops::request("5m /status"), Vec::new(), Vec::new());
+            session.complete("an answer", Vec::new(), 0);
+            session.scroll_up(6);
+
+            session
+                .dispatch_tick()
+                .expect("the tick did not begin a turn");
+            assert_eq!(
+                session.scroll, 0,
+                "a loop's tick left the transcript short of its tail"
+            );
+        }
+
+        /// A file changing on disk is the one event in this program that nobody presses a key for
+        /// at all, so a view open when it fires is a view whose reader is still reading.
+        #[test]
+        fn a_watch_firing_leaves_an_open_view_where_its_reader_put_it() {
+            let later = Instant::now() + Duration::from_secs(6);
+
+            let mut session = Session::new("none");
+            spawn(&mut session, "reader", "find the parser");
+            session.arm_watch("notes.md", "/work", saw("first"));
+            session.watch();
+            session.scroll_up(6);
+
+            session
+                .watch_fired(later, |_, _| saw("second"))
+                .expect("the change did not begin a turn");
+            assert_eq!(
+                session.scroll, 6,
+                "a watch firing pulled the open view back to its tail"
+            );
+
+            let mut session = Session::new("none");
+            session.arm_watch("notes.md", "/work", saw("first"));
+            session.scroll_up(6);
+
+            session
+                .watch_fired(later, |_, _| saw("second"))
+                .expect("the change did not begin a turn");
+            assert_eq!(
+                session.scroll, 0,
+                "a watch firing left the transcript short of its tail"
+            );
+        }
+
+        /// A command line that waited is given up as the turn ends, starts, and prints what it
+        /// captured: three events in a row, none of them a press. All three are checked because
+        /// each moves the offset on its own, so a view that survived the first two would still be
+        /// pulled to the tail by the third.
+        #[test]
+        fn a_queued_command_line_leaves_an_open_view_where_its_reader_put_it() {
+            let mut session = Session::new("none");
+            spawn(&mut session, "reader", "find the parser");
+            queue_shell(&mut session, "ls -1");
+            session.watch();
+            session.complete("an answer", Vec::new(), 0);
+            session.scroll_up(6);
+
+            session
+                .take_queued_shell()
+                .expect("the queued command line was not taken");
+            assert_eq!(
+                session.scroll, 6,
+                "the queue giving up a command line pulled the open view back to its tail"
+            );
+
+            session.begin_command();
+            assert_eq!(
+                session.scroll, 6,
+                "the command starting pulled the open view back to its tail"
+            );
+
+            session.printed("first\nsecond");
+            assert_eq!(
+                session.scroll, 6,
+                "what the command printed pulled the open view back to its tail"
+            );
+
+            let mut session = Session::new("none");
+            queue_shell(&mut session, "ls -1");
+            session.complete("an answer", Vec::new(), 0);
+            session.scroll_up(6);
+
+            session
+                .take_queued_shell()
+                .expect("the queued command line was not taken");
+            assert_eq!(
+                session.scroll, 0,
+                "the queue giving up a command line left the transcript short of its tail"
+            );
+
+            session.scroll_up(6);
+            session.begin_command();
+            assert_eq!(
+                session.scroll, 0,
+                "the command starting left the transcript short of its tail"
+            );
+
+            session.scroll_up(6);
+            session.printed("first\nsecond");
+            assert_eq!(
+                session.scroll, 0,
+                "what the command printed left the transcript short of its tail"
+            );
+        }
+
+        /// A goal judged the work short and sent it back, which is the goal's round and not a
+        /// press: the condition was typed rounds ago and the person has been reading a view since.
+        #[test]
+        fn a_goal_sending_the_work_back_leaves_an_open_view_where_its_reader_put_it() {
+            let mut session = Session::new("none");
+            spawn(&mut session, "reader", "find the parser");
+            session.start_goal("cargo test exits 0".to_string());
+            session.watch();
+            session.scroll_up(6);
+
+            session
+                .goal_not_met("nothing above runs the tests".to_string())
+                .expect("the goal did not send the work back");
+            assert_eq!(
+                session.scroll, 6,
+                "a goal sending the work back pulled the open view back to its tail"
+            );
+
+            let mut session = Session::new("none");
+            session.start_goal("cargo test exits 0".to_string());
+            session.scroll_up(6);
+
+            session
+                .goal_not_met("nothing above runs the tests".to_string())
+                .expect("the goal did not send the work back");
+            assert_eq!(
+                session.scroll, 0,
+                "a goal sending the work back left the transcript short of its tail"
+            );
+        }
+
+        /// A command line typed and sent while a turn is running, which the queue gives up when it
+        /// ends. Shell mode is armed by hand because `!` is answered only at rest, and the line
+        /// under it is queued rather than run for exactly the reason this test is about.
+        fn queue_shell(session: &mut Session, line: &str) {
+            session.status = Status::Working;
+            session.shell = true;
+            session.input = line.to_string();
+            assert!(
+                session.queue_shell(),
+                "the command line was not taken as a queued one"
+            );
         }
 
         /// The whole of what the mode is for: the lines on the screen are the delegate's own.
