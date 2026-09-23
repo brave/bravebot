@@ -54,11 +54,33 @@
 //! let chosen = untrusted_file_contents();
 //! bravebot_i18n::t!(chosen);
 //! ```
+//!
+//! ## Why nothing here can parse a catalog
+//!
+//! The parser is compiled for the build script and for tests and is not part of the library a
+//! binary links, so a call to it is not a call anybody can write. The sibling module the
+//! generated code does call is there:
+//!
+//! ```
+//! assert_eq!(bravebot_i18n::plural::category("en", 1), "one");
+//! ```
+//!
+//! The parser is not:
+//!
+//! ```compile_fail
+//! bravebot_i18n::catalog::parse("hello = hi");
+//! ```
 
 #![forbid(unsafe_code)]
 
-/// The catalog format and its parser, shared with the build script that reads it.
-pub mod catalog;
+/// The catalog format and its parser, compiled only for tests.
+///
+/// The build script does not reach it through here: it `include!`s `src/catalog.rs` into itself,
+/// so the parser exists where a catalog is actually read, which is before the binary does. Gated
+/// so the shipped library links no parser, which is what makes LOCALE-6 a property of the build
+/// rather than of nobody calling an exported function.
+#[cfg(test)]
+mod catalog;
 /// Which plural category a number falls into, per language.
 pub mod plural;
 
