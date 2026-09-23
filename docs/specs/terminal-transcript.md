@@ -26,12 +26,14 @@ rules here are about a person being able to see what the agent did. What the use
 <a id="VIEW-1"></a>
 ### VIEW-1: the end of a reply is visible when it arrives, and scrolling back is deliberate
 
-A wrapped reply shows its end as it lands. Scrolling back changes the view and holds it there.
+A wrapped reply shows its end as it lands. Scrolling back changes the view and holds it there,
+whatever the running turn adds to the transcript below it.
 
 `verified-by: bravebot_tui::render::the_end_of_a_wrapped_reply_is_visible_when_it_arrives`
 `verified-by: bravebot_tui::render::scrolling_back_changes_the_view`
 `verified-by: bravebot_tui::render::a_reply_arriving_does_not_drag_a_scrolled_back_view_to_the_tail`
 `verified-by: bravebot_tui::state::a_chunk_of_the_reply_leaves_a_view_scrolled_back_at_rest_where_it_was`
+`verified-by: bravebot_tui::state::nothing_a_running_turn_adds_moves_a_scrolled_back_view`
 
 
 <a id="VIEW-2"></a>

@@ -1963,17 +1963,17 @@ impl Session {
         self.streaming.push_str(text);
     }
 
-    /// Put the turn's own view back at its tail for something the turn has just done.
+    /// Put the turn's own view back at its tail as a piece of work begins or a command line lands.
     ///
     /// Nothing while the delegate view is open, because `scroll` is that view's position then and
     /// the turn's own is held aside until it closes. A person who went to read a delegate or what
     /// a command printed asked for that screen, and a row arriving under the turn is not them
     /// asking for another.
     ///
-    /// For a one-off event only: a delegate starting, a preview released, a queued prompt taken, an
-    /// aside going out. Each happens once and changes what the session is doing, so the tail is
-    /// where its own view belongs afterwards. The reply arriving is not one of them, and
-    /// [`Session::streaming`] says why.
+    /// Each of those happens once and changes what the session is doing, so the tail is where its
+    /// own view belongs afterwards. Nothing a running turn adds below the view is one of them: a
+    /// person who scrolled back while it runs asked to read that place, and with nothing open over
+    /// it a view at the tail follows what arrives unmoved, since `scroll` is 0 there.
     fn back_to_the_tail(&mut self) {
         if self.watching.is_none() {
             self.scroll = 0;
@@ -2078,7 +2078,6 @@ impl Session {
         {
             watching.at += 1;
         }
-        self.back_to_the_tail();
         let mut entry = Entry::system("");
         entry.speaker = Speaker::Delegate;
         entry.delegate = Some(Delegate {
@@ -2421,8 +2420,9 @@ impl Session {
     /// something the session said. Where there is no such line, which should not happen, it goes
     /// on its own rather than being dropped: content released for a screen and then not drawn is
     /// the worst of both.
+    ///
+    /// Nothing about the view moves for it, for the reason [`Session::back_to_the_tail`] gives.
     pub fn show(&mut self, shown: Shown) {
-        self.back_to_the_tail();
         match self.working_lines().last_mut() {
             Some(entry) if entry.speaker == Speaker::Tool && entry.shown.is_none() => {
                 entry.shown = Some(shown);
@@ -5161,16 +5161,15 @@ impl Session {
     /// The oldest prompt rather than the oldest line, because neither a command nor a command line
     /// was ever offered to the turn: what the turn just took is the oldest line that had a copy in
     /// the buffer, and either of those queued ahead of it has one waiting there still.
+    ///
+    /// Nothing about the view moves for it, for the reason [`Session::back_to_the_tail`] gives: the
+    /// prompt was sent rounds ago, and the turn taking it is the turn's doing rather than a press.
     pub fn interjected(&mut self) {
         let Some(taken) = self.queued.iter().position(|line| line.waiting.is_sent()) else {
             return;
         };
         let gone = self.queued.remove(taken);
         self.transcript.push(Entry::user(gone.prompt));
-        // Through [`Session::back_to_the_tail`], so an open view stays where its reader put it.
-        // The turn taking a queued prompt is the turn's own doing and nobody pressed anything for
-        // it, and while a view is open `scroll` is that view's position rather than the turn's.
-        self.back_to_the_tail();
     }
 
     /// Begin the turn for the prompt queued longest ago, if the session is free to start one.
@@ -7143,8 +7142,7 @@ mod tests {
         }
 
         /// The turn taking a queued prompt is the turn's doing and not a press: the prompt was
-        /// sent rounds ago and the person has been reading a view since. Both states again, for
-        /// the reason above.
+        /// sent rounds ago and the person has been reading a view since.
         #[test]
         fn a_turn_taking_a_queued_prompt_leaves_an_open_view_where_its_reader_put_it() {
             let mut session = Session::new("none");
@@ -7158,16 +7156,55 @@ mod tests {
                 session.scroll, 6,
                 "the turn taking a queued prompt pulled the open view back to its tail"
             );
+        }
 
-            let mut session = Session::new("none");
-            queue(&mut session, "and tidy up");
-            session.scroll_up(6);
+        /// The same holds with no view open, where `scroll` is the transcript's own place, at rest
+        /// and under the scroller alike. Each of these lands below somebody reading further up
+        /// while the turn runs, and each moving the view would cost them their place once per
+        /// event, with nothing pressed to ask for it.
+        #[test]
+        fn nothing_a_running_turn_adds_moves_a_scrolled_back_view() {
+            type Lands = fn(&mut Session);
+            let events: [(&str, Lands); 3] = [
+                ("a released preview", |session| {
+                    session.show(quarantined("notes0.md"))
+                }),
+                ("a delegate starting", |session| {
+                    spawn(session, "reader", "find the parser");
+                }),
+                ("the turn taking a queued prompt", Session::interjected),
+            ];
+            for (event, lands) in events {
+                for (place, scroller) in [("at rest", false), ("under the scroller", true)] {
+                    let mut session = Session::new("none");
+                    queue(&mut session, "and tidy up");
+                    session.note_layout(Laid {
+                        width: 80,
+                        height: 10,
+                        rows: 100,
+                        ..Laid::default()
+                    });
+                    if scroller {
+                        session.open_scroller();
+                    }
+                    session.scroll_up(40);
+                    let looking_at = session.top_row();
+                    assert_eq!(looking_at, 50, "the view is not scrolled back off the tail");
 
-            session.interjected();
-            assert_eq!(
-                session.scroll, 0,
-                "the turn taking a queued prompt left the transcript short of its tail"
-            );
+                    lands(&mut session);
+                    session.note_layout(Laid {
+                        width: 80,
+                        height: 10,
+                        rows: 130,
+                        ..Laid::default()
+                    });
+                    assert_eq!(
+                        session.top_row(),
+                        looking_at,
+                        "{event} moved a view scrolled back {place}"
+                    );
+                }
+            }
         }
 
         /// A prompt typed and sent while a turn is running, which is what the turn later takes.
