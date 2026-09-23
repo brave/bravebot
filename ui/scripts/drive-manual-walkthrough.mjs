@@ -55,7 +55,8 @@ async function until(predicate, label) {
   while (!await predicate()) { assert(Date.now() < deadline, `${label} timed out; fixture errors: ${failures}`); await delay(50) }
 }
 try {
-  app = await electron.launch({ args: ['.', ...(process.env.CI ? ['--no-sandbox'] : []), ...(process.platform === 'linux' ? ['--ozone-platform=x11'] : []), `--user-data-dir=${profile}`], env, timeout: 40000 })
+  // Under xvfb the GPU process's GL start can hold the hidden window's first paint past a click's timeout on a fresh runner.
+  app = await electron.launch({ args: ['.', ...(process.env.CI ? ['--no-sandbox'] : []), ...(process.platform === 'linux' ? ['--ozone-platform=x11', '--disable-gpu'] : []), `--user-data-dir=${profile}`], env, timeout: 40000 })
   page = await app.firstWindow(); page.setDefaultTimeout(15000)
   await page.setViewportSize({ width: 1350, height: 900 })
   const uiErrors = []; page.on('pageerror', error => uiErrors.push(error.message))
