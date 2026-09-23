@@ -21,6 +21,7 @@ use bravebot_agent::confirm::{
 };
 use bravebot_agent::report::{Activity, Landing, Phase, Reporter, Shown};
 use bravebot_core::ask::{Answer, Asking};
+use bravebot_core::delegate::DelegateId;
 use bravebot_core::event::Sink;
 use bravebot_core::todo::Row;
 use serde_json::{Value, json};
@@ -244,10 +245,16 @@ impl Sink for BridgeSink {
         // two renderings of one trail would drift the moment either changed.
         let data = json!({
             "turn": self.turn,
-            "event": bravebot_session::audit::as_json(&event, None),
+            "event": bravebot_session::audit::as_json(&event, self.trail.recording()),
         });
         self.emitter.send(Event::new("audit", &self.session, data));
         self.trail.emit(event);
+    }
+
+    /// Passed to the trail, which both readers above take the answer from: the record written at
+    /// the end of the turn and the event sent out as it happens name the same run (TRACE-4).
+    fn recording_for(&mut self, delegate: Option<DelegateId>) {
+        self.trail.recording_for(delegate);
     }
 }
 

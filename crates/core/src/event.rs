@@ -147,9 +147,13 @@ pub trait Sink {
     /// says whose a report is: it already holds the answer, and reading the record back to work
     /// the answer out would be taking it from prose a model had a hand in.
     ///
-    /// Ignored by a sink that keeps no attribution, and by every run that spawns nothing: a trail
-    /// told nothing is a turn's own.
-    fn recording_for(&mut self, _delegate: Option<DelegateId>) {}
+    /// Required rather than defaulted, because a default body is what a sink gets for not
+    /// answering the question at all, and a sink that keeps records and no attribution writes
+    /// every run's decisions down as the turn's own: a delegate's carry no number for that run,
+    /// and two delegates of the same kind read identically. A run that spawns nothing calls this
+    /// with `None` or never calls it, which are the same thing: a trail told nothing is a turn's
+    /// own.
+    fn recording_for(&mut self, delegate: Option<DelegateId>);
 }
 
 /// Discards everything. For tests that do not assert on the trail.
@@ -158,6 +162,9 @@ pub struct NullSink;
 
 impl Sink for NullSink {
     fn emit(&mut self, _event: Event) {}
+
+    /// Nothing to attribute: there is no record here to name.
+    fn recording_for(&mut self, _delegate: Option<DelegateId>) {}
 }
 
 /// Retains events in order. For tests, and for replaying a run's trail.
