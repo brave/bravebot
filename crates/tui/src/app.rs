@@ -3811,10 +3811,11 @@ fn named_directories(whence: Whence, named: &[String]) -> Named {
 ///
 /// [PERM-14]: ../../docs/specs/permissions.md
 fn proposed_rules(settings: &bravebot_config::Settings) -> Vec<bravebot_agent::granted::Proposed> {
-    settings
-        .allow_ignored()
-        .map(|(path, rule)| bravebot_agent::granted::Proposed::new(path, rule))
-        .collect()
+    // The rules among the dropped entries and not every dropped entry: one that is not a rule
+    // decides nothing whoever writes it, so PERM-15 reports it under PERM-11 rather than offering
+    // it, and the list this builds is both what the question offers and what the session reports
+    // as dropped.
+    bravebot_agent::permissions::proposed(settings, bravebot_agent::home::profile().as_deref())
 }
 
 /// What becomes of the `allow` rules a checkout proposed.
@@ -13298,6 +13299,40 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    /// PERM-11, PERM-15: the list this interface builds holds the entries that are rules and not
+    /// the ones that are not. A line nothing can act on is reported for what is wrong with it, so
+    /// offering it in the box would ask somebody to grant a rule that would still decide nothing
+    /// once they had, and telling them it was withheld sends them to the wrong fix.
+    ///
+    /// From files rather than from [`bravebot_config::Settings::parse`], because which layer wrote
+    /// an entry is what puts it in this list at all. The tests below start from a list already
+    /// built, so this is the one that pins where the interface's own comes from.
+    #[test]
+    fn a_checkouts_entry_is_proposed_here_only_where_it_is_a_rule() {
+        let root = crate::testutil::scratch_dir("bravebot-app-proposed-rules");
+        let _ = std::fs::remove_dir_all(&root);
+        let home = root.join("home");
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&home).expect("scratch home");
+        std::fs::create_dir_all(cwd.join(".bravebot")).expect("scratch project");
+        std::fs::write(
+            cwd.join(".bravebot").join("settings.json"),
+            r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)", "Nonsense"]}}"#,
+        )
+        .expect("write the project layer");
+        let settings = bravebot_config::Settings::layered(Some(home), Some(&cwd), None);
+
+        let offered: Vec<String> = proposed_rules(&settings)
+            .into_iter()
+            .map(|rule| rule.rule)
+            .collect();
+        assert_eq!(
+            offered,
+            ["Bash(bash scripts/check.sh)"],
+            "the entries this session offers are not the ones that are rules"
+        );
     }
 
     /// PERM-15: the person who was asked about the working directory is asked about the `allow` rules

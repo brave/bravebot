@@ -146,6 +146,18 @@ pub fn session(skip_permissions: bool) -> ExitCode {
             problem = bravebot_agent::permissions::describe(problem)
         ));
     }
+    // And the `allow` entries a checkout wrote, which are dropped wherever the file is read
+    // (PERM-14) and which this session grants none of: it puts no question, so there is nowhere
+    // an answer to one could have been collected (PERM-15). Said for the reason the rejects above
+    // are: the prompt the entry was written to answer still appears, and somebody told nothing
+    // reads that as a second fault rather than as the rule not being in force.
+    for rule in bravebot_agent::permissions::proposed(&settings, profile.as_deref()) {
+        asking.say(&t!(
+            session_permission_allow_ignored,
+            rule = &rule.rule,
+            path = rule.path.display().to_string()
+        ));
+    }
 
     // The startup question (TRUST-7), put as a line. The map a yes writes is the one the panel's
     // yes writes, because both go through the same function; the end of the input is the third
