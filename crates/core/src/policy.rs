@@ -3663,6 +3663,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// map rather than from this label, which a peek for review sets pessimistically whatever
     /// the map says.
     ///
+    /// **What the file would hold is read here too, and it is not a finding.** Whether the body
+    /// is one value and nothing else is the difference between a credential copied into a
+    /// document and one created as a file, and the two are answered differently: see
+    /// [`Scanned::only_the_value`].
+    ///
     /// Nothing about a finding reaches the planner: see [`crate::credentials`] for what a
     /// finding is allowed to hold, and the caller for which half of its result is said to whom.
     pub fn scan_a_write(
@@ -3709,7 +3714,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             .into_iter()
             .partition(|finding| already.contains(&finding.fingerprint));
 
-        let scanned = Scanned { authored, carried };
+        let scanned = Scanned {
+            authored,
+            carried,
+            only_the_value: crate::credentials::stands_alone(&body),
+        };
         self.allow(
             "credential-scan",
             format!(

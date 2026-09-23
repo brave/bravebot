@@ -52,6 +52,8 @@ pub enum Kind {
     UrlPassword,
     /// A value assigned to a name that says it is a secret, rare enough to be one.
     Assigned,
+    /// A rare value standing as the whole of a file, with nothing beside it saying what it is.
+    Standalone,
 }
 
 impl Kind {
@@ -67,6 +69,7 @@ impl Kind {
             Kind::PrivateKey => "a private key",
             Kind::UrlPassword => "a password in a connection string",
             Kind::Assigned => "a secret assigned by name",
+            Kind::Standalone => "a secret standing as a file's whole contents",
         }
     }
 
@@ -80,10 +83,15 @@ impl Kind {
     /// a local development password and a test fixture, none of which anybody should have to argue
     /// with a scanner about.
     ///
+    /// [`Kind::Standalone`] is inferred for the same reason and reads as weaker still: nothing on
+    /// the line says the value is a secret, only that the file holds one value and nothing else.
+    /// A commit id, an identifier and a digest are written that way too, and a turn refused
+    /// outright for one of those would have no way to say otherwise.
+    ///
     /// The distinction exists because the two deserve different answers, not because one matters
     /// less: see [`Scanned::refused`] and [`Scanned::to_approve`].
     pub fn is_declared(self) -> bool {
-        !matches!(self, Kind::Assigned)
+        !matches!(self, Kind::Assigned | Kind::Standalone)
     }
 }
 
@@ -128,6 +136,16 @@ pub struct Scanned {
     pub authored: Vec<Finding>,
     /// Values the file already held at this path, which the change carries along.
     pub carried: Vec<Finding>,
+    /// Whether what the write would leave is one value and nothing else.
+    ///
+    /// The shape creating a credential takes, because there the file *is* the secret rather than
+    /// a document mentioning one. It decides what a turn is told rather than what is found: a
+    /// file holding only a key has nowhere for a reference to go, so telling a planner to write
+    /// one into it is advice that cannot be followed.
+    ///
+    /// Read off the body rather than off the findings, so it is the same answer whichever layer
+    /// named the value.
+    pub only_the_value: bool,
 }
 
 impl Scanned {
@@ -216,6 +234,7 @@ fn mask(value: &str) -> String {
 /// alike. [`run_salt`] is the one every scan in a run takes.
 pub fn scan(path: &str, text: &str, salt: u64) -> Vec<Finding> {
     let lines: Vec<&str> = text.lines().collect();
+    let standing = standing_alone(&lines);
     let mut found = Vec::new();
 
     for (index, line) in lines.iter().enumerate() {
@@ -227,6 +246,14 @@ pub fn scan(path: &str, text: &str, salt: u64) -> Vec<Finding> {
         on_this_line.extend(url_password(line).map(|value| (Kind::UrlPassword, value)));
         if let Some(value) = assigned(line) {
             on_this_line.push((Kind::Assigned, value));
+        }
+        // Last of the three, so the reduction below drops it wherever a layer that says more
+        // about the value has already matched the same one. This layer says only that the value
+        // is the whole file.
+        if let Some((at, value)) = &standing
+            && *at == index
+        {
+            on_this_line.push((Kind::Standalone, value.clone()));
         }
 
         // The more specific layer wins. A value another finding already spans is the same
@@ -431,6 +458,47 @@ fn assigned(line: &str) -> Option<String> {
     }
 
     looks_rare(value).then(|| value.to_string())
+}
+
+/// A rare value standing as the whole of a file, which is the shape creating one takes.
+///
+/// A value a turn generates arrives with nothing beside it: no provider stamped a prefix on it,
+/// so [`shaped`] has nothing to match, and there is no name to the left of a separator, so
+/// [`assigned`] has no name to believe. The file *is* the secret, which is how a framework key,
+/// a signing key and a generated token reach a tree, and it was the one shape no layer here read.
+///
+/// What stands in for the name is the file itself. A document mentioning a secret says something
+/// else as well: a key, a comment, a second line. A file that is one rare token and nothing else
+/// is a value rather than a document, and that is as much as this layer claims, which is why
+/// [`Kind::is_declared`] treats it as inferred.
+///
+/// Returns where the value is as well as what it is, because a finding says which line it is on
+/// and a file may open with blank lines.
+fn standing_alone(lines: &[&str]) -> Option<(usize, String)> {
+    let mut only: Option<(usize, &str)> = None;
+    for (index, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if only.replace((index, trimmed)).is_some() {
+            return None;
+        }
+    }
+    let (index, line) = only?;
+    let value = trim_quoting(line);
+    // Anything a value is not written in says this line is prose, an assignment or a fragment of
+    // a format, and each of those is another layer's business.
+    if !value.chars().all(is_token) {
+        return None;
+    }
+    looks_rare(value).then(|| (index, value.to_string()))
+}
+
+/// Whether this text is one value and nothing else, which is what [`Scanned::only_the_value`]
+/// carries to the caller deciding what to tell a turn.
+pub fn stands_alone(text: &str) -> bool {
+    standing_alone(&text.lines().collect::<Vec<&str>>()).is_some()
 }
 
 /// What the format put around a value, taken off: spaces, quotes, and the punctuation a container
@@ -883,6 +951,98 @@ mod tests {
         let found = scan(".env", line, 1);
         assert_eq!(found.len(), 1, "got {found:?}");
         assert_eq!(found[0].kind, Kind::Assigned);
+    }
+
+    /// The shape creating a credential takes, and the one no layer read: a turn asked to finish
+    /// setting a project up generates a key, and the file it writes *is* the key. There is no
+    /// provider prefix to match and no name to the left of a separator to believe, so the value
+    /// went into the tree with nothing found and nothing said.
+    #[test]
+    fn a_generated_key_standing_as_a_whole_file_is_recognised() {
+        let found = scan(
+            "config/master.key",
+            "c8f1a0b4d2e6f7a9c3b5d8e0f2a4c6b8d1e3f5a7\n",
+            1,
+        );
+        assert_eq!(found.len(), 1, "got {found:?}");
+        assert_eq!(found[0].kind, Kind::Standalone);
+        assert_eq!(found[0].line, 1);
+    }
+
+    /// What stands in for a name here is the file being nothing else. A rule that read a lone
+    /// *line* instead would report the one bare token in a document full of them, which is a
+    /// changelog, a list of hashes and half the fixtures in a test tree.
+    #[test]
+    fn a_rare_token_with_a_document_around_it_is_not_a_whole_file() {
+        for text in [
+            "# the key for this environment\nc8f1a0b4d2e6f7a9c3b5d8e0f2a4c6b8d1e3f5a7\n",
+            "c8f1a0b4d2e6f7a9c3b5d8e0f2a4c6b8d1e3f5a7\nc8f1a0b4d2e6f7a9c3b5d8e0f2a4c6b9d1e3f5a7\n",
+            "the key is c8f1a0b4d2e6f7a9c3b5d8e0f2a4c6b8d1e3f5a7\n",
+        ] {
+            assert!(scan("notes.md", text, 1).is_empty(), "reported: {text}");
+        }
+    }
+
+    /// Blank lines around the value are the file as an editor leaves it, and a rule counting them
+    /// as contents would read the commonest spelling of this file as a document.
+    #[test]
+    fn blank_lines_around_the_value_are_not_contents() {
+        let found = scan(
+            "master.key",
+            "\n\nc8f1a0b4d2e6f7a9c3b5d8e0f2a4c6b8d1e3f5a7\n\n",
+            1,
+        );
+        assert_eq!(found.len(), 1, "got {found:?}");
+        assert_eq!(found[0].kind, Kind::Standalone);
+        assert_eq!(found[0].line, 3, "a finding has to say where the value is");
+    }
+
+    /// Two layers reading the same value would report one key twice, and cut it differently:
+    /// attribution compares fingerprints, so the same secret under two spellings is two
+    /// credentials and the second is never excused by the file that already held it.
+    #[test]
+    fn a_provider_key_standing_alone_is_one_finding_and_not_two() {
+        // A counted-off alphabet at the shape's declared minimum, as the fixtures above are.
+        let key = "ghp_0123456789abcdefghijklmnopqrstuvwxyzAB"; // nosemgrep: generic.secrets.gitleaks.github-pat.github-pat
+        let found = scan("token.txt", &format!("{key}\n"), 1);
+        assert_eq!(found.len(), 1, "got {found:?}");
+        assert_eq!(
+            found[0].kind,
+            Kind::GitHubToken,
+            "the layer that says less about the value won"
+        );
+    }
+
+    /// Nothing on the line says this value is a secret, only that the file holds one value. A
+    /// commit id, a machine identifier and a digest are written exactly that way, so a turn
+    /// refused outright for one of them would have no way to say otherwise, which is the reason
+    /// the rarity layer is a question rather than a rule.
+    #[test]
+    fn a_value_standing_as_a_whole_file_is_a_question_and_not_a_rule() {
+        let found = scan(
+            "master.key",
+            "c8f1a0b4d2e6f7a9c3b5d8e0f2a4c6b8d1e3f5a7\n",
+            1,
+        );
+        let scanned = Scanned {
+            authored: found,
+            carried: Vec::new(),
+            only_the_value: true,
+        };
+        assert!(scanned.refused().is_empty(), "refused without asking");
+        assert_eq!(scanned.to_approve().len(), 1, "nobody was asked");
+    }
+
+    /// The difference between a credential copied into a document and one created as a file, which
+    /// is what decides whether a turn is told to write a reference or told that nothing was
+    /// created. Asked of the body, so a value another layer named answers it the same way.
+    #[test]
+    fn a_file_that_is_the_value_is_told_from_one_that_mentions_it() {
+        let value = "c8f1a0b4d2e6f7a9c3b5d8e0f2a4c6b8d1e3f5a7";
+        assert!(stands_alone(&format!("{value}\n")));
+        assert!(!stands_alone(&format!("SECRET_KEY_BASE={value}\n")));
+        assert!(!stands_alone(&format!("# generated\n{value}\n")));
+        assert!(!stands_alone("a file of ordinary prose about nothing\n"));
     }
 
     /// A configuration file naming the variable it wants set is the commonest thing in a tree,
