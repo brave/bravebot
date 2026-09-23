@@ -67,6 +67,7 @@ not have held would enter that context on the next resume, which is the launderi
 design exists to close.
 
 `verified-by: bravebot_tui::sessions::what_a_file_nobody_vouched_for_held_is_not_written_down`
+`verified-by: bravebot_tui::sessions::a_path_vouched_for_inside_the_turn_keeps_what_it_held_out_of_the_record`
 `verified-by: bravebot_tui::sessions::an_answer_the_planner_could_not_have_held_is_not_written_down`
 `verified-by: bravebot_agent::turn::the_trail_records_the_slot_and_the_path_rather_than_the_content`
 
@@ -611,14 +612,16 @@ that stood before its turn, what that turn was asked, and what its writes overwr
 `/rewind` after a resume reach the same turns they reached before the program was closed.
 
 What a path held is written base64 in the record, so the record carries the rewind budget as well
-as the conversation. Only when the backup's capture provenance says its bytes were trusted: a
-map from before the turn cannot authorize bytes captured after a sibling replaced the file.
-SESSION-2 is why
-untrusted captured bytes are written down as a path whose contents this session did not keep,
-which the session itself still holds and can still put back. Paths inside the project are recorded
-relative to it and come back under the directory the resumed session works in, as trust rules do.
+as the conversation. Only where the map that stood before the turn vouches for the path and the
+backup's capture provenance says its bytes were trusted. The pre-turn map is the one that labelled
+those bytes, which is why SESSION-2 asks it; on its own it cannot authorize bytes captured after a
+sibling replaced the file, which is why the capture is asked as well. What neither vouches for is
+written down as a path whose contents this session did not keep, which the session itself still
+holds and can still put back. Paths inside the project are recorded relative to it and come back
+under the directory the resumed session works in, as trust rules do.
 
 `verified-by: bravebot_tui::sessions::backup_capture_trust_overrides_a_stale_pre_turn_grant`
+`verified-by: bravebot_tui::sessions::a_path_vouched_for_inside_the_turn_keeps_what_it_held_out_of_the_record`
 
 Only the points a rewind can still reach are written. A record holds what the session holds, so a
 point that ages out of the session's depth or budget, and every point given up when something

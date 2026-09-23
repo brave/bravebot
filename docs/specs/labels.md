@@ -50,7 +50,7 @@ guards:
       - crates/agent/src/tools.rs: 13
       - crates/agent/src/turn.rs: 3
       - crates/agent/src/workspace.rs: 8
-      - crates/tui/tests/sessions.rs: 2
+      - crates/tui/tests/sessions.rs: 4
       - crates/agent/tests/workspace.rs: 158
       - crates/core/src/policy.rs: 23
       - crates/core/src/value.rs: 3

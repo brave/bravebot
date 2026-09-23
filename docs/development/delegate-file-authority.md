@@ -33,9 +33,12 @@ same revision before explicit output delivery and automatic completion delivery.
 conservative: even an unrelated file decision can quarantine output. Background redirections and
 reference stdin remain refused.
 
-Backups carry their capture integrity. Storage uses that field, never a pre-turn map, to decide
-whether to save bytes. The stored format is unchanged. Imported checkpoint validity and safe
-rewind are Item 02; ordinary interrupted caller retention and save/resume are Item 03.
+Backups carry their capture integrity. Storage asks that field as well as the map that stood before
+the turn, so neither a grant that map has gone stale about nor one minted after the bytes were read
+saves them on its own. This item made the capture the only question, which dropped SESSION-2's
+pre-turn gate until issue #706 put it back beside the capture. The stored format is unchanged.
+Imported checkpoint validity and safe rewind are Item 02; ordinary interrupted caller retention and
+save/resume are Item 03.
 
 ## Behavior, faults and evidence
 
