@@ -79,6 +79,7 @@ help:
 	@echo "Releasing:"
 	@echo "  make bump-version BUMP=bugfix|minor|major   Set the next version"
 	@echo "  make github-release                         Tag it; Jenkins and npm publish are later"
+	@echo "  make publish-npm [TAG=v<version>]           Publish npm for TAG, or the latest GitHub release"
 	@echo "  make app-bundle                             Package the desktop application, release build"
 	@echo
 	@echo "  make clean          Remove build output"
@@ -550,7 +551,7 @@ bump-version:
 
 # Tags the current version and pushes it. GitHub Actions runs CI on the tag.
 # Signed assets and the npm package are published later, each by hand: Jenkins
-# (bravebot-build with UPLOAD and RELEASE), then Actions → Publish npm.
+# (bravebot-build with UPLOAD and RELEASE), then make publish-npm.
 #
 # A refused push takes the tag with it. A tag left behind locally is one the
 # remote never got, and the next run reports the version as already tagged
@@ -596,8 +597,21 @@ github-release:
 	fi; \
 	echo "pushed $(TAG) to $(RELEASE_REMOTE); GitHub Actions will run CI on the tag"; \
 	echo "publish signed assets later with Jenkins job bravebot-build (UPLOAD and RELEASE)"; \
-	echo "then publish npm: gh workflow run publish-npm.yml --ref $(TAG) -f tag=$(TAG)"; \
+	echo "then publish npm: make publish-npm TAG=$(TAG)"; \
 	echo "watch CI with: gh run watch --repo brave/bravebot"
+
+# Without TAG on the command line, the latest GitHub release: this tree may be bumped past it.
+.PHONY: publish-npm
+publish-npm:
+	@set -eu; \
+	if [ "$(origin TAG)" = "command line" ]; then \
+		tag="$(TAG)"; \
+	else \
+		tag="$$(gh release view --repo brave/bravebot --json tagName --jq .tagName)"; \
+	fi; \
+	echo "dispatching publish-npm.yml for $$tag"; \
+	gh workflow run publish-npm.yml --repo brave/bravebot --ref "$$tag" -f tag="$$tag"; \
+	echo "watch it with: gh run watch --repo brave/bravebot"
 
 .PHONY: clean
 clean:
