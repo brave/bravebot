@@ -213,7 +213,7 @@ pub struct Backup {
     pub path: PathBuf,
     /// What was there.
     pub was: Before,
-    /// Trust of these bytes when captured, never the pre-turn map.
+    /// What the map said about the path at the moment these bytes were read.
     pub captured_trust: bravebot_core::label::Integrity,
 }
 

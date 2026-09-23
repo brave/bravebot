@@ -487,13 +487,18 @@ impl StoredRewind {
                 .map(|backup| {
                     let relative = backup.path.strip_prefix(project).unwrap_or(&backup.path);
                     let path = relative.display().to_string();
-                    // The capture's own trust authorizes storage. A pre-turn snapshot may
-                    // predate another writer and cannot label bytes captured afterwards.
+                    // Both maps have to vouch for the path. The capture's own trust is asked
+                    // first, since a pre-turn snapshot may predate another writer and cannot
+                    // label bytes captured afterwards. The map that stood before the turn is
+                    // asked as well: the bytes are what the file held before it, so that map is
+                    // the one that labelled them, and a path it does not vouch for held bytes the
+                    // planner was never allowed to see. What neither vouches for stays in memory
+                    // for a rewind in this session and goes no further.
                     let (before, bytes) = match &backup.was {
                         Before::Nothing => (NOTHING, None),
                         Before::Bytes(held)
-                            if backup.captured_trust
-                                == bravebot_core::label::Integrity::Trusted =>
+                            if backup.captured_trust == Integrity::Trusted
+                                && vouched_for(&snapshot.trust, relative) =>
                         {
                             (
                                 BYTES,
@@ -582,6 +587,32 @@ impl StoredRewind {
             prompt: self.prompt,
         }
     }
+}
+
+/// Whether `trust` vouches for `path`, asked of both spellings a rewind's path can arrive in.
+///
+/// A path inside the project is relative, which is the spelling a rule about it is written in. One
+/// outside arrives whole, and a `/`-joined name built from its components is not always the
+/// platform's own spelling, which is how one derived from an absolute name reaches it. The two
+/// reach one rule where `/` is already the separator, since the leading empty segment an absolute
+/// name joins with is dropped on the way to a key. On Windows they do not, where a rule written in
+/// one spelling is invisible to a question asked in the other, and what such a question falls back
+/// to is the rule about the directory above the file: after somebody vouches for their project,
+/// that answer is "trusted".
+///
+/// So the weaker of the two answers is the one taken. A rule marking this path untrusted keeps its
+/// bytes out of the record whichever spelling recorded it, and a path no rule covers at all is not
+/// vouched for either, since nobody has said anything about it. What that costs on Windows is a
+/// path somebody did vouch for under the other spelling: its bytes stay out of the record, so the
+/// session holding them can still put them back and a resumed one cannot, which is the direction
+/// that keeps untrusted bytes out rather than the one that hands them to a planner.
+fn vouched_for(trust: &TrustStore, path: &Path) -> bool {
+    let joined = path
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/");
+    trust.is_trusted(&joined) && trust.is_trusted(&path.to_string_lossy())
 }
 
 /// A trust map as it is written down.
