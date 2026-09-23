@@ -54,6 +54,28 @@ fn an_unknown_method_is_refused_rather_than_fatal() {
     assert!(call(&mut bridge, "agent.info", json!({})).is_ok());
 }
 
+/// HOOK-8: a front end asks the agent what the hooks file says instead of reading it, so this is a
+/// method the bridge answers rather than one it refuses.
+#[test]
+fn the_hooks_file_is_read_through_the_bridge() {
+    let (mut bridge, _) = harness();
+    match call(&mut bridge, "hooks.inspect", json!({})) {
+        Ok(read) => {
+            assert!(
+                read["path"]
+                    .as_str()
+                    .expect("where the declarations live")
+                    .ends_with("hooks.json")
+            );
+            assert!(read["hooks"].is_array(), "what the agent read");
+            assert!(read["entire"].is_boolean(), "whether it read all of it");
+        }
+        // A machine naming no state directory declares no hooks, and is told which of the two
+        // this is rather than being handed an empty file to edit.
+        Err(code) => assert_eq!(code, ErrorCode::NoHome),
+    }
+}
+
 #[test]
 fn listing_sessions_never_fails_however_little_is_on_disk() {
     let (mut bridge, _) = harness();

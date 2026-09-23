@@ -298,9 +298,13 @@ pub struct Running {
     /// Emptied by that tick, so the rule holds because there is nothing left to carry rather than
     /// because something counted the ticks.
     pasted: Vec<crate::state::AttachedImage>,
-    /// What a later tick sends instead, with those pictures put back to words.
+    /// The files dropped onto it, which that same tick takes and no later one has, for that reason.
+    attached: Vec<crate::state::Attached>,
+    /// What a later tick sends instead, with those pictures put back to words and those files put
+    /// back to their names.
     ///
-    /// `None` where the line named none, which is every loop but one somebody pasted into.
+    /// `None` where the line named neither, which is every loop but one somebody dropped on or
+    /// pasted into.
     settled: Option<String>,
     pacing: Pacing,
     began: Instant,
@@ -323,6 +327,7 @@ impl Running {
         Self {
             prompt: request.prompt,
             pasted: Vec::new(),
+            attached: Vec::new(),
             settled: None,
             pacing: request.pacing,
             began: Instant::now(),
@@ -334,17 +339,24 @@ impl Running {
         }
     }
 
-    /// Carry the pictures pasted into the line, for the first tick and no other.
+    /// Carry what the line named, for the first tick and no other.
     ///
-    /// `settled` is the same line with their markers put back to words, and is what every tick after
-    /// the first sends. The picture belongs to the line the person pressed Enter on, so the first
-    /// tick is a turn like any other prompt with a paste in it; a later tick has nothing to carry,
-    /// and a marker left in one would name a screenshot nothing came with.
+    /// `settled` is the same line with each marker put back to what stands for it durably, and is
+    /// what every tick after the first sends. What was named belongs to the line the person pressed
+    /// Enter on, so the first tick is a turn like any other prompt with a paste or a drop in it; a
+    /// later tick has nothing to carry, and a marker left in one would name a screenshot nothing came
+    /// with or a file nothing read.
     ///
-    /// Only called where something was pasted, which is why nothing here asks: see
+    /// Only called where something was named, which is why nothing here asks: see
     /// [`crate::state::Session::start_loop`], where the same question decides what is said about it.
-    pub fn carrying(mut self, pasted: Vec<crate::state::AttachedImage>, settled: String) -> Self {
+    pub fn carrying(
+        mut self,
+        pasted: Vec<crate::state::AttachedImage>,
+        attached: Vec<crate::state::Attached>,
+        settled: String,
+    ) -> Self {
         self.pasted = pasted;
+        self.attached = attached;
         self.settled = Some(settled);
         self
     }
@@ -361,9 +373,11 @@ impl Running {
     pub fn armed(prompt: String, wakeup: Wakeup, now: Instant) -> Self {
         Self {
             prompt,
-            // Nothing pasted, and nothing to settle: what a turn asks to look at again is a line
-            // out of the conversation, and no box was open for anybody to paste into.
+            // Nothing pasted, nothing dropped, and nothing to settle: what a turn asks to look at
+            // again is a line out of the conversation, and no box was open for anybody to paste into
+            // or drop on.
             pasted: Vec::new(),
+            attached: Vec::new(),
             settled: None,
             pacing: Pacing::SelfPaced,
             began: now,
@@ -453,19 +467,32 @@ impl Running {
 
     /// Record that a tick is going out, and give up what it sends.
     ///
-    /// The first tick after a paste sends the line as it was typed, marker and picture together,
-    /// which is what any prompt with a paste in it sends. Every tick after it sends the settled line
-    /// and carries nothing, because the pictures left with the tick that took them.
-    pub fn dispatching(&mut self) -> (String, Vec<crate::state::AttachedImage>) {
+    /// The first tick after a paste or a drop sends the line as it was typed, markers and contents
+    /// together, which is what any prompt with a paste or a drop in it sends. Every tick after it
+    /// sends the settled line and carries nothing, because what was staged left with the tick that
+    /// took it.
+    ///
+    /// Read off `settled` rather than off a tick count, so the two cannot disagree: what decides is
+    /// whether anything is left to carry.
+    pub fn dispatching(
+        &mut self,
+    ) -> (
+        String,
+        Vec<crate::state::AttachedImage>,
+        Vec<crate::state::Attached>,
+    ) {
         self.ticks += 1;
         self.running = true;
         self.due = None;
-        match std::mem::take(&mut self.pasted) {
-            carried if carried.is_empty() => (
+        let pasted = std::mem::take(&mut self.pasted);
+        let attached = std::mem::take(&mut self.attached);
+        match pasted.is_empty() && attached.is_empty() {
+            true => (
                 self.settled.clone().unwrap_or_else(|| self.prompt.clone()),
                 Vec::new(),
+                Vec::new(),
             ),
-            carried => (self.prompt.clone(), carried),
+            false => (self.prompt.clone(), pasted, attached),
         }
     }
 
@@ -758,20 +785,51 @@ mod tests {
             media_type: "image/png",
             bytes: b"pixels".to_vec(),
         };
-        let mut running = Running::begin(request("5m look at [Image #1]"))
-            .carrying(vec![picture.clone()], "look at the picture".to_string());
+        let mut running = Running::begin(request("5m look at [Image #1]")).carrying(
+            vec![picture.clone()],
+            Vec::new(),
+            "look at the picture".to_string(),
+        );
 
         assert_eq!(
             running.dispatching(),
-            ("look at [Image #1]".to_string(), vec![picture])
+            ("look at [Image #1]".to_string(), vec![picture], Vec::new())
         );
         assert_eq!(
             running.dispatching(),
-            ("look at the picture".to_string(), Vec::new())
+            ("look at the picture".to_string(), Vec::new(), Vec::new())
         );
         assert_eq!(
             running.dispatching(),
-            ("look at the picture".to_string(), Vec::new())
+            ("look at the picture".to_string(), Vec::new(), Vec::new())
+        );
+    }
+
+    /// A dropped file leaves with the same tick and for the same reason, and what the ticks after it
+    /// send is its name. A name is what a turn can act on: it reads the file through the gate it
+    /// reads any other file through, so a later tick looks at the same file rather than at a marker
+    /// standing for nothing.
+    #[test]
+    fn a_dropped_file_goes_to_one_tick_and_its_name_to_every_other() {
+        let file = crate::state::Attached {
+            marker: "[Image #1]".to_string(),
+            name: "shot.png".to_string(),
+            shown: "/home/me/shot.png".to_string(),
+            kind: crate::dropped::Kind::Attachment("image/png"),
+        };
+        let mut running = Running::begin(request("5m look at [Image #1]")).carrying(
+            Vec::new(),
+            vec![file.clone()],
+            "look at shot.png".to_string(),
+        );
+
+        assert_eq!(
+            running.dispatching(),
+            ("look at [Image #1]".to_string(), Vec::new(), vec![file])
+        );
+        assert_eq!(
+            running.dispatching(),
+            ("look at shot.png".to_string(), Vec::new(), Vec::new())
         );
     }
 

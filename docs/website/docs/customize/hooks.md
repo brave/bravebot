@@ -1,5 +1,5 @@
 ---
-sidebar_position: 5
+sidebar_position: 6
 title: Hooks
 description: Run a command of your own when a turn starts, when a tool call finishes, or when a turn is over.
 ---

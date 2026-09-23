@@ -16,6 +16,8 @@ members of lives.
 | `npm run build` | Build both Rust executables, typecheck, bundle into `out/` |
 | `npm start` | Set up Electron and preview the existing bundle; does not rebuild it |
 | `npm run package` | Build both Rust executables, bundle, package for macOS or Linux; does not typecheck |
+| `make app-bundle` (from the root) | The same bundle, carrying release executables built with credentials required |
+| `make check-ui` (from the root) | Install, build the file helper, and run every `scripts/*.test.mjs` |
 | `cargo test -p bravebot-ui-bridge -p bravebot-ui-files` | Test the two front-end crates |
 | `cargo test --all` | Test the whole workspace, agent crates included |
 | `cargo clippy --all-targets --all-features -- -D warnings` | Lint the whole workspace |
@@ -61,6 +63,16 @@ bundles, then `scripts/package.mjs` uses `@electron/packager` to create
 The platform and architecture follow the Node process. Rust uses its configured toolchain target; for a native
 bundle, use matching Node and Rust architectures.
 
+Which Rust build the bundle carries is the one thing the finished bundle does not record: it is
+named, versioned and laid out identically either way, and the two overwrite each other in
+`dist/`. `npm run package` carries the debug executables, which is what a checkout has already
+built and what makes it the right command for testing the bundle itself. The last line it prints
+says which it took:
+
+```
+packaged: dist/Brave Bot-linux-x64 (debug executables)
+```
+
 The bundle's version is `package.json`'s, and that is the repository's version rather than one
 of the front end's own: the app ships an agent build, so the two are one release.
 `make bump-version` at the root rewrites this manifest and its lockfile along with the workspace's,
@@ -68,9 +80,13 @@ and `make check-versions` fails a tree where they disagree. Neither is edited by
 
 Both `bravebot-rpc` and `bravebot-ui-files` are copied into the app's Resources.
 Packaged builds use those copies; development builds use the workspace `../target/debug/`.
-The script currently packages debug Rust executables, and performs no app signing
-or notarisation. The resulting bundle is for local testing, not a completed
-release-distribution pipeline. Git commit signatures are separate from macOS app signing.
+
+A bundle for anybody else is `make app-bundle`, from the repository root: it builds both
+executables in release mode with the backend credentials required rather than optional, and
+packages those instead. Neither command signs or notarises the result, so what comes out is
+installable and not distributable, and how a release would get the rest is
+[releasing](../../docs/development/releasing.md#the-desktop-application). Git commit signatures
+are separate from macOS app signing.
 
 A development checkout can produce a configured or unconfigured binary depending
 on the build environment. Follow [credentials](setup.md#credentials) before packaging

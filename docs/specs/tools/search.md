@@ -271,4 +271,8 @@ had configured them, which is the one thing a test of a cap cannot have.
 `verified-by: bravebot_config::settings::a_search_cap_that_is_not_a_whole_count_is_absence`
 `verified-by: bravebot_config::settings::a_layer_capping_one_side_of_a_search_leaves_the_other`
 `verified-by: bravebot_agent::workspace::a_cap_nobody_named_stays_on_its_built_in_number`
+`verified-by: bravebot_ui_bridge::workspace::a_turn_searches_under_the_file_cap_the_project_settings_name`
+`verified-by: bravebot_ui_bridge::workspace::a_turn_searches_under_the_time_cap_the_project_settings_name`
+`verified-by: bravebot_ui_bridge::workspace::caps_nobody_named_leave_a_turn_on_the_built_in_ones`
+`verified-by: bravebot_ui_bridge::workspace::a_turns_search_runs_under_the_cap_the_settings_name`
 `verified-by: bravebot_agent::workspace::a_search_that_ran_out_of_time_says_so`

@@ -152,6 +152,14 @@ line fed one thing is not redeemable for the same steps fed another.
 `verified-by: bravebot_core::policy::an_endorsement_does_not_authorise_the_same_plan_fed_something_else`
 `verified-by: bravebot_core::command::a_plan_fed_a_reference_encodes_apart_from_the_same_plan_fed_nothing`
 
+A file-dependent output label must also account for overlapping effects. If shared file state
+changes between the run gate and output capture, apart from the command's own guarded effect
+entries, that output is untrusted. This includes background output when polled. This conservative
+check can quarantine output after an unrelated file decision; it never broadens command approval.
+
+`verified-by: bravebot_agent::turn::foreground_redirection_quarantines_live_reads_and_all_endings`
+`verified-by: bravebot_agent::tools::an_ended_job_revalidates_its_file_proof_before_releasing_output`
+
 <a id="RUN-5"></a>
 ### RUN-5: every run asks, unless every stage was vouched for, remembered, ruled on, or proven
 

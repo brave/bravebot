@@ -6,7 +6,9 @@
 
 #![deny(unsafe_code)]
 
+pub mod agents;
 pub mod aside;
+pub mod attached;
 pub mod backend;
 pub mod cmdline;
 pub mod compact;

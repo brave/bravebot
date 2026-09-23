@@ -13,8 +13,8 @@ guards:
       - crates/agent/src/lsp.rs: 4
       - crates/agent/src/manifest.rs: 3
       - crates/agent/src/tools.rs: 20
-      - crates/agent/src/workspace.rs: 6
-      - crates/agent/tests/workspace.rs: 27
+      - crates/agent/src/workspace.rs: 7
+      - crates/agent/tests/workspace.rs: 28
       - crates/aichat/src/lib.rs: 4
       - crates/bedrock/src/lib.rs: 5
       - crates/core/src/policy.rs: 85
@@ -29,10 +29,10 @@ guards:
       - crates/agent/src/aside.rs: 2
       - crates/agent/src/manifest.rs: 4
       - crates/agent/src/processor.rs: 1
-      - crates/agent/src/tools.rs: 25
+      - crates/agent/src/tools.rs: 26
       - crates/agent/src/turn.rs: 4
       - crates/agent/src/vet.rs: 1
-      - crates/agent/src/workspace.rs: 2
+      - crates/agent/src/workspace.rs: 1
       - crates/agent/tests/workspace.rs: 41
       - crates/aichat/tests/client.rs: 2
       - crates/bedrock/src/lib.rs: 1
@@ -40,16 +40,22 @@ guards:
       - crates/core/src/value.rs: 1
       - crates/mcp/tests/http.rs: 1
       - crates/mcp/tests/stdio.rs: 2
+      - crates/ui-bridge/tests/workspace.rs: 1
   - symbol: Labelled::trusted
     sites:
+      - crates/agent/src/agents.rs: 1
+      - crates/agent/src/attached.rs: 1
       - crates/agent/src/manifest.rs: 10
       - crates/agent/src/preamble.rs: 1
       - crates/agent/src/skills.rs: 3
       - crates/agent/src/tools.rs: 13
       - crates/agent/src/turn.rs: 3
-      - crates/agent/tests/workspace.rs: 149
+      - crates/agent/src/workspace.rs: 8
+      - crates/tui/tests/sessions.rs: 4
+      - crates/agent/tests/workspace.rs: 158
       - crates/core/src/policy.rs: 23
       - crates/core/src/value.rs: 3
+      - crates/ui-bridge/tests/workspace.rs: 2
   - symbol: Labelled::relabel
     sites:
       - crates/core/src/policy.rs: 1
@@ -81,6 +87,7 @@ guards:
   - symbol: Policy::present
     sites:
       - crates/agent/src/aside.rs: 1
+      - crates/agent/src/attached.rs: 1
       - crates/agent/src/goal.rs: 1
       - crates/agent/src/lsp.rs: 3
       - crates/agent/src/turn.rs: 9
@@ -114,7 +121,6 @@ guards:
       - crates/net/src/lib.rs: 1
       - crates/net/tests/egress.rs: 2
       - crates/tui/src/update.rs: 1
-      - crates/ui-bridge/src/models.rs: 1
 documented-by: docs/website/docs/how-it-works.md
 ---
 
@@ -266,6 +272,12 @@ settled.
 `verified-by: bravebot_core::policy::a_private_argument_is_refused_rather_than_read`
 `verified-by: bravebot_agent::tools::an_edit_from_a_trusted_context_replaces_the_passage`
 `verified-by: bravebot_agent::tools::an_edit_is_refused_once_the_context_has_met_something_untrusted`
+`verified-by: bravebot_agent::tools::a_command_line_and_a_directory_are_read_from_a_trusted_context`
+`verified-by: bravebot_agent::tools::a_command_line_is_refused_once_the_context_has_met_something_untrusted`
+`verified-by: bravebot_agent::tools::a_url_is_read_from_a_trusted_context`
+`verified-by: bravebot_agent::tools::a_url_is_refused_once_the_context_has_met_something_untrusted`
+`verified-by: bravebot_agent::tools::a_job_name_is_read_from_a_trusted_context`
+`verified-by: bravebot_agent::tools::a_job_name_is_refused_once_the_context_has_met_something_untrusted`
 
 <a id="LABEL-6"></a>
 ### LABEL-6: minting a witness is not permission to inspect

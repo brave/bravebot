@@ -67,6 +67,7 @@ not have held would enter that context on the next resume, which is the launderi
 design exists to close.
 
 `verified-by: bravebot_tui::sessions::what_a_file_nobody_vouched_for_held_is_not_written_down`
+`verified-by: bravebot_tui::sessions::a_path_vouched_for_inside_the_turn_keeps_what_it_held_out_of_the_record`
 `verified-by: bravebot_tui::sessions::an_answer_the_planner_could_not_have_held_is_not_written_down`
 `verified-by: bravebot_agent::turn::the_trail_records_the_slot_and_the_path_rather_than_the_content`
 
@@ -611,10 +612,16 @@ that stood before its turn, what that turn was asked, and what its writes overwr
 `/rewind` after a resume reach the same turns they reached before the program was closed.
 
 What a path held is written base64 in the record, so the record carries the rewind budget as well
-as the conversation. Only for a path the map that stood before the turn vouched for: SESSION-2 is
-why one it did not vouch for is written down as a path whose contents this session did not keep,
-which the session itself still holds and can still put back. Paths inside the project are recorded
-relative to it and come back under the directory the resumed session works in, as trust rules do.
+as the conversation. Only where the map that stood before the turn vouches for the path and the
+backup's capture provenance says its bytes were trusted. The pre-turn map is the one that labelled
+those bytes, which is why SESSION-2 asks it; on its own it cannot authorize bytes captured after a
+sibling replaced the file, which is why the capture is asked as well. What neither vouches for is
+written down as a path whose contents this session did not keep, which the session itself still
+holds and can still put back. Paths inside the project are recorded relative to it and come back
+under the directory the resumed session works in, as trust rules do.
+
+`verified-by: bravebot_tui::sessions::backup_capture_trust_overrides_a_stale_pre_turn_grant`
+`verified-by: bravebot_tui::sessions::a_path_vouched_for_inside_the_turn_keeps_what_it_held_out_of_the_record`
 
 Only the points a rewind can still reach are written. A record holds what the session holds, so a
 point that ages out of the session's depth or budget, and every point given up when something
@@ -787,6 +794,32 @@ place it genuinely is.
 `verified-by: bravebot_ui_bridge::interop::resuming_a_session_writes_back_to_it_rather_than_forking`
 `verified-by: bravebot_ui_bridge::interop::every_project_is_listed_in_one_order_rather_than_project_by_project`
 `verified-by: bravebot_ui_bridge::dispatch::listing_sessions_never_fails_however_little_is_on_disk`
+
+<a id="SESSION-29"></a>
+### SESSION-29: a record says which surface wrote it, and resuming in the other says so
+
+Beside the build that produced a record, the record names which of the two front ends wrote it.
+The surface is the one doing the writing rather than the one the record arrived with, so a
+resumed session's word describes the turns being added to it and not the turns already there,
+exactly as the build stamp does. Every caller states it, since a surface that could leave it out
+would be recorded as the other one.
+
+Resuming a session the other surface wrote says so, beside the caveats about a different build
+and a different branch. A record with no surface written down says nothing, because it is one
+from before this was kept and has nothing to compare. A word this build does not recognise is
+said as it was written rather than passed over: a front end added later is still not this one.
+
+**Why.** SESSION-28 has both surfaces reading and writing one store, and nothing in what a session
+holds says which of them produced it. A transcript is read after the fact, usually because
+something in it looks wrong, and a detail being read as the agent's behaviour may be the other
+surface's rendering of the same record. Without the word, that has to be inferred from the
+transcript's own symptoms, which is the inference the build stamp exists to remove and the same
+inference in a second dimension. Folding it into the build string instead would tie two facts that
+go stale independently: one build ships both surfaces, and every build ships the same two.
+
+`verified-by: bravebot_session::sessions::a_record_says_which_front_end_wrote_it`
+`verified-by: bravebot_session::sessions::a_session_written_in_the_other_front_end_says_so`
+`verified-by: bravebot_ui_bridge::interop::opening_a_session_the_terminal_wrote_says_which_surface_drew_it`
 
 ## Known costs
 

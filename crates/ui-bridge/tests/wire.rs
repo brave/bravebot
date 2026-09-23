@@ -173,16 +173,52 @@ fn released_content_crosses_the_transport_with_the_label_it_was_released_under()
 
 #[test]
 fn a_replayed_tool_line_carries_no_outcome() {
-    let value = wire::said(&Said::Tool("read(src/main.rs)".into()));
-    assert_eq!(value["kind"], json!("tool"));
-    let keys: Vec<&String> = value.as_object().expect("an object").keys().collect();
+    let said = wire::recounted(&[Said::Tool("read(src/main.rs)".into())]);
+    assert_eq!(said[0]["kind"], json!("tool"));
+    let keys: Vec<&String> = said[0].as_object().expect("an object").keys().collect();
     assert_eq!(keys, vec!["kind", "text"], "nothing to imply a result");
 
-    assert_eq!(wire::said(&Said::User("hi".into()))["kind"], json!("user"));
-    assert_eq!(
-        wire::said(&Said::Assistant("hello".into()))["kind"],
-        json!("assistant")
-    );
+    let said = wire::recounted(&[Said::User("hi".into()), Said::Assistant("hello".into())]);
+    assert_eq!(said[0]["kind"], json!("user"));
+    assert_eq!(said[1]["kind"], json!("assistant"));
+}
+
+/// The coordinate `session.fork` cuts on, numbered where the numbering is made.
+///
+/// The list is `Said::User` and nothing else, because that is the list [`crate::fork::cut`]
+/// resolves an ordinal against. Two wrong lists are rejected here. Numbering every entry gives
+/// the last prompt 4 rather than 2, and a client sending 4 is refused. Numbering a message the
+/// agent composed as well, the attachment in the middle, which is a user-role message in the
+/// request and is not a prompt, gives it 2 rather than the 1 `cut` will look for.
+///
+/// The nudge a turn sends itself for spending its tool budget is the one in the fixture that a
+/// window could never count: it is an untagged `Said::User`, it is a prompt to `cut`, and no
+/// event tells a live window it happened.
+#[test]
+fn only_prompts_are_numbered_and_they_are_numbered_in_order() {
+    let said = wire::recounted(&[
+        Said::User("first".into()),
+        Said::Assistant("a reply".into()),
+        Said::Tool("read(src/main.rs)".into()),
+        Said::Composed {
+            why: Composed::Attached {
+                path: "notes.md".into(),
+            },
+            text: "Contents of notes.md:\nsomething".into(),
+        },
+        Said::User("you have spent your tool budget".into()),
+        Said::User("second".into()),
+    ]);
+    assert_eq!(said[0]["prompt"], json!(0));
+    assert_eq!(said[4]["prompt"], json!(1));
+    assert_eq!(said[5]["prompt"], json!(2));
+    for at in [1, 2, 3] {
+        assert!(
+            said[at].get("prompt").is_none(),
+            "only what the user said can be forked at: {}",
+            said[at]
+        );
+    }
 }
 
 /// A message the agent composed crosses as its tag and the fields a window needs to write its own
@@ -191,24 +227,26 @@ fn a_replayed_tool_line_carries_no_outcome() {
 /// and whatever the file says about itself.
 #[test]
 fn a_message_the_agent_composed_crosses_as_a_tag_and_no_prose() {
-    let attached = wire::said(&Said::Composed {
+    let attached = wire::recounted(&[Said::Composed {
         why: Composed::Attached {
             path: "readme.md".into(),
         },
         text: "Contents of readme.md:\n\nthe briefing".into(),
-    });
+    }])
+    .remove(0);
     assert_eq!(attached["kind"], json!("attached"));
     assert_eq!(attached["path"], json!("readme.md"));
     let keys: Vec<&String> = attached.as_object().expect("an object").keys().collect();
     assert_eq!(keys, vec!["kind", "path"], "no prose to read back");
 
-    let fired = wire::said(&Said::Composed {
+    let fired = wire::recounted(&[Said::Composed {
         why: Composed::Watch {
             number: 7,
             path: "/etc/hosts".into(),
         },
         text: "Watch 7 fired: /etc/hosts looks written to since the last look.".into(),
-    });
+    }])
+    .remove(0);
     assert_eq!(fired["kind"], json!("watch"));
     assert_eq!(fired["number"], json!(7));
     assert_eq!(fired["path"], json!("/etc/hosts"));

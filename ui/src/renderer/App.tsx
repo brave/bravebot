@@ -98,6 +98,17 @@ interface Live {
    * exactly once per compaction that actually happened.
    */
   archived: number
+  /**
+   * The entry id of a prompt this window has sent and not yet been told the ordinal of.
+   *
+   * A prompt is drawn the moment it is sent, and where it landed among the things the user said
+   * is not knowable here: the turn adds a user message for every file named in the prompt, and
+   * another if it spends its tool budget. So the agent reports it when the turn ends, and this
+   * says which row to put it on. `null` for a turn nobody in this window asked for, a watch
+   * firing or a bot bringing its memory up to date, which draw no prompt and must not take the
+   * ordinal of the one above them.
+   */
+  awaitingOrdinal?: string | null
   outcome?: 'complete' | 'failed'
   draftId?: string
   queuePaused?: boolean
@@ -511,7 +522,7 @@ export function App(): React.JSX.Element {
         bot: bot ? { slug: bot.slug, grounded: false } : null,
         archived: opened.archived,
       })
-      const notes = [opened.branchNote, opened.buildNote].filter(Boolean) as string[]
+      const notes = [opened.branchNote, opened.buildNote, opened.frontNote].filter(Boolean) as string[]
       setProblem(notes.length ? notes.join(' · ') : null)
     } catch (error) {
       setProblem(String(error))
@@ -584,13 +595,17 @@ export function App(): React.JSX.Element {
     const bot = sending?.bot ?? null
     const model = sending?.model ?? null
     const attachments = selectedFiles ?? sending?.attachments ?? []
+    // Made here rather than inside the update so its id can be remembered: the agent says where
+    // this prompt landed when the turn ends, and that answer has to find the row it belongs to.
+    const said = t.userSaid(prompt)
     updateSession(handle, (old) =>
       old
         ? {
             ...old,
             summary: old.summary.title === 'New session' ? { ...old.summary, title: prompt.slice(0, 70) } : old.summary,
             attachments: selectedFiles ? old.attachments : [],
-            entries: [...old.entries, ...attachments.map((file): t.Entry => ({ kind: 'attached', id: crypto.randomUUID(), path: file.path })), t.userSaid(prompt)],
+            entries: [...old.entries, ...attachments.map((file): t.Entry => ({ kind: 'attached', id: crypto.randomUUID(), path: file.path })), said],
+            awaitingOrdinal: said.id,
             running: true,
             queuePaused: old.queued?.length ? old.queuePaused : false,
             bot: old.bot ? { ...old.bot, grounded: true } : null,
@@ -611,7 +626,7 @@ export function App(): React.JSX.Element {
     } catch (error) {
       if (error instanceof Unconfigurable) {
         setUnconfigured(error.message)
-        updateSession(handle, (old) => (old ? { ...old, running: false, queuePaused: true, entries: [...old.entries, t.errored(error.message)] } : old))
+        updateSession(handle, (old) => (old ? { ...old, running: false, queuePaused: true, awaitingOrdinal: null, entries: [...old.entries, t.errored(error.message)] } : old))
         return
       }
       updateSession(handle, (old) =>
@@ -621,6 +636,10 @@ export function App(): React.JSX.Element {
               entries: [...old.entries, t.errored(String(error))],
               queuePaused: true,
               running: false,
+              // Nothing was sent, so this prompt is in no conversation and there is no ordinal
+              // coming for it. Left standing, it would take the ordinal of the next turn to
+              // finish, which may be one nobody in this window asked for.
+              awaitingOrdinal: null,
               // Put back. Nothing was sent, so nothing was said — a briefing marked delivered by a
               // turn that failed would be one the bot never received.
               bot: old.bot ? { ...old.bot, grounded: bot?.grounded ?? false } : null,
@@ -1013,17 +1032,19 @@ export function App(): React.JSX.Element {
       const entries = live?.entries
       if (!handle || !entries) return
 
-      const at = entries.findIndex((candidate) => candidate.id === id)
-      const entry = at === -1 ? null : entries[at]
+      const entry = entries.find((candidate) => candidate.id === id) ?? null
       // Only a prompt. The menu offers this on nothing else, but the id arrives from outside
       // this component and a check here is cheaper than trusting the round trip.
       if (!entry || entry.kind !== 'user') return
-      // The same list the agent counts, which is why it goes through `isPrompt` rather than
-      // testing a kind here: a message the agent composed is tagged in the record, so neither side
-      // reports one as a prompt and neither has to recognise one by its wording. The agent resolves
-      // this ordinal against its own messages and checks the text against it, so a count that
-      // disagreed would refuse the fork rather than take it in the wrong place.
-      const prompt = entries.slice(0, at).filter(t.isPrompt).length
+      // The agent's own ordinal, read rather than counted. A window counting what it drew holds
+      // a second copy of a rule the agent already applies, and the two agree only for as long as
+      // nobody adds a kind of user message: a turn nudged for spending its tool budget adds one
+      // and no event tells this window about it. The agent resolves the ordinal against its own
+      // messages and checks the text against it, so a count that is short by one is a fork
+      // refused rather than one taken in the wrong place, which is the right failure and still a
+      // broken feature.
+      const prompt = entry.prompt
+      if (prompt === undefined) return
 
       try {
         const forked = await call<ForkedSession>('session.fork', {
@@ -1370,7 +1391,8 @@ function apply(
           outcome: 'complete',
           running: message.data.consolidating === true,
           phase: null,
-          entries: [...old.entries, t.replied(message.data.reply, message.data.turn)],
+          entries: [...t.number(old.entries, old.awaitingOrdinal ?? '', message.data.prompt), t.replied(message.data.reply, message.data.turn)],
+          awaitingOrdinal: null,
           archived: message.data.archived,
           bot: old.bot && compacted ? { ...old.bot, grounded: false } : old.bot,
         }
@@ -1384,7 +1406,8 @@ function apply(
           summary: { ...old.summary, id: message.data.id ?? old.summary.id },
           running: false,
           phase: null,
-          entries: [...t.interruptPending(old.entries), { ...t.errored(`${kind}: ${detail}`), category: kind === 'cancelled' ? 'cancelled' : message.data.category, attempts: message.data.attempts, status: message.data.status, turn: message.data.turn }],
+          entries: [...t.interruptPending(t.number(old.entries, old.awaitingOrdinal ?? '', message.data.prompt)), { ...t.errored(`${kind}: ${detail}`), category: kind === 'cancelled' ? 'cancelled' : message.data.category, attempts: message.data.attempts, status: message.data.status, turn: message.data.turn }],
+          awaitingOrdinal: null,
           queuePaused: true,
         }
       }

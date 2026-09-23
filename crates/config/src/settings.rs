@@ -130,6 +130,9 @@ pub fn name_a_settings_file(path: PathBuf) {
 ///
 /// Not comparable, because a gateway block it read may carry a token and [`crate::Secret`]
 /// refuses equality. What a test wants of one of these is a field of it rather than the whole.
+///
+/// Clears its `env` block when it goes, that block being a buffer this program owns a credential in
+/// ([CRED-23](../../../docs/specs/credential-protection.md#CRED-23)).
 #[derive(Debug, Clone, Default)]
 pub struct Settings {
     env: BTreeMap<String, String>,
@@ -304,7 +307,7 @@ impl Settings {
             named.map(Path::to_path_buf),
         ];
 
-        let mut merged = serde_json::Map::new();
+        let mut merged = Document::default();
         let mut found = Vec::new();
         let mut winner = BTreeMap::new();
         let mut contested = BTreeMap::new();
@@ -325,7 +328,9 @@ impl Settings {
             if found.contains(&path) {
                 continue;
             }
-            let Some(root) = read(&path) else { continue };
+            let Some(mut root) = read(&path) else {
+                continue;
+            };
             if root.contains_key(VETTING_BLOCK) {
                 match Some(&path) == home_layer.as_ref() {
                     true => vetting = auto_vetting(&root),
@@ -351,7 +356,7 @@ impl Settings {
                 }
             }
             found.push(path);
-            merge(&mut merged, root);
+            merge(&mut merged, root.take());
         }
 
         let mut settings = Self::from_map(&merged);
@@ -367,6 +372,8 @@ impl Settings {
         // to the entries a layer entitled to grant wrote.
         settings.permissions.allow = allow;
         settings.allow_ignored = allow_ignored;
+        // `merged` goes here, and clears what every layer stated as it does: the settings hold what
+        // they keep of it by now, so the rest is a spare copy of a gateway token.
         settings
     }
 
@@ -385,7 +392,7 @@ impl Settings {
     /// has: a `model` key is the whole of some people's settings, and requiring an `env` block
     /// beside it would discard it for being alone.
     pub fn parse(text: &str) -> Self {
-        let Ok(serde_json::Value::Object(root)) = serde_json::from_str(text) else {
+        let Ok(root) = Document::of(text) else {
             return Self::default();
         };
         Self::from_map(&root)
@@ -595,6 +602,35 @@ impl Settings {
             .chain(self.search.time.is_some().then_some("search.maxSeconds"))
             .chain(self.env.keys().map(String::as_str))
     }
+
+    /// Overwrite what the `env` block was set to, which is what the [`Drop`] below is.
+    ///
+    /// A method rather than the body of that drop, because a buffer this owns is unreachable once
+    /// this is gone: what a test can run is the overwriting, and the drop calling it is one line.
+    fn scrub_env(&mut self) {
+        self.env.values_mut().for_each(crate::scrub);
+    }
+}
+
+/// Clear the `env` block rather than return a credential in it to the allocator.
+///
+/// The block is variables, and one of the names a person may write there is the signing key: what
+/// [`crate::Config`] builds out of that name is a [`crate::Secret`] that clears itself, and the map
+/// it was read out of is a second buffer holding the same bytes for as long as the settings live
+/// ([CRED-23](../../../docs/specs/credential-protection.md#CRED-23)).
+///
+/// Every value rather than the names a credential is known to arrive under, which is the reading a
+/// parsed document already gets and is here for the same reason: the same block carries a region and
+/// a model name, and what a person may put in it is anything. The names are left alone, a name being
+/// what a value was called rather than the value.
+///
+/// The other fields hold no credential of their own. A gateway token among them is in a
+/// [`crate::Secret`], which clears its own buffer as this goes, and so does each copy of one a
+/// caller cloned out of here.
+impl Drop for Settings {
+    fn drop(&mut self) {
+        self.scrub_env();
+    }
 }
 
 /// One layer's JSON, or `None` when there is nothing there worth reading.
@@ -603,16 +639,115 @@ impl Settings {
 /// oversized one, a syntax error, or a root that is not an object. A half-typed project file leaves
 /// the layers under it in force, because the alternative is a mistake in a checkout deciding that a
 /// person's own profile no longer applies.
-pub(crate) fn read(path: &Path) -> Option<serde_json::Map<String, serde_json::Value>> {
+pub(crate) fn read(path: &Path) -> Option<Document> {
     match std::fs::metadata(path) {
         Ok(found) if found.len() > MAX_BYTES => return None,
         Ok(_) => {}
         Err(_) => return None,
     }
-    let text = std::fs::read_to_string(path).ok()?;
-    match serde_json::from_str(&text) {
-        Ok(serde_json::Value::Object(root)) => Some(root),
-        _ => None,
+    let mut text = std::fs::read_to_string(path).ok()?;
+    Document::parse(&mut text).ok()
+}
+
+/// A parsed settings document, which clears itself when it goes.
+///
+/// A settings file may state a gateway token, so the parse of one is a buffer this program owns a
+/// credential in ([CRED-23](../../../docs/specs/credential-protection.md#CRED-23)) and the bytes go
+/// to the allocator intact if it is simply dropped. A type that clears itself rather than a call at
+/// each place a document dies: [`crate::Secret`] answers the same question the same way one level
+/// down, and a call is a thing the next reader of a document here has to know to write.
+#[derive(Default)]
+pub(crate) struct Document {
+    /// What the file stated.
+    root: serde_json::Map<String, serde_json::Value>,
+    /// What a merge took out of `root` and put something else in the place of.
+    ///
+    /// A stronger layer restating a gateway displaces an entry that may hold a token, and nothing
+    /// reads that entry again. Kept here rather than dropped there, so that the whole of what a
+    /// read parsed is cleared in one place, which is this document going.
+    displaced: Vec<serde_json::Value>,
+}
+
+/// Why a file does not hold a settings document, for a caller that has to say which way it is wrong.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotADocument {
+    /// It could not be read at all.
+    Unreadable,
+    /// It is not JSON.
+    NotJson,
+    /// It is JSON, and not an object.
+    NotAnObject,
+}
+
+/// Whether a file holds a settings document, answered without leaving what it holds in a buffer.
+///
+/// The front end checks a file somebody chose before the agent reads it as a layer, and a check that
+/// parsed the file itself would make a second copy of a token in it and drop that copy intact. The
+/// answer comes from here instead, where the parse is behind [`Document`]
+/// ([CRED-23](../../../docs/specs/credential-protection.md#CRED-23)).
+///
+/// The size limit is the caller's: a front end refusing a file has something to say about how large
+/// one may be, and [`read`] treats an oversized file as absence rather than as a thing to report.
+pub fn check_document(path: &Path) -> Result<(), NotADocument> {
+    let mut text = std::fs::read_to_string(path).map_err(|_| NotADocument::Unreadable)?;
+    Document::parse(&mut text).map(|_| ())
+}
+
+impl Document {
+    /// The document some text holds, or which way the text is not one.
+    fn of(text: &str) -> Result<Self, NotADocument> {
+        match serde_json::from_str(text) {
+            Ok(serde_json::Value::Object(root)) => Ok(Self {
+                root,
+                displaced: Vec::new(),
+            }),
+            // A parse that is not a document still holds whatever the file put in it, so it is
+            // cleared here: this is the one exit that has a value and no document to keep it in.
+            Ok(mut other) => {
+                crate::scrub_value(&mut other);
+                Err(NotADocument::NotAnObject)
+            }
+            Err(_) => Err(NotADocument::NotJson),
+        }
+    }
+
+    /// The document a file's text holds, clearing the text whatever the parse made of it.
+    ///
+    /// Cleared before the parse is answered for, because a half-typed settings file is an ordinary
+    /// thing and the token in one is still in the text. By reference rather than by value, so the
+    /// buffer the caller owns is the buffer that gets cleared.
+    fn parse(text: &mut String) -> Result<Self, NotADocument> {
+        let document = Self::of(text.as_str());
+        crate::scrub(text);
+        document
+    }
+
+    /// The names out of this document, for a merge laying them into another one.
+    ///
+    /// What is taken is no longer this document's to clear, so the only caller is that merge, whose
+    /// destination is a document too.
+    fn take(&mut self) -> serde_json::Map<String, serde_json::Value> {
+        std::mem::take(&mut self.root)
+    }
+}
+
+impl std::ops::Deref for Document {
+    type Target = serde_json::Map<String, serde_json::Value>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.root
+    }
+}
+
+impl Drop for Document {
+    /// Every value the parse made, and every value a merge displaced.
+    ///
+    /// The names are left alone. A key cannot be reached through a [`serde_json::Map`] to write
+    /// over, and a name is what a value was called rather than the value: what a settings file
+    /// states as a credential is on the right of the colon.
+    fn drop(&mut self) {
+        crate::scrub_document(&mut self.root);
+        self.displaced.iter_mut().for_each(crate::scrub_value);
     }
 }
 
@@ -714,10 +849,11 @@ fn env_names(root: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
 /// `run.scrubEnv` unions instead, since a name there only ever takes a variable away from a
 /// subprocess. Overriding would let a layer hand back something a weaker one withheld, which is a
 /// direction this list is not for.
-fn merge(
-    base: &mut serde_json::Map<String, serde_json::Value>,
-    over: serde_json::Map<String, serde_json::Value>,
-) {
+fn merge(document: &mut Document, over: serde_json::Map<String, serde_json::Value>) {
+    let Document {
+        root: base,
+        displaced,
+    } = document;
     for (key, value) in over {
         match (base.get_mut(&key), value) {
             // `env`, `provider`, `attribution` and `keybindings`: per-name, one level down. The
@@ -733,14 +869,16 @@ fn merge(
                     || key == "keybindings"
                     || key == "search" =>
             {
-                under.extend(above);
+                for (name, value) in above {
+                    lay_over(displaced, under, name, value);
+                }
             }
             // `run` holds one list that unions and nothing else that does, so a sibling added later
             // gets whatever this arm does by default, which is to override.
             (Some(serde_json::Value::Object(under)), serde_json::Value::Object(above))
                 if key == "run" =>
             {
-                merge_run(under, above);
+                merge_run(displaced, under, above);
             }
             // Every rule from every layer, which is the rule the tool this borrows from applies. A
             // layer that replaced the block could drop a `deny` a weaker one set, and a permission
@@ -748,12 +886,33 @@ fn merge(
             (Some(serde_json::Value::Object(under)), serde_json::Value::Object(above))
                 if key == "permissions" =>
             {
-                merge_permissions(under, above);
+                merge_permissions(displaced, under, above);
             }
             (_, value) => {
-                base.insert(key, value);
+                lay_over(displaced, base, key, value);
             }
         }
+    }
+}
+
+/// Lay one name over whatever a weaker layer set it to, keeping what it displaced.
+///
+/// A file restating a gateway replaces an entry that may hold a token, and that entry is a buffer
+/// this program owns a credential in
+/// ([CRED-23](../../../docs/specs/credential-protection.md#CRED-23)). Nothing reads it again, so
+/// what [`serde_json::Map::insert`] does with it otherwise, which is to drop it, leaves the bytes
+/// for the allocator.
+///
+/// It stays with the document instead of being cleared here, so that everything one read parsed is
+/// cleared in the one place, which is [`Document`] going.
+fn lay_over(
+    displaced: &mut Vec<serde_json::Value>,
+    base: &mut serde_json::Map<String, serde_json::Value>,
+    key: String,
+    value: serde_json::Value,
+) {
+    if let Some(entry) = base.insert(key, value) {
+        displaced.push(entry);
     }
 }
 
@@ -767,6 +926,7 @@ fn merge(
 /// knows which layer each entry came from. Unioning it and no more would let a checkout's file
 /// answer a prompt, which [`grants`] is the rule against.
 fn merge_permissions(
+    displaced: &mut Vec<serde_json::Value>,
     under: &mut serde_json::Map<String, serde_json::Value>,
     above: serde_json::Map<String, serde_json::Value>,
 ) {
@@ -776,7 +936,7 @@ fn merge_permissions(
                 kept.extend(added);
             }
             (_, value) => {
-                under.insert(key, value);
+                lay_over(displaced, under, key, value);
             }
         }
     }
@@ -784,6 +944,7 @@ fn merge_permissions(
 
 /// The `run` block, where `scrubEnv` unions and every other name overrides.
 fn merge_run(
+    displaced: &mut Vec<serde_json::Value>,
     under: &mut serde_json::Map<String, serde_json::Value>,
     above: serde_json::Map<String, serde_json::Value>,
 ) {
@@ -795,7 +956,7 @@ fn merge_run(
                 kept.extend(added);
             }
             (_, value) => {
-                under.insert(key, value);
+                lay_over(displaced, under, key, value);
             }
         }
     }
@@ -1006,6 +1167,133 @@ mod tests {
         Some(std::ffi::OsString::from(home))
     }
 
+    /// A gateway block as a file states one, for the token in it.
+    fn gateway(token: &str) -> serde_json::Value {
+        serde_json::json!({"options": {"baseURL": "https://example.invalid/v1", "apiKey": token}})
+    }
+
+    /// One layer as a file states it, for a merge to lay over another.
+    fn layer(stated: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+        match stated {
+            serde_json::Value::Object(root) => root,
+            _ => panic!("a layer is a document"),
+        }
+    }
+
+    /// CRED-23: the buffer a settings file is read into holds the token the file states, and it is a
+    /// buffer this program owns.
+    ///
+    /// Taking the value out of the parse leaves this one behind, so a crash writes the token from
+    /// here even once every copy downstream of it is in a `Secret`.
+    ///
+    /// A file that does not parse is the second case, and the one the ordering in
+    /// [`Document::parse`] is for: a half-typed settings file is an ordinary thing, and the token in
+    /// one is in the text whatever the parse made of it.
+    #[test]
+    fn the_text_a_layer_was_parsed_from_is_cleared() {
+        let token = "sk-live-0123456789";
+        for (text, is_a_document) in [
+            (
+                serde_json::json!({"provider": {"gw": gateway(token)}}).to_string(),
+                true,
+            ),
+            (
+                format!("{{\"provider\": {{\"gw\": {{\"apiKey\": \"{token}\""),
+                false,
+            ),
+        ] {
+            let mut text = text;
+            let length = text.len();
+
+            let parsed = Document::parse(&mut text);
+
+            assert_eq!(
+                parsed.is_ok(),
+                is_a_document,
+                "the fixture parsed the other way, so it says nothing about clearing"
+            );
+            assert_eq!(
+                text.as_bytes(),
+                vec![0u8; length],
+                "the file's bytes are still in the buffer it was read into"
+            );
+        }
+    }
+
+    /// CRED-23: two layers may state the same gateway, and the entry the stronger one replaces is
+    /// the last place the weaker one's token is. Dropping it where it is displaced puts it beyond
+    /// the clearing the document does when it goes, so the merge keeps it instead.
+    ///
+    /// Through [`merge`] rather than the helper it calls, because which arm handles a name is what
+    /// decides whether the entry is kept. All four displace: a project file restating a gateway a
+    /// home file stated, one setting `provider` to something that is not a block and so replacing
+    /// every gateway at once, and one restating `permissions.deny` or `run.scrubEnv` as a value that
+    /// is not a list.
+    #[test]
+    fn a_merge_keeps_the_entry_a_stronger_layer_displaced() {
+        let token = "sk-home-0123456789";
+        let home = serde_json::json!({
+            "provider": {"gw": gateway(token)},
+            "permissions": {"deny": ["Read(./.env)"]},
+            "run": {"scrubEnv": ["MY_TOKEN"]}
+        });
+        for (above, displaced) in [
+            (
+                serde_json::json!({"provider": {"gw": gateway("sk-project-0123456789")}}),
+                vec![gateway(token)],
+            ),
+            (
+                serde_json::json!({"provider": "off"}),
+                vec![serde_json::json!({"gw": gateway(token)})],
+            ),
+            (
+                serde_json::json!({"permissions": {"deny": "everything"}}),
+                vec![serde_json::json!(["Read(./.env)"])],
+            ),
+            (
+                serde_json::json!({"run": {"scrubEnv": "all of them"}}),
+                vec![serde_json::json!(["MY_TOKEN"])],
+            ),
+        ] {
+            let mut merged = Document::default();
+            merge(&mut merged, layer(home.clone()));
+            assert!(
+                merged.displaced.is_empty(),
+                "the weakest layer displaced something, so the fixture proves nothing"
+            );
+
+            merge(&mut merged, layer(above.clone()));
+
+            assert_eq!(
+                merged.displaced, displaced,
+                "{above} replaced an entry and left nothing holding it"
+            );
+        }
+    }
+
+    /// The front end tells somebody which way the file they chose is wrong, so the answers it maps
+    /// to its three messages have to be distinguishable. It asks here rather than parsing the file
+    /// itself, which is CRED-23: a parse it made would be a copy of a token it then dropped.
+    #[test]
+    fn a_chosen_file_is_answered_for_each_way_it_is_not_settings() {
+        let dir = crate::testutil::scratch_dir("settings-chosen-file");
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+        for (name, text, answer) in [
+            ("settings.json", r#"{"model": "opus"}"#, Ok(())),
+            ("half-typed.json", "{not json", Err(NotADocument::NotJson)),
+            ("a-list.json", "[]", Err(NotADocument::NotAnObject)),
+        ] {
+            let path = dir.join(name);
+            std::fs::write(&path, text).expect("a file to check");
+            assert_eq!(check_document(&path), answer, "{text}");
+        }
+        assert_eq!(
+            check_document(&dir.join("nothing-here.json")),
+            Err(NotADocument::Unreadable),
+            "a file that is not there is not a file that is not JSON"
+        );
+    }
+
     /// STATE-2: this crate resolves the state directory itself, since it sits below the one that
     /// answers where it is. What has to hold across the resolvers is the name, so a layer reading
     /// a settings file finds the same directory a layer writing history does.
@@ -1069,6 +1357,50 @@ mod tests {
         );
         assert_eq!(settings.get("AWS_REGION"), Some("us-west-2"));
         assert_eq!(settings.get("AWS_PROFILE"), Some("some-profile"));
+    }
+
+    /// CRED-23: a signing key is one of the names a person may write into the `env` block, so that
+    /// block is a buffer this program owns a credential in.
+    ///
+    /// The `Secret` the configuration builds out of the name clears itself, and this map is a second
+    /// buffer holding the same bytes for as long as the settings live. Both halves of the assertion
+    /// are needed and neither says it alone: a buffer of zeros at a fresh address leaves the value
+    /// where the allocator can hand it on, and a buffer that has not moved and still reads as the
+    /// value is what dropping the string produces.
+    ///
+    /// Every value rather than the credential name alone, because the same block carries a region
+    /// and a model name and what a person may put there is anything.
+    #[test]
+    fn what_the_env_block_was_set_to_is_overwritten_where_it_lies() {
+        let key = "sk-live-0123456789abcdef";
+        let mut settings = Settings::parse(
+            &serde_json::json!({
+                "env": {crate::env_var::SIGNING_KEY: key, "AWS_REGION": "us-west-2"}
+            })
+            .to_string(),
+        );
+        let addresses: Vec<(String, *const u8, usize)> = settings
+            .env
+            .iter()
+            .map(|(name, value)| (name.clone(), value.as_ptr(), value.len()))
+            .collect();
+        assert_eq!(addresses.len(), 2, "the fixture set two names");
+
+        settings.scrub_env();
+
+        for (name, address, length) in addresses {
+            let value = settings.get(&name).expect("the name is still in the block");
+            assert_eq!(
+                value.as_ptr(),
+                address,
+                "{name}'s buffer moved, so its value is still in the one left behind"
+            );
+            assert_eq!(
+                value.as_bytes(),
+                vec![0u8; length],
+                "the buffer {name} was in still holds bytes of its value"
+            );
+        }
     }
 
     /// Every name is read rather than a chosen subset. The file is the user's own configuration

@@ -18,7 +18,7 @@
 //! drifts as untrusted content accumulates.
 
 use crate::ask::{self, Answer};
-use crate::capability::{Capability, CapabilitySet};
+use crate::capability::{Capability, CapabilitySet, ServerAlias};
 use crate::credentials::Scanned;
 use crate::event::{Event, Principle, Role, Sink};
 use crate::label::{Integrity, Label};
@@ -251,7 +251,7 @@ pub struct Policy<'sink, S: Sink> {
     sink: &'sink mut S,
     denials: usize,
     /// Which paths the user vouched for.
-    trust: TrustStore,
+    trust: crate::file_authority::FileAuthority,
     /// The working directory this turn runs in.
     ///
     /// The same directory [`Policy::trust`] was made against: the map reads its own relative names
@@ -286,6 +286,14 @@ pub struct Policy<'sink, S: Sink> {
     /// Consulted at the gates that ask, and nowhere else. Empty is the state a session with no
     /// settings file is in, and means every gate behaves as it did before rules existed.
     permissions: crate::permissions::Permissions,
+    /// The kinds of delegate a name may select this turn.
+    ///
+    /// Resolved before the turn from the program's own three and whatever definition files a
+    /// person vouched for, and never added to while it runs. What a planner names is compared
+    /// against this, so the set itself has to be something nothing untrusted reached: the
+    /// comparison decides nothing an attacker steers only because the enumeration does not
+    /// either.
+    delegates: crate::delegate::Definitions,
     /// Paths this turn has already offered to the user to vouch for.
     ///
     /// Turn-scoped, and deliberately not recorded anywhere longer-lived. A yes goes into the trust
@@ -300,6 +308,15 @@ pub struct Policy<'sink, S: Sink> {
     /// two go through one gate and are not the same act: only the first is something a turn asked
     /// for, and only the first is what a `WebFetch` rule is about.
     fetching: Option<String>,
+    /// The host and port a declared MCP server is at, while a request to it is in flight.
+    ///
+    /// Set by [`Policy::before_server_request`] and cleared by
+    /// [`Policy::server_request_finished`]. A remote server has no process to confine, so the
+    /// boundary is the network: a declaration names one destination, and a hop that leaves it is
+    /// one the person who declared the server has to approve. The port is part of that, unlike a
+    /// rule about a host: a machine runs many services on one address, and the declaration named
+    /// one of them.
+    calling_server: Option<String>,
     /// The integrity of every observation this turn has made, met together.
     ///
     /// Starts trusted, since the task is the user's own words, and drops to untrusted the moment
@@ -382,15 +399,20 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             // `with_trust`. The filesystem root is the working directory a map with no project
             // behind it has to read a relative name under, and an empty map answers `None` about
             // every path whatever it is read under.
-            trust: TrustStore::new("/"),
+            trust: crate::file_authority::FileAuthority::new(TrustStore::new("/")),
             root: None,
             scratch: None,
             programs: crate::programs::TrustedPrograms::new(),
             asked: crate::programs::AskedAbout::new(),
             remembered: crate::remembered::Remembered::new(),
             permissions: crate::permissions::Permissions::new(),
+            // The three the program wrote. A caller that found definition files installs the
+            // resolved set with `with_delegates`; one that found none is in exactly the state
+            // every session was in before there were files to find.
+            delegates: crate::delegate::Definitions::default(),
             vouch_asked: std::collections::BTreeSet::new(),
             fetching: None,
+            calling_server: None,
             context: Integrity::Trusted,
         })
     }
@@ -416,7 +438,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
     /// Check that a capability was granted before it is exercised.
     pub fn before_capability(&mut self, capability: Capability) -> Gated<()> {
-        if !self.capabilities.contains(capability) {
+        if !self.capabilities.contains(&capability) {
             return Err(self.deny(
                 "capability",
                 Principle::Capability,
@@ -425,6 +447,26 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         }
         self.allow("capability", format!("{capability} granted"));
         Ok(())
+    }
+
+    /// Withdraw the grant to call tools on one MCP server, for the rest of this run.
+    ///
+    /// Takes effect at the next call rather than at the next session, because a grant is
+    /// the thing [`Policy::before_capability`] asks about and not a property the session
+    /// recorded when it started. Nothing here grants: the only direction this moves is
+    /// narrower, so a run still cannot acquire a capability partway through.
+    ///
+    /// Says whether a grant was there to withdraw, which is how a caller tells an alias
+    /// nobody had granted anything about from one it has just dropped.
+    pub fn revoke_mcp_call(&mut self, alias: &ServerAlias) -> bool {
+        let withdrawn = self.capabilities.revoke_mcp_call(alias);
+        if withdrawn {
+            self.allow(
+                "capability",
+                format!("mcp_call:{alias} withdrawn, from the next call"),
+            );
+        }
+        withdrawn
     }
 
     /// Check a network egress before it happens. Called for the initial URL *and* for
@@ -476,6 +518,22 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                     format!(
                         "this fetch was approved for {approved} and redirected somewhere else, \
                          which nobody was shown"
+                    ),
+                ));
+            }
+        }
+
+        if let Some(declared) = self.calling_server.clone() {
+            // What a `Location` header names is a server's own bytes, so a refusal repeating it
+            // would be writing them into whatever formats that refusal. The declared destination
+            // is what a person wrote down, so a refusal names that.
+            if crate::url::authority_of(url).unwrap_or_default() != declared {
+                return Err(self.deny(
+                    "network",
+                    Principle::IntegrityGate,
+                    format!(
+                        "this request was addressed to the server declared at {declared} and \
+                         redirected to a destination nobody declared or approved"
                     ),
                 ));
             }
@@ -592,6 +650,38 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.fetching = None;
     }
 
+    /// Confine egress to where a declared server is, until the request reports back.
+    ///
+    /// A remote server is reached over the network and nowhere else, so the declaration's host
+    /// and port are the whole of where such a request may go. Every hop passes the egress gate,
+    /// and while this is set a hop naming anywhere else is one the person who declared the server
+    /// has to approve: what the request carries is a call to that server, with its arguments and
+    /// its session id, and a `Location` header is the server's own bytes rather than anything a
+    /// person wrote down. A server that has genuinely moved and a server that wants the call
+    /// delivered somewhere else write the same header.
+    ///
+    /// The port counts, unlike anywhere a rule about a host decides. A declaration is one URL
+    /// somebody wrote in full, and the machine it names runs other services on other ports, so a
+    /// hop that keeps the address and changes the port is a different service.
+    ///
+    /// No rule widens this, which is the other difference from a fetch. A `WebFetch` rule says
+    /// which websites the planner may reach, and that is not a statement that one server's
+    /// traffic may be sent somewhere else. An approval would widen it, and there is none to give:
+    /// a gate allows or refuses and cannot ask, so the question needs a prompt before the call and
+    /// a declaration to write the answer back into, and issue #83 is where both are. Until then a
+    /// hop that leaves the declared destination is refused and nothing is sent.
+    pub fn before_server_request(&mut self, url: &str) {
+        self.calling_server = Some(crate::url::authority_of(url).unwrap_or_default());
+    }
+
+    /// Say that the request to a declared server has finished, however it went.
+    ///
+    /// Called on every path out of a request, so a failed one does not leave the rest of the
+    /// turn's egress confined to a server's host.
+    pub fn server_request_finished(&mut self) {
+        self.calling_server = None;
+    }
+
     /// Record that a capability produced an observation, returning the label it must
     /// carry. The label comes from the capability, never from the data.
     pub fn observe(&mut self, capability: Capability) -> Gated<Label> {
@@ -605,13 +695,43 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
     /// Install the user's trust decisions, before the turn runs.
     pub fn with_trust(mut self, trust: TrustStore) -> Self {
-        self.trust = trust;
+        self.trust = crate::file_authority::FileAuthority::new(trust);
         self
     }
 
     /// The trust decisions in force, including any this turn recorded.
-    pub fn trust(&self) -> &TrustStore {
-        &self.trust
+    pub fn trust(&self) -> TrustStore {
+        self.trust.snapshot()
+    }
+
+    /// Whether the map trusts `path`, for a caller that wants the answer and not the map.
+    ///
+    /// Unlike [`Policy::read_is_quarantined`] this is the map's own answer, with nothing lent to
+    /// the session's own directory, which is what a question about a directory in the project
+    /// wants.
+    pub fn trusts_path(&self, path: &str) -> bool {
+        self.trust.is_trusted(path)
+    }
+
+    /// Share file authority without sharing capabilities, routing or context.
+    pub fn with_file_authority(mut self, authority: crate::file_authority::FileAuthority) -> Self {
+        self.trust = authority;
+        self
+    }
+
+    pub fn file_authority(&self) -> crate::file_authority::FileAuthority {
+        self.trust.clone()
+    }
+
+    /// Capture bytes and decide their labels within one file-authority boundary.
+    /// The closure must not prompt, call a model, or wait for a process or delegate.
+    pub fn capture_files<R>(
+        &mut self,
+        capture: impl FnOnce(&mut Self, &crate::file_authority::FileCapture<'_>) -> R,
+    ) -> R {
+        let authority = self.file_authority();
+        let guard = authority.capture();
+        capture(self, &guard)
     }
 
     /// Say which directory this turn runs in.
@@ -737,6 +857,25 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// The rules in force.
     pub fn permissions(&self) -> &crate::permissions::Permissions {
         &self.permissions
+    }
+
+    /// Install the kinds of delegate a name may select this turn.
+    ///
+    /// The caller resolves them from files before the turn starts, through the same trusted-read
+    /// gate a skill passes, so what arrives here is the program's own three plus whatever a
+    /// person vouched for. Nothing widens it afterwards: a definition may narrow what its kind
+    /// holds and there is no spelling of one that adds a capability, so installing a set is
+    /// offering fewer delegates rather than more authority.
+    /// Taken by reference because the set is resolved from files, and resolving them takes this
+    /// policy: the read of each one passes the same gates every other read does, so there is no
+    /// point before the policy exists at which the caller could hand a set to a constructor.
+    pub fn install_delegates(&mut self, delegates: crate::delegate::Definitions) {
+        self.delegates = delegates;
+    }
+
+    /// The kinds of delegate a name may select.
+    pub fn delegates(&self) -> &crate::delegate::Definitions {
+        &self.delegates
     }
 
     /// Refuse an action a `deny` rule covers, before anything is opened or started.
@@ -2323,33 +2462,52 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         // this run has met nothing an attacker wrote.
         let proof = Declassification::authorise("a delegate kind the planner named");
         let name = kind.clone().declassify(&proof);
-        let Some(selected) = crate::delegate::Kind::from_name(&name) else {
+        let Some(selected) = self.delegates.get(&name).cloned() else {
             return Err(self.deny(
                 "delegate",
                 Principle::Capability,
                 format!(
                     "{id}: there is no kind of delegate called '{name}'; the kinds are {}",
-                    crate::delegate::Kind::NAMES.join(", ")
+                    self.delegates.names().join(", ")
                 ),
             ));
         };
 
+        // The definition's tools are the second term and the parent's set is the third, so the
+        // intersection still only ever narrows. Taken here rather than where the file was read,
+        // because which capabilities a delegate holds is a decision and decisions are the
+        // kernel's; a loader that did this would have moved one out of it.
+        let beyond = selected.tools_beyond_its_kind();
+        if !beyond.is_empty() {
+            self.allow(
+                "delegate",
+                format!(
+                    "{id}: {} names {} which a {} does not reach, so it is delegated without \
+                     them",
+                    selected.name(),
+                    beyond.join(", "),
+                    selected.kind()
+                ),
+            );
+        }
+
         let wanted = selected.capabilities();
         let held: CapabilitySet = wanted
             .iter()
-            .filter(|capability| self.capabilities.contains(*capability))
+            .filter(|capability| self.capabilities.contains(capability))
             .collect();
         let dropped: Vec<&str> = wanted
             .iter()
-            .filter(|capability| !self.capabilities.contains(*capability))
-            .map(Capability::as_str)
+            .filter(|capability| !self.capabilities.contains(capability))
+            .map(|capability| capability.as_str())
             .collect();
         if !dropped.is_empty() {
             self.allow(
                 "delegate",
                 format!(
-                    "{id}: a {selected} asks for {} which this run does not hold, so it is \
+                    "{id}: a {} asks for {} which this run does not hold, so it is \
                      delegated without them",
+                    selected.name(),
                     dropped.join(", ")
                 ),
             );
@@ -2357,7 +2515,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
         let proof = Declassification::authorise("a delegate's prompt, carried not read");
         let task = task.clone().declassify(&proof);
-        let spec = crate::delegate::DelegateSpec::new(id, selected, task, held, selected.rounds());
+        let rounds = selected.kind().rounds();
+        let spec = crate::delegate::DelegateSpec::new(id, &selected, task, held, rounds);
 
         self.allow(
             "delegate",
@@ -2391,43 +2550,16 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// a command they approved, so both were `(T,pub)` before any run existed.
     pub fn vouched(&self) -> Vouched {
         Vouched {
-            trust: self.trust.clone(),
+            trust: self.trust(),
             programs: self.programs.clone(),
         }
     }
 
-    /// Take back what a person decided inside a nested run.
+    /// Adopt exact command approvals added inside a delegate.
     ///
-    /// The trust map and the vouched programs, and nothing the delegate itself produced. Both are
-    /// standing decisions a person made about their own machine, and the record of them belongs
-    /// to the session rather than to whichever run happened to be going when they made it: a
-    /// delegate told once that the build may run must not leave the next one asking again.
-    ///
-    /// What moved inside the delegate is what comes back, which is what `since` is for. A
-    /// delegate hands back the whole record it was seeded with, and the entries differing from
-    /// that copy are the ones a person answered inside it. The rest are written back unchanged
-    /// and settle nothing, because a copy taken at one moment says what was true then: it can be
-    /// behind what the session has since decided, and something behind must not be able to erase.
-    ///
-    /// **No label crosses here and none could.** A trust rule is a path a person answered about
-    /// and a vouched program is a command they approved, so both were `(T,pub)` before either run
-    /// existed. Nothing a delegate read, produced or was told is in either record.
+    /// File decisions are already shared and must never be merged from snapshots. Capabilities,
+    /// routing grants, quarantines and prompt history remain local to each policy.
     pub fn adopt_from_delegate(&mut self, since: &Vouched, ended: &Vouched) {
-        // Under the keys rather than the names: a name is relative to whichever working
-        // directory the map holding it was made with, and the two maps here need not have been.
-        let before: BTreeMap<&str, Integrity> = since.trust.keyed().collect();
-        let mut paths = 0;
-        for (path, integrity) in ended.trust.keyed() {
-            if before.get(path) == Some(&integrity) {
-                continue;
-            }
-            match integrity {
-                Integrity::Trusted => self.trust.trust(path),
-                Integrity::Untrusted => self.trust.distrust(path),
-            }
-            paths += 1;
-        }
-
         let mut vouched = 0;
         for command in ended.programs.iter() {
             if since
@@ -2442,10 +2574,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
         self.allow(
             "delegate",
-            format!(
-                "what a person vouched for inside a delegate is kept: {paths} trust rules, \
-                 {vouched} commands"
-            ),
+            format!("what a person vouched for inside a delegate is kept: {vouched} commands"),
         );
     }
 
@@ -3535,7 +3664,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         scanned
     }
 
-    /// Update the trust map to match what was just written to `path`.
+    /// Reconcile a completed write in a non-overlapping snapshot.
+    ///
+    /// Live filesystem callers must use `FileAuthority::capture` and its effect reservation
+    /// before writing. Calling this after I/O cannot order reads against that write.
     ///
     /// The invariant: a path's effective trust equals the integrity of the data in it. A rule
     /// is recorded only when the write disagrees with the rule already covering the path, so a
@@ -3554,54 +3686,22 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             return;
         }
 
-        match actual {
-            Integrity::Untrusted => self.trust.distrust(path),
-            Integrity::Trusted => self.trust.trust(path),
-        }
-
-        self.allow(
-            "trust",
-            format!(
-                "{path} recorded as {} to match what was written",
-                match actual {
-                    Integrity::Trusted => "trusted",
-                    Integrity::Untrusted => "untrusted",
-                }
-            ),
-        );
-    }
-
-    /// Update the trust map for the destinations a command line opened for writing.
-    ///
-    /// `written` is the label the run gate fixed for the line's output, and `paths` are the files
-    /// it opened, spelled the way a read of them is spelled. A redirection is a write this system
-    /// performs, so untrusted output landing in a vouched-for tree marks those paths untrusted,
-    /// which is what stops the bytes being read back as trusted.
-    ///
-    /// One direction. A trusted line is no evidence that its destination holds only trusted
-    /// bytes: `>>` keeps whatever was already in the file, and the label is a statement about
-    /// who answered for the programs rather than about what any one file now holds. So a line
-    /// never raises a path's trust, and raising it stays something a person does.
-    pub fn reconcile_after_run(&mut self, paths: &[String], written: Label) {
-        if paths.is_empty() {
-            return;
-        }
-
-        if written.is_trusted() {
+        let recorded = match actual {
+            Integrity::Trusted => "trusted",
+            Integrity::Untrusted => "untrusted",
+        };
+        if !self.trust.publish(path, actual) {
             self.allow(
                 "trust",
-                format!(
-                    "{} left as the map had them: a line's output says nothing about what was \
-                     already in a file it added to",
-                    paths.join(", ")
-                ),
+                format!("{path} left as it was: a file effect on it is still active"),
             );
             return;
         }
 
-        for path in paths {
-            self.reconcile_after_write(path, written);
-        }
+        self.allow(
+            "trust",
+            format!("{path} recorded as {recorded} to match what was written"),
+        );
     }
 
     /// Record that the user named `path` themselves, which is what vouches for it.
@@ -3615,11 +3715,43 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// and a rule on the file is more specific than any rule on the tree around it, so a
     /// referenced file is trusted inside a directory nobody vouched for.
     pub fn vouch_for_named_path(&mut self, path: &str) {
-        self.trust.trust(path);
+        if !self.trust.publish(path, Integrity::Trusted) {
+            self.allow(
+                "trust",
+                format!("{path} remains untrusted while a file effect is active"),
+            );
+            return;
+        }
         self.allow(
             "trust",
             format!("{path} trusted: the user named it in their own line"),
         );
+    }
+
+    /// Vouch for `path` only if nothing has decided about it since `shown_at`.
+    ///
+    /// A preview is what the answer was about. If that path, or a tree above it, was decided about
+    /// while the question was on the screen, the text the person read is not what a rule minted now
+    /// would cover, so the answer is thrown away rather than spent on bytes nobody saw.
+    ///
+    /// Refusing is recorded and reported. A yes that quietly does nothing leaves a person watching
+    /// a file they just trusted come back quarantined with nothing saying why, and the caller needs
+    /// the answer to say so.
+    pub fn vouch_if_unchanged(&mut self, path: &str, shown_at: u64) -> bool {
+        let vouched = self.capture_files(|policy, capture| {
+            if capture.revision_of(path) != shown_at {
+                return false;
+            }
+            policy.vouch_for_named_path(path);
+            true
+        });
+        if !vouched {
+            self.allow(
+                "trust",
+                format!("{path} not trusted: it changed while the question was being answered"),
+            );
+        }
+        vouched
     }
 
     /// Each step of a plan as one line, for a rule to match against.
@@ -3634,13 +3766,26 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     fn plan_lines(&self, plan: &crate::command::Plan) -> Vec<String> {
         plan.steps()
             .iter()
-            .map(|step| {
-                std::iter::once(step.program.as_str())
-                    .chain(step.args.iter().map(String::as_str))
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            })
+            .map(|step| rule_line(&step.program, &step.args))
             .collect()
+    }
+
+    /// Refuse one step's command line a `deny` rule covers, before its program is looked for.
+    ///
+    /// Called by the compiler with a step's name and argv as soon as it has both and before it
+    /// asks `$PATH` what the name means, which is the position PERM-7 puts the rules in: the
+    /// refusal comes before the program is looked for. A denied line is then refused by the rule
+    /// whether or not the program is installed, rather than being reported as a name nothing on
+    /// `$PATH` matches, which is an answer about this machine's software in place of the one the
+    /// person wrote down, and one carrying none of the "do not retry" the clause owes the planner.
+    ///
+    /// The name and the argv rather than a line, so that the rendering a rule is matched against
+    /// is built in one place and a caller cannot arrive with a different spelling of the same
+    /// step.
+    pub fn before_command_rules(&mut self, program: &str, args: &[String]) -> Gated<()> {
+        let line = rule_line(program, args);
+        let decision = self.permissions.for_command(&line);
+        self.refuse_if_denied("run", decision, &line)
     }
 
     /// Refuse a plan a `deny` rule covers, before anything is started.
@@ -3651,6 +3796,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// A redirection is a write and takes the rules a write takes, and a `<` is a read and takes
     /// the rules a read takes. A rule restricting a path is a statement about the path, so it
     /// cannot depend on which tool reached it.
+    ///
+    /// The command lines have already been through [`Policy::before_command_rules`] where the
+    /// plan came from the compiler, which is the only place one is built from a planner's line.
+    /// They are consulted again here, because a plan reaching this gate by any other route has to
+    /// be ruled on too, and the second answer is the same one: the rules are a function of the
+    /// line and nothing between the two calls can change it.
     pub fn before_plan_rules(&mut self, plan: &crate::command::Plan) -> Gated<()> {
         for line in &self.plan_lines(plan) {
             let decision = self.permissions.for_command(line);
@@ -4645,6 +4796,18 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     pub fn finish(self) -> bool {
         self.denials == 0
     }
+}
+
+/// One step as the line a rule is matched against.
+///
+/// The one place that rendering is built, so the answer cannot depend on which gate asked:
+/// [`Policy::before_command_rules`] has the name and the argv before a step exists, and
+/// `plan_lines` has a compiled plan, and a rule means the same thing at both.
+fn rule_line(program: &str, args: &[String]) -> String {
+    std::iter::once(program)
+        .chain(args.iter().map(String::as_str))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Whether a program was written as a path rather than as a name to look up.
@@ -5815,7 +5978,7 @@ five
             &mut sink,
         )
         .unwrap();
-        for capability in Capability::ALL {
+        for capability in Capability::all() {
             // Written out rather than read from the capability: a match that asked the code under
             // test what to expect would assert nothing.
             let expected = match capability {
@@ -5824,20 +5987,27 @@ five
                 Capability::ShellExec => Some(Label::untrusted_private()),
                 Capability::LanguageServer => Some(Label::untrusted_private()),
                 Capability::WebFetch => Some(Label::untrusted_public()),
-                Capability::McpCall => Some(Label::untrusted_public()),
+                // Whichever server: what a call to one produces is a property of the
+                // protocol, and the alias decides who may make the call rather than what
+                // the answer is labelled.
+                Capability::McpCall(_) => Some(Label::untrusted_public()),
                 Capability::FileWrite => None,
                 Capability::GitWrite => None,
             };
             match expected {
                 Some(label) => {
-                    assert_eq!(policy.observe(capability).ok(), Some(label), "{capability}");
+                    assert_eq!(
+                        policy.observe(capability.clone()).ok(),
+                        Some(label),
+                        "{capability}"
+                    );
                 }
                 // An effect observes nothing, so there is no label to hand back. The refusal has to
                 // say that, since a refusal for any other reason would leave this passing while the
                 // question went unanswered.
                 None => {
                     let denial = policy
-                        .observe(capability)
+                        .observe(capability.clone())
                         .expect_err("an effect has no observation to label");
                     assert_eq!(denial.principle, Principle::Capability, "{capability}");
                     assert!(
@@ -7995,6 +8165,62 @@ five
         assert!(
             policy.before_network("https://elsewhere.test/x").is_ok(),
             "a finished fetch went on confining where the turn could reach"
+        );
+    }
+
+    /// A declared server is one destination and a redirect names another, so the hop is refused
+    /// whatever the settings say. A `WebFetch` rule is a person naming websites the planner may
+    /// reach, which is not consent to send a server's call to a different service. What could
+    /// widen this is an approval of where that one server went, which is a prompt nothing raises
+    /// yet, so a rule remaining inert here is the whole of the behaviour and not half of it.
+    #[test]
+    fn a_rule_does_not_let_a_servers_request_be_redirected_off_its_host() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_permissions(permissions(
+            &[],
+            &[],
+            &["WebFetch(domain:elsewhere.test)"],
+        ));
+
+        policy.before_server_request("https://mcp.example/api");
+        assert!(
+            policy.before_network("https://mcp.example/api").is_ok(),
+            "the host the server was declared at was refused"
+        );
+        assert!(
+            policy.before_network("https://elsewhere.test/api").is_err(),
+            "an allow rule let a server's request be redirected off the declared host"
+        );
+    }
+
+    /// One machine runs many services, so the port is part of where a server is. A hop that keeps
+    /// the address and changes the port has reached a different program on the same host, which
+    /// is the shape a loopback declaration is most exposed to.
+    #[test]
+    fn a_servers_request_cannot_be_redirected_to_another_port_on_the_same_host() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+
+        policy.before_server_request("http://127.0.0.1:8931/mcp");
+        assert!(
+            policy
+                .before_network("http://127.0.0.1:8931/mcp/v2")
+                .is_ok(),
+            "the port the server was declared on was refused"
+        );
+
+        let denial = policy
+            .before_network("http://127.0.0.1:2375/containers/create")
+            .expect_err("a server's call reached another service on the same host");
+        assert!(
+            denial.message.contains("127.0.0.1:8931"),
+            "the refusal must name where the server was declared: {}",
+            denial.message
+        );
+        assert!(
+            !denial.message.contains("2375"),
+            "the refusal repeated what a server chose: {}",
+            denial.message
         );
     }
 
@@ -10971,6 +11197,153 @@ five
             }
         }
 
+        /// What a name is compared against is the set the driver resolved, so the refusal names
+        /// the definitions a person actually has rather than the three the program shipped.
+        /// A planner told `reader, checker, worker` in a session with definitions in it would
+        /// never name one.
+        #[test]
+        fn a_refusal_names_the_definitions_this_session_resolved() {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            let mut definitions = crate::delegate::Definitions::default();
+            definitions.insert(crate::delegate::Definition::from_file(
+                "rule-reviewer",
+                "checks a diff",
+                Kind::Reader,
+                None,
+                "",
+                ".bravebot/agents/rule-reviewer.md",
+            ));
+            policy.install_delegates(definitions);
+
+            let err = policy
+                .before_delegate(DelegateId::nth(1), &argument("auditor"), &argument("do it"))
+                .expect_err("a name nobody resolved must reach no capability set");
+            assert!(
+                err.to_string().contains("rule-reviewer"),
+                "the refusal did not name what this session can select: {err}"
+            );
+        }
+
+        /// A definition selects a kind, and what it is is that kind's: the bound, the prompt
+        /// bracketing and the capabilities all come from the enumerated set rather than from the
+        /// file. A file that could say either would be a checked-in file authoring authority.
+        #[test]
+        fn a_definition_is_delegated_as_the_kind_it_names() {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            let mut definitions = crate::delegate::Definitions::default();
+            definitions.insert(crate::delegate::Definition::from_file(
+                "rule-reviewer",
+                "checks a diff",
+                Kind::Reader,
+                None,
+                "read the diff",
+                ".bravebot/agents/rule-reviewer.md",
+            ));
+            policy.install_delegates(definitions);
+
+            let spec = policy
+                .before_delegate(
+                    DelegateId::nth(1),
+                    &argument("rule-reviewer"),
+                    &argument("check it"),
+                )
+                .expect("a resolved definition may be selected");
+
+            assert_eq!(spec.definition(), "rule-reviewer");
+            assert_eq!(spec.kind(), Kind::Reader);
+            assert_eq!(spec.rounds(), Kind::Reader.rounds());
+            assert_eq!(spec.prompt(), "read the diff");
+            assert!(!spec.capabilities().contains(&Capability::FileWrite));
+        }
+
+        /// A definition may name fewer tools than its kind reaches and never more. The narrowing
+        /// is taken here rather than where the file was read, so what a delegate holds is a
+        /// decision the kernel took, and the trail says what was dropped.
+        #[test]
+        fn a_definition_naming_a_tool_its_kind_lacks_is_delegated_without_it() {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            let mut definitions = crate::delegate::Definitions::default();
+            definitions.insert(crate::delegate::Definition::from_file(
+                "rule-reviewer",
+                "checks a diff",
+                Kind::Reader,
+                Some(
+                    ["read_file", "write_file", "run"]
+                        .map(str::to_string)
+                        .to_vec(),
+                ),
+                "",
+                ".bravebot/agents/rule-reviewer.md",
+            ));
+            policy.install_delegates(definitions);
+
+            let spec = policy
+                .before_delegate(
+                    DelegateId::nth(1),
+                    &argument("rule-reviewer"),
+                    &argument("check it"),
+                )
+                .expect("a resolved definition may be selected");
+
+            assert_eq!(spec.tools(), Some(["read_file".to_string()].as_slice()));
+            assert!(!spec.capabilities().contains(&Capability::FileWrite));
+            assert!(!spec.capabilities().contains(&Capability::ShellExec));
+            assert!(
+                sink.events().iter().any(|event| matches!(
+                    event,
+                    Event::GatePassed { detail, .. }
+                        if detail.contains("write_file") && detail.contains("does not reach")
+                )),
+                "the trail did not say what the definition asked for and did not get"
+            );
+        }
+
+        /// A definition is not a way around the parent's own set. Both narrowings apply and they
+        /// apply in the same direction, so a `worker` definition spawned from a run that cannot
+        /// write is a delegate that cannot write.
+        #[test]
+        fn a_definition_cannot_widen_past_the_run_that_spawned_it() {
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing_with("task", "look into it"),
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead]),
+                &mut sink,
+            )
+            .unwrap();
+            let mut definitions = crate::delegate::Definitions::default();
+            definitions.insert(crate::delegate::Definition::from_file(
+                "fixer",
+                "finishes a sub-task",
+                Kind::Worker,
+                Some(
+                    ["read_file", "write_file", "run"]
+                        .map(str::to_string)
+                        .to_vec(),
+                ),
+                "",
+                ".bravebot/agents/fixer.md",
+            ));
+            policy.install_delegates(definitions);
+
+            let spec = policy
+                .before_delegate(DelegateId::nth(1), &argument("fixer"), &argument("fix it"))
+                .expect("a narrow run may still delegate");
+
+            assert!(spec.capabilities().contains(&Capability::FileRead));
+            assert!(
+                !spec.capabilities().contains(&Capability::FileWrite),
+                "a definition handed writing to a run that could not write"
+            );
+            assert!(
+                !spec.capabilities().contains(&Capability::ShellExec),
+                "a definition handed running to a run that could not run"
+            );
+        }
+
         /// Delegation redistributes authority and never creates it. A worker asks for writing and
         /// running; a run holding neither hands on neither, and the delegate is built without them
         /// rather than refused, so a narrow run can still delegate the reading.
@@ -10989,13 +11362,13 @@ five
                 .before_delegate(DelegateId::nth(1), &argument("worker"), &argument("fix it"))
                 .expect("a narrow run may still delegate");
 
-            assert!(spec.capabilities().contains(Capability::FileRead));
+            assert!(spec.capabilities().contains(&Capability::FileRead));
             assert!(
-                !spec.capabilities().contains(Capability::FileWrite),
+                !spec.capabilities().contains(&Capability::FileWrite),
                 "a delegate was handed writing by a run that could not write"
             );
             assert!(
-                !spec.capabilities().contains(Capability::ShellExec),
+                !spec.capabilities().contains(&Capability::ShellExec),
                 "a delegate was handed running by a run that could not run"
             );
         }
@@ -11028,8 +11401,11 @@ five
             let seeded = policy.vouched();
             // What the delegate's own run came back with: the same map, plus the answer a person
             // gave inside it.
-            let mut ended = seeded.clone();
-            ended.trust.trust("vendor/lib.js");
+            let mut child_sink = RecordingSink::new();
+            let mut child =
+                open_policy(&mut child_sink).with_file_authority(policy.file_authority());
+            child.vouch_for_named_path("vendor/lib.js");
+            let ended = child.vouched();
             policy.adopt_from_delegate(&seeded, &ended);
 
             assert!(
@@ -11080,10 +11456,16 @@ five
 
             // Both copies taken from the same run, before either delegate had asked anything.
             let seeded = policy.vouched();
-            let mut reader = seeded.clone();
-            reader.trust.trust("vendor/reader.js");
-            let mut checker = seeded.clone();
-            checker.trust.trust("vendor/checker.js");
+            let mut reader_sink = RecordingSink::new();
+            let mut checker_sink = RecordingSink::new();
+            let mut reader =
+                open_policy(&mut reader_sink).with_file_authority(policy.file_authority());
+            let mut checker =
+                open_policy(&mut checker_sink).with_file_authority(policy.file_authority());
+            reader.vouch_for_named_path("vendor/reader.js");
+            checker.vouch_for_named_path("vendor/checker.js");
+            let reader = reader.vouched();
+            let checker = checker.vouched();
 
             policy.adopt_from_delegate(&seeded, &reader);
             policy.adopt_from_delegate(&seeded, &checker);
@@ -11109,8 +11491,11 @@ five
             // Seeded first, so this copy predates the answer below and cannot know about it.
             let seeded = policy.vouched();
 
-            let mut answered = seeded.clone();
-            answered.trust.distrust("vendor/generated");
+            let mut child_sink = RecordingSink::new();
+            let mut child =
+                open_policy(&mut child_sink).with_file_authority(policy.file_authority());
+            child.reconcile_after_write("vendor/generated", Label::untrusted_public());
+            let answered = child.vouched();
             policy.adopt_from_delegate(&seeded, &answered);
             assert_eq!(
                 policy.trust().integrity_of("vendor/generated"),
@@ -11125,6 +11510,69 @@ five
                 Some(Integrity::Untrusted),
                 "a delegate that answered nothing erased what another one had settled"
             );
+        }
+
+        /// An approval is spent on the version the person was shown, and a version they never saw
+        /// is not one they answered about.
+        ///
+        /// The preview is what the question was: somebody reading a file and saying it is theirs
+        /// has said so about the text in front of them. A sibling effect replaces the bytes while
+        /// they are answering, and vouching anyway would put their grant on a file nobody read.
+        #[test]
+        fn a_vouch_is_not_spent_on_a_version_nobody_was_shown() {
+            let mut sink = RecordingSink::new();
+            let mut writer_sink = RecordingSink::new();
+            let (spent, trusted) = {
+                let mut policy = open_policy(&mut sink);
+                let shown_at =
+                    policy.capture_files(|_, capture| capture.revision_of("vendor/lib.js"));
+
+                // A sibling's write, entered and published the way the workspace enters one: the
+                // path is reserved under one boundary and what it holds is published under another,
+                // with the bytes released in between.
+                let mut writer =
+                    open_policy(&mut writer_sink).with_file_authority(policy.file_authority());
+                let effect = writer
+                    .capture_files(|_, capture| capture.begin("vendor/lib.js"))
+                    .expect("the path is free");
+                effect.complete(Integrity::Untrusted);
+
+                (
+                    policy.vouch_if_unchanged("vendor/lib.js", shown_at),
+                    policy.trust().is_trusted("vendor/lib.js"),
+                )
+            };
+
+            assert!(
+                !spent,
+                "an approval was spent on a version it was not given for"
+            );
+            assert!(
+                !trusted,
+                "a file replaced while the question was open came back trusted"
+            );
+            let trail = format!("{:?}", sink.events());
+            assert!(
+                trail.contains("changed while the question was being answered"),
+                "nothing says why a file the person trusted came back quarantined: {trail}"
+            );
+        }
+
+        /// The same call with nothing intervening, so the answer is spent.
+        ///
+        /// Without this the check above would be satisfied by a method that never vouches, which
+        /// would leave every prompt a person answers costing them the answer and nothing else.
+        #[test]
+        fn a_vouch_for_the_version_shown_is_spent_on_it() {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            let shown_at = policy.capture_files(|_, capture| capture.revision_of("vendor/lib.js"));
+
+            assert!(
+                policy.vouch_if_unchanged("vendor/lib.js", shown_at),
+                "an answer about the version in front of the person was not spent on it"
+            );
+            assert!(policy.trust().is_trusted("vendor/lib.js"));
         }
     }
 

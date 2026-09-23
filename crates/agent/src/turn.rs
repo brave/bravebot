@@ -532,6 +532,7 @@ pub struct Attachment {
 /// What a turn is asked to do.
 #[derive(Debug, Clone)]
 pub struct Task {
+    pub(crate) file_authority: Option<bravebot_core::file_authority::FileAuthority>,
     /// The user's instruction. The only trusted input.
     pub prompt: String,
     /// Why this prompt exists, where nobody typed it.
@@ -745,6 +746,7 @@ impl PastedImage {
 impl Task {
     pub fn new(prompt: impl Into<String>) -> Self {
         Self {
+            file_authority: None,
             prompt: prompt.into(),
             // A line somebody typed until a caller says what composed it.
             composed: None,
@@ -2177,6 +2179,10 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         .with_permissions(task.permissions.clone())
         .resuming(conversation.context());
 
+    if let Some(authority) = &task.file_authority {
+        policy = policy.with_file_authority(authority.clone());
+    }
+
     // Read once. A turn nobody is looping arranges its own later look, which is what a request to
     // report a change needs; a tick of a self-paced loop sets the pace of the next one; and a tick
     // the person gave an interval for decides nothing, because their interval already did.
@@ -2191,6 +2197,16 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     // one this agent wrote itself.
     let (catalogue, mut notices) =
         crate::skills::discover(&mut policy, workspace, task.home.as_deref());
+
+    // The kinds of delegate this turn can select from, resolved from the same two roots and for
+    // the same reason: a definition names a kind, so a file can say what a delegate is for and
+    // no file can say what one may do. Resolved afresh every turn, as every other standing
+    // instruction is, and installed into the kernel, which is what a planner's name is compared
+    // against.
+    let (delegates, delegate_notices) =
+        crate::agents::discover(&mut policy, workspace, task.home.as_deref());
+    notices.extend(delegate_notices);
+    policy.install_delegates(delegates.clone());
 
     // Nothing is started here: LSP-8 starts a server on the first question that needs one, and
     // LSP-5 asks the person before it does, so a session that never asks about a symbol never
@@ -2246,7 +2262,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     let system = match &task.delegate {
         Some(spec) => format!(
             "{}{}{mode}",
-            crate::delegate::prompt_for(spec.kind()),
+            crate::delegate::prompt_for(spec.capabilities(), spec.prompt()),
             preamble.text
         ),
         // `for_a_person` names tools only this side is offered, so it sits with the rest of what
@@ -2433,8 +2449,8 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     // Derived from the set rather than named per kind, so a tool cannot be offered to a run whose
     // gates would refuse it on every call.
     let offered = match &task.delegate {
-        Some(spec) => tools::for_delegate(spec.capabilities()),
-        None => tools::available(scheduling, task.arming),
+        Some(spec) => tools::for_delegate(spec.capabilities(), spec.tools()),
+        None => tools::for_planner(scheduling, task.arming, &delegates),
     };
 
     let mut steps = 0;
@@ -3596,7 +3612,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
 
     // Taken before `finish` consumes the policy, since a write may have changed the map and an
     // approved run may have added to the programs.
-    let trust = policy.trust().clone();
+    let trust = policy.trust();
     let programs = policy.programs().clone();
     let asked_about = policy.asked().clone();
 

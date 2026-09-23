@@ -11,9 +11,11 @@ The Electron app does not drive a terminal and does not parse one. It talks to a
 **library**, `bravebot-ui-bridge`, which lives in this repository and depends on
 `bravebot` as an ordinary Cargo dependency.
 
-**`bravebot` is not modified. Zero files, zero new crates, zero refactors.**
-That is a hard constraint on this design, not an aspiration, and §2.3 says what would
-violate it.
+**`bravebot` was not modified while it was a separate repository.** That was a hard
+constraint on the original design, and §2.3 says what would have violated it. It no longer
+holds: the two repositories are one workspace, so widening a shared function is an ordinary
+change and is the right answer whenever this side would otherwise re-decide something the
+agent already decides. What has not changed is which side decides: the agent, always.
 
 In v1 the library is reached through a thin binary, `bravebot-rpc`, that speaks
 newline-delimited JSON on stdin and stdout. The protocol in §4–§9 is the library's
@@ -258,8 +260,8 @@ implementation should have one serialisation function per row and a round-trip t
 | `report::Reach` | `"not_the_planner"` \| `"no_model"` | |
 | `report::Landing` | `"context"` \| `"quarantined"` \| `"reserved"` | |
 | `todo::Status` | `"pending"` \| `"active"` \| `"done"` | |
-| `conversation::Said` | `{"kind":"user"\|"assistant"\|"tool","text":"…"}`, `{"kind":"attached","path":"…"}` or `{"kind":"watch","number":N,"path":"…"}` | from `recounted()`, §7.1 |
-| `core::event::Event` | as `audit::as_json` already produces | **reuse verbatim**, do not re-derive |
+| `conversation::Said` | `{"kind":"user"\|"assistant"\|"tool","text":"…"}` with `"prompt":N` on `user` only, `{"kind":"attached","path":"…"}` or `{"kind":"watch","number":N,"path":"…"}` | from `recounted()`, §7.1 |
+| `core::event::Event` | as `audit::as_json` already produces, `refusal` included | **reuse verbatim**, do not re-derive |
 | `label::Label` | `{"integrity":"trusted"\|"untrusted","confidentiality":"public"\|"private"}` | as `audit::label_json` |
 | `SystemTime` seconds | JSON number, seconds since epoch | matches `Record::started`/`updated` |
 
@@ -272,7 +274,14 @@ Two rules for the enums above:
    contract.
 2. **Unknown tags degrade toward less trust.** A client reading a tag it does not
    recognise treats it as untrusted/quarantined, mirroring what `Snapshot` and
-   `Record::trust_map` already do on the Rust side. Never the other way.
+   `Record::trust_map` already do on the Rust side. Never the other way. An audit record
+   whose `refusal` cannot be read is drawn as a refusal for the same reason: a check whose
+   answer nobody can read is not one to show as though it passed.
+3. **A decision the agent has taken is sent, not reconstructed.** Whether a record is a
+   refusal, and which of the user's messages a prompt is, are both facts the agent holds,
+   so both travel beside what they describe. A client working one back out of the other
+   fields has to be taught every shape the answer takes, and the shape it was not taught is
+   the one that goes wrong quietly.
 
 `report::Activity::verb` is a `&'static str` chosen by the dispatch table, never model
 output; it is safe to send as-is and safe to switch on.
@@ -320,7 +329,7 @@ Loads the `Record` via `sessions::load` and the trail and todos via `sessions::r
   "record": { "id": "…", "directory": "…", "branch": "main", "title": "…",
               "started": 1756200000, "updated": 1756300000,
               "turns": 4, "tokens": 51234, "build": "0.1.0 (abcdef1)" },
-  "said": [ { "kind": "user"|"assistant"|"tool", "text": "…" }, { "kind": "attached", "path": "…" } ],
+  "said": [ { "kind": "user", "text": "…", "prompt": 0 }, { "kind": "attached", "path": "…" } ],
   "context": "trusted",
   "todos":  { "1": [ { "content": "…", "status": "done" } ] },
   "audit":  { "1": [ { "at": 1756200003, "event": { "kind": "gate_passed", … } } ] },
@@ -351,6 +360,13 @@ Loads the `Record` via `sessions::load` and the trail and todos via `sessions::r
   message are a line the agent wrote followed by **the file's own bytes**, so a client that read
   them back to decide what to draw would let whoever wrote that file choose which row it appears
   as, the interface's own rows included. Rule 1 of §6, applied where it matters most.
+- `prompt` appears on a `user` entry and no other, and is which of the user's messages it is:
+  the coordinate `session.fork` cuts on. **A client must not count this for itself.** A count
+  over the rows a transcript calls prompts is a second copy of a rule this side already applies,
+  and it agrees only for as long as nobody adds a kind of user message the client is not told
+  about: a turn nudged for spending its tool budget adds one mid-turn and no event reports it.
+  `session.fork` checks the prompt's text against the ordinal, so a count short by one is a
+  refusal. A prompt a client has just sent and has no `Said` for yet is numbered by `turn.done`.
 - `context` is `Snapshot::context`, the word for what the conversation has met.
 - `todos` and `audit` are keyed by turn number as strings, because JSON object keys are
   strings; the Rust side is a `BTreeMap<usize, _>`.
@@ -386,7 +402,7 @@ located.
 ```json
 { "id": 5, "ok": {
   "session": "s7", "id": "1756300000-4711", "directory": "…", "branch": "main",
-  "said": [ { "kind": "user"|"assistant"|"tool", "text": "…" }, { "kind": "attached", "path": "…" } ],
+  "said": [ { "kind": "user", "text": "…", "prompt": 0 }, { "kind": "attached", "path": "…" } ],
   "prefill": "make it handle quotes",
   "context": "trusted",
   "turns": 2,
@@ -400,14 +416,14 @@ Begins a session holding everything the parent said *before* one of its prompts.
 that prompt, handed back rather than kept, because the point of forking is to ask it
 differently: the front-end puts it in the composer and the person edits it.
 
-- `prompt` is a **0-based ordinal over `Said::User`**, the prompts a transcript drew, and not a
-  turn number. `text` is what that prompt said. Both are sent because they check each other:
-  the ordinal says where to cut, and the text says the front-end's idea of where agrees with the
-  conversation's. They can disagree. A window draws some user-role messages as something other
-  than a prompt: this app's own consolidation turns, which it marks in the prose because it wrote
-  them. Those are still messages the conversation counts, so a window that leaves one out of its
-  count is a prompt out of step for the rest of the session. A mismatch is `bad_request`; a fork
-  taken one prompt away from where somebody pointed is worse than one that did not happen.
+- `prompt` is a **0-based ordinal over `Said::User`**, and not a turn number. It is the ordinal
+  this side minted and sent, on the `Said` (§7.1) or on the `turn.done` that reported the
+  prompt; a client echoes one back rather than arriving at one of its own. `text` is what that
+  prompt said. Both are sent because they check each other: the ordinal says where to cut, and
+  the text says the client is holding the conversation this cut is being asked of. They can
+  disagree: a client working from a transcript the conversation has moved on from is the case.
+  A mismatch is `bad_request`; a fork taken one prompt away from where somebody pointed is worse
+  than one that did not happen.
 - **A message the agent composed is not a prompt on either side.** It is tagged in the record and
   reported as `attached` or `watch`, so neither the window nor the cut has to recognise one by its
   wording. That is what keeps the two counts aligned rather than approximately aligned: while an
@@ -748,9 +764,16 @@ whose events all share one second cannot say which came first.
   "tokens": 51234, "outputTokens": 812,
   "notices": ["loaded AGENTS.md"],
   "trust": { "rules": [ { "path": "…", "integrity": "untrusted" } ] },
-  "id": "0f1c…", "archived": 0
+  "id": "0f1c…", "archived": 0, "prompt": 4
 } }
 ```
+
+`prompt` is where this turn's prompt landed among the things the user said, the same
+coordinate `Said.prompt` carries and the one `session.fork` cuts on. It is here because a
+client cannot count it: the turn adds a user message for every file named in the prompt,
+and another if it spends its tool budget, and a transcript draws none of those as a prompt.
+`null` where the conversation does not hold the prompt, which is a prompt that cannot be
+forked rather than one to guess a place for.
 
 `reply` is `Outcome::reply_for_display()`, which was authorised inside the turn while the
 policy was still open, so the release is in the audit trail. **Never send
@@ -788,8 +811,11 @@ a client that reloads on receipt sees the same thing on disk.
 { "event": "turn.error", "session": "s1", "data": {
   "turn": 5, "kind": "cancelled"|"precommit"|"workspace"|"chat", "message": "…",
   "notices": ["hook turn-finished: /usr/bin/fmt could not be started"],
-  "id": "saved-session-id-or-null" } }
+  "prompt": 4, "id": "saved-session-id-or-null" } }
 ```
+
+`prompt` is as on `turn.done`: a turn that failed still said what it was asked, so the
+prompt is in the conversation and is still a place a fork can be cut at.
 
 The four `TurnError` variants. A failed turn is still part of the conversation and the
 conversation is handed back either way — the next question is usually about it — so the
@@ -1018,5 +1044,14 @@ Still open:
   a model from that service instead of replacing its credential.
   Error events include stable `category`, optional `status` and `attempts`; raw backend
   diagnostic text is not sent as a turn error.
-- `bravebot:hooks:read/save` are main-process IPC endpoints, not arbitrary RPC methods.
-  A save takes the edited JSON and the previously read text (null for an absent file).
+- `hooks.inspect` reports the hooks file as the agent reads it: `path`, its `text` (null for a
+  file this could not read at all), the `hooks` it declares as `{ on, tool, run, firesForNothing }`,
+  and `entire`, false where the reader passed over part of the file, so that composing it back
+  from `hooks` alone would drop what it did not read. An editor that offers a form refuses one for
+  such a file. `no_home` where the platform names no state directory. Nothing else parses the
+  file: which entries this build can use, and which name a tool on a moment that has none, are the
+  same answers a turn fires hooks from.
+- `bravebot:hooks:save` is a main-process IPC endpoint, not an arbitrary RPC method. It takes the
+  edited JSON and the text `hooks.inspect` last reported (null for an absent file), and writes
+  through a descriptor-pinned atomic replace that refuses a symlink and stale text. There is no
+  read endpoint: a renderer reads the file through `hooks.inspect`.

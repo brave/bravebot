@@ -1,5 +1,5 @@
 ---
-sidebar_position: 4
+sidebar_position: 5
 title: Leo Premium
 description: Import a Leo Premium subscription so requests go to the premium tier.
 ---

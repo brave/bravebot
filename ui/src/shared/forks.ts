@@ -12,6 +12,8 @@
  * first reply. See `docs/phase-0-rpc-protocol.md` §7.1.
  */
 
+import { isProjectPath } from './recents'
+
 /** One session, durably: an id is unique only within the project it ran in. */
 export interface SessionRef {
   directory: string
@@ -22,8 +24,13 @@ export interface Fork {
   child: SessionRef
   parent: SessionRef
   /**
-   * Which prompt of the parent the child was cut in front of, counted over what the transcript
-   * drew. The same coordinate `session.fork` cut on, which is what lets a link land on the row.
+   * Which of the parent's user messages the child was cut in front of, as the agent counts them.
+   *
+   * The same coordinate `session.fork` cut on, which is what lets a link land on the row. It is
+   * the agent's count and not a count of the rows a transcript drew: several things the agent
+   * stores as a user message are drawn as something else, and a fork whose ordinal disagreed
+   * with the agent's was refused rather than taken, so every entry written here is one the agent
+   * accepted.
    */
   prompt: number
   /** When the fork was taken, in milliseconds. */
@@ -51,10 +58,6 @@ export const FORKS_MAX = 500
  */
 export function isSessionId(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && !value.includes('/') && !value.includes('\0')
-}
-
-function isProjectPath(value: unknown): value is string {
-  return typeof value === 'string' && value.startsWith('/') && !value.includes('\0')
 }
 
 function parseRef(value: unknown): SessionRef | null {

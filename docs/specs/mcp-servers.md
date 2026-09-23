@@ -24,8 +24,16 @@ surface that spec has none of.
 
 ## What exists today
 
-Nothing in this spec is built. `crates/mcp/` is a finished client under nine normative clauses, and
-no crate depends on it: `mcp.md` records the gap in its own front matter, `documented-by: none
+Almost nothing in this spec is built, and what there is amounts to half of two clauses.
+[SERVERS-9](#SERVERS-9)'s capability names the server it is about, so the gate `crates/mcp/`
+already runs on every call asks about one declared server rather than about the protocol, and a
+grant can be withdrawn while the run is going. What would *put* a grant there is still missing, so
+a caller writing the set out itself is the only thing that grants a call today.
+[SERVERS-11](#SERVERS-11)'s gate holds a request to a remote server to the destination it was
+addressed to, and refuses a hop that leaves it. The question that hop is meant to raise is missing
+for the same reason, since there is no declaration to ask about or to write an answer into.
+
+`crates/mcp/` is a finished client under nine normative clauses, and no crate depends on it: `mcp.md` records the gap in its own front matter, `documented-by: none
 (internal: no settings key wires up a server yet, so there is nothing a reader can configure)`.
 Issue #83 is where that was written down, and it names the four things wiring needs decided first:
 where a server is declared, what a name and an argv is trusted for, how the untrusted label
@@ -33,8 +41,11 @@ where a server is declared, what a name and an argv is trusted for, how the untr
 below answers one of them.
 
 Read every clause here as a requirement on work nobody has started, not as a description of this
-program. The `verified-by: none` on each one is the honest form of that, and is what keeps a reader
-from taking the present tense as a claim about the current build.
+program. The `verified-by: none` on each one but [SERVERS-9](#SERVERS-9) and
+[SERVERS-11](#SERVERS-11) is the honest form of that, and is what keeps a reader from taking the
+present tense as a claim about the current build. Those two are the exceptions because the half each
+pins is about what the client does rather than about a declaration, and the client exists: what it
+does is pinned, and nothing calls it.
 
 ## The parity target
 
@@ -408,9 +419,17 @@ thing being asked about and not a property the session recorded.
 server a widening of what the first may be asked to do, which is the opposite of what adding a
 server should mean.
 
-**Unbuilt, so nothing pins this.** McpCall is not reachable, and the capability names no alias.
+**Half built.** The capability names the alias, both transports gate on the one naming the server
+in front of them, and a grant can be withdrawn while the run is going. What is not built is
+anything that would put a grant there: no declaration exists for an alias to resolve against
+([SERVERS-1](#SERVERS-1)) and nobody is asked ([SERVERS-4](#SERVERS-4)), so a caller writing the
+set out itself is the only thing that grants a call today.
 
-`verified-by: none`
+`verified-by: bravebot_core::capability::a_grant_for_one_server_is_not_a_grant_for_another`
+`verified-by: bravebot_core::capability::withdrawing_one_grant_leaves_the_others`
+`verified-by: bravebot_mcp::stdio::a_grant_for_one_server_does_not_reach_another`
+`verified-by: bravebot_mcp::http::a_grant_for_one_server_does_not_reach_another`
+`verified-by: bravebot_mcp::stdio::a_grant_withdrawn_stops_the_next_call`
 
 <a id="SERVERS-10"></a>
 ### SERVERS-10: a variable a server needs is named in the declaration, and reaches that server alone
@@ -443,8 +462,24 @@ are in variables, and a server is code we did not write.
 
 An HTTP server has no process to confine, so [MCP-3](mcp.md#MCP-3) has nothing to say about it and
 the boundary is the network instead. A call to one passes the policy gate in `bravebot-net` like
-everything else carrying labelled content, the host is part of the digest, and a redirect to another
-host is refused rather than followed.
+everything else carrying labelled content, the host is part of the digest, and a hop that leaves
+where the server was declared is put to the person rather than followed. Where they approve it, the
+declaration is rewritten to the destination they were shown, so a server that has moved is one
+somebody wrote down again and the call after it asks nothing. Where they do not, nothing is sent.
+
+Where a server is is a socket and not a name, so a hop that changed the port has left it as surely
+as one that changed the host. A declaration is a url somebody wrote in full, and the machine it
+names runs other services on other ports: a loopback declaration compared on the host alone would
+deliver a tool call to whatever else answers at that address.
+
+Nothing in the settings answers that question in advance. A `WebFetch` rule names websites the
+planner may reach, and what goes out here is one server's call with its arguments and its session
+id, so a rule about a host is not consent to hand those to a different service.
+
+The destination is shown where a server's bytes may be shown and nowhere else. It reaches the
+prompt, which is drawn for a person and parsed by nothing afterwards, and it does not reach the
+refusal the planner is given: that names the declared destination, which is what somebody wrote
+down ([LABEL-3](labels.md#LABEL-3)).
 
 A call to one is a client in this process like any other, so the handshake is validated against the
 roots the machine states rather than this build's alone ([NET-7](network-egress.md#NET-7)) and it
@@ -456,9 +491,32 @@ though confinement covered both. A stdio server is dangerous because it runs her
 dangerous because the content leaves. Naming the host in the digest is what stops an approved alias
 from being repointed at a different service by an edit that keeps the argv shape intact.
 
-**Unbuilt, so nothing pins this.** The http client is reachable from nothing, so no call passes the gate.
+**Why a question and not a follow.** A move and a redirection are written the same way. The client
+resends the request it was holding, so following a hop sends the tool call, its arguments and the
+session id onward, and the header that decided where is a server's own bytes: a server that has
+genuinely moved and a server that wants the call delivered somewhere else are indistinguishable in
+it. That is a difference only the person who declared the server can make, which is what makes this
+a prompt rather than a rule.
 
-`verified-by: none`
+**Why a question and not a refusal.** Servers move, and a deployment answering a move with a
+relocation is doing the ordinary thing. A boundary that has no answer but no is one a deployment
+works around, and a boundary everybody works around is off.
+
+**The declaration is unbuilt, so the question cannot be asked.** No settings key declares a server,
+so there is nothing to digest, no alias an edit could repoint, and nothing to rewrite an approval
+into. The prompt is unbuilt with it: a hop is detected at the egress gate, which allows or refuses
+and cannot ask, so an approval has to be a grant minted before the call and there is no prompt to
+mint one. Until issue #83 declares a server, a hop that leaves the declared destination is refused
+and nothing is sent, which is this clause with its question unasked rather than a different rule.
+What is built reads a destination as a host and a port together, as above. Nothing calls it, since
+no crate depends on the client.
+
+`verified-by: bravebot_mcp::http::mcp_traffic_passes_through_the_network_gate`
+`verified-by: bravebot_mcp::http::a_redirect_to_another_host_is_refused`
+`verified-by: bravebot_mcp::http::a_redirect_within_the_declared_host_is_followed`
+`verified-by: bravebot_mcp::http::a_failed_server_request_stops_confining_the_turns_other_egress`
+`verified-by: bravebot_core::policy::a_rule_does_not_let_a_servers_request_be_redirected_off_its_host`
+`verified-by: bravebot_core::policy::a_servers_request_cannot_be_redirected_to_another_port_on_the_same_host`
 
 <a id="SERVERS-12"></a>
 ### SERVERS-12: the managed layer may remove a server and never add one
@@ -500,7 +558,7 @@ Each of the following holds in that mode exactly as it holds outside it:
 | [SERVERS-1](#SERVERS-1), only the person's own directory declares a server | An undeclared server does not become declared by nobody being asked about it. A checkout's request still resolves against declarations or resolves to nothing. |
 | [SERVERS-9](#SERVERS-9), the capability | A capability is configuration, not a prompt. A server with no grant is called by nobody in this mode either. |
 | [SERVERS-12](#SERVERS-12), a managed denial | An administrator's removal is not a question being put to the person running the program. |
-| [SERVERS-11](#SERVERS-11), the egress gate and the host in the digest | The gate decides on labels, and a redirect off the approved host is refused rather than asked about. |
+| [SERVERS-11](#SERVERS-11), the egress gate and the host in the digest | The gate decides on labels. This mode answers two named questions and not every question, and a hop leaving the declared destination is neither of them, so it is refused here rather than followed. |
 
 **Nothing is recorded.** A skipped question leaves no approval, no project path and no tool entry
 behind, so a later run outside the mode asks every question as though this one had not happened. That

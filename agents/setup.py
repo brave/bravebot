@@ -4,7 +4,7 @@
 The source of truth is `agents/`: versioned, reviewed, and named for no particular
 vendor. No tool reads it. Claude Code discovers skills, slash commands and subagents
 under `.claude/`; Codex discovers skills under `.agents/skills`; Cursor discovers skills
-and subagents under `.cursor/`; and bravebot discovers skills under `.bravebot/skills`.
+and subagents under `.cursor/`; and bravebot discovers skills under `.bravebot/skills` and subagents under `.bravebot/agents`.
 Codex, Cursor and bravebot read their instructions from `AGENTS.md` at the workspace
 root. This script bridges them by creating one symlink per entry, so a skill is written
 once and every tool sees it:
@@ -53,8 +53,9 @@ _IS_WINDOWS = os.name == 'nt'
 # One source directory fans out to one link per child, rather than linking the directory
 # itself, so a discovery dir can also hold entries this repo does not own.
 #
-# bravebot and Codex read skills only. Cursor also reads subagents, but it dropped slash
-# commands in favour of skills, so `commands/` links into `.claude/` alone.
+# Codex reads skills only. Cursor and bravebot also read subagents, and bravebot ignores the
+# frontmatter keys it has no use for, so one checked-in `agents/` serves both. Cursor dropped
+# slash commands in favour of skills, so `commands/` links into `.claude/` alone.
 #
 # Cursor reads `.agents/skills` and `.claude/agents` as compatibility paths, so its own
 # paths are listed too: they are what it documents, they win a name conflict against the
@@ -62,7 +63,7 @@ _IS_WINDOWS = os.name == 'nt'
 _FANOUT = [
     ('skills', ['.claude/skills', '.agents/skills', '.bravebot/skills', '.cursor/skills']),
     ('commands', ['.claude/commands']),
-    ('agents', ['.claude/agents', '.cursor/agents']),
+    ('agents', ['.claude/agents', '.cursor/agents', '.bravebot/agents']),
 ]
 
 # One file to one destination each, under the name the tool reading it looks for.

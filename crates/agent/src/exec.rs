@@ -282,11 +282,10 @@ pub fn run_within(
             routes: Vec::new(),
         })
         .collect();
-    // A pipeline carries no redirections, so there is nothing for it to report having opened, and
-    // nothing to feed in: a [`Pipeline`] carries the label of what would be fed to its first stage
-    // and never the bytes, so there are none here to hand over.
-    Running::new(directory, cancel, limit, scratch, None)
-        .finish(&Steps::Pipeline(steps), &mut Vec::new())
+    // A pipeline carries no redirections, so there is no destination for it to enter an effect on,
+    // and nothing to feed in: a [`Pipeline`] carries the label of what would be fed to its first
+    // stage and never the bytes, so there are none here to hand over.
+    Running::new(directory, cancel, limit, scratch, None).finish(&Steps::Pipeline(steps))
 }
 
 /// Run a compiled command line and collect what it printed.
@@ -294,10 +293,10 @@ pub fn run_within(
 /// Every part of the plan shares one deadline, because the limit is on the line rather than on
 /// any one program in it, and a part reached after the time ran out is not started.
 ///
-/// `opened` collects the destinations this line opened for writing, in the order they were
-/// opened, and is filled in whatever becomes of the line. The caller decides what the trust map
-/// records about a file bytes landed in, and the plan's write set cannot answer that: it names
-/// every branch, and a branch that is not taken opens nothing.
+/// Reports nothing about the files it wrote. A caller that has to decide what the trust map
+/// records passes [`run_plan_observed`] a notification instead, which arrives before each
+/// destination may be opened rather than after the line has finished.
+///
 /// `scratch` is the session's own directory, told to every part of the line as in [`run`].
 ///
 /// `stdin` is the bytes the policy layer resolved out of a quarantined reference, for the first
@@ -312,11 +311,30 @@ pub fn run_plan(
     plan: &Plan,
     cancel: &Cancel,
     limit: Duration,
-    opened: &mut Vec<std::path::PathBuf>,
     scratch: Option<&std::path::Path>,
     stdin: Option<&str>,
 ) -> Result<Ran, ExecError> {
-    Running::new(&plan.directory, cancel, limit, scratch, stdin).finish(&plan.steps, opened)
+    Running::new(&plan.directory, cancel, limit, scratch, stdin).finish(&plan.steps)
+}
+
+/// Run with notification immediately before each destination may be opened for writing.
+///
+/// The notification is the whole of what a caller learns about the files a line writes. Nothing
+/// is collected afterwards: a list handed back once the line has finished cannot order a read
+/// against a write that already happened, which is what [`FileCapture::begin`] is for.
+///
+/// [`FileCapture::begin`]: bravebot_core::file_authority::FileCapture::begin
+pub fn run_plan_observed(
+    plan: &Plan,
+    cancel: &Cancel,
+    limit: Duration,
+    scratch: Option<&std::path::Path>,
+    stdin: Option<&str>,
+    entering: &mut dyn FnMut(&std::path::Path) -> Result<(), ExecError>,
+) -> Result<Ran, ExecError> {
+    let mut running = Running::new(&plan.directory, cancel, limit, scratch, stdin);
+    running.entering = Some(entering);
+    running.finish(&plan.steps)
 }
 
 /// Where one of a step's streams goes.
@@ -335,7 +353,10 @@ enum Where {
 
 /// One line's worth of running: its parts in order, what they printed, and one deadline over all
 /// of them.
+type Entering<'a> = &'a mut dyn FnMut(&std::path::Path) -> Result<(), ExecError>;
+
 struct Running<'a> {
+    entering: Option<Entering<'a>>,
     directory: &'a std::path::Path,
     cancel: &'a Cancel,
     started: Instant,
@@ -344,8 +365,6 @@ struct Running<'a> {
     stderr: String,
     codes: Vec<Option<i32>>,
     stopped: Option<Duration>,
-    /// The destinations opened for writing so far, in the order the steps opened them.
-    wrote: Vec<std::path::PathBuf>,
     /// The directory this session was given, where it has one.
     scratch: Option<&'a std::path::Path>,
     /// The bytes the policy layer supplied for standard input, until a step has been given them.
@@ -366,6 +385,7 @@ impl<'a> Running<'a> {
         stdin: Option<&'a str>,
     ) -> Self {
         Self {
+            entering: None,
             directory,
             cancel,
             started: Instant::now(),
@@ -374,23 +394,13 @@ impl<'a> Running<'a> {
             stderr: String::new(),
             codes: Vec::new(),
             stopped: None,
-            wrote: Vec::new(),
             scratch,
             stdin,
         }
     }
 
-    fn finish(
-        mut self,
-        steps: &Steps,
-        opened: &mut Vec<std::path::PathBuf>,
-    ) -> Result<Ran, ExecError> {
-        let outcome = self.run(steps);
-        // Before the error is handed on. A destination is truncated as its step begins, so a line
-        // that could not start its next program has already written where it got to, and a caller
-        // that only heard about the files of a line that ended well would miss those.
-        opened.append(&mut self.wrote);
-        let ended_well = outcome?;
+    fn finish(mut self, steps: &Steps) -> Result<Ran, ExecError> {
+        let ended_well = self.run(steps)?;
         Ok(Ran {
             stdout: self.stdout,
             stderr: self.stderr,
@@ -432,7 +442,7 @@ impl<'a> Running<'a> {
             return Err(ExecError::Io("no stages to run".to_string()));
         }
 
-        let mut children: Vec<Child> = Vec::with_capacity(steps.len());
+        let mut children = ForegroundChildren(Vec::with_capacity(steps.len()));
         // Nothing is typed at a program bravebot started, so a step with nothing upstream reads an
         // empty stdin rather than the terminal's. Unless the policy layer supplied bytes for it,
         // which are taken here and given to the first step below: taken rather than borrowed, so
@@ -527,18 +537,25 @@ impl<'a> Running<'a> {
                 _ => std::mem::replace(&mut upstream, Stdio::null()),
             });
 
+            // Before the open, never after it. Opening for writing truncates, so a notification
+            // that waited for a successful open would leave a window in which the file is empty
+            // and the map still calls it trusted. The cost is that a target that could not be
+            // opened at all has entered an effect by then, which the caller is conservative
+            // about: a path that may have been written is not a path to go on trusting.
+            if let Where::File(path, _) = &out
+                && let Some(entering) = self.entering.as_mut()
+            {
+                entering(path)?;
+            }
             // The duplicate is what `2>&1` needs: a second handle on wherever standard output is
             // going at that point, rather than a second place.
             let (writing, reading, duplicate) = destination(&out)?;
-            // Recorded once the file is open, so a target that could not be opened at all, a
-            // directory among them, is not reported as a file this line wrote.
-            if let Where::File(path, _) = &out {
-                self.wrote.push(path.clone());
-            }
             let (erring, err_reading) = match &err {
                 Where::File(path, append) => {
+                    if let Some(entering) = self.entering.as_mut() {
+                        entering(path)?;
+                    }
                     let file = for_writing(path, *append)?;
-                    self.wrote.push(path.clone());
                     (Stdio::from(file), None)
                 }
                 Where::AsStdout => (
@@ -667,6 +684,25 @@ fn destination(
             let duplicate = writer.try_clone().ok().map(Stdio::from);
             Ok((Stdio::from(writer), Some(reader), duplicate))
         }
+    }
+}
+
+/// Every error after spawning a stage must stop it before its file effects are released.
+struct ForegroundChildren(Vec<Child>);
+impl std::ops::Deref for ForegroundChildren {
+    type Target = Vec<Child>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for ForegroundChildren {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+impl Drop for ForegroundChildren {
+    fn drop(&mut self) {
+        stop(&mut self.0);
     }
 }
 

@@ -1,9 +1,10 @@
 //! HTTP transport tests against a loopback MCP server.
 //!
 //! Confirms the gate sees MCP traffic like any other egress, that results are labelled
-//! untrusted, and that a redirecting server is revalidated rather than followed blindly.
+//! untrusted, and that a server redirecting off the destination it was declared at does not
+//! have that hop followed for the asking.
 
-use bravebot_core::capability::{Capability, CapabilitySet};
+use bravebot_core::capability::{Capability, CapabilitySet, ServerAlias};
 use bravebot_core::event::{Event, RecordingSink};
 use bravebot_core::label::Label;
 use bravebot_core::policy::{Policy, ReleasePlan, Routing};
@@ -16,14 +17,7 @@ use std::thread;
 
 /// Serve a fixed sequence of raw HTTP responses, one per connection.
 fn serve(responses: Vec<String>) -> (String, mpsc::Receiver<String>) {
-    serve_as("127.0.0.1", responses)
-}
-
-/// The same, reachable under `host`, so a test can tell two loopback servers apart by name.
-///
-/// Bound through the name rather than through an address resolved here, so the client and the
-/// listener agree about which loopback address it means.
-fn serve_as(host: &str, responses: Vec<String>) -> (String, mpsc::Receiver<String>) {
+    let host = "127.0.0.1";
     let listener = TcpListener::bind((host, 0)).expect("bind");
     let port = listener.local_addr().expect("addr").port();
     let (sender, receiver) = mpsc::channel();
@@ -100,7 +94,10 @@ fn a_handshake_and_tool_list_round_trip() {
     let mut policy = Policy::begin(
         routing(),
         ReleasePlan::new(),
-        CapabilitySet::from_iter([Capability::WebFetch, Capability::McpCall]),
+        CapabilitySet::from_iter([
+            Capability::WebFetch,
+            Capability::McpCall(ServerAlias::new("remote")),
+        ]),
         &mut sink,
     )
     .expect("policy");
@@ -129,7 +126,10 @@ fn a_tool_result_is_labelled_untrusted() {
     let mut policy = Policy::begin(
         routing(),
         ReleasePlan::new(),
-        CapabilitySet::from_iter([Capability::WebFetch, Capability::McpCall]),
+        CapabilitySet::from_iter([
+            Capability::WebFetch,
+            Capability::McpCall(ServerAlias::new("remote")),
+        ]),
         &mut sink,
     )
     .expect("policy");
@@ -161,7 +161,10 @@ fn an_sse_framed_reply_is_handled() {
     let mut policy = Policy::begin(
         routing(),
         ReleasePlan::new(),
-        CapabilitySet::from_iter([Capability::WebFetch, Capability::McpCall]),
+        CapabilitySet::from_iter([
+            Capability::WebFetch,
+            Capability::McpCall(ServerAlias::new("remote")),
+        ]),
         &mut sink,
     )
     .expect("policy");
@@ -185,7 +188,10 @@ fn mcp_traffic_passes_through_the_network_gate() {
     let mut policy = Policy::begin(
         routing(),
         ReleasePlan::new(),
-        CapabilitySet::from_iter([Capability::WebFetch, Capability::McpCall]),
+        CapabilitySet::from_iter([
+            Capability::WebFetch,
+            Capability::McpCall(ServerAlias::new("remote")),
+        ]),
         &mut sink,
     )
     .expect("policy");
@@ -217,7 +223,7 @@ fn mcp_over_http_requires_the_fetch_capability() {
     let mut policy = Policy::begin(
         routing(),
         ReleasePlan::new(),
-        CapabilitySet::from_iter([Capability::McpCall]),
+        CapabilitySet::from_iter([Capability::McpCall(ServerAlias::new("remote"))]),
         &mut sink,
     )
     .expect("policy");
@@ -253,17 +259,65 @@ fn a_tool_call_requires_the_mcp_capability() {
     assert!(error.to_string().contains("mcp_call"), "got: {error}");
 }
 
-/// A redirecting server is revalidated per hop, so both destinations reach the gate.
+/// SERVERS-9 over the other transport. The gate is written out once per transport, so a
+/// stdio test says nothing about this one. The fault this rejects is the same: a gate that
+/// reads only the protocol out of the capability lets a grant for `weather` call `remote`.
 #[test]
-fn a_redirecting_server_is_revalidated() {
-    // Two servers, and the hop between them named absolutely, so the gate's record of the second
-    // check names a host the first request did not go to. A path-absolute Location keeps the
-    // authority it was served from, which is a redirect the record cannot tell from no redirect at
-    // all now that only the host is kept.
-    let (elsewhere, _moved) = serve_as("localhost", vec![json_response(INIT_OK)]);
-    let redirect = format!(
-        "HTTP/1.1 307 Temporary Redirect\r\nLocation: {elsewhere}/elsewhere\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+fn a_grant_for_one_server_does_not_reach_another() {
+    let (url, _received) = serve(vec![json_response(INIT_OK)]);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([
+            Capability::WebFetch,
+            Capability::McpCall(ServerAlias::new("weather")),
+        ]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let mut server = HttpServer::new("remote", &url);
+    server
+        .initialize(&mut policy, &egress, "bravebot", "0.1.0")
+        .expect("handshake needs only fetch");
+
+    let error = server
+        .call_tool(&mut policy, &egress, "lookup", serde_json::json!({}))
+        .expect_err("a grant for weather must not reach remote");
+    // The server that was asked for, not the one that was granted.
+    assert!(
+        error.to_string().contains("mcp_call:remote"),
+        "got: {error}"
     );
+}
+
+/// Every hop the gate passed, in order.
+fn hosts_reached(sink: &RecordingSink) -> Vec<String> {
+    sink.events()
+        .iter()
+        .filter_map(|e| match e {
+            Event::GatePassed {
+                gate: "network",
+                detail,
+            } => Some(detail.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A declaration names one destination, and everything a request to a server carries is meant
+/// for that destination. A `Location` header naming another host is the server's own choice, so
+/// following it would send the call somewhere nobody declared. Refused rather than asked about
+/// because nothing declares a server yet, so there is no prompt to raise and nothing an answer
+/// could be written back into: see `SERVERS-11` and issue #83.
+#[test]
+fn a_redirect_to_another_host_is_refused() {
+    // Nothing listens at the target, and nothing needs to: were the hop followed, the request
+    // would leave for a name that resolves nowhere, which is a transport failure rather than the
+    // refusal asserted here.
+    let redirect = "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://elsewhere.invalid/mcp\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string();
     let (url, _received) = serve(vec![redirect]);
 
     let egress = Egress::new();
@@ -271,7 +325,59 @@ fn a_redirecting_server_is_revalidated() {
     let mut policy = Policy::begin(
         routing(),
         ReleasePlan::new(),
-        CapabilitySet::from_iter([Capability::WebFetch, Capability::McpCall]),
+        CapabilitySet::from_iter([
+            Capability::WebFetch,
+            Capability::McpCall(ServerAlias::new("remote")),
+        ]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let mut server = HttpServer::new("remote", format!("{url}/mcp"));
+    let error = server
+        .initialize(&mut policy, &egress, "bravebot", "0.1.0")
+        .expect_err("a redirect off the declared host must be refused");
+    drop(policy);
+
+    let McpError::Denied(denial) = error else {
+        panic!("got: {error}");
+    };
+    assert!(
+        denial.message.contains("127.0.0.1"),
+        "the refusal must name the declared host: {}",
+        denial.message
+    );
+    assert!(
+        !denial.message.contains("elsewhere.invalid"),
+        "the refusal repeated the host a server chose: {}",
+        denial.message
+    );
+
+    let reached = hosts_reached(&sink);
+    assert_eq!(
+        reached,
+        vec!["egress to 127.0.0.1".to_string()],
+        "the hop off the declared host was let through the gate: {reached:?}"
+    );
+}
+
+/// A redirect that stays on the declared host is ordinary: the server is still the destination
+/// the declaration names, so moving its endpoint within that host is not a refusal.
+#[test]
+fn a_redirect_within_the_declared_host_is_followed() {
+    // Path-absolute, so it resolves against the authority it was served from.
+    let redirect = "HTTP/1.1 307 Temporary Redirect\r\nLocation: /mcp/v2\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string();
+    let (url, _received) = serve(vec![redirect, json_response(INIT_OK)]);
+
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([
+            Capability::WebFetch,
+            Capability::McpCall(ServerAlias::new("remote")),
+        ]),
         &mut sink,
     )
     .expect("policy");
@@ -279,27 +385,47 @@ fn a_redirecting_server_is_revalidated() {
     let mut server = HttpServer::new("remote", format!("{url}/mcp"));
     server
         .initialize(&mut policy, &egress, "bravebot", "0.1.0")
-        .expect("redirect followed");
+        .expect("a redirect within the declared host must be followed");
     drop(policy);
 
-    let checked: Vec<&String> = sink
-        .events()
-        .iter()
-        .filter_map(|e| match e {
-            Event::GatePassed {
-                gate: "network",
-                detail,
-            } => Some(detail),
-            _ => None,
-        })
-        .collect();
-
-    assert_eq!(checked.len(), 2, "each hop must be checked: {checked:?}");
-    assert_eq!(checked[0].as_str(), "egress to 127.0.0.1");
+    let reached = hosts_reached(&sink);
     assert_eq!(
-        checked[1].as_str(),
-        "egress to localhost",
-        "the redirect target was not the URL the second check saw: {checked:?}"
+        reached,
+        vec![
+            "egress to 127.0.0.1".to_string(),
+            "egress to 127.0.0.1".to_string()
+        ],
+        "each hop must reach the gate: {reached:?}"
+    );
+}
+
+/// A server's host confines that one request and nothing after it, however the request went.
+/// A turn goes on reaching this program's own backend, which is egress through the same gate.
+#[test]
+fn a_failed_server_request_stops_confining_the_turns_other_egress() {
+    // A reply that is not JSON, so the request fails after the gate rather than at it.
+    let (url, _received) = serve(vec![json_response("not json at all")]);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([
+            Capability::WebFetch,
+            Capability::McpCall(ServerAlias::new("remote")),
+        ]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let mut server = HttpServer::new("remote", &url);
+    server
+        .initialize(&mut policy, &egress, "bravebot", "0.1.0")
+        .expect_err("the reply is not json");
+
+    assert!(
+        policy.before_network("https://elsewhere.test/x").is_ok(),
+        "a finished request to a server went on confining where the turn could reach"
     );
 }
 
@@ -313,7 +439,10 @@ fn a_tool_level_error_is_reported_as_a_failure() {
     let mut policy = Policy::begin(
         routing(),
         ReleasePlan::new(),
-        CapabilitySet::from_iter([Capability::WebFetch, Capability::McpCall]),
+        CapabilitySet::from_iter([
+            Capability::WebFetch,
+            Capability::McpCall(ServerAlias::new("remote")),
+        ]),
         &mut sink,
     )
     .expect("policy");
@@ -347,7 +476,10 @@ fn a_server_error_is_reported() {
     let mut policy = Policy::begin(
         routing(),
         ReleasePlan::new(),
-        CapabilitySet::from_iter([Capability::WebFetch, Capability::McpCall]),
+        CapabilitySet::from_iter([
+            Capability::WebFetch,
+            Capability::McpCall(ServerAlias::new("remote")),
+        ]),
         &mut sink,
     )
     .expect("policy");
@@ -371,7 +503,10 @@ fn a_non_json_reply_is_an_error() {
     let mut policy = Policy::begin(
         routing(),
         ReleasePlan::new(),
-        CapabilitySet::from_iter([Capability::WebFetch, Capability::McpCall]),
+        CapabilitySet::from_iter([
+            Capability::WebFetch,
+            Capability::McpCall(ServerAlias::new("remote")),
+        ]),
         &mut sink,
     )
     .expect("policy");

@@ -687,6 +687,7 @@ status-premium-in-use = premium, un jeton a été dépensé
 status-premium-not-spent = aucun abonnement utilisé
 status-no-subscription = aucun abonnement configuré
 status-confinement = Confinement
+status-confinement-nothing-confined = cette session ne confine rien
 status-loop = Boucle
 status-loop-every = toutes les { $every }
 status-loop-self-paced = cadencée par chaque tour
@@ -779,6 +780,9 @@ session-branch-gone =
 session-branch-new =
     cette session ne tournait sur aucune branche ; cette copie de travail est sur { $now }
 session-build-differs = cette session tournait sous bravebot { $was } ; celle-ci est { $now }
+session-front-differs = cette session a été écrite dans { $was } ; celle-ci l'est dans { $now }
+session-front-terminal = le terminal
+session-front-desktop = l'application de bureau
 
 
 ## Thèmes
@@ -839,6 +843,7 @@ scroller-key-full-page = page entière   (aussi ctrl-f / ctrl-b)
 scroller-key-ends = début / fin   (aussi home / end)
 scroller-key-prompts = invite précédente / suivante
 scroller-key-search = rechercher, correspondance suivante/précédente
+scroller-key-search-run = lancer / supprimer, puis abandonner
 scroller-key-editor = ouvrir la transcription dans $EDITOR
 scroller-key-this-list = cette liste
 scroller-key-close = fermer le défilement   (aussi ctrl-c)
@@ -1169,7 +1174,7 @@ manifest-recorded = enregistré sous { $id } ; à relire avec bravebot --resume 
 
 ## L'écran d'accueil
 
-opening-confinement = confinement { $level }
+opening-confinement = confinement disponible : { $level }
 opening-invitation = Posez une question sur cet espace de travail.
 
 

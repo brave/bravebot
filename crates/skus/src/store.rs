@@ -92,7 +92,9 @@ impl std::error::Error for StoreError {}
 ///
 /// Serialised as JSON rather than a bespoke encoding because a readable shape is one less thing to
 /// get wrong when the format changes.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// No equality, which the credential a batch is made of does not have: see [`crate::Secret`].
+#[derive(Debug, Clone)]
 pub struct StoredCredentials {
     /// The order the batch belongs to, so a re-import can refresh in place.
     pub order_id: String,
@@ -110,10 +112,13 @@ pub struct StoredCredentials {
 }
 
 /// One single-use credential.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Credential {
     /// Base64 unblinded token, from which the verification key is derived.
-    pub unblinded: String,
+    ///
+    /// A bearer value for as long as the batch is held, so it lives in a buffer that clears itself
+    /// when it goes ([CRED-23](../../../docs/specs/credential-protection.md#CRED-23)).
+    pub unblinded: crate::Secret,
     /// Start of the window this credential is valid in, as the server stated it.
     pub valid_from: String,
     /// End of that window.
@@ -276,7 +281,7 @@ pub fn save(credentials: &StoredCredentials) -> Result<(), StoreError> {
     // open and before the write, so the truncated file is private before it holds a token again.
     let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
 
-    file.write_all(encode(credentials).as_bytes())
+    file.write_all(encode(credentials).expose().as_bytes())
         .map_err(|e| unusable(format!("{}: {e}", path.display())))
 }
 
@@ -304,7 +309,7 @@ pub fn save(credentials: &StoredCredentials) -> Result<(), StoreError> {
     let mut file = acl::create_granted_to_this_account_only(&path)
         .map_err(|e| unusable(format!("{}: {e}", path.display())))?;
 
-    file.write_all(encode(credentials).as_bytes())
+    file.write_all(encode(credentials).expose().as_bytes())
         .map_err(|e| unusable(format!("{}: {e}", path.display())))
 }
 
@@ -585,8 +590,10 @@ mod acl {
 /// Read the batch.
 pub fn load() -> Result<StoredCredentials, StoreError> {
     let path = path()?;
+    // Held in a buffer that clears itself, since the text of the file is every token in the batch
+    // and a read that is answered with an error hands it back as readily as one that succeeds.
     let raw = match std::fs::read_to_string(&path) {
-        Ok(raw) => raw,
+        Ok(raw) => crate::Secret::new(raw),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(StoreError::NotFound),
         Err(e) => {
             return Err(StoreError::Unusable {
@@ -594,7 +601,7 @@ pub fn load() -> Result<StoredCredentials, StoreError> {
             });
         }
     };
-    decode(&raw)
+    decode(raw.expose())
 }
 
 /// A batch held open for a session, spending from memory.
@@ -746,8 +753,11 @@ pub fn clear() -> Result<(), StoreError> {
 /// Only [`save`] writes, and the target that has neither a mode nor an access-control list has a
 /// [`save`] that refuses, so there this is reachable from the tests alone.
 #[cfg(any(unix, windows, test))]
-fn encode(credentials: &StoredCredentials) -> String {
-    serde_json::json!({
+fn encode(credentials: &StoredCredentials) -> crate::Secret {
+    // The document is built inside a guard and the text it serialises to is a secret of its own:
+    // both hold every token in the batch, and the file the caller writes is the only copy meant to
+    // outlive this call.
+    let document = crate::secret::Document::of(serde_json::json!({
         "version": 1,
         "order_id": credentials.order_id,
         "environment": credentials.environment.as_str(),
@@ -757,15 +767,15 @@ fn encode(credentials: &StoredCredentials) -> String {
             .credentials
             .iter()
             .map(|c| serde_json::json!({
-                "unblinded": c.unblinded,
+                "unblinded": c.unblinded.expose(),
                 "valid_from": c.valid_from,
                 "valid_to": c.valid_to,
                 "spent": c.spent,
                 "rfc": c.rfc,
             }))
             .collect::<Vec<_>>(),
-    })
-    .to_string()
+    }));
+    crate::Secret::new(document.read().to_string())
 }
 
 fn decode(raw: &str) -> Result<StoredCredentials, StoreError> {
@@ -780,10 +790,15 @@ fn decode(raw: &str) -> Result<StoredCredentials, StoreError> {
         });
     }
 
-    let value: serde_json::Value =
-        serde_json::from_str(raw).map_err(|e| StoreError::Malformed {
+    // Parsed into a guard, so the copy of every token the parse makes is cleared however this
+    // returns: a malformed file leaves by one of the refusals below and its tokens are as real as
+    // a good file's.
+    let document = crate::secret::Document::of(serde_json::from_str(raw).map_err(|e| {
+        StoreError::Malformed {
             detail: format!("not valid JSON: {e}"),
-        })?;
+        }
+    })?);
+    let value = document.read();
 
     let field = |name: &str| -> Result<String, StoreError> {
         value
@@ -810,7 +825,7 @@ fn decode(raw: &str) -> Result<StoredCredentials, StoreError> {
                     .to_string()
             };
             Credential {
-                unblinded: text("unblinded"),
+                unblinded: crate::Secret::new(text("unblinded")),
                 valid_from: text("valid_from"),
                 valid_to: text("valid_to"),
                 spent: c
@@ -913,6 +928,42 @@ mod tests {
         result
     }
 
+    /// The order, the environment, the item, the issuer, and every credential in the batch.
+    type Fields<'a> = (
+        &'a str,
+        crate::Environment,
+        &'a str,
+        &'a str,
+        Vec<(&'a str, &'a str, &'a str, bool, bool)>,
+    );
+
+    /// Every field of a batch, as one comparable value.
+    ///
+    /// A credential has no equality and neither, therefore, has a batch made of them, so a test
+    /// comparing two of them spells out what it is comparing. Written as a whole rather than as an
+    /// assertion per field so that a failure prints both batches.
+    fn fields(batch: &StoredCredentials) -> Fields<'_> {
+        (
+            &batch.order_id,
+            batch.environment,
+            &batch.item_id,
+            &batch.issuer,
+            batch
+                .credentials
+                .iter()
+                .map(|c| {
+                    (
+                        c.unblinded.expose(),
+                        c.valid_from.as_str(),
+                        c.valid_to.as_str(),
+                        c.spent,
+                        c.rfc,
+                    )
+                })
+                .collect(),
+        )
+    }
+
     fn batch() -> StoredCredentials {
         StoredCredentials {
             order_id: "aaaaaaaa-1111-4222-8333-444444444444".to_string(),
@@ -921,14 +972,14 @@ mod tests {
             issuer: "brave.com?sku=brave-leo-premium".to_string(),
             credentials: vec![
                 Credential {
-                    unblinded: "token-one".to_string(),
+                    unblinded: crate::Secret::new("token-one"),
                     valid_from: "2026-08-22T00:00:00".to_string(),
                     valid_to: "2026-08-23T00:00:00".to_string(),
                     spent: false,
                     rfc: true,
                 },
                 Credential {
-                    unblinded: "token-two".to_string(),
+                    unblinded: crate::Secret::new("token-two"),
                     valid_from: "2026-08-23T00:00:00".to_string(),
                     valid_to: "2026-08-24T00:00:00".to_string(),
                     spent: false,
@@ -1073,7 +1124,10 @@ mod tests {
         let first = wallet.spend("2026-08-22T12:00:00").expect("first");
         let second = wallet.spend("2026-08-22T12:00:00").expect("second");
 
-        assert_ne!(first.credential.unblinded, second.credential.unblinded);
+        assert_ne!(
+            first.credential.unblinded.expose(),
+            second.credential.unblinded.expose()
+        );
         assert_eq!(second.remaining, 0);
     }
 
@@ -1091,9 +1145,27 @@ mod tests {
         ));
     }
 
+    /// A batch is printed by whatever holds it: an error path formatting a wallet, a panic
+    /// unwinding through one, a trace line somebody adds later. The token is a bearer value, so
+    /// what a derived `Debug` puts in that output is the credential itself.
+    #[test]
+    fn a_stored_batch_does_not_print_its_tokens() {
+        let printed = format!("{:?}", batch());
+
+        assert!(
+            !printed.contains("token-one") && !printed.contains("token-two"),
+            "a token is in the printed form of the batch: {printed}"
+        );
+        assert!(
+            printed.contains("brave-leo-premium"),
+            "the rest of the batch is still printed: {printed}"
+        );
+    }
+
     #[test]
     fn a_batch_survives_a_round_trip_through_the_stored_form() {
-        assert_eq!(decode(&encode(&batch())).unwrap(), batch());
+        let decoded = decode(encode(&batch()).expose()).unwrap();
+        assert_eq!(fields(&decoded), fields(&batch()));
     }
 
     /// One subscription means one stored batch: importing from another channel must replace what
@@ -1106,11 +1178,15 @@ mod tests {
 
             // A second import, as switching channels produces: same order, different tokens.
             let mut second = batch();
-            second.credentials[0].unblinded = "from-the-other-channel".to_string();
+            second.credentials[0].unblinded = crate::Secret::new("from-the-other-channel");
             save(&second).expect("a second write");
 
             let loaded = load().expect("a read");
-            assert_eq!(loaded, second, "the newer import must win");
+            assert_eq!(
+                fields(&loaded),
+                fields(&second),
+                "the newer import must win"
+            );
             assert_eq!(
                 loaded.credentials.len(),
                 second.credentials.len(),
@@ -1127,7 +1203,7 @@ mod tests {
             assert!(matches!(load(), Err(StoreError::NotFound)));
 
             save(&batch()).expect("a write");
-            assert_eq!(load().expect("a read"), batch());
+            assert_eq!(fields(&load().expect("a read")), fields(&batch()));
         });
     }
 
@@ -1414,7 +1490,7 @@ mod tests {
         let mut staging = batch();
         staging.environment = crate::Environment::Staging;
         assert_eq!(
-            decode(&encode(&staging)).unwrap().environment,
+            decode(encode(&staging).expose()).unwrap().environment,
             crate::Environment::Staging
         );
     }

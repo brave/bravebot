@@ -91,6 +91,12 @@ pub struct Question {
     asked: String,
     /// The pictures the question named, pasted into the line the question was typed on.
     pasted: Vec<crate::turn::PastedImage>,
+    /// The files the question named, dropped onto that same line and already read.
+    ///
+    /// Read before this exists, by [`crate::attached::read`], because the policy [`ask`] builds
+    /// holds no `FileRead` and reaches no workspace. What is here is the kernel's answer about each
+    /// one rather than a path still to be resolved.
+    dropped: Vec<crate::attached::Carried>,
     /// What the exchange had met, which is what decides whether the answer may be written down.
     context: Integrity,
 }
@@ -110,8 +116,20 @@ impl Question {
             exchange: conversation.with_system(SYSTEM_PROMPT),
             asked: question.to_string(),
             pasted,
+            dropped: Vec::new(),
             context: conversation.context(),
         }
+    }
+
+    /// Carry the files dropped onto the line, already read.
+    ///
+    /// Separate from [`Question::about`] because the two happen in different places. The exchange is
+    /// taken on the thread that owns the conversation, and the read happens on the thread that owns
+    /// the trail the request is recorded in, so the question crosses between them and picks up what
+    /// was read on the way.
+    pub fn carrying(mut self, dropped: Vec<crate::attached::Carried>) -> Self {
+        self.dropped = dropped;
+        self
     }
 
     /// What the exchange had met when the question was asked.
@@ -122,18 +140,26 @@ impl Question {
     /// Every message the request holds: the exchange, then the question with its pictures in it.
     ///
     /// One message for the question and whatever came with it, because that is what the person did:
-    /// they typed a line and pasted a picture into it. Two messages would put the picture somewhere
-    /// other than the sentence asking about it.
+    /// they typed a line and pasted a picture into it, or dropped one on it. Two messages would put
+    /// the picture somewhere other than the sentence asking about it.
+    ///
+    /// Dropped files first and pasted pictures after them, which is the order a turn puts them in,
+    /// so one line sends the same request whichever of the three carries it. On a line that both
+    /// pasted and dropped that order is not the order its markers number them, which is a cost
+    /// `dropping.md` carries rather than one this fixes: a picture travels as bytes with nothing
+    /// beside it to say which marker it answers, so ordering differently here would mean the same
+    /// line reaching the planner one way from a prompt and another from a question.
     ///
     /// The record `pasting.md` PASTE-8 asks for is not taken here. This runs wherever the request is
     /// assembled and the gate belongs to the policy, so [`ask`] takes it before calling this.
     fn into_request(self) -> Vec<Message> {
         let mut messages = self.exchange;
         let text = format!("{INSTRUCTION}\n\n{}", self.asked);
-        messages.push(match self.pasted.is_empty() {
-            true => Message::user(text),
-            false => Message::user_parts(
+        messages.push(match (self.pasted.is_empty(), self.dropped.is_empty()) {
+            (true, true) => Message::user(text),
+            _ => Message::user_parts(
                 std::iter::once(Part::Text { text })
+                    .chain(self.dropped.iter().map(crate::attached::Carried::part))
                     .chain(self.pasted.iter().map(crate::turn::PastedImage::part))
                     .collect(),
             ),

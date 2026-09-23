@@ -22,6 +22,7 @@ pub mod credentials;
 pub mod delegate;
 pub mod event;
 pub mod fence;
+pub mod file_authority;
 pub mod incognito;
 pub mod label;
 pub mod manifest;
@@ -41,7 +42,7 @@ pub mod vetting;
 
 pub use ask::{Answer, Choice, Prompt, Question};
 pub use cancel::Cancel;
-pub use capability::{Capability, CapabilitySet, CapabilityToken};
+pub use capability::{Capability, CapabilitySet, CapabilityToken, ServerAlias};
 pub use command::{Pipeline, Stage};
 pub use delegate::{DelegateSpec, Kind as DelegateKind};
 pub use event::{Event, NullSink, Principle, RecordingSink, Role, Sink};

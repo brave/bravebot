@@ -1099,7 +1099,13 @@ fn an_endorsed_write_is_refused_when_the_file_changed() {
         all_file_capabilities(),
         &mut sink,
     )
-    .expect("policy");
+    .expect("policy")
+    .with_trust({
+        // Editing and comparing a current file requires a trusted capture.
+        let mut trust = TrustStore::new(workspace.root());
+        trust.trust("a.txt");
+        trust
+    });
 
     // Someone else writes to the file after it was read and approved.
     std::fs::write(&file, "changed underneath\n").unwrap();
@@ -1138,7 +1144,13 @@ fn an_endorsed_write_proceeds_when_the_file_is_unchanged() {
         all_file_capabilities(),
         &mut sink,
     )
-    .expect("policy");
+    .expect("policy")
+    .with_trust({
+        // Editing and comparing a current file requires a trusted capture.
+        let mut trust = TrustStore::new(workspace.root());
+        trust.trust("a.txt");
+        trust
+    });
 
     let path = Labelled::new("a.txt".to_string(), Label::untrusted_public());
     let body = Labelled::new("edited\n".to_string(), Label::untrusted_public());
@@ -1167,7 +1179,13 @@ fn a_stale_write_does_not_consume_the_endorsement() {
         all_file_capabilities(),
         &mut sink,
     )
-    .expect("policy");
+    .expect("policy")
+    .with_trust({
+        // Editing and comparing a current file requires a trusted capture.
+        let mut trust = TrustStore::new(workspace.root());
+        trust.trust("a.txt");
+        trust
+    });
 
     let path = Labelled::new("a.txt".to_string(), Label::untrusted_public());
     let body = Labelled::new("edited\n".to_string(), Label::untrusted_public());
@@ -4166,6 +4184,7 @@ fn a_rewind_names_the_paths_it_could_not_put_back() {
     std::fs::create_dir(&blocked).expect("create");
 
     let refused = workspace.restore_backups(vec![Backup {
+        captured_trust: bravebot_core::label::Integrity::Trusted,
         path: blocked.clone(),
         was: Before::Bytes(b"whatever was there".to_vec()),
     }]);
@@ -4183,6 +4202,7 @@ fn a_created_file_already_gone_is_not_reported_as_refused() {
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
     let refused = workspace.restore_backups(vec![Backup {
+        captured_trust: bravebot_core::label::Integrity::Trusted,
         path: scratch.path.join("never-there.txt"),
         was: Before::Nothing,
     }]);
@@ -4648,4 +4668,123 @@ fn a_symlink_out_of_the_sessions_own_directory_is_refused() {
         .read(&mut policy, &link)
         .expect_err("a symlink out of the session's own directory must be refused");
     assert!(matches!(error, WorkspaceError::Escapes { .. }), "{error:?}");
+}
+
+/// Shared decisions follow complete replacements without changing independent paths or trusting stale snapshots.
+#[test]
+fn shared_file_authority_preserves_aliases_scratch_added_paths_and_independent_writes() {
+    let scratch = Scratch::new("shared-authority-controls");
+    let added = Scratch::new("shared-authority-added");
+    let session = Scratch::new("shared-authority-scratch");
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let mut workspace = Workspace::new(&project).unwrap();
+    workspace
+        .add_directory(scratch.path.to_str().unwrap())
+        .unwrap();
+    workspace
+        .add_directory(added.path.to_str().unwrap())
+        .unwrap();
+    workspace.open_scratch(Some(session.path.canonicalize().unwrap()));
+    let mut trust = TrustStore::new(workspace.root());
+    trust.distrust(".");
+    trust.distrust(added.path.canonicalize().unwrap().to_str().unwrap());
+    let authority = bravebot_core::file_authority::FileAuthority::new(trust);
+    let mut a_sink = RecordingSink::new();
+    let mut b_sink = RecordingSink::new();
+    let mut a = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut a_sink,
+    )
+    .unwrap()
+    .with_file_authority(authority.clone())
+    .with_scratch(workspace.scratch());
+    let mut b = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut b_sink,
+    )
+    .unwrap()
+    .with_file_authority(authority)
+    .with_scratch(workspace.scratch());
+    let untouched = a.vouched();
+    workspace
+        .write(
+            &mut a,
+            &Labelled::trusted("independent.txt".into()),
+            &Labelled::trusted("keep trusted".into()),
+        )
+        .unwrap();
+    let paths = [
+        ("shared.txt".to_string(), "./shared.txt".to_string()),
+        (
+            "absolute.txt".to_string(),
+            workspace.root().join("absolute.txt").display().to_string(),
+        ),
+        (
+            added.path.join("added.txt").display().to_string(),
+            added
+                .path
+                .canonicalize()
+                .unwrap()
+                .join("added.txt")
+                .display()
+                .to_string(),
+        ),
+        (
+            session.path.join("scratch.txt").display().to_string(),
+            session
+                .path
+                .canonicalize()
+                .unwrap()
+                .join("scratch.txt")
+                .display()
+                .to_string(),
+        ),
+    ];
+    for (first, alias) in paths {
+        workspace
+            .write(
+                &mut a,
+                &Labelled::trusted(first.clone()),
+                &Labelled::trusted("first trusted".into()),
+            )
+            .unwrap();
+        workspace
+            .write(
+                &mut b,
+                &Labelled::trusted(alias.clone()),
+                &Labelled::new("CONTROL_SENTINEL".into(), Label::untrusted_public()),
+            )
+            .unwrap();
+        a.adopt_from_delegate(&untouched, &untouched);
+        let captured = workspace
+            .read(&mut a, &Labelled::trusted(first.clone()))
+            .unwrap();
+        assert!(
+            !captured.label().is_trusted(),
+            "alias {alias} left a stale grant for {first}"
+        );
+        workspace
+            .write(
+                &mut a,
+                &Labelled::trusted(first.clone()),
+                &Labelled::trusted("final trusted".into()),
+            )
+            .unwrap();
+        b.adopt_from_delegate(&untouched, &untouched);
+        let captured = workspace.read(&mut b, &Labelled::trusted(alias)).unwrap();
+        assert!(
+            captured.label().is_trusted(),
+            "a complete trusted replacement lost its grant"
+        );
+        assert_eq!(
+            b.read_trusted_content("fixture", &captured).unwrap(),
+            "final trusted"
+        );
+        assert!(b.trust().is_trusted("independent.txt"));
+    }
 }

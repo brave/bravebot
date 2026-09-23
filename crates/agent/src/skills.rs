@@ -57,6 +57,24 @@ const MARKER: &str = "---";
 /// skill is included in that: a name with no description is one the planner cannot choose
 /// between, and advertising it would be worse than leaving it out.
 pub fn parse_frontmatter(text: &str) -> Option<Frontmatter> {
+    let declared = declarations(text)?;
+    let name = declared.get("name").filter(|n| !n.is_empty())?;
+    let description = declared.get("description").filter(|d| !d.is_empty())?;
+    Some(Frontmatter {
+        name: name.clone(),
+        description: description.clone(),
+    })
+}
+
+/// Every `key: value` a frontmatter block declares, wrapped values joined.
+///
+/// The one dialect, so a delegate definition is read the way a skill is and a file written for
+/// another agent parses the same either way. Keys nothing here looks for are returned rather than
+/// dropped, and callers ignore what they do not want: a strict schema would refuse a file written
+/// for a second agent, and being one directory two agents can read is the point.
+///
+/// `None` means "not frontmatter", and every caller drops the file on that answer.
+pub fn declarations(text: &str) -> Option<std::collections::BTreeMap<String, String>> {
     let mut lines = text.lines();
     if lines.next().map(str::trim_end) != Some(MARKER) {
         return None;
@@ -78,8 +96,7 @@ pub fn parse_frontmatter(text: &str) -> Option<Frontmatter> {
         return None;
     }
 
-    let mut name = None;
-    let mut description = None;
+    let mut declared = std::collections::BTreeMap::new();
 
     let mut at = 0;
     while at < block.len() {
@@ -102,16 +119,13 @@ pub fn parse_frontmatter(text: &str) -> Option<Frontmatter> {
         let Some((key, first)) = line.split_once(':') else {
             continue;
         };
-        match key.trim() {
-            "name" => name = Some(value_of(first, &wrapped)),
-            "description" => description = Some(value_of(first, &wrapped)),
-            _ => {}
-        }
+        // Last wins, as the pair of `let`s this replaced did. A file declaring a key twice is
+        // malformed YAML rather than a shape to support, and reading the second is what every
+        // caller here did before there was a map.
+        declared.insert(key.trim().to_string(), value_of(first, &wrapped));
     }
 
-    let name = name.filter(|n| !n.is_empty())?;
-    let description = description.filter(|d| !d.is_empty())?;
-    Some(Frontmatter { name, description })
+    Some(declared)
 }
 
 /// How many columns a line is indented by, which is what says whether it continues the one above.
@@ -473,7 +487,7 @@ fn discover_workspace<S: Sink>(
     // content. A directory name is content too: a skill directory in a project nobody vouched
     // for could be named to read like an instruction, and it would reach the user's screen in a
     // notice even if it never reached the prompt.
-    if !policy.trust().is_trusted(WORKSPACE_SKILLS) {
+    if !policy.trusts_path(WORKSPACE_SKILLS) {
         let (count, verb) = counted(names.len());
         notices.push(Notice::new(format!(
             "{count} in {WORKSPACE_SKILLS} {verb} not loaded: this directory is not trusted"

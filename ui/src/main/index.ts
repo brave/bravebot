@@ -7,7 +7,7 @@
  * remote origins, and no navigation.
  */
 
-import { readHooks, saveHooks } from './agent-settings'
+import { saveHooks } from './agent-settings'
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { newAvatarSeed } from '../shared/avatar'
@@ -401,6 +401,7 @@ const ALLOWED = new Set([
   'permissions.list',
   'permissions.revoke',
   'doctor',
+  'hooks.inspect',
   'settings.inspect',
   'watches.list',
   'watches.add',
@@ -799,7 +800,8 @@ app.whenReady().then(() => {
     if (!info?.home) throw new Error('The agent state directory is unavailable.')
     return info.home
   }
-  ipcMain.handle('bravebot:hooks:read', async () => readHooks(await agentHome()))
+  // Saving only. The renderer reads the file through the agent's own `hooks.inspect`, so nothing
+  // here reads or interprets it.
   ipcMain.handle('bravebot:hooks:save', async (_event, text: unknown, expected: unknown) => {
     if (typeof text !== 'string' || (expected !== null && typeof expected !== 'string')) throw new Error('Invalid hooks document.')
     return saveHooks(await agentHome(), text, expected)

@@ -542,10 +542,20 @@ pub fn run<S: Sink, C: Confirmer, R: Reporter>(
     // with everything that got as far as existing.
     let mut attempt = Attempt::default();
 
+    // Before the planner's policy exists, because that policy is the network and nothing else: a
+    // planner cannot read. What a person dropped onto the line is read here instead, under a policy
+    // of its own, and the plan is still fixed before anything the plan itself could look at. See
+    // [`crate::attached`].
+    let dropped = match crate::attached::read(workspace, &task.attachments, trust.clone(), sink) {
+        Ok(dropped) => dropped,
+        Err(error) => return Err(stopped(attempt, error)),
+    };
+
     let planned = match plan(
         config,
         egress,
         task,
+        &dropped,
         reporter,
         sink,
         subscription.as_mut(),
@@ -714,6 +724,7 @@ fn plan<S: Sink, R: Reporter>(
     config: &Config,
     egress: &Egress,
     task: &Task,
+    dropped: &[crate::attached::Carried],
     reporter: &mut R,
     sink: &mut S,
     mut subscription: Option<&mut crate::ImportedSubscription>,
@@ -756,16 +767,24 @@ fn plan<S: Sink, R: Reporter>(
     // message, because a screenshot of the thing to be built is the task. It is the user's own
     // keystroke and not something observed, which is why manifest.md MANIFEST-1 admits it and
     // MANIFEST-9 still refuses a pipe.
+    //
+    // One dropped on it goes in the same message and for the same reason: the person dragged that
+    // file onto the window and let the line go, so the path was fixed by their gesture before any
+    // request went out (dropping.md DROP-2). What is different is that a file has to be read, and
+    // the read has already happened, above and outside this policy.
     let mut history = Conversation::new();
-    history.push(match task.images.is_empty() {
-        true => Message::user(opening),
-        false => {
-            // One record per picture, so the trail says what arrived: pasting.md PASTE-8.
+    history.push(match (task.images.is_empty(), dropped.is_empty()) {
+        (true, true) => Message::user(opening),
+        _ => {
+            // One record per picture, so the trail says what arrived: pasting.md PASTE-8. A dropped
+            // file is named in the trail by the read that took it, which is a stronger record than
+            // this and is why nothing is taken for one here.
             for image in &task.images {
                 policy.admit_pasted_image(image.media_type, image.bytes.len());
             }
             Message::user_parts(
                 std::iter::once(Part::Text { text: opening })
+                    .chain(dropped.iter().map(crate::attached::Carried::part))
                     .chain(task.images.iter().map(crate::turn::PastedImage::part))
                     .collect(),
             )
@@ -1144,7 +1163,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
         }
     };
 
-    let trust = policy.trust().clone();
+    let trust = policy.trust();
     let programs = policy.programs().clone();
     let asked_about = policy.asked().clone();
     Ok(Outcome {
@@ -1252,9 +1271,9 @@ fn run_step<S: Sink, C: Confirmer>(
     step: &Step,
     entry: &'static Advertised,
 ) -> Result<Done, String> {
-    if let Some(capability) = entry.gate {
+    if let Some(capability) = &entry.gate {
         policy
-            .before_capability(capability)
+            .before_capability(capability.clone())
             .map_err(|d| d.to_string())?;
     }
 
@@ -1563,7 +1582,18 @@ fn write<S: Sink, C: Confirmer>(
 
     let proof = policy.authorise_display_release("proposed write");
     let shown = body.clone().declassify(&proof);
-    let existing = workspace.peek_for_review(&path);
+    // The pre-image and the version it was read at, taken together, exactly as a turn's write
+    // takes them: prior bytes a sibling effect left untrusted cannot answer for a credential in
+    // this body, and the approval minted below is spent only on the version shown here.
+    let (existing, existing_trusted, approved_revision) =
+        policy.capture_files(|policy, capture| {
+            let key = workspace.trust_key(&path);
+            (
+                workspace.peek_for_review(&path),
+                !policy.read_is_quarantined(&key),
+                capture.revision_of(&key),
+            )
+        });
     let replaced_age = workspace.age_of(&path);
     let intent = if existing.is_some() {
         Intent::Overwrite
@@ -1574,7 +1604,12 @@ fn write<S: Sink, C: Confirmer>(
     // What this would leave in the tree, before anything is written and before anybody is asked.
     // A manifest run has no planner in the control path, so the refusal here is read by a person
     // and is the whole of what they are told about the step.
-    let scanned = policy.scan_a_write("write_file", &path, existing.as_deref(), &body);
+    let scanned = policy.scan_a_write(
+        "write_file",
+        &path,
+        existing.as_deref().filter(|_| existing_trusted),
+        &body,
+    );
     let refused = scanned.refused();
     if !refused.is_empty() {
         let found: Vec<String> = refused.iter().map(|finding| finding.describe()).collect();
@@ -1610,9 +1645,13 @@ fn write<S: Sink, C: Confirmer>(
 
     policy.issue_grant("file_write", "path", path.clone());
     workspace
-        .write_endorsed(policy, &Labelled::trusted(path.clone()), &body)
+        .write_endorsed_at_revision(
+            policy,
+            &Labelled::trusted(path.clone()),
+            &body,
+            Some(approved_revision),
+        )
         .map_err(|e| e.to_string())?;
-    policy.reconcile_after_write(&workspace.trust_key(&path), body_label);
 
     let (note, changes) =
         crate::tools::change_report(intent, existing.as_deref(), &shown, replaced_age);

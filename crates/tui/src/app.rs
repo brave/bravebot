@@ -369,14 +369,24 @@ pub enum Action {
     /// the network, which the loop owns, and gives the conversation nothing back.
     ///
     /// The pictures pasted into the question travel with it, because it is a request and a paste is
-    /// the person's own input to the thing they are asking about.
-    Aside(String, Vec<crate::state::AttachedImage>),
+    /// the person's own input to the thing they are asking about. So do the files dropped onto it,
+    /// which are read before the request is assembled: the same gesture put both there.
+    Aside(
+        String,
+        Vec<crate::state::AttachedImage>,
+        Vec<crate::state::Attached>,
+    ),
     /// Plan this task in full and then walk it. Needs the workspace, the trust map and the
     /// network, which the loop owns, and gives the conversation nothing back.
     ///
     /// The pictures pasted into the task travel with it, for the reason a question's do: a
-    /// screenshot of the thing to be built is part of the task and nothing observed.
-    Manifest(String, Vec<crate::state::AttachedImage>),
+    /// screenshot of the thing to be built is part of the task and nothing observed. So do the files
+    /// dropped onto it, whose paths a person's gesture fixed before the plan was asked for.
+    Manifest(
+        String,
+        Vec<crate::state::AttachedImage>,
+        Vec<crate::state::Attached>,
+    ),
     /// Start a new session here. Needs the conversation and the session record, which the loop owns.
     Clear,
     /// Call this session something else. Needs the session record, which the loop owns.
@@ -1119,19 +1129,39 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
     }
 }
 
-/// Whether the line is one of the commands whose argument ends up in a request.
-///
-/// `/btw` asks a question beside the work, `/manifest` plans a run from the task, and `/loop` sends
-/// the line as a prompt. Each of the three is answered by a model, so a picture pasted into one of
-/// those lines goes where the person put it. Every other command is carried out here and there is no
-/// request for one to travel in, `/goal` included: a condition is judged against a turn that has not
-/// happened yet, so a picture pasted into one has no moment to be shown at.
-///
-/// Read off the line, because both callers have a line and neither knows any more than that about it.
-fn hands_its_argument_to_a_planner(line: &str) -> bool {
-    [BTW_COMMAND, MANIFEST_COMMAND, LOOP_COMMAND]
+/// What a command's line can take with it, which is decided by what answers it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Carries {
+    /// Everything a prompt carries, because what answers the line is a turn.
+    ///
+    /// `/loop` alone. A tick is an ordinary turn, so its first one carries the pictures and the
+    /// files the person named exactly as the prompt they typed them into would have.
+    Everything,
+    /// Bytes and nothing else, because what answers the line is one request and no turn.
+    ///
+    /// `/btw` and `/manifest`. A picture and a PDF are bytes the request can hold. A text file's
+    /// contents would be a context message, and both of those planners are precommitted to a context
+    /// holding the task and the driver's own words and nothing read out of the tree.
+    Bytes,
+    /// Nothing, because the driver carries the command out itself and there is no request at all.
+    ///
+    /// Every other command, `/goal` included: a condition is judged against a turn that has not
+    /// happened yet, so a picture pasted into one has no moment to be shown at.
+    Nothing,
+}
+
+/// What the line is, read off the line: both callers have one and neither knows any more than that.
+fn carries(line: &str) -> Carries {
+    if argument_to(line, LOOP_COMMAND).is_some() {
+        return Carries::Everything;
+    }
+    match [BTW_COMMAND, MANIFEST_COMMAND]
         .iter()
         .any(|command| argument_to(line, command).is_some())
+    {
+        true => Carries::Bytes,
+        false => Carries::Nothing,
+    }
 }
 
 /// Carry out the command a line is, whether it was typed just now or queued while a turn ran.
@@ -1148,15 +1178,18 @@ fn hands_its_argument_to_a_planner(line: &str) -> bool {
 /// is a table entry that nobody wired up: `every_command_in_the_table_dispatches` is what says so,
 /// since a word recognised and then quietly dropped would be worse than one never recognised.
 fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -> Action {
-    // The pictures pasted into the line survive only as far as the commands that have somewhere to
-    // put them, which is the three below that hand their argument to a request. For every other word
-    // the marker becomes a sentence saying a picture was pasted, since a path or a name that came out
-    // of a paste was never going to be one.
-    let crate::state::Commanded { line, pasted } =
-        match hands_its_argument_to_a_planner(&commanded.line) {
-            true => commanded,
-            false => session.without_pictures(commanded),
-        };
+    // What the line named survives only as far as the command can take it. For a word the driver
+    // carries out itself the marker becomes a sentence saying a picture was pasted, or the dropped
+    // file's own name, since a path or a name that came out of a paste was never going to be one.
+    let crate::state::Commanded {
+        line,
+        pasted,
+        attached,
+    } = match carries(&commanded.line) {
+        Carries::Everything => commanded,
+        Carries::Bytes => crate::state::without_text_files(commanded),
+        Carries::Nothing => session.without_what_it_cannot_carry(commanded),
+    };
     let line = line.as_str();
 
     if line.trim() == EXIT_COMMAND {
@@ -1195,7 +1228,7 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     // The question is taken verbatim and never sent as a prompt: it goes out over a copy of the
     // conversation and the copy is thrown away, so nothing about it joins the exchange.
     if let Some(question) = argument_to(line, BTW_COMMAND) {
-        return Action::Aside(question.to_string(), pasted);
+        return Action::Aside(question.to_string(), pasted, attached);
     }
     if line.trim() == CLEAR_COMMAND {
         return Action::Clear;
@@ -1227,7 +1260,7 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     // driver's own words in its context, so the conversation neither goes into the run nor hears
     // anything back from it.
     if let Some(task) = argument_to(line, MANIFEST_COMMAND) {
-        return Action::Manifest(task.to_string(), pasted);
+        return Action::Manifest(task.to_string(), pasted, attached);
     }
     // The command that sends a prompt rather than the line it was typed on. `/loop 5m check the
     // deploy` arms the loop and hands back "check the deploy", which is what every tick sends from
@@ -1245,10 +1278,12 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
                 }
                 Action::Redraw
             }
-            crate::loops::Asked::Start(request) => match session.start_loop(request, pasted) {
-                Some(prompt) => Action::Submit(prompt),
-                None => Action::Redraw,
-            },
+            crate::loops::Asked::Start(request) => {
+                match session.start_loop(request, pasted, attached) {
+                    Some(prompt) => Action::Submit(prompt),
+                    None => Action::Redraw,
+                }
+            }
             crate::loops::Asked::Unreadable => {
                 session.note(t!(loop_needs_a_prompt));
                 Action::Redraw
@@ -2393,7 +2428,11 @@ fn event_loop(
         // Already answered before the loop was entered: the picker runs once, in `run`.
         Start::Fresh | Start::Choose => (
             Conversation::new(),
-            bravebot_session::sessions::Handle::begin(workspace.root(), bravebot_stamp::BUILD),
+            bravebot_session::sessions::Handle::begin(
+                workspace.root(),
+                bravebot_session::sessions::Front::Terminal,
+                bravebot_stamp::BUILD,
+            ),
             // A session that was never asked vouches for nothing, exactly as with the map.
             TrustedPrograms::new(),
         ),
@@ -2401,6 +2440,7 @@ fn event_loop(
             let handle = bravebot_session::sessions::Handle::resuming(
                 workspace.root(),
                 &record,
+                bravebot_session::sessions::Front::Terminal,
                 bravebot_stamp::BUILD,
             );
             let conversation = Conversation::restored(record.conversation.clone());
@@ -2432,6 +2472,15 @@ fn event_loop(
             if let Some(note) = bravebot_session::sessions::build_note(
                 record.build.as_deref(),
                 bravebot_stamp::BUILD,
+            ) {
+                session.note(note);
+            }
+            // And the third of them: which surface drew the transcript above. The other one
+            // renders the same session differently, so a detail being read as a symptom of the
+            // work may be a symptom of the program that showed it.
+            if let Some(note) = bravebot_session::sessions::front_note(
+                record.front.as_deref(),
+                bravebot_session::sessions::Front::Terminal,
             ) {
                 session.note(note);
             }
@@ -2864,7 +2913,7 @@ fn event_loop(
                 stored.append_audit(session.turns, &events);
                 needs_draw = true;
             }
-            Action::Aside(question, pasted) => {
+            Action::Aside(question, pasted, attached) => {
                 if question.is_empty() {
                     session.note(t!(btw_needs_a_question));
                 } else {
@@ -2880,6 +2929,8 @@ fn event_loop(
                         &trust,
                         &question,
                         &pasted,
+                        &attached,
+                        &workspace,
                     )?;
 
                     // Written now rather than at the end of the next turn, for the reason a
@@ -2915,7 +2966,7 @@ fn event_loop(
                 }
                 needs_draw = true;
             }
-            Action::Manifest(task, pasted) => {
+            Action::Manifest(task, pasted, attached) => {
                 if task.is_empty() {
                     session.note(t!(manifest_needs_a_task));
                 } else {
@@ -2931,6 +2982,7 @@ fn event_loop(
                         &workspace,
                         &task,
                         &pasted,
+                        &attached,
                         &trust,
                         &permissions,
                         settings.attribution(),
@@ -2986,6 +3038,7 @@ fn event_loop(
                 conversation = Conversation::new();
                 stored = bravebot_session::sessions::Handle::begin(
                     workspace.root(),
+                    bravebot_session::sessions::Front::Terminal,
                     bravebot_stamp::BUILD,
                 );
                 session.note(t!(session_cleared));
@@ -3527,6 +3580,8 @@ fn bedrock_models(
             // that went on claiming otherwise would report a level as in force after the requests
             // carrying it had stopped.
             reads_effort: bravebot_agent::backend::bedrock_reads_effort(&entry.id),
+            // Bedrock has no listing, so nothing has described these models to us.
+            advertised: bravebot_aichat::models::Advertised::default(),
         })
         .collect()
 }
@@ -3569,6 +3624,8 @@ fn provider_models(
                 &provider.chat_completions_url(),
                 &model.id,
             ),
+            // A block names models and describes none of them, so there is nothing to carry.
+            advertised: bravebot_aichat::models::Advertised::default(),
         })
         .collect()
 }
@@ -3824,10 +3881,11 @@ fn named_directories(whence: Whence, named: &[String]) -> Named {
 ///
 /// [PERM-14]: ../../docs/specs/permissions.md
 fn proposed_rules(settings: &bravebot_config::Settings) -> Vec<bravebot_agent::granted::Proposed> {
-    settings
-        .allow_ignored()
-        .map(|(path, rule)| bravebot_agent::granted::Proposed::new(path, rule))
-        .collect()
+    // The rules among the dropped entries and not every dropped entry: one that is not a rule
+    // decides nothing whoever writes it, so PERM-15 reports it under PERM-11 rather than offering
+    // it, and the list this builds is both what the question offers and what the session reports
+    // as dropped.
+    bravebot_agent::permissions::proposed(settings, bravebot_agent::home::profile().as_deref())
 }
 
 /// What becomes of the `allow` rules a checkout proposed.
@@ -4385,6 +4443,7 @@ fn compact_animated(
 /// A question that could not be answered leaves a line in the transcript rather than a row with
 /// nothing in it. The gates it did pass are still returned, since they decided about a request
 /// that really went out.
+#[allow(clippy::too_many_arguments)]
 fn aside_animated(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     session: &mut Session,
@@ -4393,6 +4452,8 @@ fn aside_animated(
     trust: &TrustStore,
     question: &str,
     pasted: &[crate::state::AttachedImage],
+    attached: &[crate::state::Attached],
+    workspace: &Workspace,
 ) -> io::Result<Vec<Stamped>> {
     // For the reason a turn and a summary both do it: this is one request to the same backend,
     // and a sign-in is not something a worker thread can ask for.
@@ -4402,6 +4463,7 @@ fn aside_animated(
 
     let worker_config = config.clone();
     let worker_trust = trust.clone();
+    let worker_workspace = workspace.clone();
     let model = session.model().map(str::to_string);
     // Taken here, before the worker starts, because that is what crosses to it: the request, not
     // the conversation. The conversation stays on this thread and is not touched again, so there
@@ -4421,6 +4483,20 @@ fn aside_animated(
             })
             .collect(),
     );
+    // The files dropped onto the line, as paths to read rather than as bytes: the read itself is the
+    // worker's, so that it lands in the same trail as the request it travels in. Only what is carried
+    // as bytes reaches here, since `crate::state::without_text_files` settled the rest to their names
+    // before the action was built.
+    let dropped: Vec<_> = attached
+        .iter()
+        .filter_map(|file| match file.kind {
+            crate::dropped::Kind::Attachment(media) => Some(bravebot_agent::turn::Attachment {
+                path: file.name.clone(),
+                media: media.to_string(),
+            }),
+            crate::dropped::Kind::Text => None,
+        })
+        .collect();
     let asked = question.to_string();
 
     session.begin_aside();
@@ -4429,6 +4505,20 @@ fn aside_animated(
         let mut sink = Trail::new();
         let mut reporter = crate::remote_confirm::RemoteReporter::new(to_main);
         let egress = Egress::new();
+        // Before the question's own policy exists, which is the whole point: that one holds
+        // `WebFetch` alone and reaches no workspace, so what reads a dropped file is a policy of its
+        // own holding `FileRead` and nothing else. See `bravebot_agent::attached`.
+        let asking = match bravebot_agent::attached::read(
+            &worker_workspace,
+            &dropped,
+            worker_trust.clone(),
+            &mut sink,
+        ) {
+            Ok(carried) => asking.carrying(carried),
+            // Reduced to a sentence here for the reason the answer is below: the error types are the
+            // kernel's, and this thread is the only place they mean anything.
+            Err(error) => return (Err(error.to_string()), sink),
+        };
         // Reduced to what a person can be told before it crosses back, since the error types are
         // the kernel's and this thread is the only place they mean anything.
         let done = turn::aside(
@@ -4570,6 +4660,7 @@ fn manifest_animated(
     workspace: &Workspace,
     task: &str,
     pasted: &[crate::state::AttachedImage],
+    attached: &[crate::state::Attached],
     trust: &TrustStore,
     permissions: &Permissions,
     attribution: &Attribution,
@@ -4592,14 +4683,18 @@ fn manifest_animated(
     // key pressed while it walks describes what comes after it, and a plan already on the screen
     // must not have the question withdrawn from under the person answering it.
     let permission_mode = session.permission_mode();
-    // No files and no attachments: each of those is context, and this mode fixes its plan before it
-    // observes anything, which is the same reason a pipe is refused (MANIFEST-9).
+    // No files: a file named with `@` is context, and this mode fixes its plan before it observes
+    // anything, which is the same reason a pipe is refused (MANIFEST-9).
     //
-    // A pasted picture goes in, and is the one thing here that does. It is not observed context: the
-    // person pressed Ctrl-V on their own clipboard, so it arrives on the footing of the task they
-    // typed it into (PASTE-2) and says nothing about what anybody has read (PASTE-5). MANIFEST-1
-    // names it for that reason, and a plan asked for from a screenshot is still a plan fixed before
-    // anything was looked at.
+    // A pasted picture goes in. It is not observed context: the person pressed Ctrl-V on their own
+    // clipboard, so it arrives on the footing of the task they typed it into (PASTE-2) and says
+    // nothing about what anybody has read (PASTE-5). MANIFEST-1 names it for that reason, and a plan
+    // asked for from a screenshot is still a plan fixed before anything was looked at.
+    //
+    // A dropped picture goes in beside it, on the same footing and for the same reason: the person
+    // dragged that file onto the window and let the line go, so its path was fixed by their gesture
+    // before any request went out (DROP-2). It is read before the planner's policy exists, which is
+    // what keeps a planner that cannot read from having read something.
     let mut worker_task = Task::new(task)
         .with_home(bravebot_agent::home::directory())
         .with_profile(bravebot_agent::home::profile())
@@ -4615,6 +4710,14 @@ fn manifest_animated(
             media_type: image.media_type,
             bytes: image.bytes.clone(),
         });
+    }
+    // Only what is carried as bytes, since `crate::state::without_text_files` settled the rest to their
+    // names before the action was built: what is left here is a picture or a PDF, and the run reads
+    // it before it plans.
+    for file in attached {
+        if let crate::dropped::Kind::Attachment(media) = file.kind {
+            worker_task = worker_task.with_attachment(file.name.clone(), media);
+        }
     }
     // Nothing is said about the standing form of a write answer, so nothing offers it. A plan has
     // no standing answer at all (MANIFEST-10), and a run whose steps were fixed before anything was
@@ -4820,6 +4923,7 @@ fn manifest_animated(
             workspace.root(),
             &asked,
             &outcome,
+            bravebot_session::sessions::Front::Terminal,
             bravebot_stamp::BUILD,
         ),
     };
@@ -6030,6 +6134,7 @@ mod tests {
             provider: None,
             conversation_tokens: window,
             reads_effort: true,
+            advertised: bravebot_aichat::models::Advertised::default(),
         }
     }
 
@@ -6603,7 +6708,7 @@ mod tests {
             let id = DelegateId::nth(session.delegates().len() as u32 + 1);
             session.delegate_started(Delegation {
                 id,
-                kind,
+                kind: kind.to_string(),
                 task: task.to_string(),
             });
             session.reporting_for(Some(id));
@@ -6957,13 +7062,17 @@ mod tests {
 
             handle_key(&mut session, key(KeyCode::Char('p')));
             assert_eq!(
-                session.watched_delegate().map(|delegate| delegate.kind),
+                session
+                    .watched_delegate()
+                    .map(|delegate| delegate.kind.as_str()),
                 Some("reader")
             );
 
             handle_key(&mut session, key(KeyCode::Char('n')));
             assert_eq!(
-                session.watched_delegate().map(|delegate| delegate.kind),
+                session
+                    .watched_delegate()
+                    .map(|delegate| delegate.kind.as_str()),
                 Some("checker")
             );
         }
@@ -6984,7 +7093,9 @@ mod tests {
                 "enter did not open a delegate"
             );
             assert_eq!(
-                session.watched_delegate().map(|delegate| delegate.kind),
+                session
+                    .watched_delegate()
+                    .map(|delegate| delegate.kind.as_str()),
                 Some("reader"),
                 "enter opened a delegate other than the one the list was on"
             );
@@ -7743,7 +7854,8 @@ mod tests {
                         marker: "[Image #1]".to_string(),
                         media_type: "image/png",
                         bytes: b"pixels".to_vec(),
-                    }]
+                    }],
+                    Vec::new()
                 )
             );
             assert!(
@@ -7773,7 +7885,8 @@ mod tests {
                         marker: "[Image #1]".to_string(),
                         media_type: "image/png",
                         bytes: b"pixels".to_vec(),
-                    }]
+                    }],
+                    Vec::new()
                 )
             );
         }
@@ -7831,7 +7944,8 @@ mod tests {
                         marker: "[Image #1]".to_string(),
                         media_type: "image/png",
                         bytes: b"pixels".to_vec(),
-                    }]
+                    }],
+                    Vec::new()
                 ))
             );
         }
@@ -7851,7 +7965,7 @@ mod tests {
 
             assert_eq!(
                 handle_key(&mut session, key(KeyCode::Enter)),
-                Action::Aside("what is this".to_string(), Vec::new())
+                Action::Aside("what is this".to_string(), Vec::new(), Vec::new())
             );
             assert!(
                 !session
@@ -7889,6 +8003,203 @@ mod tests {
             take_from_clipboard(&mut session, picture(b"pixels".to_vec()));
 
             assert!(!session.image_on_clipboard, "the hint outlived the paste");
+        }
+    }
+
+    /// Dropping a file onto a command line, which is a paste the session recognises as a drop.
+    ///
+    /// Real files in a real directory, because whether a path names something is the whole question
+    /// a drop asks. The commands are exercised through [`handle_key`] rather than through
+    /// [`Session::take_command`], because the defect was in the wiring between them: the box took a
+    /// picture off the line and the dispatch was handed pictures alone.
+    mod dropping {
+        use super::*;
+
+        /// A scratch directory with one file in it, and a session working there.
+        ///
+        /// The workspace matters: it is what decides the name the task is given, and a session with
+        /// none names every drop absolutely.
+        fn a_session_with(name: &str, file: &str) -> (Session, std::path::PathBuf, String) {
+            let directory = crate::testutil::scratch_dir(&format!("bravebot-app-drop-{name}"));
+            let _ = std::fs::remove_dir_all(&directory);
+            std::fs::create_dir_all(&directory).expect("scratch");
+            std::fs::write(directory.join(file), [0x89u8, 0x50]).expect("write");
+            let at = directory.join(file).to_string_lossy().to_string();
+            (
+                Session::new("kernel-enforced").in_workspace(&directory),
+                directory,
+                at,
+            )
+        }
+
+        /// The question the issue reports. A dropped picture and a pasted one read the same in the
+        /// box, so a question that carries one and not the other answers about nothing and tells the
+        /// person no image came through about a screenshot that is plainly in their line.
+        #[test]
+        fn a_picture_dropped_onto_a_question_goes_with_it() {
+            let (mut session, directory, path) = a_session_with("btw", "shot.png");
+            type_line(&mut session, "/btw what is in ");
+            assert!(session.drop_files(&path), "not recognised as a drop");
+            assert_eq!(session.input(), "/btw what is in [Image #1] ");
+
+            let action = handle_key(&mut session, key(KeyCode::Enter));
+            let Action::Aside(question, pasted, attached) = action else {
+                panic!("a question was not asked: {action:?}");
+            };
+            assert_eq!(question, "what is in [Image #1]");
+            assert!(pasted.is_empty(), "a paste was invented: {pasted:?}");
+            assert_eq!(attached.len(), 1, "the picture did not go: {attached:?}");
+            assert_eq!(attached[0].name, "shot.png");
+
+            let _ = std::fs::remove_dir_all(&directory);
+        }
+
+        /// A picture of the thing to be built is the task whichever gesture put it there.
+        #[test]
+        fn a_picture_dropped_onto_a_task_goes_with_the_plan() {
+            let (mut session, directory, path) = a_session_with("manifest", "shot.png");
+            type_line(&mut session, "/manifest build ");
+            session.drop_files(&path);
+
+            let action = handle_key(&mut session, key(KeyCode::Enter));
+            let Action::Manifest(task, _, attached) = action else {
+                panic!("a plan was not asked for: {action:?}");
+            };
+            assert_eq!(task, "build [Image #1]");
+            assert_eq!(attached.len(), 1, "the picture did not go: {attached:?}");
+
+            let _ = std::fs::remove_dir_all(&directory);
+        }
+
+        /// A tick is an ordinary turn, so the first one carries the file the person dropped on the
+        /// line they armed the loop from. Settled at the dispatch instead, the loop would spend its
+        /// whole life asking about a file no tick was given.
+        #[test]
+        fn a_picture_dropped_onto_a_loop_goes_with_its_first_tick() {
+            let (mut session, directory, path) = a_session_with("loop", "shot.png");
+            type_line(&mut session, "/loop 15m look at ");
+            session.drop_files(&path);
+
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Submit("look at [Image #1]".to_string())
+            );
+            assert_eq!(
+                session.sent_attachments().len(),
+                1,
+                "the first tick went without the file"
+            );
+            assert_eq!(session.sent_attachments()[0].name, "shot.png");
+
+            let _ = std::fs::remove_dir_all(&directory);
+        }
+
+        /// Waiting is not being refused, so a question typed while a turn ran carries what was
+        /// dropped on it when the queue reaches it. What makes that possible is that the file is held
+        /// with the queued line rather than in the box, which the press that queued it emptied.
+        #[test]
+        fn a_picture_dropped_onto_a_question_that_waited_still_goes_with_it() {
+            let (mut session, directory, path) = a_session_with("queued", "shot.png");
+            type_line(&mut session, "first");
+            handle_key(&mut session, key(KeyCode::Enter));
+            assert_eq!(session.status, Status::Working);
+
+            for c in "/btw what is in ".chars() {
+                handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+            }
+            handle_paste_while_working(&mut session, &path);
+            assert_eq!(session.input(), "/btw what is in [Image #1] ");
+            handle_key_while_working(&mut session, key(KeyCode::Enter));
+            assert!(session.input().is_empty(), "the command stayed in the box");
+
+            session.complete("answered", Vec::new(), 0);
+
+            let action = queued_next(&mut session);
+            let Some(Action::Aside(question, _, attached)) = action else {
+                panic!("a waiting question was lost: {action:?}");
+            };
+            assert_eq!(question, "what is in [Image #1]");
+            assert_eq!(attached.len(), 1, "the picture did not go: {attached:?}");
+
+            let _ = std::fs::remove_dir_all(&directory);
+        }
+
+        /// Deleting the marker is how a file is taken off a line, so what a command carries is read
+        /// out of the line rather than off what the session has staged. Read off the staging, a drop
+        /// somebody rubbed out would ride along with every command they typed afterwards.
+        #[test]
+        fn a_command_line_whose_dropped_marker_was_deleted_carries_no_file() {
+            let (mut session, directory, path) = a_session_with("deleted", "shot.png");
+            type_line(&mut session, "/btw ");
+            session.drop_files(&path);
+            // The marker and the space a drop leaves after itself.
+            handle_key(&mut session, key(KeyCode::Backspace));
+            handle_key(&mut session, key(KeyCode::Backspace));
+            assert_eq!(session.input(), "/btw ", "the marker outlived the press");
+            type_line(&mut session, "what is this");
+
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Aside("what is this".to_string(), Vec::new(), Vec::new())
+            );
+
+            let _ = std::fs::remove_dir_all(&directory);
+        }
+
+        /// A command the driver carries out itself has no request for a file to travel in, so the
+        /// marker becomes the file's name: that is what a planner is handed everywhere else the file
+        /// itself cannot go. Left as it was, `/rename` would call the session `[Image #1]`.
+        #[test]
+        fn a_file_dropped_onto_a_command_line_is_carried_out_as_its_name() {
+            let (mut session, directory, path) = a_session_with("rename", "shot.png");
+            type_line(&mut session, "/rename ");
+            session.drop_files(&path);
+
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Rename("shot.png".to_string())
+            );
+
+            let _ = std::fs::remove_dir_all(&directory);
+        }
+
+        /// A text file's contents would be a context message, and a planner asked a question or a
+        /// task is precommitted to a context holding the task and the driver's own words. So what it
+        /// is given is the name, which it can act on, rather than a marker standing for nothing.
+        #[test]
+        fn a_text_file_dropped_onto_a_question_is_sent_as_its_name() {
+            let (mut session, directory, path) = a_session_with("text", "notes.md");
+            type_line(&mut session, "/btw what is in ");
+            session.drop_files(&path);
+            assert_eq!(session.input(), "/btw what is in [File #1] ");
+
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Aside("what is in notes.md".to_string(), Vec::new(), Vec::new())
+            );
+
+            let _ = std::fs::remove_dir_all(&directory);
+        }
+
+        /// Taking the line clears what it named, the way taking a prompt does. Left staged, a
+        /// session accumulates a record for every command anybody dropped on, each one behind a box
+        /// that cannot name it again, which is the state `dropping.md` DROP-6 exists to rule out.
+        /// Nothing on the screen says so, which is why this is asserted against the session.
+        #[test]
+        fn dispatching_a_command_clears_what_was_dropped_on_its_line() {
+            let (mut session, directory, path) = a_session_with("cleared", "shot.png");
+            type_line(&mut session, "/btw what is in ");
+            session.drop_files(&path);
+            assert_eq!(session.attached().len(), 1);
+
+            handle_key(&mut session, key(KeyCode::Enter));
+            assert!(
+                session.attached().is_empty(),
+                "the record outlived the line: {:?}",
+                session.attached()
+            );
+
+            let _ = std::fs::remove_dir_all(&directory);
         }
     }
 
@@ -8048,7 +8359,8 @@ mod tests {
             handle_key(&mut session, key(KeyCode::Enter)),
             Action::Aside(
                 "what is first\nsecond\nthird\nfourth".to_string(),
-                Vec::new()
+                Vec::new(),
+                Vec::new(),
             )
         );
     }
@@ -8091,7 +8403,11 @@ mod tests {
 
         assert_eq!(
             handle_key(&mut session, key(KeyCode::Enter)),
-            Action::Manifest("fix first\nsecond\nthird\nfourth".to_string(), Vec::new())
+            Action::Manifest(
+                "fix first\nsecond\nthird\nfourth".to_string(),
+                Vec::new(),
+                Vec::new(),
+            )
         );
     }
 
@@ -9064,6 +9380,7 @@ mod tests {
     /// A command line with nothing pasted into it, for a test about the word rather than the paste.
     fn commanded(line: &str) -> crate::state::Commanded {
         crate::state::Commanded {
+            attached: Vec::new(),
             line: line.to_string(),
             pasted: Vec::new(),
         }
@@ -9693,6 +10010,7 @@ mod tests {
             provider: Some("OpenRouter".to_string()),
             conversation_tokens: None,
             reads_effort: false,
+            advertised: bravebot_aichat::models::Advertised::default(),
         }];
 
         assert!(reads_effort(&described, Some("openrouter/not-listed")));
@@ -9963,7 +10281,11 @@ mod tests {
 
         assert_eq!(
             handle_key(&mut session, key(KeyCode::Enter)),
-            Action::Aside("why is the parser recursive?".to_string(), Vec::new())
+            Action::Aside(
+                "why is the parser recursive?".to_string(),
+                Vec::new(),
+                Vec::new()
+            )
         );
     }
 
@@ -9978,7 +10300,7 @@ mod tests {
 
         assert_eq!(
             handle_key(&mut session, key(KeyCode::Enter)),
-            Action::Aside(String::new(), Vec::new())
+            Action::Aside(String::new(), Vec::new(), Vec::new())
         );
     }
 
@@ -10227,7 +10549,11 @@ mod tests {
         let mut session = Session::new("none");
         // A line no message in the catalog quotes, so the sentence that says what the command needs
         // cannot be mistaken for the report: that sentence gives `check the deploy` as its example.
-        session.start_loop(crate::loops::request("5m tail the log"), Vec::new());
+        session.start_loop(
+            crate::loops::request("5m tail the log"),
+            Vec::new(),
+            Vec::new(),
+        );
         session.complete("done", Vec::new(), 0);
         session.loop_turn_ended(None);
         session.transcript.clear();
@@ -10259,7 +10585,11 @@ mod tests {
     #[test]
     fn the_loop_command_ends_the_loop_when_asked_to_stop() {
         let mut session = Session::new("none");
-        session.start_loop(crate::loops::request("5m check the deploy"), Vec::new());
+        session.start_loop(
+            crate::loops::request("5m check the deploy"),
+            Vec::new(),
+            Vec::new(),
+        );
         session.complete("done", Vec::new(), 0);
         for c in "/loop stop".chars() {
             handle_key(&mut session, key(KeyCode::Char(c)));
@@ -10286,7 +10616,11 @@ mod tests {
     #[test]
     fn asking_to_stop_a_loop_during_a_turn_ends_it_when_the_queue_is_reached() {
         let mut session = Session::new("none");
-        session.start_loop(crate::loops::request("5m check the deploy"), Vec::new());
+        session.start_loop(
+            crate::loops::request("5m check the deploy"),
+            Vec::new(),
+            Vec::new(),
+        );
         for c in "/loop stop".chars() {
             handle_key_while_working(&mut session, key(KeyCode::Char(c)));
         }
@@ -10483,6 +10817,7 @@ mod tests {
             handle_key(&mut session, key(KeyCode::Enter)),
             Action::Manifest(
                 "summarise every doc under docs/specs".to_string(),
+                Vec::new(),
                 Vec::new()
             )
         );
@@ -10504,7 +10839,7 @@ mod tests {
 
         assert_eq!(
             handle_key(&mut session, key(KeyCode::Enter)),
-            Action::Manifest(String::new(), Vec::new()),
+            Action::Manifest(String::new(), Vec::new(), Vec::new()),
             "the bare word has to reach the loop, which says what it needs"
         );
         assert!(
@@ -10739,7 +11074,7 @@ mod tests {
     #[test]
     fn interrupting_stops_the_loop_before_it_leaves() {
         let mut session = Session::new("none");
-        session.start_loop(crate::loops::request("5m watch"), Vec::new());
+        session.start_loop(crate::loops::request("5m watch"), Vec::new(), Vec::new());
         session.complete("done", Vec::new(), 0);
 
         assert_eq!(handle_key(&mut session, ctrl('c')), Action::Redraw);
@@ -10759,7 +11094,7 @@ mod tests {
     #[test]
     fn interrupting_clears_the_line_before_it_stops_the_loop() {
         let mut session = Session::new("none");
-        session.start_loop(crate::loops::request("5m watch"), Vec::new());
+        session.start_loop(crate::loops::request("5m watch"), Vec::new(), Vec::new());
         session.complete("done", Vec::new(), 0);
         for c in "half a thought".chars() {
             handle_key(&mut session, key(KeyCode::Char(c)));
@@ -11222,7 +11557,11 @@ mod tests {
 
         // A tick submits from the main loop rather than from a key, which is how the offer
         // reaches a running turn at all.
-        session.start_loop(crate::loops::request("30s check the deploy"), Vec::new());
+        session.start_loop(
+            crate::loops::request("30s check the deploy"),
+            Vec::new(),
+            Vec::new(),
+        );
         assert_eq!(session.status, Status::Working);
         assert!(session.cleared_by_interrupt, "the tick took the offer down");
 
@@ -13310,6 +13649,40 @@ mod tests {
             .collect()
     }
 
+    /// PERM-11, PERM-15: the list this interface builds holds the entries that are rules and not
+    /// the ones that are not. A line nothing can act on is reported for what is wrong with it, so
+    /// offering it in the box would ask somebody to grant a rule that would still decide nothing
+    /// once they had, and telling them it was withheld sends them to the wrong fix.
+    ///
+    /// From files rather than from [`bravebot_config::Settings::parse`], because which layer wrote
+    /// an entry is what puts it in this list at all. The tests below start from a list already
+    /// built, so this is the one that pins where the interface's own comes from.
+    #[test]
+    fn a_checkouts_entry_is_proposed_here_only_where_it_is_a_rule() {
+        let root = crate::testutil::scratch_dir("bravebot-app-proposed-rules");
+        let _ = std::fs::remove_dir_all(&root);
+        let home = root.join("home");
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&home).expect("scratch home");
+        std::fs::create_dir_all(cwd.join(".bravebot")).expect("scratch project");
+        std::fs::write(
+            cwd.join(".bravebot").join("settings.json"),
+            r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)", "Nonsense"]}}"#,
+        )
+        .expect("write the project layer");
+        let settings = bravebot_config::Settings::layered(Some(home), Some(&cwd), None);
+
+        let offered: Vec<String> = proposed_rules(&settings)
+            .into_iter()
+            .map(|rule| rule.rule)
+            .collect();
+        assert_eq!(
+            offered,
+            ["Bash(bash scripts/check.sh)"],
+            "the entries this session offers are not the ones that are rules"
+        );
+    }
+
     /// PERM-15: the person who was asked about the working directory is asked about the `allow` rules
     /// a checkout proposed too, because each answers an approval prompt they would otherwise see and
     /// the file is the easiest thing in a checkout to write to.
@@ -13533,7 +13906,11 @@ mod tests {
         let conversation = Conversation::new();
         let trust = TrustStore::new("/work");
         let programs = TrustedPrograms::new();
-        let stored = bravebot_session::sessions::Handle::begin(&root, bravebot_stamp::BUILD);
+        let stored = bravebot_session::sessions::Handle::begin(
+            &root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
 
         type_line(&mut session, "delete the tests");
         session.submit().expect("the prompt is sent");
@@ -13609,7 +13986,8 @@ mod tests {
         let workspace = Workspace::new(&root).expect("a workspace");
         let mut trust = TrustStore::new(&root);
         let mut programs = TrustedPrograms::new();
-        let mut stored = sessions::Handle::begin(&root, bravebot_stamp::BUILD);
+        let mut stored =
+            sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
         let mut session = Session::new("none");
         let mut conversation = Conversation::new();
 
@@ -13738,7 +14116,8 @@ mod tests {
         let workspace = Workspace::new(&root).expect("a workspace");
         let mut trust = TrustStore::new(&root);
         let mut programs = TrustedPrograms::new();
-        let mut stored = sessions::Handle::begin(&root, bravebot_stamp::BUILD);
+        let mut stored =
+            sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
         let mut session = Session::new("none");
         let mut conversation = Conversation::new();
 
@@ -13895,6 +14274,7 @@ mod tests {
         let mut session = Session::new("none");
         session.open_rewind_point(a_point_before(0), "add a line to notes.md".into());
         session.keep_backups(vec![bravebot_agent::workspace::Backup {
+            captured_trust: bravebot_core::label::Integrity::Trusted,
             path: std::path::PathBuf::from("/work/notes.md"),
             was: bravebot_agent::workspace::Before::Nothing,
         }]);
@@ -14805,7 +15185,8 @@ mod tests {
         let workspace = Workspace::new(&root).unwrap();
         let mut trust = TrustStore::new(&root);
         let mut programs = TrustedPrograms::new();
-        let mut stored = sessions::Handle::begin(&root, bravebot_stamp::BUILD);
+        let mut stored =
+            sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
         let mut session = Session::new("test");
         let mut conversation = Conversation::new();
         for (index, prompt) in ["kept", "failed", "cancelled"].into_iter().enumerate() {

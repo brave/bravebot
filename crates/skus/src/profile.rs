@@ -197,12 +197,16 @@ pub fn find_leo_order(channel: Channel) -> Result<LeoOrder, ProfileError> {
     let mut outcome = None;
 
     for path in files {
-        let Ok(text) = std::fs::read_to_string(&path) else {
+        // The file is the browser's whole preferences document, which holds the credentials of
+        // whatever subscriptions that install has. Only an order id is taken out of it, so the
+        // text is held in a buffer that clears itself rather than left for the allocator
+        // ([CRED-23](../../../docs/specs/credential-protection.md#CRED-23)).
+        let Ok(text) = std::fs::read_to_string(&path).map(crate::Secret::new) else {
             continue;
         };
         saw_a_file = true;
 
-        match leo_order_in_preferences(&text) {
+        match leo_order_in_preferences(text.expose()) {
             // The first file with a usable order wins.
             Ok(order_id) => return Ok(order_id),
             // A file may exist with the pref absent, migrated away, or empty. That is not a
@@ -241,12 +245,16 @@ enum OrderLookupError {
 /// Separate from the filesystem so the parsing is testable against fixtures rather than against
 /// whatever happens to be installed.
 fn leo_order_in_preferences(text: &str) -> Result<LeoOrder, OrderLookupError> {
-    let root: serde_json::Value =
-        serde_json::from_str(text).map_err(|e| OrderLookupError::Malformed {
+    // In a guard, since the parse copies the browser's credentials out of the text and this
+    // returns by one of half a dozen paths.
+    let root = crate::secret::Document::of(serde_json::from_str(text).map_err(|e| {
+        OrderLookupError::Malformed {
             detail: format!("not valid JSON: {e}"),
-        })?;
+        }
+    })?);
 
     let state = root
+        .read()
         .get("skus")
         .and_then(|skus| skus.get("state"))
         .and_then(serde_json::Value::as_object)
@@ -263,10 +271,16 @@ fn leo_order_in_preferences(text: &str) -> Result<LeoOrder, OrderLookupError> {
         let Some(serialised) = value.as_str() else {
             continue;
         };
-        let Ok(inner) = serde_json::from_str::<serde_json::Value>(serialised) else {
+        let Ok(inner) =
+            serde_json::from_str::<serde_json::Value>(serialised).map(crate::secret::Document::of)
+        else {
             continue;
         };
-        let Some(orders) = inner.get("orders").and_then(serde_json::Value::as_object) else {
+        let Some(orders) = inner
+            .read()
+            .get("orders")
+            .and_then(serde_json::Value::as_object)
+        else {
             continue;
         };
 

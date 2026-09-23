@@ -9,7 +9,7 @@ use bravebot_agent::Conversation;
 use bravebot_aichat::protocol::Message;
 use bravebot_core::programs::TrustedPrograms;
 use bravebot_core::trust::TrustStore;
-use bravebot_session::sessions::{Handle, Standing};
+use bravebot_session::sessions::{Front, Handle, Standing};
 use bravebot_session::store;
 use bravebot_session::store::Entry;
 use std::collections::BTreeMap;
@@ -174,7 +174,7 @@ fn writing_a_session_narrows_the_state_directory() {
 
     let mut conversation = Conversation::new();
     conversation.push(Message::user("a prompt worth keeping private"));
-    let mut handle = Handle::begin(&project, bravebot_stamp::BUILD);
+    let mut handle = Handle::begin(&project, Front::Terminal, bravebot_stamp::BUILD);
     handle.save(
         "a prompt worth keeping private",
         Standing {

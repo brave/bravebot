@@ -17,6 +17,31 @@ use serde::Deserialize;
 
 use crate::ChatError;
 
+/// What a service advertised about a model, in the words the service used.
+///
+/// Read by whoever draws a picker, and by nothing that decides anything: a person's choice off
+/// the list is what endorses a request field, and this is only how the list is described to them.
+///
+/// Empty where nothing said so. The Brave roster describes a model in a different vocabulary and
+/// never mentions modality at all, a settings block names models without describing them, and the
+/// OpenAI shape a gateway answers in guarantees only the name. Kept as the service spelled it,
+/// rather than mapped onto names chosen here, because a picker draws one badge per entry and a
+/// modality nobody here has heard of is still one somebody choosing should be able to see.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Advertised {
+    /// What the model accepts: `text`, `image`, `audio`, `video`, `file`, and whatever else a
+    /// service names.
+    pub input_modalities: Vec<String>,
+    /// What it produces.
+    pub output_modalities: Vec<String>,
+    /// The request fields the service says this model reads, or `None` where it did not say.
+    ///
+    /// The same list [`Model::reads_effort`] is decided from, kept rather than discarded because
+    /// that field answers one question about it and a picker asks others: whether the model can
+    /// call tools, whether it reasons, whether it can be asked for structured output.
+    pub parameters: Option<Vec<String>>,
+}
+
 /// A model the user may choose.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Model {
@@ -51,6 +76,8 @@ pub struct Model {
     /// this program deciding against them from silence. False only where a row states its
     /// parameters and this is not among them, which is the roster saying so.
     pub reads_effort: bool,
+    /// What the service said about this model beyond its name, for whoever draws the row.
+    pub advertised: Advertised,
 }
 
 impl Model {
@@ -69,6 +96,8 @@ impl Model {
             conversation_tokens: None,
             // Brave's endpoint resolves this per request, so no row describes what will answer.
             reads_effort: true,
+            // There is no one model behind this name, so there is nothing to describe.
+            advertised: Advertised::default(),
         }
     }
 
@@ -174,6 +203,22 @@ struct ListedByGateway {
     /// leave a person unable to pick anything.
     #[serde(default)]
     supported_parameters: Option<Vec<String>>,
+    /// What the model takes and what it produces, where the gateway reports it.
+    ///
+    /// Not every gateway does, and none of it decides anything: it is what a picker draws a
+    /// badge from, so a person can see that a model takes images before choosing it for a task
+    /// that needs one.
+    #[serde(default)]
+    architecture: Option<Architecture>,
+}
+
+/// The modality half of what a gateway reports about one model.
+#[derive(Debug, Deserialize, Default)]
+struct Architecture {
+    #[serde(default)]
+    input_modalities: Vec<String>,
+    #[serde(default)]
+    output_modalities: Vec<String>,
 }
 
 /// Ask one gateway what models it serves.
@@ -298,6 +343,22 @@ fn offered_by_gateway(
                 Some(parameters) => parameters.iter().any(|it| it == EFFORT_PARAMETER),
                 None => crate::reads_effort(&provider.chat_completions_url(), &entry.id),
             },
+            // Everything the roster said, carried through for whoever draws the row. A picker
+            // that wanted this used to decode the envelope a second time to get at it, which
+            // made a second declassification site out of a field nothing decides anything on.
+            advertised: Advertised {
+                input_modalities: entry
+                    .architecture
+                    .as_ref()
+                    .map(|a| a.input_modalities.clone())
+                    .unwrap_or_default(),
+                output_modalities: entry
+                    .architecture
+                    .as_ref()
+                    .map(|a| a.output_modalities.clone())
+                    .unwrap_or_default(),
+                parameters: entry.supported_parameters.clone(),
+            },
         })
         .collect()
 }
@@ -326,6 +387,9 @@ fn usable(listed: Vec<Listed>) -> Vec<Model> {
                     // This roster describes what a model can do and never which request fields it
                     // reads, so nothing here states the subject either way.
                     reads_effort: true,
+                    // Its vocabulary is capabilities rather than modalities, and it names no
+                    // request field, so there is nothing here it could be read as saying.
+                    advertised: Advertised::default(),
                 })
             })
             // The endpoint has no reason to list one name twice, but the choice is a person's and
@@ -709,5 +773,52 @@ mod tests {
     fn fetched_gateway_models_are_not_marked_premium() {
         let models = from_gateway(&gateway(), r#"{"data": [{"id": "z-ai/glm-4.6"}]}"#);
         assert!(!models[0].premium);
+    }
+
+    /// What a picker draws a badge from, carried through rather than left behind.
+    ///
+    /// A front-end that wanted it decoded the same envelope a second time to get at it, which
+    /// made a second declassification site out of a field nothing decides anything on. The two
+    /// directions are kept apart: a model that reads an image and a model that draws one are
+    /// different rows to somebody choosing, and a listing that collapsed them would say the
+    /// second of these accepts pictures.
+    #[test]
+    fn what_a_model_takes_and_produces_is_carried_through_to_the_picker() {
+        let models = from_gateway(
+            &gateway(),
+            r#"{"data": [
+                {"id": "reads/pictures", "supported_parameters": ["tools", "reasoning"],
+                 "architecture": {"input_modalities": ["text", "image"],
+                                  "output_modalities": ["text"]}},
+                {"id": "draws/pictures", "supported_parameters": ["tools"],
+                 "architecture": {"input_modalities": ["text"],
+                                  "output_modalities": ["text", "image"]}}
+            ]}"#,
+        );
+        assert_eq!(
+            models[0].advertised.input_modalities,
+            ["text".to_string(), "image".to_string()]
+        );
+        assert_eq!(models[0].advertised.output_modalities, ["text".to_string()]);
+        assert_eq!(models[1].advertised.input_modalities, ["text".to_string()]);
+        assert_eq!(
+            models[1].advertised.output_modalities,
+            ["text".to_string(), "image".to_string()]
+        );
+        assert_eq!(
+            models[0].advertised.parameters.as_deref(),
+            Some(["tools".to_string(), "reasoning".to_string()].as_slice())
+        );
+    }
+
+    /// A gateway reporting only the name says nothing about modality, which is different from
+    /// saying a model has none. Both are empty here, and the parameter list stays `None` so the
+    /// distinction survives for whoever reads it.
+    #[test]
+    fn a_roster_that_describes_nothing_claims_nothing() {
+        let models = from_gateway(&gateway(), r#"{"data": [{"id": "z-ai/glm-4.6"}]}"#);
+        assert!(models[0].advertised.input_modalities.is_empty());
+        assert!(models[0].advertised.output_modalities.is_empty());
+        assert_eq!(models[0].advertised.parameters, None);
     }
 }

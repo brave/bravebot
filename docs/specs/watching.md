@@ -239,11 +239,17 @@ watching is also the mode most likely to be open while something is going wrong.
 ### WATCH-10: what is on the screen changes when a person asks, and not otherwise
 
 A delegate finishing leaves the view on it. A delegate starting does not take the screen from
-somebody reading an older one.
+somebody reading an older one. Nor does anything else that happens without a press: a turn the
+queue starts as the one before it ends, a tick of a loop coming due, a watch firing, a goal sending
+the work back, a command line that waited being run, and what that command printed each leave an
+open view where its reader put it. Where no view is open the tail is where the session's own view
+belongs, so every one of them still takes the transcript there.
 
 **Why.** Several delegates report at once, so a view that followed the newest event would move
 under the reader several times a second, and the run somebody opened would be the one run they
-could not keep on the screen.
+could not keep on the screen. The rest are the program acting on something asked for rounds ago,
+which is further still from a person asking for the screen back: the only press a reader made was
+the one that opened the view they are in.
 
 `verified-by: bravebot_tui::state::a_delegate_that_finishes_is_still_the_one_being_watched`
 `verified-by: bravebot_tui::state::a_new_delegate_does_not_take_the_screen_from_the_one_being_read`
@@ -253,6 +259,11 @@ could not keep on the screen.
 `verified-by: bravebot_tui::state::nothing_the_turn_reports_moves_an_open_view`
 `verified-by: bravebot_tui::state::an_aside_beginning_leaves_an_open_view_where_its_reader_put_it`
 `verified-by: bravebot_tui::state::a_turn_taking_a_queued_prompt_leaves_an_open_view_where_its_reader_put_it`
+`verified-by: bravebot_tui::state::a_turn_the_queue_starts_leaves_an_open_view_where_its_reader_put_it`
+`verified-by: bravebot_tui::state::a_loop_tick_leaves_an_open_view_where_its_reader_put_it`
+`verified-by: bravebot_tui::state::a_watch_firing_leaves_an_open_view_where_its_reader_put_it`
+`verified-by: bravebot_tui::state::a_queued_command_line_leaves_an_open_view_where_its_reader_put_it`
+`verified-by: bravebot_tui::state::a_goal_sending_the_work_back_leaves_an_open_view_where_its_reader_put_it`
 
 <a id="WATCH-11"></a>
 ### WATCH-11: the footer speaks in the interface's own words, and the turn's own row names the key

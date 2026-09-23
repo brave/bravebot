@@ -867,7 +867,7 @@ fn draw_delegate_head(frame: &mut Frame, area: Rect, session: &Session) {
                 Span::styled(
                     t!(
                         watching_footer,
-                        kind = delegate.kind,
+                        kind = delegate.kind.clone(),
                         number = delegate.id.to_string()
                     ),
                     Style::default().add_modifier(Modifier::BOLD),
@@ -907,7 +907,7 @@ fn draw_watching_footer(frame: &mut Frame, area: Rect, session: &Session) {
             (
                 t!(
                     watching_footer,
-                    kind = delegate.kind,
+                    kind = delegate.kind.clone(),
                     number = delegate.id.to_string()
                 )
                 .to_string(),
@@ -1378,7 +1378,7 @@ fn draw_scroller(frame: &mut Frame, session: &Session) -> Laid {
 ///
 /// The way out is last and is never the row that did not fit: a list that scrolled its own exit
 /// off the screen would be a mode nobody could leave.
-fn scroller_keys() -> [(&'static str, &'static str); 9] {
+fn scroller_keys() -> [(&'static str, &'static str); 10] {
     [
         ("up/down, j/k", t!(scroller_key_line)),
         ("ctrl-u / ctrl-d", t!(scroller_key_half_page)),
@@ -1386,6 +1386,11 @@ fn scroller_keys() -> [(&'static str, &'static str); 9] {
         ("g / G", t!(scroller_key_ends)),
         ("{ / }", t!(scroller_key_prompts)),
         ("/ then n/N", t!(scroller_key_search)),
+        // The keys the search itself answers get a row of their own rather than a parenthesis on
+        // the row above: the second spellings carried that way are the same key by another name,
+        // and these two are neither, so a list that folded them in would be naming keys it had
+        // not told anybody about.
+        ("enter / backspace", t!(scroller_key_search_run)),
         ("v", t!(scroller_key_editor)),
         ("?", t!(scroller_key_this_list)),
         ("any key", t!(scroller_key_close_list)),
@@ -3297,7 +3302,7 @@ mod tests {
             let id = DelegateId::nth(session.delegates().len() as u32 + 1);
             session.delegate_started(Delegation {
                 id,
-                kind,
+                kind: kind.to_string(),
                 task: task.to_string(),
             });
             session.reporting_for(Some(id));
@@ -4258,6 +4263,42 @@ mod tests {
             (drawn, marked)
         }
 
+        /// The rows of the `?` list as it draws them, inside its border and nothing else.
+        ///
+        /// Read from inside the border rather than off the whole screen, so a key spelled with
+        /// one letter is looked for where it is a key rather than wherever that letter happens to
+        /// land.
+        fn help_rows(session: &Session) -> Vec<String> {
+            let mut terminal = Terminal::new(TestBackend::new(90, 24)).expect("terminal");
+            terminal
+                .draw(|frame| {
+                    draw(frame, session);
+                })
+                .expect("draw succeeds");
+            let buffer = terminal.backend().buffer().clone();
+
+            // The box the scroller took away is not on the screen, so the one rounded corner
+            // there is belongs to the list.
+            let (left, top) = (0..buffer.area.height)
+                .flat_map(|row| (0..buffer.area.width).map(move |column| (column, row)))
+                .find(|at| buffer[*at].symbol() == "\u{256d}")
+                .expect("the list is drawn inside a border");
+            let right = (left + 1..buffer.area.width)
+                .find(|column| buffer[(*column, top)].symbol() == "\u{256e}")
+                .expect("the border closes across");
+            let bottom = (top + 1..buffer.area.height)
+                .find(|row| buffer[(left, *row)].symbol() == "\u{2570}")
+                .expect("the border closes down");
+
+            (top + 1..bottom)
+                .map(|row| {
+                    (left + 1..right)
+                        .map(|column| buffer[(column, row)].symbol())
+                        .collect()
+                })
+                .collect()
+        }
+
         /// A session reading back over a quarantined block whose one preview line is `preview`,
         /// with the scroller open over it.
         fn reading_a_block(preview: &str) -> Session {
@@ -4669,21 +4710,12 @@ mod tests {
             );
         }
 
-        /// Draw one frame the way the loop draws it, and give back the top row of the screen and
-        /// what the frame laid the transcript out to.
+        /// The top row of one frame drawn the way the loop draws it.
         fn a_frame(session: &mut Session) -> String {
-            let mut terminal = Terminal::new(TestBackend::new(90, 24)).expect("terminal");
-            let mut laid = Laid::default();
-            terminal
-                .draw(|frame| laid = draw(frame, session))
-                .expect("draw succeeds");
-            session.note_layout(laid);
-
-            let buffer = terminal.backend().buffer();
-            let top: String = (0..buffer.area.width)
-                .map(|column| buffer[(column, 0)].symbol())
-                .collect();
-            top.trim_end().to_string()
+            rows_of_a_frame(session)
+                .into_iter()
+                .next()
+                .expect("a screen has a row")
         }
 
         /// Holding the view has to hold it in the frame that draws it, not in the one after. The
@@ -4880,6 +4912,64 @@ mod tests {
                 drawn.contains(t!(scroller_key_close_list)),
                 "nothing said the press closes the list: {drawn}"
             );
+        }
+
+        /// The list is the one place every key is written down. A key the specification names and
+        /// the list does not is a key nobody can find, and the two the search takes were named
+        /// only in the search's own footer, which is not on the screen while the list is.
+        ///
+        /// What is asked for here is every key docs/specs/scroller.md names, which is what the
+        /// clause holds the list to. A key answered by the code and named in neither is a
+        /// different fault, against the clause saying an unnamed key does nothing.
+        #[test]
+        fn the_help_names_every_key_the_scroller_spec_names() {
+            let mut session = reading();
+            session.toggle_scroller_help();
+
+            let rows = help_rows(&session);
+            // The key column is ` {key:<18}`, so the first nineteen columns of a row are the
+            // keys it is about and the rest is what they do.
+            let keys: Vec<String> = rows
+                .iter()
+                .map(|row| row.chars().take(19).collect::<String>().trim().to_string())
+                .collect();
+
+            // Every key docs/specs/scroller.md names, in the spelling the list gives it. The
+            // wheel is the one thing in that file which is not a key.
+            for spelling in [
+                "up/down, j/k",
+                "ctrl-u / ctrl-d",
+                "space / b",
+                "g / G",
+                "{ / }",
+                "/ then n/N",
+                "enter / backspace",
+                "v",
+                "?",
+                "any key",
+            ] {
+                assert!(
+                    keys.iter().any(|key| key == spelling),
+                    "the list named no key {spelling:?}: {keys:?}"
+                );
+            }
+
+            // The way out carries whichever chord opened the scroller, so what is asked of it is
+            // the part that does not move.
+            assert!(
+                keys.iter().any(|key| key.starts_with("q / esc / ")),
+                "the list never named the way out: {keys:?}"
+            );
+
+            // A key that is a second spelling of one already listed rides on the description of
+            // the row it shares, which is where ctrl-f, home and ctrl-c are.
+            let list = rows.join("\n");
+            for alternate in ["ctrl-f / ctrl-b", "home / end", "ctrl-c"] {
+                assert!(
+                    list.contains(alternate),
+                    "the list named no key {alternate:?}: {list}"
+                );
+            }
         }
 
         /// The list is the one place the keys are written down, so a key that closes the mode and
@@ -5844,7 +5934,7 @@ mod tests {
         let id = bravebot_agent::report::DelegateId::nth(1);
         session.delegate_started(bravebot_agent::report::Delegation {
             id,
-            kind: "reader",
+            kind: "reader".to_string(),
             task: "find the parser".to_string(),
         });
         session.delegate_finished(id, "answered".to_string(), false, None);
@@ -5879,7 +5969,7 @@ mod tests {
         let id = bravebot_agent::report::DelegateId::nth(1);
         session.delegate_started(bravebot_agent::report::Delegation {
             id,
-            kind: "reader",
+            kind: "reader".to_string(),
             task: "find the parser".to_string(),
         });
 
@@ -5979,13 +6069,21 @@ mod tests {
         // state the part says one word in, so the whole of it is a fixed string rather than a
         // countdown moving while the test reads it.
         let mut looping = Session::new("kernel").allowing_bypass();
-        looping.start_loop(crate::loops::request("5m check the deploy"), Vec::new());
+        looping.start_loop(
+            crate::loops::request("5m check the deploy"),
+            Vec::new(),
+            Vec::new(),
+        );
         // The third is between ticks, where the part is at its longest: the countdown is the widest
         // thing this row ever has to fit, so a sweep that only ever saw the bare word would pass
         // while the form people spend most of a loop looking at was cut in half. Two days out, so
         // `1d 23h` is what it says for the hour after this line rather than something that moves.
         let mut counting_down = Session::new("kernel").allowing_bypass();
-        counting_down.start_loop(crate::loops::request("2d check the deploy"), Vec::new());
+        counting_down.start_loop(
+            crate::loops::request("2d check the deploy"),
+            Vec::new(),
+            Vec::new(),
+        );
         counting_down.complete("done", Vec::new(), 0);
         counting_down.loop_turn_ended(None);
         let counting = t!(loop_hint_next, next = "1d 23h");
@@ -6031,7 +6129,11 @@ mod tests {
     #[test]
     fn the_hint_line_says_a_loop_is_live() {
         let mut session = Session::new("kernel-enforced");
-        session.start_loop(crate::loops::request("5m check the deploy"), Vec::new());
+        session.start_loop(
+            crate::loops::request("5m check the deploy"),
+            Vec::new(),
+            Vec::new(),
+        );
         let word = t!(loop_hint).to_string();
         let hint = hint_row_at(&session, 120, 24);
         assert!(hint.contains(&word), "{hint}");
@@ -6062,7 +6164,11 @@ mod tests {
     fn the_hint_line_says_a_loop_is_live_in_shell_mode_too() {
         let mut session = Session::new("kernel-enforced");
         session.shell = true;
-        session.start_loop(crate::loops::request("5m check the deploy"), Vec::new());
+        session.start_loop(
+            crate::loops::request("5m check the deploy"),
+            Vec::new(),
+            Vec::new(),
+        );
         let hint = hint_row_at(&session, 120, 24);
         assert!(hint.contains(&t!(loop_hint).to_string()), "{hint}");
         assert!(
@@ -6112,7 +6218,11 @@ mod tests {
     #[test]
     fn a_narrow_terminal_gives_up_a_reading_before_the_loop_and_the_loop_before_the_mode() {
         let mut session = Session::new("kernel").allowing_bypass();
-        session.start_loop(crate::loops::request("5m check the deploy"), Vec::new());
+        session.start_loop(
+            crate::loops::request("5m check the deploy"),
+            Vec::new(),
+            Vec::new(),
+        );
         let word = t!(loop_hint).to_string();
 
         // Room for the mode and the loop and not for the reading beside them.
@@ -7306,6 +7416,70 @@ mod tests {
             "scrolling back down did not return to the latest reply"
         );
     }
+
+    /// A view scrolled back has to survive the reply being written under it, which is the only
+    /// time holding it is hard. A chunk lands several times a second for as long as the model
+    /// writes, so a view taken back to the tail for one is taken again before its reader has
+    /// finished the line they scrolled to, and scrolling back stops being something they can do.
+    #[test]
+    fn a_reply_arriving_does_not_drag_a_scrolled_back_view_to_the_tail() {
+        let mut session = Session::new("none");
+        for turn in 0..40 {
+            session.type_char('q');
+            session.submit();
+            session.complete(format!("reply number {turn}"), Vec::new(), 0);
+        }
+
+        // Laid out once first: the offset is measured against the screen of the previous frame,
+        // and a session that has never been told one counts back from nothing. This frame is at
+        // the tail, so it also fixes what being dragged back there looks like.
+        let tail = rows_of_a_frame(&mut session).join("\n");
+        assert!(
+            tail.contains("reply number 39"),
+            "the tail does not show the last reply, so its absence proves nothing: {tail}"
+        );
+
+        session.scroll_up(60);
+        let reading = rows_of_a_frame(&mut session).join("\n");
+        assert!(
+            !reading.contains("reply number 39"),
+            "the view never left the tail, so there is nothing here to hold: {reading}"
+        );
+
+        session.streaming("a chunk of the next reply");
+
+        let arriving = rows_of_a_frame(&mut session).join("\n");
+        assert!(
+            !arriving.contains("reply number 39"),
+            "a chunk of the reply dragged the view back to the tail: {arriving}"
+        );
+    }
+
+    /// Draw one frame the way the loop draws it, tell the session what the frame laid out, and give
+    /// back the rows of the screen.
+    ///
+    /// [`rendered`] cannot answer a question about a held view: it never reports the layout, so the
+    /// offset stays measured against a screen the session has not seen.
+    fn rows_of_a_frame(session: &mut Session) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(90, 24)).expect("terminal");
+        let mut laid = crate::state::Laid::default();
+        terminal
+            .draw(|frame| laid = draw(frame, session))
+            .expect("draw succeeds");
+        session.note_layout(laid);
+
+        let buffer = terminal.backend().buffer();
+        (0..buffer.area.height)
+            .map(|row| {
+                (0..buffer.area.width)
+                    .map(|column| buffer[(column, row)].symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect()
+    }
+
     /// Render at a chosen size, since wrapping depends on width.
     fn rendered_at(session: &Session, width: u16, height: u16) -> String {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");

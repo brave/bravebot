@@ -111,7 +111,9 @@ them again.
 
 A resume does **not** ask the startup trust question, because the answer honoured is the one that
 session's own user gave. A record from before maps were kept has none, and is asked about. Resuming a
-session recorded by a different build says so, beside the note about a changed branch.
+session recorded by a different build says so, beside the note about a changed branch, and so does
+resuming one the other front end wrote: the terminal and the desktop app keep their sessions in the
+same place, and the transcript you are looking at was drawn by whichever of them recorded it.
 
 ## What the record accounts for
 

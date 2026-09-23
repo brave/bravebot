@@ -19,7 +19,8 @@ use crate::turn::{BridgeConfirmer, BridgeReporter, BridgeSink, Reply};
 use crate::{store, wire};
 use bravebot_agent::Workspace;
 use bravebot_agent::turn::{self as agent_turn, Task, TurnError};
-use bravebot_config::Config;
+use bravebot_agent::workspace::WorkspaceError;
+use bravebot_config::{Config, Settings};
 use bravebot_core::cancel::Cancel;
 use bravebot_core::trust::TrustStore;
 use bravebot_net::Egress;
@@ -146,6 +147,7 @@ impl Bridge {
                 self.settings = path;
                 Ok(crate::settings::report(None, self.settings.as_deref()))
             }
+            "hooks.inspect" => crate::hooks::inspect(),
             "doctor" => Ok(
                 json!({"found": true, "structured": true, "text": serde_json::to_string_pretty(&crate::settings::report(None, self.settings.as_deref())).unwrap_or_default()}),
             ),
@@ -244,7 +246,7 @@ impl Bridge {
         // `recounted` filters that note back out. Going around it would show a transcript
         // subtly unlike the one a resume produces.
         let conversation = bravebot_agent::Conversation::restored(record.conversation.clone());
-        let said: Vec<Value> = conversation.recounted().iter().map(wire::said).collect();
+        let said = wire::recounted(&conversation.recounted());
 
         let todos = todos_json(&record.todo_rows());
 
@@ -261,6 +263,7 @@ impl Bridge {
                 "turns": record.turns,
                 "tokens": record.tokens,
                 "build": record.build,
+                "front": record.front,
             },
             "said": said,
             "context": record.conversation.context,
@@ -286,6 +289,10 @@ impl Bridge {
             "buildNote": bravebot_session::sessions::build_note(
                 record.build.as_deref(),
                 crate::agent_build(),
+            ),
+            "frontNote": bravebot_session::sessions::front_note(
+                record.front.as_deref(),
+                crate::FRONT,
             ),
         })
     }
@@ -410,7 +417,7 @@ impl Bridge {
         // the front-end draws the fork from what the conversation says rather than from a slice
         // of what it happened to have on screen.
         let before = bravebot_agent::Conversation::restored(cut.before.clone()).recounted();
-        let recounted: Vec<Value> = before.iter().map(wire::said).collect();
+        let recounted = wire::recounted(&before);
         // The first thing said in the history the child keeps, which is what titles it. Without
         // this a fork would be named after the prompt that replaced the one it was cut at, and a
         // list of forks would say nothing about where any of them came from.
@@ -594,14 +601,13 @@ impl Bridge {
 
         let model = requested_model.or_else(|| open.model.clone());
         let config = crate::settings::config(Some(&open.project), self.settings.as_deref())?;
-        // What the settings say a commit message or a pull request this turn writes may carry
-        // (BACKEND-30). Read off the same layers the configuration above came from, and here
-        // rather than in the worker so the answer is the one that stood when the turn was asked
-        // for.
-        let attribution = crate::settings::layers(Some(&open.project), self.settings.as_deref())
-            .attribution()
-            .clone();
-        let mut workspace = Workspace::new(open.project.clone())
+        // The same layers the configuration above came from, read here rather than in the worker
+        // so what they say is what stood when the turn was asked for. Two answers come off them:
+        // what a commit message or a pull request this turn writes may carry (BACKEND-30), and
+        // the caps a search this turn makes runs under (SEARCH-9).
+        let settings = crate::settings::layers(Some(&open.project), self.settings.as_deref());
+        let attribution = settings.attribution().clone();
+        let mut workspace = turn_workspace(open.project.clone(), &settings)
             .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
 
         let project = open.project.clone();
@@ -1032,7 +1038,7 @@ impl Bridge {
             if attempt > 0 {
                 thread::sleep(std::time::Duration::from_millis(250));
             }
-            let handle = Handle::begin(project, crate::agent_build());
+            let handle = Handle::begin(project, crate::FRONT, crate::agent_build());
             if !self.id_taken(project, handle.id()) {
                 return Ok(handle);
             }
@@ -1066,6 +1072,21 @@ impl Bridge {
     }
 }
 
+/// The workspace one turn runs on, under the caps the settings in force put a search under.
+///
+/// SEARCH-9 has the caps handed to the workspace by whoever read the settings, because a
+/// workspace that read them itself would answer differently on a machine whose owner had
+/// configured them. That makes this the whole of the clause for this front end: a cap named in a
+/// settings file reaches a search here or nowhere. A cap nobody named is `None`, which leaves the
+/// built-in one standing.
+///
+/// A function of its own rather than three lines at the call site, so a test can build the
+/// workspace a turn is given without a backend to run one against.
+pub fn turn_workspace(project: PathBuf, settings: &Settings) -> Result<Workspace, WorkspaceError> {
+    let caps = settings.search();
+    Ok(Workspace::new(project)?.with_search_caps(caps.files, caps.time))
+}
+
 /// Everything a worker needs to run one turn.
 ///
 /// A struct rather than a dozen arguments, because the list was the kind that grows one
@@ -1093,6 +1114,21 @@ struct Work {
     pending: crate::turn::Pending,
     answers: mpsc::Receiver<crate::turn::Reply>,
     finished: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Where the prompt a turn carried landed among the things the user said.
+///
+/// The coordinate `session.fork` cuts on, answered by the side that assigns it. A window cannot
+/// count it: a turn nudged for spending its tool budget adds a user message of its own, and no
+/// event tells a window about one. A window counting its own bubbles is short by one for each,
+/// and `session.fork` checks the text against the ordinal and refuses rather than cutting in the
+/// wrong place.
+///
+/// The last message carrying this text, because that is the one this turn has just added.
+fn prompt_ordinal(conversation: &bravebot_agent::Conversation, prompt: &str) -> Option<usize> {
+    crate::fork::prompts(&conversation.recounted())
+        .iter()
+        .rposition(|said| *said == prompt)
 }
 
 /// Run one turn to its end, whatever that end is.
@@ -1264,6 +1300,11 @@ fn work(work: Work) {
                     // inferred from the `compacting` phase, which is emitted before compaction is
                     // attempted and so also fires when there was nothing worth compacting.
                     "archived": archived,
+                    // Where this turn's prompt landed among the things the user said, which is
+                    // the coordinate `session.fork` cuts on. `null` where the conversation does
+                    // not hold it, which is a prompt that cannot be forked rather than one to
+                    // guess a place for.
+                    "prompt": prompt_ordinal(&state.conversation, &prompt),
                 }),
             ));
         }
@@ -1311,6 +1352,9 @@ fn work(work: Work) {
                     // turn that answered. There is no outcome here to take them from, and a hook
                     // that could not be started is the person's own to hear about (HOOK-7).
                     "notices": reporter.notices(),
+                    // As on `turn.done`. A turn that failed still said what it was asked, so the
+                    // prompt is in the conversation and is still a place a fork can be cut at.
+                    "prompt": prompt_ordinal(&state.conversation, &prompt),
                     "id": state.handle.as_ref().map(|handle| handle.id()) }),
             ));
         }
@@ -1337,7 +1381,7 @@ fn save(
 ) -> usize {
     let handle = state
         .handle
-        .get_or_insert_with(|| Handle::begin(project, crate::agent_build()));
+        .get_or_insert_with(|| Handle::begin(project, crate::FRONT, crate::agent_build()));
 
     let first = state.first_prompt.clone().unwrap_or_default();
     // Taken once and lent to both readers below. A snapshot copies the whole conversation, and

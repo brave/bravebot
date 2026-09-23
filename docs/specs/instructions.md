@@ -4,6 +4,7 @@ title: Resolving standing instructions
 status: normative
 governs:
   - crates/agent/src/preamble.rs
+  - crates/agent/src/agents.rs
   - crates/agent/src/home.rs
 documented-by: docs/website/docs/customize/instructions.md
 ---
@@ -21,18 +22,25 @@ It does not cover what a skill file looks like or what any source is trusted for
 ## The sources
 
 <a id="INSTR-1"></a>
-### INSTR-1: four sources, and no others
+### INSTR-1: six sources, and no others
 
 | File | Applies to |
 |---|---|
 | `~/.bravebot/AGENTS.md` | every project |
 | `~/.bravebot/skills/<name>/SKILL.md` | every project |
+| `~/.bravebot/agents/<name>.md` | every project |
 | `<workspace>/AGENTS.md`, else `CLAUDE.md`, else `.claude/CLAUDE.md` | this project |
 | `<workspace>/.bravebot/skills/<name>/SKILL.md` | this project |
+| `<workspace>/.bravebot/agents/<name>.md` | this project |
 
 The two roots are spelled differently on purpose: the user's own directory is already `.bravebot`,
-so its skills sit directly beneath it, while a project keeps its own out of the way in a dotted
-directory rather than at the root where `AGENTS.md` sits.
+so its skills and definitions sit directly beneath it, while a project keeps its own out of the
+way in a dotted directory rather than at the root where `AGENTS.md` sits.
+
+A skill is a directory because it has other material to keep beside its instructions. A delegate
+definition is one file, so `agents/` is flat: there is nothing for the directory to hold. What a
+definition is, and what makes one admissible at all, is
+[DELEGATE-19](delegation.md#DELEGATE-19) and [DELEGATE-20](delegation.md#DELEGATE-20).
 
 The project's instructions are looked for under more than one name, in the order above, and the
 first that exists is the source. Not all of them: a repository holding two of these holds one set
@@ -53,6 +61,8 @@ next machine.
 `verified-by: bravebot_agent::preamble::the_project_file_may_be_named_claude_md`
 `verified-by: bravebot_agent::preamble::only_the_first_project_file_that_exists_is_read`
 `verified-by: bravebot_agent::skills::a_workspace_skill_shadows_a_home_skill_of_the_same_name`
+`verified-by: bravebot_agent::agents::a_definition_in_the_users_own_directory_is_selectable`
+`verified-by: bravebot_agent::agents::a_definition_in_a_vouched_for_project_is_selectable`
 
 <a id="INSTR-2"></a>
 ### INSTR-2: `~/.bravebot` is the directory the environment names, and there is no fallback
@@ -98,6 +108,7 @@ by name rather than merging is what lets a project override one skill without re
 
 `verified-by: bravebot_agent::preamble::the_home_agents_file_is_read_before_the_project_one`
 `verified-by: bravebot_agent::skills::a_workspace_skill_shadows_a_home_skill_of_the_same_name`
+`verified-by: bravebot_agent::agents::a_workspace_definition_shadows_a_home_one_of_the_same_name`
 
 <a id="INSTR-5"></a>
 ### INSTR-5: what is resolved goes into the system prompt, never into the conversation

@@ -22,6 +22,33 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread;
 
+/// Owns a mock server until the test has finished reading its requests.
+struct MockRequests {
+    receiver: mpsc::Receiver<String>,
+    stopped: Arc<AtomicBool>,
+    port: u16,
+    worker: Option<thread::JoinHandle<()>>,
+}
+
+impl std::ops::Deref for MockRequests {
+    type Target = mpsc::Receiver<String>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.receiver
+    }
+}
+
+impl Drop for MockRequests {
+    fn drop(&mut self) {
+        self.stopped.store(true, Ordering::Release);
+        // Wake accept so the listener is closed before the next test needs a socket.
+        let _ = std::net::TcpStream::connect(("127.0.0.1", self.port));
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
 struct Scratch {
     path: PathBuf,
 }
@@ -42,8 +69,23 @@ impl Drop for Scratch {
 }
 
 /// Serve one canned reply, returning the base URL and the request body received.
-fn serve(reply: &str) -> (String, mpsc::Receiver<String>) {
+fn serve(reply: &str) -> (String, MockRequests) {
     serve_sequence(vec![reply.to_string()])
+}
+
+/// Finished tests must release their mock listeners even when a script allows retries.
+#[test]
+fn dropping_mock_requests_releases_each_server_listener() {
+    for (url, requests) in [
+        serve_sequence(Vec::new()),
+        serve_by_marker(Vec::new()),
+        serve_pages(Vec::new()),
+        serve_script(Vec::new()),
+    ] {
+        drop(requests);
+        let address = url.strip_prefix("http://").expect("mock URL");
+        let _listener = TcpListener::bind(address).expect("the previous listener was released");
+    }
 }
 
 /// Re-express a whole chat response as the SSE stream that would have delivered it.
@@ -586,7 +628,7 @@ fn a_missing_file_fails_the_turn() {
 /// test here say something about a conversation it is not about; instead a check is answered with
 /// [`a_check_finding_nothing`] and the script stays a script of the turn's own rounds. The check's
 /// request is still reported on the channel, so a test asserting on what went out sees it.
-fn serve_sequence(replies: Vec<String>) -> (String, mpsc::Receiver<String>) {
+fn serve_sequence(replies: Vec<String>) -> (String, MockRequests) {
     serve_sequence_answering_checks(Vec::new(), 0, replies)
 }
 
@@ -595,7 +637,7 @@ fn serve_sequence(replies: Vec<String>) -> (String, mpsc::Receiver<String>) {
 fn serve_sequence_answering_checks_with(
     checks: Vec<String>,
     replies: Vec<String>,
-) -> (String, mpsc::Receiver<String>) {
+) -> (String, MockRequests) {
     serve_sequence_answering_checks(checks, 0, replies)
 }
 
@@ -604,7 +646,7 @@ fn serve_sequence_answering_checks_with(
 /// What a backend that is down looks like to a check, which is not the same failure as a check
 /// that answered something no verdict could be read out of: no reply arrives at all, every
 /// attempt is lost, and the call itself fails.
-fn serve_sequence_losing_every_check(replies: Vec<String>) -> (String, mpsc::Receiver<String>) {
+fn serve_sequence_losing_every_check(replies: Vec<String>) -> (String, MockRequests) {
     serve_sequence_answering(Vec::new(), 0, replies, true)
 }
 
@@ -612,10 +654,7 @@ fn serve_sequence_losing_every_check(replies: Vec<String>) -> (String, mpsc::Rec
 ///
 /// What a connection that died looks like from the client's side: the request went out and
 /// nothing came back.
-fn serve_sequence_losing_the_first(
-    dropped: usize,
-    replies: Vec<String>,
-) -> (String, mpsc::Receiver<String>) {
+fn serve_sequence_losing_the_first(dropped: usize, replies: Vec<String>) -> (String, MockRequests) {
     serve_sequence_answering_checks(Vec::new(), dropped, replies)
 }
 
@@ -623,7 +662,7 @@ fn serve_sequence_answering_checks(
     checks: Vec<String>,
     dropped: usize,
     replies: Vec<String>,
-) -> (String, mpsc::Receiver<String>) {
+) -> (String, MockRequests) {
     serve_sequence_answering(checks, dropped, replies, false)
 }
 
@@ -632,7 +671,7 @@ fn serve_sequence_answering(
     dropped: usize,
     replies: Vec<String>,
     lose_every_check: bool,
-) -> (String, mpsc::Receiver<String>) {
+) -> (String, MockRequests) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().expect("addr").port();
     let (sender, receiver) = mpsc::channel();
@@ -641,7 +680,9 @@ fn serve_sequence_answering(
         .chain(replies.into_iter().map(Some))
         .collect();
 
-    thread::spawn(move || {
+    let stopped = Arc::new(AtomicBool::new(false));
+    let stopping = Arc::clone(&stopped);
+    let worker = thread::spawn(move || {
         let mut attempts = attempts.into_iter();
         let mut checks = checks.into_iter();
         // The listener outlives the script rather than going away with the last reply in it. The
@@ -650,6 +691,9 @@ fn serve_sequence_answering(
         // calls permanent: the turn then fails naming neither the first failure nor its cause.
         let mut answered: Option<(String, String)> = None;
         while let Ok((mut stream, _)) = listener.accept() {
+            if stopping.load(Ordering::Acquire) {
+                break;
+            }
             let mut reader = BufReader::new(stream.try_clone().expect("clone"));
 
             let mut line = String::new();
@@ -728,7 +772,13 @@ fn serve_sequence_answering(
         }
     });
 
-    (format!("http://127.0.0.1:{port}"), receiver)
+    let requests = MockRequests {
+        receiver,
+        stopped,
+        port,
+        worker: Some(worker),
+    };
+    (format!("http://127.0.0.1:{port}"), requests)
 }
 
 /// What a request the script has no reply for is told.
@@ -820,7 +870,7 @@ fn a_request_the_script_cannot_answer_is_told_so() {
 /// sent it, in order. The first rule whose marker appears and still has a reply left answers, so
 /// a turn's own marker goes before the tasks it hands out: a turn replays the arguments it called
 /// with, and so holds every task it asked for as well as its own prompt.
-fn serve_by_marker(rules: Vec<(&'static str, Vec<String>)>) -> (String, mpsc::Receiver<String>) {
+fn serve_by_marker(rules: Vec<(&'static str, Vec<String>)>) -> (String, MockRequests) {
     let (endpoint, received, _) = serve_by_marker_meeting(rules, &[]);
     (endpoint, received)
 }
@@ -836,7 +886,7 @@ fn serve_by_marker(rules: Vec<(&'static str, Vec<String>)>) -> (String, mpsc::Re
 fn serve_by_marker_meeting(
     rules: Vec<(&'static str, Vec<String>)>,
     meet: &'static [&'static str],
-) -> (String, mpsc::Receiver<String>, Arc<AtomicBool>) {
+) -> (String, MockRequests, Arc<AtomicBool>) {
     use std::collections::{BTreeSet, VecDeque};
     use std::sync::{Condvar, Mutex};
 
@@ -858,8 +908,13 @@ fn serve_by_marker_meeting(
     ));
 
     let reached = Arc::clone(&met);
-    thread::spawn(move || {
+    let stopped = Arc::new(AtomicBool::new(false));
+    let stopping = Arc::clone(&stopped);
+    let worker = thread::spawn(move || {
         while let Ok((mut stream, _)) = listener.accept() {
+            if stopping.load(Ordering::Acquire) {
+                break;
+            }
             let waiting = Arc::clone(&waiting);
             let sender = sender.clone();
             let arrived = Arc::clone(&arrived);
@@ -954,7 +1009,13 @@ fn serve_by_marker_meeting(
         }
     });
 
-    (format!("http://127.0.0.1:{port}"), receiver, met)
+    let requests = MockRequests {
+        receiver,
+        stopped,
+        port,
+        worker: Some(worker),
+    };
+    (format!("http://127.0.0.1:{port}"), requests, met)
 }
 
 /// Every request the model was sent, however many runs sent them, once no more are coming.
@@ -962,7 +1023,7 @@ fn serve_by_marker_meeting(
 /// Collected by waiting for the turn to be over rather than for a count: with delegates in
 /// flight there is no count known in advance, since a round the turn spends being told what came
 /// back is a round that exists only if something came back in time.
-fn every_request(received: &mpsc::Receiver<String>) -> Vec<String> {
+fn every_request(received: &MockRequests) -> Vec<String> {
     let mut bodies = Vec::new();
     while let Ok(body) = received.try_recv() {
         bodies.push(body);
@@ -2468,6 +2529,55 @@ fn a_denied_file_is_not_read_by_a_processor_either() {
             "a denied file's contents were read: {body}"
         );
     }
+}
+
+/// A deny rule is a decision about the command line, so what it answers cannot depend on whether
+/// the program happens to be installed here. The line below names a program no machine has, so
+/// only the rule can have refused it; before the rules were consulted on the compiled line the
+/// answer was that `$PATH` matches nothing, which reports the state of this machine's software in
+/// place of the person's own decision and tells the planner nothing about not retrying.
+#[test]
+fn a_denied_program_is_refused_by_the_rule_and_not_for_being_absent() {
+    let scratch = Scratch::new("permissions-run-denied-absent");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"bravebot-no-such-editor notes.md"}"#),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("open the notes").with_permissions(rules(
+        &["Bash(bravebot-no-such-editor notes.md)"],
+        &[],
+        &[],
+    ));
+    turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("deny rule"),
+        "the planner was not told a rule refused the line: {second}"
+    );
+    assert!(
+        second.contains("Do not retry"),
+        "a rule's refusal did not tell the planner that retrying is not the answer: {second}"
+    );
+    assert!(
+        !second.contains("is not a program that could be found"),
+        "the program was looked for before the rule answered: {second}"
+    );
 }
 
 /// A deny rule holds against a workspace the user vouched for, which is the case that makes one
@@ -14830,6 +14940,59 @@ fn a_picture_pasted_into_a_question_reaches_the_model_with_it() {
     );
 }
 
+/// A picture dropped onto the question goes with it too, in that same message. The marker reads the
+/// same on screen whichever gesture made it, so a question carrying one and not the other is a
+/// person told no image came through about a screenshot that is plainly in their line.
+///
+/// Driven through `attached::read` rather than a hand-built value, because the two halves are what
+/// the defect was: a request that carried what it was handed, and nothing handing it anything.
+#[test]
+fn a_picture_dropped_onto_a_question_reaches_the_model_with_it() {
+    let scratch = Scratch::new("dropped-question");
+    std::fs::write(scratch.path.join("shot.png"), [0x89u8, 0x50]).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![reply_with("three stripes")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let carried = bravebot_agent::attached::read(
+        &workspace,
+        &[bravebot_agent::turn::Attachment {
+            path: "shot.png".to_string(),
+            media: "image/png".to_string(),
+        }],
+        bravebot_core::trust::TrustStore::new(&scratch.path),
+        &mut sink,
+    )
+    .expect("a dropped picture is read before the question is asked");
+
+    turn::aside(
+        &config,
+        &egress,
+        bravebot_agent::aside::Question::about(
+            &an_exchange_to_ask_beside(),
+            "what is in [Image #1]?",
+            Vec::new(),
+        )
+        .carrying(carried),
+        None,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        |_| {},
+    )
+    .expect("asking beside the work must not be refused");
+
+    let body = received.recv().expect("the question's request");
+    assert!(body.contains("what is in [Image #1]?"), "{body}");
+    assert!(
+        body.contains("data:image/png;base64,iVA="),
+        "the picture did not go with the question: {body}"
+    );
+}
+
 /// A picture is an input, and the record says what arrived however it arrived: asked beside the work
 /// is still asked. Left out here, a session's trail would account for every picture but the ones
 /// pasted into a question.
@@ -15382,6 +15545,93 @@ fn what_a_delegate_reported_reaches_the_person_watching() {
             "I PICKED build.log".to_string()
         )),
         "the words the delegate answered with never reached the interface"
+    );
+}
+
+/// The whole wiring in one run: a definition on disk reaches the kernel, the kernel builds the
+/// delegate the definition names, the delegate's own prompt carries the definition's body, and
+/// the line the person watching reads names the definition rather than its kind. Each of those is
+/// pinned on its own elsewhere; what only a turn can show is that they are connected.
+#[test]
+fn a_definition_names_the_delegate_a_turn_runs_and_says_what_it_is_for() {
+    let scratch = Scratch::new("delegate-definition");
+    let home = Scratch::new("delegate-definition-home");
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("rule-reviewer.md"),
+        "---\nname: rule-reviewer\ndescription: Checks a diff. Use before a review.\nkind: \
+         reader\ntools: read_file, list_files\n---\n\nREAD-THE-DIFF-AND-SAY-WHICH-SHAPE\n",
+    )
+    .expect("write the definition");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "DELEGATE-SOMETHING",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"rule-reviewer","task":"CHECK-THE-DIFF"}"#,
+                ),
+                reply_with("nothing to add while it works"),
+                reply_with("relayed"),
+            ],
+        ),
+        ("CHECK-THE-DIFF", vec![reply_with("no violation")]),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-SOMETHING").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    // The delegate's own request, which is the one that carries the task and not the marker the
+    // spawning turn was given: the turn is not blocked while a delegate works, so its next round
+    // goes out carrying the transcript of the call that spawned it, task and all, and whichever
+    // of the two the server reads first is a matter of timing.
+    let requests: Vec<String> = received.try_iter().collect();
+    let delegate = requests
+        .iter()
+        .find(|body| body.contains("CHECK-THE-DIFF") && !body.contains("DELEGATE-SOMETHING"))
+        .expect("the delegate never ran, so the definition never selected one");
+
+    assert!(
+        delegate.contains("READ-THE-DIFF-AND-SAY-WHICH-SHAPE"),
+        "the definition's body did not reach the delegate it defines"
+    );
+    assert!(
+        delegate.contains("You cannot write a file"),
+        "the definition's body displaced what its kind cannot do"
+    );
+    let offered: Vec<&str> = ["read_file", "list_files", "search", "run", "write_file"]
+        .into_iter()
+        .filter(|tool| delegate.contains(&format!(r#""name":"{tool}""#)))
+        .collect();
+    assert_eq!(
+        offered,
+        ["read_file", "list_files"],
+        "the delegate was not confined to the tools the definition named"
+    );
+
+    let (_, note, _) = reporter
+        .delegates_finished
+        .first()
+        .expect("no delegate was reported as finishing");
+    assert!(
+        note.contains("rule-reviewer"),
+        "the person watching was not told which definition answered: {note}"
     );
 }
 
@@ -16892,15 +17142,20 @@ fn the_middle_of_a_capped_output_stays_reachable() {
 ///
 /// Keeps listening past the end of its replies for the reason the chat server does: a fetch that is
 /// retried should meet the page again rather than a closed port.
-fn serve_pages(replies: Vec<String>) -> (String, mpsc::Receiver<String>) {
+fn serve_pages(replies: Vec<String>) -> (String, MockRequests) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().expect("addr").port();
     let (sender, receiver) = mpsc::channel();
 
-    thread::spawn(move || {
+    let stopped = Arc::new(AtomicBool::new(false));
+    let stopping = Arc::clone(&stopped);
+    let worker = thread::spawn(move || {
         let mut replies = replies.into_iter();
         let mut answered: Option<(String, String)> = None;
         while let Ok((mut stream, _)) = listener.accept() {
+            if stopping.load(Ordering::Acquire) {
+                break;
+            }
             let mut reader = BufReader::new(stream.try_clone().expect("clone"));
             let mut request = String::new();
             let _ = reader.read_line(&mut request);
@@ -16938,7 +17193,13 @@ fn serve_pages(replies: Vec<String>) -> (String, mpsc::Receiver<String>) {
         }
     });
 
-    (format!("http://127.0.0.1:{port}"), receiver)
+    let requests = MockRequests {
+        receiver,
+        stopped,
+        port,
+        worker: Some(worker),
+    };
+    (format!("http://127.0.0.1:{port}"), requests)
 }
 
 fn page(body: &str) -> String {
@@ -19422,14 +19683,19 @@ enum Served {
     Unfinished,
 }
 
-fn serve_script(script: Vec<Served>) -> (String, mpsc::Receiver<String>) {
+fn serve_script(script: Vec<Served>) -> (String, MockRequests) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().expect("addr").port();
     let (sender, receiver) = mpsc::channel();
 
-    thread::spawn(move || {
+    let stopped = Arc::new(AtomicBool::new(false));
+    let stopping = Arc::clone(&stopped);
+    let worker = thread::spawn(move || {
         let mut script = script.into_iter();
         while let Ok((mut stream, _)) = listener.accept() {
+            if stopping.load(Ordering::Acquire) {
+                break;
+            }
             let mut reader = BufReader::new(stream.try_clone().expect("clone"));
             let mut line = String::new();
             let _ = reader.read_line(&mut line);
@@ -19517,7 +19783,13 @@ fn serve_script(script: Vec<Served>) -> (String, mpsc::Receiver<String>) {
         }
     });
 
-    (format!("http://127.0.0.1:{port}"), receiver)
+    let requests = MockRequests {
+        receiver,
+        stopped,
+        port,
+        worker: Some(worker),
+    };
+    (format!("http://127.0.0.1:{port}"), requests)
 }
 
 fn take_a_turn_reporting(
@@ -19740,7 +20012,7 @@ fn a_stop_between_attempts_is_a_stop_rather_than_a_failure() {
 fn nothing_recorded_about_a_request_carries_the_credential_in_its_url() {
     let scratch = Scratch::new("review-audit-secret");
     let workspace = Workspace::new(&scratch.path).unwrap();
-    let (url, _) = serve_script(vec![Served::Status(401)]);
+    let (url, _requests) = serve_script(vec![Served::Status(401)]);
     let mut sink = RecordingSink::new();
     turn::run(
         &config_for(&format!("{url}/?api_key=REVIEW_SECRET")),
@@ -19760,7 +20032,7 @@ fn nothing_recorded_about_a_request_carries_the_credential_in_its_url() {
 fn what_the_planner_is_told_about_a_failed_delegate_carries_nothing_of_the_endpoint() {
     let scratch = Scratch::new("review-delegate-leak");
     let workspace = Workspace::new(&scratch.path).unwrap();
-    let (url, _) = serve_by_marker(vec![(
+    let (url, _requests) = serve_by_marker(vec![(
         "REVIEW-PARENT-LEAK",
         vec![
             tool_request_with_usage(
@@ -19791,7 +20063,7 @@ fn what_the_planner_is_told_about_a_failed_delegate_carries_nothing_of_the_endpo
 fn compaction_failure_narration_keeps_credentials_out() {
     let scratch = Scratch::new("compaction-diagnostic");
     let workspace = Workspace::new(&scratch.path).unwrap();
-    let (url, _) = serve_script(vec![
+    let (url, _requests) = serve_script(vec![
         Served::Status(401),
         Served::Reply(reply_with_usage("done", 20, 2)),
     ]);
@@ -20690,6 +20962,308 @@ mod usage {
     impl Drop for Run {
         fn drop(&mut self) {
             self.cancel.cancel();
+        }
+    }
+
+    /// A sibling's unchanged private map must not hide its later untrusted replacement.
+    #[test]
+    fn overlapping_delegate_writes_follow_effect_order_in_both_collection_orders() {
+        for (trusted_first, untrusted_last) in
+            [(true, true), (false, true), (true, false), (false, false)]
+        {
+            let scratch = Scratch::new(&format!(
+                "overlapping-writes-{trusted_first}-{untrusted_last}"
+            ));
+            const SENTINEL: &str = "QUARANTINED_SIBLING_SENTINEL";
+            std::fs::write(scratch.path.join("source.txt"), SENTINEL).unwrap();
+            std::fs::write(scratch.path.join("shared.txt"), "original").unwrap();
+            let workspace = Workspace::new(&scratch.path).unwrap();
+            let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+            trust.distrust("source.txt");
+            trust.distrust("shared.txt");
+            let (endpoint, pending) = controlled_server();
+            let (finished_tx, finished) = mpsc::channel();
+            let worker = thread::spawn(move || {
+                let mut conversation = bravebot_agent::Conversation::new();
+                let result = turn::resume(
+                    &config_for(&endpoint),
+                    &bravebot_net::Egress::new(),
+                    &workspace,
+                    &Task::new("PARENT-OVERLAP"),
+                    &mut conversation,
+                    &mut bravebot_agent::confirm::ApproveWrites,
+                    &mut bravebot_agent::report::IgnoreReports,
+                    &mut RecordingSink::new(),
+                    trust,
+                    bravebot_core::programs::TrustedPrograms::new(),
+                    None,
+                    &bravebot_core::cancel::Cancel::new(),
+                );
+                finished_tx.send(result).unwrap();
+            });
+            let request = || {
+                pending
+                    .recv_timeout(WAIT)
+                    .expect("expected planner request")
+            };
+            let trusted = r#"{"kind":"worker","task":"TRUSTED-WRITER"}"#;
+            let untrusted = r#"{"kind":"worker","task":"UNTRUSTED-WRITER"}"#;
+            let (first, second) = if trusted_first {
+                (trusted, untrusted)
+            } else {
+                (untrusted, trusted)
+            };
+            request().answer(&two_tool_requests(
+                ("spawn_agent", first),
+                ("spawn_agent", second),
+            ));
+            let mut parent = None;
+            let mut a = None;
+            let mut b = None;
+            for _ in 0..3 {
+                let next = request();
+                if next.body.contains("PARENT-OVERLAP") {
+                    parent = Some(next);
+                } else if next.body.contains("UNTRUSTED-WRITER") {
+                    b = Some(next);
+                } else {
+                    assert!(next.body.contains("TRUSTED-WRITER"));
+                    a = Some(next);
+                }
+            }
+            parent.unwrap().answer(&tool_request(
+                "spawn_agent",
+                r#"{"kind":"reader","task":"UNTOUCHED-SIBLING"}"#,
+            ));
+            let first = request();
+            let second = request();
+            let (parent, untouched) = if first.body.contains("PARENT-OVERLAP") {
+                (first, second)
+            } else {
+                (second, first)
+            };
+            assert!(untouched.body.contains("UNTOUCHED-SIBLING"));
+            let write_a = |a: Pending| {
+                a.answer(&tool_request(
+                    "write_file",
+                    r#"{"path":"shared.txt","contents":"trusted replacement"}"#,
+                ));
+                let done = request();
+                assert_eq!(
+                    std::fs::read_to_string(scratch.path.join("shared.txt")).unwrap(),
+                    "trusted replacement"
+                );
+                done
+            };
+            let write_b = |b: Pending| {
+                b.answer(&tool_request("read_file", r#"{"path":"source.txt"}"#));
+                let read = request();
+                assert!(!read.body.contains(SENTINEL));
+                read.answer(&tool_request(
+                    "write_file",
+                    r#"{"path":"shared.txt","contents_ref":"ref:1"}"#,
+                ));
+                let done = request();
+                assert!(!done.body.contains(SENTINEL));
+                assert_eq!(
+                    std::fs::read_to_string(scratch.path.join("shared.txt")).unwrap(),
+                    SENTINEL
+                );
+                done
+            };
+            let (a_done, b_done) = if untrusted_last {
+                let a_done = write_a(a.unwrap());
+                (a_done, write_b(b.unwrap()))
+            } else {
+                let b_done = write_b(b.unwrap());
+                (write_a(a.unwrap()), b_done)
+            };
+            // Both children remain inside their planner requests, so neither can be collected.
+            parent.answer(&tool_request("read_file", r#"{"path":"shared.txt"}"#));
+            let parent_before_collection = request();
+            let parent_leaked = parent_before_collection.body.contains(SENTINEL);
+            a_done.answer(&tool_request("read_file", r#"{"path":"shared.txt"}"#));
+            let sibling_before_collection = request();
+            let sibling_leaked = sibling_before_collection.body.contains(SENTINEL);
+            sibling_before_collection.answer(&reply_with_usage("trusted writer done", 1, 1));
+            b_done.answer(&reply_with_usage("untrusted writer done", 1, 1));
+            untouched.answer(&reply_with_usage("nothing changed", 1, 1));
+            parent_before_collection.answer(&reply_with_usage("collect workers", 1, 1));
+            let collected = request();
+            collected.answer(&tool_request("read_file", r#"{"path":"shared.txt"}"#));
+            let after_read = request();
+            let leaked = after_read.body.contains(SENTINEL);
+            after_read.answer(&reply_with_usage("done", 1, 1));
+            let outcome = finished
+                .recv_timeout(WAIT)
+                .expect("parent completed")
+                .unwrap();
+            worker.join().unwrap();
+            assert_eq!(
+                outcome.trust.is_trusted("shared.txt"),
+                !untrusted_last,
+                "trust did not follow the completed write order; trusted spawned first={trusted_first}"
+            );
+            assert!(
+                !leaked,
+                "untrusted replacement reached the parent's planner"
+            );
+            assert!(
+                !parent_leaked,
+                "parent read untrusted replacement before collection"
+            );
+            assert!(
+                !sibling_leaked,
+                "sibling read untrusted replacement before collection"
+            );
+        }
+    }
+
+    /// A foreground destination stays quarantined while its process can still write it.
+    #[cfg(unix)]
+    #[test]
+    fn foreground_redirection_quarantines_live_reads_and_all_endings() {
+        for ending in ["success", "failure", "cancelled", "parent_failure"] {
+            let scratch = Scratch::new(&format!("live-redirection-{ending}"));
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let port = listener.local_addr().unwrap().port();
+            std::fs::write(scratch.path.join("shared.txt"), "trusted original").unwrap();
+            std::fs::write(scratch.path.join("redirect.py"), format!(
+                "import os,socket\nos.write(1,b'REDIRECT_SENTINEL')\ns=socket.create_connection(('127.0.0.1',{port}))\ns.settimeout(5)\ns.sendall(b'written')\ns.recv(1)\nos._exit({})\n",
+                if ending == "failure" { 7 } else { 0 }
+            )).unwrap();
+            let workspace = Workspace::new(&scratch.path).unwrap();
+            let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+            trust.trust(".");
+            let (endpoint, pending) = controlled_server();
+            let (finished_tx, finished) = mpsc::channel();
+            let cancel = bravebot_core::Cancel::new();
+            let stop = cancel.clone();
+            let worker = thread::spawn(move || {
+                let result = turn::resume(
+                    &config_for(&endpoint),
+                    &bravebot_net::Egress::new(),
+                    &workspace,
+                    &Task::new("PARENT-REDIRECTION"),
+                    &mut bravebot_agent::Conversation::new(),
+                    &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+                    &mut bravebot_agent::report::IgnoreReports,
+                    &mut RecordingSink::new(),
+                    trust,
+                    bravebot_core::programs::TrustedPrograms::new(),
+                    None,
+                    &stop,
+                );
+                finished_tx.send(result).unwrap();
+            });
+            let request = || {
+                pending
+                    .recv_timeout(WAIT)
+                    .expect("expected planner request")
+            };
+            request().answer(&tool_request(
+                "spawn_agent",
+                r#"{"kind":"checker","task":"REDIRECT-WORKER"}"#,
+            ));
+            let first = request();
+            let second = request();
+            let (parent, child) = if first.body.contains("PARENT-REDIRECTION") {
+                (first, second)
+            } else {
+                (second, first)
+            };
+            child.answer(&tool_request(
+                "run",
+                r#"{"command":"python3 redirect.py > shared.txt"}"#,
+            ));
+            // Accept on a bounded helper so a process that never reaches the effect cannot hang this test.
+            let (ready_tx, ready) = mpsc::channel();
+            thread::spawn(move || {
+                let until = std::time::Instant::now() + WAIT;
+                while std::time::Instant::now() < until {
+                    match listener.accept() {
+                        Ok((mut socket, _)) => {
+                            socket.set_nonblocking(false).unwrap();
+                            socket.set_read_timeout(Some(WAIT)).unwrap();
+                            let mut signal = [0; 7];
+                            socket.read_exact(&mut signal).unwrap();
+                            assert_eq!(&signal, b"written");
+                            ready_tx.send(socket).unwrap();
+                            return;
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            thread::yield_now()
+                        }
+                        Err(error) => panic!("effect observer failed: {error}"),
+                    }
+                }
+            });
+            let mut process = ready
+                .recv_timeout(WAIT)
+                .expect("redirected process wrote and remains alive");
+            assert_eq!(
+                std::fs::read_to_string(scratch.path.join("shared.txt")).unwrap(),
+                "REDIRECT_SENTINEL"
+            );
+            parent.answer(&tool_request("read_file", r#"{"path":"shared.txt"}"#));
+            let after_read = request();
+            assert!(after_read.body.contains("PARENT-REDIRECTION"));
+            let leaked = after_read.body.contains("REDIRECT_SENTINEL");
+            if ending == "cancelled" {
+                cancel.cancel();
+                after_read.interrupted_stream();
+            } else if ending == "parent_failure" {
+                after_read.refuse();
+                process.write_all(b"x").unwrap();
+                let child_done = request();
+                assert!(child_done.body.contains("REDIRECT-WORKER"));
+                assert!(!child_done.body.contains("REDIRECT_SENTINEL"));
+                child_done.answer(&reply_with_usage("child done", 1, 1));
+            } else {
+                process.write_all(b"x").unwrap();
+                let child_done = request();
+                assert!(child_done.body.contains("REDIRECT-WORKER"));
+                if ending == "failure" {
+                    assert!(
+                        child_done.body.contains("exited 7"),
+                        "the command failure was not observed"
+                    );
+                }
+                child_done.answer(&reply_with_usage("child done", 1, 1));
+                after_read.answer(&reply_with_usage("collect", 1, 1));
+                request().answer(&reply_with_usage("done", 1, 1));
+            }
+            let outcome = finished
+                .recv_timeout(WAIT)
+                .expect("parent and process ended");
+            worker.join().unwrap();
+            if ending == "cancelled" {
+                assert!(matches!(
+                    outcome.unwrap_err().ending(),
+                    bravebot_agent::Ending::Stopped { .. }
+                ));
+            } else if ending == "parent_failure" {
+                assert_eq!(
+                    outcome.unwrap_err().ending().diagnosis().unwrap().category,
+                    bravebot_agent::Category::Unauthorized
+                );
+            } else {
+                assert!(!outcome.unwrap().trust.is_trusted("shared.txt"));
+            }
+            if matches!(ending, "cancelled" | "parent_failure") {
+                process.set_read_timeout(Some(WAIT)).unwrap();
+                let mut byte = [0];
+                assert_eq!(
+                    process.read(&mut byte).unwrap(),
+                    0,
+                    "child survived its parent"
+                );
+            }
+            assert!(
+                !leaked,
+                "live redirection entered the parent planner on {ending}"
+            );
         }
     }
 
@@ -22124,7 +22698,7 @@ fn a_credential_the_file_already_held_does_not_refuse_the_change_carrying_it() {
         &mut bravebot_agent::confirm::ApproveWrites,
         &mut reporter,
         &mut sink,
-        bravebot_core::trust::TrustStore::new("/work"),
+        trusting_the_workspace(),
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect("turn runs");
