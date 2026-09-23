@@ -40,6 +40,7 @@ guards:
       - crates/core/src/value.rs: 1
       - crates/mcp/tests/http.rs: 1
       - crates/mcp/tests/stdio.rs: 2
+      - crates/ui-bridge/tests/workspace.rs: 1
   - symbol: Labelled::trusted
     sites:
       - crates/agent/src/agents.rs: 1
@@ -54,6 +55,7 @@ guards:
       - crates/agent/tests/workspace.rs: 158
       - crates/core/src/policy.rs: 23
       - crates/core/src/value.rs: 3
+      - crates/ui-bridge/tests/workspace.rs: 2
   - symbol: Labelled::relabel
     sites:
       - crates/core/src/policy.rs: 1

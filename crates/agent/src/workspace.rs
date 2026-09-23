@@ -371,6 +371,22 @@ impl Workspace {
         self
     }
 
+    /// The caps a search here runs under: how many files it may walk, and how long it may spend
+    /// opening them.
+    ///
+    /// For the caller that handed them over. SEARCH-9 puts the reading of the settings in that
+    /// caller, so whether a front end passed on what a person configured is a property of the
+    /// front end rather than of this crate, and a search is the only other place it shows: the
+    /// number a cap was raised to shows in nothing a test can run in milliseconds, since a raised
+    /// cap is one a search stops short of.
+    ///
+    /// The number in force rather than an `Option`, because a cap nobody named is the built-in
+    /// one and a search runs under that.
+    #[must_use]
+    pub fn search_caps(&self) -> (usize, Duration) {
+        (self.search_files, self.search_time)
+    }
+
     pub fn root(&self) -> &Path {
         &self.root
     }
