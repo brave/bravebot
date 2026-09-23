@@ -1018,5 +1018,14 @@ Still open:
   a model from that service instead of replacing its credential.
   Error events include stable `category`, optional `status` and `attempts`; raw backend
   diagnostic text is not sent as a turn error.
-- `bravebot:hooks:read/save` are main-process IPC endpoints, not arbitrary RPC methods.
-  A save takes the edited JSON and the previously read text (null for an absent file).
+- `hooks.inspect` reports the hooks file as the agent reads it: `path`, its `text` (null for a
+  file this could not read at all), the `hooks` it declares as `{ on, tool, run, firesForNothing }`,
+  and `entire`, false where the reader passed over part of the file, so that composing it back
+  from `hooks` alone would drop what it did not read. An editor that offers a form refuses one for
+  such a file. `no_home` where the platform names no state directory. Nothing else parses the
+  file: which entries this build can use, and which name a tool on a moment that has none, are the
+  same answers a turn fires hooks from.
+- `bravebot:hooks:save` is a main-process IPC endpoint, not an arbitrary RPC method. It takes the
+  edited JSON and the text `hooks.inspect` last reported (null for an absent file), and writes
+  through a descriptor-pinned atomic replace that refuses a symlink and stale text. There is no
+  read endpoint: a renderer reads the file through `hooks.inspect`.

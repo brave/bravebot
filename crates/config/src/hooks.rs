@@ -26,6 +26,14 @@
 //! A missing file, an oversized one, a syntax error, an entry naming a moment nothing fires or
 //! carrying no program: each is that much of the file not applying, and never a reason to refuse to
 //! start. A mistake in a hook must not be a session that will not open.
+//!
+//! # One reading, shown as well as fired
+//!
+//! An editor showing somebody their hooks needs the same answers a turn needs, plus one more:
+//! whether what it was handed accounts for the whole file. It gets them from here
+//! ([`Declarations`]) rather than reading the text itself, because leniency is the point of the
+//! rules above and a second reader written to be strict would refuse files this one runs, while one
+//! written to be lenient would quietly drop what it did not recognise the next time this changed.
 
 use std::path::{Path, PathBuf};
 
@@ -113,6 +121,15 @@ impl Hook {
         &self.run
     }
 
+    /// Whether this entry names a call that does not happen at its moment, so nothing fires it.
+    ///
+    /// Answered here because an editor showing somebody this entry has to say so, and working it
+    /// out from the moment and the name again would be a second answer to which entries are about
+    /// a call.
+    pub fn fires_for_nothing(&self) -> bool {
+        self.tool.is_some() && self.moment != Moment::ToolFinished
+    }
+
     /// Whether this entry fires for `moment`, for a call on `tool` where there was one.
     fn fires(&self, moment: Moment, tool: Option<&str>) -> bool {
         if self.moment != moment {
@@ -135,18 +152,9 @@ pub struct Hooks {
 impl Hooks {
     /// Read the file in a state directory, or nothing where there is no directory or no file.
     pub fn load(home: Option<&Path>) -> Self {
-        let Some(home) = home else {
-            return Self::default();
-        };
-        let path = hooks_file(home);
-        match std::fs::metadata(&path) {
-            Ok(found) if found.len() > MAX_BYTES => return Self::default(),
-            Ok(_) => {}
-            Err(_) => return Self::default(),
-        }
-        match std::fs::read_to_string(&path) {
-            Ok(text) => Self::parse(&text),
-            Err(_) => Self::default(),
+        match home {
+            Some(home) => Declarations::read(home).into_hooks(),
+            None => Self::default(),
         }
     }
 
@@ -155,22 +163,21 @@ impl Hooks {
     /// The root is an object with a `hooks` array, so that the file has somewhere to grow a second
     /// key without every reader of the first having to be taught that the root changed shape.
     pub fn parse(text: &str) -> Self {
-        let Ok(serde_json::Value::Object(root)) = serde_json::from_str::<serde_json::Value>(text)
-        else {
-            return Self::default();
-        };
-        let Some(serde_json::Value::Array(entries)) = root.get("hooks") else {
-            return Self::default();
-        };
-        Self {
-            hooks: entries.iter().filter_map(entry).collect(),
-        }
+        read(text).0
     }
 
     /// Whether anything is declared at all, so a turn that has no hooks can say so without
     /// looking at a moment.
     pub fn is_empty(&self) -> bool {
         self.hooks.is_empty()
+    }
+
+    /// Every entry, in the order the file declared them, whatever moment each names.
+    ///
+    /// For showing somebody their file. A turn asks [`Self::firing`] instead, because what fires
+    /// at a moment is a question about a moment.
+    pub fn declared(&self) -> &[Hook] {
+        &self.hooks
     }
 
     /// The hooks that fire for `moment`, in the order the file declared them.
@@ -185,10 +192,131 @@ impl Hooks {
     }
 }
 
+/// A hooks file as something showing it has to see it: what it declares, the text it was written
+/// as, and whether the first accounts for all of the second.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Declarations {
+    hooks: Hooks,
+    text: Option<String>,
+    entire: bool,
+}
+
+impl Declarations {
+    /// Read the hooks file in a state directory.
+    pub fn read(home: &Path) -> Self {
+        let path = hooks_file(home);
+        let unread = Self {
+            hooks: Hooks::default(),
+            text: None,
+            entire: false,
+        };
+        match std::fs::metadata(&path) {
+            Ok(found) if found.len() > MAX_BYTES => return unread,
+            Ok(_) => {}
+            // No file yet is a file wholly accounted for: there is nothing in it left unread, and
+            // somebody may write their first hook into it. A file that is there and could not be
+            // opened is not that, and says so.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Self {
+                    entire: true,
+                    ..unread
+                };
+            }
+            Err(_) => return unread,
+        }
+        match std::fs::read_to_string(&path) {
+            Ok(text) => {
+                let (hooks, entire) = read(&text);
+                Self {
+                    hooks,
+                    text: Some(text),
+                    entire,
+                }
+            }
+            Err(_) => unread,
+        }
+    }
+
+    /// What the file declares, which is what a turn would fire.
+    pub fn hooks(&self) -> &Hooks {
+        &self.hooks
+    }
+
+    /// The file as it is written, where there was a file this could read.
+    pub fn text(&self) -> Option<&str> {
+        self.text.as_deref()
+    }
+
+    /// Whether [`Self::hooks`] accounts for every word of [`Self::text`]: no key beyond the ones
+    /// read, no entry passed over, and nothing trimmed on the way in.
+    ///
+    /// An editor composing the file back from the entries alone would drop whatever this does not
+    /// cover, so where this is false the file is somebody's to edit and not a form's to rewrite.
+    pub fn entire(&self) -> bool {
+        self.entire
+    }
+
+    /// What a turn wants out of this, once nothing needs to know how the file read.
+    pub fn into_hooks(self) -> Hooks {
+        self.hooks
+    }
+}
+
+/// The declarations in hooks JSON, and whether they account for all of it.
+///
+/// The root is an object with a `hooks` array, so that the file has somewhere to grow a second key
+/// without every reader of the first having to be taught that the root changed shape. A key this
+/// does not read is therefore expected one day, and is reported as something it did not read rather
+/// than refused.
+fn read(text: &str) -> (Hooks, bool) {
+    let Ok(serde_json::Value::Object(root)) = serde_json::from_str::<serde_json::Value>(text)
+    else {
+        return (Hooks::default(), false);
+    };
+    let Some(serde_json::Value::Array(entries)) = root.get("hooks") else {
+        return (Hooks::default(), false);
+    };
+    let mut hooks = Vec::with_capacity(entries.len());
+    let mut entire = root.len() == 1;
+    for value in entries {
+        match entry(value) {
+            Some(hook) => {
+                entire &= accounted(value, &hook);
+                hooks.push(hook);
+            }
+            None => entire = false,
+        }
+    }
+    (Hooks { hooks }, entire)
+}
+
+/// Whether writing this entry back out of what was read would put the same words there.
+fn accounted(value: &serde_json::Value, hook: &Hook) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    if object
+        .keys()
+        .any(|key| !matches!(key.as_str(), "on" | "tool" | "run"))
+    {
+        return false;
+    }
+    // A name read as `None` because it was blank, because it was not a string at all, or trimmed
+    // on the way in, is a name that would not survive the round trip.
+    match (object.get("tool"), hook.tool.as_deref()) {
+        (None, None) => true,
+        (Some(written), Some(read)) => written.as_str() == Some(read),
+        _ => false,
+    }
+}
+
 /// One entry, or `None` where it says nothing this build can run.
 ///
 /// Dropped rather than refused, and dropped one at a time: a typo in the third entry leaves the
 /// other two firing.
+///
+/// A key added here is a key [`accounted`] has to know about, or every file using it is reported as
+/// holding something unread and no editor will offer to write it.
 fn entry(value: &serde_json::Value) -> Option<Hook> {
     let object = value.as_object()?;
     let moment = Moment::parse(object.get("on")?.as_str()?)?;
@@ -411,6 +539,92 @@ mod tests {
     #[test]
     fn no_state_directory_means_no_hooks() {
         assert!(Hooks::load(None).is_empty());
+    }
+
+    /// HOOK-8: what is shown is what was read: the entries, and the text they were read out of.
+    #[test]
+    fn a_file_read_for_showing_reports_the_text_it_was_read_from() {
+        let home = scratch_dir("hooks-shown");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).expect("a scratch state directory");
+        let text = r#"{"hooks": [{"on": "tool-finished", "tool": "write_file", "run": ["fmt"]}]}"#;
+        std::fs::write(hooks_file(&home), text).expect("write a hooks file");
+
+        let read = Declarations::read(&home);
+        std::fs::remove_dir_all(&home).ok();
+
+        assert_eq!(read.text(), Some(text));
+        assert!(read.entire(), "everything in it was read");
+        assert_eq!(read.hooks().declared().len(), 1);
+        assert_eq!(read.hooks().declared()[0].tool(), Some("write_file"));
+    }
+
+    /// HOOK-8: anything in the file this reader passed over is reported as passed over, so an
+    /// editor composing the file back from the entries alone knows it would drop something.
+    #[test]
+    fn whatever_went_unread_leaves_the_file_not_wholly_read() {
+        for text in [
+            r#"{"hooks": [{"on": "turn-started", "run": ["x"]}], "later": true}"#,
+            r#"{"hooks": [{"on": "turn-started", "run": ["x"], "unless": "weekends"}]}"#,
+            r#"{"hooks": [{"on": "file-opened", "run": ["x"]}]}"#,
+            r#"{"hooks": [{"on": "turn-started", "run": []}]}"#,
+            r#"{"hooks": [{"on": "tool-finished", "tool": " write_file ", "run": ["x"]}]}"#,
+            r#"{"hooks": [{"on": "tool-finished", "tool": "", "run": ["x"]}]}"#,
+            r#"{"hooks": [{"on": "turn-started", "tool": null, "run": ["x"]}]}"#,
+            r#"{"hooks": [{"on": "turn-started", "tool": 7, "run": ["x"]}]}"#,
+            "not json",
+            r#"{"hooks": {}}"#,
+        ] {
+            assert!(!read(text).1, "{text}");
+        }
+        assert!(
+            read(r#"{"hooks": [{"on": "turn-started", "run": ["x"]}]}"#).1,
+            "a file holding only what this reads is wholly read"
+        );
+    }
+
+    /// HOOK-8: a file nobody has written yet is one an editor may write, and a file that is there
+    /// but was not read is not.
+    #[test]
+    fn a_file_that_is_not_there_is_wholly_read_and_one_too_large_is_not() {
+        let home = scratch_dir("hooks-unread");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).expect("a scratch state directory");
+
+        let missing = Declarations::read(&home);
+        let padding = " ".repeat(MAX_BYTES as usize + 1);
+        std::fs::write(
+            hooks_file(&home),
+            format!(r#"{{"hooks": [{{"on": "turn-started", "run": ["x"]}}]{padding}}}"#),
+        )
+        .expect("write a hooks file");
+        let oversized = Declarations::read(&home);
+        std::fs::remove_dir_all(&home).ok();
+
+        assert_eq!(missing.text(), None);
+        assert!(missing.entire(), "nothing in a file that is not there");
+        assert_eq!(oversized.text(), None);
+        assert!(!oversized.entire(), "a file this passed over unread");
+        assert!(oversized.hooks().is_empty());
+    }
+
+    /// HOOK-8: which entries are about a call is answered here, so nothing showing one works it
+    /// out from the moment and the name a second time.
+    #[test]
+    fn an_entry_says_whether_it_fires_for_nothing() {
+        let hooks = Hooks::parse(
+            r#"{"hooks": [
+                {"on": "turn-started", "tool": "write_file", "run": ["a"]},
+                {"on": "tool-finished", "tool": "write_file", "run": ["b"]},
+                {"on": "turn-finished", "run": ["c"]}
+            ]}"#,
+        );
+        let fires_for_nothing: Vec<bool> = hooks
+            .declared()
+            .iter()
+            .map(Hook::fires_for_nothing)
+            .collect();
+        assert_eq!(fires_for_nothing, vec![true, false, false]);
     }
 
     /// HOOK-7: a file too large to be the handful of short vectors this reads is passed over.

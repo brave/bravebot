@@ -146,6 +146,7 @@ impl Bridge {
                 self.settings = path;
                 Ok(crate::settings::report(None, self.settings.as_deref()))
             }
+            "hooks.inspect" => crate::hooks::inspect(),
             "doctor" => Ok(
                 json!({"found": true, "structured": true, "text": serde_json::to_string_pretty(&crate::settings::report(None, self.settings.as_deref())).unwrap_or_default()}),
             ),
