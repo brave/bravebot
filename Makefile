@@ -211,12 +211,16 @@ write-untranslated:
 #
 # No model is involved, so both are deterministic.
 .PHONY: check-reviewdog
-check-reviewdog:
+check-reviewdog: check-reviewdog-selftest
 	@contrib/check-reviewdog.sh
 
 .PHONY: check-reviewdog-full
-check-reviewdog-full:
+check-reviewdog-full: check-reviewdog-selftest
 	@contrib/check-reviewdog.sh --full
+
+.PHONY: check-reviewdog-selftest
+check-reviewdog-selftest:
+	python3 contrib/check-reviewdog-selftest.py
 
 # The npm-lockfile job. The published package is a thin wrapper that downloads the
 # release binary, so the lockfile is the whole supply chain surface it has. The front end

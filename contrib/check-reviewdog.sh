@@ -17,7 +17,8 @@
 # The two modes are the action's own two modes. On a pull request it runs
 # baseline_scan_only, which passes opengrep --baseline-commit and filters
 # every runner through the diff; on workflow_dispatch it scans everything
-# with -filter-mode=nofilter. Same flags here.
+# with -filter-mode=nofilter. Dirty files need a scan without the commit-only
+# baseline; reviewdog still filters them through the diff.
 #
 # No model is involved, so this is deterministic and cheap to re-run.
 
@@ -170,6 +171,14 @@ fi
 
 # ── which runners have anything to look at ───────────────────────────────────
 
+cd "$REPO_ROOT" || die "cannot enter $REPO_ROOT"
+if [ "$MODE" != "full" ]; then
+    BASE_SHA="$(git rev-parse --verify --quiet "${BASE_REF}^{commit}")" \
+        || die "no such ref: $BASE_REF (fetch it, or pass --base)"
+    # Use the branch point rather than changes that landed on main afterwards.
+    MERGE_BASE="$(git merge-base HEAD "$BASE_SHA")" || die "no merge base with $BASE_REF"
+fi
+
 # Every runner but opengrep is a no-op without its file type, and pip-audit is
 # worse than a no-op: it imports pip_audit at module scope, so with no python
 # manifest to audit it still fails to start and reviewdog reports the crash.
@@ -179,7 +188,15 @@ has() { [ -n "$(git -C "$REPO_ROOT" ls-files -- "$@" | head -n 1)" ]; }
 if [ -z "$RUNNERS" ]; then
     RUNNERS="opengrep"
     has '*.svg' && RUNNERS="$RUNNERS safesvg"
-    has '*.svelte' '*.html' && RUNNERS="$RUNNERS sveltegrep"
+    # This runner ignores Git exclusions while finding extracted scripts. Do not
+    # walk build output and nested worktrees when the diff has no script inputs.
+    if [ "$MODE" = "full" ]; then
+        has '*.svelte' '*.html' && RUNNERS="$RUNNERS sveltegrep"
+    else
+        script_files="$(git diff --name-only --diff-filter=d "$MERGE_BASE" -- '*.svelte' '*.html')" \
+            || die "cannot list script files to scan"
+        [ -z "$script_files" ] || RUNNERS="$RUNNERS sveltegrep"
+    fi
     has 'package-lock.json' '*/package-lock.json' && RUNNERS="$RUNNERS npm-audit"
     has 'pyproject.toml' '*/pyproject.toml' 'requirements*.txt' '*/requirements*.txt' \
         && RUNNERS="$RUNNERS pip-audit"
@@ -212,8 +229,6 @@ esac
 
 # ── the file list every runner scopes itself with ────────────────────────────
 
-cd "$REPO_ROOT" || die "cannot enter $REPO_ROOT"
-
 # reviewdog writes a stderr log per runner into the working directory, and the
 # working directory has to be the repo root for the scan to find anything.
 # Clear them going in and out so a run leaves nothing behind.
@@ -226,46 +241,75 @@ rm -f "$REPO_ROOT"/reviewdog.*.stderr.log
 
 FINDINGS="$(mktemp)"
 FAILURES="$(mktemp)"
-trap 'cleanup; rm -f "$FINDINGS" "$FAILURES"' EXIT
+CONFIG="$(mktemp)"
+BRAVEBOT_SCAN_FAILURES="$(mktemp)"
+export BRAVEBOT_SCAN_FAILURES
+trap 'cleanup; rm -f "$FINDINGS" "$FAILURES" "$CONFIG" "$BRAVEBOT_SCAN_FAILURES"' EXIT
 
+# A failed scanner at the start of a pipeline must fail the runner even when
+# its formatter exits successfully. Keep the upstream commands and rules.
+ruby -ryaml -rshellwords -e '
+    config = YAML.load_file(ARGV[0])
+    config.fetch("runner").each do |name, runner|
+        runner["cmd"] = <<~SH
+            bash -o pipefail -c #{Shellwords.escape(runner.fetch("cmd"))}
+            status=$?
+            if [ "$status" -ne 0 ]; then
+                printf "%s\\n" #{Shellwords.escape(name)} >> "$BRAVEBOT_SCAN_FAILURES"
+            fi
+            exit "$status"
+        SH
+    end
+    puts YAML.dump(config)
+' "$SCRIPTPATH/reviewdog/reviewdog.yml" > "$CONFIG" || die "cannot prepare runner configuration"
+
+scan_failed=0
 if [ "$MODE" = "full" ]; then
+    unset GITHUB_BASE_REF
     # reviewdog.sh's own full-scan line.
-    git ls-files | tr '\n' '\0' > "$SCRIPTPATH/all_changed_files.txt"
+    git ls-files | tr '\n' '\0' > "$SCRIPTPATH/all_changed_files.txt" || die "cannot list files to scan"
     say "scanning the whole tree: $RUNNERS"
 
     reviewdog \
         -runners="$(printf '%s' "$RUNNERS" | tr ' ' ',')" \
-        -conf="$SCRIPTPATH/reviewdog/reviewdog.yml" \
+        -conf="$CONFIG" \
         -filter-mode=nofilter \
-        -reporter=local > "$FINDINGS" 2>>"$FAILURES"
+        -reporter=local > "$FINDINGS" 2>>"$FAILURES" || scan_failed=1
 else
-    BASE_SHA="$(git rev-parse --verify --quiet "${BASE_REF}^{commit}")" \
-        || die "no such ref: $BASE_REF (fetch it, or pass --base)"
-    # The merge base, not the ref itself, so a branch that has not been rebased
-    # is judged on what it changed rather than on everything main moved on to.
-    MERGE_BASE="$(git merge-base HEAD "$BASE_SHA")" || die "no merge base with $BASE_REF"
-
-    if [ "$MERGE_BASE" = "$(git rev-parse HEAD)" ]; then
+    if [ "$MERGE_BASE" = "$(git rev-parse HEAD)" ] && git diff --quiet "$MERGE_BASE"; then
         say "HEAD is at the merge base with $BASE_REF; nothing on this branch to scan"
         say "(scan the whole tree with --full)"
         exit 0
     fi
 
-    git update-ref "$BASELINE_REF" "$MERGE_BASE"
-    export GITHUB_BASE_REF="__check_reviewdog_base"
+    git update-ref "$BASELINE_REF" "$MERGE_BASE" || die "cannot set scanner baseline"
+    # Opengrep derives baseline targets from commits and misses dirty files.
+    # Reviewdog still filters the full scan to this branch and working-tree diff.
+    if git diff --quiet HEAD; then
+        export GITHUB_BASE_REF="__check_reviewdog_base"
+    else
+        unset GITHUB_BASE_REF
+    fi
 
-    say "scanning this branch against $BASE_REF ($(git rev-parse --short "$MERGE_BASE")): $RUNNERS"
+    if branch_name="$(git symbolic-ref --quiet --short HEAD)"; then
+        scan_subject="the \`$branch_name\` branch"
+    else
+        scan_subject="detached HEAD ($(git rev-parse --short HEAD))"
+    fi
+    say "scanning $scan_subject against $BASE_REF ($(git rev-parse --short "$MERGE_BASE")): $RUNNERS"
     git diff --name-only -z --diff-filter=d "$MERGE_BASE" \
-        > "$SCRIPTPATH/all_changed_files.txt"
+        > "$SCRIPTPATH/all_changed_files.txt" || die "cannot list files to scan"
 
     # One runner at a time, filtered through the diff, as reviewdog.sh does it.
     for runner in $RUNNERS; do
+        say "starting $runner"
         reviewdog \
             -reporter=local \
             -runners="$runner" \
-            -conf="$SCRIPTPATH/reviewdog/reviewdog.yml" \
+            -conf="$CONFIG" \
             -diff="git diff -U0 $MERGE_BASE" \
-            >> "$FINDINGS" 2>>"$FAILURES"
+            >> "$FINDINGS" 2>>"$FAILURES" || scan_failed=1
+        say "finished $runner"
     done
 fi
 
@@ -278,14 +322,26 @@ for runner in $RUNNERS; do
     [ -s "$log" ] || continue
     printf '\033[0;31m%s could not run cleanly:\033[0m\n' "$runner" >&2
     sed 's/^/  /' "$log" >&2
+    scan_failed=1
 done
-grep -q 'failed with zero findings: The command itself failed' "$FAILURES" 2>/dev/null \
-    && sed 's/^/  /' "$FAILURES" >&2
+if [ -s "$FAILURES" ]; then
+    sed 's/^/  /' "$FAILURES" >&2
+fi
+if grep -q 'failed with zero findings: The command itself failed' "$FAILURES"; then
+    scan_failed=1
+fi
+# Reviewdog may return zero when a runner fails after emitting findings that
+# the diff filters out. Record the runner status before that filtering happens.
+if [ -s "$BRAVEBOT_SCAN_FAILURES" ]; then
+    say "failed runners: $(tr '\n' ' ' < "$BRAVEBOT_SCAN_FAILURES")"
+    scan_failed=1
+fi
+if [ "$scan_failed" -ne 0 ]; then
+    cat "$FINDINGS"
+    die "security scan failed; findings are incomplete"
+fi
 
-count="$(grep -c '^[^ ]*:[0-9]*: \[' "$FINDINGS" 2>/dev/null)"
-count="${count:-0}"
-
-if [ "$count" -eq 0 ]; then
+if [ ! -s "$FINDINGS" ]; then
     say "no findings"
     exit 0
 fi
@@ -300,5 +356,5 @@ else
         -e 's|^([^ ]*:[0-9]+:) |\n\1\n    |' "$FINDINGS"
 fi
 
-printf '\n\033[0;31m%s finding(s)\033[0m\n' "$count" >&2
+printf '\n\033[0;31msecurity findings reported\033[0m\n' >&2
 exit 1
