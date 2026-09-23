@@ -97,7 +97,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-agent"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "base64 0.22.1",
  "bravebot-aichat",
@@ -116,7 +116,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-aichat"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "bravebot-config",
  "bravebot-core",
@@ -128,7 +128,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-bedrock"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "bravebot-aichat",
  "bravebot-config",
@@ -141,7 +141,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-cli"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "bravebot-agent",
  "bravebot-config",
@@ -157,22 +157,22 @@ dependencies = [
 
 [[package]]
 name = "bravebot-config"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "bravebot-core"
-version = "0.9.0"
+version = "0.10.0"
 
 [[package]]
 name = "bravebot-i18n"
-version = "0.9.0"
+version = "0.10.0"
 
 [[package]]
 name = "bravebot-lsp"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "bravebot-core",
  "serde",
@@ -181,7 +181,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-mcp"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "bravebot-core",
  "bravebot-net",
@@ -192,7 +192,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-net"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "bravebot-core",
  "ureq",
@@ -200,7 +200,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-sandbox"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "landlock",
  "libc",
@@ -209,7 +209,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-session"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "base64 0.22.1",
  "bravebot-agent",
@@ -224,7 +224,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-signing"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "base64 0.22.1",
  "hmac",
@@ -233,7 +233,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-skus"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "challenge-bypass-ristretto",
  "hmac",
@@ -246,11 +246,11 @@ dependencies = [
 
 [[package]]
 name = "bravebot-stamp"
-version = "0.9.0"
+version = "0.10.0"
 
 [[package]]
 name = "bravebot-tui"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "base64 0.22.1",
  "bravebot-agent",
@@ -271,7 +271,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-ui-bridge"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "bravebot-agent",
  "bravebot-aichat",
@@ -287,7 +287,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-ui-files"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "rustix",
  "serde",
