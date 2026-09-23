@@ -102,9 +102,9 @@ const fn grant_for_writing() -> Grant {
 /// leaves a second entry to remove.
 fn grants_for(policy: &SandboxPolicy) -> Vec<(PathBuf, Grant)> {
     let mut grants: Vec<(PathBuf, Grant)> = Vec::new();
-    for path in &policy.writable {
-        if !grants.iter().any(|(granted, _)| granted == path) {
-            grants.push((path.clone(), grant_for_writing()));
+    for row in &policy.writable {
+        if !grants.iter().any(|(granted, _)| *granted == row.path) {
+            grants.push((row.path.clone(), grant_for_writing()));
         }
     }
     for path in &policy.readable {

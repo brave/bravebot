@@ -101,10 +101,10 @@ impl SeatbeltSandbox {
             ));
         }
 
-        for path in &policy.writable {
+        for row in &policy.writable {
             out.push_str(&format!(
                 "(allow file-write* (subpath {}))\n",
-                quote(&path.to_string_lossy())
+                quote(&row.path.to_string_lossy())
             ));
         }
 

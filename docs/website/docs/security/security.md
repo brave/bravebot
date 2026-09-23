@@ -171,8 +171,12 @@ paths than any one machine has, so refusing every policy that mentions an absent
 machine with no `~/.pyenv` is a machine where nothing runs. Where the platform can grant a path that
 does not exist, the policy is what was wanted. Where it cannot, an absent path is left out before the
 policy is built and reported back, so the difference between the grant that was decided on and the
-grant a program got stays visible. Nothing is invented in its place: naming the parent directory would
-grant every other file in it, and creating the file would write where nothing asked for a write.
+grant a program got stays visible. Naming the parent directory in its place is not done, since that
+would grant every other file in it. A path is created in its place only where the list naming it says
+whether it is a file or a directory, and only for a program meant to create it, which is how a fresh
+account with no `~/.ssh/known_hosts` would get one rather than a push that fails; what is created is
+reachable by your account and nobody else. The lists a confined process runs under today say neither,
+so nothing is created for one.
 
 **The environment is the caller's.** A confined process starts with the environment this process
 holds. A grant over paths can neither withhold nor hand over what sits in a variable, and a credential
