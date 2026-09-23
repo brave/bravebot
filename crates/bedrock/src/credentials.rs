@@ -109,6 +109,12 @@ impl Credentials {
     /// with `aws iam delete-access-key`, for a key that does not exist. A session token is present
     /// only for a credential STS issued, which is exactly the distinction being drawn.
     ///
+    /// Which arrangement, and not which tier. Both stand at Held, and
+    /// [`Held::tier`](bravebot_config::Held::tier) is what says so: the export
+    /// above renews a session without asking anybody, and nothing here reads the profile chain
+    /// that would say how long it can keep doing that, so a tier read off the session token
+    /// would report a value this agent renews unaided as a bounded one. CRED-9.
+    ///
     /// `'static` because neither arm names a host: the lifetime on [`Held`] is for the gateway
     /// arrangement, whose record borrows the endpoint the block stated.
     pub fn held(&self) -> Held<'static> {
@@ -810,14 +816,29 @@ mod tests {
         // expiry. The session credential has nothing under it in turn.
         assert!(long_lived.held().outlives_revocation());
         assert!(!session.held().outlives_revocation());
+    }
 
-        // CRED-10: the session credential is the one whose bound is a window, so it is the one
-        // the record owes a detection figure for. A resolver that called it a long-lived key
-        // would take the obligation off it along with the expiry.
-        assert_eq!(session.held().tier(), bravebot_config::Tier::HeldBriefly);
-        assert!(session.held().noticed_within().is_some());
-        assert_eq!(long_lived.held().tier(), bravebot_config::Tier::Held);
-        assert!(long_lived.held().noticed_within().is_none());
+    /// CRED-9: a session credential the CLI resolved is recorded at Held, because the export
+    /// that renews it asks nobody. A session token and a stated expiry are what a record reading
+    /// the value takes for a bounded credential, so the fixture carries both: what the clause
+    /// asks is whether renewing needs authority this agent lacks, and the expiry does not answer
+    /// it. Read at the site that decides the tier, so a record that turned on the session token
+    /// fails here rather than at the line a person reads.
+    #[test]
+    fn a_session_this_program_re_mints_unaided_is_recorded_at_held() {
+        let session = decode(
+            br#"{"AccessKeyId":"ASIA","SecretAccessKey":"secret","SessionToken":"token","Expiration":"2026-09-05T03:04:02+00:00"}"#,
+        )
+        .expect("decoded");
+        assert!(
+            session.expires_at.is_some(),
+            "the fixture needs the stated lifetime the clause says does not decide the tier"
+        );
+        assert_eq!(
+            session.held().tier(),
+            bravebot_config::Tier::Held,
+            "a session this program re-mints for itself is recorded above Held"
+        );
     }
 
     /// The expiry is what lets a caller answer "is this still good" without running the CLI again,

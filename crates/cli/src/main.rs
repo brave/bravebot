@@ -2363,6 +2363,11 @@ fn why_it_dropped(
             gate = gate,
             answer = answer
         ),
+        (Held::AwsSession, Condition::RenewableWithoutAuthority) => t!(
+            doctor_dropped_aws_session_renewable_without_authority,
+            gate = gate,
+            answer = answer
+        ),
         (Held::GatewayToken { .. }, Condition::NothingDecidesEachUse) => t!(
             doctor_dropped_gateway_token_nothing_decides_each_use,
             gate = gate,
@@ -2383,11 +2388,10 @@ fn why_it_dropped(
             gate = gate,
             answer = answer
         ),
-        // The conditions each credential's walk does not hold. Gate 3 is passed by the session
-        // credential and gate 2 by the subscription batch, which is why neither has an account of
-        // the gates below the one it stopped at; the rest are the other conditions of the gates
-        // each credential does drop at, and a drop recorded on one of them is an account nobody
-        // has written.
+        // The conditions each credential's walk does not hold. Gate 2 is passed by the
+        // subscription batch, which is why it has no account of the gates below the one it
+        // stopped at; the rest are the other conditions of the gates each credential does drop
+        // at, and a drop recorded on one of them is an account nobody has written.
         (
             Held::SigningKey | Held::AwsAccessKey | Held::GatewayToken { .. },
             Condition::NothingCanRefuseAUse
@@ -2402,8 +2406,7 @@ fn why_it_dropped(
             | Condition::BoundEnforcedWithinReach
             | Condition::BoundWithNoEnd
             | Condition::NotMintedForOneStep
-            | Condition::IssuerEndsNothing
-            | Condition::RenewableWithoutAuthority,
+            | Condition::IssuerEndsNothing,
         )
         | (
             Held::SubscriptionBatch,
@@ -3372,11 +3375,6 @@ mod tests {
         // record separates are separated in the report. Reported alike, the tier line would be
         // decoration beside an account that already names the credential.
         assert_ne!(
-            what_tier_it_stands_at(bravebot_config::Held::AwsSession.tier()),
-            what_tier_it_stands_at(bravebot_config::Held::SigningKey.tier()),
-            "a credential at Held briefly and one at Held are reported alike"
-        );
-        assert_ne!(
             what_tier_it_stands_at(bravebot_config::Held::SubscriptionBatch.tier()),
             what_tier_it_stands_at(bravebot_config::Held::SigningKey.tier()),
             "a bounded credential and a permanent one are reported alike"
@@ -3411,9 +3409,9 @@ mod tests {
     /// CRED-3: a reason is reported for exactly the drops the record holds. A credential whose
     /// drops go unreported leaves the tier an assertion, which is the state the clause exists to
     /// end. A reason reported for a drop the record does not hold is the other half and the worse
-    /// one: the session credential's expiry is enforced by AWS, and a line saying it failed gate 3
-    /// sends somebody looking for a bound nothing is missing, while a gate 2 line naming a
-    /// condition the walk did not fail is a stated reason that is not the reason.
+    /// one: the subscription batch's bound is enforced by the backend that verifies it, and a line
+    /// saying it failed gate 2 sends somebody looking for a bound nothing is missing, while a gate
+    /// 3 line naming a condition the walk did not fail is a stated reason that is not the reason.
     ///
     /// Asked of every condition of every gate rather than of the walk alone, since the walk is
     /// what both sides read and a report keyed on something coarser agrees with it by accident.

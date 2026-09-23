@@ -492,10 +492,11 @@ impl Tier {
 /// the record naming the arrangements is where the tier belongs: the alternative is a second list
 /// that can be short by one.
 ///
-/// CRED-10 asks a fifth thing, of the credentials at Held briefly alone: how quickly a leak of one
-/// would be noticed and acted on. That figure is a judgement about the deployment rather than a
-/// fact about the arrangement, and it establishes no tier and moves none, so it is recorded here
-/// beside the tier rather than derived from it: [`Held::tier`] and [`Held::noticed_within`].
+/// CRED-10 asks a fifth thing, of every credential at Held briefly and of any other worth saying it
+/// of: how quickly a leak of one would be noticed and acted on. That figure is a judgement about
+/// the deployment rather than a fact about the arrangement, and it establishes no tier and moves
+/// none, so it is recorded here beside the tier rather than derived from it: [`Held::tier`] and
+/// [`Held::noticed_within`].
 ///
 /// CRED-3 asks a sixth thing, of every credential here: how it reached the tier it stands at. Each
 /// drop of the walk down from Delegated records which of the gate's conditions failed and whether
@@ -535,8 +536,10 @@ pub enum Held<'a> {
     AwsAccessKey,
     /// An AWS session credential: an SSO session or an assumed role, as the AWS CLI resolved it.
     ///
-    /// Held briefly. It states an expiry and stops working at it; ending it before that is done at
-    /// its issuer, because `aws sso logout` clears this machine's copy rather than the session.
+    /// Held. It states an expiry, and the expiry ends that copy rather than this program's
+    /// access: credentials are resolved as each request is built, and the export that renews them
+    /// asks nobody. Ending it is done at its issuer, because `aws sso logout` clears this
+    /// machine's copy rather than the session.
     AwsSession,
     /// The bearer token a `provider` block carries or names a variable for, held for the run.
     ///
@@ -636,11 +639,20 @@ impl<'a> Held<'a> {
                     attempt: Attempt::NotAttempted,
                 },
             ],
-            // Two drops, because gate 3 passes: STS mints the session for the profile and ends it
-            // at an expiry AWS enforces. Gate 2 fails on the bound rather than on the lifetime,
-            // which is the whole of the difference between Granted and Held briefly: the session
-            // carries whatever the profile's role or SSO grant allows, and nothing here asks STS
-            // to narrow it to this run.
+            // Three drops, although the session states an expiry and the issuer that minted it
+            // could end it early. Gate 2 fails on the bound: the session carries whatever the
+            // profile's role or SSO grant allows, and nothing here asks STS to narrow it to this
+            // run. Gate 3 fails on renewal, which is CRED-9's false pass. Credentials are resolved
+            // as each request is built, and what renews them is `aws configure
+            // export-credentials`, which asks nobody: the next session is minted from whatever the
+            // profile chains to, for as long as that lasts. How long that is is a question about
+            // `~/.aws/config`, which nothing here reads. A `role_arn` over a long-lived key in a
+            // file lasts until somebody deletes the key, and an SSO chain until its own token runs
+            // out; the two arrive here as one arrangement, the CLI answering an export.
+            //
+            // Not attempted rather than refused: reading the profile chain, and finding one whose
+            // renewal a person has to sit through, would be a different arrangement and would
+            // answer differently, and nothing here has asked for one.
             Self::AwsSession => &[
                 GateDrop {
                     condition: Condition::NothingDecidesEachUse,
@@ -648,6 +660,10 @@ impl<'a> Held<'a> {
                 },
                 GateDrop {
                     condition: Condition::NoBoundFixedBeforeIssue,
+                    attempt: Attempt::NotAttempted,
+                },
+                GateDrop {
+                    condition: Condition::RenewableWithoutAuthority,
                     attempt: Attempt::NotAttempted,
                 },
             ],
@@ -693,20 +709,26 @@ impl<'a> Held<'a> {
     pub fn tier(self) -> Tier {
         match self {
             Self::SubscriptionBatch => Tier::Granted,
-            Self::AwsSession => Tier::HeldBriefly,
-            Self::SigningKey | Self::AwsAccessKey | Self::GatewayToken { .. } => Tier::Held,
+            Self::SigningKey
+            | Self::AwsAccessKey
+            | Self::AwsSession
+            | Self::GatewayToken { .. } => Tier::Held,
         }
     }
 
     /// How quickly a leak of this credential would be noticed and acted on, which CRED-10 asks the
     /// record to say for every credential at Held briefly.
     ///
-    /// `None` at every other tier, where the figure would mean nothing: a permanent credential is
-    /// bounded by the surface that revokes it rather than by a window, and that surface is what
-    /// [`Held`] already records, while one at Granted is bounded by what the issuer will accept it
-    /// for. The figure is owed exactly where the window is the bound, so it is `Some` for exactly
-    /// the credentials [`Held::tier`] puts at [`Tier::HeldBriefly`], and the two are pinned
-    /// together rather than derived from one another.
+    /// Owed at Held too, and for the stronger reason. The obligations ratchet downward, so a
+    /// credential that drops a tier keeps what it owed and picks up more, and detection is the
+    /// whole of what a permanent credential is owed: it outlives every decision made about it.
+    /// What the drop takes away is what the figure decides. At Held briefly it says whether the
+    /// window is short enough for what the credential reaches; at Held there is no window, and it
+    /// says how long a leak runs before anybody goes to the surface [`Held`] already names.
+    ///
+    /// So a credential [`Held::tier`] puts at [`Tier::HeldBriefly`] has to have one, and a
+    /// credential at Held may. Recorded rather than derived either way, so a credential added at
+    /// Held briefly and left unsized is a disagreement a test sees.
     ///
     /// It does not establish the tier and cannot move it. A rota that stopped watching would make
     /// this number larger and leave the session credential exactly where the gate walk left it.
@@ -716,8 +738,8 @@ impl<'a> Held<'a> {
     /// of a credential this program holds: the notice comes from the AWS account's own trail,
     /// where a call made with the session appears rather than here, and ending the session before
     /// its expiry is then one request at its issuer. Fifteen minutes is how long that takes
-    /// somebody who is reading the trail. Where nobody reads it, nothing notices at all and the
-    /// expiry is the only bound, which is the judgement this figure exists to let a person make.
+    /// somebody who is reading the trail. Where nobody reads it, nothing notices at all, which is
+    /// the judgement this figure exists to let a person make.
     pub fn noticed_within(self) -> Option<Duration> {
         match self {
             Self::AwsSession => Some(Duration::from_secs(15 * 60)),
@@ -1458,6 +1480,41 @@ mod tests {
         );
     }
 
+    /// CRED-9: gate 3 is decided by whether renewing a credential needs authority this agent
+    /// cannot supply, and for none of the credentials this program holds that reach it does it. An
+    /// AWS session credential is the one that reads as briefer than the rest, since it states an
+    /// expiry and an issuer that could end it minted it, so a record deciding the tier from the
+    /// value would put it a tier above the others. What the clause asks instead is who has to be
+    /// asked for the next one, and nothing here has to ask anybody: a record putting it at Held
+    /// briefly reports a permanent credential as a bounded one, and offers waiting out an expiry
+    /// as though it were a disposition.
+    ///
+    /// The session's drop at gate 3 is on the clause's own condition, since the other two are
+    /// ones it meets: STS mints it for the profile and AWS ends it. A drop recorded on either of
+    /// those would state a reason that is not the reason.
+    #[test]
+    fn no_credential_this_program_holds_stands_at_held_briefly() {
+        for held in Held::all("gateway.invalid") {
+            assert_ne!(
+                held.tier(),
+                Tier::HeldBriefly,
+                "{held:?} is recorded at Held briefly, and nothing establishes that renewing it needs a person"
+            );
+        }
+
+        let at_gate_three: Vec<Condition> = Held::AwsSession
+            .walk()
+            .iter()
+            .map(|drop| drop.condition)
+            .filter(|condition| condition.gate() == Gate::Three)
+            .collect();
+        assert_eq!(
+            at_gate_three,
+            [Condition::RenewableWithoutAuthority],
+            "the session credential drops at gate 3 on something other than being renewed unaided"
+        );
+    }
+
     /// CRED-25: both AWS arrangements, because which one a profile resolves to is the AWS CLI's
     /// answer and this is configuration rather than a resolved credential. They differ in what
     /// would end them, so reporting one of the two would be wrong for half the machines that read
@@ -1604,8 +1661,9 @@ mod tests {
     /// appearing to say something about all of them.
     ///
     /// Held against the whole of the record rather than against a variant, because the credential a
-    /// tier is missing from is the one nobody thought about, and against three distinct answers
-    /// because a constant is what a record with no walk behind it looks like from the outside.
+    /// tier is missing from is the one nobody thought about, and against the distinct answers the
+    /// walks arrive at because a constant is what a record with no walk behind it looks like from
+    /// the outside.
     #[test]
     fn every_credential_in_the_record_stands_at_a_tier_the_walk_arrived_at() {
         let every = Held::all("gateway.invalid");
@@ -1626,14 +1684,14 @@ mod tests {
         tiers.dedup();
         assert_eq!(
             tiers,
-            ["Granted", "Held", "HeldBriefly"],
+            ["Granted", "Held"],
             "the record does not answer its credentials with the tiers their walks stopped at"
         );
 
         // Each answer is the gate the arrangement stops at, and the reasoning is on the variant.
         assert_eq!(Held::SigningKey.tier(), Tier::Held);
         assert_eq!(Held::AwsAccessKey.tier(), Tier::Held);
-        assert_eq!(Held::AwsSession.tier(), Tier::HeldBriefly);
+        assert_eq!(Held::AwsSession.tier(), Tier::Held);
         assert_eq!(Held::SubscriptionBatch.tier(), Tier::Granted);
 
         // CRED-4: the tier is a claim about the arrangement, and a gateway's address is not part of
@@ -1692,46 +1750,40 @@ mod tests {
     }
 
     /// CRED-10: a credential the record stands at Held briefly is owed a figure for how quickly a
-    /// leak of it would be noticed and acted on, and one at Held is not. The window is the whole
-    /// of what bounds the first, so a window nobody sized is a number somebody liked; the second
-    /// is bounded by the surface that revokes it, which the record already names, and giving it a
-    /// figure too would say a window bounds a credential that has none.
+    /// leak of it would be noticed and acted on. The window is the whole of what bounds such a
+    /// credential, so a window nobody sized is a number somebody liked.
     ///
-    /// The two are kept apart and pinned together here so that a credential standing at Held
-    /// briefly and left unsized fails rather than passing quietly.
+    /// One direction and not both. The obligations ratchet downward, so a credential that drops
+    /// to Held keeps the figure it owed and is owed detection besides, and a record that made the
+    /// figure exclusive to Held briefly would drop it on the way down, which is the direction
+    /// that needs it most.
+    ///
+    /// The tier and the figure are kept apart and pinned here so that a credential standing at
+    /// Held briefly and left unsized fails rather than passing quietly.
     #[test]
-    fn a_credential_at_held_briefly_is_sized_against_detection_and_one_at_held_is_not() {
-        let gateway = Held::GatewayToken {
-            host: "gateway.invalid",
-        };
+    fn a_credential_at_held_briefly_is_sized_against_detection() {
         for held in Held::all("gateway.invalid") {
+            assert!(
+                held.tier() != Tier::HeldBriefly || held.noticed_within().is_some(),
+                "{held:?} stands at Held briefly with no figure for how quickly a leak is noticed"
+            );
+
+            let Some(window) = held.noticed_within() else {
+                continue;
+            };
+            assert!(
+                window >= Duration::from_secs(60),
+                "a figure under a minute is the unsized case wearing a number: {window:?}"
+            );
+            // Whole minutes, because minutes are what the report states: a figure of ninety
+            // seconds would reach a person as one minute, which is a smaller window than
+            // anybody recorded.
             assert_eq!(
-                held.noticed_within().is_some(),
-                held.tier() == Tier::HeldBriefly,
-                "{held:?} stands at one tier and is sized for the other"
+                window.as_secs() % 60,
+                0,
+                "a figure that is not whole minutes is reported as a shorter one: {window:?}"
             );
         }
-
-        assert_eq!(Held::AwsSession.tier(), Tier::HeldBriefly);
-        assert_ne!(Held::SigningKey.tier(), Tier::HeldBriefly);
-        assert_ne!(Held::AwsAccessKey.tier(), Tier::HeldBriefly);
-        assert_ne!(gateway.tier(), Tier::HeldBriefly);
-        assert_ne!(Held::SubscriptionBatch.tier(), Tier::HeldBriefly);
-
-        let window = Held::AwsSession
-            .noticed_within()
-            .expect("a session credential stands at Held briefly");
-        assert!(
-            window >= Duration::from_secs(60),
-            "a figure under a minute is the unsized case wearing a number: {window:?}"
-        );
-        // Whole minutes, because minutes are what the report states: a figure of ninety seconds
-        // would reach a person as one minute, which is a smaller window than anybody recorded.
-        assert_eq!(
-            window.as_secs() % 60,
-            0,
-            "a figure that is not whole minutes is reported as a shorter one: {window:?}"
-        );
     }
 
     /// Without Bedrock the aichat credentials are still required. Relaxing them for everyone would

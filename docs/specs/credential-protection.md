@@ -378,7 +378,18 @@ agent can renew without further authority is permanent, whatever its stated life
 **Why.** Refreshable-without-asking is the common false pass: a fifteen-minute token the agent
 renews by itself is a permanent credential with extra steps, and belongs at Held.
 
-`verified-by: none`
+**What this leaves the AWS session credential at.** Held. The AWS CLI is asked for credentials as
+each request is built, and what renews one is an export that asks nobody: the next session comes
+from whatever the profile chains to, for as long as that lasts. How long that is is a question
+about `~/.aws/config`, which nothing here reads, so a `role_arn` over a long-lived key in a file
+and an SSO chain arrive as one arrangement, the CLI answering an export. Its walk drops at gate 3
+on the agent renewing it without further authority, and [CRED-3](#CRED-3) records that drop as one
+nobody attempted: reading the profile chain, and finding one whose renewal a person has to sit
+through, would be a different arrangement. So the stated expiry ends that copy rather than this
+program's access, which is what the record and the report say.
+
+`verified-by: bravebot_config::lib::no_credential_this_program_holds_stands_at_held_briefly`
+`verified-by: bravebot_bedrock::credentials::a_session_this_program_re_mints_unaided_is_recorded_at_held`
 
 <a id="CRED-10"></a>
 ### CRED-10: a brief window is sized against detection, and the size is recorded
@@ -402,9 +413,17 @@ the same surface: `doctor` prints the figure under the account of what would end
 tier and the figure are separate answers on that record, so a credential standing at Held briefly
 with nothing sized is a disagreement rather than a silence.
 
-`verified-by: bravebot_config::lib::a_credential_at_held_briefly_is_sized_against_detection_and_one_at_held_is_not`
+**What stands there, and what the figure survives.** Nothing this program holds stands at Held
+briefly: the one arrangement whose bound reads as a window is an AWS session credential, and
+[CRED-9](#CRED-9) puts it at Held. Its figure stays, because the obligations ratchet downward and
+a drop sheds none of them, and because detection is the whole of what a permanent credential is
+owed. What the drop changes is what the figure decides. At Held briefly it says whether the window
+is short enough for what the credential reaches; at Held there is no window, and it says how long
+a leak runs before anybody goes to the surface [CRED-25](#CRED-25) names. So a credential at Held
+briefly has a figure and one at Held may, which is one direction rather than two.
+
+`verified-by: bravebot_config::lib::a_credential_at_held_briefly_is_sized_against_detection`
 `verified-by: bravebot_cli::main::how_soon_a_leak_is_noticed_is_reported_for_exactly_the_credentials_the_record_sizes`
-`verified-by: bravebot_bedrock::credentials::a_session_token_is_what_says_what_would_end_a_credential`
 
 <a id="CRED-11"></a>
 ### CRED-11: a turn does not copy a credential somewhere weaker than where it was
