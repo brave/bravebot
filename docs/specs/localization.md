@@ -107,7 +107,7 @@ nothing that parses, matches, or interpolates a catalog.
 whose whole premise is that it does not interpret what it was given, is the sort of thing that is
 only ever noticed afterwards.
 
-`verified-by: by-construction (the build script writes Rust, and the crate links no parser: what ships are string constants and the code that concatenates them)`
+`verified-by: by-construction (the build script writes Rust, and the crate links no parser: the catalog module is declared #[cfg(test)] in crates/i18n/src/lib.rs and the build script reaches the file through an include! of its own, so what ships are string constants and the code that concatenates them; the absence is pinned by the compile_fail doctest calling bravebot_i18n::catalog::parse in crates/i18n/src/lib.rs, beside an ordinary doctest calling the sibling plural::category that does ship, since a compile_fail block alone passes for any compile error at all)`
 
 <a id="LOCALE-7"></a>
 ### LOCALE-7: the locale is chosen once, by the program, and not by the library
