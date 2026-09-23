@@ -120,6 +120,10 @@ fn main() -> ExitCode {
         // Fork a session, creating a new session record that starts with the same transcript.
         Some("--fork" | "-f") => match args.get(1) {
             Some(id) => fork_named(id, skip_permissions),
+            // No result object here, and none is owed: reaching this arm means the arguments held
+            // `--fork` and nothing after it, so the command line cannot also have carried `--json`.
+            // `bravebot --fork --json` reads the flag as the session id and is refused by name in
+            // `fork_named` instead.
             None => fail(Ending::Argument, t!(cli_fork_needs_a_name)),
         },
         // A session in lines, which takes nothing from the terminal (CLI-14). On its own, because
@@ -128,11 +132,7 @@ fn main() -> ExitCode {
         // starting.
         Some("--plain") => match args.len() {
             1 => plain::session(skip_permissions),
-            _ => {
-                let refused = fail(Ending::Argument, t!(cli_plain_takes_nothing_else));
-                print_help();
-                refused
-            }
+            _ => refused_with_the_usage(as_json, t!(cli_plain_takes_nothing_else)),
         },
         // The task flags may lead: `bravebot -p "task"` and `bravebot --mode manifest "task"`
         // would otherwise be caught below as unknown options.
@@ -142,9 +142,7 @@ fn main() -> ExitCode {
         Some("doctor") => doctor(),
         Some("import-leo-creds") => import_leo_creds(&args[1..]),
         Some(flag) if flag.starts_with('-') => {
-            let refused = fail(Ending::Argument, t!(cli_unknown_option, flag = flag));
-            print_help();
-            refused
+            refused_with_the_usage(as_json, t!(cli_unknown_option, flag = flag))
         }
         // Anything else is treated as the task prompt.
         Some(_) => run_task(&args, skip_permissions),
@@ -896,6 +894,21 @@ fn stopped_before_the_turn(
         say_the_result(&what_ran(ending, &message, &[], &[], &[]));
     }
     stopped
+}
+
+/// A command line refused before it named a command, where the usage is the rest of the answer.
+///
+/// The table is what a person mistyping a flag needs, and it is written with `println!`, so it
+/// lands on the stream CLI-12 promises holds the result object and nothing else. A run that asked
+/// for an object therefore gets the object in its place: the two cannot share stdout, and prose a
+/// caller has to tell apart from a result is the surface the flag exists to replace. The complaint
+/// itself is on stderr either way, so nothing is lost to the person reading.
+fn refused_with_the_usage(as_json: bool, message: impl std::fmt::Display) -> ExitCode {
+    let refused = stopped_before_the_turn(as_json, Ending::Argument, message);
+    if !as_json {
+        print_help();
+    }
+    refused
 }
 
 /// Put a result object on stdout.

@@ -487,6 +487,7 @@ job is code somebody else wrote against fields this program chose, and without a
 what may change, every field is either frozen by accident or broken without warning.
 
 `verified-by: bravebot_cli::running::a_run_asked_for_a_result_object_puts_one_on_stdout`
+`verified-by: bravebot_cli::running::a_refused_command_line_asking_for_a_result_object_gets_one_instead_of_the_usage`
 `verified-by: bravebot_cli::json::a_finished_run_says_what_it_did_in_fields_a_program_can_read`
 `verified-by: bravebot_cli::json::a_failure_before_the_turn_is_still_a_result_object`
 `verified-by: bravebot_cli::json::a_refusal_names_the_principle_it_upholds`
