@@ -2271,14 +2271,41 @@ fn credential_refusal(path: &str, scanned: &Scanned) -> Produced {
     refused_with_a_note(
         format!(
             "refused: writing {path} would put a credential in the tree, so nothing was \
-             written. Put a reference to the value in the file instead, and tell the user which \
-             secret they have to set and where."
+             written. {}",
+            do_this_instead(scanned.only_the_value)
         ),
         format!(
             "refused, a credential would have landed here: {}",
             found.join("; ")
         ),
     )
+}
+
+/// What the planner is told to do instead of the write, which depends on what the file would
+/// have held.
+///
+/// A value inside a document was copied there from somewhere, so the answer is the reference: the
+/// secret still sits wherever it already sat, and the file gets a name for it.
+///
+/// A file that is the value and nothing else is the other thing. It has no room for a reference,
+/// and a value with no prior location is one this turn brought into existence, which is the case
+/// [CRED-13](../../../docs/specs/credential-protection.md) is written about. There is nothing
+/// here to create a credential into, so what the planner is owed is that the value does not
+/// exist and that generating another one and writing it somewhere else is the same refusal a
+/// second time. Saying what it could not create is the whole of what the turn can do, and the
+/// person does the rest.
+fn do_this_instead(only_the_value: bool) -> &'static str {
+    match only_the_value {
+        false => {
+            "Put a reference to the value in the file instead, and tell the user which secret \
+             they have to set and where."
+        }
+        true => {
+            "That file would hold the value and nothing else, so there is no reference to put in \
+             it and nothing was created. Do not generate another and do not write one elsewhere: \
+             tell the user what the value is for and where it has to go, and let them create it."
+        }
+    }
 }
 
 /// A list of findings said the one way a finding may be said.
@@ -2302,8 +2329,8 @@ fn credential_aware_rejection(path: &str, scanned: &Scanned) -> Produced {
     refused_with_a_note(
         format!(
             "refused: the user did not approve writing {path}, which looks like it would put a \
-             credential in the tree. Put a reference to the value in the file instead, and tell \
-             the user which secret they have to set and where."
+             credential in the tree. {}",
+            do_this_instead(scanned.only_the_value)
         ),
         "not approved".to_string(),
     )

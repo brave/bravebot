@@ -414,7 +414,18 @@ on the machine is at Held before anyone has walked a gate, and the walk then rat
 value already sits instead of deciding it. Creating into the authority is what leaves the walk
 something to decide.
 
-`verified-by: none`
+**What the refusal says.** A credential created as a file is the value and nothing else, so there
+is no room in it for the reference CRED-11's refusal asks for, and a planner told to write one
+there writes it into the file a framework reads as the key. What that turn is told instead is that
+nothing was created, that generating another and writing it elsewhere is the same refusal again,
+and that the person is the one who creates the value. Telling the two apart is a question about the
+body rather than about the finding: a value inside a document was copied from wherever it already
+sat, and a value that is the whole file had no prior location.
+
+`verified-by: bravebot_agent::turn::a_credential_created_as_a_whole_file_is_not_created_and_the_planner_is_told_so`
+`verified-by: bravebot_core::credentials::a_generated_key_standing_as_a_whole_file_is_recognised`
+`verified-by: bravebot_core::credentials::a_file_that_is_the_value_is_told_from_one_that_mentions_it`
+`verified-by: bravebot_core::credentials::blank_lines_around_the_value_are_not_contents`
 
 <a id="CRED-14"></a>
 ### CRED-14: the credentials this agent holds for itself reach no program, no prompt and no record
@@ -488,6 +499,11 @@ catches an inline Kubernetes `Secret`, a local development password and a test f
 all four with no override would stop ordinary work over a guess, and a scan people have to fight is
 a scan they turn off. The prompt names the finding, so the question can be answered.
 
+A value standing as the whole of a file, with no name beside it and no provider prefix on it, is
+inferred the same way and raised the same way. The file being nothing else is what stands in for
+the name, which is weaker than a name: a commit id, a machine identifier and a digest are written
+in that shape too.
+
 A finding raised this way goes to the person and never to the planner, which is what CRED-19
 requires of a finding however it is answered.
 
@@ -503,6 +519,9 @@ requires of a finding however it is answered.
 `verified-by: bravebot_core::credentials::a_password_in_a_connection_string_is_a_finding`
 `verified-by: bravebot_core::credentials::each_shape_matches_at_its_minimum_and_not_below_it`
 `verified-by: bravebot_core::credentials::one_key_in_a_json_field_is_one_finding`
+`verified-by: bravebot_core::credentials::a_provider_key_standing_alone_is_one_finding_and_not_two`
+`verified-by: bravebot_core::credentials::a_rare_token_with_a_document_around_it_is_not_a_whole_file`
+`verified-by: bravebot_core::credentials::a_value_standing_as_a_whole_file_is_a_question_and_not_a_rule`
 `verified-by: bravebot_core::credentials::an_armoured_private_key_is_one_finding_over_its_whole_body`
 `verified-by: bravebot_core::credentials::nothing_a_finding_says_repeats_the_value`
 
@@ -779,6 +798,27 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   reference. Where a framework cannot read a reference, the turn produces the reference, says what
   it could not do, and the person completes it. This breaks scaffolding written on the assumption
   that generated secrets land in a file.
+
+- **There is nothing to create a credential into, so creation is refused rather than performed.**
+  CRED-13 asks for the value to reach an authority in the same step and its tier to be recorded
+  then. No authority exists, so what runs is the clause's other half: the creation does not happen
+  and the turn says so. Nothing records a tier for a credential a turn created, because there is no
+  such credential to record one for.
+
+- **A credential created as a file is inferred, so the refusal can be overridden.** The shape is a
+  file whose whole contents is one rare value, which is what says it is a value rather than a
+  document. A commit id, a machine identifier and a digest are written that way too, so the finding
+  goes to the person on the approval the write already needs rather than refusing outright, and a
+  person who says yes gets the write. Where the value also declares itself under CRED-16, it is
+  refused with nobody asked, as any declared value is. What would close the gap is an authority to
+  create into, which is the entry above.
+
+- **A value a command generates is not scanned at all.** CRED-16 reads what a turn wrote in its own
+  words, and a redirection is a file a program the turn started opened for itself: `openssl rand
+  -hex 32 > config/master.key` puts the value in the tree without a byte of it passing through a
+  layer here. Reading it back to decide whether to refuse would be a decision taken from bytes
+  nobody vouched for, which [labels.md](labels.md) admits nowhere. This is the same gap as the
+  reference case below rather than a second one, and it closes the same way.
 
 - **Gate 2 is usually failed by the counterparty.** Most SaaS keys, most package registries and most
   webhook secrets have no derived form to ask for. The tier is honest about it and cannot fix it.

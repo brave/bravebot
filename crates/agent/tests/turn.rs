@@ -22972,6 +22972,12 @@ const GENERATED_SECRET: &str = "c8f1a0b4d2e6f7a9c3b5d8e0f2a4c6b8d1e3f5a7";
 /// is why a write carrying it is refused rather than put to anybody.
 const DECLARED_KEY: &str = "AKIAIOSFODNN7EXAMPLE";
 
+/// A key that says what it is, written as the whole of a file rather than beside a name.
+///
+/// A counted-off alphabet at the GitHub shape's declared minimum, so the fixture carries the
+/// length and the character classes the rule matches on and reads as nothing an issuer handed out.
+const KEY_AS_A_WHOLE_FILE: &str = "ghp_0123456789abcdefghijklmnopqrstuvwxyzAB"; // nosemgrep: generic.secrets.gitleaks.github-pat.github-pat
+
 /// Approves writes and keeps what it was shown, so a test can read the question rather than only
 /// the answer. Everything else is [`bravebot_agent::confirm::ApproveWrites`]'s refusal.
 #[derive(Default)]
@@ -23283,6 +23289,77 @@ fn tool_results(request: &str) -> String {
         .map(|message| message["content"].to_string())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// CRED-13. A value a turn brings into existence has no prior location, so there is nothing to
+/// copy it from and nothing weaker to copy it to: what the clause asks is that it goes to an
+/// authority as it is created. There is no authority here, so the credential is not created, and
+/// what the turn owes is saying that rather than writing the value and reporting a file.
+///
+/// The two bodies are the same key in the two shapes it reaches a tree in, and they are answered
+/// differently on purpose. In `.env` the value sits in a document that has room for a name, so
+/// the reference is the answer and the secret still exists wherever it came from. As the whole of
+/// `master.key` there is no room for a reference and no prior location, so a planner told to
+/// "write a reference instead" would write one into a file a framework reads as the key itself,
+/// and its next move after that is to generate the value again somewhere else.
+#[test]
+fn a_credential_created_as_a_whole_file_is_not_created_and_the_planner_is_told_so() {
+    let answered_for = |path: &str, contents: String| {
+        let scratch = Scratch::new(&format!("credential-created-{}", path.replace('.', "-")));
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request_2(
+                "write_file",
+                &format!(
+                    r#"{{"path":"{path}","contents":{}}}"#,
+                    serde_json::Value::String(contents)
+                ),
+            ),
+            reply_with("understood"),
+        ]);
+        let mut sink = RecordingSink::new();
+        turn::run(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("finish setting the project up"),
+            // Approving every write, so the refusal is the only thing that can stop this one.
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut sink,
+        )
+        .expect("turn runs");
+        assert!(
+            !scratch.path.join(path).exists(),
+            "a credential a turn created was written to {path}"
+        );
+        let _first = received.recv().expect("first request");
+        let second = received.recv().expect("second request");
+        tool_results(&second)
+    };
+
+    let created = answered_for("master.key", format!("{KEY_AS_A_WHOLE_FILE}\n"));
+    assert!(
+        created.contains("nothing was created"),
+        "the planner was not told the credential does not exist: {created}"
+    );
+    assert!(
+        !created.contains("Put a reference to the value in the file"),
+        "the planner was told to write a reference into a file that is the key: {created}"
+    );
+    assert!(
+        !created.contains(KEY_AS_A_WHOLE_FILE),
+        "the value reached the planner's context: {created}"
+    );
+
+    let copied = answered_for(".env", format!("GITHUB_TOKEN={KEY_AS_A_WHOLE_FILE}\n"));
+    assert!(
+        copied.contains("Put a reference to the value in the file"),
+        "a value copied into a document lost the answer that fits it: {copied}"
+    );
+    assert!(
+        !copied.contains("nothing was created"),
+        "a value copied into a document was reported as one this turn created: {copied}"
+    );
 }
 
 /// Attribution is what lets this refuse where the scan at startup can only inform. A turn that
