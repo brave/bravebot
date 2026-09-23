@@ -7,7 +7,6 @@
 # where the lists themselves merge cleanly, and a count nothing reads is wrong quietly. Count the
 # lines, or read the warnings check-spec prints.
 
-docs/specs/credential-protection.md:CRED-2: every credential carries a tier, and the tier is where its gate walk stopped
 docs/specs/credential-protection.md:CRED-4: nothing climbs a tier without the arrangement changing
 docs/specs/credential-protection.md:CRED-6: a handle the agent can redeem alone is not a handle
 docs/specs/credential-protection.md:CRED-7: a bound is decided before issue and enforced beyond the agent's reach

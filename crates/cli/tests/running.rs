@@ -650,6 +650,127 @@ fn a_run_asked_for_a_result_object_puts_one_on_stdout() {
     );
 }
 
+/// CRED-2: the tier a credential stands at reaches the person, once per credential the report
+/// accounts for. A tier recorded and never printed leaves the surface reading the record saying
+/// what would end each credential and nothing about what authority any of them stands for, which
+/// is the position the clause exists to end.
+///
+/// Counted against the accounts rather than asserted to appear, because the tier is a fact about
+/// one credential: a report that printed it once for the section, or for the first credential
+/// alone, would satisfy an assertion that the word is somewhere in the output and answer two of
+/// the three credentials with nothing.
+///
+/// An aichat build with an AWS account, so three credentials at two different tiers are accounted
+/// for and a report printing one tier for all of them is a report that can be caught.
+#[test]
+fn doctor_names_the_tier_of_every_credential_it_accounts_for() {
+    let scratch = Scratch::new("cli-running-tiers");
+
+    let output = bravebot(
+        &scratch.path,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+            ("BRAVEBOT_USE_BEDROCK", "1"),
+            ("AWS_REGION", "us-west-2"),
+            ("ANTHROPIC_DEFAULT_OPUS_MODEL", "an-opus-arn"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "doctor did not run: {stderr}");
+
+    let lines: Vec<&str> = stdout.lines().map(str::trim).collect();
+    let accounts: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.starts_with("ends "))
+        .map(|(at, _)| at)
+        .collect();
+    assert_eq!(
+        accounts.len(),
+        3,
+        "the fixture holds a signing key and both AWS arrangements: {stdout}"
+    );
+
+    for at in &accounts {
+        assert!(
+            lines[at + 1].starts_with("tier "),
+            "a credential is accounted for without the tier it stands at: {}",
+            lines[*at]
+        );
+    }
+
+    // The session credential is the one arrangement here whose issuer enforces a lifetime rather
+    // than a reach, so a report answering every credential with one tier reads the same for all
+    // three and this separates them.
+    let tiers: Vec<&str> = accounts.iter().map(|at| lines[at + 1]).collect();
+    let brief = tiers
+        .iter()
+        .filter(|tier| tier.contains("held briefly"))
+        .count();
+    assert_eq!(
+        brief, 1,
+        "one credential here stands at Held briefly and the report put {brief} there: {stdout}"
+    );
+}
+
+/// CRED-2: an imported subscription's credential batch is a credential in use, so the report
+/// accounts for it and names the tier its walk stopped at. It is the one credential here that
+/// stops above Held, so a report that defaulted every tier to the bottom of the scale passes
+/// everything else and fails this.
+///
+/// Both directions from one fixture, because the account is owed for custody rather than for the
+/// configuration: the same build with nothing imported holds one credential fewer, and a rule that
+/// listed the batch unconditionally would send somebody to forget an import they never made.
+#[test]
+fn doctor_accounts_for_an_imported_subscription_at_the_tier_its_walk_stopped_at() {
+    let scratch = Scratch::new("cli-running-batch-tier");
+    let configured = [
+        ("SERVICES_KEY_AICHAT", "a-services-key"),
+        ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+        ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+    ];
+
+    let (before, stderr) = said(&bravebot(&scratch.path, &configured, &["doctor"]));
+    assert!(
+        !before.contains("subscription's credential"),
+        "a machine with nothing imported is accounted for a batch: {before}{stderr}"
+    );
+
+    let stored = scratch.credentials();
+    std::fs::create_dir_all(stored.parent().expect("the state directory"))
+        .expect("create the state directory");
+    std::fs::write(
+        &stored,
+        r#"{"version": 1,
+            "order_id": "aaaaaaaa-1111-4222-8333-444444444444",
+            "environment": "production",
+            "item_id": "b7114ccc-b3a5-4951-9a5d-8b7a28731111",
+            "issuer": "brave.com?sku=brave-leo-premium",
+            "credentials": [{"unblinded": "a-token", "valid_from": "2020-01-01T00:00:00Z",
+                             "valid_to": "2099-01-01T00:00:00Z", "spent": false, "rfc": true}]}"#,
+    )
+    .expect("write an imported batch");
+
+    let output = bravebot(&scratch.path, &configured, &["doctor"]);
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "doctor did not run: {stderr}");
+
+    let lines: Vec<&str> = stdout.lines().map(str::trim).collect();
+    let at = lines
+        .iter()
+        .position(|line| line.starts_with("ends ") && line.contains("subscription's credential"))
+        .unwrap_or_else(|| panic!("the batch is accounted for: {stdout}"));
+    assert!(
+        lines[at + 1].starts_with("tier ") && lines[at + 1].contains("granted"),
+        "the batch is accounted for at a tier its walk did not stop at: {}",
+        lines[at + 1]
+    );
+}
+
 /// CRED-10: the figure sizing the one brief window reaches the person, under the account of what
 /// would end the credential it sizes. The record holding a figure nothing prints is the same
 /// position as the record holding no figure: somebody reading this after a session credential
@@ -702,12 +823,17 @@ fn doctor_sizes_the_window_on_a_session_credential_and_on_nothing_else() {
         "the window was reported without the figure the record holds: {}",
         lines[at]
     );
-    // The session credential is the one above it: `aws sso logout` is in that account and in no
-    // other, so this says which credential the figure was printed under.
+    // Which credential the figure was printed under is the nearest account above it, since each
+    // credential's lines are one group led by its account. The session credential's is the one
+    // naming `aws sso logout`, which is in that account and in no other.
+    let account = lines[..at]
+        .iter()
+        .rposition(|line| line.starts_with("ends "))
+        .expect("the figure is printed under an account");
     assert!(
-        lines[at - 1].starts_with("ends ") && lines[at - 1].contains("aws sso logout"),
+        lines[account].contains("aws sso logout"),
         "the figure was not reported under the credential it sizes: {}",
-        lines[at - 1]
+        lines[account]
     );
 }
 

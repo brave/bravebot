@@ -182,6 +182,21 @@ doctor-ends-aws-session =
     a session credential: issued by AWS STS for the profile and ends at its own expiry; ended sooner only at its issuer, since `aws sso logout` clears this machine's copy rather than the session behind it
 doctor-ends-gateway-token =
     a gateway bearer token: issued by { $gateway }, which is also the only surface that revokes it; deleting it from the settings file or unsetting the variable ends this machine's custody and leaves the token live there
+doctor-ends-subscription-batch =
+    an imported subscription's credential batch: minted by Brave's subscription service against the order this install registered as a device on; each credential is spent by one premium request and the batch stops working when its last window closes, and nothing revokes an unspent one, so `bravebot import-leo-creds --forget` ends this machine's custody and leaves the batch spendable by whatever copied the file
+# Which tier the gate walk left a credential on, shown under the account of what would end it. One
+# sentence per tier rather than per credential: the tier is where the walk stopped, and what is
+# particular to a credential is the line above this one. Delegated is here although nothing stands
+# there, so the first credential that does is not reported as the tier below it.
+doctor-tier = tier
+doctor-tier-delegated =
+    delegated: nothing is held here, and something this program cannot impersonate decides each use and can refuse it
+doctor-tier-granted =
+    granted: a real secret, bounded before it was issued to what the issuer will accept it for, and enforced where this program cannot reach
+doctor-tier-held-briefly =
+    held briefly: a real secret whose lifetime, rather than its reach, is what its issuer enforces
+doctor-tier-held =
+    held: a permanent secret, bounded by the surface that revokes it and by nothing else
 # How quickly a leak of a credential would be noticed and acted on, shown for the one arrangement
 # whose bound is a window rather than a revocation. The figure is this deployment's judgement and
 # not a fact about the credential: it decides whether the window is short enough for what the
@@ -226,6 +241,8 @@ doctor-dropped-gateway-token-no-bound-fixed-before-issue =
     gate { $gate }, { $answer }: no bound on what the token may do is fixed before it is issued, since the block names a host and a variable and never an issuer, so there is nothing here to ask for a narrower one
 doctor-dropped-gateway-token-not-minted-for-one-step =
     gate { $gate }, { $answer }: it is not minted for one step, since the token is whatever the settings file carries or the variable holds, and it is held for the whole run
+doctor-dropped-subscription-batch-nothing-decides-each-use =
+    gate { $gate }, { $answer }: nothing the agent cannot impersonate decides each use, since this process presents a credential from the batch itself and nothing is asked to authorise the request
 # Both are reported when both are reachable, so this names one of the two rather than the backend.
 doctor-backend = offers
 doctor-backend-bedrock = AWS Bedrock

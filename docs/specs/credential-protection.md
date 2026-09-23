@@ -271,7 +271,16 @@ credential nothing reads has no tier, and neither does the off-the-scale case CR
 that ended up wherever it ended up. Defaulting the unexamined case to the top would let silence
 claim the strongest tier.
 
-`verified-by: none`
+**Where it is recorded.** On the record [CRED-25](#CRED-25) uses, which is the one per-credential
+record there is, and read by the same surface: `doctor` names the tier under the account of what
+would end the credential. The tier is the one entry on that record every credential in it owes
+whatever its tier, which is why the record reaches past the two tiers CRED-25 asks an account of.
+
+`verified-by: bravebot_config::lib::every_credential_in_the_record_stands_at_a_tier_the_walk_arrived_at`
+`verified-by: bravebot_config::lib::an_imported_subscription_is_a_credential_this_configuration_holds`
+`verified-by: bravebot_cli::main::each_tier_a_credential_can_stand_at_is_reported_in_its_own_words`
+`verified-by: bravebot_cli::running::doctor_names_the_tier_of_every_credential_it_accounts_for`
+`verified-by: bravebot_cli::running::doctor_accounts_for_an_imported_subscription_at_the_tier_its_walk_stopped_at`
 
 <a id="CRED-3"></a>
 ### CRED-3: a gate fails only for a stated reason, and dropping pays what the gate says it costs
@@ -782,8 +791,9 @@ exists and refuses, but it reports the finding and reaches no part of this recor
 credential would have landed in a file is not thereby told what would end the one they already
 hold. CRED-15's scan of the tree before a run does not exist, and nor does the place CRED-19 would
 write a finding. What exists is the record and one surface that reads it, `doctor`, which reports
-what would end each credential this configuration holds, a gateway's bearer token included. A scan
-reaching it later reads that record rather than writing a second one.
+what would end each credential this configuration holds, a gateway's bearer token and an imported
+subscription's credential batch included. A scan reaching it later reads that record rather than
+writing a second one.
 
 `verified-by: bravebot_config::lib::a_build_that_cannot_sign_for_itself_holds_no_signing_key_to_account_for`
 `verified-by: bravebot_config::lib::an_aws_account_holds_both_arrangements_and_they_end_differently`
