@@ -5,7 +5,6 @@ use crate::process::ConfinedChild;
 use crate::process::{Stream, Streams};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::io::Read;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::path::PathBuf;
 
 /// For a test that cares only about how a confined process exited.
@@ -72,7 +71,6 @@ pub(crate) fn variable_names_received_by(child: &mut ConfinedChild) -> Vec<Strin
 /// per-checkout and already ignored by git.
 ///
 /// Nothing is created here: callers make and remove the directory as they already did.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) fn scratch_dir(name: &str) -> PathBuf {
     // CARGO_MANIFEST_DIR is `<workspace>/crates/<crate>`, so two pops reach the root.
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

@@ -228,12 +228,12 @@ every path that is there is kept in the list it was named in. Resolution adds no
 between the two lists, and carries the network and subprocess grants as they were, so what it
 produces is a subset of what was wanted.
 
-Neither of the other two answers to an absent path is taken. Naming the directory holding it
+Neither of the other two answers to an absent path is taken here. Naming the directory holding it
 grants over every other file in that directory, and the path this would fire on first is
-`~/.ssh/known_hosts`, whose directory holds the private key no scope reaches. Creating the file
-writes where nothing asked for a write, and a policy names a path without saying whether it is a
-file or a directory, so a caller creating one guesses between an empty file and an empty directory,
-and the wrong guess is a program that fails on a path it was granted.
+`~/.ssh/known_hosts`, whose directory holds the private key no scope reaches. Creating one is a
+write, and this decides what a policy names rather than what is on disk, so a row a caller means a
+program to create is created before this runs, by the caller that said what it is
+([SANDBOX-11](#SANDBOX-11)). What is still absent when this runs is left out.
 
 **Why.** [SANDBOX-6](#SANDBOX-6) refuses a policy naming a path the backend cannot grant, which is
 the right answer to a caller that named a path wrongly and the wrong answer to a machine that does
@@ -273,6 +273,45 @@ for it.
 `verified-by: bravebot_tui::status::the_confinement_is_reported_as_available_rather_than_in_force`
 `verified-by: bravebot_tui::logo::the_mark_names_the_agent_its_confinement_and_its_tier`
 `verified-by: bravebot_tui::logo::a_narrow_pane_still_reports_the_confinement_and_the_tier`
+
+<a id="SANDBOX-11"></a>
+### SANDBOX-11: a write row says what is at the path it names, and one that is not there is created
+
+A row granting a write says whether the path it names is a file, a directory, or neither. Before a
+policy is resolved against a backend that cannot name a path which does not exist
+([SANDBOX-9](#SANDBOX-9)), every write row saying which of the two it is and not on disk is created:
+a file empty, with the directory holding it, and a directory empty, each reachable by the account
+that owns it and by nobody else. A row saying neither is not created. A path already there is left
+as it is, contents and all. A row that could not be created is absent still, so resolution leaves it
+out and names it. Nothing is created where the backend names an absent path, and nothing where it
+confines nothing at all, since a process that will be refused reaches no path made for it.
+
+**Why.** Leaving an absent write row out costs a program the write the row granted it, and the rows
+this fires on are the ones a program would have created for itself: a toolchain cache on a machine
+that has not run that toolchain, and `~/.ssh/known_hosts` on a fresh account, each of which is a
+build or a push that fails rather than a program that does not start. The other answer, naming the
+directory holding the path, grants over every other file there, which for `known_hosts` is the
+private key. Creating it is open only to a caller that knows which of the two the row means: the
+guess is wrong half the time, and a program that finds a directory where it expects a file fails on
+a path it was granted as surely as on one that is absent. A read row says nothing and needs to say
+nothing, since there is nothing at an absent path to read. Creating on a backend that grants an
+absent path would write on the platform where no write was necessary, which is the cost a capability
+reported per backend exists to avoid ([SANDBOX-5](#SANDBOX-5)). What is created is narrower than
+what the program would have made for itself, because the account gains a path nobody asked it to
+have: the directory this fires on first holds a private key, a umask most accounts leave at its
+default would make it listable by everybody, and nothing tightens a directory that already exists
+afterwards.
+
+`verified-by: bravebot_sandbox::policy::a_row_naming_a_directory_that_is_not_there_is_created_as_a_directory`
+`verified-by: bravebot_sandbox::policy::a_row_naming_a_file_that_is_not_there_is_created_as_a_file`
+`verified-by: bravebot_sandbox::policy::a_file_row_is_created_with_the_directory_holding_it`
+`verified-by: bravebot_sandbox::policy::a_row_that_does_not_say_what_it_names_is_not_created`
+`verified-by: bravebot_sandbox::policy::a_backend_that_grants_an_absent_path_has_nothing_created_for_it`
+`verified-by: bravebot_sandbox::policy::a_backend_that_confines_nothing_has_nothing_created_for_it`
+`verified-by: bravebot_sandbox::policy::what_is_created_is_reachable_by_its_owner_and_nobody_else`
+`verified-by: bravebot_sandbox::policy::a_row_that_is_already_there_keeps_what_is_in_it`
+`verified-by: bravebot_sandbox::policy::a_row_created_first_is_in_the_policy_the_backend_is_handed`
+`verified-by: bravebot_sandbox::policy::a_row_that_could_not_be_created_is_left_out_and_named`
 
 ## Programs a person asked for
 
@@ -407,7 +446,9 @@ put it there or can take it away.
 A stage reaches its own row and no other: a `docker` stage reaches neither the remote scope nor
 `~/.aws`, and no row reaches a private key, `~/.ssh` as a directory, or the keychain database on
 disk. The remote scope is the agent socket `$SSH_AUTH_SOCK`, `~/.ssh/config` and
-`~/.ssh/known_hosts` to read with `known_hosts` also to write, the public keys in that directory,
+`~/.ssh/known_hosts` to read with `known_hosts` also to write, that write row naming a file rather
+than a directory so that an account with no `known_hosts` gets one rather than a push that fails
+([SANDBOX-11](#SANDBOX-11)), the public keys in that directory,
 `~/.gitconfig`, and the stores an https helper reads: `~/.git-credentials`, `~/.netrc`,
 `~/.config/gh`, and the login keychain through the system service that holds it. A push signs
 through the agent and needs no private key, and the public half is in the scope because that is what
@@ -494,17 +535,6 @@ reported as what it is.
   the socket instead. On Linux the right that governs connecting to a pathname socket arrives many
   ABI versions after the one this backend targets, so a connect there is neither granted nor
   deniable, and a profile meaning to bound one needs that ABI and a kernel carrying it.
-- A profile has to say, for a path it means a program to create, whether that path is a file or a
-  directory. A wanted path that is not on disk is left out of the policy on the backend that cannot
-  name one ([SANDBOX-9](#SANDBOX-9)), which is the whole answer for a row that is only read, since
-  there is nothing at such a path to read either way, and which is why a machine with no `~/.pyenv`
-  is not a machine where every `run` is refused. What it costs is a row a program is meant to write into
-  and would have created for itself: a toolchain cache directory on a machine that has not run that
-  toolchain, and `~/.ssh/known_hosts` on a fresh account, each of which becomes a push or a build
-  that fails rather than a `run` that does not start. Keeping those means creating the path before
-  the policy is built, which a profile cannot ask for while a row says only a path, and naming the
-  directory holding it instead is not open to `known_hosts`, whose directory holds the key no scope
-  reaches.
 - Subprocess denial has no mechanism on Windows or on Linux. A container bounds what a process
   reaches rather than whether it creates children, and a child of a confined process is inside the
   same container rather than outside it, so a policy asking for that denial is refused on both
