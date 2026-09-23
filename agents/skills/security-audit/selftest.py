@@ -925,6 +925,18 @@ def test_pinned_images():
         str(kinds(with_cwd(nested, lambda: list(audit.check_pinned_images())))),
     )
 
+    nested_checkout = in_tree({
+        "other-checkout/.git": "gitdir: /elsewhere/worktrees/other\n",
+        "other-checkout/Dockerfile": "FROM rust:slim\n",
+        "tools/Dockerfile": "FROM alpine:3\n",
+    })
+    found = with_cwd(nested_checkout, lambda: list(audit.check_pinned_images()))
+    check(
+        "nested worktrees are excluded but source subdirectories are checked",
+        len(found) == 1 and "tools/Dockerfile:1" in found[0]["evidence"],
+        str(found),
+    )
+
     # Every image in the tree names a digest today, and this is what keeps it that way.
     check(
         "the tree's own build images are pinned",

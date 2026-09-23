@@ -1255,7 +1255,10 @@ def expanded(reference, values):
 def image_files():
     """Every file that can name an image: the Dockerfiles, the Makefile, and the workflows."""
     for root, directories, names in os.walk("."):
-        directories[:] = sorted(one for one in directories if one not in NOT_WALKED)
+        directories[:] = sorted(
+            one for one in directories
+            if one not in NOT_WALKED and not (Path(root) / one / ".git").exists()
+        )
         for name in sorted(names):
             if name.startswith("Dockerfile") or name == "Makefile":
                 yield Path(root) / name
