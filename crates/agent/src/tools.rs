@@ -4102,6 +4102,13 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
         return problem(refusal);
     }
 
+    // Before the gate below rather than inside it: what this refuses is the content, and bypassing
+    // with no screening asked for makes no check to refuse it in. Before the prompt too, so a
+    // picture is never released for a screen on its way to the refusal `promote_vetted` makes.
+    if let Err(denial) = policy.before_promoting(&slot, tools.slots) {
+        return problem(format!("refused: {denial}"));
+    }
+
     // The second opinion, before the question rather than after it.
     //
     // Skipped only where nothing would read the word: bypassing with no screening asked for answers

@@ -3001,9 +3001,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// that could not hold it could not send it. Private is refused for the same reason it is
     /// refused there, since the user's own data must not become another model's prompt.
     ///
-    /// A picture is refused outright. What a check reads is text, and the bytes behind a picture
-    /// slot are a data URI, so a check over one would be a check over base64 that answers
-    /// confidently about nothing.
+    /// A picture is refused outright, by [`Policy::before_promoting`].
     pub fn before_vetting(
         &mut self,
         slot: &SlotId,
@@ -3026,16 +3024,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             ));
         }
 
-        if slots.is_a_picture(slot) {
-            return Err(self.deny(
-                "vetting",
-                Principle::Confinement,
-                format!(
-                    "{slot} is a picture, and a check reads text. There is no way to ask about \
-                     what a picture shows"
-                ),
-            ));
-        }
+        self.before_promoting(slot, slots)?;
 
         let expects = match expects {
             Some(expects) => {
@@ -3067,6 +3056,30 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let origin = self.where_a_slot_came_from(slot, slots);
 
         Ok(self.fix_check(content, slot.to_string(), origin, expects))
+    }
+
+    /// Refuse a slot whose bytes must never be promoted, whether or not a check is made first.
+    ///
+    /// A picture. What a check reads is text, and the bytes behind a picture slot are a data URI,
+    /// so a check over one would be a check over base64 that answers confidently about nothing, and
+    /// a promotion would hand the planner that base64 as text it may trust.
+    ///
+    /// Apart from [`Policy::before_vetting`] because a run bypassing permissions with no screening
+    /// asked for makes no check, and a refusal only that gate held would be one such a run never
+    /// meets. [`Policy::promote_vetted`] makes it again, so a route to a promotion that never asked
+    /// here is refused where the bytes would cross.
+    pub fn before_promoting(&mut self, slot: &SlotId, slots: &crate::slot::SlotStore) -> Gated<()> {
+        if slots.is_a_picture(slot) {
+            return Err(self.deny(
+                "vetting",
+                Principle::Confinement,
+                format!(
+                    "{slot} is a picture, and a check reads text. There is no way to ask about \
+                     what a picture shows"
+                ),
+            ));
+        }
+        Ok(())
     }
 
     /// The driver's own record of where a slot's bytes came from, never the bytes.
@@ -3295,6 +3308,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         by: crate::vetting::Endorsed,
     ) -> Gated<Labelled<String>> {
         self.consume_grant("vet_content", "ref", slot.as_str())?;
+        self.before_promoting(slot, slots)?;
 
         let content = slots.take_for_effect(slot).map_err(|e| Denial {
             principle: Principle::Confinement,
@@ -8625,6 +8639,37 @@ five
                 .is_err(),
             "a check was fixed over a picture"
         );
+    }
+
+    /// The promotion refuses a picture itself, whoever endorsed it, so a caller that never asked
+    /// [`Policy::before_promoting`] still cannot hand the planner a data URI.
+    #[test]
+    fn a_picture_is_never_promoted_whoever_endorsed_it() {
+        for by in [
+            Endorsed::ByAPerson,
+            Endorsed::ByBypassing,
+            Endorsed::ByASafeVerdict,
+        ] {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            let (mut slots, slot) = fetched("data:image/png;base64,AAAA");
+            slots.mark_picture(&slot, "image/png");
+            policy.issue_grant("vet_content", "ref", slot.as_str());
+
+            assert!(
+                policy.promote_vetted(&slot, &slots, by).is_err(),
+                "a picture was promoted on {by:?}"
+            );
+            drop(policy);
+            assert!(
+                sink.events().iter().any(|event| matches!(
+                    event,
+                    Event::GateBlocked { reason, .. } if reason.contains("is a picture")
+                )),
+                "refusing a picture on {by:?} left no record in the trail: {:#?}",
+                sink.events()
+            );
+        }
     }
 
     /// What a verdict buys on its own: nothing. The word is advice for the person answering the

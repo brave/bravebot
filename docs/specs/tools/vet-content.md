@@ -43,8 +43,9 @@ the planner and nothing at all to the person being asked about it.
 <a id="VET-2"></a>
 ### VET-2: what it refuses
 
-A reference to nothing, since there is nothing to check or to show. A picture, since a check reads
-text and the bytes behind a picture slot are a data URI. A private sentence, per VET-1. And a call
+A reference to nothing, since there is nothing to check or to show. A picture, whether or not a
+check is made first: a check reads text, and the bytes behind a picture slot are a data URI that a
+promotion would hand the planner as text it may trust. A private sentence, per VET-1. And a call
 from a delegate, which is neither offered the tool nor answered when it names it anyway.
 
 A reference to a file nothing has read yet is opened rather than refused: naming one is the
@@ -57,6 +58,8 @@ into a context nobody at the keyboard is watching.
 
 `verified-by: bravebot_core::policy::a_check_over_nothing_is_refused`
 `verified-by: bravebot_core::policy::a_check_over_a_picture_is_refused`
+`verified-by: bravebot_core::policy::a_picture_is_never_promoted_whoever_endorsed_it`
+`verified-by: bravebot_agent::turn::bypassing_with_no_screening_still_refuses_to_promote_a_picture`
 `verified-by: bravebot_agent::tools::a_delegate_is_never_offered_a_way_to_promote_a_slot`
 
 <a id="VET-3"></a>
