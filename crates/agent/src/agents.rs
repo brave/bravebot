@@ -490,7 +490,7 @@ mod tests {
         assert!(
             !definition
                 .capabilities()
-                .contains(bravebot_core::capability::Capability::FileWrite),
+                .contains(&bravebot_core::capability::Capability::FileWrite),
             "an asterisk widened a definition to everything its kind holds"
         );
     }

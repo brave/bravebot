@@ -1787,14 +1787,14 @@ mod tests {
         // The grant a file read gives is not this one, which is the whole clause.
         let reads_only = CapabilitySet::from_iter([Capability::FileRead]);
         assert!(
-            reads_only.token_for(Capability::LanguageServer).is_none(),
+            reads_only.token_for(&Capability::LanguageServer).is_none(),
             "file reads must not carry a language server with them"
         );
 
         // And an empty set carries nothing, so the default is refusal.
         assert!(
             CapabilitySet::none()
-                .token_for(Capability::LanguageServer)
+                .token_for(&Capability::LanguageServer)
                 .is_none()
         );
     }

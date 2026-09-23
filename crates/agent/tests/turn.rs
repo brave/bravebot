@@ -2531,6 +2531,55 @@ fn a_denied_file_is_not_read_by_a_processor_either() {
     }
 }
 
+/// A deny rule is a decision about the command line, so what it answers cannot depend on whether
+/// the program happens to be installed here. The line below names a program no machine has, so
+/// only the rule can have refused it; before the rules were consulted on the compiled line the
+/// answer was that `$PATH` matches nothing, which reports the state of this machine's software in
+/// place of the person's own decision and tells the planner nothing about not retrying.
+#[test]
+fn a_denied_program_is_refused_by_the_rule_and_not_for_being_absent() {
+    let scratch = Scratch::new("permissions-run-denied-absent");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"bravebot-no-such-editor notes.md"}"#),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("open the notes").with_permissions(rules(
+        &["Bash(bravebot-no-such-editor notes.md)"],
+        &[],
+        &[],
+    ));
+    turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("deny rule"),
+        "the planner was not told a rule refused the line: {second}"
+    );
+    assert!(
+        second.contains("Do not retry"),
+        "a rule's refusal did not tell the planner that retrying is not the answer: {second}"
+    );
+    assert!(
+        !second.contains("is not a program that could be found"),
+        "the program was looked for before the rule answered: {second}"
+    );
+}
+
 /// A deny rule holds against a workspace the user vouched for, which is the case that makes one
 /// worth writing: saying yes at startup trusts the tree, and a rule is how a person keeps one file
 /// out of that answer without having to decline the whole of it.
@@ -15759,10 +15808,14 @@ fn a_definition_names_the_delegate_a_turn_runs_and_says_what_it_is_for() {
     )
     .expect("turn runs");
 
+    // The delegate's own request, which is the one that carries the task and not the marker the
+    // spawning turn was given: the turn is not blocked while a delegate works, so its next round
+    // goes out carrying the transcript of the call that spawned it, task and all, and whichever
+    // of the two the server reads first is a matter of timing.
     let requests: Vec<String> = received.try_iter().collect();
     let delegate = requests
         .iter()
-        .find(|body| body.contains("CHECK-THE-DIFF"))
+        .find(|body| body.contains("CHECK-THE-DIFF") && !body.contains("DELEGATE-SOMETHING"))
         .expect("the delegate never ran, so the definition never selected one");
 
     assert!(

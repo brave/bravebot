@@ -35,9 +35,7 @@ docs/specs/mcp-servers.md:SERVERS-5: an approval binds to a digest of the declar
 docs/specs/mcp-servers.md:SERVERS-6: a command that fetches its own code is named as one at the prompt
 docs/specs/mcp-servers.md:SERVERS-7: every call to a server's tool is put to the person, with three answers
 docs/specs/mcp-servers.md:SERVERS-8: a server's own words are never an identifier
-docs/specs/mcp-servers.md:SERVERS-9: the capability is granted per server, not per protocol
 docs/specs/mcp-servers.md:SERVERS-10: a variable a server needs is named in the declaration, and reaches that server alone
-docs/specs/mcp-servers.md:SERVERS-11: a remote server is an egress destination, and its host is approved as one
 docs/specs/mcp-servers.md:SERVERS-12: the managed layer may remove a server and never add one
 docs/specs/mcp-servers.md:SERVERS-13: bypassing answers these two prompts and reaches nothing else here
 docs/specs/mcp-servers.md:SERVERS-14: what is reachable is visible without running anything

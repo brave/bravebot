@@ -18,7 +18,7 @@
 //! drifts as untrusted content accumulates.
 
 use crate::ask::{self, Answer};
-use crate::capability::{Capability, CapabilitySet};
+use crate::capability::{Capability, CapabilitySet, ServerAlias};
 use crate::credentials::Scanned;
 use crate::event::{Event, Principle, Role, Sink};
 use crate::label::{Integrity, Label};
@@ -308,6 +308,15 @@ pub struct Policy<'sink, S: Sink> {
     /// two go through one gate and are not the same act: only the first is something a turn asked
     /// for, and only the first is what a `WebFetch` rule is about.
     fetching: Option<String>,
+    /// The host and port a declared MCP server is at, while a request to it is in flight.
+    ///
+    /// Set by [`Policy::before_server_request`] and cleared by
+    /// [`Policy::server_request_finished`]. A remote server has no process to confine, so the
+    /// boundary is the network: a declaration names one destination, and a hop that leaves it is
+    /// one the person who declared the server has to approve. The port is part of that, unlike a
+    /// rule about a host: a machine runs many services on one address, and the declaration named
+    /// one of them.
+    calling_server: Option<String>,
     /// The integrity of every observation this turn has made, met together.
     ///
     /// Starts trusted, since the task is the user's own words, and drops to untrusted the moment
@@ -403,6 +412,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             delegates: crate::delegate::Definitions::default(),
             vouch_asked: std::collections::BTreeSet::new(),
             fetching: None,
+            calling_server: None,
             context: Integrity::Trusted,
         })
     }
@@ -428,7 +438,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
     /// Check that a capability was granted before it is exercised.
     pub fn before_capability(&mut self, capability: Capability) -> Gated<()> {
-        if !self.capabilities.contains(capability) {
+        if !self.capabilities.contains(&capability) {
             return Err(self.deny(
                 "capability",
                 Principle::Capability,
@@ -437,6 +447,26 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         }
         self.allow("capability", format!("{capability} granted"));
         Ok(())
+    }
+
+    /// Withdraw the grant to call tools on one MCP server, for the rest of this run.
+    ///
+    /// Takes effect at the next call rather than at the next session, because a grant is
+    /// the thing [`Policy::before_capability`] asks about and not a property the session
+    /// recorded when it started. Nothing here grants: the only direction this moves is
+    /// narrower, so a run still cannot acquire a capability partway through.
+    ///
+    /// Says whether a grant was there to withdraw, which is how a caller tells an alias
+    /// nobody had granted anything about from one it has just dropped.
+    pub fn revoke_mcp_call(&mut self, alias: &ServerAlias) -> bool {
+        let withdrawn = self.capabilities.revoke_mcp_call(alias);
+        if withdrawn {
+            self.allow(
+                "capability",
+                format!("mcp_call:{alias} withdrawn, from the next call"),
+            );
+        }
+        withdrawn
     }
 
     /// Check a network egress before it happens. Called for the initial URL *and* for
@@ -488,6 +518,22 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                     format!(
                         "this fetch was approved for {approved} and redirected somewhere else, \
                          which nobody was shown"
+                    ),
+                ));
+            }
+        }
+
+        if let Some(declared) = self.calling_server.clone() {
+            // What a `Location` header names is a server's own bytes, so a refusal repeating it
+            // would be writing them into whatever formats that refusal. The declared destination
+            // is what a person wrote down, so a refusal names that.
+            if crate::url::authority_of(url).unwrap_or_default() != declared {
+                return Err(self.deny(
+                    "network",
+                    Principle::IntegrityGate,
+                    format!(
+                        "this request was addressed to the server declared at {declared} and \
+                         redirected to a destination nobody declared or approved"
                     ),
                 ));
             }
@@ -602,6 +648,38 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// egress being checked against a host that one call was approved for.
     pub fn fetch_finished(&mut self) {
         self.fetching = None;
+    }
+
+    /// Confine egress to where a declared server is, until the request reports back.
+    ///
+    /// A remote server is reached over the network and nowhere else, so the declaration's host
+    /// and port are the whole of where such a request may go. Every hop passes the egress gate,
+    /// and while this is set a hop naming anywhere else is one the person who declared the server
+    /// has to approve: what the request carries is a call to that server, with its arguments and
+    /// its session id, and a `Location` header is the server's own bytes rather than anything a
+    /// person wrote down. A server that has genuinely moved and a server that wants the call
+    /// delivered somewhere else write the same header.
+    ///
+    /// The port counts, unlike anywhere a rule about a host decides. A declaration is one URL
+    /// somebody wrote in full, and the machine it names runs other services on other ports, so a
+    /// hop that keeps the address and changes the port is a different service.
+    ///
+    /// No rule widens this, which is the other difference from a fetch. A `WebFetch` rule says
+    /// which websites the planner may reach, and that is not a statement that one server's
+    /// traffic may be sent somewhere else. An approval would widen it, and there is none to give:
+    /// a gate allows or refuses and cannot ask, so the question needs a prompt before the call and
+    /// a declaration to write the answer back into, and issue #83 is where both are. Until then a
+    /// hop that leaves the declared destination is refused and nothing is sent.
+    pub fn before_server_request(&mut self, url: &str) {
+        self.calling_server = Some(crate::url::authority_of(url).unwrap_or_default());
+    }
+
+    /// Say that the request to a declared server has finished, however it went.
+    ///
+    /// Called on every path out of a request, so a failed one does not leave the rest of the
+    /// turn's egress confined to a server's host.
+    pub fn server_request_finished(&mut self) {
+        self.calling_server = None;
     }
 
     /// Record that a capability produced an observation, returning the label it must
@@ -2416,12 +2494,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let wanted = selected.capabilities();
         let held: CapabilitySet = wanted
             .iter()
-            .filter(|capability| self.capabilities.contains(*capability))
+            .filter(|capability| self.capabilities.contains(capability))
             .collect();
         let dropped: Vec<&str> = wanted
             .iter()
-            .filter(|capability| !self.capabilities.contains(*capability))
-            .map(Capability::as_str)
+            .filter(|capability| !self.capabilities.contains(capability))
+            .map(|capability| capability.as_str())
             .collect();
         if !dropped.is_empty() {
             self.allow(
@@ -3688,13 +3766,26 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     fn plan_lines(&self, plan: &crate::command::Plan) -> Vec<String> {
         plan.steps()
             .iter()
-            .map(|step| {
-                std::iter::once(step.program.as_str())
-                    .chain(step.args.iter().map(String::as_str))
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            })
+            .map(|step| rule_line(&step.program, &step.args))
             .collect()
+    }
+
+    /// Refuse one step's command line a `deny` rule covers, before its program is looked for.
+    ///
+    /// Called by the compiler with a step's name and argv as soon as it has both and before it
+    /// asks `$PATH` what the name means, which is the position PERM-7 puts the rules in: the
+    /// refusal comes before the program is looked for. A denied line is then refused by the rule
+    /// whether or not the program is installed, rather than being reported as a name nothing on
+    /// `$PATH` matches, which is an answer about this machine's software in place of the one the
+    /// person wrote down, and one carrying none of the "do not retry" the clause owes the planner.
+    ///
+    /// The name and the argv rather than a line, so that the rendering a rule is matched against
+    /// is built in one place and a caller cannot arrive with a different spelling of the same
+    /// step.
+    pub fn before_command_rules(&mut self, program: &str, args: &[String]) -> Gated<()> {
+        let line = rule_line(program, args);
+        let decision = self.permissions.for_command(&line);
+        self.refuse_if_denied("run", decision, &line)
     }
 
     /// Refuse a plan a `deny` rule covers, before anything is started.
@@ -3705,6 +3796,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// A redirection is a write and takes the rules a write takes, and a `<` is a read and takes
     /// the rules a read takes. A rule restricting a path is a statement about the path, so it
     /// cannot depend on which tool reached it.
+    ///
+    /// The command lines have already been through [`Policy::before_command_rules`] where the
+    /// plan came from the compiler, which is the only place one is built from a planner's line.
+    /// They are consulted again here, because a plan reaching this gate by any other route has to
+    /// be ruled on too, and the second answer is the same one: the rules are a function of the
+    /// line and nothing between the two calls can change it.
     pub fn before_plan_rules(&mut self, plan: &crate::command::Plan) -> Gated<()> {
         for line in &self.plan_lines(plan) {
             let decision = self.permissions.for_command(line);
@@ -4699,6 +4796,18 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     pub fn finish(self) -> bool {
         self.denials == 0
     }
+}
+
+/// One step as the line a rule is matched against.
+///
+/// The one place that rendering is built, so the answer cannot depend on which gate asked:
+/// [`Policy::before_command_rules`] has the name and the argv before a step exists, and
+/// `plan_lines` has a compiled plan, and a rule means the same thing at both.
+fn rule_line(program: &str, args: &[String]) -> String {
+    std::iter::once(program)
+        .chain(args.iter().map(String::as_str))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Whether a program was written as a path rather than as a name to look up.
@@ -5869,7 +5978,7 @@ five
             &mut sink,
         )
         .unwrap();
-        for capability in Capability::ALL {
+        for capability in Capability::all() {
             // Written out rather than read from the capability: a match that asked the code under
             // test what to expect would assert nothing.
             let expected = match capability {
@@ -5878,20 +5987,27 @@ five
                 Capability::ShellExec => Some(Label::untrusted_private()),
                 Capability::LanguageServer => Some(Label::untrusted_private()),
                 Capability::WebFetch => Some(Label::untrusted_public()),
-                Capability::McpCall => Some(Label::untrusted_public()),
+                // Whichever server: what a call to one produces is a property of the
+                // protocol, and the alias decides who may make the call rather than what
+                // the answer is labelled.
+                Capability::McpCall(_) => Some(Label::untrusted_public()),
                 Capability::FileWrite => None,
                 Capability::GitWrite => None,
             };
             match expected {
                 Some(label) => {
-                    assert_eq!(policy.observe(capability).ok(), Some(label), "{capability}");
+                    assert_eq!(
+                        policy.observe(capability.clone()).ok(),
+                        Some(label),
+                        "{capability}"
+                    );
                 }
                 // An effect observes nothing, so there is no label to hand back. The refusal has to
                 // say that, since a refusal for any other reason would leave this passing while the
                 // question went unanswered.
                 None => {
                     let denial = policy
-                        .observe(capability)
+                        .observe(capability.clone())
                         .expect_err("an effect has no observation to label");
                     assert_eq!(denial.principle, Principle::Capability, "{capability}");
                     assert!(
@@ -8049,6 +8165,62 @@ five
         assert!(
             policy.before_network("https://elsewhere.test/x").is_ok(),
             "a finished fetch went on confining where the turn could reach"
+        );
+    }
+
+    /// A declared server is one destination and a redirect names another, so the hop is refused
+    /// whatever the settings say. A `WebFetch` rule is a person naming websites the planner may
+    /// reach, which is not consent to send a server's call to a different service. What could
+    /// widen this is an approval of where that one server went, which is a prompt nothing raises
+    /// yet, so a rule remaining inert here is the whole of the behaviour and not half of it.
+    #[test]
+    fn a_rule_does_not_let_a_servers_request_be_redirected_off_its_host() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_permissions(permissions(
+            &[],
+            &[],
+            &["WebFetch(domain:elsewhere.test)"],
+        ));
+
+        policy.before_server_request("https://mcp.example/api");
+        assert!(
+            policy.before_network("https://mcp.example/api").is_ok(),
+            "the host the server was declared at was refused"
+        );
+        assert!(
+            policy.before_network("https://elsewhere.test/api").is_err(),
+            "an allow rule let a server's request be redirected off the declared host"
+        );
+    }
+
+    /// One machine runs many services, so the port is part of where a server is. A hop that keeps
+    /// the address and changes the port has reached a different program on the same host, which
+    /// is the shape a loopback declaration is most exposed to.
+    #[test]
+    fn a_servers_request_cannot_be_redirected_to_another_port_on_the_same_host() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+
+        policy.before_server_request("http://127.0.0.1:8931/mcp");
+        assert!(
+            policy
+                .before_network("http://127.0.0.1:8931/mcp/v2")
+                .is_ok(),
+            "the port the server was declared on was refused"
+        );
+
+        let denial = policy
+            .before_network("http://127.0.0.1:2375/containers/create")
+            .expect_err("a server's call reached another service on the same host");
+        assert!(
+            denial.message.contains("127.0.0.1:8931"),
+            "the refusal must name where the server was declared: {}",
+            denial.message
+        );
+        assert!(
+            !denial.message.contains("2375"),
+            "the refusal repeated what a server chose: {}",
+            denial.message
         );
     }
 
@@ -11083,7 +11255,7 @@ five
             assert_eq!(spec.kind(), Kind::Reader);
             assert_eq!(spec.rounds(), Kind::Reader.rounds());
             assert_eq!(spec.prompt(), "read the diff");
-            assert!(!spec.capabilities().contains(Capability::FileWrite));
+            assert!(!spec.capabilities().contains(&Capability::FileWrite));
         }
 
         /// A definition may name fewer tools than its kind reaches and never more. The narrowing
@@ -11117,8 +11289,8 @@ five
                 .expect("a resolved definition may be selected");
 
             assert_eq!(spec.tools(), Some(["read_file".to_string()].as_slice()));
-            assert!(!spec.capabilities().contains(Capability::FileWrite));
-            assert!(!spec.capabilities().contains(Capability::ShellExec));
+            assert!(!spec.capabilities().contains(&Capability::FileWrite));
+            assert!(!spec.capabilities().contains(&Capability::ShellExec));
             assert!(
                 sink.events().iter().any(|event| matches!(
                     event,
@@ -11161,13 +11333,13 @@ five
                 .before_delegate(DelegateId::nth(1), &argument("fixer"), &argument("fix it"))
                 .expect("a narrow run may still delegate");
 
-            assert!(spec.capabilities().contains(Capability::FileRead));
+            assert!(spec.capabilities().contains(&Capability::FileRead));
             assert!(
-                !spec.capabilities().contains(Capability::FileWrite),
+                !spec.capabilities().contains(&Capability::FileWrite),
                 "a definition handed writing to a run that could not write"
             );
             assert!(
-                !spec.capabilities().contains(Capability::ShellExec),
+                !spec.capabilities().contains(&Capability::ShellExec),
                 "a definition handed running to a run that could not run"
             );
         }
@@ -11190,13 +11362,13 @@ five
                 .before_delegate(DelegateId::nth(1), &argument("worker"), &argument("fix it"))
                 .expect("a narrow run may still delegate");
 
-            assert!(spec.capabilities().contains(Capability::FileRead));
+            assert!(spec.capabilities().contains(&Capability::FileRead));
             assert!(
-                !spec.capabilities().contains(Capability::FileWrite),
+                !spec.capabilities().contains(&Capability::FileWrite),
                 "a delegate was handed writing by a run that could not write"
             );
             assert!(
-                !spec.capabilities().contains(Capability::ShellExec),
+                !spec.capabilities().contains(&Capability::ShellExec),
                 "a delegate was handed running by a run that could not run"
             );
         }

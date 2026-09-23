@@ -13,8 +13,9 @@
 //! improving on, because somebody who has read those docs will write `//` when they mean the root,
 //! and quietly meaning something else here would be worse than agreeing.
 
+use crate::granted::Proposed;
 use bravebot_config::{PermissionLists, Settings};
-use bravebot_core::permissions::{Anchors, Permissions, Rejected, Unreadable};
+use bravebot_core::permissions::{Anchors, Permissions, Rejected, Rule, Unreadable};
 use bravebot_i18n::t;
 
 /// The rules a settings file carried, and any of its lines that were not rules.
@@ -103,6 +104,11 @@ pub fn for_an_unattended_run(
     let (_, unreadable) = Permissions::parse(&[], &[], &lists.allow, &anchors);
     rejected.extend(unreadable);
     rejected.extend(entries_that_are_not_lines(lists));
+    // And the entries a layer that cannot grant wrote, for the same reason again: an unreadable
+    // one is not a rule anybody could have granted, so it is named here rather than left to the
+    // report about grants (PERM-14) that this run has none of.
+    let (_, unreadable) = dropped_allow_entries(settings, &anchors);
+    rejected.extend(unreadable);
     (permissions, rejected)
 }
 
@@ -151,10 +157,56 @@ pub fn with_granted(
     // narrowing one however the list is ordered. The order the person read them in is the order they
     // were proposed in, which is the order to report a bad one in.
     let allow: Vec<String> = lists.allow.iter().chain(granted).cloned().collect();
-    let (permissions, mut rejected) =
-        Permissions::parse(&lists.deny, &lists.ask, &allow, &anchors(profile));
+    let anchors = anchors(profile);
+    let (permissions, mut rejected) = Permissions::parse(&lists.deny, &lists.ask, &allow, &anchors);
     rejected.extend(entries_that_are_not_lines(lists));
+    let (_, unreadable) = dropped_allow_entries(settings, &anchors);
+    rejected.extend(unreadable);
     (permissions, rejected)
+}
+
+/// The `allow` entries a layer that could not grant them wrote, as the rules among them and the
+/// entries that are not rules at all.
+///
+/// Both halves are reported and under different clauses. A rule is [PERM-14]'s: dropped, named
+/// with the file it was written in, and put to the person at the question [PERM-15] describes. An
+/// entry that is not a rule is [PERM-11]'s whatever layer wrote it, and is not also reported as a
+/// grant that was withheld, because a rule nothing can act on is nobody's grant: being told to
+/// grant a line that can never decide anything sends somebody to the wrong fix, where the same
+/// line in their own file is named for what is wrong with it.
+///
+/// Split here rather than in the settings crate for [`entries_that_are_not_lines`]'s reason: what
+/// a line means is the kernel's to say, and layering.md puts the kernel above the crate that reads
+/// the file.
+///
+/// [PERM-11]: ../../../docs/specs/permissions.md
+/// [PERM-14]: ../../../docs/specs/permissions.md
+/// [PERM-15]: ../../../docs/specs/permissions.md
+fn dropped_allow_entries(settings: &Settings, anchors: &Anchors) -> (Vec<Proposed>, Vec<Rejected>) {
+    let mut proposed = Vec::new();
+    let mut rejected = Vec::new();
+    for (path, rule) in settings.allow_ignored() {
+        match Rule::parse(rule, anchors) {
+            Ok(_) => proposed.push(Proposed::new(path, rule)),
+            Err(reject) => rejected.push(reject),
+        }
+    }
+    (proposed, rejected)
+}
+
+/// The `allow` rules a checkout proposed: every dropped entry that is a rule at all.
+///
+/// What the question [PERM-15] describes offers, and what [PERM-14] reports as dropped or as
+/// granted. The entries left out of it are reported as unreadable instead, by whichever of
+/// [`from_settings`], [`with_granted`] and [`for_an_unattended_run`] the same caller builds its
+/// rules with, so no surface has to remember the other half of the report.
+///
+/// `profile` is the user's home directory, for the reason [`from_settings`] states.
+///
+/// [PERM-14]: ../../../docs/specs/permissions.md
+/// [PERM-15]: ../../../docs/specs/permissions.md
+pub fn proposed(settings: &Settings, profile: Option<&std::path::Path>) -> Vec<Proposed> {
+    dropped_allow_entries(settings, &anchors(profile)).0
 }
 
 /// The directories a settings file asked to have opened, in the order it named them.
@@ -441,6 +493,54 @@ mod tests {
         );
         assert_eq!(rejected.len(), 1);
         assert!(describe(&rejected[0]).contains("scripts/check.sh"));
+    }
+
+    /// PERM-11, PERM-14: a checkout's `allow` entry is a grant that was withheld where it is a
+    /// rule, and an unreadable entry wherever it was written. Both directions from one file,
+    /// because each half alone is passed by a wrong implementation: offering every entry reports a
+    /// line that can never decide anything as a rule to grant, and offering none reports a rule the
+    /// person could have granted as a typo.
+    #[test]
+    fn an_allow_entry_a_checkout_wrote_is_proposed_only_where_it_is_a_rule() {
+        let block = r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)", "Nonsense"]}}"#;
+        let checkout = layered_settings("checkout-allow-readability", Some(block), None);
+        let profile = PathBuf::from("/home/x");
+
+        let offered: Vec<String> = proposed(&checkout, Some(&profile))
+            .into_iter()
+            .map(|rule| rule.rule)
+            .collect();
+        assert_eq!(
+            offered,
+            ["Bash(bash scripts/check.sh)"],
+            "the entries offered as grants are not the ones that are rules"
+        );
+
+        let (_, rejected) = from_settings(&checkout, Some(&profile));
+        let said: Vec<String> = rejected.iter().map(describe).collect();
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(
+            said[0].contains("Nonsense"),
+            "the entry that is not a rule was not named for what is wrong with it: {said:?}"
+        );
+    }
+
+    /// PERM-11: the same entry in a run nobody is watching. Such a run installs no allow rule at
+    /// all and puts no question, so this report is the only one it has: an entry named nowhere
+    /// reads to whoever wrote it as a rule in force, which is the same failure in a surface that
+    /// has no grant to explain it away.
+    #[test]
+    fn a_checkouts_unreadable_allow_entry_is_named_to_a_run_nobody_is_watching() {
+        let block = r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)", "Nonsense"]}}"#;
+        let checkout = layered_settings("unattended-checkout-allow", Some(block), None);
+
+        let (_, rejected) = for_an_unattended_run(&checkout, Some(&PathBuf::from("/home/x")));
+        let said: Vec<String> = rejected.iter().map(describe).collect();
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(
+            said[0].contains("Nonsense"),
+            "the entry that is not a rule was not named: {said:?}"
+        );
     }
 
     /// A scratch home and working directory with the layers the arguments name, read the way a

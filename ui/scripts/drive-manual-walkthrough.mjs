@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { _electron as electron } from 'playwright-core'
 
+const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
 const root = mkdtempSync(join(tmpdir(), 'bravebot-walkthrough-'))
 const home = join(root, 'home'), project = join(root, 'project'), profile = join(root, 'profile')
 for (const path of [join(home, '.bravebot'), project, profile]) mkdirSync(path, { recursive: true })
@@ -121,7 +122,7 @@ try {
   // 1–2: diagnostics, keyboard navigation, real override validation and clearing.
   await openSettings()
   await settings.getByText('Model service configured', { exact: true }).waitFor()
-  assert.match(await settings.innerText(), /0\.9\.0/)
+  assert.match(await settings.innerText(), new RegExp(version.replaceAll('.', '\\.')))
   await settings.getByRole('button', { name: 'Refresh diagnostics' }).click()
   await settings.getByRole('tab', { name: 'Connection', exact: true }).focus()
   for (const [key, name] of [['ArrowRight', 'Hooks'], ['ArrowRight', 'Run settings'], ['ArrowRight', 'Connection'], ['ArrowLeft', 'Run settings'], ['Home', 'Connection'], ['End', 'Run settings']]) {

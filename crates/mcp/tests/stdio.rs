@@ -4,7 +4,7 @@
 //! process rather than an in-memory pipe is the point: it exercises the sandbox spawn
 //! path, which is where a confinement failure would surface.
 
-use bravebot_core::capability::{Capability, CapabilitySet};
+use bravebot_core::capability::{Capability, CapabilitySet, ServerAlias};
 use bravebot_core::event::RecordingSink;
 use bravebot_core::label::Label;
 use bravebot_core::policy::{Policy, ReleasePlan, Routing};
@@ -212,7 +212,7 @@ fn a_tool_result_is_labelled_untrusted() {
     let mut policy = Policy::begin(
         routing(),
         ReleasePlan::new(),
-        CapabilitySet::from_iter([Capability::McpCall]),
+        CapabilitySet::from_iter([Capability::McpCall(ServerAlias::new("fake"))]),
         &mut sink,
     )
     .expect("policy");
@@ -259,6 +259,96 @@ fn a_tool_call_without_the_capability_is_refused() {
         .call_tool(&mut policy, "echo", serde_json::json!({}))
         .expect_err("must be refused");
     assert!(error.to_string().contains("mcp_call"), "got: {error}");
+
+    let _ = std::fs::remove_file(&script);
+}
+
+/// SERVERS-9: a grant names the server it is about, so calling a second server is refused
+/// while the first is callable. The fault this rejects is the gate reading the protocol out
+/// of the capability and stopping there, which is what one alias-free `McpCall` left it
+/// doing: a run that had been granted calls to `weather` could call `payments` too.
+#[test]
+fn a_grant_for_one_server_does_not_reach_another() {
+    let _spawning = one_at_a_time();
+    let Some(sandbox) = sandbox_or_skip() else {
+        return;
+    };
+    let script = fake_server("other-server", WORKING_SERVER);
+
+    let mut payments = StdioServer::launch(
+        "payments",
+        script.to_str().expect("path"),
+        &[],
+        sandbox.as_ref(),
+        &sandbox_policy(),
+    )
+    .expect("server launches");
+    payments.initialize("bravebot", "0.1.0").expect("handshake");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::McpCall(ServerAlias::new("weather"))]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let error = payments
+        .call_tool(&mut policy, "echo", serde_json::json!({"text": "hi"}))
+        .expect_err("a grant for weather must not reach payments");
+    // The server that was asked for, not the one that was granted: a refusal naming
+    // `mcp_call:weather` would mean the gate checked the grant it held rather than the
+    // call in front of it.
+    assert!(
+        error.to_string().contains("mcp_call:payments"),
+        "got: {error}"
+    );
+
+    let _ = std::fs::remove_file(&script);
+}
+
+/// SERVERS-9: a grant withdrawn stops answering at the next call, not at the next session.
+/// The fault this rejects is a set fixed when the run began, which is what leaves a
+/// withdrawal waiting for a restart while the server stays callable meanwhile.
+#[test]
+fn a_grant_withdrawn_stops_the_next_call() {
+    let _spawning = one_at_a_time();
+    let Some(sandbox) = sandbox_or_skip() else {
+        return;
+    };
+    let script = fake_server("withdrawn", WORKING_SERVER);
+
+    let mut server = StdioServer::launch(
+        "fake",
+        script.to_str().expect("path"),
+        &[],
+        sandbox.as_ref(),
+        &sandbox_policy(),
+    )
+    .expect("server launches");
+    server.initialize("bravebot", "0.1.0").expect("handshake");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::McpCall(ServerAlias::new("fake"))]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    server
+        .call_tool(&mut policy, "echo", serde_json::json!({"text": "hi"}))
+        .expect("granted, so the first call goes through");
+
+    assert!(policy.revoke_mcp_call(&ServerAlias::new("fake")));
+
+    // The same policy, so the same session: nothing was restarted between the two calls.
+    let error = server
+        .call_tool(&mut policy, "echo", serde_json::json!({"text": "hi"}))
+        .expect_err("the grant was withdrawn before this call");
+    assert!(error.to_string().contains("mcp_call:fake"), "got: {error}");
 
     let _ = std::fs::remove_file(&script);
 }
@@ -363,7 +453,7 @@ fn a_tool_level_error_is_reported_as_a_failure() {
     let mut policy = Policy::begin(
         routing(),
         ReleasePlan::new(),
-        CapabilitySet::from_iter([Capability::McpCall]),
+        CapabilitySet::from_iter([Capability::McpCall(ServerAlias::new("fake"))]),
         &mut sink,
     )
     .expect("policy");
@@ -486,7 +576,7 @@ fn a_server_does_not_receive_this_processes_environment() {
     let mut policy = Policy::begin(
         routing(),
         ReleasePlan::new(),
-        CapabilitySet::from_iter([Capability::McpCall]),
+        CapabilitySet::from_iter([Capability::McpCall(ServerAlias::new("fake"))]),
         &mut sink,
     )
     .expect("policy");

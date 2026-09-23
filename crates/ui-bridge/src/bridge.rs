@@ -19,7 +19,8 @@ use crate::turn::{BridgeConfirmer, BridgeReporter, BridgeSink, Reply};
 use crate::{store, wire};
 use bravebot_agent::Workspace;
 use bravebot_agent::turn::{self as agent_turn, Task, TurnError};
-use bravebot_config::Config;
+use bravebot_agent::workspace::WorkspaceError;
+use bravebot_config::{Config, Settings};
 use bravebot_core::cancel::Cancel;
 use bravebot_core::trust::TrustStore;
 use bravebot_net::Egress;
@@ -600,14 +601,13 @@ impl Bridge {
 
         let model = requested_model.or_else(|| open.model.clone());
         let config = crate::settings::config(Some(&open.project), self.settings.as_deref())?;
-        // What the settings say a commit message or a pull request this turn writes may carry
-        // (BACKEND-30). Read off the same layers the configuration above came from, and here
-        // rather than in the worker so the answer is the one that stood when the turn was asked
-        // for.
-        let attribution = crate::settings::layers(Some(&open.project), self.settings.as_deref())
-            .attribution()
-            .clone();
-        let mut workspace = Workspace::new(open.project.clone())
+        // The same layers the configuration above came from, read here rather than in the worker
+        // so what they say is what stood when the turn was asked for. Two answers come off them:
+        // what a commit message or a pull request this turn writes may carry (BACKEND-30), and
+        // the caps a search this turn makes runs under (SEARCH-9).
+        let settings = crate::settings::layers(Some(&open.project), self.settings.as_deref());
+        let attribution = settings.attribution().clone();
+        let mut workspace = turn_workspace(open.project.clone(), &settings)
             .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
 
         let project = open.project.clone();
@@ -1070,6 +1070,21 @@ impl Bridge {
         self.open.insert(handle.clone(), session);
         handle
     }
+}
+
+/// The workspace one turn runs on, under the caps the settings in force put a search under.
+///
+/// SEARCH-9 has the caps handed to the workspace by whoever read the settings, because a
+/// workspace that read them itself would answer differently on a machine whose owner had
+/// configured them. That makes this the whole of the clause for this front end: a cap named in a
+/// settings file reaches a search here or nowhere. A cap nobody named is `None`, which leaves the
+/// built-in one standing.
+///
+/// A function of its own rather than three lines at the call site, so a test can build the
+/// workspace a turn is given without a backend to run one against.
+pub fn turn_workspace(project: PathBuf, settings: &Settings) -> Result<Workspace, WorkspaceError> {
+    let caps = settings.search();
+    Ok(Workspace::new(project)?.with_search_caps(caps.files, caps.time))
 }
 
 /// Everything a worker needs to run one turn.

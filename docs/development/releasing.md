@@ -65,3 +65,25 @@ secrets. Jenkins does not set it on an upload, so a missing credential fails the
 instead of shipping a binary that cannot reach the backend.
 
 Darwin binaries are codesigned and notarised, Windows binaries are Authenticode-signed.
+
+## The desktop application
+
+```sh
+make app-bundle
+```
+
+The third family of artifact, and the one the tag does not produce. It builds the agent and the
+secure file helper in release mode, bundles the front end, and writes
+`ui/dist/Brave Bot-darwin-<arch>/Brave Bot.app` on macOS or `ui/dist/Brave Bot-linux-<arch>/` on
+Linux, carrying those two release executables as resources. `ui/package.json` states its version,
+which is the version above, so the app names the release it ships an agent build of.
+
+It refuses a build with no backend credentials in it, which the front end's own
+`npm run bridge` allows on purpose: a bundle built from an unconfigured shell starts, lists
+sessions, opens them, and fails at the first inference request, and Finder loads no shell
+configuration for the person who would then report that. So the credentials have to be in the
+environment `make` runs in, as they are for the cross-builds above.
+
+The bundle is not signed, not notarised, and not built by anything in this repository: no CI job
+packages it and the tag does not either. Until it goes through the same job that signs the
+binaries, a release that includes the app is this command run by hand on a configured macOS host.
