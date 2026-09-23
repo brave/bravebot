@@ -98,6 +98,8 @@ interface Live {
    * exactly once per compaction that actually happened.
    */
   archived: number
+  /** Whether the session opened with auto-vetting on, as the agent settled it then. */
+  autoVetting: boolean
   /**
    * The entry id of a prompt this window has sent and not yet been told the ordinal of.
    *
@@ -521,6 +523,7 @@ export function App(): React.JSX.Element {
         // extra reading of a short file is cheaper than a bot that has quietly forgotten itself.
         bot: bot ? { slug: bot.slug, grounded: false } : null,
         archived: opened.archived,
+        autoVetting: opened.autoVetting,
       })
       const notes = [opened.branchNote, opened.buildNote, opened.frontNote].filter(Boolean) as string[]
       setProblem(notes.length ? notes.join(' · ') : null)
@@ -540,7 +543,7 @@ export function App(): React.JSX.Element {
     const chosen = directory ?? (await window.bravebot.chooseDirectory())
     if (!chosen) return
     try {
-      const made = await call<{ session: string; branch: string | null; model: string | null }>('session.new', {
+      const made = await call<{ session: string; branch: string | null; model: string | null; autoVetting: boolean }>('session.new', {
         directory: chosen,
       })
       setConversation(conversationKey(chosen, draftId), { botSlug: bot?.slug ?? null })
@@ -568,6 +571,7 @@ export function App(): React.JSX.Element {
         focus: null,
         bot: bot ? { slug: bot.slug, grounded: false } : null,
         archived: 0,
+        autoVetting: made.autoVetting,
       })
       setProblem(null)
     } catch (error) {
@@ -1086,6 +1090,7 @@ export function App(): React.JSX.Element {
         // needed, where too high a figure would miss the one that is — and a fork is not a bot, so
         // in this build it asks for nothing at all.
         archived: 0,
+        autoVetting: forked.autoVetting,
         forkedFrom: {
             directory: forked.parent.directory,
             id: forked.parent.id,

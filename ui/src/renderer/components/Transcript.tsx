@@ -38,6 +38,7 @@ interface Live {
   askingTrust: string | null
   forkedFrom: { directory: string; id: string; title: string; prompt: number } | null
   focus: number | null
+  autoVetting?: boolean
 }
 
 /**
@@ -382,6 +383,7 @@ export function Transcript({
         <button disabled={!matches.length} onClick={() => setMatch((n) => n + 1)} aria-label="Next match">↓</button>
         <button onClick={() => setSearching(false)} aria-label="Close search">×</button>
       </div>}
+      {live?.autoVetting && <VettingBanner />}
       {live?.forkedFrom && <ForkBanner from={live.forkedFrom} onOpen={onOpenParent} />}
     </header>
   )
@@ -862,6 +864,23 @@ function ForkBanner({
         {from.title}
       </button>
       , before prompt {from.prompt + 1}.
+    </p>
+  )
+}
+
+/**
+ * That this session opened with auto-vetting on, which CHECK-11 has said at the top and kept said.
+ *
+ * In the header for the reason `ForkBanner` is: it stays on screen however far the transcript
+ * scrolls, and it is not a `t.Entry`, so no export carries it. The mode's whole effect is a
+ * question that never appears, which nothing else on screen could show. Nothing is drawn when the
+ * mode is off, since asking is the ordinary state.
+ */
+function VettingBanner(): React.JSX.Element {
+  return (
+    <p className="fork-banner vetting-banner" role="note">
+      <strong>Auto-vetting is on.</strong> A check that finds nothing reads content to the model
+      without asking you. Kept in <code>~/.bravebot/vetting</code>.
     </p>
   )
 }

@@ -663,6 +663,8 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 .fork-banner .link:hover { color: var(--accent-text); }
 .fork-banner .link:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+.vetting-banner { border-left: 3px solid var(--accent); }
+.vetting-banner strong { color: var(--ink); }
 
 /* Where a fork's link landed. `display: contents` on `.entry-hit` means the wrapper cannot be
    painted, so the mark is drawn on the row inside it — and it fades, because it answers "which

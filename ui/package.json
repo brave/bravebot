@@ -24,6 +24,7 @@
     "drive:resize": "npm run bridge && electron-vite build && node scripts/drive-resize.mjs",
     "drive:panels": "npm run bridge && electron-vite build && node scripts/drive-panels.mjs",
     "drive:columns": "npm run bridge && electron-vite build && node scripts/drive-columns.mjs",
+    "drive:vetting": "npm run bridge && electron-vite build && node scripts/drive-vetting.mjs",
     "drive:run": "npm run bridge && electron-vite build && node scripts/drive-run.mjs",
     "drive:ask": "npm run bridge && electron-vite build && node scripts/drive-ask.mjs",
     "package": "npm run bridge && electron-vite build && node scripts/package.mjs",
