@@ -547,9 +547,19 @@ fn stops_the_turn(session: &Session, key: KeyEvent) -> bool {
 /// session was idle into the turn, and the press that stops the turn is the press that offer was
 /// waiting for. Left up, the hint row goes on saying the next Ctrl-C leaves over a box holding the
 /// line the stop put back, which the next Ctrl-C would only take.
+///
+/// A half-typed vi instruction goes for the same reason: it waits for a character, and neither
+/// stopping key is one.
 fn stop_what_is_running(session: &mut Session, cancel: &Cancel) {
     session.cleared_by_interrupt = false;
+    session.abandon_half_typed();
     cancel.cancel();
+}
+
+/// Whether a press is a character typed, which is the only kind of press a half-typed vi
+/// instruction waits for.
+fn types_a_character(key: KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Char(_)) && key.modifiers.difference(KeyModifiers::SHIFT).is_empty()
 }
 
 /// Interpret a key press while the scroller is open.
@@ -940,6 +950,13 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
     // transcript; `/` opens the search Ctrl-R opens. Translated to the key rather than answered a
     // second time, so a letter cannot come to disagree with the chord it stands for.
     let key = spelled_by_vi(session, key).unwrap_or(key);
+
+    // A press that is not a character cannot be the key a half-typed vi instruction waits for. Left
+    // standing, the wait would take the next letter instead, so `d`, Left, `w` would delete a word
+    // from wherever the arrow had put the caret.
+    if !types_a_character(key) {
+        session.abandon_half_typed();
+    }
 
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
@@ -1582,6 +1599,11 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     // prompt history and the search, neither of which sends anything, so a running turn refuses
     // nothing here.
     let key = spelled_by_vi(session, key).unwrap_or(key);
+
+    // Where the idle path abandons it, and for the reason that path does.
+    if !types_a_character(key) {
+        session.abandon_half_typed();
+    }
 
     // Where the idle path clears it, and for the reason that path clears it: the hint offering the
     // way out lives for one press, and this is it. A turn a loop tick or a watch began started
@@ -8687,6 +8709,123 @@ mod tests {
             Some(crate::vim::Mode::Insert),
             "the press that stopped the turn also changed the mode"
         );
+    }
+
+    /// Escape is how vi abandons an instruction still waiting for a key, so the key after it is read
+    /// on its own: `d`, Escape, `w` moves a word rather than deleting one. Both spellings, being one
+    /// request.
+    #[test]
+    fn escape_abandons_an_instruction_still_waiting_for_a_key() {
+        for escape in [key(KeyCode::Esc), ctrl('[')] {
+            for (first, second, line) in [
+                ('d', 'w', "one two three"),
+                ('c', 'w', "one two three"),
+                ('f', 't', "one two three"),
+                ('g', 'g', "one\ntwo"),
+            ] {
+                let started = |keys: &[KeyEvent]| {
+                    let mut session = in_normal_mode(line);
+                    handle_key(&mut session, key(KeyCode::Char('0')));
+                    for pressed in keys {
+                        handle_key(&mut session, *pressed);
+                    }
+                    session
+                };
+                let alone = started(&[key(KeyCode::Char(second))]);
+                let session = started(&[
+                    key(KeyCode::Char(first)),
+                    escape,
+                    key(KeyCode::Char(second)),
+                ]);
+
+                let keys = format!("{first}, {escape:?}, {second}");
+                assert_eq!(session.input(), line, "{keys} edited the line");
+                assert_eq!(session.vi_mode(), Some(crate::vim::Mode::Normal), "{keys}");
+                assert_eq!(session.caret(), alone.caret(), "{keys}");
+                assert_eq!(session.half_typed(), alone.half_typed(), "{keys}");
+            }
+        }
+    }
+
+    /// A press that is not a character cannot be the key a half-typed instruction waits for, so it
+    /// abandons the wait and does what it does alone: `d`, Left, `w` moves back and then a word on,
+    /// rather than deleting the space the arrow left the caret on.
+    #[test]
+    fn a_press_that_is_not_a_character_abandons_an_instruction_still_waiting_for_a_key() {
+        let pressed_keys = [
+            KeyCode::Left,
+            KeyCode::Right,
+            KeyCode::Home,
+            KeyCode::End,
+            KeyCode::Backspace,
+            KeyCode::Delete,
+        ];
+        for pressed in pressed_keys {
+            for first in ['d', 'c', 'f', 'g', 'm'] {
+                let started = |keys: &[KeyEvent]| {
+                    let mut session = in_normal_mode("one two three");
+                    handle_key(&mut session, key(KeyCode::Char('0')));
+                    handle_key(&mut session, key(KeyCode::Char('w')));
+                    for pressed in keys {
+                        handle_key(&mut session, *pressed);
+                    }
+                    session
+                };
+                let keys = format!("{first}, {pressed:?}");
+                let waited = started(&[key(KeyCode::Char(first)), key(pressed)]);
+                assert_eq!(waited.half_typed(), None, "{keys}");
+
+                let alone = started(&[key(pressed), key(KeyCode::Char('w'))]);
+                let session = started(&[
+                    key(KeyCode::Char(first)),
+                    key(pressed),
+                    key(KeyCode::Char('w')),
+                ]);
+                assert_eq!(session.input(), alone.input(), "{keys}, w");
+                assert_eq!(session.caret(), alone.caret(), "{keys}, w");
+                assert_eq!(session.vi_mode(), alone.vi_mode(), "{keys}, w");
+            }
+        }
+    }
+
+    /// Enter sends the line with an instruction still waiting, and the wait does not ride into the
+    /// turn: a letter typed while the answer arrives is read on its own rather than as the stretch a
+    /// `d` typed before the send deletes.
+    #[test]
+    fn sending_the_line_abandons_an_instruction_still_waiting_for_a_key() {
+        let mut session = in_normal_mode("a question");
+        handle_key(&mut session, key(KeyCode::Char('d')));
+        assert_eq!(session.half_typed(), Some("d"));
+
+        handle_key(&mut session, key(KeyCode::Enter));
+
+        assert_eq!(session.status, Status::Working);
+        assert_eq!(session.half_typed(), None);
+    }
+
+    /// While a turn runs the box is still NORMAL mode's, and a press that is not a character still
+    /// abandons the wait. So does stopping the turn, which Escape and Ctrl-C do before any ladder
+    /// reads them.
+    #[test]
+    fn a_press_while_a_turn_runs_abandons_an_instruction_still_waiting_for_a_key() {
+        let working = || {
+            let mut session = editing_vis_way();
+            type_line(&mut session, "a question");
+            handle_key(&mut session, key(KeyCode::Enter));
+            assert_eq!(session.status, Status::Working);
+            handle_key_while_working(&mut session, ctrl('['));
+            handle_key_while_working(&mut session, key(KeyCode::Char('d')));
+            assert_eq!(session.half_typed(), Some("d"));
+            session
+        };
+
+        let mut session = working();
+        handle_key_while_working(&mut session, key(KeyCode::Left));
+        assert_eq!(session.half_typed(), None, "Left");
+
+        let mut session = working();
+        stop_what_is_running(&mut session, &Cancel::new());
+        assert_eq!(session.half_typed(), None, "stopping the turn");
     }
 
     /// A session in NORMAL mode over a paragraph, which is what gives the row keys somewhere to go.

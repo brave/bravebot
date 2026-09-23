@@ -3115,9 +3115,16 @@ fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
     // is in decides whether the next letter is a letter or an instruction, so of everything here the
     // two of them are what somebody has to catch without going looking. Nothing at all for the box
     // everybody else has, which is in no mode to report.
+    //
+    // With the keys of an instruction still waiting for more after it, as vi's `showcmd` draws them.
+    // A `d` waiting decides what the next letter does as much as the mode does, and drawn nowhere it
+    // is the next `w` that says so, by deleting a word.
     let editing = session
         .vi_mode()
-        .map(|mode| mode.as_str().to_string())
+        .map(|mode| match session.half_typed() {
+            Some(keys) => format!("{} {keys}", mode.as_str()),
+            None => mode.as_str().to_string(),
+        })
         .unwrap_or_default();
     // What is going to happen here without anybody touching the keyboard. Between ticks the screen
     // is a transcript of things that have already happened, so a loop that is quietly spending a
@@ -6021,6 +6028,43 @@ mod tests {
         let hint = hint_row_at(&session, 120, 24);
         assert!(hint.contains("NORMAL"), "{hint}");
         assert!(!hint.contains("INSERT"), "both modes were drawn: {hint}");
+    }
+
+    /// A `d` waiting for its stretch decides what the next letter does as much as the mode does, so
+    /// the keys of an instruction still waiting are drawn beside the mode, as vi's `showcmd` draws
+    /// them, and go once it is whole or abandoned.
+    #[test]
+    fn the_hint_line_draws_an_instruction_still_waiting_beside_the_mode() {
+        let mut session = Session::new("kernel-enforced");
+        session.choose_editing(crate::vim::Editing::Vi);
+        for c in "one two".chars() {
+            session.type_char(c);
+        }
+        session.enter_vi_normal();
+        session.type_char('0');
+
+        session.type_char('d');
+        let hint = hint_row_at(&session, 120, 24);
+        assert!(hint.contains("NORMAL d"), "{hint}");
+        session.type_char('i');
+        let hint = hint_row_at(&session, 120, 24);
+        assert!(hint.contains("NORMAL di"), "{hint}");
+
+        session.type_char('w');
+        let hint = hint_row_at(&session, 120, 24);
+        assert!(
+            hint.contains("NORMAL") && !hint.contains("NORMAL d"),
+            "a whole instruction was still drawn as waiting: {hint}"
+        );
+
+        session.type_char('g');
+        assert!(hint_row_at(&session, 120, 24).contains("NORMAL g"));
+        session.abandon_half_typed();
+        let hint = hint_row_at(&session, 120, 24);
+        assert!(
+            hint.contains("NORMAL") && !hint.contains("NORMAL g"),
+            "an abandoned instruction was still drawn as waiting: {hint}"
+        );
     }
 
     /// The box everybody else has is in no mode, and a word standing there for somebody who never

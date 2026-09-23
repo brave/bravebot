@@ -944,8 +944,12 @@ pub struct Session {
     ///
     /// `f` alone says to jump to a character nobody has named yet, so nothing happens until the next
     /// press names it. Held rather than acted on, and cleared by the press that completes or abandons
-    /// it: a wait that outlived the pair would swallow letters typed later.
+    /// it, and by Escape: a wait that outlived the pair would swallow letters typed later.
     half_typed: Option<crate::vim::Pending>,
+    /// The keys typed of the instruction `half_typed` holds, for the hint line to draw.
+    ///
+    /// Read only while that is set, so what an abandoned wait leaves here is never drawn.
+    typed_so_far: String,
     /// The last jump to a character, for the keys that repeat one.
     ///
     /// Remembered because `;` and `,` mean nothing on their own: they say "that again", and there is
@@ -1351,6 +1355,7 @@ impl Session {
             bindings: crate::keybindings::Keybindings::default(),
             mode: crate::vim::Mode::default(),
             half_typed: None,
+            typed_so_far: String::new(),
             last_find: None,
             anchor: None,
             register: None,
@@ -2638,6 +2643,9 @@ impl Session {
         // draw one: what is left otherwise is a reversed run of characters in a box whose keys
         // cannot account for it.
         self.anchor = None;
+        // An instruction waiting for its next key goes with the mode it was typed in, for the same
+        // reason: INSERT mode would draw it beside a box that is typing its letters.
+        self.half_typed = None;
     }
 
     /// Which vi mode the box is in, or `None` where vi is not the style.
@@ -2658,6 +2666,16 @@ impl Session {
     pub fn vi_normal(&self) -> bool {
         self.vi_mode()
             .is_some_and(crate::vim::Mode::takes_instructions)
+    }
+
+    /// The keys typed so far of a vi instruction still waiting for more, or `None` where none is.
+    pub fn half_typed(&self) -> Option<&str> {
+        self.half_typed.map(|_| self.typed_so_far.as_str())
+    }
+
+    /// Drops a vi instruction still waiting for its next key, for a press that cannot be that key.
+    pub fn abandon_half_typed(&mut self) {
+        self.half_typed = None;
     }
 
     /// The stretch VISUAL mode has marked out, as byte offsets, or `None` where it is not open.
@@ -2732,6 +2750,10 @@ impl Session {
     /// A letter vi does not use does nothing at all, which is the mode's whole bargain: the box is
     /// not typing, so an instruction it does not recognise is not text to fall back on.
     fn obey(&mut self, c: char) {
+        if self.half_typed.is_none() {
+            self.typed_so_far.clear();
+        }
+        self.typed_so_far.push(c);
         // A key that was waiting for one more takes this press and nothing else looks at it. Cleared
         // first, so a pair that means nothing ends the wait rather than holding it open: one stray
         // press would otherwise swallow every letter after it until something happened to match.
@@ -13384,6 +13406,108 @@ mod tests {
         // The next press is read on its own rather than as a third key of the pair.
         s.type_char('0');
         assert_eq!(s.caret, 4);
+    }
+
+    /// A key beginning an instruction this box does not have changes nothing, and nor does the key vi
+    /// would give it: `ma` must not open INSERT mode on the `a`, nor `mw` move on the `w`, nor `rx`
+    /// delete on the `x`. Every prefix, after an operator and after none, against every key that can
+    /// be typed after it, and in VISUAL mode the prefixes that mean there what they mean here.
+    #[test]
+    fn a_prefix_this_box_has_no_instruction_for_changes_nothing_whatever_follows_it() {
+        let in_both_modes = [
+            "\"", "q", "@", "m", "'", "`", "z", "Z", "[", "]", "g'", "g`",
+        ];
+        // In VISUAL mode `r` and `gr` replace the selection, and the operators under `g` and `R`
+        // act on it and take no key.
+        let in_normal_mode = [
+            "r", "R", "gr", "gu", "gU", "g~", "g?", "gq", "gw", "g@", "gui", "guf",
+        ];
+        let after_an_operator = ["d'", "c`", "y[", "d]", "dz", "gu'"];
+        for prefix in in_both_modes
+            .iter()
+            .chain(&in_normal_mode)
+            .chain(&after_an_operator)
+        {
+            for follower in ' '..='~' {
+                let mut s = normal("one two", 0);
+                for c in prefix.chars().chain([follower]) {
+                    s.type_char(c);
+                }
+                assert_eq!(s.input, "one two", "{prefix}{follower} edited the line");
+                assert_eq!(s.caret, 0, "{prefix}{follower} moved the caret");
+                assert_eq!(
+                    s.vi_mode(),
+                    Some(crate::vim::Mode::Normal),
+                    "{prefix}{follower} left NORMAL mode"
+                );
+            }
+        }
+        for prefix in in_both_modes {
+            for follower in ' '..='~' {
+                let mut s = normal("one two", 0);
+                for c in ['v'].into_iter().chain(prefix.chars()).chain([follower]) {
+                    s.type_char(c);
+                }
+                assert_eq!(s.input, "one two", "v{prefix}{follower} edited the line");
+                assert_eq!(s.caret, 0, "v{prefix}{follower} moved the caret");
+                assert_eq!(
+                    s.vi_mode(),
+                    Some(crate::vim::Mode::Visual { lines: false }),
+                    "v{prefix}{follower} left VISUAL mode"
+                );
+            }
+        }
+    }
+
+    /// With a selection on the screen, an operator under `g` and `R` take no key of their own, so
+    /// the motion after them moves the end of the selection as it would have without them. `gr` is
+    /// `r` there, as it is in vi.
+    #[test]
+    fn visual_mode_leaves_the_key_after_an_operator_under_g_or_capital_r_to_act_on_its_own() {
+        let pressed = |keys: &str| {
+            let mut s = normal("one two", 0);
+            for c in keys.chars() {
+                s.type_char(c);
+            }
+            (s.input.clone(), s.caret, s.vi_selection(), s.vi_mode())
+        };
+        assert_eq!(pressed("vl").1, 1);
+        for prefix in ["gu", "gU", "g~", "g?", "gq", "gw", "g@", "R"] {
+            assert_eq!(pressed(&format!("v{prefix}l")), pressed("vl"), "v{prefix}l");
+        }
+        assert_eq!(pressed("vlgrx").0, "xxe two");
+        assert_eq!(pressed("vlgrx"), pressed("vlrx"));
+    }
+
+    /// Exactly the key vi would give the prefix and no more, so the press after it is read on its
+    /// own: the `x` after `ma` deletes the character under the caret. A wait held open past that key
+    /// would swallow letters typed later, and one that ended short of it would run the `a`. After an
+    /// operator vi gives most prefixes no key, so the `x` after `dm` is read on its own too.
+    #[test]
+    fn a_prefix_this_box_has_no_instruction_for_takes_the_key_vi_would_give_it_and_no_more() {
+        for keys in [
+            "ma", "rx", "\"a", "zz", "]]", "Rx", "g'a", "g`a", "grx", "guw", "guu", "guiw", "gufa",
+            "gugg", "gu'a", "d'a", "dzz", "dm", "c\"", "yq", "d@", "dr", "dZ", "dR",
+        ] {
+            assert_eq!(
+                edited("one two", 0, &format!("{keys}x")),
+                "ne two",
+                "{keys} took the wrong number of keys"
+            );
+        }
+    }
+
+    /// Choosing a style comes back to INSERT mode, and an instruction still waiting for its next key
+    /// goes with the mode it was typed in rather than being drawn beside a box typing letters.
+    #[test]
+    fn choosing_a_style_abandons_an_instruction_still_waiting_for_a_key() {
+        let mut s = normal("one two", 0);
+        s.type_char('d');
+        assert_eq!(s.half_typed(), Some("d"));
+
+        s.choose_editing(crate::vim::Editing::Vi);
+
+        assert_eq!(s.half_typed(), None);
     }
 
     /// `f` and `t` search forwards, `F` and `T` back, and the short pair stop one character before
