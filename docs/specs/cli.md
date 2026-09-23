@@ -149,6 +149,9 @@ over one set of failures is one of them going out of date.
 `verified-by: bravebot_cli::running::a_turn_that_could_not_run_exits_non_zero`
 `verified-by: bravebot_cli::running::each_kind_of_failure_has_a_status_of_its_own`
 `verified-by: bravebot_cli::running::a_failure_says_a_stable_identifier_whatever_language_it_explains_itself_in`
+`verified-by: bravebot_cli::running::doctor_ends_on_the_configuration_status_and_says_its_identifier`
+`verified-by: bravebot_cli::running::doctor_ends_on_the_configuration_status_where_nothing_will_serve_a_turn`
+`verified-by: bravebot_cli::main::a_report_that_found_a_configuration_error_ends_on_it`
 `verified-by: bravebot_cli::exit::every_ending_has_a_status_of_its_own`
 `verified-by: bravebot_cli::exit::a_failure_is_identified_and_a_success_is_not`
 `verified-by: bravebot_cli::exit::a_failure_says_its_identifier_in_front_of_the_message`

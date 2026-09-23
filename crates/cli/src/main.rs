@@ -1703,9 +1703,44 @@ fn import_leo_creds(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// Which of two endings a report that found both ends on.
+///
+/// `doctor` does not stop at the first problem, the whole picture being what somebody runs it
+/// for, so the ending is accumulated across the report rather than returned by the line that
+/// found one. A later problem is not a more important one and a count of problems is not a
+/// status, so the rule is which of the two a caller can do something with: CLI-6's row 3 names
+/// what to go and fix, and its row 1 is the catch-all that names nothing. A machine whose
+/// configuration cannot be used and whose platform confines nothing is one where the
+/// configuration is the thing to change, so the report ends on row 3.
+fn ends_on(found: Ending, also: Ending) -> Ending {
+    match (found, also) {
+        (Ending::Configuration, _) | (_, Ending::Configuration) => Ending::Configuration,
+        (Ending::Done, other) | (other, Ending::Done) => other,
+        (kept, _) => kept,
+    }
+}
+
+/// Say something `doctor` found that the report itself has no line for, and record its ending.
+///
+/// For the two problems the report cannot state: one that stopped it before the configuration
+/// section printed anything, and one there is no section for because a platform offering no
+/// confinement has no capabilities to describe. Everything else wrong with a machine is a line
+/// the report already prints, and saying it a second time here would put the same sentence on
+/// both streams.
+///
+/// It leaves through [`fail`], which is what makes CLI-6's identifier a property of one function
+/// rather than of every place a report can go wrong.
+fn doctor_found(ending: &mut Ending, found: Ending, problem: impl std::fmt::Display) {
+    let _ = fail(found, problem);
+    *ending = ends_on(*ending, found);
+}
+
 /// Report whether configuration is usable, without revealing the signing key.
 fn doctor() -> ExitCode {
-    let mut ok = true;
+    // What the report ends on, rather than whether it passed: CLI-6 gives a configuration this
+    // build cannot use a status of its own, and a report collapsing every way a machine can be
+    // wrong into `ExitCode::FAILURE` tells a caller checking one nothing it can act on.
+    let mut ending = Ending::Done;
 
     // Read before the configuration so the file can be reported even when it is what made the
     // configuration wrong.
@@ -1846,7 +1881,10 @@ fn doctor() -> ExitCode {
                 },
             );
             for problem in &rejected {
-                ok = false;
+                // The catch-all rather than the configuration status, which CLI-6 gives to a
+                // configuration nothing ran on: the rest of the file is honoured and a session
+                // here opens and works, so what is wrong is one line of it rather than the whole.
+                ending = ends_on(ending, Ending::Failed);
                 fact(
                     t!(doctor_permissions_unreadable),
                     bravebot_agent::permissions::describe(problem),
@@ -1915,7 +1953,7 @@ fn doctor() -> ExitCode {
                 &bravebot_net::Egress::new(),
                 &model_for_this_run(None, &config),
             ) {
-                ok = false;
+                ending = ends_on(ending, Ending::Configuration);
                 println!();
                 println!(
                     "{}",
@@ -1924,8 +1962,11 @@ fn doctor() -> ExitCode {
             }
         }
         Err(err) => {
-            eprintln!("{}", t!(cli_configuration_problem, problem = err));
-            ok = false;
+            doctor_found(
+                &mut ending,
+                Ending::Configuration,
+                t!(cli_configuration_problem, problem = err),
+            );
             // The one line from the section above that still has to be printed. A pin is the case
             // where the person reading this can do nothing about the error, so the file that holds
             // it is the only actionable thing in the report.
@@ -1960,18 +2001,20 @@ fn doctor() -> ExitCode {
     }
     // Any of the three is a statement about this machine that the program is not honouring,
     // which is what a report exits non-zero over: nothing is trusted, a named path holds nothing, or
-    // a proxy was named that requests are not taking.
+    // a proxy was named that requests are not taking. CLI-7 calls each of them a configuration
+    // error rather than a finding, which is the status CLI-6 gives them.
     if !transport.trust_problems().is_empty() || transport.unusable_proxy().is_some() {
-        ok = false;
+        ending = ends_on(ending, Ending::Configuration);
     }
 
     println!();
     // Not a warning: without confinement, untrusted work will be refused rather than run, so
-    // this is a hard problem for the user to solve.
-    if !report_confinement(
+    // this is a hard problem for the user to solve. Not a configuration error either: nothing the
+    // reader can write down would give this platform a sandbox, so it is CLI-6's catch-all.
+    if let Some(problem) = report_confinement(
         bravebot_sandbox::for_current_platform().map(|sandbox| sandbox.capabilities()),
     ) {
-        ok = false;
+        doctor_found(&mut ending, Ending::Failed, problem);
     }
 
     // Development setup is advisory: released binaries need neither facility.
@@ -1985,11 +2028,7 @@ fn doctor() -> ExitCode {
         }
     }
 
-    if ok {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::FAILURE
-    }
+    ending.code()
 }
 
 /// Recognise the source tree by its checked-in layout, including from a subdirectory.
@@ -2609,16 +2648,19 @@ struct Confinement {
 ///
 /// Takes what the lookup found rather than calling it: a machine has only its own backend to
 /// look up, so what is said about the other two levels is otherwise unreachable.
-fn report_confinement(found: Result<Capabilities, SandboxError>) -> bool {
+///
+/// A refusal is handed back rather than printed here, because it goes where a problem goes: on
+/// stderr, behind the identifier CLI-6 gives it, and into the status the run ends on. A section
+/// that printed it itself would be the one failure in the report with nothing in front of it.
+fn report_confinement(found: Result<Capabilities, SandboxError>) -> Option<String> {
     let report = confinement(found);
-    for line in &report.lines {
-        // A refusal is not a finding among the others: it goes where a problem goes.
-        match report.established {
-            true => println!("{line}"),
-            false => eprintln!("{line}"),
-        }
+    if !report.established {
+        return Some(report.lines.join("\n"));
     }
-    report.established
+    for line in &report.lines {
+        println!("{line}");
+    }
+    None
 }
 
 /// The confinement section of `doctor`: the level in force, and what enforces it.
@@ -2941,9 +2983,11 @@ mod tests {
             detail: "no backend is implemented here".into(),
         };
 
+        let refusal = report_confinement(Err(missing()))
+            .expect("doctor reported no confinement and still passed");
         assert!(
-            !report_confinement(Err(missing())),
-            "doctor reported no confinement and still passed"
+            refusal.contains(&missing().to_string()),
+            "the refusal handed back does not say what was missing: {refusal}"
         );
 
         let lines = confinement(Err(missing())).lines;
@@ -2953,6 +2997,38 @@ mod tests {
                 .any(|line| line.contains(&missing().to_string())),
             "the refusal does not say what was missing: {lines:?}"
         );
+    }
+
+    /// `doctor` reports the whole machine rather than stopping at the first thing wrong with it,
+    /// so a run can reach the end holding a configuration it cannot use and a platform that
+    /// confines nothing at once, and one status has to be chosen for both.
+    ///
+    /// Either order, because the failure this rejects is the obvious implementation: keeping the
+    /// first ending found, or keeping the last. Both report a machine whose endpoint is
+    /// unparseable as CLI-6's catch-all for half the reports that find one, which is the status
+    /// meaning "a reason none of the others name" applied to a reason row 3 names.
+    #[test]
+    fn a_report_that_found_a_configuration_error_ends_on_it() {
+        assert_eq!(
+            ends_on(Ending::Configuration, Ending::Failed),
+            Ending::Configuration,
+            "a later catch-all displaced the configuration error in front of it"
+        );
+        assert_eq!(
+            ends_on(Ending::Failed, Ending::Configuration),
+            Ending::Configuration,
+            "a configuration error found after a catch-all was dropped"
+        );
+
+        // And nothing else moves: a report with one kind of problem ends on that kind, and one
+        // with none is still a success.
+        assert_eq!(ends_on(Ending::Done, Ending::Failed), Ending::Failed);
+        assert_eq!(ends_on(Ending::Failed, Ending::Failed), Ending::Failed);
+        assert_eq!(
+            ends_on(Ending::Done, Ending::Configuration),
+            Ending::Configuration
+        );
+        assert_eq!(ends_on(Ending::Done, Ending::Done), Ending::Done);
     }
 
     /// A managed layer somebody cannot change has to say so somewhere, or "why is the variable I

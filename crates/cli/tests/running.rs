@@ -612,6 +612,87 @@ fn a_failure_says_a_stable_identifier_whatever_language_it_explains_itself_in() 
     );
 }
 
+/// CLI-6 over the command that reports rather than runs. `doctor` used to end every failure it
+/// found on `ExitCode::FAILURE` and say the configuration problem with nothing in front of it, so
+/// a CI job running it to check a machine could not tell "the configuration is wrong, fail the
+/// build" from the catch-all, and the failure it pasted into a bug report had nothing to search
+/// for.
+///
+/// The same environment as [`a_configuration_error_exits_non_zero`], so what is pinned is that
+/// the two commands classify one configuration the same way rather than each having a status of
+/// its own for it.
+#[test]
+fn doctor_ends_on_the_configuration_status_and_says_its_identifier() {
+    let scratch = Scratch::new("cli-running-doctor-configuration");
+    let output = bravebot(
+        &scratch.path,
+        // Complete but for the endpoint, which names no scheme.
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "ai-chat.example.invalid"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "the report did not end on the configuration status: {stdout}{stderr}"
+    );
+    // In front of the message rather than instead of it: the sentence is what says what to fix,
+    // and the value is what says the report failed over the endpoint it was handed.
+    assert!(
+        stderr.contains("BB1003: configuration error:"),
+        "the identifier is not in front of the message: {stderr}"
+    );
+    assert!(
+        stderr.contains("ai-chat.example.invalid"),
+        "the report failed over something other than the endpoint it was given: {stderr}"
+    );
+}
+
+/// The same status for the other way a configuration can be unusable: one this build can parse
+/// and that names nothing which will serve a turn, which CLI-7 calls a configuration error rather
+/// than a finding. The report says it and goes on to the end, so the status is accumulated across
+/// the run rather than returned by the line that found the problem, and it is the whole of what a
+/// caller has to tell this machine from one the report passed.
+#[test]
+fn doctor_ends_on_the_configuration_status_where_nothing_will_serve_a_turn() {
+    let scratch = Scratch::new("cli-running-doctor-no-service");
+    let output = bravebot(
+        &scratch.path,
+        // Brave's own hosts, which is what a released binary arrives pointed at, with nothing
+        // imported under this home to spend against them.
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "https://ai-chat.bsg.brave.com"),
+            (
+                "BRAVE_AI_CHAT_PREMIUM_ENDPOINT",
+                "https://ai-chat-premium.bsg.brave.com",
+            ),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "a report over a configuration that will serve no turn did not end on row 3: \
+         {stdout}{stderr}"
+    );
+    // And the report still says it, in the section CLI-7 puts it in: a status is what a caller
+    // reads and the routes out are what the person in front of the screen reads, so the fix is
+    // not the report losing one to gain the other.
+    assert!(
+        stdout.contains("bravebot import-leo-creds"),
+        "the report stopped saying how to configure a service: {stdout}"
+    );
+}
+
 /// The point of the flag: one object on stdout, in the reply's place, holding what a caller would
 /// otherwise have had to read out of English on stderr. A failure before the turn is a result too,
 /// since a caller that had to tell an empty stdout from a result has the prose surface back.
