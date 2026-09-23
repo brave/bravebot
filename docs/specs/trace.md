@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/core/src/event.rs
   - crates/session/src/audit.rs
+  - crates/ui-bridge/src/turn.rs
 documented-by: docs/website/docs/security/audit-trail.md
 ---
 
@@ -74,6 +75,7 @@ file has a different reader.
 
 `verified-by: bravebot_tui::sessions::the_audit_keeps_the_time_each_event_happened`
 `verified-by: bravebot_session::audit::the_written_record_names_the_delegate_that_took_the_decision`
+`verified-by: bravebot_ui_bridge::audit::the_trail_the_front_end_keeps_names_the_delegate_that_took_the_decision`
 
 A **gate** is a check that has to pass before anything consequential happens: content reaching the
 model, a file being written, a program being run, a request leaving the process. Each one decides a

@@ -60,6 +60,14 @@ impl Trail {
         &self.events
     }
 
+    /// Whose events are arriving, for a sink wrapping this one that has a second reader to tell.
+    ///
+    /// The one copy of the answer. A wrapper holding its own would be a wrapper whose live view
+    /// and whose file could disagree about which run took a decision.
+    pub fn recording(&self) -> Option<DelegateId> {
+        self.recording
+    }
+
     /// Every event as the transcript shows it, each named with the run whose gate took it.
     pub fn lines(&self) -> Vec<TrailLine> {
         self.events
