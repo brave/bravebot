@@ -3171,8 +3171,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// **Not a relabel, and not a claim about a file.** The slot keeps the label it was
     /// quarantined at, exactly as it does when a command's output is read aloud, and what comes
-    /// back is a new value whose first label comes from the provenance the kernel tracked: a
-    /// person having read the bytes and said so. Nothing here writes a trust rule, so a later
+    /// back is a new value whose first label comes from the provenance the kernel tracked, which
+    /// `by` names and which is a person having read the bytes and said so unless it says
+    /// otherwise. Nothing here writes a trust rule, so a later
     /// read of the same file mints a new slot and is quarantined again, and the trust map still
     /// says what it said.
     ///
@@ -3189,7 +3190,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// minted it and reaches the trail and nothing else: the label, the single use and what
     /// happens to the slot are the same whichever it was. A check that said `safe` mints nothing
     /// here; where auto-vetting is on it is [`crate::vetting::auto`]'s answer, decided before this
-    /// is called, that let the driver mint one in a person's place.
+    /// is called, that let the driver mint one in a person's place. In a run bypassing permissions
+    /// that asked for no screening it is the mode that did, with nobody shown the bytes and no
+    /// check made, and the trail says so rather than crediting a person.
     pub fn promote_vetted(
         &mut self,
         slot: &SlotId,
@@ -3301,7 +3304,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// since vouching for `git log` is a prediction about output that does not exist yet. Where it
     /// is a safe verdict, it is a second model's word about bytes nobody was shown, which is a
     /// weaker claim wearing the same label, and the reason the mode behind it is off until somebody
-    /// turns it on. Either way it is an assertion, and nothing here checks it.
+    /// turns it on. Where it is the permission mode, in a run bypassing permissions that asked for
+    /// no screening, it is neither of those: nobody was shown the bytes and no check read them, and
+    /// what releases them is the mode having answered every such question in advance. Whichever it
+    /// was it is an assertion, and nothing here checks it.
     ///
     /// `by` is carried rather than assumed so the trail says which happened. A record crediting a
     /// person who was never shown the bytes is the one entry a reader cannot check.
@@ -8888,18 +8894,19 @@ five
     }
 
     /// A trail crediting a person who was never shown the bytes is the one record a reader cannot
-    /// check, so the two ways in are told apart in what the trail says.
+    /// check, so the three ways in are told apart in what the trail says. Each phrase is asserted
+    /// absent for the other two as well as present for its own, since a release the mode made and
+    /// one a person made are the pair a reader most needs to tell apart.
     #[test]
-    fn the_trail_says_which_of_the_two_released_the_output() {
+    fn the_trail_says_which_of_the_three_released_the_output() {
         let credits_a_person = "the user read it and vouched for it";
-        let credits_the_check = "nobody was asked";
-        for (by, expected, absent) in [
-            (Endorsed::ByAPerson, credits_a_person, credits_the_check),
-            (
-                Endorsed::ByASafeVerdict,
-                credits_the_check,
-                credits_a_person,
-            ),
+        let credits_the_check = "auto-vetting is on and the check found nothing";
+        let credits_the_mode = "permissions are being bypassed with no screening asked for";
+        let phrases = [credits_a_person, credits_the_check, credits_the_mode];
+        for (by, expected) in [
+            (Endorsed::ByAPerson, credits_a_person),
+            (Endorsed::ByASafeVerdict, credits_the_check),
+            (Endorsed::ByBypassing, credits_the_mode),
         ] {
             let mut sink = RecordingSink::new();
             let mut policy = open_policy(&mut sink);
@@ -8913,11 +8920,41 @@ five
                 trail.contains(expected),
                 "{by:?} was not credited in the trail: {trail}"
             );
-            assert!(
-                !trail.contains(absent),
-                "{by:?} was credited to the other one as well: {trail}"
-            );
+            for other in phrases.iter().filter(|phrase| **phrase != expected) {
+                assert!(
+                    !trail.contains(other),
+                    "{by:?} was credited to another release as well: {trail}"
+                );
+            }
         }
+    }
+
+    /// The same on the other route. `vet_content` and `read_output` both promote one slot on
+    /// somebody's say-so, and a run bypassing permissions with no screening asked for reaches both
+    /// with nobody shown the bytes, so a reader of either entry has to be told which happened.
+    #[test]
+    fn the_trail_says_when_the_mode_promoted_a_slot_unshown() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let (slots, slot) = fetched("a page");
+        policy.issue_grant("vet_content", "ref", slot.as_str());
+        policy
+            .promote_vetted(&slot, &slots, Endorsed::ByBypassing)
+            .expect("endorsed");
+
+        let recorded = format!("{:?}", sink.events());
+        assert!(
+            recorded.contains("permissions are being bypassed with no screening asked for"),
+            "a promotion the mode made is not distinguishable on the trail: {recorded}"
+        );
+        assert!(
+            !recorded.contains("the user read it"),
+            "the trail credited a person who was never shown the bytes: {recorded}"
+        );
+        assert!(
+            !recorded.contains("the check found nothing"),
+            "the trail credited a check that was never made: {recorded}"
+        );
     }
 
     /// The slot itself is untouched. Nothing is relabelled: the quarantined value keeps the label

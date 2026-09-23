@@ -12306,6 +12306,179 @@ fn bypassing_fills_in_a_verdict_that_claims_nothing() {
     );
 }
 
+/// The line the trail keeps about one release, which is the entry a reader checks a promotion
+/// against. Picked out by the sentence the promotion writes rather than by the gate alone, since
+/// accepting the reference and releasing the bytes for a screen pass the same gate.
+fn how_a_slot_was_released(sink: &RecordingSink, gate: &str) -> String {
+    let released: Vec<String> = sink
+        .events()
+        .iter()
+        .filter_map(|event| match event {
+            Event::GatePassed {
+                gate: passed,
+                detail,
+            } if *passed == gate && detail.contains("so the planner is given") => {
+                Some(detail.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    match released.as_slice() {
+        [only] => only.clone(),
+        other => panic!(
+            "the trail holds {} releases, not one: {other:?}",
+            other.len()
+        ),
+    }
+}
+
+/// A release the mode made is recorded as the mode's own. Nobody was shown the bytes and no check
+/// read them, so an entry crediting a person is the one a reader cannot check and an entry
+/// crediting a check names a call that was never placed: neither of the two provenances
+/// `docs/specs/tools/read-output.md` OUTPUT-1 tells apart happened here.
+///
+/// The double refuses and is never reached, so the release is the mode's own answer rather than a
+/// person's, and the empty prompt list is what says nobody read the bytes. The script answers a
+/// check with a safe verdict, so a check that did run would be answered rather than failing on an
+/// unscripted request and reading as a different fault.
+#[test]
+fn an_unscreened_unattended_run_credits_the_mode_for_the_output() {
+    let scratch = Scratch::new("read-output-bypass-credit");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, received) = serve_sequence_answering_checks_with(
+        vec![reply_with(
+            r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
+        )],
+        vec![
+            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request("read_output", r#"{"ref":"ref:1"}"#),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reading = ReadsWhatItRan::new(false);
+    let asked = std::sync::Arc::clone(&reading.shown);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut reading, bravebot_agent::PermissionMode::Bypass, false);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out").with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    assert!(
+        asked.lock().unwrap().is_empty(),
+        "a prompt reached somebody, so this is not the release the trail has to account for"
+    );
+    let sent: Vec<String> = received.try_iter().collect();
+    assert!(
+        sent.last()
+            .is_some_and(|last| last.contains("SENTINEL-XYZZY")),
+        "the mode answered the prompt yes and the output still did not reach the planner"
+    );
+
+    let released = how_a_slot_was_released(&sink, "read_output");
+    assert!(
+        released.contains("permissions are being bypassed with no screening asked for"),
+        "the trail does not say the mode released the output: {released}"
+    );
+    assert!(
+        !released.contains("the user read it and vouched for it"),
+        "the trail credits a person who was never shown the bytes: {released}"
+    );
+    assert!(
+        !released.contains("the check found nothing"),
+        "the trail credits a check that was never made: {released}"
+    );
+}
+
+/// The same on the other route. Both promote one slot on somebody's say-so and both are answered
+/// by the mode in a run bypassing permissions with no screening asked for, so a fix to one of them
+/// leaves the same unreadable entry behind on the other.
+#[test]
+fn an_unscreened_unattended_run_credits_the_mode_for_a_promoted_slot() {
+    let scratch = Scratch::new("vet-content-bypass-credit");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, received) = serve_sequence_answering_checks_with(
+        vec![reply_with(
+            r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
+        )],
+        vec![
+            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request(
+                "vet_content",
+                r#"{"ref":"ref:1","expects":"the path the file records"}"#,
+            ),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut shown = ShownAfterAVet::new(false);
+    let asked = std::sync::Arc::clone(&shown.shown);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut shown, bravebot_agent::PermissionMode::Bypass, false);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out").with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    assert!(
+        asked.lock().unwrap().is_empty(),
+        "a prompt reached somebody, so this is not the release the trail has to account for"
+    );
+    let sent: Vec<String> = received.try_iter().collect();
+    assert!(
+        sent.last()
+            .is_some_and(|last| last.contains("SENTINEL-XYZZY")),
+        "the mode answered the prompt yes and the slot still did not reach the planner"
+    );
+
+    let released = how_a_slot_was_released(&sink, "vet_content");
+    assert!(
+        released.contains("permissions are being bypassed with no screening asked for"),
+        "the trail does not say the mode promoted the slot: {released}"
+    );
+    assert!(
+        !released.contains("the user read it and vouched for it"),
+        "the trail credits a person who was never shown the bytes: {released}"
+    );
+    assert!(
+        !released.contains("the check found nothing"),
+        "the trail credits a check that was never made: {released}"
+    );
+}
+
 /// What the two flags together are for: a run with nobody to ask still screens what it promotes, and
 /// the check's word is the only thing left that can keep a slot's bytes back. Asked for on both
 /// halves, as a caller must ask for it.

@@ -127,6 +127,14 @@ over the call that reads it and an answer that promoted on a failure is an answe
 reach. The planner is told the bytes were kept back and is told nothing about what decided that, as
 [CHECK-9](vetting.md#CHECK-9) requires of every route.
 
+**A release this mode made is recorded as this mode's.** The two promotions are the only answers
+here that are written into the audit trail as somebody's word about bytes, and where nothing
+screened them there is no such word: nobody was shown the bytes and no check was made about them.
+So the trail names the mode rather than a person or a check
+([CHECK-8](vetting.md#CHECK-8), [OUTPUT-1](tools/read-output.md#OUTPUT-1)). Where screening was
+asked for, the check's word is what answered, and the trail names that instead. What the mode
+authorises is the promotion; what this decides is what the record of it says.
+
 Vouching is not one of those two. It writes a standing rule about a path rather than promoting one
 read, which is a larger question than the one a check answered, so it is approved here however a
 check about today's contents came out.
@@ -154,6 +162,9 @@ the wrong mode everywhere else, and it is named `--dangerously-skip-permissions`
 
 `verified-by: bravebot_agent::permission_mode::bypassing_answers_every_permission_question`
 `verified-by: bravebot_agent::permission_mode::bypassing_promotes_quarantined_content_where_nothing_screens_it`
+`verified-by: bravebot_agent::permission_mode::an_unscreened_unattended_release_is_credited_to_the_mode`
+`verified-by: bravebot_agent::turn::an_unscreened_unattended_run_credits_the_mode_for_the_output`
+`verified-by: bravebot_agent::turn::an_unscreened_unattended_run_credits_the_mode_for_a_promoted_slot`
 `verified-by: bravebot_agent::permission_mode::screening_under_bypass_refuses_what_a_check_would_not_pass`
 `verified-by: bravebot_agent::permission_mode::screening_under_bypass_still_promotes_what_a_check_found_nothing_in`
 `verified-by: bravebot_agent::permission_mode::screening_does_not_reach_the_vouch_offer`

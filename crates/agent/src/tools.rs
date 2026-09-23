@@ -3843,20 +3843,22 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
         }
     };
 
-    // The one branch on a verdict that decides more than which sentence a person reads first, and
-    // it is reachable only where somebody turned auto-vetting on. `Safe` is the only word that
-    // answers here: unsafe, and every way a check can fail to complete, fall through to the prompt
+    // Who the trail is credited to, which the mode decides along with the verdict. The one branch
+    // on a verdict that decides more than which sentence a person reads first is inside it, and it
+    // is reachable only where somebody turned auto-vetting on: `Safe` is the only word that answers
+    // there, and unsafe, and every way a check can fail to complete, fall through to the prompt
     // with the banner they would have carried anyway. As `vet_content`, because the grant is the
     // same shape on both routes: one slot, once, with no rule written.
-    let endorsed = match tools.auto_vetting && verdict.is_safe() {
-        true => Endorsed::ByASafeVerdict,
-        false => Endorsed::ByAPerson,
-    };
+    let endorsed = tools
+        .permission_mode
+        .released_by(tools.auto_vetting, verdict);
 
-    // A `match` rather than an `if`, so a third way of endorsing cannot be added and default to
+    // A `match` rather than an `if`, so a fourth way of endorsing cannot be added and default to
     // skipping the prompt: a new variant stops compiling here until somebody says which it is.
+    // Bypassing with nothing screening asks in the sense that the request is built and put to a
+    // confirmer; what answers it is the mode, which is why it is credited as itself below.
     let ask = match endorsed {
-        Endorsed::ByAPerson => true,
+        Endorsed::ByAPerson | Endorsed::ByBypassing => true,
         Endorsed::ByASafeVerdict => false,
     };
 
@@ -4018,20 +4020,22 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
     // the prompt was built over where none was. The two are the same slot and agree.
     let mut counted = spec.as_ref().map_or(0, |spec| spec.lines());
 
-    // The one branch on a verdict that decides more than which sentence a person reads first, and
-    // it is reachable only where somebody turned auto-vetting on. `Safe` is the only word that
-    // answers here: unsafe, and every way a check can fail to complete, fall through to the prompt
+    // Who the trail is credited to, which the mode decides along with the verdict. The one branch
+    // on a verdict that decides more than which sentence a person reads first is inside it, and it
+    // is reachable only where somebody turned auto-vetting on: `Safe` is the only word that answers
+    // there, and unsafe, and every way a check can fail to complete, fall through to the prompt
     // with the banner they would have carried anyway. Written down as the third known cost in
     // `docs/specs/labels.md`.
-    let endorsed = match tools.auto_vetting && verdict.is_safe() {
-        true => Endorsed::ByASafeVerdict,
-        false => Endorsed::ByAPerson,
-    };
+    let endorsed = tools
+        .permission_mode
+        .released_by(tools.auto_vetting, verdict);
 
-    // A `match` rather than an `if`, so a third way of endorsing cannot be added and default to
+    // A `match` rather than an `if`, so a fourth way of endorsing cannot be added and default to
     // skipping the prompt: a new variant stops compiling here until somebody says which it is.
+    // Bypassing with nothing screening asks in the sense that the request is built and put to a
+    // confirmer; what answers it is the mode, which is why it is credited as itself below.
     let ask = match endorsed {
-        Endorsed::ByAPerson => true,
+        Endorsed::ByAPerson | Endorsed::ByBypassing => true,
         Endorsed::ByASafeVerdict => false,
     };
     if ask {
