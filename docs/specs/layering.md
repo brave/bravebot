@@ -131,10 +131,17 @@ one:
   and whose foot states the reach; an untrusted write is marked on the card. Content reaches the
   tree as a text child rather than as markup, so its own spelling of that chrome is drawn as the
   characters it is: neutralised rather than dropped, for the reason the terminal neutralises an
-  escape rather than removing it.
+  escape rather than removing it. A question whose turn ended before anybody answered it is drawn
+  as the card it was: it loses the controls, because the channel the answer would go down is gone,
+  and it keeps everything that marks its content, because a turn ending declassifies nothing.
 - **Content reaches no raw markup.** No plugin turning HTML in released content into elements is
-  installed, and `dangerouslySetInnerHTML` appears nowhere in the front end. That is what makes
-  the property above a property of the renderer rather than of what the content happens to hold.
+  installed, and nothing in the front end hands an element `dangerouslySetInnerHTML` or assigns
+  `innerHTML`. That is what makes the property above a property of the renderer rather than of
+  what the content happens to hold. An absence is checked as one rather than remembered: the test
+  named below reads every source under `ui/src` and the dependencies `ui/package.json` declares.
+  What is forbidden is the use rather than the word: `src/main/export.ts` names the route in the
+  paragraph explaining why the PDF window exists, and a rule against writing that down would cost
+  more than it bought.
 - **Nothing content renders makes the app fetch.** An image in released content is never an
   `<img>`, and no element the renderer draws around such content carries an attribute a browser
   resolves without being asked: no `src`, no `srcset`, no `url(` inside a style. So nothing
@@ -151,7 +158,7 @@ from the planner. Giving quarantined content that vocabulary would hand it the s
 is meant to trust, an inch above them.
 
 `verified-by: bravebot_cli::layering::every_presentation_crate_is_named_by_the_clause_that_marks_content`
-`verified-by: by-construction (a surface this workspace compiles is one of its crates, and the test above holds the clause naming them to every row of the table whose constraint opens on presentation, in both directions; the desktop renderer is not one of its crates and is pinned instead by ui/scripts/marking.test.mjs, which renders the real components through react-dom and asserts the three properties above on the markup that comes out, for every card of the transcript that shows released content, and which make check-ui and the Front end CI job both run, while the governs list above holds the file's existence to make check-spec; a surface in neither place has no run to check, which is the known cost below)`
+`verified-by: by-construction (a surface this workspace compiles is one of its crates, and the test above holds the clause naming them to every row of the table whose constraint opens on presentation, in both directions; the desktop renderer is not one of its crates and is pinned instead by ui/scripts/marking.test.mjs, which renders the real components through react-dom and asserts the three properties above on the markup that comes out, for every kind of entry the transcript has and for each of those both as a live card and as one whose turn ended unanswered; the set of kinds is read out of the Entry union in transcript.ts rather than listed by hand, so a kind added without a card drawn for it fails the test, and one that shows no released content is recorded there with the reason, which is the half no grep decides; the second property is asserted as the absence it is stated as, over every source under ui/src and the dependencies ui/package.json declares; and make check-ui and the Front end CI job both run all of it, while the governs list above holds the file's existence to make check-spec; a surface in neither place has no run to check, which is the known cost below)`
 
 <a id="LAYER-6"></a>
 ### LAYER-6: what a message is comes from the record, not from its words
