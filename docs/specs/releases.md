@@ -177,8 +177,8 @@ A branch push, a pull request, and a tag push do not publish to the registry. So
 `publish-npm.yml` with the version tag after Jenkins has created the GitHub release of that name.
 What is published is the tree that tag names, and a branch of the same name does not supply it. A
 dispatch whose tag is not `v` plus the version in the tree, or whose GitHub release is missing any
-platform asset or checksum, is refused rather than publishing a wrapper whose installer has
-nothing to fetch.
+platform asset, any checksum, or the signature beside a Linux checksum, is refused rather than
+publishing a wrapper whose installer has nothing to fetch.
 
 **Why.** The installer derives the download from the version it was published with. Publishing
 the wrapper first makes every install fail until the assets exist, which reads as the tool being
@@ -186,7 +186,7 @@ broken. Jenkins is started by hand, days later if need be, so npm publish is the
 step: it happens when somebody chooses, not when the tag lands. Publishing from a branch puts
 an unreviewed version on the registry.
 
-`verified-by: by-construction (publish-npm.yml runs only on workflow_dispatch, checks out refs/tags/ the given tag so a branch of that name cannot supply the tree and a tag that does not exist fails the run, refuses unless that tag is v plus the version in both files, and refuses unless each named asset and its checksum are on the GitHub release; make check-security faults a checkout of a bare name)`
+`verified-by: by-construction (publish-npm.yml runs only on workflow_dispatch, checks out refs/tags/ the given tag so a branch of that name cannot supply the tree and a tag that does not exist fails the run, refuses unless that tag is v plus the version in both files, and refuses unless each named asset and its checksum, and each Linux checksum's signature, are on the GitHub release; make check-security faults a checkout of a bare name)`
 
 <a id="RELEASE-11"></a>
 ### RELEASE-11: the registry authenticates the workflow, not a stored token
@@ -276,11 +276,11 @@ or added to the person's own.
   noticing. RELEASE-9 is the installer in this repository: a checksum Jenkins ships in the
   wrong form is refused here, not accepted.
 
-- **Nothing refuses a release whose Linux checksums carry no signature.** The publish job checks
-  for each binary, and the npm publish workflow for each binary and its checksum, but neither
-  looks for a signature. A release published without them is refused by every Linux install that has `gpg`,
-  and the install script, which always fetches the newest release, stops working for all of them
-  at once.
+- **Only the npm publish refuses a release whose Linux checksums carry no signature.** The publish
+  job in devops checks for each binary but not for a signature. The install script fetches the
+  newest GitHub release whether or not npm has been published, so a release Jenkins publishes
+  without them is refused by every Linux install that has `gpg` from the moment it exists, and the
+  npm check comes too late to prevent that.
 
 - **Changing the signing key breaks every installer that names the old one.** Each npm version
   names a key and installs its own version's release, so the download host has to go on serving

@@ -107,6 +107,14 @@ jobs:
             if ! printf '%s\n' "$names" | grep -qxF "${asset}.sha256"; then
               missing="$missing ${asset}.sha256"
             fi
+            # A Linux install with gpg refuses a checksum that has no signature beside it.
+            case "$asset" in
+              bravebot-linux-*)
+                if ! printf '%s\n' "$names" | grep -qxF "${asset}.sha256.asc"; then
+                  missing="$missing ${asset}.sha256.asc"
+                fi
+                ;;
+            esac
           done
           if [ -n "$missing" ]; then
             echo "error: GitHub release $TAG is missing:$missing"
