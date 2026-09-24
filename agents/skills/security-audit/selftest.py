@@ -1740,6 +1740,132 @@ def test_key_sites_exhaustive():
     )
 
 
+# One job, named the way a check run is named, running a target the documentation makes a promise
+# about. The promise is prose, so the fixture is prose: a rewording that stops matching is the thing
+# being caught, the same as the exception counts above.
+GATE_JOB = """\
+name: CI
+
+jobs:
+  specs:
+    name: Specs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the specs against the implementation
+        run: make check-spec
+"""
+
+GATE_PROMISE = """\
+# Checks
+
+`make check-spec` checks the mechanical half of the specs. CI runs it too, so a new use of a
+guarded symbol fails a pull request rather than waiting for somebody to notice it.
+"""
+
+GATE_TREE = {".github/workflows/ci.yml": GATE_JOB, "docs/development/checks.md": GATE_PROMISE}
+
+
+def gates(files):
+    return with_cwd(in_tree(files), lambda: list(audit.check_required_checks_are_the_gates()))
+
+
+def test_required_checks_are_the_gates():
+    found = gates({**GATE_TREE, "contrib/required-checks.txt": "# nothing yet\n"})
+    check(
+        "a job that runs a check and that no context names is an error",
+        kinds(found) == ["ungated-check"] and found[0]["severity"] == audit.ERROR,
+        str(kinds(found)),
+    )
+    check(
+        "it names the job, the target and the promise made about it",
+        bool(found)
+        and found[0]["evidence"] == ["Specs runs make check-spec", "docs/development/checks.md:3"],
+        str(found[0]["evidence"] if found else None),
+    )
+
+    # The rule is that a job whose purpose is a check gates, not that the page said so: a paragraph
+    # making no promise leaves the job exactly as unrequired.
+    silent = dict(GATE_TREE, **{"contrib/required-checks.txt": ""})
+    silent["docs/development/checks.md"] = GATE_PROMISE.replace(
+        "fails a pull request rather than waiting for somebody to notice it",
+        "reports into a pull request",
+    )
+    check(
+        "a job that runs a check is required whether or not the page promises anything",
+        kinds(gates(silent)) == ["ungated-check"],
+        str(kinds(gates(silent))),
+    )
+
+    # A promise about a target no job runs: the page says a pull request fails over something that
+    # never runs on one.
+    unrun = dict(GATE_TREE, **{"contrib/required-checks.txt": "Specs\n"})
+    unrun["docs/development/checks.md"] = GATE_PROMISE + (
+        "\n`make check-deps` decides deny.toml. CI runs it too, so a git dependency fails a pull\n"
+        "request rather than warning into one.\n"
+    )
+    found = gates(unrun)
+    check(
+        "a target the page promises will fail a pull request that no job runs is an error",
+        kinds(found) == ["unrun-promise"]
+        and found[0]["evidence"] == ["docs/development/checks.md:6"],
+        str(found[0]["evidence"] if found else kinds(found)),
+    )
+
+    found = gates({**GATE_TREE, "contrib/required-checks.txt": "Specs\nSecurity\n"})
+    check(
+        "a context that is the display name of no job is an error",
+        kinds(found) == ["orphaned-required-check"] and found[0]["impact"] == "high",
+        str(kinds(found)),
+    )
+
+    # The name in the file and the name of the job differ only in case, which is exactly the
+    # difference between the organisation's `security` and this repository's `Security`.
+    check(
+        "a context matching a job's name but not its case is an error",
+        kinds(gates({**GATE_TREE, "contrib/required-checks.txt": "specs\n"}))
+        == ["orphaned-required-check", "ungated-check"],
+    )
+
+    # A trailing comment is not part of an unquoted YAML scalar, so it is not part of the name a
+    # required context has to match.
+    commented = dict(GATE_TREE, **{"contrib/required-checks.txt": "Specs\n"})
+    commented[".github/workflows/ci.yml"] = GATE_JOB.replace(
+        "name: Specs", "name: Specs # the mechanical half"
+    )
+    check(
+        "a comment beside a job's name is not part of the name",
+        gates(commented) == [],
+        str(kinds(gates(commented))),
+    )
+
+    # Three ways a target arrives that reading the word after `make` would miss.
+    behind = ("make -k check-spec", "make RUST_TEST_THREADS=8 check-spec", "make fmt check-spec")
+    for command in behind:
+        hidden = dict(GATE_TREE, **{"contrib/required-checks.txt": ""})
+        hidden[".github/workflows/ci.yml"] = GATE_JOB.replace("make check-spec", command)
+        check(
+            f"a target reached by `{command}` is still a check the job runs",
+            kinds(gates(hidden)) == ["ungated-check"],
+            str(kinds(gates(hidden))),
+        )
+
+    check(
+        "a job a context names is clean",
+        gates({**GATE_TREE, "contrib/required-checks.txt": "# the gates\n\nSpecs\n"}) == [],
+    )
+
+    check(
+        "a tree with no record of its gates at all is an error",
+        kinds(gates(GATE_TREE)) == ["unrecorded-required-check"],
+    )
+
+    # The real file against the real workflows and the real page, which is what it is for.
+    check(
+        "the tree's own record names jobs that exist and covers every job running a check",
+        with_cwd(ROOT, lambda: list(audit.check_required_checks_are_the_gates())) == [],
+    )
+
+
 def test_guarantee_specs_are_read():
     """Naming a spec in the list is only worth something if every use resolves it.
 
@@ -2301,6 +2427,7 @@ def main():
         test_pinned_images,
         test_privileged_job_runs_only_its_own_code,
         test_checkout_ref_is_qualified,
+        test_required_checks_are_the_gates,
         test_construction_pinned,
         test_gates_pinned,
         test_key_sites_exhaustive,
