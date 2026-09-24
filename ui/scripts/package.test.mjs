@@ -135,6 +135,11 @@ test('the Electron installed for this machine reads as this machine', (t) => {
 test('a missing executable is reported with the command that builds that profile', () => {
   assert.equal(buildProfile([]).build, 'npm run bridge')
   assert.equal(buildProfile(['--release']).build, 'make app-bundle')
+  // The prebuilt pair comes from a different target per platform, and each of the three builds
+  // only its own, so naming another platform's is a loop back to the same missing file.
+  assert.equal(buildProfile(['--platform=darwin', '--executables=/stage/amd64']).build, 'make app-release')
+  assert.equal(buildProfile(['--platform=linux', '--executables=/stage/amd64']).build, 'make app-bundles-linux')
+  assert.equal(buildProfile(['--platform=win32', '--executables=/stage/amd64']).build, 'make app-bundles-windows')
 })
 
 // The cross-build writes the Windows pair with the suffix Windows gives an executable, and the
