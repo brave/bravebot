@@ -1888,10 +1888,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .confirm-actions { position: sticky; bottom: 0; z-index: 1; background: var(--bg); flex-wrap: wrap; }
 .permission-scope { margin: 0; padding: 10px 12px; font-size: 12px; border-top: 1px solid var(--line); color: var(--ink-dim); overflow-wrap: anywhere; }
 
-/* The rows are flex so the ⋯ menu and the button share one line; the button's own shape and
-   its open/current state live in the component's classes (ghost + `bg-accent` when current),
-   so only the width split is said here. The badges row keeps wrapping — the column narrows
-   to 200px, and a badge must not push a title off the line the badges cannot have. */
+/* The row is a card whose button fills the width; the ⋯ menu no longer shares the
+   line — it sits inside the card's top-right (see `modern.css`), so only the open
+   button is in flow. The open/current state lives in the component's classes
+   (ghost + `bg-accent` when current); the width split is no more. The badges row
+   keeps wrapping — the column narrows to 200px, and a badge must not push a title
+   off the line the badges cannot have. */
 .session-row { display: flex; align-items: center; }
 .session-row .session { flex: 1; min-width: 0; }
 .session-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 4px; }
