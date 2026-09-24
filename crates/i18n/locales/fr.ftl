@@ -171,7 +171,7 @@ doctor-ends-signing-key =
 doctor-ends-aws-access-key =
     une clé d'accès permanente : émise par AWS IAM à l'utilisateur nommé par le profil ; supprimée avec `aws iam delete-access-key`
 doctor-ends-aws-session =
-    une identification de session : émise par AWS STS pour le profil et prend fin à sa propre expiration ; on ne peut y mettre fin plus tôt qu'auprès de son émetteur, car `aws sso logout` efface la copie de cette machine et non la session elle-même
+    une identification de session : émise par AWS STS pour le profil, et ce programme en demande une autre à l'AWS CLI à chaque requête qu'il construit, de sorte que l'expiration met fin à cette copie et non à l'accès de ce programme ; on y met fin auprès de son émetteur, car `aws sso logout` efface la copie de cette machine et non la session elle-même, et la suivante est émise à partir de ce à quoi le profil se rattache, tant que cela dure
 doctor-ends-gateway-token =
     un jeton porteur de passerelle : émis par { $gateway }, qui est aussi la seule surface qui le révoque ; le supprimer du fichier de réglages ou effacer la variable met fin à la garde de cette machine et laisse le jeton actif là-bas
 doctor-ends-subscription-batch =
@@ -210,6 +210,8 @@ doctor-dropped-aws-session-nothing-decides-each-use =
     porte { $gate }, { $answer } : rien que l'agent ne puisse usurper ne décide de chaque usage, car ce processus signe chaque requête avec l'identification de session elle-même
 doctor-dropped-aws-session-no-bound-fixed-before-issue =
     porte { $gate }, { $answer } : aucune limite sur ce que la session peut faire n'est fixée avant son émission, car elle porte tout ce que le rôle ou l'accès SSO du profil autorise et rien ici ne demande à STS de la restreindre à cette exécution
+doctor-dropped-aws-session-renewable-without-authority =
+    porte { $gate }, { $answer } : l'agent la renouvelle sans autre autorisation, car ce programme demande une autre session à l'AWS CLI à chaque requête qu'il construit et l'interface l'émet à partir de ce à quoi le profil se rattache sans rien demander à personne
 doctor-dropped-gateway-token-nothing-decides-each-use =
     porte { $gate }, { $answer } : rien que l'agent ne puisse usurper ne décide de chaque usage, car le jeton part dans un en-tête envoyé par ce processus et aucun mandataire n'existe pour la requête
 doctor-dropped-gateway-token-no-bound-fixed-before-issue =

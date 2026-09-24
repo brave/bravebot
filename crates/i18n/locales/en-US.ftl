@@ -179,7 +179,7 @@ doctor-ends-signing-key =
 doctor-ends-aws-access-key =
     a long-lived access key: issued by AWS IAM to the user the profile names; ended with `aws iam delete-access-key`
 doctor-ends-aws-session =
-    a session credential: issued by AWS STS for the profile and ends at its own expiry; ended sooner only at its issuer, since `aws sso logout` clears this machine's copy rather than the session behind it
+    a session credential: issued by AWS STS for the profile, and this program asks the AWS CLI for another as it builds each request, so the expiry ends that copy rather than this program's access; ended at its issuer, since `aws sso logout` clears this machine's copy rather than the session behind it, and the next one is minted from whatever the profile chains to, for as long as that lasts
 doctor-ends-gateway-token =
     a gateway bearer token: issued by { $gateway }, which is also the only surface that revokes it; deleting it from the settings file or unsetting the variable ends this machine's custody and leaves the token live there
 doctor-ends-subscription-batch =
@@ -235,6 +235,8 @@ doctor-dropped-aws-session-nothing-decides-each-use =
     gate { $gate }, { $answer }: nothing the agent cannot impersonate decides each use, since this process signs each request with the session credential itself
 doctor-dropped-aws-session-no-bound-fixed-before-issue =
     gate { $gate }, { $answer }: no bound on what the session may do is fixed before it is issued, since it carries whatever the profile's role or SSO grant allows and nothing here asks STS to narrow it to this run
+doctor-dropped-aws-session-renewable-without-authority =
+    gate { $gate }, { $answer }: the agent renews it without further authority, since this program asks the AWS CLI for another session as it builds each request and the CLI mints it from whatever the profile chains to without asking anybody
 doctor-dropped-gateway-token-nothing-decides-each-use =
     gate { $gate }, { $answer }: nothing the agent cannot impersonate decides each use, since the token goes in a header this process sends and no performer exists for the request
 doctor-dropped-gateway-token-no-bound-fixed-before-issue =

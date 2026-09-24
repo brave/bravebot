@@ -811,8 +811,10 @@ fn a_run_asked_for_a_result_object_puts_one_on_stdout() {
 /// alone, would satisfy an assertion that the word is somewhere in the output and answer two of
 /// the three credentials with nothing.
 ///
-/// An aichat build with an AWS account, so three credentials at two different tiers are accounted
-/// for and a report printing one tier for all of them is a report that can be caught.
+/// An aichat build with an AWS account, so three credentials are accounted for, and all three stand
+/// at Held: the session credential is the one that reads as briefer than the rest, and CRED-9 puts
+/// it beside them. A report printing one tier for every credential is caught where a credential
+/// stands above Held, which is the imported subscription below.
 #[test]
 fn doctor_names_the_tier_of_every_credential_it_accounts_for() {
     let scratch = Scratch::new("cli-running-tiers");
@@ -854,18 +856,17 @@ fn doctor_names_the_tier_of_every_credential_it_accounts_for() {
         );
     }
 
-    // The session credential is the one arrangement here whose issuer enforces a lifetime rather
-    // than a reach, so a report answering every credential with one tier reads the same for all
-    // three and this separates them.
-    let tiers: Vec<&str> = accounts.iter().map(|at| lines[at + 1]).collect();
-    let brief = tiers
-        .iter()
-        .filter(|tier| tier.contains("held briefly"))
-        .count();
-    assert_eq!(
-        brief, 1,
-        "one credential here stands at Held briefly and the report put {brief} there: {stdout}"
-    );
+    // The session credential states an expiry, so a report reading the tier off the value puts it
+    // at Held briefly. This program renews it unaided, which is what CRED-9 says a stated
+    // lifetime does not outweigh.
+    for at in &accounts {
+        assert!(
+            lines[at + 1].contains("held:"),
+            "a credential here is reported above Held: {} under {}",
+            lines[at + 1],
+            lines[*at]
+        );
+    }
 }
 
 /// CRED-2: an imported subscription's credential batch is a credential in use, so the report
@@ -993,9 +994,10 @@ fn doctor_sizes_the_window_on_a_session_credential_and_on_nothing_else() {
 /// somebody reading the report is told where each credential stands and nothing about which gate
 /// put it there, so a tier is an assertion again.
 ///
-/// Counted per credential rather than over the report, because the session credential is the one
-/// thing here that passes a gate: two drops where the other two have three, and a report that
-/// printed three for it would say AWS enforces nothing it does enforce.
+/// Counted per credential rather than over the report, because the count is the tier: a report
+/// that printed two drops under the session credential would say gate 3 passes for a session this
+/// program renews unaided, and a total over the report cannot tell that from a drop printed under
+/// the wrong credential.
 ///
 /// Both AWS arrangements are held wherever an account is configured, so an account is all the
 /// fixture needs; the AWS CLI is never run, since this is what the configuration holds rather
@@ -1043,15 +1045,9 @@ fn doctor_accounts_for_every_drop_of_each_credentials_walk() {
             .copied()
             .collect();
 
-        // The session credential is the one whose account names `aws sso logout`, and the one
-        // gate anything here passes is its third.
-        let expected = match lines[*at].contains("aws sso logout") {
-            true => 2,
-            false => 3,
-        };
         assert_eq!(
             dropped.len(),
-            expected,
+            3,
             "the walk reported under {} is not the walk the record holds: {dropped:?}",
             lines[*at]
         );
