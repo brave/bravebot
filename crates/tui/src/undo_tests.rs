@@ -7,6 +7,10 @@ use serde_json::json;
 #[path = "undo_endpoint.rs"]
 mod endpoint;
 
+#[path = "../../session/test-support/profile.rs"]
+mod profile;
+use profile::{in_isolated_profile, project as scratch_dir};
+
 const SENTINEL: &str = "UNTRUSTED_UNDO_REPLACEMENT_92817";
 
 fn save(
@@ -38,7 +42,7 @@ fn save(
 }
 
 fn oversized_undo(ending: &str, resumed: bool) {
-    let root = crate::testutil::scratch_dir(&format!("undo-oversized-{ending}-{resumed}"));
+    let root = scratch_dir(&format!("undo-oversized-{ending}-{resumed}"));
     std::fs::create_dir_all(&root).unwrap();
     let workspace = Workspace::new(&root).unwrap();
     let root = workspace.root();
@@ -258,6 +262,9 @@ fn oversized_undo(ending: &str, resumed: bool) {
 /// A failed byte restore cannot put the old prefix grant over a replacement.
 #[test]
 fn oversized_original_withdraws_grants_after_live_and_resumed_successful_undo() {
+    if !in_isolated_profile() {
+        return;
+    }
     for resumed in [false, true] {
         oversized_undo("success", resumed);
     }
@@ -266,6 +273,9 @@ fn oversized_original_withdraws_grants_after_live_and_resumed_successful_undo() 
 /// Undo remains conservative even while Phase 03 still owns interrupted caller retention.
 #[test]
 fn oversized_original_withdraws_grants_after_failed_and_cancelled_undo() {
+    if !in_isolated_profile() {
+        return;
+    }
     for ending in ["failure", "cancel"] {
         for resumed in [false, true] {
             oversized_undo(ending, resumed);
@@ -277,11 +287,14 @@ fn oversized_original_withdraws_grants_after_failed_and_cancelled_undo() {
 /// and cannot erase either snapshot or current explicit distrust.
 #[test]
 fn complete_and_failed_restores_keep_files_trust_programs_and_history_aligned() {
+    if !in_isolated_profile() {
+        return;
+    }
     use bravebot_agent::workspace::{Backup, Before};
     use bravebot_aichat::protocol::Message;
     use bravebot_core::programs::Command;
     for (failed, resumed) in [(false, false), (false, true), (true, false), (true, true)] {
-        let root = crate::testutil::scratch_dir(&format!("undo-restore-error-{failed}-{resumed}"));
+        let root = scratch_dir(&format!("undo-restore-error-{failed}-{resumed}"));
         std::fs::create_dir_all(&root).unwrap();
         let workspace = Workspace::new(&root).unwrap();
         let root = workspace.root();
@@ -415,6 +428,9 @@ fn complete_and_failed_restores_keep_files_trust_programs_and_history_aligned() 
 /// before saving a file decision the terminal will later use.
 #[test]
 fn terminal_bridge_terminal_handoff_and_both_forks_keep_current_file_decisions() {
+    if !in_isolated_profile() {
+        return;
+    }
     use bravebot_ui_bridge::{bridge::Bridge, protocol::Request};
     fn call(bridge: &mut Bridge, method: &str, params: serde_json::Value) -> serde_json::Value {
         bridge
@@ -424,7 +440,7 @@ fn terminal_bridge_terminal_handoff_and_both_forks_keep_current_file_decisions()
             )
             .unwrap()
     }
-    let root = crate::testutil::scratch_dir("undo-bridge-handoff");
+    let root = scratch_dir("undo-bridge-handoff");
     std::fs::create_dir_all(&root).unwrap();
     let workspace = Workspace::new(&root).unwrap();
     let root = workspace.root();
@@ -594,6 +610,9 @@ fn terminal_bridge_terminal_handoff_and_both_forks_keep_current_file_decisions()
 #[cfg(unix)]
 #[test]
 fn programs_close_all_points_before_the_next_planner_round() {
+    if !in_isolated_profile() {
+        return;
+    }
     use bravebot_agent::report::{Activity, Reporter};
     struct Observe {
         points: Vec<bravebot_agent::workspace::RewindCoverage>,
@@ -614,7 +633,7 @@ fn programs_close_all_points_before_the_next_planner_round() {
         ("redirection", "printf replacement > output.txt", false),
         ("background", "sleep 60", true),
     ] {
-        let root = crate::testutil::scratch_dir(&format!("undo-program-{name}"));
+        let root = scratch_dir(&format!("undo-program-{name}"));
         std::fs::create_dir_all(&root).unwrap();
         let workspace = Workspace::new(&root).unwrap();
         let mut trust = TrustStore::new(workspace.root());
@@ -693,13 +712,16 @@ fn programs_close_all_points_before_the_next_planner_round() {
 #[cfg(unix)]
 #[test]
 fn matching_hooks_close_all_points_in_memory_and_after_resume() {
+    if !in_isolated_profile() {
+        return;
+    }
     for (moment, tool, fires) in [
         ("turn-started", None, true),
         ("tool-finished", Some("read_file"), true),
         ("turn-finished", None, true),
         ("tool-finished", Some("write_file"), false),
     ] {
-        let root = crate::testutil::scratch_dir("undo-hooks");
+        let root = scratch_dir("undo-hooks");
         let home = root.join("home");
         std::fs::create_dir_all(&home).unwrap();
         std::fs::write(root.join("output.txt"), "original").unwrap();

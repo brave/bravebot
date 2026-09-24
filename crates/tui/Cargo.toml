@@ -36,3 +36,4 @@ rustix = { workspace = true, features = ["event"] }
 
 [dev-dependencies]
 bravebot-ui-bridge = { path = "../ui-bridge" }
+tempfile = { workspace = true }
