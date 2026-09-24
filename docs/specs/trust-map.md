@@ -141,7 +141,9 @@ remain available. A later complete trusted replacement can trust the path again.
 Byte capture and label lookup share a boundary with effect entry and successful publication.
 No reader can capture replacement bytes under an earlier grant. This covers context files,
 attachments, deferred references and searches as well as direct reads. Collection never merges
-a delegate's stale file snapshot. No coordination lock spans a prompt, model call or child join.
+a delegate's stale file snapshot. No coordination lock spans a prompt, model call or child join. Session callers retain this
+same authority after turn-owned children finish, including on failure or cancellation, and save
+its current file decisions rather than substituting the map from before the turn.
 
 Approvals based on a preview are checked against the path's revision before effect entry or
 vouching. A changed path cannot spend the old approval. Changes to another path do not invalidate

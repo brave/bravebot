@@ -5642,10 +5642,9 @@ fn run_turn_animated(
             bytes: image.bytes.clone(),
         });
     }
-    let task = task;
-    // Kept so a failed turn does not lose the user's decisions. Both of them: a run approved
-    // "always" in a turn that then failed is still an answer the user gave.
-    let fallback = trust.clone();
+    // The worker shares file decisions so errors cannot return the pre-write map.
+    let file_authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
+    let task = task.with_file_authority(file_authority.clone());
     let fallback_programs = programs.clone();
     let fallback_asked = asked_about.clone();
     let fallback_exposed = exposed.clone();
@@ -5986,7 +5985,7 @@ fn run_turn_animated(
         finish_cancelled_turn(session, prompt, *attempts);
         return Ok(Continued {
             conversation,
-            trust: fallback,
+            trust: file_authority.snapshot(),
             programs: fallback_programs,
             servers,
             asked_about: fallback_asked,
@@ -6011,7 +6010,7 @@ fn run_turn_animated(
         outcome,
         sink,
         Carried {
-            trust: fallback,
+            trust: file_authority.snapshot(),
             programs: fallback_programs,
             asked: fallback_asked,
             exposed: fallback_exposed,

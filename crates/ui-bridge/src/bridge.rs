@@ -1287,6 +1287,8 @@ fn work(work: Work) {
     // Cloned out before the call, because the conversation is borrowed mutably for the
     // duration and both of these are passed by value.
     let trust = state.trust.clone();
+    let file_authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
+    let task = task.with_file_authority(file_authority.clone());
     let programs = state.programs.clone();
     let outcome = agent_turn::resume(
         &config,
@@ -1302,6 +1304,9 @@ fn work(work: Work) {
         None, // Language-server approvals are not offered by this front-end.
         &cancel,
     );
+
+    // Cleanup has finished on every return, including cancellation and request errors.
+    state.trust = file_authority.snapshot();
 
     // The prompt joins the history the terminal also reads, so recall works across both
     // front-ends. Best-effort by design upstream, and nothing here depends on it.

@@ -103,6 +103,11 @@ pub fn endpoint(
                 index += 1;
                 continue;
             }
+            if reply == "hold" {
+                held.push(stream);
+                index += 1;
+                continue;
+            }
             let response = if reply == "fail" {
                 "HTTP/1.1 418 Teapot\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into()
             } else {

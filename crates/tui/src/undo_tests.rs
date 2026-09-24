@@ -99,11 +99,12 @@ fn oversized_undo(ending: &str, resumed: bool) {
     );
     let start = conversation.recounted().len();
     let mut sink = Trail::new();
+    let authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
     let result = turn::resume(
         &config,
         &Egress::new(),
         &workspace,
-        &Task::new("copy"),
+        &Task::new("copy").with_file_authority(authority.clone()),
         &mut conversation,
         &mut bravebot_agent::confirm::ApproveWrites,
         &mut bravebot_agent::IgnoreReports,
@@ -113,11 +114,13 @@ fn oversized_undo(ending: &str, resumed: bool) {
         None,
         &cancel,
     );
+    trust = authority.snapshot();
+    assert_eq!(trust.integrity_of("output.txt"), Some(Integrity::Untrusted));
     if ending == "cancel" {
         let Err(turn::TurnError::Cancelled { attempts }) = result else {
             panic!("cancellation must actually occur");
         };
-        // This is the TUI cancellation completion path; Phase 03 owns its fallback retention.
+        // The TUI adopts the live authority after the worker joins.
         finish_cancelled_turn(&mut session, "copy", attempts);
     } else {
         assert_eq!(result.is_ok(), ending == "success");
@@ -185,9 +188,7 @@ fn oversized_undo(ending: &str, resumed: bool) {
         1,
     );
     let mut before = before;
-    if ending == "success" {
-        before.distrust("output.txt");
-    }
+    before.distrust("output.txt");
     let expected: Vec<_> = before
         .keyed()
         .map(|(path, _)| (path.to_string(), Integrity::Untrusted))
@@ -270,7 +271,7 @@ fn oversized_original_withdraws_grants_after_live_and_resumed_successful_undo() 
     }
 }
 
-/// Undo remains conservative even while Phase 03 still owns interrupted caller retention.
+/// Failure and cancellation retain the completed write before undo and save/resume.
 #[test]
 fn oversized_original_withdraws_grants_after_failed_and_cancelled_undo() {
     if !in_isolated_profile() {
@@ -431,6 +432,12 @@ fn terminal_bridge_terminal_handoff_and_both_forks_keep_current_file_decisions()
     if !in_isolated_profile() {
         return;
     }
+    for ending in ["success", "failure", "cancel"] {
+        bridge_handoff(ending);
+    }
+}
+
+fn bridge_handoff(ending: &str) {
     use bravebot_ui_bridge::{bridge::Bridge, protocol::Request};
     fn call(bridge: &mut Bridge, method: &str, params: serde_json::Value) -> serde_json::Value {
         bridge
@@ -440,7 +447,7 @@ fn terminal_bridge_terminal_handoff_and_both_forks_keep_current_file_decisions()
             )
             .unwrap()
     }
-    let root = scratch_dir("undo-bridge-handoff");
+    let root = scratch_dir(&format!("undo-bridge-handoff-{ending}"));
     std::fs::create_dir_all(&root).unwrap();
     let workspace = Workspace::new(&root).unwrap();
     let root = workspace.root();
@@ -487,7 +494,11 @@ fn terminal_bridge_terminal_handoff_and_both_forks_keep_current_file_decisions()
                 "write_file",
                 json!({"path":"output.txt","contents_ref":"ref:1"}),
             ),
-            endpoint::answer(),
+            match ending {
+                "success" => endpoint::answer(),
+                "failure" => "fail".into(),
+                _ => "hold".into(),
+            },
             endpoint::tool("read_file", json!({"path":"output.txt"})),
             endpoint::answer(),
         ],
@@ -518,9 +529,28 @@ fn terminal_bridge_terminal_handoff_and_both_forks_keep_current_file_decisions()
         "turn.send",
         json!({"session":handle,"prompt":"copy","recall":false,"model":"phase02/test"}),
     );
+    let mut observed = Vec::new();
+    let until = std::time::Instant::now() + endpoint::LIMIT;
+    let mut cancelled = false;
     loop {
-        let event = events_rx.recv_timeout(endpoint::LIMIT).unwrap();
-        assert_ne!(event.name, "turn.error", "bridge error: {:?}", event.data);
+        observed.extend(requests.try_iter());
+        if ending == "cancel" && observed.len() == 3 && !cancelled {
+            call(&mut bridge, "turn.cancel", json!({"session":handle}));
+            cancelled = true;
+        }
+        assert!(std::time::Instant::now() < until, "bridge turn never ended");
+        let event = match events_rx.recv_timeout(std::time::Duration::from_millis(10)) {
+            Ok(event) => event,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(error) => panic!("bridge events: {error}"),
+        };
+        if event.name == "turn.error" {
+            assert_ne!(ending, "success", "bridge error: {:?}", event.data);
+            if ending == "cancel" {
+                assert_eq!(event.data["kind"], "cancelled");
+            }
+            break;
+        }
         if event.name == "confirm.request" {
             call(
                 &mut bridge,
@@ -528,6 +558,7 @@ fn terminal_bridge_terminal_handoff_and_both_forks_keep_current_file_decisions()
                 json!({"session":handle,"request":event.data["request"],"decision":"approve"}),
             );
         } else if event.name == "turn.done" {
+            assert_eq!(ending, "success");
             break;
         } else if event.name == "vouch.request" {
             call(
@@ -600,9 +631,9 @@ fn terminal_bridge_terminal_handoff_and_both_forks_keep_current_file_decisions()
     )
     .unwrap();
     server.join().unwrap();
-    let requests: Vec<_> = requests.try_iter().collect();
-    assert_eq!(requests.len(), 5);
-    assert!(!requests[4].contains(SENTINEL));
+    observed.extend(requests.try_iter());
+    assert_eq!(observed.len(), 5);
+    assert!(!observed[4].contains(SENTINEL));
     std::fs::remove_dir_all(root).unwrap();
 }
 
