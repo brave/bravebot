@@ -3707,6 +3707,36 @@ fn adopt_budget_for_current_model(session: &mut Session, config: &mut Config) {
     session.note_model_reads_effort(reads_effort(&models, session.model()));
 }
 
+/// Take on a level the service refused while a turn was running.
+///
+/// [`adopt_budget_for_current_model`] asks the listing once, at startup, and [`choose_model`] asks
+/// it again; between the two there was nothing. A service that refuses the field answers the same
+/// question the listing answers, and it answers it mid-turn, so a session that never asked again
+/// went on reporting a level as in force for the rest of its life after the requests carrying one
+/// had stopped (BACKEND-22).
+///
+/// Only ever subtracts, which is why it takes the refusal rather than the whole answer: a roster
+/// row that states its parameters and does not name the field has already said this model reads no
+/// level, and a turn that learned nothing is not the roster taking that back.
+///
+/// Said out loud as well, for the reason `/model` says it when a picked model reads none: a level
+/// charged for and discarded at the far end answers exactly like one that was honoured, so a
+/// session that took it away in silence would leave somebody believing every later turn was
+/// thinking harder than it was. Said on the turn that learned it and not again, the condition
+/// holding for the rest of the session.
+///
+/// The refusal is read by the caller, where the configuration says which service was answering.
+/// Passed in rather than asked for here so the rule is a function of its argument: what a service
+/// refused is remembered for the life of the process, and a test that had to arrange one could not
+/// arrange it back.
+fn note_a_refused_level(session: &mut Session, refused: bool) {
+    if !refused || !session.model_reads_effort() {
+        return;
+    }
+    session.note_model_reads_effort(false);
+    say_if_unread(session);
+}
+
 /// Take on what the listing says about the model in force, where there is no session to hold it.
 ///
 /// A one-shot run puts a model in force without anybody picking one: the command line named it, or
@@ -4980,6 +5010,15 @@ fn manifest_animated(
 
     let stopped_by_the_person = was_stopped(&outcome, &cancel);
 
+    // The other place a level goes out, so the other place one can be refused. A run carries the
+    // session's chosen level the way a turn does, and the session it comes back to is the one that
+    // reports whether a level is in force.
+    let refused = bravebot_agent::backend::refused_a_level(
+        config,
+        session.model().unwrap_or(&config.default_model),
+    );
+    note_a_refused_level(session, refused);
+
     // What the run decided about the tree is the session's, the way a turn's is. A file dropped on
     // the line was vouched for by the gesture that put it there, and `dropping.md` DROP-2 has that
     // rule hold for the rest of the session rather than for the run; the rules the run's own writes
@@ -5735,6 +5774,14 @@ fn run_turn_animated(
 
     // Record cancellation separately from failure, then restore the prompt when possible.
     let events = sink.events().to_vec();
+
+    // Before the cancellation below, because a stopped turn can have learned this too: the level
+    // goes out on the first request and the person may stop the turn several rounds later.
+    let refused = bravebot_agent::backend::refused_a_level(
+        config,
+        session.model().unwrap_or(&config.default_model),
+    );
+    note_a_refused_level(session, refused);
 
     if let Err(turn::TurnError::Cancelled { attempts }) = &outcome {
         finish_cancelled_turn(session, prompt, *attempts);
@@ -10464,6 +10511,77 @@ mod tests {
                 .iter()
                 .any(|entry| entry.text.contains("reads no effort level")),
             "nothing was said about the model reading none"
+        );
+    }
+
+    /// The roster is asked at startup and on `/model`, and a service that refuses the field answers
+    /// the same question in between. A session that kept the startup answer would report a level as
+    /// in force, and go on offering to send one, for the rest of its life after the requests
+    /// carrying it had stopped.
+    #[test]
+    fn a_level_the_service_refused_stops_being_reported_as_in_force() {
+        let mut session = Session::new("none");
+        set_effort(&mut session, "max");
+        assert!(session.model_reads_effort(), "the roster said nothing yet");
+
+        note_a_refused_level(&mut session, true);
+
+        assert!(
+            !session.model_reads_effort(),
+            "a refused level was still reported as one the model reads"
+        );
+        assert_eq!(
+            session.effort_in_force(),
+            None,
+            "a refused level was still offered to the next request"
+        );
+        assert_eq!(
+            session.effort(),
+            Some(bravebot_aichat::protocol::Effort::Max),
+            "the choice was thrown away rather than withheld"
+        );
+        assert_eq!(
+            session
+                .transcript
+                .iter()
+                .filter(|entry| entry.text.contains("reads no effort level"))
+                .count(),
+            1,
+            "the level was taken away without the person being told once"
+        );
+
+        note_a_refused_level(&mut session, true);
+        assert_eq!(
+            session
+                .transcript
+                .iter()
+                .filter(|entry| entry.text.contains("reads no effort level"))
+                .count(),
+            1,
+            "a condition that holds for the rest of the session was said again"
+        );
+    }
+
+    /// A turn that learned nothing is not the roster taking back what it said. The listing states
+    /// which parameters a row takes, a refusal only ever subtracts from that, and reading the
+    /// absence of one as permission would put the level back into requests to a model the gateway
+    /// has described as reading none.
+    #[test]
+    fn a_turn_that_refused_nothing_does_not_restore_a_level_the_roster_says_is_unread() {
+        let mut session = Session::new("none");
+        session.note_model_reads_effort(false);
+        set_effort(&mut session, "max");
+
+        note_a_refused_level(&mut session, false);
+
+        assert!(
+            !session.model_reads_effort(),
+            "a turn that refused nothing was read as the roster saying the level is read"
+        );
+        assert_eq!(
+            session.effort_in_force(),
+            None,
+            "a level the roster says is unread went back into a request"
         );
     }
 

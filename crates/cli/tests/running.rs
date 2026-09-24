@@ -1739,6 +1739,36 @@ struct Gateway {
 /// the client drop the field on its own (BACKEND-22), so a test using one could not tell the two
 /// apart.
 fn a_gateway_listing(parameters: &str) -> Gateway {
+    a_gateway(parameters, |_| {
+        http(500, r#"{"error": {"message": "nothing here answers"}}"#)
+    })
+}
+
+/// Stand up a gateway that advertises the level and then refuses it.
+///
+/// The case a roster cannot be asked about ahead of time: the listing states `reasoning_effort`
+/// among the parameters its one model takes, and the service turns every request carrying the field
+/// down with an invalid-request status, which is the answer BACKEND-22 says outranks the listing.
+/// The client gives up the breakpoints first and the level second, so the third request of the first
+/// turn is the one that succeeds and every request after it is answered.
+///
+/// Answers a streamed reply, because that is what a session in lines asks for.
+#[cfg(target_os = "linux")]
+fn a_gateway_that_refuses_the_level_it_advertises() -> Gateway {
+    a_gateway(r#"["tools", "reasoning_effort"]"#, |body| {
+        match body.contains("reasoning_effort") {
+            true => http(
+                400,
+                r#"{"error": {"message": "this model does not take reasoning_effort"}}"#,
+            ),
+            false => streamed("all done"),
+        }
+    })
+}
+
+/// One gateway on loopback: a roster of one model taking `parameters`, and `answer` for every chat
+/// request, which is handed the body that arrived.
+fn a_gateway(parameters: &str, answer: impl Fn(&str) -> String + Send + 'static) -> Gateway {
     let listing = format!(
         r#"{{"data": [{{"id": "reasons-only", "context_length": 262144, "supported_parameters": {parameters}}}]}}"#
     );
@@ -1768,19 +1798,43 @@ fn a_gateway_listing(parameters: &str) -> Gateway {
             let mut body = vec![0u8; content_length];
             let _ = reader.read_exact(&mut body);
 
-            let answer = match request.starts_with("GET") {
+            let reply = match request.starts_with("GET") {
                 true => http(200, &listing),
                 false => {
-                    let _ = sender.send(String::from_utf8_lossy(&body).into_owned());
-                    http(500, r#"{"error": {"message": "nothing here answers"}}"#)
+                    let body = String::from_utf8_lossy(&body).into_owned();
+                    let reply = answer(&body);
+                    let _ = sender.send(body);
+                    reply
                 }
             };
-            let _ = stream.write_all(answer.as_bytes());
+            let _ = stream.write_all(reply.as_bytes());
             let _ = stream.flush();
         }
     });
 
     Gateway { port, asked }
+}
+
+/// One streamed reply, framed: the words, then the frame that ends the turn, then the sentinel.
+///
+/// Every chunk names the model, which is what stops the run reporting the reply as served by
+/// something other than the model in force.
+#[cfg(target_os = "linux")]
+fn streamed(reply: &str) -> String {
+    let chunk = |delta: &str| {
+        format!(
+            r#"data: {{"id": "one", "object": "chat.completion.chunk", "model": "reasons-only", "choices": [{delta}]}}"#
+        )
+    };
+    let words = chunk(&format!(
+        r#"{{"index": 0, "delta": {{"role": "assistant", "content": "{reply}"}}}}"#
+    ));
+    let ending = chunk(r#"{"index": 0, "delta": {}, "finish_reason": "stop"}"#);
+    let body = format!("{words}\n\n{ending}\n\ndata: [DONE]\n\n");
+    format!(
+        "HTTP/1.1 200 \r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    )
 }
 
 /// One JSON response, framed.
@@ -1980,5 +2034,93 @@ fn a_session_in_lines_withholds_a_level_the_roster_says_the_model_does_not_read(
     assert!(
         said_to_the_person.contains("reads no effort level"),
         "the session withheld the level and said nothing about it: {said_to_the_person}"
+    );
+}
+
+/// A service that refuses the field answers the question the roster answered wrongly, and it
+/// answers it mid-session (BACKEND-22). A session that asked the listing once before its first
+/// prompt has nowhere else to learn it from, so it went on reporting the level as in force for
+/// the rest of its life while every request had the field stripped out from under it.
+///
+/// The roster here states `reasoning_effort` among the parameters, so the level goes out on the
+/// first turn and nothing is said before it: what is under test is the sentence the session says
+/// once it has been told otherwise, not the one it says at startup.
+///
+/// A property of the process. The wire cannot show it: the client drops the field on its own once
+/// it has been refused, so a request without a level is what both the fault and the fix put on it,
+/// and the only difference between them is what the person is told.
+///
+/// `script(1)` supplies the terminal a session in lines refuses to run without, in util-linux's
+/// argument form.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_service_that_refuses_the_level_it_advertised_is_reported_as_reading_none() {
+    let gateway = a_gateway_that_refuses_the_level_it_advertises();
+    let scratch = Scratch::new("cli-running-effort-refused-mid-session")
+        .with_settings(&settings_for(&gateway))
+        .with_effort("max");
+
+    let mut session = Command::new("/usr/bin/script")
+        .env_clear()
+        .env("HOME", &scratch.path)
+        .env("BRAVEBOT_LOCALE", "en-US")
+        .envs(AT_A_GATEWAY.iter().copied())
+        .args([
+            "-qec",
+            &format!("{} --plain", env!("CARGO_BIN_EXE_bravebot")),
+            "/dev/null",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("a terminal for a session in lines");
+
+    // The startup trust question answered no, then two prompts: the first learns the refusal and
+    // the second is the turn a session that learned nothing would still be reporting a level for.
+    session
+        .stdin
+        .take()
+        .expect("the session's input")
+        .write_all(b"n\nsay something\nsay something else\n")
+        .expect("write the script");
+    let output = session.wait_with_output().expect("the session ends");
+
+    let (said_to_the_person, _) = said(&output);
+    let first = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the session reached the gateway");
+    assert!(
+        first.contains("reasoning_effort"),
+        "the roster advertised the field and no level went out: {first}"
+    );
+
+    assert!(
+        said_to_the_person.contains("all done"),
+        "no turn completed: {said_to_the_person}"
+    );
+    // After the marker the first prompt was typed at, so this is the turn saying it rather than
+    // the startup notice the same sentence is used for: the roster advertised the field, so
+    // nothing had been withheld before a request went out.
+    let asked_for_one = said_to_the_person
+        .find("\n> ")
+        .unwrap_or_else(|| panic!("no prompt was put: {said_to_the_person}"));
+    let told = said_to_the_person
+        .find("reads no effort level")
+        .unwrap_or_else(|| {
+            panic!(
+                "the service refused the level and the session said nothing: {said_to_the_person}"
+            )
+        });
+    assert!(
+        told > asked_for_one,
+        "the level was reported as unread before any request had gone out: {said_to_the_person}"
+    );
+    assert_eq!(
+        said_to_the_person.matches("reads no effort level").count(),
+        1,
+        "a condition that holds for the rest of the session was said between every prompt and its \
+         reply: {said_to_the_person}"
     );
 }
