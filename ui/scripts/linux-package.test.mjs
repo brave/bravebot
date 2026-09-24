@@ -51,9 +51,9 @@ test('each architecture is named the way the format being built names it', () =>
   assert.deepEqual(ARCHES.amd64, { deb: 'amd64', rpm: 'x86_64' })
   assert.deepEqual(ARCHES.arm64, { deb: 'arm64', rpm: 'aarch64' })
   assert.match(debianControl({ version: '1.2.3', arch: 'arm64', installedSize: 1 }), /^Architecture: arm64$/m)
-  assert.match(rpmSpec({ version: '1.2.3', arch: 'arm64' }), /^BuildArch: aarch64$/m)
+  assert.match(rpmSpec({ version: '1.2.3', arch: 'arm64' }), /^ExclusiveArch: aarch64$/m)
   assert.match(debianControl({ version: '1.2.3', arch: 'amd64', installedSize: 1 }), /^Architecture: amd64$/m)
-  assert.match(rpmSpec({ version: '1.2.3', arch: 'amd64' }), /^BuildArch: x86_64$/m)
+  assert.match(rpmSpec({ version: '1.2.3', arch: 'amd64' }), /^ExclusiveArch: x86_64$/m)
 })
 
 test('an architecture neither asset name covers is refused rather than packaged as something', () => {
@@ -245,4 +245,48 @@ test('dpkg builds a package whose contents and metadata are the staged tree', (t
   assert.match(contents.split('\n').find((line) => line.endsWith(' ./usr/bin/')), /^drwxr-xr-x root\/root /)
   assert.ok(contents.includes(`/usr/share/applications/${PACKAGE}.desktop`))
   assert.ok(contents.includes(`/usr/share/icons/hicolor/scalable/apps/${ICON}.svg`))
+})
+
+// The rpm half of the test above, given its target as `make app-packages-linux` gives it. Skipped
+// where rpmbuild is absent, as it is on a stock Mac; CI's desktop job runs on an Ubuntu image that
+// ships it.
+function rpmbuild(t, arch, target) {
+  const { dir } = bundle(t)
+  const into = mkdtempSync(join(tmpdir(), 'linux-stage-'))
+  t.after(() => rmSync(into, { recursive: true, force: true }))
+  const { spec } = stage({ bundle: dir, arch, into })
+  const build = spawnSync('rpmbuild', [
+    '-bb', '--target', target,
+    '--define', `_sourcedir ${into}`, '--define', `_topdir ${join(into, 'rpm')}`,
+    '--define', `_rpmdir ${into}`, '--define', '_rpmfilename out.rpm', spec,
+  ], { encoding: 'utf8' })
+  const query = (...args) => {
+    const run = spawnSync('rpm', ['-qp', ...args, join(into, 'out.rpm')], { encoding: 'utf8' })
+    assert.equal(run.status, 0, run.stderr)
+    return run.stdout
+  }
+  return { build, query }
+}
+
+// Both architectures are packaged on one host, so one of them is always an architecture the host
+// cannot run.
+test('rpmbuild packages either architecture on one host, as that architecture, with the sandbox helper setuid root', (t) => {
+  if (spawnSync('rpmbuild', ['--version']).status !== 0) return t.skip('no rpmbuild on this host')
+  for (const [arch, { rpm }] of Object.entries(ARCHES)) {
+    const { build, query } = rpmbuild(t, arch, rpm)
+    assert.equal(build.status, 0, `${arch}: ${build.stderr}`)
+    assert.equal(query('--queryformat', '%{ARCH}'), rpm)
+    const sandbox = query('-lv').split('\n').find((line) => line.endsWith(`${INSTALL_DIR}/${SANDBOX}`))
+    assert.match(sandbox, /^-rwsr-xr-x\s+\d+\s+root\s+root\s/)
+  }
+})
+
+// An rpm built for another target than the one its bundle was staged for declares one machine and
+// carries the other's executables, which the package manager then installs on the machine that
+// cannot run them.
+test('an rpm built for a target other than its bundle\'s architecture is refused', (t) => {
+  if (spawnSync('rpmbuild', ['--version']).status !== 0) return t.skip('no rpmbuild on this host')
+  const { build } = rpmbuild(t, 'arm64', ARCHES.amd64.rpm)
+  assert.notEqual(build.status, 0)
+  assert.match(build.stderr, /Architecture is not included: x86_64/)
 })

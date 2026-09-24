@@ -120,7 +120,7 @@ that one tree; `make app-release-linux` at the root packs it with `dpkg-deb` and
 pinned containers. The setuid bit is the point of the exercise: where unprivileged user
 namespaces are unavailable, Electron aborts at start without it, and only an installer can set
 it. `scripts/linux-package.test.mjs` covers what the two formats are told, and builds a real
-`.deb` where `dpkg-deb` is present.
+`.deb` where `dpkg-deb` is present and a real `.rpm` of each architecture where `rpmbuild` is.
 
 A Windows bundle is also a directory, and `scripts/windows-installer.mjs` puts it in a per-user
 NSIS installer with electron-builder, which is handed the bundle as `prepackaged` and so changes

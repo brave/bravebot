@@ -606,6 +606,9 @@ app-bundles-linux:
 # scratch directory and hands its output back to whoever is packaging before it exits. What it
 # leaves owned by root, the cleanup here cannot remove: the second architecture would then fail
 # on the first one's leftovers.
+#
+# rpmbuild is given its target from the spec's `ExclusiveArch`, for the reason rpmSpec() in
+# ui/scripts/linux-package.mjs gives.
 .PHONY: app-packages-linux
 app-packages-linux:
 	@set -e; mkdir -p dist; stage=$$(mktemp -d); trap 'rm -rf "$$stage"' EXIT; \
@@ -621,7 +624,9 @@ app-packages-linux:
 			rm -rf deb && chown "$$OWNER" out.deb'; \
 		docker run --rm -e OWNER="$$(id -u):$$(id -g)" -v "$$stage/$$arch:/stage" -w /stage $(RPM_IMAGE) sh -c '\
 			dnf -y --setopt=install_weak_deps=False install rpm-build >/dev/null && \
-			rpmbuild -bb --define "_sourcedir /stage" --define "_topdir /stage/rpm" \
+			target=$$(sed -n "s/^ExclusiveArch: //p" brave-bot.spec) && \
+			rpmbuild -bb --target "$${target:?brave-bot.spec states no ExclusiveArch}" \
+				--define "_sourcedir /stage" --define "_topdir /stage/rpm" \
 				--define "_rpmdir /stage" --define "_rpmfilename out.rpm" brave-bot.spec && \
 			rm -rf rpm && chown "$$OWNER" out.rpm'; \
 		mv "$$stage/$$arch/out.deb" dist/bravebot-app-linux-$$arch.deb; \

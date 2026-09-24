@@ -198,6 +198,12 @@ export function debianControl({ version, arch, installedSize }) {
 //
 // `%install` copies rather than being handed the tree, because rpmbuild empties the build root
 // before it runs. `cp -a` is what carries the modes, the setuid bit included.
+//
+// The architecture is `ExclusiveArch` rather than `BuildArch`, because rpmbuild refuses a
+// `BuildArch` the host it runs on cannot execute, and both architectures are packaged on one host.
+// The build is given the architecture as its `--target` instead, which the Makefile reads from
+// this line, and `ExclusiveArch` refuses any other target, so a build given none or the wrong one
+// stops rather than labelling the package with the host's architecture.
 export function rpmSpec({ version, arch }) {
   const { rpm } = architecture(arch)
   return [
@@ -212,7 +218,7 @@ export function rpmSpec({ version, arch }) {
     'License: MPL-2.0',
     `URL: ${HOMEPAGE}`,
     `Packager: ${MAINTAINER}`,
-    `BuildArch: ${rpm}`,
+    `ExclusiveArch: ${rpm}`,
     'AutoReqProv: no',
     ...RPM_REQUIRES.map((name) => `Requires: ${name}`),
     '',
