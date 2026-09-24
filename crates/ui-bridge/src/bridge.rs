@@ -624,6 +624,7 @@ impl Bridge {
         // the caps a search this turn makes runs under (SEARCH-9).
         let settings = crate::settings::layers(Some(&open.project), self.settings.as_deref());
         let attribution = settings.attribution().clone();
+        let output_cap = settings.run_output_cap();
         let auto_vetting = open.auto_vetting;
         let mut workspace = turn_workspace(open.project.clone(), &settings)
             .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
@@ -687,6 +688,7 @@ impl Bridge {
                 state,
                 config,
                 attribution,
+                output_cap,
                 auto_vetting,
                 workspace,
                 prompt,
@@ -1168,6 +1170,9 @@ struct Work {
     config: Config,
     /// What the settings say a commit message and a pull request this turn writes may carry.
     attribution: bravebot_config::Attribution,
+    /// What the settings say a command's output may spend of this turn's conversation, where they
+    /// said anything (RUN-21). Read where the attribution was and carried the same way.
+    output_cap: Option<usize>,
     /// The session's, settled when it opened.
     auto_vetting: bool,
     watches: Arc<Mutex<bravebot_agent::watch::Watches>>,
@@ -1215,6 +1220,7 @@ fn work(work: Work) {
         state,
         config,
         attribution,
+        output_cap,
         auto_vetting,
         watches,
         model,
@@ -1248,6 +1254,7 @@ fn work(work: Work) {
         .with_rounds(None)
         .with_model(model)
         .with_attribution(attribution)
+        .with_output_cap(output_cap)
         .with_auto_vetting(auto_vetting);
     if let Some(composed) = composed {
         task = task.composed_rather_than_typed(composed);

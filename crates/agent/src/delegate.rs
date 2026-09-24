@@ -344,6 +344,10 @@ pub fn run(
     // same tree for the same person, so a settings key that decided what the parent's carry and
     // said nothing about a delegate's would be answered by whichever of the two did the writing.
     attribution: &bravebot_config::Attribution,
+    // The spawning turn's as well. A delegate runs programs into a conversation of its own, but the
+    // budget is the person's answer about what a command's output is worth spending context on, and
+    // it does not stop being their answer because the spending moved.
+    output_cap: Option<usize>,
     cancel: &bravebot_core::cancel::Cancel,
     confirmer: &mut (dyn Confirmer + Send),
     reporter: &mut (dyn Reporter + Send),
@@ -395,7 +399,8 @@ pub fn run(
         .with_permissions(seeded.permissions.clone())
         .with_permission_mode(permission_mode)
         .with_auto_vetting(auto_vetting)
-        .with_attribution(attribution.clone());
+        .with_attribution(attribution.clone())
+        .with_output_cap(output_cap);
 
     task.file_authority = Some(seeded.file_authority.clone());
 

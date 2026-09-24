@@ -620,10 +620,11 @@ where the planner holds a reference it may not read. The verdict is read off the
 clock, never out of a byte the program printed, so it is structure exactly as a line count is and
 puts nothing in the planner's context that a program chose.
 
-Output the planner **may** read comes back as text, capped at 16 KiB. Past the cap the head and the
-tail are kept and the middle dropped, with a line in between saying how much went. The cap is on what
-enters the conversation rather than on what the command printed, and the whole of it stays available
-as a reference.
+Output the planner **may** read comes back as text, capped at 16 KiB unless
+[`run.maxOutput`](../customize/configuration.md#runmaxoutput) names another figure. Past the cap the
+head and the tail are kept and the middle dropped, with a line in between saying how much went. The
+cap is on what enters the conversation rather than on what the command printed, and the whole of it
+stays available as a reference.
 
 ### Filtering something the agent may not read
 
