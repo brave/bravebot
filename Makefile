@@ -23,6 +23,13 @@ MSRV_IMAGE = rust:1.88-slim@sha256:38bc5a86d998772d4aec2348656ed21438d20fcdce279
 # runs a second time over the finished assets.
 STABLE_IMAGE = rust:1.98-slim@sha256:f47a8de237dcbb0b0ce1099901e60a89728e3d51f24e664b40e947171538ade7
 ZIGBUILD_IMAGE = ghcr.io/rust-cross/cargo-zigbuild:0.23.0@sha256:b8364c2c60cdcc9b95c402d17654bff517410926a35678bd89dd924b8158d6ae
+# The two that pack the desktop application's Linux packages. Neither compiles anything: each
+# holds the one tool its format is built with, over a tree that is already finished, so what the
+# digest buys is the tool behaving the same way on every host rather than a reproducible build.
+# Debian ships `dpkg-deb` in the base image and Fedora does not ship `rpmbuild`, which is the
+# one install below.
+DEB_IMAGE = debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+RPM_IMAGE = fedora:42@sha256:99e203b80b1c3d8f7e161ec10a68fd02b081ef83a3963553e513c82846b97814
 # Every file that states the version, which is what a bump rewrites and commits. The two under
 # ui/ are the desktop application's: it is packaged from its own manifest, so a version left
 # behind there is an app bundle naming a release that does not exist.
@@ -82,6 +89,7 @@ help:
 	@echo "  make publish-npm [TAG=v<version>]           Publish npm for TAG, or the latest GitHub release"
 	@echo "  make app-bundle                             Package the desktop application, release build"
 	@echo "  make app-release                            Its disk images for both Mac architectures, unsigned"
+	@echo "  make app-release-linux                      Its .deb and .rpm for both Linux architectures, unsigned"
 	@echo "  make app-bundles-windows                    Its Windows bundles for both architectures, unsigned"
 	@echo
 	@echo "  make clean          Remove build output"
@@ -480,8 +488,10 @@ app-bundle:
 # has to come first because it rewrites the Electron binary, which a signature covers.
 #
 # Each pair is the architecture's name in an asset and Electron's name for it, which differ for
-# Intel, and this list is the one place that says so. Windows uses the same two names for the same
-# two architectures, so `app-bundles-windows` below reads this list too.
+# Intel, and this list is the one place that says so. Linux and Windows use the same two names for
+# the same two architectures, so `app-bundles-linux` and `app-bundles-windows` below read this
+# list too; the Linux packages then have a third spelling each, which
+# ui/scripts/linux-package.mjs holds.
 APP_ARCHES = arm64:arm64 amd64:x64
 
 .PHONY: app-release
@@ -526,6 +536,91 @@ app-dmg:
 		echo "wrote dist/bravebot-app-darwin-$$arch.dmg"; \
 	done
 
+# The desktop application's Linux release assets, built on a Linux host from what the cross-build
+# left in dist/, for both architectures whichever one this host is:
+#
+#   reads   dist/bravebot-rpc-linux-<arch>, dist/bravebot-ui-files-linux-<arch>
+#   writes  dist/bravebot-app-linux-<arch>.deb, dist/bravebot-app-linux-<arch>.rpm
+#
+# for <arch> arm64 and amd64, from `make linux-amd64 linux-arm64 strip`, and needing no Rust
+# toolchain. Two steps for the same reason the Mac is two: `app-bundles-linux` writes a fused,
+# unsigned directory per architecture under ui/dist/, and `app-packages-linux` puts each one in
+# its packages. Signing them, and the repository that would serve updates, are issue #770.
+#
+# The packages are what is shipped rather than a tarball or an AppImage, and the reason is
+# Chromium's sandbox. Where unprivileged user namespaces are unavailable, which Ubuntu 24.04's
+# AppArmor policy makes the default, Electron needs `chrome-sandbox` owned by root with mode 4755
+# and otherwise aborts at start. Only an installer can set that; anything a person unpacks
+# themselves leaves `--no-sandbox` as the way to start it, which must not be a supported way to
+# run an agent.
+#
+# Both architectures are packaged on one host: the packager downloads the Electron runtime for
+# the architecture it is asked for, and the two tools below archive a finished tree rather than
+# executing anything in it, so neither needs the machine the package is for. What is not covered
+# here is installing the result, which needs a virtual machine of each supported release rather
+# than a container: a container shares this kernel and its AppArmor policy, so it cannot exercise
+# the sandbox the packages exist for.
+.PHONY: app-release-linux
+app-release-linux: app-bundles-linux
+	$(MAKE) app-packages-linux
+
+.PHONY: app-bundles-linux
+app-bundles-linux:
+	@missing=; builds=; for pair in $(APP_ARCHES); do \
+		arch=$${pair%%:*}; lacks=; \
+		for name in bravebot-rpc bravebot-ui-files; do \
+			test -f dist/$$name-linux-$$arch || lacks="$$lacks $$name-linux-$$arch"; \
+		done; \
+		if [ -n "$$lacks" ]; then missing="$$missing$$lacks"; builds="$$builds linux-$$arch"; fi; \
+	done; \
+	if [ -n "$$missing" ]; then \
+		echo "missing from dist/:$$missing" >&2; \
+		echo "run \`make$$builds strip\` first" >&2; exit 1; \
+	fi
+	cd ui && npm ci && npm run typecheck && npm exec -- electron-vite build
+	@set -e; stage=$$(mktemp -d); trap 'rm -rf "$$stage"' EXIT; \
+	for pair in $(APP_ARCHES); do \
+		arch=$${pair%%:*}; electron=$${pair#*:}; \
+		mkdir "$$stage/$$arch"; \
+		install -m 0755 dist/bravebot-rpc-linux-$$arch "$$stage/$$arch/bravebot-rpc"; \
+		install -m 0755 dist/bravebot-ui-files-linux-$$arch "$$stage/$$arch/bravebot-ui-files"; \
+		(cd ui && node scripts/package.mjs --executables="$$stage/$$arch" --arch=$$electron); \
+	done
+
+# The install tree and the two package descriptions are written once by
+# ui/scripts/linux-package.mjs, so the layout a person gets is the same whichever format they
+# installed, and only the packing is done per format. The .deb takes its own control directory
+# through a hardlinked copy rather than in the tree itself, because a DEBIAN directory left in
+# the build root is a file the rpm build would refuse as unpackaged.
+#
+# Each container runs as root, since installing rpmbuild needs it, so each removes its own
+# scratch directory and hands its output back to whoever is packaging before it exits. What it
+# leaves owned by root, the cleanup here cannot remove: the second architecture would then fail
+# on the first one's leftovers.
+.PHONY: app-packages-linux
+app-packages-linux:
+	@set -e; mkdir -p dist; stage=$$(mktemp -d); trap 'rm -rf "$$stage"' EXIT; \
+	for pair in $(APP_ARCHES); do \
+		arch=$${pair%%:*}; electron=$${pair#*:}; \
+		bundle="ui/dist/Brave Bot-linux-$$electron"; \
+		test -d "$$bundle" || { echo "no $$bundle: run \`make app-bundles-linux\` first" >&2; exit 1; }; \
+		mkdir "$$stage/$$arch"; \
+		node ui/scripts/linux-package.mjs --bundle="$$bundle" --arch=$$arch --stage="$$stage/$$arch"; \
+		docker run --rm -e OWNER="$$(id -u):$$(id -g)" -v "$$stage/$$arch:/stage" -w /stage $(DEB_IMAGE) sh -c '\
+			cp -al payload deb && mkdir deb/DEBIAN && cp control deb/DEBIAN/control && \
+			dpkg-deb --build --root-owner-group deb out.deb && \
+			rm -rf deb && chown "$$OWNER" out.deb'; \
+		docker run --rm -e OWNER="$$(id -u):$$(id -g)" -v "$$stage/$$arch:/stage" -w /stage $(RPM_IMAGE) sh -c '\
+			dnf -y --setopt=install_weak_deps=False install rpm-build >/dev/null && \
+			rpmbuild -bb --define "_sourcedir /stage" --define "_topdir /stage/rpm" \
+				--define "_rpmdir /stage" --define "_rpmfilename out.rpm" brave-bot.spec && \
+			rm -rf rpm && chown "$$OWNER" out.rpm'; \
+		mv "$$stage/$$arch/out.deb" dist/bravebot-app-linux-$$arch.deb; \
+		mv "$$stage/$$arch/out.rpm" dist/bravebot-app-linux-$$arch.rpm; \
+		rm -rf "$$stage/$$arch"; \
+		echo "wrote dist/bravebot-app-linux-$$arch.deb dist/bravebot-app-linux-$$arch.rpm"; \
+	done
+
 # The Windows half of the same thing, and the first of its two steps:
 #
 #   reads   dist/bravebot-rpc-windows-<arch>.exe, dist/bravebot-ui-files-windows-<arch>.exe
@@ -562,6 +657,7 @@ app-bundles-windows:
 		(cd ui && node scripts/package.mjs --executables="$$stage/$$arch" --platform=win32 --arch=$$electron); \
 	done
 
+
 # Symbols are kept during the build because Rust's own strip can corrupt some targets
 # under zigbuild, so they are removed here instead.
 #
@@ -579,7 +675,7 @@ app-bundles-windows:
 .PHONY: strip
 strip:
 	@for f in dist/$(BINARY)-*; do \
-		case "$$f" in *.sha256|*SHA256SUMS|*.dmg) continue;; esac; \
+		case "$$f" in *.sha256|*SHA256SUMS|*.dmg|*.deb|*.rpm) continue;; esac; \
 		docker run --rm -v "$(PWD)/dist:/dist" -e ASSET="/dist/$$(basename $$f)" \
 			$(ZIGBUILD_IMAGE) sh -c '\
 			lib=$$(rustc --print sysroot)/lib && \
@@ -750,16 +846,17 @@ define cross-build
 endef
 
 # `docker create` on a scratch image needs a command argument even though it never
-# runs; the container exists only so the binary can be copied out. A Mac or Windows target's
-# image also holds the desktop application's two executables, which land beside the CLI under
-# the names `app-bundles` and `app-bundles-windows` read, and are stripped with it. The Windows
-# pair gets the `.exe` the CLI asset beside it has, since that is the name the bundle carries.
+# runs; the container exists only so the binary can be copied out. Every target's image also
+# holds the desktop application's two executables, which land beside the CLI under the names
+# `app-bundles`, `app-bundles-linux` and `app-bundles-windows` read, and are stripped with it.
+# The Windows pair gets the `.exe` the CLI asset beside it has, since that is the name the
+# bundle carries.
 define extract
 	mkdir -p dist
 	docker rm -f tmp-$(BINARY)-$(2) 2>/dev/null || true
 	docker create --name tmp-$(BINARY)-$(2) $(1) /dev/null
 	docker cp tmp-$(BINARY)-$(2):/$(BINARY) dist/$(call artifact,$(2))
-	$(if $(findstring darwin,$(2)),for helper in bravebot-rpc bravebot-ui-files; do \
+	$(if $(or $(findstring darwin,$(2)),$(findstring linux,$(2))),for helper in bravebot-rpc bravebot-ui-files; do \
 		docker cp tmp-$(BINARY)-$(2):/$$helper dist/$$helper-$(2) || exit 1; done)
 	$(if $(findstring windows,$(2)),for helper in bravebot-rpc bravebot-ui-files; do \
 		docker cp tmp-$(BINARY)-$(2):/$$helper dist/$$helper-$(2).exe || exit 1; done)

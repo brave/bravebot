@@ -43,15 +43,18 @@ export function buildProfile(argv) {
   // build left in `dist/` is `bravebot-rpc.exe` there and `bravebot-rpc` everywhere else. The
   // bundle's platform decides it rather than the host's, because a Windows bundle is the one
   // that gets built somewhere else.
-  const windows = bundlePlatform(argv) === 'win32'
-  const exe = windows ? '.exe' : ''
+  const platform = bundlePlatform(argv)
+  const exe = platform === 'win32' ? '.exe' : ''
   const executables = argv.find((arg) => arg.startsWith('--executables='))?.slice('--executables='.length)
   if (executables !== undefined) {
     return {
       name: 'prebuilt',
       agent: `${executables}/bravebot-rpc${exe}`,
       files: `${executables}/bravebot-ui-files${exe}`,
-      build: windows ? 'make app-bundles-windows' : 'make app-release',
+      // The target that hands the pair over, which is a different one per platform. Naming
+      // another platform's sends whoever hit this to a target that will not produce the
+      // executables they are missing.
+      build: PREBUILT_TARGET[platform],
       fused: true,
     }
   }
@@ -67,6 +70,13 @@ export function buildProfile(argv) {
     build: release ? 'make app-bundle' : 'npm run bridge',
     fused: release,
   }
+}
+
+// What builds the prebuilt pair for each platform the app is packaged for.
+const PREBUILT_TARGET = {
+  darwin: 'make app-release',
+  linux: 'make app-bundles-linux',
+  win32: 'make app-bundles-windows',
 }
 
 // Which platform the bundle is for, in Electron's names: the host's unless `--platform=` says

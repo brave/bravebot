@@ -30,11 +30,11 @@ RUN --mount=type=secret,id=bravebot_env,target=/run/secrets/bravebot_env \
 
 # Normalise the artifact name so extraction does not need to know about .exe.
 #
-# A Mac or Windows target also keeps the desktop application's two executables, which the build
-# above has already compiled with the rest of the workspace: `make app-release` and
-# `make app-bundles-windows` package them. A Linux target does not, because there is no Linux
-# desktop package to put them in. The Windows pair is normalised like the CLI above, for the same
-# reason, and extraction is where the suffix goes back on.
+# Every target also keeps the desktop application's two executables, which the build above has
+# already compiled with the rest of the workspace: `make app-release` packages the Mac pair into
+# disk images, `make app-release-linux` packages the Linux pair into .deb and .rpm, and
+# `make app-bundles-windows` packages the Windows pair. The Windows pair is normalised like the
+# CLI above, for the same reason, and extraction is where the suffix goes back on.
 RUN mkdir -p /out \
     && if [ -f "/src/target/${TARGET}/release/bravebot.exe" ]; then \
          cp "/src/target/${TARGET}/release/bravebot.exe" /out/bravebot; \
@@ -42,7 +42,7 @@ RUN mkdir -p /out \
          cp "/src/target/${TARGET}/release/bravebot" /out/bravebot; \
        fi \
     && case "$TARGET" in \
-         *-apple-darwin) \
+         *-apple-darwin|*-unknown-linux-gnu) \
            cp "/src/target/${TARGET}/release/bravebot-rpc" \
               "/src/target/${TARGET}/release/bravebot-ui-files" /out/ ;; \
          *-pc-windows-*) \

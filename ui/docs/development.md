@@ -18,6 +18,7 @@ members of lives.
 | `npm run package` | Build both Rust executables, bundle, package for macOS or Linux; does not typecheck |
 | `make app-bundle` (from the root) | The same bundle, carrying release executables built with credentials required, fused |
 | `make app-release` (from the root) | A disk image per Mac architecture, from the cross-built executables in `dist/`; see [releasing](../../docs/development/releasing.md#the-desktop-application) |
+| `make app-release-linux` (from the root) | A `.deb` and an `.rpm` per Linux architecture, from the same; see [releasing](../../docs/development/releasing.md#the-linux-packages) |
 | `make app-bundles-windows` (from the root) | A Windows bundle per architecture, from the cross-built executables in `dist/`, on any host; see [releasing](../../docs/development/releasing.md#the-windows-bundle) |
 | `make check-ui` (from the root) | Install, build the file helper, and run every `scripts/*.test.mjs` |
 | `cargo test -p bravebot-ui-bridge -p bravebot-ui-files` | Test the two front-end crates |
@@ -110,6 +111,16 @@ asar. A fused app cannot be driven, because Playwright attaches through `--inspe
 `npm run drive:packaged` and `SECURE_FILES_APP` take the unfused bundle `npm run package` writes.
 All three write to the same `dist/` path, and `drive:packaged` refuses a fused bundle there rather
 than wait out its launch timeout.
+
+What `npm run package` writes on Linux is a directory somebody has to unpack and run themselves,
+which is why it is not what a release ships. `scripts/linux-package.mjs` lays that bundle out as
+an install under `/opt/brave-bot`, with a launcher entry, the icon in the theme's scalable
+directory, and `chrome-sandbox` setuid root, and writes the `.deb` and `.rpm` descriptions from
+that one tree; `make app-release-linux` at the root packs it with `dpkg-deb` and `rpmbuild` in
+pinned containers. The setuid bit is the point of the exercise: where unprivileged user
+namespaces are unavailable, Electron aborts at start without it, and only an installer can set
+it. `scripts/linux-package.test.mjs` covers what the two formats are told, and builds a real
+`.deb` where `dpkg-deb` is present.
 
 Every macOS bundle carries the bundle id `com.brave.bravebot` and the icon `build/icon.icns`. macOS
 keys privacy grants and keychain items on the bundle id, so it does not change between releases.
