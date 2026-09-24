@@ -7,7 +7,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { RELEASE_FUSES, SENTINEL, acceptsInspect, readFuses, setFuses } from './fuses.mjs'
+import { RELEASE_FUSES, SENTINEL, acceptsInspect, hasFuses, readFuses, setFuses } from './fuses.mjs'
 
 // A binary with one wire per entry in `wires`, each `[version, fuses]`, between bytes that are not
 // part of any wire, so a write that lands outside one shows up as a changed byte around it.
@@ -65,6 +65,21 @@ test('a debugger can attach unless the inspect fuse is off, whatever the other f
   assert.equal(acceptsInspect(allButInspect), true)
   assert.equal(acceptsInspect(inspectOff), false)
   assert.equal(acceptsInspect(binary([1, SHIPPED], [1, '000011011'])), false)
+})
+
+// An installer reads this to refuse a bundle nobody fused, which is what a debug bundle under the
+// release's directory name looks like. A universal binary with one slice fused is not fused, and
+// neither is a wire that has lost a fuse a release sets.
+test('a binary reads as fused only when every wire says what a release sets', () => {
+  const fused = binary([1, SHIPPED], [1, SHIPPED])
+  setFuses(fused, RELEASE_FUSES)
+  assert.equal(hasFuses(fused, RELEASE_FUSES), true)
+  assert.equal(hasFuses(binary([1, SHIPPED]), RELEASE_FUSES), false)
+  assert.equal(hasFuses(binary([1, '000011011'], [1, SHIPPED]), RELEASE_FUSES), false)
+  assert.equal(hasFuses(binary([1, 'r00011011']), RELEASE_FUSES), false)
+  // Four fuses long, with the bytes after it reading as the rest of a fused wire.
+  const short = Buffer.concat([Buffer.from(SENTINEL), Buffer.from([1, 4]), Buffer.from('000011011', 'latin1')])
+  assert.equal(hasFuses(short, RELEASE_FUSES), false)
 })
 
 // The wire's layout is Electron's to change, so the fixture above only shows this writes the

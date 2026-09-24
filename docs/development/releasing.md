@@ -77,8 +77,8 @@ make app-release
 
 The third family of artifact, and the one the tag does not produce. macOS gets a disk image per
 architecture, Linux a `.deb` and an `.rpm` per architecture from
-[the Linux packages](#the-linux-packages) below, and Windows the bundle below and no installer
-around it yet.
+[the Linux packages](#the-linux-packages) below, and Windows an installer per architecture from
+[the Windows installers](#the-windows-installers).
 
 `app-release` runs on a Mac of either architecture and needs no Rust toolchain. It packages the
 app once per architecture from what the cross-build left in `dist/`, and writes a disk image for
@@ -180,32 +180,72 @@ the sandbox the packages exist for. On a machine of each, the package has to ins
 its launcher with the sandbox on, start its agent, ignore `ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS`
 and `--inspect`, and uninstall cleanly.
 
-### The Windows bundle
+### The Windows installers
 
 ```sh
 make windows-amd64 windows-arm64 strip
-make app-bundles-windows
+make app-release-windows
 ```
 
-The same shape as `app-bundles`, and one step in so far:
+It packages the app once per architecture from what the cross-build left in `dist/`, and writes an
+installer for each:
 
 | Reads | Writes |
 | --- | --- |
-| `dist/bravebot-rpc-windows-arm64.exe`, `dist/bravebot-ui-files-windows-arm64.exe` | `ui/dist/Brave Bot-win32-arm64/` |
-| `dist/bravebot-rpc-windows-amd64.exe`, `dist/bravebot-ui-files-windows-amd64.exe` | `ui/dist/Brave Bot-win32-x64/` |
+| `dist/bravebot-rpc-windows-arm64.exe`, `dist/bravebot-ui-files-windows-arm64.exe` | `dist/bravebot-desktop-windows-arm64-setup.exe` |
+| `dist/bravebot-rpc-windows-amd64.exe`, `dist/bravebot-ui-files-windows-amd64.exe` | `dist/bravebot-desktop-windows-amd64-setup.exe` |
 
-It runs on any host, unlike the Mac one, because everything platform-specific about a Windows
-bundle is the icon and the version resource in `Brave Bot.exe`, and `@electron/packager` writes
-both with resedit, a JavaScript library. No Windows node and no Wine is involved, so the release
-builds the bundle where it builds everything else and takes it to the Windows node only to sign it.
+Two steps with the signing between them, as on the Mac, and each runs on different hosts:
 
-The Windows cross-build keeps the same pair of executables beside the CLI as the Mac one does,
-`make strip` strips them with the rest, and `make checksums` leaves them out of the assets. The
-bundle is fused, in `Brave Bot.exe` rather than in a framework, and unsigned. The job signs every
-PE in it where it lies: `Brave Bot.exe`, both helpers in `resources/`, and Electron's own DLLs.
+```sh
+make app-bundles-windows      # ui/dist/Brave Bot-win32-arm64/ and ui/dist/Brave Bot-win32-x64/, on any host
+# sign every PE in each bundle where it lies
+make app-installers-windows   # the two installers, on Windows or a Mac; then sign those
+```
 
-The installer that a signed bundle goes into is the second step and does not exist yet. Its format,
-whether it installs per user or per machine, and the product identity it fixes for good are open
-questions on [#769](https://github.com/brave/bravebot/issues/769), and none of them is a packaging
-script's to settle. Until they are, what comes out of this target is a directory somebody can run
-the app from, not something anybody installs.
+The bundles build on any host, because everything platform-specific about a Windows bundle is the
+icon and the version resource in `Brave Bot.exe`, and `@electron/packager` writes both with
+resedit, a JavaScript library. The Windows cross-build keeps the same pair of executables beside
+the CLI as the Mac one does, `make strip` strips them with the rest, and `make checksums` leaves
+them out of the assets. The bundle is fused, in `Brave Bot.exe` rather than in a framework, and
+unsigned. The job signs every PE in it where it lies: `Brave Bot.exe`, both helpers in
+`resources/`, and Electron's own DLLs.
+
+The installers do not build on Linux. electron-builder writes each one's uninstaller by running a
+stub build of the installer, which runs natively on Windows and which it reads in JavaScript on
+macOS, and on Linux it needs Wine. So the release builds the installers on the Windows node that
+signed the bundles, and signs them there too.
+
+**What the installer does.** It is NSIS, written by electron-builder from the bundle as
+`prepackaged`, so electron-builder packs and edits nothing and the files the job signed are the
+files installed. It is one click and per user, with no administrator prompt, as
+[#769](https://github.com/brave/bravebot/issues/769) settled:
+
+| | |
+| --- | --- |
+| Install directory | `%LOCALAPPDATA%\Programs\bravebot-desktop` |
+| Uninstall key | `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\bravebot-desktop` |
+| Start menu entry, Apps list | `Brave Bot Desktop` |
+| Silent install | `/S`, which Intune and SCCM can run; Group Policy software installation takes only MSI |
+
+A newer installer finds the install it replaces through the uninstall key and runs that install's
+uninstaller first. So the key is fixed by the first release, like the macOS bundle id and the Linux
+package name, and so are the directory and the per-user scope: an installer that changes any of
+them installs a second copy beside the first. Uninstalling leaves the app's data and `~/.bravebot`
+where they are. `ui/scripts/windows-installer.mjs` states all of it, and refuses a bundle of the
+other architecture, or one that is not fused, which is what a debug bundle packaged on a Windows
+checkout looks like under the same directory name.
+
+The Start menu entry carries `com.brave.bravebot` as its AppUserModelID. Windows groups a window
+under the entry with the ID the process sets, and the app sets none yet, which is part of
+[#767](https://github.com/brave/bravebot/issues/767).
+
+Each installer carries an uninstaller that electron-builder writes during the build, so the job
+cannot sign it afterwards the way it signs the installer. electron-builder signs it in the same
+build when given a certificate there, and setting that up is
+[#770](https://github.com/brave/bravebot/issues/770).
+
+**What is not checked here.** Installing one. On Windows of each architecture, the installer has to
+install without an administrator prompt, start the app from its Start menu entry, start its agent,
+upgrade over the previous release, and uninstall cleanly. GitHub's hosted `windows-latest` and
+`windows-11-arm` runners can do that as a CI job once the app starts on Windows, which is #767.
