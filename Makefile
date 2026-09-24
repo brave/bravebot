@@ -313,14 +313,17 @@ docs-updated-to-sha:
 check-all-local: check-scripts check check-spec check-security check-locales check-versions check-docs check-npm check-deps check-ui check-reviewdog
 check-all: check-all-local check-msrv check-windows check-linux
 
-.PHONY: check-scripts check-all-selftest check-reviewdog-selftest
-check-scripts: check-all-selftest check-reviewdog-selftest
+.PHONY: check-scripts check-all-selftest check-reviewdog-selftest check-rebase-selftest
+check-scripts: check-all-selftest check-reviewdog-selftest check-rebase-selftest
 
 check-all-selftest:
 	python3 contrib/check-all-selftest.py
 
 check-reviewdog-selftest:
 	python3 contrib/check-reviewdog-selftest.py
+
+check-rebase-selftest:
+	python3 agents/skills/rebase/selftest.py
 
 # CI and local runs share the same desktop checks. Linux uses a virtual display;
 # macOS uses the logged-in desktop session.
