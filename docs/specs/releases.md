@@ -34,10 +34,11 @@ binaries are built and published by the Jenkins job `bravebot-build` in the devo
 The npm package is published afterwards, from a manually dispatched GitHub Actions workflow,
 once that release exists.
 
-Nothing here is pinned by a Rust test. The rules below are enforced by a refusal in the tagging
+Most of this is not pinned by a Rust test. Those rules are enforced by a refusal in the tagging
 path, the Jenkins publish path, or the npm publish workflow rather than by anything the test
-suite can execute, so each clause says in brackets what makes it hold, or says `none` where
-nothing does yet.
+suite can execute, so each of those clauses says in brackets what makes it hold. What the
+installers do with a Linux signature is the exception: a test runs both of them against a release
+it made.
 
 ## Clauses
 
@@ -225,31 +226,42 @@ the pipeline that publishes.
 
 On Linux, where `gpg` can be run, each installer also fetches the signature published beside the
 checksum and the release signing key, which is served from Brave's download host rather than from
-the release, and checks that signature over the checksum exactly as it was fetched. When either
-cannot be fetched, or the signature does not verify, no executable is written. Where `gpg` cannot
-be run, the installer says it skipped the check and installs on the checksum alone. Darwin and
-Windows are not checked this way.
+the release, and checks that signature over the checksum exactly as it was fetched. The signature
+counts only when it was made by the key the installer names by its fingerprint, whatever else the
+fetched key file holds. When the signature or the key cannot be fetched, or the signature does not
+verify or was made by any other key, no executable is written. Where `gpg` cannot be run, the
+installer says it skipped the check and installs on the checksum alone. Darwin and Windows are not
+checked this way.
 
 **Why.** The Linux binary carries no signature of its own, and its checksum is uploaded beside it,
 so whoever can replace the one can replace the other: the checksum proves the download arrived
-intact, not who produced it. A signature from a key published somewhere else means a substituted
-binary also needs that key, or control of a second host. A missing signature is refused rather than
-skipped because skipping it would let whoever can change the release turn the check off by deleting
-one file, and that is the person the check exists for. A missing `gpg` is skipped rather than
-refused because it is a property of the machine, which nobody changing a release controls, and
-requiring it would fail an install for a reason that has nothing to do with what was downloaded.
+intact, not who produced it. A signature from a key held somewhere else means a substituted binary
+also needs that key. The key is named in the installer because the file it is fetched from is on a
+host too, and whoever controlled that host as well as the release could otherwise sign with a key
+of their own and serve it. A missing signature is refused rather than skipped because skipping it
+would let whoever can change the release turn the check off by deleting one file, and that is the
+person the check exists for. A missing `gpg` is skipped rather than refused because it is a
+property of the machine, which nobody changing a release controls, and requiring it would fail an
+install for a reason that has nothing to do with what was downloaded.
 
 **Note.** The check runs in a keyring made for it and removed afterwards, so nothing is read from
 or added to the person's own.
 
-`verified-by: none`
+`verified-by: bravebot_cli::installer_signature::a_linux_checksum_signed_by_the_release_key_installs`
+`verified-by: bravebot_cli::installer_signature::a_checksum_replaced_after_it_was_signed_installs_nothing`
+`verified-by: bravebot_cli::installer_signature::a_checksum_signed_by_any_key_but_the_release_key_installs_nothing`
+`verified-by: bravebot_cli::installer_signature::a_linux_checksum_with_no_signature_installs_nothing`
+`verified-by: bravebot_cli::installer_signature::a_release_key_that_cannot_be_fetched_installs_nothing`
+`verified-by: bravebot_cli::installer_signature::without_gpg_a_linux_install_says_it_skipped_the_signature_and_installs`
+`verified-by: bravebot_cli::installer_signature::a_darwin_or_windows_install_neither_fetches_nor_needs_a_signature`
 
 ## Known costs
 
-- **Nothing here is pinned by a Rust test.** Every clause but [RELEASE-13](#RELEASE-13) is
-  by-construction, which means a refusal can be removed and only a reader will notice. RELEASE-13
-  is `verified-by: none`: its check is shell and JavaScript that could be run against a key made
-  for the purpose, and nothing runs it yet. The tagging path is shell in a makefile,
+- **Only the installers' signature check is pinned by a Rust test.** Every clause but
+  [RELEASE-13](#RELEASE-13) is by-construction, which means a refusal can be removed and only a
+  reader will notice. The test for RELEASE-13 runs on Linux alone and skips where `gpg` or `node`
+  is missing, so on a macOS checkout it passes having checked nothing; the Linux job in CI has
+  both. The tagging path is shell in a makefile,
   publication is a Jenkins job in another repository, and a test that shelled out to a real tag
   push would have to publish something to prove anything. Two checks hold part of it from outside
   the suite. `make check-security` holds the shape of the publish workflow rather than any of these
@@ -270,9 +282,12 @@ or added to the person's own.
   and the install script, which always fetches the newest release, stops working for all of them
   at once.
 
-- **The signing key is whatever Brave's download host serves.** Neither installer names the key it
-  expects, so control of that host and of the release together passes the check, where a key named
-  in the installer would also need the key's secret half.
+- **Changing the signing key breaks every installer that names the old one.** Each npm version
+  names a key and installs its own version's release, so the download host has to go on serving
+  every key a version still in use names, not only the newest. The install script is served from
+  the trunk and installs the newest release, so the key it names has to change at the moment the
+  first release signed by the new key is published, and either order leaves a window in which
+  Linux installs with `gpg` are refused.
 
 - **The refusals before a tag guard the tag, not the branch.** Tagging checks the branch, the
   remote, and the agreement among the files that state a version. The publish job builds the tip of a

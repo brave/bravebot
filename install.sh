@@ -16,6 +16,9 @@ set -eu
 REPO="brave/bravebot"
 API_URL="https://api.github.com/repos/${REPO}/releases/latest"
 PUBKEY_URL="https://brave-browser-downloads.s3.brave.com/keys/bravebot-release.asc"
+# The key a Linux checksum has to be signed by. The file at PUBKEY_URL is only where its public
+# half is fetched from, so whoever controls that host can add a key to it but cannot become this one.
+SIGNING_KEY_FINGERPRINT="13F28F0405C49B0B232DBA1BC1E827646A2DE416"
 BIN_NAME="bravebot"
 DEFAULT_INSTALL_DIR="/usr/local/bin"
 
@@ -53,22 +56,30 @@ is_sha256() {
   return 0
 }
 
-# Verifies a detached signature over an already checksum-verified file, in a throwaway keyring
-# that never touches the caller's own. Takes file paths rather than fetching anything itself, so
-# it has no network dependency and is the seam a test calls directly. Returns non-zero on any
-# failure (missing gpg, bad import, bad signature); the caller decides what that means.
+# Succeeds only when the signature verifies and was made by the key with the given fingerprint.
+# A good signature from any other key in the imported file is a refusal, which is what the
+# fingerprint is for. The keyring is made for this call and removed after it, so the person's own
+# is neither read nor added to.
 verify_checksum_signature() {
   asc_path="$1"
   sha_path="$2"
   pubkey_path="$3"
+  fingerprint="$4"
   gpg_home="$(mktemp -d)" || return 1
-  ( GNUPGHOME="$gpg_home" export GNUPGHOME
-    gpg --batch --quiet --import "$pubkey_path" 2>/dev/null &&
-      gpg --batch --quiet --verify "$asc_path" "$sha_path" 2>/dev/null
-  )
-  rc=$?
+  # The last field of VALIDSIG is the primary key's fingerprint, whichever subkey signed.
+  if (
+    GNUPGHOME="$gpg_home"
+    export GNUPGHOME
+    gpg --batch --quiet --import "$pubkey_path" 2>/dev/null || exit 1
+    status="$(gpg --batch --status-fd 1 --verify "$asc_path" "$sha_path" 2>/dev/null)" || exit 1
+    printf '%s\n' "$status" | grep -q "^\[GNUPG:\] VALIDSIG .* ${fingerprint}\$"
+  ); then
+    rc=0
+  else
+    rc=1
+  fi
   rm -rf "$gpg_home"
-  return $rc
+  return "$rc"
 }
 
 main() {
@@ -150,9 +161,9 @@ main() {
   fi
 
   # Linux ships no code signature, unlike Darwin (notarized) and Windows (Authenticode), so its
-  # checksum carries a detached GPG signature instead. Best-effort: the checksum above is the one
-  # check every install enforces regardless of what is on this machine; this only adds to it when
-  # gpg is present, and never weakens or replaces it.
+  # checksum carries a detached GPG signature instead. With gpg here, a signature that is missing
+  # is refused like one that is wrong, since deleting it is what somebody replacing the release
+  # would do. Without gpg the check is skipped, and said to be.
   if [ "$OS_KEY" = "linux" ]; then
     if command -v gpg >/dev/null 2>&1; then
       ASC_PATH="${TMP_DIR}/${ASSET_NAME}.sha256.asc"
@@ -161,7 +172,7 @@ main() {
         fail "unable to download the checksum signature for ${ASSET_NAME}"
       curl -fsSL "$PUBKEY_URL" -o "$PUBKEY_PATH" ||
         fail "unable to download the release signing key from ${PUBKEY_URL}"
-      verify_checksum_signature "$ASC_PATH" "$SHA_PATH" "$PUBKEY_PATH" ||
+      verify_checksum_signature "$ASC_PATH" "$SHA_PATH" "$PUBKEY_PATH" "$SIGNING_KEY_FINGERPRINT" ||
         fail "signature verification failed for ${ASSET_NAME}.sha256; refusing to install"
     else
       echo "note: gpg not found; skipping signature verification (the checksum above was still verified)."
@@ -216,8 +227,7 @@ main() {
   fi
 }
 
-# A test sources this file with BRAVEBOT_INSTALL_SH_TEST=1 to reach the functions above (in
-# particular verify_checksum_signature, which touches no network) without running an install.
+# Sourced with BRAVEBOT_INSTALL_SH_TEST=1, this file installs nothing, so a test can call main itself.
 if [ "${BRAVEBOT_INSTALL_SH_TEST:-0}" != "1" ]; then
   main
 fi

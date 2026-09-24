@@ -18,6 +18,9 @@ const SKIP_ENV = "BRAVEBOT_INSTALL_SKIP_DOWNLOAD";
 const DEFAULT_REPO = "brave/bravebot";
 const MAX_REDIRECTS = 5;
 const PUBKEY_URL = "https://brave-browser-downloads.s3.brave.com/keys/bravebot-release.asc";
+// The key a Linux checksum has to be signed by. The file at PUBKEY_URL is only where its public
+// half is fetched from, so whoever controls that host can add a key to it but cannot become this one.
+const SIGNING_KEY_FINGERPRINT = "13F28F0405C49B0B232DBA1BC1E827646A2DE416";
 
 function resolveTarget(platform, arch) {
   const resolved = resolveArch(platform, arch);
@@ -118,11 +121,11 @@ function hasGpg() {
   return result.status === 0;
 }
 
-// Verifies a detached signature over already checksum-verified bytes, in a throwaway keyring
-// that never touches anything else on the machine. Takes the exact bytes rather than fetching
-// or reconstructing anything itself, so it has no network dependency and is the seam a test
-// calls directly. Never throws for a bad signature or a missing gpg binary, only returns false.
-function verifySignature(shaBytes, ascBytes, publicKeyBytes) {
+// True only when the signature verifies and was made by the key with the given fingerprint. A
+// good signature from any other key in the imported file is a refusal, which is what the
+// fingerprint is for. The keyring is made for this call and removed after it, so the person's own
+// is neither read nor added to.
+function verifySignature(shaBytes, ascBytes, publicKeyBytes, fingerprint) {
   let gnupgHome;
   try {
     gnupgHome = fs.mkdtempSync(path.join(os.tmpdir(), "bravebot-gnupg-"));
@@ -143,14 +146,29 @@ function verifySignature(shaBytes, ascBytes, publicKeyBytes) {
     if (imported.status !== 0) {
       return false;
     }
-    const verified = spawnSync("gpg", ["--batch", "--quiet", "--verify", ascPath, shaPath], { env });
-    return verified.status === 0;
+    const verified = spawnSync(
+      "gpg",
+      ["--batch", "--status-fd", "1", "--verify", ascPath, shaPath],
+      { env, encoding: "utf8" }
+    );
+    if (verified.status !== 0) {
+      return false;
+    }
+    // The last field of VALIDSIG is the primary key's fingerprint, whichever subkey signed.
+    return verified.stdout.split("\n").some((line) => {
+      const fields = line.trim().split(" ");
+      return (
+        fields[0] === "[GNUPG:]" &&
+        fields[1] === "VALIDSIG" &&
+        fields[fields.length - 1] === fingerprint
+      );
+    });
   } finally {
     fs.rmSync(gnupgHome, { recursive: true, force: true });
   }
 }
 
-async function install(tag, target, baseUrl, destination) {
+async function install(tag, target, baseUrl, destination, fingerprint = SIGNING_KEY_FINGERPRINT) {
   const shaBytes = await fetchToBuffer(`${baseUrl}/${target.asset}.sha256`);
   const expected = shaBytes.toString("utf8").trim();
   if (!/^[0-9a-f]{64}$/i.test(expected)) {
@@ -166,15 +184,15 @@ async function install(tag, target, baseUrl, destination) {
   }
 
   // Linux ships no code signature, unlike Darwin (notarized) and Windows (Authenticode), so its
-  // checksum carries a detached GPG signature instead. Best-effort: the checksum above is the
-  // one check every install enforces regardless of what is on this machine; this only adds to
-  // it when gpg is present, and never weakens or replaces it. Verified against the exact bytes
+  // checksum carries a detached GPG signature instead. With gpg here, a signature that is missing
+  // is refused like one that is wrong, since deleting it is what somebody replacing the release
+  // would do. Without gpg the check is skipped, and said to be. Verified against the exact bytes
   // fetched for the checksum, not a reconstructed string, since that is what was actually signed.
   if (target.asset.includes("-linux-")) {
     if (hasGpg()) {
       const ascBytes = await fetchToBuffer(`${baseUrl}/${target.asset}.sha256.asc`);
       const publicKeyBytes = await fetchToBuffer(PUBKEY_URL);
-      if (!verifySignature(shaBytes, ascBytes, publicKeyBytes)) {
+      if (!verifySignature(shaBytes, ascBytes, publicKeyBytes, fingerprint)) {
         throw new Error(
           `Signature verification failed for ${target.asset}.sha256; refusing to install`
         );
@@ -219,9 +237,7 @@ function main() {
   });
 }
 
-// A test requires this file with BRAVEBOT_INSTALL_SH_TEST-style isolation via require.main, to
-// reach verifySignature/resolveTarget/resolveArch (none of which touch the network) without
-// running an install.
+// Required rather than run, this file installs nothing, so a test can call install() itself.
 if (require.main === module) {
   main();
 }
