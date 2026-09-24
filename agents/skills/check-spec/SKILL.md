@@ -205,7 +205,7 @@ first, and how many drafts are waiting. Nothing else. The report is the delivera
 | `verified-by: none` | mechanical | warning |
 | `agents/unverified-clauses.txt` lists exactly the clauses a full run finds uncovered | mechanical | error |
 | `governs` paths exist | mechanical | error |
-| `guards` symbols exist | mechanical | error |
+| `guards` symbols exist, a qualified one under the type or module named | mechanical | error |
 | A `guards` entry that pins its sites is used in exactly those files, that many times | mechanical | error |
 | Front matter carries no key nothing reads, such as a `sites:` indented out of its entry | mechanical | error |
 | No spec cites another spec's clause ids | mechanical | error |

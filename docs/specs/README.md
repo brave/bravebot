@@ -115,10 +115,13 @@ Front matter, then numbered clauses. Everything outside a clause is commentary a
   naming the symbol is not a use of it at all. The line defining the symbol counts as one of those
   occurrences. A method is counted where it is called on a receiver too, since `gate.open()` is how
   most call sites read; an associated function has no receiver, so `Labelled::new` counts its
-  definition and every place the qualified name is written, and nothing besides. A count rather than
-  a line number, so moving a call inside a file changes nothing, while adding or removing one is an
-  edit to this spec that a reviewer sees. `make check-spec` prints the number it found, which is the
-  number to record.
+  definition and every place the qualified name is written, and nothing besides. A qualified
+  symbol has to be defined where its qualifier owns it, in an `impl` naming the type or, for
+  `home::write_file`, at the margin of the module of that name: a method another type happens to
+  spell the same way is not this one, and a guard whose qualifier defines nothing counts no uses
+  at all rather than that type's. A count rather than a line number, so moving a call inside a
+  file changes nothing, while adding or removing one is an edit to this spec that a reviewer
+  sees. `make check-spec` prints the number it found, which is the number to record.
   Within one spec, either every entry pins its sites or none does: an unpinned entry beside pinned
   ones reads as though it were checked too.
 - **`documented-by`** names the pages under `docs/website/docs/` that describe this spec to somebody
