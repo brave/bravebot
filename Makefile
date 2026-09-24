@@ -599,13 +599,14 @@ app-bundles-linux:
 # The install tree and the two package descriptions are written once by
 # ui/scripts/linux-package.mjs, so the layout a person gets is the same whichever format they
 # installed, and only the packing is done per format. The .deb takes its own control directory
-# through a hardlinked copy rather than in the tree itself, because a DEBIAN directory left in
-# the build root is a file the rpm build would refuse as unpackaged.
+# in a copy of the tree rather than in the tree itself, because a DEBIAN directory left there is a
+# file the rpm build would refuse as unpackaged.
 #
-# Each container runs as root, since installing rpmbuild needs it, so each removes its own
-# scratch directory and hands its output back to whoever is packaging before it exits. What it
-# leaves owned by root, the cleanup here cannot remove: the second architecture would then fail
-# on the first one's leftovers.
+# Both tools build from a copy in the container's own /tmp rather than in the mounted stage.
+# Docker Desktop's file sharing drops the setuid bit from a file copied onto it and cannot hardlink
+# a symlink at all, and a package records the modes its build root holds. Each container runs as
+# root, since installing rpmbuild needs it, so each hands its output back to whoever is packaging
+# before it exits.
 #
 # rpmbuild is given its target from the spec's `ExclusiveArch`, for the reason rpmSpec() in
 # ui/scripts/linux-package.mjs gives.
@@ -619,16 +620,16 @@ app-packages-linux:
 		mkdir "$$stage/$$arch"; \
 		node ui/scripts/linux-package.mjs --bundle="$$bundle" --arch=$$arch --stage="$$stage/$$arch"; \
 		docker run --rm -e OWNER="$$(id -u):$$(id -g)" -v "$$stage/$$arch:/stage" -w /stage $(DEB_IMAGE) sh -c '\
-			cp -al payload deb && mkdir deb/DEBIAN && cp control deb/DEBIAN/control && \
-			dpkg-deb --build --root-owner-group deb out.deb && \
-			rm -rf deb && chown "$$OWNER" out.deb'; \
+			cp -a payload /tmp/deb && mkdir /tmp/deb/DEBIAN && cp control /tmp/deb/DEBIAN/control && \
+			dpkg-deb --build --root-owner-group /tmp/deb out.deb && \
+			chown "$$OWNER" out.deb'; \
 		docker run --rm -e OWNER="$$(id -u):$$(id -g)" -v "$$stage/$$arch:/stage" -w /stage $(RPM_IMAGE) sh -c '\
 			dnf -y --setopt=install_weak_deps=False install rpm-build >/dev/null && \
 			target=$$(sed -n "s/^ExclusiveArch: //p" brave-bot.spec) && \
 			rpmbuild -bb --target "$${target:?brave-bot.spec states no ExclusiveArch}" \
-				--define "_sourcedir /stage" --define "_topdir /stage/rpm" \
+				--define "_sourcedir /stage" --define "_topdir /tmp/rpm" \
 				--define "_rpmdir /stage" --define "_rpmfilename out.rpm" brave-bot.spec && \
-			rm -rf rpm && chown "$$OWNER" out.rpm'; \
+			chown "$$OWNER" out.rpm'; \
 		mv "$$stage/$$arch/out.deb" dist/bravebot-app-linux-$$arch.deb; \
 		mv "$$stage/$$arch/out.rpm" dist/bravebot-app-linux-$$arch.rpm; \
 		rm -rf "$$stage/$$arch"; \
