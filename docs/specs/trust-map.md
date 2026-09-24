@@ -4,6 +4,7 @@ title: The trust map
 status: normative
 governs:
   - crates/core/src/trust.rs
+  - crates/core/src/spelling.rs
   - crates/core/src/file_authority.rs
   - crates/core/src/policy.rs
   - crates/tui/src/trust_prompt.rs
@@ -671,6 +672,18 @@ therefore belongs to the workspace and not to the map, and every door that opens
 name, `/cd` as much as `/add-dir`, refuses a resolved name it cannot spell that way rather than
 handing over one that would be read as a path inside the project.
 
+The workspace separates a key with `/` whatever the host separates with, which is the same
+respelling a rule written in advance is matched with ([permissions.md](permissions.md)), and the
+question is put to the host rather than to the name: a backslash separates where the host makes it
+one and is a filename byte everywhere else. A name carrying a root there is no `/`-spelling for is
+left whole, since respelling decides a name's spelling and not which namespace it is keyed in.
+Without the respelling every name below the root is one opaque segment on such a host, so a rule
+about a directory does not reach the files under it, the rule a write records about a path is
+invisible to the next read of that path, and the broader answer given about the project at startup
+decides both. That is the laundering this map exists to close, reachable from the host alone. A
+rule a session recorded before its keys were spelled this way is respelled as the record is
+replayed, so resuming does not leave a rule keyed under a name nothing asks about.
+
 Every rule is written about a directory somebody opened, under the name that directory was opened
 as: the working directory itself, which is what the startup answer covers (TRUST-7), and the path
 it resolved to for one opened by name (TRUST-9). A path is therefore reduced to the open directory
@@ -714,6 +727,8 @@ would be read as a path inside the project, where the answer given about the pro
 covers it.
 
 `verified-by: bravebot_core::trust::a_name_that_is_a_root_on_another_platform_is_read_under_the_working_directory`
+`verified-by: bravebot_agent::workspace::a_trust_rule_covers_the_file_below_it_wherever_a_backslash_separates`
+`verified-by: bravebot_agent::workspace::a_name_and_its_key_are_spelled_the_way_the_host_separates`
 `verified-by: bravebot_agent::workspace::a_directory_the_trust_map_cannot_key_is_refused`
 `verified-by: bravebot_agent::workspace::a_project_file_named_absolutely_is_read_under_its_relative_rule`
 `verified-by: bravebot_core::policy::a_project_file_named_absolutely_is_answered_by_the_project_rule`
@@ -924,21 +939,12 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   holds rather than to confinement.
 - **A platform that spells its paths from a drive letter cannot open a directory by name.** Every
   rule is keyed under a `/`-spelled name (TRUST-18), so `/add-dir` and `/cd` both refuse a resolved
-  path that is not one, which on Windows is every path there is. Windows is a platform this project
-  supports and publishes binaries for, so that is a gap to close rather than a caveat to keep, and
-  what closes it is one canonical key spelling on that platform's separator
-  ([issue #25](https://github.com/brave/bravebot/issues/25)).
+  path that is not one, which on Windows is every path there is: the separator a name below the root
+  carries is respelled, and a root that is a prefix rather than a slash is not. Windows is a platform
+  this project supports and publishes binaries for, so that is a gap to close rather than a caveat to
+  keep, and what closes it is one canonical key spelling for a path whose root is a prefix
+  ([issue #842](https://github.com/brave/bravebot/issues/842)).
   Refusing is the closed direction of the two: admitting such a directory would key its rule under
   a name read as a path inside the project, where the answer given about the project at startup
-  covers every file in it.
-
-  A file inside the project on that platform has the same problem and no refusal to fall back on,
-  since a name the workspace hands back below the root carries that platform's separator, and a name
-  split on `/` alone is then one opaque segment: a rule about a directory does not cover the files
-  under it, and the project's own broader answer decides them instead. Those names reach the map
-  without anybody having spelled one, because what a run reports opening is recorded under them, and
-  they reach a permission rule the same way, which is matched segment by segment as well, so one
-  opaque segment matches nothing a rule a person wrote says about the path they wrote it for
-  ([permissions.md](permissions.md) records that half). So the laundering this closes outside the
-  project stays reachable inside it there, and what settles it is one canonical key spelling on that
-  platform's separator, which is [issue #25](https://github.com/brave/bravebot/issues/25).
+  covers every file in it. The primary root has no refusal to fall back on, since the refusal is
+  reached from the door that opens a directory by name and the root is not opened through one.

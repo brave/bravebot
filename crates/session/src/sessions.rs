@@ -538,12 +538,12 @@ impl StoredRewind {
         let mut trust = TrustStore::new(root);
         for rule in self.trust.iter().flatten() {
             if rule.integrity == TRUSTED {
-                trust.trust(&rule.path);
+                trust.trust(&replayed(&rule.path));
             }
         }
         for rule in self.trust.iter().flatten() {
             if rule.integrity != TRUSTED {
-                trust.distrust(&rule.path);
+                trust.distrust(&replayed(&rule.path));
             }
         }
 
@@ -837,6 +837,17 @@ pub struct StoredRule {
     pub integrity: String,
 }
 
+/// A recorded rule's path, spelled the way the map is asked about that path today.
+///
+/// A record keeps the key a write wrote, and a record written before a key was spelled from `/`
+/// keeps whatever the host separated with. Replaying it verbatim leaves the rule keyed under a
+/// name nothing asks about, so a file somebody recorded as untrusted comes back decided by the
+/// answer given about the project, which is the direction that fails open (TRUST-18).
+fn replayed(path: &str) -> String {
+    bravebot_core::spelling::to_slash(path, bravebot_agent::workspace::BACKSLASH_SEPARATES)
+        .into_owned()
+}
+
 /// The word for a trusted rule. Anything else reads as untrusted.
 const TRUSTED: &str = "trusted";
 const UNTRUSTED: &str = "untrusted";
@@ -947,10 +958,10 @@ impl Record {
         let rules = self.trust.as_ref()?;
         let mut trust = TrustStore::new(root);
         for rule in rules.iter().filter(|rule| rule.integrity == TRUSTED) {
-            trust.trust(&rule.path);
+            trust.trust(&replayed(&rule.path));
         }
         for rule in rules.iter().filter(|rule| rule.integrity != TRUSTED) {
-            trust.distrust(&rule.path);
+            trust.distrust(&replayed(&rule.path));
         }
         Some(trust)
     }

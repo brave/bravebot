@@ -123,6 +123,9 @@ fn anchors(profile: Option<&std::path::Path>) -> Anchors {
         // The settings file lives in the global state directory, so a `/` rule is anchored there.
         settings_dir: home.as_ref().map(|home| format!("{home}/.bravebot")),
         home,
+        // The host's answer, which this crate is the lowest one that may ask for: the kernel has
+        // no filesystem and takes it as data (PERM-3).
+        backslash_separates: crate::workspace::BACKSLASH_SEPARATES,
     }
 }
 

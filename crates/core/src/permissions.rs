@@ -136,6 +136,12 @@ pub struct Anchors {
     pub home: Option<String>,
     /// The directory the settings file sits in, for a single-slash pattern.
     pub settings_dir: Option<String>,
+    /// Whether the host separates one segment of a path from the next with a backslash as well as
+    /// with a slash. Supplied by the caller for the same reason the two directories are: this
+    /// crate asks the host nothing, and the answer cannot be read off a pattern or a path, since a
+    /// backslash is a legal filename byte where a slash is the only separator
+    /// ([`crate::spelling`]).
+    pub backslash_separates: bool,
 }
 
 impl Anchors {
@@ -348,6 +354,11 @@ pub struct Permissions {
     deny: Vec<Rule>,
     ask: Vec<Rule>,
     allow: Vec<Rule>,
+    /// The host's answer, kept from the anchors the rules were read with, because a path arrives
+    /// at [`Permissions::for_path`] long after the file was parsed and has to be spelled the way
+    /// the patterns were. Defaults to a slash being the only separator, which is what a caller
+    /// that never named a host gets.
+    backslash_separates: bool,
 }
 
 impl Permissions {
@@ -383,6 +394,7 @@ impl Permissions {
             deny: read(deny),
             ask: read(ask),
             allow: read(allow),
+            backslash_separates: anchors.backslash_separates,
         };
         (permissions, rejected)
     }
@@ -398,9 +410,14 @@ impl Permissions {
     }
 
     /// What the rules say about reading or editing `path`.
+    ///
+    /// Spelled from `/` before anything is matched against it, which is how the patterns were read
+    /// (PERM-3). Here rather than at each gate, so a path reaches the rules one way whichever gate
+    /// it came through and a gate added later cannot be the one that forgot.
     pub fn for_path(&self, subject: Subject, path: &str) -> Decision {
+        let path = crate::spelling::to_slash(path, self.backslash_separates);
         self.decide(|rule, restricting| {
-            rule.subject == subject && rule.covers_path(path, restricting)
+            rule.subject == subject && rule.covers_path(&path, restricting)
         })
     }
 
@@ -475,7 +492,15 @@ impl Permissions {
 /// The four shapes Claude Code has, which differ only in where they start from:
 /// `//x` the filesystem root, `~/x` the home directory, `/x` the directory the settings file sits
 /// in, and `x` or `./x` the workspace.
+///
+/// Spelled from `/` first, on the same terms as the path it will be matched against: somebody
+/// writing a rule on a host that separates with a backslash writes the separator their own shell
+/// and their own file manager use, and a pattern kept as they wrote it would be one segment while
+/// the path it names is several. The anchors are read after the respelling, so `~\x` anchors where
+/// `~/x` does. A path specifier alone: a command pattern is matched against argv, where a
+/// backslash is an argument's own byte on every host.
 fn path_pattern(specifier: &str, anchors: &Anchors) -> Option<Pattern> {
+    let specifier = &*crate::spelling::to_slash(specifier, anchors.backslash_separates);
     if let Some(rest) = specifier.strip_prefix("//") {
         return Some(Pattern::Absolute(PathPattern::rooted(rest)));
     }
@@ -678,13 +703,33 @@ mod tests {
         Anchors {
             home: Some("/home/someone".to_string()),
             settings_dir: Some("/home/someone/.bravebot".to_string()),
+            backslash_separates: false,
         }
     }
 
     fn rules(deny: &[&str], ask: &[&str], allow: &[&str]) -> Permissions {
+        read_with(&anchors(), deny, ask, allow)
+    }
+
+    /// The same rules read as a host that separates with a backslash reads them. The answer is the
+    /// host's and these tests run on one host, so both answers are asked for by hand: a respelling
+    /// that ignored the question would read as correct from whichever host happened to run them.
+    fn rules_where_a_backslash_separates(
+        deny: &[&str],
+        ask: &[&str],
+        allow: &[&str],
+    ) -> Permissions {
+        let anchors = Anchors {
+            backslash_separates: true,
+            ..anchors()
+        };
+        read_with(&anchors, deny, ask, allow)
+    }
+
+    fn read_with(anchors: &Anchors, deny: &[&str], ask: &[&str], allow: &[&str]) -> Permissions {
         let owned = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         let (permissions, rejected) =
-            Permissions::parse(&owned(deny), &owned(ask), &owned(allow), &anchors());
+            Permissions::parse(&owned(deny), &owned(ask), &owned(allow), anchors);
         assert_eq!(rejected, Vec::new(), "a rule in this test did not parse");
         permissions
     }
@@ -1191,5 +1236,104 @@ mod tests {
         let permissions = rules(&[], &[], &[&pattern]);
         let command = "a".repeat(2048);
         assert_eq!(permissions.for_command(&command), Decision::Unmatched);
+    }
+    /// A rule a person wrote about a path applies to the path they wrote it for on every host this
+    /// ships to. A pattern is matched segment by segment against a name split on `/` and a host
+    /// hands a path back separated its own way, so without one spelling a name below the workspace
+    /// root is a single opaque segment: `Read(src/**)` covers nothing under `src`, and
+    /// `Read(.env)`, which matches a bare name at any depth, covers nothing called `.env` below the
+    /// top. A `deny` refuses outright rather than prompting (PERM-2), so a rule that fails to match
+    /// has nothing standing behind it.
+    #[test]
+    fn a_path_rule_covers_the_file_it_names_wherever_a_backslash_separates() {
+        let permissions =
+            rules_where_a_backslash_separates(&["Read(src/**)", "Read(.env)"], &[], &[]);
+
+        for named in ["src\\main.rs", "config\\.env"] {
+            assert_eq!(
+                permissions.for_path(Subject::Read, named),
+                Decision::Ruled(Ruling::Deny),
+                "a deny rule did not reach '{named}' where a backslash separates"
+            );
+        }
+    }
+
+    /// Where a slash is the only separator a backslash is a legal filename byte, so a file whose
+    /// name holds one is a file at the top of the project rather than a file below a directory.
+    /// Taking it apart there would put it under a rule written about a directory nobody has, and an
+    /// `allow` reaching further than it was written for is a grant nobody gave.
+    #[test]
+    fn a_name_holding_a_backslash_is_one_segment_where_a_slash_is_the_only_separator() {
+        let permissions = rules(&[], &[], &["Read(src/**)"]);
+        assert_eq!(
+            permissions.for_path(Subject::Read, "src\\main.rs"),
+            Decision::Unmatched,
+            "a rule about a directory granted a file whose whole name is one segment"
+        );
+
+        let permissions = rules(&["Read(src/**)"], &[], &[]);
+        assert_eq!(
+            permissions.for_path(Subject::Read, "src\\main.rs"),
+            Decision::Unmatched,
+            "a rule about a directory refused a file whose whole name is one segment"
+        );
+    }
+
+    /// A person writes a rule with the separator their own shell and file manager use, so a pattern
+    /// is read on the same terms as the path it will be matched against. Otherwise the rule that
+    /// reads as protection is one segment while the path it names is several, and it matches
+    /// nothing.
+    #[test]
+    fn a_pattern_written_with_the_hosts_own_separator_is_the_same_rule() {
+        let permissions = rules_where_a_backslash_separates(&["Read(src\\**)"], &[], &[]);
+
+        for named in ["src\\main.rs", "src/main.rs"] {
+            assert_eq!(
+                permissions.for_path(Subject::Read, named),
+                Decision::Ruled(Ruling::Deny),
+                "a deny rule written with a backslash did not reach '{named}'"
+            );
+        }
+    }
+
+    /// A path carrying a root of its own stays one opaque name. A root here is a leading slash, a
+    /// drive letter is not one, and a name cut into segments while still reading as relative would
+    /// be matched against the patterns written about the workspace: a rule anchored at the project
+    /// would then grant a file that is not in the project, which is the direction that fails open.
+    #[test]
+    fn a_workspace_rule_does_not_reach_a_path_carrying_a_root_of_its_own() {
+        let permissions =
+            rules_where_a_backslash_separates(&[], &[], &["Read(.env)", "Read(Desktop/**)"]);
+
+        assert_eq!(
+            permissions.for_path(Subject::Read, "C:\\Users\\someone\\Desktop\\.env"),
+            Decision::Unmatched,
+            "a rule anchored at the workspace granted a file outside it"
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Read, "Desktop\\.env"),
+            Decision::Ruled(Ruling::Allow),
+            "a name below the workspace root stopped being respelled"
+        );
+    }
+
+    /// A command rule is matched against argv, where a backslash is an argument's own byte on every
+    /// host: there is no shell here (PERM-1), so nothing has separated anything. Respelling a
+    /// command pattern would make a rule naming one file name another.
+    #[test]
+    fn a_command_rule_keeps_a_backslash_where_a_path_rule_would_not() {
+        let permissions =
+            rules_where_a_backslash_separates(&["Bash(type C:\\secrets.txt)"], &[], &[]);
+
+        assert_eq!(
+            permissions.for_command("type C:\\secrets.txt"),
+            Decision::Ruled(Ruling::Deny),
+            "a command rule stopped matching the line it names"
+        );
+        assert_eq!(
+            permissions.for_command("type C:/secrets.txt"),
+            Decision::Unmatched,
+            "a command rule matched a line it does not name"
+        );
     }
 }

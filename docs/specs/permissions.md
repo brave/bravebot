@@ -4,6 +4,7 @@ title: Permission rules
 status: normative
 governs:
   - crates/core/src/permissions.rs
+  - crates/core/src/spelling.rs
   - crates/config/src/settings.rs
   - crates/agent/src/permissions.rs
   - crates/agent/src/workspace.rs
@@ -104,6 +105,33 @@ against the path as a gate holds it, which is relative for a file in the project
 outside, and a rule written one way says nothing about the other. A pattern whose anchor is unknown, such as `~/` on a machine with no home
 directory, is reported as unusable rather than silently matching nothing.
 
+Segments are separated by `/`. A path pattern and the path it is matched against are both spelled
+that way first, whatever the host separates with, and both are respelled where the rules are read
+and where they are asked rather than at each gate: a gate added later cannot be the one that forgot.
+The host's answer is supplied to the rule language rather than asked for by it, since nothing there
+has a filesystem, and it is the same answer the keys [trust-map.md](trust-map.md) holds its rules
+under are spelled with. Two things are left as they arrive. A command specifier is matched against
+argv, where a backslash is an argument's own byte because there is no shell (PERM-1). And a name
+carrying a root there is no `/`-spelling for stays one opaque name, because respelling decides how a
+name is spelled and not which of the two namespaces it is in: such a name reads as relative here, so
+cutting it into segments would match it against the patterns written about the workspace and a rule
+anchored at the project would reach a file outside it.
+
+Where a slash is the only separator a backslash is a legal filename byte, so a name holding one is
+one segment and no rule about a directory reaches it. Without the respelling that is what *every*
+path below the workspace root is on a host that separates with something else: `Read(src/**)` covers
+nothing under `src`, `Read(.env)` covers nothing called `.env` below the top, and a rule written with
+the host's own separator is one segment while the path it names is several, so every path rule a
+person wrote is inert in both directions.
+
+`verified-by: bravebot_core::permissions::a_path_rule_covers_the_file_it_names_wherever_a_backslash_separates`
+`verified-by: bravebot_core::permissions::a_name_holding_a_backslash_is_one_segment_where_a_slash_is_the_only_separator`
+`verified-by: bravebot_core::permissions::a_pattern_written_with_the_hosts_own_separator_is_the_same_rule`
+`verified-by: bravebot_core::permissions::a_command_rule_keeps_a_backslash_where_a_path_rule_would_not`
+`verified-by: bravebot_core::permissions::a_workspace_rule_does_not_reach_a_path_carrying_a_root_of_its_own`
+`verified-by: bravebot_core::spelling::a_name_below_a_root_is_respelled_where_a_backslash_separates`
+`verified-by: bravebot_core::spelling::a_name_holding_a_backslash_is_left_alone_where_a_slash_is_the_only_separator`
+`verified-by: bravebot_core::spelling::a_name_carrying_a_root_of_its_own_is_left_whole`
 `verified-by: bravebot_core::permissions::a_bare_name_matches_at_any_depth_in_every_list`
 `verified-by: bravebot_core::permissions::each_anchor_points_where_its_leader_says`
 `verified-by: bravebot_core::permissions::one_star_stays_in_a_segment_and_two_cross_them`
@@ -511,16 +539,6 @@ level up: a grant written inside the checkout could be committed.
   Every run asks unless a person vouched for that exact command, so the prompt is what stands
   there; a `Bash` deny rule, or the sandbox, is what closes it. Naming a path in `deny` and
   expecting it to fence every subprocess would be believing something that is not true.
-- **A path spelled with another platform's separator is one segment, so no path rule reaches it.** A
-  pattern is matched segment by segment against a path split on `/` (PERM-3), and a backslash is a
-  legal filename byte rather than a separator, so a name carrying one arrives as a single opaque
-  segment: `Read(src/**)` does not cover it, and neither does `Read(.env)`, which matches that name
-  at any depth but only as a whole segment. On Windows that is every name the workspace hands back
-  for a file below the root, so a `deny` a person wrote is not applied to the path they wrote it
-  for. What
-  settles it is one canonical spelling for a path before any rule is matched against it, which is
-  the same fix the trust map needs and is written down as a known cost in
-  [trust-map.md](trust-map.md).
 - **`defaultMode` is read and does nothing.** The key is parsed so the file is not rejected for
   carrying it, and no mode is selected from it. A person who wrote `acceptEdits` gets the prompts
   they would have got without it. The modes exist, and the command line and the mode key are what

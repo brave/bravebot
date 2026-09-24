@@ -2351,11 +2351,22 @@ impl Workspace {
     /// a listing can be read and acted on without knowing which tree an entry came from, and it is
     /// the spelling the trust map is asked about that file under: relative names it reads under the
     /// primary root, which is how it arrives at the same key either way.
+    ///
+    /// Spelled from `/` whatever the host separates with, since that is the one spelling the trust
+    /// map holds a key under and the one a rule is matched against.
     pub(crate) fn relative_display(&self, path: &Path) -> String {
-        match path.strip_prefix(&self.root) {
-            Ok(relative) => relative.to_string_lossy().to_string(),
-            Err(_) => path.to_string_lossy().to_string(),
-        }
+        self.displayed(path, BACKSLASH_SEPARATES)
+    }
+
+    /// The same with the host's answer supplied, so either answer can be asked for from either
+    /// host. The separator is a property of the host and not of the name, so a caller that can only
+    /// ask its own host cannot tell a respelling apart from leaving every name as it arrived.
+    fn displayed(&self, path: &Path, backslash_separates: bool) -> String {
+        let named = match path.strip_prefix(&self.root) {
+            Ok(relative) => relative.to_string_lossy(),
+            Err(_) => path.to_string_lossy(),
+        };
+        bravebot_core::spelling::to_slash(&named, backslash_separates).into_owned()
     }
 
     /// The name the trust map holds a rule about `named` under.
@@ -2384,17 +2395,26 @@ impl Workspace {
     /// leaves one as written: confinement refuses such a path rather than resolving it (TRUST-10),
     /// so it is refused before anything reads it, and reducing it here would be guessing at which
     /// file it named.
+    ///
+    /// Whatever the reduction leaves is spelled from `/`, which is how a key arrives spelled
+    /// (TRUST-18) on a host that separates with something else.
     pub(crate) fn trust_key(&self, named: &str) -> String {
+        self.keyed(named, BACKSLASH_SEPARATES)
+    }
+
+    /// The same with the host's answer supplied, for the reason [`Workspace::displayed`] takes one.
+    fn keyed(&self, named: &str, backslash_separates: bool) -> String {
         let candidate = Path::new(named);
         let climbs = candidate
             .components()
             .any(|c| matches!(c, Component::ParentDir));
-        if !candidate.is_absolute() || climbs {
-            return named.to_string();
-        }
-
-        self.recorded_name(candidate)
-            .unwrap_or_else(|| named.to_string())
+        let reduced = match !candidate.is_absolute() || climbs {
+            true => named.to_string(),
+            false => self
+                .recorded_name(candidate)
+                .unwrap_or_else(|| named.to_string()),
+        };
+        bravebot_core::spelling::to_slash(&reduced, backslash_separates).into_owned()
     }
 
     /// `named` spelled under the open directory it lands in, or `None` where it has no such
@@ -2442,6 +2462,21 @@ impl Workspace {
             .map(PathBuf::as_path)
     }
 }
+
+/// Whether this host separates one segment of a path from the next with a backslash as well as with
+/// a slash.
+///
+/// The one place the question is asked. The kernel takes the answer as data rather than asking for
+/// itself, since it has no filesystem, so this is what [`crate::permissions::from_settings`] hands
+/// it for the rules, what [`Workspace::trust_key`] and [`Workspace::relative_display`] hand it for
+/// the map's keys, and what a resumed session's record is replayed under.
+///
+/// Every key the map holds is `/`-spelled (TRUST-18) and the host hands a path back separated its
+/// own way, so without the respelling a name below the workspace root is one opaque segment
+/// wherever the two differ: a rule the map holds about a directory does not reach the files under
+/// it, the rule a write recorded about a path is invisible to the next read of that path, and the
+/// broader answer given about the project at startup decides both.
+pub const BACKSLASH_SEPARATES: bool = cfg!(windows);
 
 /// The part of `named` written below `opened`, for a name that reaches it through an ancestor.
 ///
@@ -2678,5 +2713,85 @@ mod tests {
         // No drive letter in this one, and the same refusal: what is asked is how the name is
         // spelled, not what spells it that way.
         assert!(refuse_unkeyable(Path::new(r"\\server\share"), r"\\server\share").is_err());
+    }
+
+    /// The name the workspace hands back and the key it asks the map about are both spelled from
+    /// `/` on a host that separates with a backslash, and both keep the name as it arrived on one
+    /// that does not: there a backslash is a legal filename byte, so the file is one at the top of
+    /// the project and not one below a directory called `src`.
+    ///
+    /// Both answers are asked for by hand, since these tests run on one host and the separator is
+    /// the host's property rather than the name's, so a caller that only ever asked its own host
+    /// could not tell a respelling apart from leaving every name as it arrived.
+    #[test]
+    fn a_name_and_its_key_are_spelled_the_way_the_host_separates() {
+        let root = crate::testutil::scratch_dir("bravebot-backslash-name");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create scratch");
+        let workspace = Workspace::new(&root).unwrap();
+        let named = root.join("src\\main.rs");
+
+        assert_eq!(
+            workspace.keyed("src\\main.rs", true),
+            "src/main.rs",
+            "the key a rule was recorded under is one opaque segment"
+        );
+        assert_eq!(
+            workspace.displayed(&named, true),
+            "src/main.rs",
+            "the name the workspace handed back is one opaque segment"
+        );
+
+        assert_eq!(
+            workspace.keyed("src\\main.rs", false),
+            "src\\main.rs",
+            "a name the host spells as one segment was taken apart"
+        );
+        assert_eq!(
+            workspace.displayed(&named, false),
+            "src\\main.rs",
+            "a name the workspace handed back was taken apart"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A key is `/`-spelled and the workspace is what resolves a host's path into one (TRUST-18),
+    /// so a rule the map holds about a directory decides the files under it and the rule a write
+    /// records about a path answers the next read of that path. Neither reaches the other while
+    /// every name below the root is one opaque segment: the broader answer given about the project
+    /// at startup decides the file instead, which is the round trip that hands untrusted bytes
+    /// back as first-party content.
+    ///
+    /// Asked with the host's answer supplied, because the host these tests run on can only give
+    /// its own and a respelling that ignored the question would read as correct from here.
+    #[test]
+    fn a_trust_rule_covers_the_file_below_it_wherever_a_backslash_separates() {
+        use bravebot_core::TrustStore;
+        use bravebot_core::label::Integrity;
+        use bravebot_core::spelling::to_slash;
+
+        let mut store = TrustStore::new("/work");
+        store.trust(".");
+        store.distrust("notes");
+
+        assert_eq!(
+            store.integrity_of(&to_slash("notes\\fetched.md", true)),
+            Some(Integrity::Untrusted),
+            "a rule about a directory did not reach the file under it"
+        );
+        assert_eq!(
+            store.integrity_of(&to_slash("notes\\fetched.md", false)),
+            Some(Integrity::Trusted),
+            "a rule about a directory reached a file whose whole name holds a backslash"
+        );
+
+        let mut recorded = TrustStore::new("/work");
+        recorded.trust(".");
+        recorded.distrust(&to_slash("notes\\fetched.md", true));
+        assert_eq!(
+            recorded.integrity_of("notes/fetched.md"),
+            Some(Integrity::Untrusted),
+            "what a write recorded was invisible to the read of the same file"
+        );
     }
 }
