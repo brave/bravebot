@@ -12433,6 +12433,61 @@ fn content_a_person_reads_after_a_check_reaches_the_planner() {
     );
 }
 
+/// A reference name means nothing to the person being asked. What the prompt has to say is where
+/// the bytes came from, which the kernel records when it quarantines them, and which the driver
+/// asks for rather than reading off the spec a check happened to leave behind.
+#[test]
+fn the_prompt_says_where_a_checked_slots_bytes_came_from() {
+    let scratch = Scratch::new("vet-origin");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, _received) = serve_sequence_answering_checks_with(
+        vec![reply_with(
+            r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
+        )],
+        vec![
+            tool_request("run", r#"{"command":"cat where.txt"}"#),
+            tool_request(
+                "vet_content",
+                r#"{"ref":"ref:1","expects":"the path the file records"}"#,
+            ),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ShownAfterAVet::new(true);
+    let shown = confirmer.shown.clone();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    let asked = shown.lock().unwrap();
+    let request = asked.first().expect("the user was asked");
+    // The program resolves to an absolute path, which differs by machine, so the sentence is
+    // pinned at both ends rather than whole.
+    assert!(
+        request.origin.starts_with("what ") && request.origin.ends_with("cat where.txt printed"),
+        "the person was told which slot the bytes are in rather than where they came from: {}",
+        request.origin
+    );
+}
+
 /// The check reads the content and the planner never does, whatever the person answers. A refusal
 /// tells the planner so rather than leaving it to guess, and nothing the check said goes to it.
 #[test]

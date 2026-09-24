@@ -4278,27 +4278,25 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
             reason.declassify(&proof)
         });
 
-        // Where a check was made these come off its spec. Where none was they come off the same
-        // two sources the spec would have read them from: the driver's record of where the slot
-        // came from, and the planner's own words.
+        // The origin comes off the kernel's own record either way, rather than off the spec on
+        // the branch that has one: a slot's address is untrusted content, so reading it out here
+        // would be a second, uncounted way for one to leave `bravebot-core`. The gate records the
+        // release, and it answers what the spec was built from.
         //
         // The words are released for a display rather than checked public as `before_vetting`
         // checks them, because what that refusal is about is a private string becoming a second
         // model's prompt, and there is no second model on this branch. What is left is the
         // person's own content going to the person's own screen, which is what a display release
         // is for. It reaches that screen and stops: no gate reads it.
-        let (origin, expects) = match &spec {
+        let origin = policy.release_where_a_slot_came_from(&slot, tools.slots);
+        let expects = match &spec {
             // `expects` is never absent on this route: the argument is required above, and this
             // is the one entry point into a check that carries what the planner claimed.
-            Some(spec) => (
-                spec.origin().to_string(),
-                spec.expects().unwrap_or_default().to_string(),
-            ),
+            Some(spec) => spec.expects().unwrap_or_default().to_string(),
             None => {
-                let origin = policy.where_a_slot_came_from(&slot, tools.slots);
                 let proof =
                     policy.authorise_display_release("what the planner expects a slot to hold");
-                (origin, expects.clone().declassify(&proof))
+                expects.clone().declassify(&proof)
             }
         };
 

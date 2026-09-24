@@ -17,7 +17,7 @@ guards:
       - crates/agent/tests/workspace.rs: 28
       - crates/aichat/src/lib.rs: 4
       - crates/bedrock/src/lib.rs: 5
-      - crates/core/src/policy.rs: 86
+      - crates/core/src/policy.rs: 88
       - crates/core/src/slot.rs: 5
       - crates/core/src/value.rs: 7
       - crates/mcp/src/http.rs: 2
@@ -84,6 +84,17 @@ guards:
     sites:
       - crates/core/src/policy.rs: 2
       - crates/core/src/slot.rs: 1
+  - symbol: Policy::where_a_slot_came_from
+    sites:
+      - crates/core/src/policy.rs: 3
+  - symbol: Policy::release_where_a_slot_came_from
+    sites:
+      - crates/agent/src/tools.rs: 1
+      - crates/core/src/policy.rs: 1
+  - symbol: VettingSpec::where_it_came_from
+    sites:
+      - crates/core/src/policy.rs: 4
+      - crates/core/src/vetting.rs: 1
   - symbol: Policy::present
     sites:
       - crates/agent/src/aside.rs: 1
@@ -224,8 +235,14 @@ never shown. So each accessor that hands one back takes a witness minted in the 
 declassification witness is minted in, and the `guards` list above pins their uses file by file,
 the way it pins a declassification. A decision relocated into the kernel and taken from a slot's
 address therefore moves a pinned count, and one relocated into any module of `bravebot-core`
-outside the gates does not compile at all. Outside the kernel a slot answers one question about
-its address, whether asking for its bytes will open a file, which names nothing.
+outside the gates does not compile at all, bar the single release named next.
+
+One of those sentences does leave the kernel, because the person being asked whether to let a
+slot's bytes through has to be told which file they are. It leaves through a single gate that
+records the release, and the `guards` list pins that gate's uses file by file too, so a second
+reader of a slot's address anywhere downstream is a line in a diff rather than a branch nobody
+is shown. Apart from that release, outside the kernel a slot answers one question about its
+address, whether asking for its bytes will open a file, which names nothing.
 
 **`bravebot-core` and `bravebot-agent` are both the driver.** Moving a branch from one
 into the other does not remove it.
@@ -240,7 +257,8 @@ into the other does not remove it.
 `verified-by: bravebot_core::policy::decoding_a_transport_envelope_is_recorded_and_hands_back_the_label`
 `verified-by: by-construction (Deref, PartialEq and Display are not implemented for Labelled, and its only witness-free accessor returns Err on anything but (T,pub))`
 `verified-by: by-construction (Declassification::authorise is pub(in crate::policy), so no other module of bravebot-core and no crate downstream of it can mint a witness)`
-`verified-by: by-construction (PathAuthority::mint is pub(in crate::policy) too, so SlotStore::path_of, SlotStore::verbatim_of, SlotStore::home_of, SlotStore::origin_of and SlotStore::deferred cannot be called from another module of bravebot-core or from any crate downstream of it, and Deferred is pub(crate), so those five are the whole of the surface returning a slot's address and every use of each is pinned above)`
+`verified-by: by-construction (PathAuthority::mint is pub(in crate::policy) too, so SlotStore::path_of, SlotStore::verbatim_of, SlotStore::home_of, SlotStore::origin_of, SlotStore::deferred, Policy::where_a_slot_came_from and VettingSpec::where_it_came_from cannot be called from another module of bravebot-core or from any crate downstream of it, and Deferred is pub(crate); Policy::release_where_a_slot_came_from is the one accessor that can, and it records the release. Those eight are the whole of the surface returning a slot's address and every use of each is pinned above)`
+`verified-by: bravebot_core::policy::a_listed_files_name_does_not_decide_how_the_trail_words_the_check`
 `verified-by: bravebot_core::slot::a_slot_is_unread_only_while_it_is_waiting_on_its_file`
 
 <a id="LABEL-5"></a>
