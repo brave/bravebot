@@ -1,135 +1,6 @@
 /* A three-column chat layout, native to macOS.
-   Light and dark both defined; the app follows the system. */
-
-:root {
-  color-scheme: light dark;
-  --bg: #ffffff;
-  --bg-side: rgba(246, 246, 248, 0.7);
-  --ink: #1c1c1e;
-  --ink-dim: #6b6b70;
-  --ink-faint: #9a9aa0;
-  --line: rgba(0, 0, 0, 0.09);
-  --accent: #f2600c;
-  --accent-ink: #ffffff;
-  /* The accent with the shout taken out — the orange mixed about half and half with
-     `--ink-dim`. For text that should read as *ours* without competing with the accent
-     proper, which in this window means a selected row and a button somebody can press. */
-  --accent-quiet: #9b4315;
-  --accent-text: #9b4315;
-  --bubble-user: #f2600c;
-  --bubble-user-ink: #ffffff;
-  --bubble-agent: #f1f1f4;
-  --added: #1a7f37;
-  --added-bg: rgba(26, 127, 55, 0.06);
-  --removed: #c0392b;
-  --removed-bg: rgba(192, 57, 43, 0.09);
-  --warn: #9a6700;
-  --warn-bg: rgba(212, 167, 44, 0.05);
-  --confine: #6f42c1;
-  --confine-bg: rgba(111, 66, 193, 0.09);
-  --radius: 10px;
-  --code-bg: rgba(0, 0, 0, 0.055);
-  /* The ground under the file tree. Lighter than the column it sits in, which is what makes the
-     tree read as a surface with an edge rather than as text loose in the sidebar. Its own token
-     because the two themes want opposite things of it: the window's own white here, and a lift
-     off the dark ground there — `--code-bg` would darken this one and `--bg` would sink that one. */
-  --tree-bg: #ffffff;
-  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
-  /* Where the inset traffic lights stop: 16px of inset, three 12px lights, two 8px gaps,
-     and a little air after them so a control does not look crowded by the window's own. */
-  --lights: 78px;
-  /* Short enough to read as the panel moving rather than as waiting for it. */
-  --panel-duration: 180ms;
-  --panel-motion: var(--panel-duration) cubic-bezier(0.32, 0.72, 0, 1);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #1c1c1e;
-    --bg-side: rgba(30, 30, 32, 0.6);
-    --ink: #f2f2f7;
-    --ink-dim: #a1a1a6;
-    --ink-faint: #6e6e73;
-    --line: rgba(255, 255, 255, 0.1);
-    /* Mixed against the dark theme's own `--ink-dim`, so it lifts off the darker ground
-       rather than sinking into it the way the light-mode value would. */
-    --accent-quiet: #efa77f;
-    --accent-text: #efa77f;
-    --bubble-agent: #2c2c2e;
-    --added: #3fb950;
-    --added-bg: rgba(63, 185, 80, 0.13);
-    --removed: #f85149;
-    --removed-bg: rgba(248, 81, 73, 0.12);
-    --warn: #d4a72c;
-    --warn-bg: rgba(212, 167, 44, 0.12);
-    --confine: #b392f0;
-    --confine-bg: rgba(179, 146, 240, 0.12);
-    --code-bg: rgba(255, 255, 255, 0.07);
-    --tree-bg: rgba(255, 255, 255, 0.06);
-  }
-}
-
-/* ------------------------------------------------------------------ a theme
-
-   The two blocks above are the `brave` theme: this window's own macOS palette, following the
-   system. Nothing below touches them, and with no theme applied nothing below applies either —
-   which is what makes `brave` cost nothing rather than be a theme that happens to look the same.
-
-   A theme names nine things: a ground, an ink, a quieter ink, and one colour each for finished,
-   failed, running, a confinement, the session's own voice and the person at the keyboard.
-   `src/renderer/theme.ts` writes those onto the root as `--role-*`, and the rest of the nineteen
-   tokens are mixed from them here, in the sheet, beside the tokens they replace. That is the whole
-   reason a palette is nine values and not nineteen: somebody writing one should be choosing
-   colours, not computing a rule at fourteen percent of their own ink.
-
-   The mixes are the same relationships the hand-picked pairs above already have — a faint ink is
-   a muted one carried toward the ground, a tinted panel is its own colour at about an eighth. What
-   is not mixed is the three things arithmetic cannot decide: whether text on the accent should be
-   black or white, the same for the user's bubble, and whether this window's native scrollbars
-   should be drawn dark. Those arrive computed, by the same luma test the terminal uses.
-
-   `--bg` and `--bg-side` are held back into their own block, because painting the ground is the
-   one thing here that costs something: the window is drawn over a native sidebar blur, and an
-   opaque background covers it. A palette that inherits its ground keeps the blur. */
-
-:root[data-theme] {
-  color-scheme: var(--role-scheme);
-  --ink: var(--role-text);
-  /* The quiet ink is carried a little back toward the text rather than taken as-is, and the
-     faintest one *is* the palette's muted. The other way round — faint mixed further toward the
-     ground — is the obvious reading of these two names and it is wrong: `muted` is already the
-     dimmest thing a palette offers an opinion about, and several of the schemes here set it barely
-     off their own background. Diluting it further turned every timestamp and every aside in the
-     sessions column into something you had to know was there. */
-  --ink-dim: color-mix(in srgb, var(--role-muted) 72%, var(--role-text));
-  --ink-faint: var(--role-muted);
-  --line: color-mix(in srgb, var(--role-text) 14%, transparent);
-  --code-bg: color-mix(in srgb, var(--role-text) 7%, transparent);
-  --tree-bg: color-mix(in srgb, var(--role-text) 6%, var(--role-background));
-  --bubble-agent: color-mix(in srgb, var(--role-text) 9%, var(--role-background));
-  --accent: var(--role-note);
-  --accent-text: var(--role-text);
-  --accent-ink: var(--role-note-ink);
-  --accent-quiet: color-mix(in srgb, var(--role-note) 55%, var(--role-muted));
-  --bubble-user: var(--role-primary);
-  --bubble-user-ink: var(--role-primary-ink);
-  --added: var(--role-ok);
-  --added-bg: color-mix(in srgb, var(--role-ok) 13%, transparent);
-  --removed: var(--role-fail);
-  --removed-bg: color-mix(in srgb, var(--role-fail) 12%, transparent);
-  --warn: var(--role-running);
-  --warn-bg: color-mix(in srgb, var(--role-running) 13%, transparent);
-  --confine: var(--role-accent);
-  --confine-bg: color-mix(in srgb, var(--role-accent) 12%, transparent);
-}
-
-/* Only where the theme brought a ground of its own. `--bg-side` keeps a little of its
-   translucency so the sessions column still reads as a surface set back from the transcript,
-   which is the job it was doing when the blur was underneath it. */
-:root[data-theme][data-ground] {
-  --bg: var(--role-background);
-  --bg-side: color-mix(in srgb, var(--role-text) 4%, var(--role-background));
-}
+   Light and dark both defined; the app follows the system. All colour tokens — the brave
+   palette, the shadcn semantics, and the theme rules — live in `shadcn.css`. */
 
 * { box-sizing: border-box; }
 
@@ -2087,10 +1958,6 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .transcript-head h1 { display: flex; align-items: center; gap: 7px; }
 
 /* Conversation workspace: readable defaults, compact mode by choice. */
-:root { --accent-ink: #24180f; --ink-faint: #707078; --bubble-user: #fff0e5; --bubble-user-ink: #632c12; }
-@media (prefers-color-scheme: dark) {
-  :root { --ink-faint: #a6a6af; --bubble-user: #443125; --bubble-user-ink: #ffe2cc; }
-}
 body { font-size: 14px; }
 button, input, textarea, select { font: inherit; }
 button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus-visible, a:focus-visible {
@@ -2392,9 +2259,16 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .watch-list strong { overflow-wrap: anywhere; }
 .watch-list p { margin: 6px 0; }
 .watch-list small { color: var(--ink-dim); }
-/* Keep the open width during folding, with room for both horizontal margins. */
-.sessions > .agent-settings-open { min-width: calc(var(--col-left-open) - 32px); margin: 10px 16px; flex-shrink: 0; }
-.vetting-notice, .processor-remark, .credential-finding { padding: 12px 16px; margin: 12px; border: 1px solid var(--line); border-radius: 8px; }
+/* Keep the open width during folding, with room for both horizontal margins. The button
+   carries `transition-all` from its component, which would otherwise animate `min-width`
+   away from the column's actual width for the whole fold and let it bleed over the divider. */
+.sessions > .agent-settings-open {
+  min-width: calc(var(--col-left-open) - 32px);
+  margin: 10px 16px;
+  flex-shrink: 0;
+  transition-property: color, background-color, border-color, opacity, box-shadow, transform, filter;
+}
+.vetting-notice, .processor-remark, .credential-finding { padding: 12px 16px; margin: 12px; width: calc(100% - 24px); box-sizing: border-box; border: 1px solid var(--line); border-radius: 8px; }
 .vetting-notice.caution { border-left: 3px solid var(--accent); }
 .vetting-notice p, .processor-remark pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0; }
 .vetting-notice small, .processor-remark small, .credential-finding small { color: var(--ink-dim); line-height: 1.5; }

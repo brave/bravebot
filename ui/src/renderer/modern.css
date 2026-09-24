@@ -1,147 +1,16 @@
 /*
  * Brave Bot modern renderer
  *
- * Loaded after styles.css. This file intentionally leaves the renderer's layout
- * mechanics and state selectors in place, and supplies a quieter visual system on
- * top. Every semantic colour below is derived from the public theme tokens so a
- * custom data-theme palette continues to repaint the complete interface.
+ * Loaded after styles.css. This file supplies a quieter visual system on top of the
+ * renderer's layout mechanics. Its tokens are declared in `shadcn.css`, beside the
+ * shadcn palette — a custom data-theme palette repaints both halves at once.
+ *
+ * This file is scheduled for retirement: its rules are being replaced component by
+ * component, and the file is deleted once the last one goes.
  */
 
 /* --------------------------------------------------------------------------
-   Tokens
-   -------------------------------------------------------------------------- */
-
-:root {
-  color-scheme: light dark;
-
-  /* The default palette is deliberately achromatic. Custom themes with a ground
-     override these through the more-specific rules in styles.css. */
-  --bg: #ffffff;
-  --bg-side: #f4f4f4;
-  --ink: #111111;
-  --ink-dim: #616161;
-  --ink-faint: #6d6d6d;
-  --line: rgb(17 17 17 / 12%);
-  --accent: #111111;
-  --accent-ink: #ffffff;
-  --accent-quiet: #3f3f3f;
-  --accent-text: #222222;
-  --bubble-user: #111111;
-  --bubble-user-ink: #ffffff;
-  --bubble-agent: #f2f2f2;
-  --code-bg: rgb(17 17 17 / 5.5%);
-  --tree-bg: #fafafa;
-  --radius: 8px;
-
-  --bb-font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
-  --bb-font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", system-ui, sans-serif;
-  --bb-font-mono: ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, monospace;
-
-  /* Semantic surface model shared by the app and shadcn components. */
-  --background: var(--bg);
-  --foreground: var(--ink);
-  --surface: color-mix(in srgb, var(--ink) 2.5%, var(--bg));
-  --surface-foreground: var(--ink);
-  --surface-secondary: color-mix(in srgb, var(--ink) 5%, var(--bg));
-  --surface-secondary-foreground: var(--ink);
-  --surface-tertiary: color-mix(in srgb, var(--ink) 8%, var(--bg));
-  --surface-tertiary-foreground: var(--ink);
-  --overlay: color-mix(in srgb, var(--ink) 1.5%, var(--bg));
-  --overlay-foreground: var(--ink);
-  --muted: var(--ink-faint);
-  --default: color-mix(in srgb, var(--ink) 6%, var(--bg));
-  --default-hover: color-mix(in srgb, var(--ink) 10%, var(--bg));
-  --default-foreground: var(--ink);
-  --field-background: var(--surface-secondary);
-  --field-foreground: var(--ink);
-  --field-placeholder: var(--ink-faint);
-  --field-focus: var(--surface);
-  --focus: var(--accent);
-  --backdrop: rgb(0 0 0 / 55%);
-  --disabled-opacity: 0.5;
-  --ring-offset-width: 2px;
-
-  --bb-canvas: var(--background);
-  --bb-sidebar: var(--surface);
-  --bb-surface: var(--surface-secondary);
-  --bb-surface-raised: var(--overlay);
-  --bb-control: var(--default);
-  --bb-hover: var(--default-hover);
-  --bb-pressed: var(--surface-tertiary);
-  --bb-selected: color-mix(in srgb, var(--accent) 10%, var(--bg));
-  --bb-selected-hover: color-mix(in srgb, var(--accent) 15%, var(--bg));
-  --bb-border: color-mix(in srgb, var(--ink) 18%, transparent);
-  --bb-border-strong: color-mix(in srgb, var(--ink) 65%, transparent);
-  --bb-accent-border: color-mix(in srgb, var(--accent) 52%, var(--bb-border));
-  --bb-accent-soft: color-mix(in srgb, var(--accent) 9%, var(--bg));
-  --bb-success-soft: color-mix(in srgb, var(--added) 7%, var(--bg));
-  --bb-danger-soft: color-mix(in srgb, var(--removed) 9%, var(--bg));
-  --bb-warning-soft: color-mix(in srgb, var(--warn) 5%, var(--bg));
-  --bb-confine-soft: color-mix(in srgb, var(--confine) 8%, var(--bg));
-  --bb-focus-ring: color-mix(in srgb, var(--accent) 70%, var(--ink));
-  --bb-shadow-color: color-mix(in srgb, var(--ink) 18%, transparent);
-  --bb-shadow-menu: 0 12px 32px color-mix(in srgb, var(--ink) 16%, transparent), 0 1px 2px color-mix(in srgb, var(--ink) 8%, transparent);
-  --bb-shadow-dialog: 0 28px 80px color-mix(in srgb, var(--ink) 24%, transparent), 0 2px 8px color-mix(in srgb, var(--ink) 8%, transparent);
-
-  --bb-radius-xs: 6px;
-  --bb-radius-sm: 8px;
-  --bb-radius-md: 12px;
-  --bb-radius-lg: 16px;
-  --bb-radius-xl: 24px;
-  --bb-control-height: 36px;
-  --field-radius: 12px;
-  --bb-ease: cubic-bezier(0.22, 1, 0.36, 1);
-  --bb-fast: 120ms;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0a0a0a;
-    --bg-side: #151515;
-    --ink: #f5f5f5;
-    --ink-dim: #b0b0b0;
-    --ink-faint: #858585;
-    --line: rgb(245 245 245 / 12%);
-    --accent: #f5f5f5;
-    --accent-ink: #0a0a0a;
-    --accent-quiet: #c7c7c7;
-    --accent-text: #e0e0e0;
-    --bubble-user: #f5f5f5;
-    --bubble-user-ink: #0a0a0a;
-    --bubble-agent: #1d1d1d;
-    --code-bg: rgb(245 245 245 / 7%);
-    --tree-bg: #181818;
-  }
-}
-
-/* These tokens intentionally reference the original variables instead of fixed
-   palette values. data-theme and data-ground therefore flow through naturally. */
-:root[data-theme] {
-  --bb-contrast-anchor: light-dark(#000000, #ffffff);
-  --ink: color-mix(in srgb, var(--role-text) 70%, var(--bb-contrast-anchor));
-  --ink-dim: color-mix(in srgb, var(--role-muted) 25%, var(--ink));
-  --ink-faint: color-mix(in srgb, var(--role-muted) 40%, var(--ink));
-  --added: color-mix(in srgb, var(--role-ok) 30%, var(--ink));
-  --removed: color-mix(in srgb, var(--role-fail) 30%, var(--ink));
-  --warn: color-mix(in srgb, var(--role-running) 30%, var(--ink));
-  --confine: color-mix(in srgb, var(--role-accent) 30%, var(--ink));
-  --accent-text: color-mix(in srgb, var(--role-note) 40%, var(--ink));
-  --accent-quiet: var(--accent-text);
-  --bb-sidebar: color-mix(in srgb, var(--ink) 3.2%, var(--bg));
-  --bb-surface: color-mix(in srgb, var(--ink) 1.7%, var(--bg));
-  --bb-surface-raised: color-mix(in srgb, var(--ink) 0.7%, var(--bg));
-  --bb-control: color-mix(in srgb, var(--ink) 3.8%, var(--bg));
-  --bb-hover: color-mix(in srgb, var(--ink) 6.5%, var(--bg));
-  --bb-pressed: color-mix(in srgb, var(--ink) 10%, var(--bg));
-  --bb-selected: color-mix(in srgb, var(--accent) 10%, var(--bg));
-  --bb-selected-hover: color-mix(in srgb, var(--accent) 15%, var(--bg));
-  --bb-accent-soft: color-mix(in srgb, var(--accent) 9%, var(--bg));
-}
-
-/* --------------------------------------------------------------------------
    Base and native-feeling controls
-   -------------------------------------------------------------------------- */
-
 html,
 body,
 #root {

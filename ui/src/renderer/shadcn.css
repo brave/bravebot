@@ -1,3 +1,19 @@
+/*
+ * shadcn (Tailwind v4) and the window's theme tokens, in one place.
+ *
+ * Everything the renderer draws with is declared here. The shadcn semantic palette is the
+ * standard neutral set in New York style, flipped to dark by `prefers-color-scheme` — the same
+ * flip the legacy tokens always used — and the legacy tokens (`--bg`, `--ink`, the `--bb-*`
+ * set, …) that `styles.css` and `modern.css` still draw with are derived from the same values,
+ * so both halves of the migration describe one appearance and can never drift apart.
+ *
+ * A custom palette repaints both halves at once. `theme.ts` writes the nine `--role-*` values
+ * onto the root and sets `data-theme`; the `:root[data-theme]` and `:root[data-theme][data-ground]`
+ * blocks below mix the shadcn variables and the legacy tokens from those roles, outranking the
+ * light block and the dark media query by specificity. With no attribute set, the window is the
+ * `brave` palette: the literal tokens in the first two blocks.
+ */
+
 @layer theme, base, components, utilities;
 @import "tailwindcss/theme.css" layer(theme);
 @import "tw-animate-css";
@@ -39,30 +55,287 @@
 }
 
 :root {
-  --card: var(--bb-surface-raised);
-  --card-foreground: var(--ink);
-  --popover: var(--bb-surface-raised);
-  --popover-foreground: var(--ink);
-  --primary: var(--accent);
-  --primary-foreground: var(--accent-ink);
-  --secondary: var(--bb-control);
-  --secondary-foreground: var(--ink);
-  --muted-background: var(--bb-surface);
-  --muted-foreground: var(--ink-dim);
-  --accent-background: var(--bb-hover);
-  --accent-background-foreground: var(--ink);
-  --destructive: var(--removed);
-  --border: var(--bb-border);
-  --input: var(--bb-border);
-  --ring: var(--bb-focus-ring);
-  --sidebar: var(--bb-sidebar);
-  --sidebar-foreground: var(--ink);
-  --sidebar-primary: var(--accent);
-  --sidebar-primary-foreground: var(--accent-ink);
-  --sidebar-accent: var(--bb-hover);
-  --sidebar-accent-foreground: var(--ink);
-  --sidebar-border: var(--bb-border);
-  --sidebar-ring: var(--bb-focus-ring);
+  color-scheme: light dark;
+
+  /* The faces this window draws its text in. */
+  --bb-font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  --bb-font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", system-ui, sans-serif;
+  --bb-font-mono: ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, monospace;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, mono;
+
+  /* Where the inset traffic lights stop: 16px of inset, three 12px lights, two 8px gaps,
+     and a little air after them so a control does not look crowded by the window's own. */
+  --lights: 78px;
+  /* Short enough to read as the panel moving rather than as waiting for it. */
+  --panel-duration: 180ms;
+  --panel-motion: var(--panel-duration) cubic-bezier(0.32, 0.72, 0, 1);
+
+  /* ------------------------------------------------------------- the brave palette
+     The default palette is deliberately achromatic, on the shadcn neutral family. Custom
+     themes override these through the `:root[data-theme]` rules below. */
+  --bg: #ffffff;
+  --bg-side: #f4f4f4;
+  --ink: #111111;
+  --ink-dim: #616161;
+  --ink-faint: #6d6d6d;
+  --line: rgb(17 17 17 / 12%);
+  --accent: #111111;
+  --accent-ink: #ffffff;
+  --accent-quiet: #3f3f3f;
+  --accent-text: #222222;
+  --bubble-user: #111111;
+  --bubble-user-ink: #ffffff;
+  --bubble-agent: #f2f2f2;
+  --code-bg: rgb(17 17 17 / 5.5%);
+  --tree-bg: #fafafa;
+
+  /* The status colours a transcript signs its diff with. */
+  --added: #1a7f37;
+  --added-bg: rgba(26, 127, 55, 0.06);
+  --removed: #c0392b;
+  --removed-bg: rgba(192, 57, 43, 0.09);
+  --warn: #9a6700;
+  --warn-bg: rgba(212, 167, 44, 0.05);
+  --confine: #6f42c1;
+  --confine-bg: rgba(111, 66, 193, 0.09);
+
+  --radius: 0.625rem;
+  --field-radius: 12px;
+
+  /* ------------------------------------------------------------- semantic surfaces
+     The shared surface model the app and shadcn components both use. `--background` and
+     `--foreground` follow `--bg` and `--ink`, which the theme rules repaint. */
+  --background: var(--bg);
+  --foreground: var(--ink);
+  --surface: color-mix(in srgb, var(--ink) 2.5%, var(--bg));
+  --surface-foreground: var(--ink);
+  --surface-secondary: color-mix(in srgb, var(--ink) 5%, var(--bg));
+  --surface-secondary-foreground: var(--ink);
+  --surface-tertiary: color-mix(in srgb, var(--ink) 8%, var(--bg));
+  --surface-tertiary-foreground: var(--ink);
+  --overlay: color-mix(in srgb, var(--ink) 1.5%, var(--bg));
+  --overlay-foreground: var(--ink);
+  --muted: var(--ink-faint);
+  --default: color-mix(in srgb, var(--ink) 6%, var(--bg));
+  --default-hover: color-mix(in srgb, var(--ink) 10%, var(--bg));
+  --default-foreground: var(--ink);
+  --field-background: var(--surface-secondary);
+  --field-foreground: var(--ink);
+  --field-placeholder: var(--ink-faint);
+  --field-focus: var(--surface);
+  --focus: var(--accent);
+  --backdrop: rgb(0 0 0 / 55%);
+  --disabled-opacity: 0.5;
+  --ring-offset-width: 2px;
+
+  /* The `--bb-*` set is the transitional alias layer: `modern.css` rules still draw with
+     these names, and each one is a view onto the tokens above. The set dies with modern.css. */
+  --bb-canvas: var(--background);
+  --bb-sidebar: var(--surface);
+  --bb-surface: var(--surface-secondary);
+  --bb-surface-raised: var(--overlay);
+  --bb-control: var(--default);
+  --bb-hover: var(--default-hover);
+  --bb-pressed: var(--surface-tertiary);
+  --bb-selected: color-mix(in srgb, var(--accent) 10%, var(--bg));
+  --bb-selected-hover: color-mix(in srgb, var(--accent) 15%, var(--bg));
+  --bb-border: color-mix(in srgb, var(--ink) 18%, transparent);
+  --bb-border-strong: color-mix(in srgb, var(--ink) 65%, transparent);
+  --bb-accent-border: color-mix(in srgb, var(--accent) 52%, var(--bb-border));
+  --bb-accent-soft: color-mix(in srgb, var(--accent) 9%, var(--bg));
+  --bb-success-soft: color-mix(in srgb, var(--added) 7%, var(--bg));
+  --bb-danger-soft: color-mix(in srgb, var(--removed) 9%, var(--bg));
+  --bb-warning-soft: color-mix(in srgb, var(--warn) 5%, var(--bg));
+  --bb-confine-soft: color-mix(in srgb, var(--confine) 8%, var(--bg));
+  --bb-focus-ring: color-mix(in srgb, var(--accent) 70%, var(--ink));
+  --bb-shadow-color: color-mix(in srgb, var(--ink) 18%, transparent);
+  --bb-shadow-menu: 0 12px 32px color-mix(in srgb, var(--ink) 16%, transparent), 0 1px 2px color-mix(in srgb, var(--ink) 8%, transparent);
+  --bb-shadow-dialog: 0 28px 80px color-mix(in srgb, var(--ink) 24%, transparent), 0 2px 8px color-mix(in srgb, var(--ink) 8%, transparent);
+
+  --bb-radius-xs: 6px;
+  --bb-radius-sm: 8px;
+  --bb-radius-md: 12px;
+  --bb-radius-lg: 16px;
+  --bb-radius-xl: 24px;
+  --bb-control-height: 36px;
+  --bb-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --bb-fast: 120ms;
+
+  /* ------------------------------------------------------------- shadcn, light
+     The standard neutral palette, New York style. */
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted-background: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent-background: oklch(0.97 0 0);
+  --accent-background-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+}
+
+/* Brave in a dark room. The same flip the legacy sheets always used: no class required, and a
+   themed window wins because `:root[data-theme]` outranks this block by specificity. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0a0a0a;
+    --bg-side: #151515;
+    --ink: #f5f5f5;
+    --ink-dim: #b0b0b0;
+    --ink-faint: #858585;
+    --line: rgb(245 245 245 / 12%);
+    --accent: #f5f5f5;
+    --accent-ink: #0a0a0a;
+    --accent-quiet: #c7c7c7;
+    --accent-text: #e0e0e0;
+    --bubble-user: #f5f5f5;
+    --bubble-user-ink: #0a0a0a;
+    --bubble-agent: #1d1d1d;
+    --code-bg: rgb(245 245 245 / 7%);
+    --tree-bg: #181818;
+    --added: #3fb950;
+    --added-bg: rgba(63, 185, 80, 0.13);
+    --removed: #f85149;
+    --removed-bg: rgba(248, 81, 73, 0.12);
+    --warn: #d4a72c;
+    --warn-bg: rgba(212, 167, 44, 0.12);
+    --confine: #b392f0;
+    --confine-bg: rgba(179, 146, 240, 0.12);
+
+    --card: oklch(0.205 0 0);
+    --card-foreground: oklch(0.985 0 0);
+    --popover: oklch(0.205 0 0);
+    --popover-foreground: oklch(0.985 0 0);
+    --primary: oklch(0.922 0 0);
+    --primary-foreground: oklch(0.205 0 0);
+    --secondary: oklch(0.269 0 0);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted-background: oklch(0.269 0 0);
+    --muted-foreground: oklch(0.708 0 0);
+    --accent-background: oklch(0.269 0 0);
+    --accent-background-foreground: oklch(0.985 0 0);
+    --destructive: oklch(0.704 0.191 22.216);
+    --border: oklch(1 0 0 / 10%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.556 0 0);
+    --sidebar: oklch(0.205 0 0);
+    --sidebar-foreground: oklch(0.985 0 0);
+    --sidebar-primary: oklch(0.488 0.243 264.376);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.269 0 0);
+    --sidebar-accent-foreground: oklch(0.985 0 0);
+    --sidebar-border: oklch(1 0 0 / 10%);
+    --sidebar-ring: oklch(0.556 0 0);
+  }
+}
+
+/* ------------------------------------------------------------------ a theme
+
+   A theme names nine things: a ground, an ink, a quieter ink, and one colour each for finished,
+   failed, running, a confinement, the session's own voice and the person at the keyboard.
+   `src/renderer/theme.ts` writes those onto the root as `--role-*`, and the rest of the tokens
+   are mixed from them here, beside the tokens they replace. That is the whole reason a palette is
+   nine values and not nineteen: somebody writing one should be choosing colours, not computing a
+   rule at fourteen percent of their own ink.
+
+   The mixes are the same relationships the hand-picked pairs above already have — a faint ink is
+   a muted one carried toward the ink, a tinted panel is its own colour at about an eighth. What is
+   not mixed is the three things arithmetic cannot decide: whether text on the accent should be
+   black or white, the same for the user's bubble, and whether this window's native scrollbars
+   should be drawn dark. Those arrive computed, by the same luma test the terminal uses.
+
+   `--bg` and `--bg-side` are held back into their own block, because painting the ground is the
+   one thing here that costs something: the window is drawn over a native sidebar blur, and an
+   opaque background covers it. A palette that inherits its ground keeps the blur. */
+
+:root[data-theme] {
+  color-scheme: var(--role-scheme);
+  --bb-contrast-anchor: light-dark(#000000, #ffffff);
+
+  /* shadcn semantics, mixed from the palette. `--role-background` is absent when the palette
+     inherits its ground, so the fallback keeps the derived surfaces on the scheme's own base. */
+  --card: color-mix(in srgb, var(--role-text) 4%, var(--role-background, var(--bg)));
+  --card-foreground: var(--role-text);
+  --popover: color-mix(in srgb, var(--role-text) 2%, var(--role-background, var(--bg)));
+  --popover-foreground: var(--role-text);
+  --primary: var(--role-note);
+  --primary-foreground: var(--role-note-ink);
+  --secondary: color-mix(in srgb, var(--role-text) 6%, var(--role-background, var(--bg)));
+  --secondary-foreground: var(--role-text);
+  --muted-background: color-mix(in srgb, var(--role-text) 8%, var(--role-background, var(--bg)));
+  --muted-foreground: var(--role-muted);
+  --accent-background: color-mix(in srgb, var(--role-text) 6%, var(--role-background, var(--bg)));
+  --accent-background-foreground: var(--role-text);
+  --destructive: var(--role-fail);
+  --border: color-mix(in srgb, var(--role-text) 14%, transparent);
+  --input: color-mix(in srgb, var(--role-text) 18%, transparent);
+  --ring: color-mix(in srgb, var(--role-note) 70%, var(--role-text));
+  --sidebar: color-mix(in srgb, var(--role-text) 3.2%, var(--role-background, var(--bg)));
+  --sidebar-foreground: var(--role-text);
+  --sidebar-primary: var(--role-note);
+  --sidebar-primary-foreground: var(--role-note-ink);
+  --sidebar-accent: color-mix(in srgb, var(--role-text) 6%, var(--role-background, var(--bg)));
+  --sidebar-accent-foreground: var(--role-text);
+  --sidebar-border: color-mix(in srgb, var(--role-text) 14%, transparent);
+  --sidebar-ring: color-mix(in srgb, var(--role-note) 70%, var(--role-text));
+
+  /* The legacy palette, mixed exactly as modern.css mixed it. */
+  --ink: color-mix(in srgb, var(--role-text) 70%, var(--bb-contrast-anchor));
+  --ink-dim: color-mix(in srgb, var(--role-muted) 25%, var(--ink));
+  --ink-faint: color-mix(in srgb, var(--role-muted) 40%, var(--ink));
+  --line: color-mix(in srgb, var(--role-text) 14%, transparent);
+  --code-bg: color-mix(in srgb, var(--role-text) 7%, transparent);
+  --tree-bg: color-mix(in srgb, var(--role-text) 6%, var(--role-background, var(--bg)));
+  --bubble-agent: color-mix(in srgb, var(--role-text) 9%, var(--role-background, var(--bg)));
+  --accent: var(--role-note);
+  --accent-text: color-mix(in srgb, var(--role-note) 40%, var(--ink));
+  --accent-ink: var(--role-note-ink);
+  --accent-quiet: var(--accent-text);
+  --bubble-user: var(--role-primary);
+  --bubble-user-ink: var(--role-primary-ink);
+  --added: color-mix(in srgb, var(--role-ok) 30%, var(--ink));
+  --added-bg: color-mix(in srgb, var(--role-ok) 13%, transparent);
+  --removed: color-mix(in srgb, var(--role-fail) 30%, var(--ink));
+  --removed-bg: color-mix(in srgb, var(--role-fail) 12%, transparent);
+  --warn: color-mix(in srgb, var(--role-running) 30%, var(--ink));
+  --warn-bg: color-mix(in srgb, var(--role-running) 13%, transparent);
+  --confine: color-mix(in srgb, var(--role-accent) 30%, var(--ink));
+  --confine-bg: color-mix(in srgb, var(--role-accent) 12%, transparent);
+
+  /* The quieter surfaces are tuned for themes: a little nearer the ground than the brave
+     defaults, so a coloured window reads as calm panels rather than as lined graph paper. */
+  --bb-sidebar: color-mix(in srgb, var(--ink) 3.2%, var(--bg));
+  --bb-surface: color-mix(in srgb, var(--ink) 1.7%, var(--bg));
+  --bb-surface-raised: color-mix(in srgb, var(--ink) 0.7%, var(--bg));
+  --bb-control: color-mix(in srgb, var(--ink) 3.8%, var(--bg));
+  --bb-hover: color-mix(in srgb, var(--ink) 6.5%, var(--bg));
+  --bb-pressed: color-mix(in srgb, var(--ink) 10%, var(--bg));
+  --bb-selected: color-mix(in srgb, var(--accent) 10%, var(--bg));
+  --bb-selected-hover: color-mix(in srgb, var(--accent) 15%, var(--bg));
+  --bb-accent-soft: color-mix(in srgb, var(--accent) 9%, var(--bg));
+}
+
+/* Only where the theme brought a ground of its own. `--bg-side` keeps a little of its
+   translucency so the sessions column still reads as a surface set back from the transcript,
+   which is the job it was doing when the blur was underneath it. */
+:root[data-theme][data-ground] {
+  --bg: var(--role-background);
+  --bg-side: color-mix(in srgb, var(--role-text) 4%, var(--role-background));
 }
 
 @layer base {

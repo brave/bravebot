@@ -259,7 +259,7 @@ test('default and built-in theme foregrounds meet normal-text contrast', () => {
     assert.ok((Math.max(a, b) + .05) / (Math.min(a, b) + .05) >= 3, name)
   }
 
-  const css = readFileSync('src/renderer/modern.css', 'utf8')
+  const css = readFileSync('src/renderer/shadcn.css', 'utf8')
   const root = css.match(/:root \{([\s\S]*?)\n\}/)?.[1] ?? ''
   const darkRoot = css.match(/@media \(prefers-color-scheme: dark\) \{\s*:root \{([\s\S]*?)\n  \}/)?.[1] ?? ''
   const token = (block, name) => block.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})`))?.[1].toLowerCase()
