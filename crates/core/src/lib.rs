@@ -35,6 +35,7 @@ pub mod pure;
 pub mod reference;
 pub mod remembered;
 pub mod slot;
+pub mod spelling;
 pub mod todo;
 pub mod trust;
 pub mod url;
