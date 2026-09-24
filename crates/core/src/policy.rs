@@ -3371,7 +3371,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let verdict = crate::vetting::Verdict::Inconclusive(why);
         self.allow(
             "vetting",
-            format!("{}: the check said {verdict}", spec.describe()),
+            format!("{}: the check said {verdict}", Self::describe_check(spec)),
         );
         verdict
     }

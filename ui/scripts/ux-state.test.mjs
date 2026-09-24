@@ -241,19 +241,66 @@ test('request IDs reused in later turns never rewrite prior answers or approvals
 })
 
 
-test('built-in accent and message foregrounds meet normal-text contrast', () => {
-  const { BUILTINS, roleVariables } = load('src/shared/theme.ts')
+test('default and built-in theme foregrounds meet normal-text contrast', () => {
+  const { BUILTINS, BRAVE_LIGHT, BRAVE_DARK, roleVariables } = load('src/shared/theme.ts')
+  const channels = (hex) => hex.slice(1).match(/../g).map((channel) => parseInt(channel, 16))
+  const color = (values) => `#${values.map((value) => Math.round(value).toString(16).padStart(2, '0')).join('')}`
+  const mix = (foreground, background, amount) => color(channels(foreground).map((value, index) => value * amount + channels(background)[index] * (1 - amount)))
   const luminance = (hex) => {
-    const linear = hex.slice(1).match(/../g).map((channel) => parseInt(channel, 16) / 255).map((c) => c <= .04045 ? c / 12.92 : ((c + .055) / 1.055) ** 2.4)
+    const linear = channels(hex).map((channel) => channel / 255).map((value) => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4)
     return .2126 * linear[0] + .7152 * linear[1] + .0722 * linear[2]
   }
-  for (const theme of BUILTINS) for (const dark of [false, true]) {
-    const vars = roleVariables(theme, dark)
-    for (const role of ['note', 'primary']) {
-      const a = luminance(vars[`--role-${role}`]), b = luminance(vars[`--role-${role}-ink`])
-      assert.ok((Math.max(a, b) + .05) / (Math.min(a, b) + .05) >= 4.5, `${theme.name} ${role}`)
+  const contrast = (foreground, background, name) => {
+    const a = luminance(foreground), b = luminance(background)
+    assert.ok((Math.max(a, b) + .05) / (Math.min(a, b) + .05) >= 4.5, name)
+  }
+  const nonTextContrast = (foreground, background, name) => {
+    const a = luminance(foreground), b = luminance(background)
+    assert.ok((Math.max(a, b) + .05) / (Math.min(a, b) + .05) >= 3, name)
+  }
+
+  const css = readFileSync('src/renderer/modern.css', 'utf8')
+  const root = css.match(/:root \{([\s\S]*?)\n\}/)?.[1] ?? ''
+  const darkRoot = css.match(/@media \(prefers-color-scheme: dark\) \{\s*:root \{([\s\S]*?)\n  \}/)?.[1] ?? ''
+  const token = (block, name) => block.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})`))?.[1].toLowerCase()
+
+  for (const [name, palette, block] of [['light', BRAVE_LIGHT, root], ['dark', BRAVE_DARK, darkRoot]]) {
+    const background = palette.background
+    const surface = token(block, 'bubble-agent')
+    const faint = token(block, 'ink-faint')
+    contrast(palette.text, background, `${name} text`)
+    contrast(palette.muted, background, `${name} muted text`)
+    contrast(faint, surface, `${name} faint text on a raised surface`)
+    nonTextContrast(mix(palette.text, background, .65), background, `${name} control boundary`)
+    for (const [role, tint] of [['ok', .07], ['fail', .09], ['running', .05], ['accent', .08]]) {
+      contrast(palette[role], mix(palette[role], background, tint), `${name} ${role} on its status surface`)
     }
   }
+
+  for (const theme of BUILTINS) for (const dark of [false, true]) {
+    const vars = roleVariables(theme, dark)
+    const background = vars['--role-background']
+    const anchor = vars['--role-scheme'] === 'light' ? '#000000' : '#ffffff'
+    const ink = mix(vars['--role-text'], anchor, .7)
+    const dim = mix(vars['--role-muted'], ink, .25)
+    const faint = mix(vars['--role-muted'], ink, .4)
+    contrast(ink, background, `${theme.name} text`)
+    contrast(dim, background, `${theme.name} dim text`)
+    contrast(faint, background, `${theme.name} faint text`)
+    contrast(mix(vars['--role-note'], ink, .4), background, `${theme.name} links`)
+    nonTextContrast(mix(ink, background, .65), background, `${theme.name} control boundary`)
+    for (const [role, tint] of [['ok', .07], ['fail', .09], ['running', .05], ['accent', .08]]) {
+      const status = mix(vars[`--role-${role}`], ink, .3)
+      contrast(status, mix(status, background, tint), `${theme.name} ${role}`)
+    }
+    for (const role of ['note', 'primary']) {
+      contrast(vars[`--role-${role}-ink`], vars[`--role-${role}`], `${theme.name} ${role} control`)
+    }
+  }
+
+  const exportCss = readFileSync('src/renderer/export.css', 'utf8')
+  const exportRoot = exportCss.match(/:root,[\s\S]*?\{([\s\S]*?)\n\}/)?.[1] ?? ''
+  contrast(token(exportRoot, 'ink-faint'), token(exportRoot, 'bg'), 'PDF faint text')
 })
 
 

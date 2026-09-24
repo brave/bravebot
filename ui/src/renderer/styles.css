@@ -20,11 +20,11 @@
   --bubble-user-ink: #ffffff;
   --bubble-agent: #f1f1f4;
   --added: #1a7f37;
-  --added-bg: rgba(26, 127, 55, 0.1);
+  --added-bg: rgba(26, 127, 55, 0.06);
   --removed: #c0392b;
   --removed-bg: rgba(192, 57, 43, 0.09);
   --warn: #9a6700;
-  --warn-bg: rgba(212, 167, 44, 0.14);
+  --warn-bg: rgba(212, 167, 44, 0.05);
   --confine: #6f42c1;
   --confine-bg: rgba(111, 66, 193, 0.09);
   --radius: 10px;

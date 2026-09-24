@@ -81,38 +81,38 @@ const MAX_THEME_BYTES = 64
  *
  * Exported although nothing imports them: `scripts/drive-theme.mjs` finds them by this spelling.
  *
- * These duplicate the `:root` block in `styles.css`, which is a real cost and a deliberate one.
+ * These duplicate the default tokens in the renderer styles, which is a real cost and a deliberate one.
  * The alternative is reading the tokens back out of the document with `getComputedStyle`, and that
  * only tells the truth while no theme is applied — the moment one is, the values it would report
  * are the theme's own, so a partial palette applied second would inherit from the first. A pair of
  * literals cannot drift silently either: `scripts/drive-theme.mjs` asserts they still match what
  * the stylesheet computes.
  *
- * `note` and `primary` are the same orange in both, because the accent is the one thing the dark
- * block in `styles.css` deliberately does not override.
+ * These values follow the default light and dark palettes; named themes still provide their own
+ * note and primary roles independently.
  */
 export const BRAVE_LIGHT: Palette = {
   background: '#ffffff',
-  text: '#1c1c1e',
-  muted: '#6b6b70',
+  text: '#111111',
+  muted: '#616161',
   ok: '#1a7f37',
   fail: '#c0392b',
   running: '#9a6700',
   accent: '#6f42c1',
-  note: '#f2600c',
-  primary: '#f2600c',
+  note: '#111111',
+  primary: '#111111',
 }
 
 export const BRAVE_DARK: Palette = {
-  background: '#1c1c1e',
-  text: '#f2f2f7',
-  muted: '#a1a1a6',
+  background: '#0a0a0a',
+  text: '#f5f5f5',
+  muted: '#b0b0b0',
   ok: '#3fb950',
   fail: '#f85149',
   running: '#d4a72c',
   accent: '#b392f0',
-  note: '#f2600c',
-  primary: '#f2600c',
+  note: '#f5f5f5',
+  primary: '#f5f5f5',
 }
 
 /** Every role inherited: `brave` paints nothing of its own, which is what makes it the default. */

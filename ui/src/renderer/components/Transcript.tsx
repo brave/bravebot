@@ -191,6 +191,7 @@ export function Transcript({
   const input = useRef<HTMLTextAreaElement>(null)
   const following = useRef(true)
   const lastScroll = useRef(0)
+  const readingAnchor = useRef<{ handle: string; id: string; offset: number } | null>(null)
   const scrollSave = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [watches, setWatches] = useState(false)
   const [permissions, setPermissions] = useState(false)
@@ -207,6 +208,21 @@ export function Transcript({
   const [recents, setRecents] = useState<string[]>([])
   const preferences = useExperience()
   const [focusedLayout, setFocusedLayout] = useState<Record<Side, boolean> | null>(null)
+  const rememberReadingAnchor = (element: HTMLElement): void => {
+    if (following.current || !live) {
+      readingAnchor.current = null
+      return
+    }
+    const top = element.getBoundingClientRect().top
+    const wrapper = [...element.querySelectorAll<HTMLElement>('[data-entry-id]')].find((candidate) => {
+      const row = candidate.firstElementChild as HTMLElement | null
+      return row ? row.getBoundingClientRect().top >= top + 20 : false
+    })
+    const row = wrapper?.firstElementChild as HTMLElement | null
+    readingAnchor.current = wrapper && row
+      ? { handle: live.handle, id: wrapper.dataset.entryId ?? '', offset: row.getBoundingClientRect().top - top }
+      : null
+  }
   const jump = (element: HTMLElement | null) => element?.scrollIntoView({ block: 'nearest',
     behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
   const latest = () => { following.current = true; setUnseen(false); jump(bottom.current) }
@@ -286,6 +302,25 @@ export function Transcript({
   focusRef.current = live?.focus ?? null
 
   const activitySnapshot = useRef<{ handle?: string; entries?: t.Entry[]; phase?: Phase | null }>({})
+  useLayoutEffect(() => {
+    const element = scroller.current
+    const anchor = readingAnchor.current
+    if (!element || !anchor || anchor.handle !== live?.handle || following.current) return
+    const wrapper = element.querySelector<HTMLElement>(`[data-entry-id="${CSS.escape(anchor.id)}"]`)
+    const row = wrapper?.firstElementChild as HTMLElement | null
+    if (!row) return
+    const offset = row.getBoundingClientRect().top - element.getBoundingClientRect().top
+    element.scrollTop += offset - anchor.offset
+    lastScroll.current = element.scrollTop
+    readingAnchor.current = { ...anchor, offset: row.getBoundingClientRect().top - element.getBoundingClientRect().top }
+  }, [live?.entries, live?.handle])
+  useEffect(() => {
+    const element = scroller.current
+    if (!element) return
+    const remember = () => rememberReadingAnchor(element)
+    element.addEventListener('scroll', remember, { passive: true })
+    return () => element.removeEventListener('scroll', remember)
+  }, [live?.handle])
   useEffect(() => {
     const previous = activitySnapshot.current
     activitySnapshot.current = { handle: live?.handle, entries: live?.entries, phase: live?.phase }
@@ -417,7 +452,12 @@ export function Transcript({
         if (scrollSave.current) clearTimeout(scrollSave.current)
         scrollSave.current = setTimeout(() => { if (storageKey) setConversation(storageKey, { scroll: lastScroll.current }) }, 180)
         following.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80
-        if (following.current) setUnseen(false)
+        if (following.current) {
+          readingAnchor.current = null
+          setUnseen(false)
+        } else {
+          rememberReadingAnchor(element)
+        }
       }}>
         {runs(live.entries).map((run) =>
           run.kind === 'run' ? (
@@ -495,24 +535,26 @@ export function Transcript({
       <footer className="composer">
         {queued.length > 0 && <div className="queued-messages"><strong>{queuePaused ? 'Queue paused' : 'Queued after this turn'}</strong>{queuePaused && <button disabled={live.running || backendReady === false} onClick={onResumeQueued}>Resume queue</button>}{queued.map((text, index) => <div key={index}><span>{text}</span><button aria-label={`Remove queued message ${index + 1}`} onClick={() => onRemoveQueued(index)}>×</button></div>)}</div>}
         {attachments.length > 0 && <div className="attachment-chips"><p>These files will be sent as trusted context with your message.</p>{attachments.map((file) => <span key={file.id}><button onClick={() => setPreviewPath(file.path)}>{file.path}</button><button aria-label={`Remove attachment ${file.path}`} onClick={() => onRemoveAttachment(file.id)}>×</button></span>)}</div>}
-        <textarea ref={input} rows={2} value={draft} aria-label="Message the agent" title="Unsent drafts are saved locally on this device. Clear the message to remove its saved draft."
-          placeholder={pending ? 'Draft your next message while you review…' : 'Describe a task, ask a question, or paste code…'}
-          onChange={(event) => onDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey
-              && !event.nativeEvent.isComposing && event.keyCode !== 229) {
-              event.preventDefault()
-              if (!event.repeat && !live.running && backendReady !== false && draft.trim()) { latest(); onSubmit() }
-            }
-          }} />
-        <div className="composer-toolbar">
-          <ModelPicker session={live.handle} scope={bot ? 'bot' : 'conversation'} key={live.handle} model={live.model} disabled={live.running} onChoose={onModel} />
-          <button className="attach-files" onClick={onAttach} disabled={attachments.length >= 5} title="Choose project files to share as trusted context">Attach files</button>
-          <span className="composer-hint">Enter to send · Shift+Enter for newline</span>
-          {live.running && <button className="stop" onClick={onCancel}>Stop</button>}
-          <button className="send" onClick={() => { latest(); live.running ? onQueue() : onSubmit() }} disabled={!draft.trim() || !!live.askingTrust || backendReady === false}>
-            {live.running ? 'Queue message' : 'Send'}
-          </button>
+        <div className="composer-box">
+          <textarea ref={input} rows={2} value={draft} aria-label="Message the agent" title="Unsent drafts are saved locally on this device. Clear the message to remove its saved draft."
+            placeholder={pending ? 'Draft your next message while you review…' : 'Describe a task, ask a question, or paste code…'}
+            onChange={(event) => onDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey
+                && !event.nativeEvent.isComposing && event.keyCode !== 229) {
+                event.preventDefault()
+                if (!event.repeat && !live.running && backendReady !== false && draft.trim()) { latest(); onSubmit() }
+              }
+            }} />
+          <div className="composer-toolbar">
+            <ModelPicker session={live.handle} scope={bot ? 'bot' : 'conversation'} key={live.handle} model={live.model} disabled={live.running} onChoose={onModel} />
+            <button className="attach-files" onClick={onAttach} disabled={attachments.length >= 5} title="Choose project files to share as trusted context">Attach files</button>
+            <span className="composer-hint">Enter to send · Shift+Enter for newline</span>
+            {live.running && <button className="stop" onClick={onCancel}>Stop</button>}
+            <button className="send" onClick={() => { latest(); live.running ? onQueue() : onSubmit() }} disabled={!draft.trim() || !!live.askingTrust || backendReady === false}>
+              {live.running ? 'Queue message' : 'Send'}
+            </button>
+          </div>
         </div>
       </footer>
       {watches && <Watches session={live.handle} onClose={() => setWatches(false)} />}
