@@ -782,15 +782,28 @@ def changed_files(base):
                 yield line.strip()
 
 
+def spec_names(spec):
+    """Every form that names one spec on the command line: its id, its file name, and its path
+    both under `docs/specs` and from the repository root, each of the three with `.md` optional.
+
+    The path is the form the tree hands a person: `grep -rl SEARCH-9 docs/specs` prints
+    `docs/specs/tools/search.md`, and the table in `AGENTS.md` links the same. Matching is exact
+    against this set rather than a suffix test, so a directory typed in part names no spec instead
+    of quietly resolving to one."""
+    rel = spec.path.as_posix()
+    prefix = f"{SPEC_DIR.as_posix()}/"
+    forms = {spec.id, spec.path.name, rel}
+    if rel.startswith(prefix):
+        forms.add(rel[len(prefix) :])
+    forms |= {form.removesuffix(".md") for form in forms}
+    return {form.lower() for form in forms if form}
+
+
 def select(specs, selectors, changed_base):
     if selectors:
-        wanted = {s.lower().removesuffix(".md") for s in selectors}
-        chosen = [
-            spec
-            for spec in specs
-            if spec.path.stem.lower() in wanted or spec.id.lower() in wanted or spec.name.lower() in wanted
-        ]
-        missing = wanted - {spec.path.stem.lower() for spec in chosen} - {spec.id.lower() for spec in chosen}
+        wanted = {s.lower() for s in selectors}
+        chosen = [spec for spec in specs if spec_names(spec) & wanted]
+        missing = wanted - {name for spec in chosen for name in spec_names(spec)}
         return chosen, sorted(missing)
     if changed_base is not None:
         touched = set(changed_files(changed_base))
@@ -1009,7 +1022,9 @@ def render(findings, chosen, strict):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("specs", nargs="*", help="spec file names, stems, or ids; default all")
+    parser.add_argument(
+        "specs", nargs="*", help="spec paths, file names, stems, or ids; default all"
+    )
     parser.add_argument("--mechanical-only", action="store_true", help="skip the review pass")
     parser.add_argument("--changed", nargs="?", const="main", default=None, metavar="BASE")
     parser.add_argument("--strict", action="store_true", help="warnings fail too")
