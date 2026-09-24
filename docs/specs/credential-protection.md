@@ -10,6 +10,7 @@ governs:
   - crates/config/src/settings.rs
   - crates/ui-bridge/src/settings.rs
   - crates/bedrock/src/credentials.rs
+  - crates/signing/src/sigv4.rs
   - crates/core/src/credentials.rs
   - crates/agent/src/findings.rs
   - crates/sandbox/src/crash.rs
@@ -737,6 +738,17 @@ carries a region and a model name, and what a person may put in it is anything. 
 to, the list of variables a subprocess is not handed, keeps the names it read out of one rather than
 the settings themselves, and a name is not a credential.
 
+The AWS credential the CLI resolves is held the same way, and so is every buffer it passes through.
+The bytes the CLI wrote are cleared as the read is answered for, whatever it answered, because a
+reply that could not be parsed holds the credential just as a good one does. The document that read
+parsed holds a copy of its own and clears itself when it goes. A reply stating a secret key and no
+access key is refused, and the secret it did state is in a `Secret` by then rather than in a string
+the refusal drops intact. Signing makes one more: the SigV4 derivation starts from the secret access
+key with four bytes in front of it, which is the key rather than something derived from it, so that
+buffer is overwritten where it lies once the first step has read it. `bravebot-signing` spells the
+overwriting out itself, for the reason `bravebot-skus` does, since
+[LAYER-1](layering.md#LAYER-1) gives it no dependency on another crate here.
+
 **What does not, and why.** Two things.
 
 The pages are not kept off swap. Locking the buffers themselves needs the allocator that hands
@@ -746,11 +758,12 @@ every later allocation becomes unswappable, so an agent asked to read a large fi
 allocate rather than being paged out. Doing this properly means an allocator for credential
 buffers, which is a decision rather than an omission.
 
-What the cryptography turns a subscription credential into is not cleared. The token values the
-library hands back from an unblinding are its buffers rather than this program's, and the
+What the cryptography turns a credential into is not cleared. The token values the library hands
+back from unblinding a subscription credential are its buffers rather than this program's, and the
 presentation a spend derives is an ordinary string: single-use, bound to one issuer, built to be a
 request header, and copied from there into the buffers the paragraph above says are not this
-program's either.
+program's either. A SigV4 signing key is the same case: the chain authorises one service in one
+region on one day, so what each step hands back is not the access key it started from.
 
 `verified-by: bravebot_config::lib::scrubbing_overwrites_the_bytes_where_they_lie`
 `verified-by: bravebot_config::lib::scrubbing_counts_the_bytes_rather_than_the_characters`
@@ -764,6 +777,9 @@ program's either.
 `verified-by: bravebot_skus::secret::scrubbing_a_document_reaches_a_token_inside_the_blocks_it_was_written_in`
 `verified-by: bravebot_skus::secret::a_secret_prints_as_redacted_rather_than_as_its_value`
 `verified-by: bravebot_skus::store::a_stored_batch_does_not_print_its_tokens`
+`verified-by: bravebot_bedrock::credentials::the_bytes_a_reply_was_read_from_are_cleared_whatever_the_read_answered`
+`verified-by: bravebot_bedrock::credentials::scrubbing_a_parsed_reply_overwrites_the_credential_rather_than_dropping_it`
+`verified-by: bravebot_signing::sigv4::scrubbing_the_signing_seed_overwrites_the_key_where_it_lies`
 `verified-by: bravebot_sandbox::crash::disabling_core_dumps_leaves_the_kernel_unable_to_write_one`
 `verified-by: bravebot_sandbox::crash::disabling_core_dumps_does_not_lower_the_hard_limit`
 `verified-by: by-construction (the buffer a Secret owns is unreachable once the Secret is gone, so what a test can run is the scrub rather than the drop; the drop body is one call to the scrub the two tests above pin and does nothing else)`
@@ -771,6 +787,7 @@ program's either.
 `verified-by: by-construction (both entry points that hold a credential, the terminal binary and the graphical front end's transport, call the core dump limit down as their first statement, before the argument vector is read and so before the signing key is unmasked)`
 `verified-by: by-construction (a parsed settings document clears itself when it goes, its drop being one call to each of the two scrubs the tests above pin and nothing else; the four readers of a settings file, the layered read, the single-file parse, the managed layer and the front end's check of a chosen file, each hold one of these and so clear what they parsed by going out of scope)`
 `verified-by: by-construction (the env block a Settings holds is unreachable once the Settings is gone, so what a test can run is the overwriting rather than the drop; the drop body is one call to the method the test above pins and does nothing else)`
+`verified-by: by-construction (the document a credential reply was parsed into and the buffer a SigV4 signing key is seeded from are each unreachable once the value owning them is gone, so what a test can run is the overwriting rather than the drop; each drop body is one call to a scrub the tests above pin and does nothing else)`
 
 <a id="CRED-24"></a>
 ### CRED-24: a credential never travels as a command-line argument

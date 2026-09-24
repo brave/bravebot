@@ -278,17 +278,38 @@ pub(crate) fn scrub_document(root: &mut serde_json::Map<String, serde_json::Valu
     root.values_mut().for_each(scrub_value);
 }
 
-/// One value of a document, and whatever is under it.
+/// Overwrite one value of a parsed document, and whatever is under it.
+///
+/// Public because a parse is how a credential arrives in more than one crate: a settings file
+/// here, and the JSON the AWS CLI answers a credential request with. A crate that may depend on
+/// this one uses this rather than spelling the walk again, which is the arrangement
+/// [CRED-23](../../../docs/specs/credential-protection.md#CRED-23) names.
 ///
 /// Recursive over a shape a parse produced, which is a shape [`serde_json`] refused past 128 levels
 /// of nesting, so the depth here is the parser's bound rather than the file's.
-pub(crate) fn scrub_value(value: &mut serde_json::Value) {
+pub fn scrub_value(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::String(text) => scrub(text),
         serde_json::Value::Array(values) => values.iter_mut().for_each(scrub_value),
         serde_json::Value::Object(map) => map.values_mut().for_each(scrub_value),
         serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {}
     }
+}
+
+/// Overwrite a byte buffer where it lies, leaving it as many zero bytes long as it was.
+///
+/// What [`scrub`] promises, for bytes that were never a `String`. A credential arrives this way
+/// whenever a subprocess writes one to a pipe: what the AWS CLI answers with is a `Vec<u8>` of
+/// JSON holding a live session key, and it is as readable there as in any other buffer.
+///
+/// A slice rather than a `Vec`, so that truncating the buffer is not one of the things a caller
+/// can reach for. The length is where the credential is, and setting it to nothing leaves every
+/// byte of it for whoever the allocator hands the memory to next.
+pub fn scrub_bytes(bytes: &mut [u8]) {
+    bytes.fill(0);
+    // The barrier [`scrub`] explains: nothing reads these zeros back, and a compiler that can see
+    // the whole life of the buffer is entitled to delete a store no one observes.
+    std::hint::black_box(&*bytes);
 }
 
 impl fmt::Debug for Secret {

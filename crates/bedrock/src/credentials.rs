@@ -336,7 +336,7 @@ pub fn sign_in_if_needed(
 
 /// Ask the CLI for credentials, without trying to fix anything.
 fn export(profile: Option<&str>) -> Result<Credentials, CredentialError> {
-    let output = export_command(profile)
+    let mut output = export_command(profile)
         .output()
         .map_err(|e| match e.kind() {
             std::io::ErrorKind::NotFound => CredentialError::NotInstalled,
@@ -346,12 +346,15 @@ fn export(profile: Option<&str>) -> Result<Credentials, CredentialError> {
         })?;
 
     if !output.status.success() {
+        // A CLI that printed a credential and then failed printed it all the same, and `decode`,
+        // which is where the clearing otherwise happens, is not reached on this path.
+        bravebot_config::scrub_bytes(&mut output.stdout);
         return Err(CredentialError::Refused {
             detail: first_line(&output.stderr),
         });
     }
 
-    decode(&output.stdout)
+    decode(&mut output.stdout)
 }
 
 /// The profiles the CLI is configured with, or `None` where it could not say.
@@ -495,24 +498,60 @@ impl Reading {
     }
 }
 
-/// Read the credential JSON the CLI's process format emits.
-pub fn decode(bytes: &[u8]) -> Result<Credentials, CredentialError> {
-    let value: serde_json::Value =
-        serde_json::from_slice(bytes).map_err(|e| CredentialError::Undecodable {
-            detail: e.to_string(),
-        })?;
+/// The reply, parsed, holding the copy of the credential the parse made.
+///
+/// The parse puts the secret access key and the session token into `String`s of its own, which
+/// the caller never sees and so cannot clear. Held behind this so that every way out of a read
+/// clears them, which is what [CRED-23](../../../docs/specs/credential-protection.md#CRED-23)
+/// asks of a buffer this program owns a credential in.
+struct Parsed(serde_json::Value);
 
-    let field = |name: &str| -> Option<String> {
-        value
+impl Parsed {
+    /// What the CLI stated for a name, or `None` where it stated nothing usable.
+    ///
+    /// An empty string counts as nothing said, which is what makes half an answer a refusal here
+    /// rather than a signature the service rejects a long way from the cause.
+    fn field(&self, name: &str) -> Option<String> {
+        self.0
             .get(name)
             .and_then(serde_json::Value::as_str)
             .map(str::to_string)
             .filter(|found| !found.is_empty())
-    };
+    }
 
-    let (Some(access_key_id), Some(secret_access_key)) =
-        (field("AccessKeyId"), field("SecretAccessKey"))
-    else {
+    /// Overwrite every value the parse made, in place.
+    ///
+    /// Assigning `Value::Null` over the credential is the mistake available here: it drops the
+    /// string, which is the thing that leaves the bytes where the allocator can hand them on.
+    fn scrub(&mut self) {
+        bravebot_config::scrub_value(&mut self.0);
+    }
+}
+
+impl Drop for Parsed {
+    fn drop(&mut self) {
+        self.scrub();
+    }
+}
+
+/// Read the credential JSON the CLI's process format emits.
+///
+/// The bytes are cleared as this is answered for, whatever it answered. They are the CLI's reply
+/// and hold a live session credential in plain text, and a reply this could not read holds it
+/// just as a good one does, so the clearing cannot sit on the success path.
+pub fn decode(bytes: &mut [u8]) -> Result<Credentials, CredentialError> {
+    let parsed = serde_json::from_slice(&*bytes).map(Parsed);
+    bravebot_config::scrub_bytes(bytes);
+    let parsed = parsed.map_err(|e| CredentialError::Undecodable {
+        detail: e.to_string(),
+    })?;
+
+    // Into a `Secret` as it is read rather than at the end: the refusal below drops whatever was
+    // read before it, and a plain `String` dropped there is the credential handed back intact.
+    let (Some(access_key_id), Some(secret_access_key)) = (
+        parsed.field("AccessKeyId"),
+        parsed.field("SecretAccessKey").map(Secret::new),
+    ) else {
         // Deliberately does not quote the body: on the success path it holds a live secret, and an
         // error message is the most likely thing to be pasted somewhere public.
         return Err(CredentialError::Undecodable {
@@ -522,9 +561,12 @@ pub fn decode(bytes: &[u8]) -> Result<Credentials, CredentialError> {
 
     Ok(Credentials {
         access_key_id,
-        secret_access_key: Secret::new(secret_access_key),
-        session_token: field("SessionToken").map(Secret::new),
-        expires_at: field("Expiration").as_deref().and_then(expiry_seconds),
+        secret_access_key,
+        session_token: parsed.field("SessionToken").map(Secret::new),
+        expires_at: parsed
+            .field("Expiration")
+            .as_deref()
+            .and_then(expiry_seconds),
     })
 }
 
@@ -597,6 +639,11 @@ fn first_line(stderr: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A reply in a buffer of its own, since reading one clears the bytes it was read from.
+    fn reply(body: &[u8]) -> Vec<u8> {
+        body.to_vec()
+    }
 
     /// What a command was told to unset, which is how `env_remove` reads back: a name a child will
     /// not be handed is present here with no value, and one left alone is absent altogether.
@@ -768,9 +815,9 @@ mod tests {
     /// The shape the CLI's `--format process` actually emits, which is what this has to read.
     #[test]
     fn credentials_are_read_from_the_process_format() {
-        let credentials = decode(
+        let credentials = decode(&mut reply(
             br#"{"Version":1,"AccessKeyId":"AKIA","SecretAccessKey":"secret","SessionToken":"token"}"#,
-        )
+        ))
         .expect("decoded");
         assert_eq!(credentials.access_key_id, "AKIA");
         assert_eq!(credentials.secret_access_key.expose(), "secret");
@@ -784,8 +831,10 @@ mod tests {
     /// key in a credentials file looks like.
     #[test]
     fn long_lived_credentials_have_no_session_token() {
-        let credentials =
-            decode(br#"{"AccessKeyId":"AKIA","SecretAccessKey":"secret"}"#).expect("decoded");
+        let credentials = decode(&mut reply(
+            br#"{"AccessKeyId":"AKIA","SecretAccessKey":"secret"}"#,
+        ))
+        .expect("decoded");
         assert!(credentials.session_token.is_none());
     }
 
@@ -797,9 +846,9 @@ mod tests {
     /// running at its issuer.
     #[test]
     fn a_session_token_is_what_says_what_would_end_a_credential() {
-        let session = decode(
+        let session = decode(&mut reply(
             br#"{"AccessKeyId":"ASIA","SecretAccessKey":"secret","SessionToken":"token","Expiration":"not a date"}"#,
-        )
+        ))
         .expect("decoded");
         assert!(
             session.expires_at.is_none(),
@@ -807,8 +856,10 @@ mod tests {
         );
         assert_eq!(session.held(), Held::AwsSession);
 
-        let long_lived =
-            decode(br#"{"AccessKeyId":"AKIA","SecretAccessKey":"secret"}"#).expect("decoded");
+        let long_lived = decode(&mut reply(
+            br#"{"AccessKeyId":"AKIA","SecretAccessKey":"secret"}"#,
+        ))
+        .expect("decoded");
         assert_eq!(long_lived.held(), Held::AwsAccessKey);
 
         // Deleting the key is the move somebody makes after a leak, and it is the one that leaves
@@ -826,9 +877,9 @@ mod tests {
     /// fails here rather than at the line a person reads.
     #[test]
     fn a_session_this_program_re_mints_unaided_is_recorded_at_held() {
-        let session = decode(
+        let session = decode(&mut reply(
             br#"{"AccessKeyId":"ASIA","SecretAccessKey":"secret","SessionToken":"token","Expiration":"2026-09-05T03:04:02+00:00"}"#,
-        )
+        ))
         .expect("decoded");
         assert!(
             session.expires_at.is_some(),
@@ -845,9 +896,9 @@ mod tests {
     /// so it has to survive the decode rather than being dropped with the rest of the envelope.
     #[test]
     fn the_expiry_the_cli_reports_is_read_from_the_process_format() {
-        let credentials = decode(
+        let credentials = decode(&mut reply(
             br#"{"AccessKeyId":"AKIA","SecretAccessKey":"secret","Expiration":"2026-09-05T03:04:02+00:00"}"#,
-        )
+        ))
         .expect("decoded");
         assert_eq!(credentials.expires_at, Some(1_788_577_442));
     }
@@ -856,8 +907,10 @@ mod tests {
     /// saying it expired at the epoch: a caller reads `None` as "nothing here says when to re-ask".
     #[test]
     fn credentials_with_no_stated_expiry_report_none() {
-        let credentials =
-            decode(br#"{"AccessKeyId":"AKIA","SecretAccessKey":"secret"}"#).expect("decoded");
+        let credentials = decode(&mut reply(
+            br#"{"AccessKeyId":"AKIA","SecretAccessKey":"secret"}"#,
+        ))
+        .expect("decoded");
         assert!(credentials.expires_at.is_none());
     }
 
@@ -968,7 +1021,10 @@ mod tests {
             &br#"{"AccessKeyId":"AKIA","SecretAccessKey":""}"#[..],
         ] {
             assert!(
-                matches!(decode(body), Err(CredentialError::Undecodable { .. })),
+                matches!(
+                    decode(&mut reply(body)),
+                    Err(CredentialError::Undecodable { .. })
+                ),
                 "{} was read as credentials",
                 String::from_utf8_lossy(body)
             );
@@ -978,7 +1034,7 @@ mod tests {
     #[test]
     fn output_that_is_not_json_is_refused() {
         assert!(matches!(
-            decode(b"could not connect to the endpoint"),
+            decode(&mut reply(b"could not connect to the endpoint")),
             Err(CredentialError::Undecodable { .. })
         ));
     }
@@ -988,7 +1044,7 @@ mod tests {
     #[test]
     fn a_decode_failure_does_not_quote_the_credentials_it_was_given() {
         let body = br#"{"AccessKeyId":"AKIA","SecretAccessKey":"a-live-secret","Oops":}"#;
-        let message = match decode(body) {
+        let message = match decode(&mut reply(body)) {
             Err(e) => e.to_string(),
             Ok(_) => panic!("should not have decoded"),
         };
@@ -999,14 +1055,63 @@ mod tests {
     /// live keys.
     #[test]
     fn debugging_resolved_credentials_does_not_leak_them() {
-        let credentials = decode(
+        let credentials = decode(&mut reply(
             br#"{"AccessKeyId":"AKIAREAL","SecretAccessKey":"a-live-secret","SessionToken":"a-live-token"}"#,
-        )
+        ))
         .expect("decoded");
         let shown = format!("{credentials:?}");
         assert!(!shown.contains("a-live-secret"), "leaked: {shown}");
         assert!(!shown.contains("a-live-token"), "leaked: {shown}");
         assert!(!shown.contains("AKIAREAL"), "leaked: {shown}");
+    }
+
+    /// The reply is the credential in plain text, in a buffer this program owns for as long as it
+    /// holds it, and a reply that could not be read holds the credential just as a good one does.
+    ///
+    /// Both directions, because clearing on the way out of a successful read is the arrangement
+    /// that looks finished and is not: the CLI answers with the key whether or not what follows
+    /// it parses, and a truncated answer is the ordinary case for a pipe that closed early.
+    #[test]
+    fn the_bytes_a_reply_was_read_from_are_cleared_whatever_the_read_answered() {
+        let mut good = reply(br#"{"AccessKeyId":"AKIA","SecretAccessKey":"a-live-secret"}"#);
+        let length = good.len();
+        decode(&mut good).expect("decoded");
+        assert_eq!(
+            good,
+            vec![0u8; length],
+            "the reply is still in the buffer it was read from"
+        );
+
+        let mut truncated = reply(br#"{"AccessKeyId":"AKIA","SecretAccessKey":"a-live-secret"#);
+        let length = truncated.len();
+        decode(&mut truncated).expect_err("should not have decoded");
+        assert_eq!(
+            truncated,
+            vec![0u8; length],
+            "a reply the read refused is still in the buffer it was read from"
+        );
+    }
+
+    /// The parse makes a second copy of the credential, in a string the caller never sees.
+    ///
+    /// The value has to stay a string of the same length for the bytes to have been written over:
+    /// assigning null over it drops the string instead, and dropping it is what leaves the
+    /// credential where the allocator can hand it on.
+    #[test]
+    fn scrubbing_a_parsed_reply_overwrites_the_credential_rather_than_dropping_it() {
+        let secret = "a-live-secret";
+        let mut parsed = Parsed(serde_json::json!({
+            "AccessKeyId": "AKIA",
+            "SecretAccessKey": secret,
+        }));
+
+        parsed.scrub();
+
+        assert_eq!(
+            parsed.0["SecretAccessKey"].as_str().expect("a string"),
+            "\0".repeat(secret.len()),
+            "the credential is still in the buffer the parse put it in"
+        );
     }
 
     /// A missing CLI cannot be fixed by signing in, so it says something different. Reporting it as
