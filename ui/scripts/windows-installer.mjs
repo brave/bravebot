@@ -38,6 +38,7 @@ export const ARCHES = { amd64: 'x64', arm64: 'arm64' }
 // The project electron-builder is run in: the front end's manifest supplies the version, and the
 // icon is the one the bundle's executable carries.
 const UI = fileURLToPath(new URL('../', import.meta.url))
+const { version } = JSON.parse(readFileSync(join(UI, 'package.json'), 'utf8'))
 
 function electronArch(arch) {
   if (!Object.hasOwn(ARCHES, arch)) {
@@ -91,6 +92,9 @@ export function installerConfig({ arch }) {
     executableName: EXECUTABLE,
     // Without this, electron-builder writes its own line with this year in it.
     copyright: 'Copyright (c) Brave Software, Inc. All rights reserved.',
+    // Otherwise a CI's BUILD_NUMBER becomes the installer's fourth version part, and not the app's.
+    buildVersion: version,
+    buildNumber: '0',
     extraMetadata: {
       name: NAME,
       // The Start menu entry's tooltip, the Apps list's comment, and the installer's description.
@@ -105,6 +109,8 @@ export function installerConfig({ arch }) {
       oneClick: true,
       perMachine: false,
       guid: NAME,
+      // electron-builder's default appends the version, which renames the Apps list entry every release.
+      uninstallDisplayName: DISPLAY_NAME,
       // Otherwise electron-builder copies its unsigned `elevate.exe` into the signed bundle. A
       // per-user install never elevates.
       packElevateHelper: false,

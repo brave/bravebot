@@ -50,6 +50,14 @@ function versionString(bytes, key) {
   return bytes.subarray(start, end).toString('utf16le')
 }
 
+// The product version in a PE's VS_FIXEDFILEINFO, the one Windows compares, as `a.b.c.d`.
+function fixedVersion(bytes) {
+  const at = bytes.indexOf(Buffer.from([0xbd, 0x04, 0xef, 0xfe]))
+  const ms = bytes.readUInt32LE(at + 16)
+  const ls = bytes.readUInt32LE(at + 20)
+  return [ms >>> 16, ms & 0xffff, ls >>> 16, ls & 0xffff].join('.')
+}
+
 function digests(dir) {
   const found = {}
   for (const entry of readdirSync(dir, { withFileTypes: true, recursive: true })) {
@@ -74,10 +82,11 @@ test("an installer is named for its architecture the way the release's assets na
 // Each of these is permanent from the first release. An upgrade finds the install it replaces
 // through the uninstall key, and the directory and scope say where that install is, so an
 // installer that changes any of them installs a second copy beside the first.
-test('the install directory, the uninstall key and the per-user scope are the ones the first release fixes', () => {
+test('the install directory, the uninstall key, the per-user scope and the Apps list name are the ones the first release fixes', () => {
   const config = installerConfig({ arch: 'amd64' })
   assert.equal(config.extraMetadata.name, 'bravebot-desktop')
   assert.equal(config.nsis.guid, 'bravebot-desktop')
+  assert.equal(config.nsis.uninstallDisplayName, 'Brave Bot Desktop')
   assert.equal(config.nsis.oneClick, true)
   assert.equal(config.nsis.perMachine, false)
   assert.equal(config.productName, 'Brave Bot Desktop')
@@ -108,11 +117,11 @@ test('a bundle missing an executable, built for the other architecture, or not f
   mkdirSync(noApp)
 
   const refusals = [
-    [noApp, `no ${noApp}/Brave Bot.exe: run \`make app-bundles-windows\` first`],
-    [noHelper, `no ${noHelper}/resources/bravebot-ui-files.exe: run \`make app-bundles-windows\` first`],
-    [otherArch, `${otherArch}/Brave Bot.exe is a win32 arm64 executable, and this is the amd64 installer`],
-    [otherHelper, `${otherHelper}/resources/bravebot-rpc.exe is a win32 arm64 executable, and this is the amd64 installer`],
-    [notFused, `${notFused}/Brave Bot.exe is not fused, so it is not a release bundle: run \`make app-bundles-windows\``],
+    [noApp, `no ${join(noApp, 'Brave Bot.exe')}: run \`make app-bundles-windows\` first`],
+    [noHelper, `no ${join(noHelper, 'resources', 'bravebot-ui-files.exe')}: run \`make app-bundles-windows\` first`],
+    [otherArch, `${join(otherArch, 'Brave Bot.exe')} is a win32 arm64 executable, and this is the amd64 installer`],
+    [otherHelper, `${join(otherHelper, 'resources', 'bravebot-rpc.exe')} is a win32 arm64 executable, and this is the amd64 installer`],
+    [notFused, `${join(notFused, 'Brave Bot.exe')} is not fused, so it is not a release bundle: run \`make app-bundles-windows\``],
   ]
   for (const [dir, message] of refusals) {
     assert.throws(() => checkBundle({ bundle: dir, arch: 'amd64' }), { message })
@@ -125,16 +134,21 @@ test('a bundle missing an executable, built for the other architecture, or not f
 // so the bundle has to reach the installer as it was handed over: a file electron-builder added to
 // it, or rewrote, would be one nobody signed. Both paths are relative, as the Makefile's are, and
 // from a directory that is not ui/, since electron-builder resolves a relative bundle against ui/.
+// The build number is a CI's, which electron-builder would otherwise put in the version.
 // Needs the NSIS toolset electron-builder downloads to its cache on first use.
 test('the installer carries the bundle as it was handed over, under the asset name and nothing else', async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'windows-installer-'))
   const cwd = process.cwd()
+  const buildNumber = process.env.BUILD_NUMBER
   t.after(() => {
     process.chdir(cwd)
+    if (buildNumber === undefined) delete process.env.BUILD_NUMBER
+    else process.env.BUILD_NUMBER = buildNumber
     rmSync(root, { recursive: true, force: true })
   })
   const dir = bundle(root, 'Brave Bot-win32-x64')
   process.chdir(root)
+  process.env.BUILD_NUMBER = '412'
   if (process.platform === 'linux') {
     await assert.rejects(buildInstaller({ bundle: 'Brave Bot-win32-x64', arch: 'amd64', out: 'out' }), { message: /needs Wine/ })
     return
@@ -155,4 +169,6 @@ test('the installer carries the bundle as it was handed over, under the asset na
   assert.equal(versionString(installer, 'CompanyName'), 'Brave Software, Inc.')
   assert.equal(versionString(installer, 'LegalCopyright'), 'Copyright (c) Brave Software, Inc. All rights reserved.')
   assert.equal(versionString(installer, 'ProductVersion'), version)
+  assert.equal(versionString(installer, 'FileVersion'), version)
+  assert.equal(fixedVersion(installer), `${version}.0`)
 })
