@@ -40,7 +40,11 @@ violation, and it can only be written inside the policy layer: `Declassification
 `pub(in crate::policy)`, so no other module and no other crate can mint one at all. Every file
 that declassifies is pinned with a count in [specs/labels.md](../specs/labels.md), so
 `make check-spec` fails on a new one until somebody records it there, which is where a reviewer
-is asked whether it belongs.
+is asked whether it belongs. The gates themselves are pinned the same way, because a reshape
+releases content to a closure the driver wrote and hands back a value that is still labelled, so
+a new call site needs no `declassify` of its own and would otherwise move nothing. So is
+`note_for` in `crates/agent/src/tools.rs`, the one function that takes a closure from its caller
+and forwards it to a gate: a new caller of it writes such a closure without touching the gate.
 
 **4. A `Labelled` built by hand.** Never construct one to give a value a better label than its
 inputs had. That is laundering, whichever crate it happens in. If a value derived from
@@ -93,9 +97,11 @@ on the whole tree: it enumerates every site each shape could hide in, reads them
 disprove what it finds, and files one issue per finding that survives. It skips anything the tracker
 already holds, open or closed, and it does not create a label.
 
-`make check-security` is its deterministic half, and it holds the two things this document cannot.
-The count above has to agree with the one in [specs/labels.md](../specs/labels.md), because two
-documents disagreeing about how many exceptions are admitted is how an unlisted exception becomes
-invisible. And shape 4 says only a reader can tell a laundered label from a sound one, which is
+`make check-security` is its deterministic half, and it holds the three things this document
+cannot. The count above has to agree with the one in [specs/labels.md](../specs/labels.md), because
+two documents disagreeing about how many exceptions are admitted is how an unlisted exception
+becomes invisible. Shape 3's gates have to be counted and not merely named, and so does any function
+that hands a caller's own closure to one, since neither moves a count that already exists. And shape
+4 says only a reader can tell a laundered label from a sound one, which is
 true of a single site and not of the surface: a spec can pin how many places construct a `Labelled`
 just as it pins how many release one, and a new site then arrives red rather than unread.

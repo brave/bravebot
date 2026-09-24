@@ -61,10 +61,21 @@ def kinds(found):
 
 
 class FakeSpec:
-    """A spec that pins the symbols named and nothing else."""
+    """A spec that pins the symbols named and nothing else.
 
-    def __init__(self, pinned):
-        self.allowlists = {symbol: [] for symbol in pinned}
+    `named` is for the checks that read both halves of a `guards` entry: a symbol a spec names
+    without counting its call sites is pinned by neither this mapping nor `check-spec`, and it is
+    a different thing from one no spec mentions at all. Pinning a symbol names it too, which is
+    what a real spec does, so the default follows `pinned`.
+
+    `sites` is for a check that reads which files an entry counts rather than only that one
+    exists, and a symbol left out of it pins no file, the way a `guards` entry with no `sites:`
+    does.
+    """
+
+    def __init__(self, pinned, named=None, sites=None):
+        self.allowlists = {symbol: list((sites or {}).get(symbol, [])) for symbol in pinned}
+        self.guards = list(pinned if named is None else named)
         self.front = {}
 
 
@@ -1305,6 +1316,232 @@ def test_construction_pinned():
     )
 
 
+def test_gates_pinned():
+    kernel = [
+        "impl Policy {",
+        "    pub fn render_in_place<T: Clone, R>(",
+        "        &mut self,",
+        "        content: &Labelled<T>,",
+        "        shape: impl FnOnce(T) -> R,",
+        "    ) -> Labelled<R> {",
+        '        let proof = Declassification::authorise("reshaped");',
+        "        Labelled::new(shape(content.clone().declassify(&proof)), content.label())",
+        "    }",
+        "    pub fn read_trusted_content<T: Clone>(&mut self, value: &Labelled<T>) -> Gated<T> {",
+        '        self.refuse_untrusted("trusted-read", "tool", value.label())?;',
+        '        let proof = Declassification::authorise("examined");',
+        "        Ok(value.clone().declassify(&proof))",
+        "    }",
+        "}",
+    ]
+    sources = {
+        Path("crates/core/src/policy.rs"): kernel,
+        Path("crates/agent/src/tools.rs"): [
+            "fn names(policy: &mut Policy, found: &Labelled<Listing>) -> Labelled<Vec<String>> {",
+            '    policy.render_in_place("list_files", found, |found| found.names())',
+            "}",
+            "fn body(policy: &mut Policy, skill: &Labelled<String>) -> Gated<String> {",
+            '    policy.read_trusted_content("load_skill", skill)',
+            "}",
+        ],
+    }
+
+    found = list(audit.check_gates_pinned([FakeSpec([])], sources))
+    check(
+        "a gate no spec counts is an error, whichever way it treats a label",
+        kinds(found) == ["gate-unpinned"] * 2 and all(one["impact"] == "low" for one in found),
+        str(kinds(found)),
+    )
+
+    # The difference the check exists to draw. A gate that refuses untrusted content can only hand
+    # the driver bytes it was already allowed to read, so naming it catches the one thing left to
+    # catch. A gate that releases whatever it is given needs the count, and a name buys nothing.
+    named = FakeSpec([], named=["Policy::render_in_place", "Policy::read_trusted_content"])
+    found = list(audit.check_gates_pinned([named], sources))
+    check(
+        "naming clears the gate that refuses untrusted content and not the gate that releases it",
+        [one["title"].split(",")[0] for one in found]
+        == ["no spec counts Policy::render_in_place"],
+        str([one["title"] for one in found]),
+    )
+
+    check(
+        "a counted gate is clean",
+        list(audit.check_gates_pinned([FakeSpec(audit.GATES)], sources)) == [],
+    )
+
+    kernel_only = {Path("crates/core/src/policy.rs"): kernel}
+    check(
+        "a gate the driver never calls is not the reported surface",
+        list(audit.check_gates_pinned([FakeSpec([])], kernel_only)) == [],
+    )
+
+    # The half a count on the gate alone leaves open: every caller of this wrapper writes a closure
+    # that runs on released content, and none of them moves the gate's count.
+    wrapped = dict(sources)
+    wrapped[Path("crates/agent/src/tools.rs")] = [
+        "fn note_for<T: Clone>(",
+        "    policy: &mut Policy,",
+        "    content: &Labelled<T>,",
+        "    shape: impl FnOnce(T) -> String,",
+        ") -> String {",
+        '    let shaped = policy.render_in_place("read_file", content, shape);',
+        "    shaped.declassify(&proof)",
+        "}",
+    ]
+    found = list(audit.check_gates_pinned([FakeSpec(audit.GATES)], wrapped))
+    check(
+        "a function that forwards its caller's closure to a gate is an error of its own",
+        kinds(found) == ["gate-forwarder-unpinned"] and "note_for" in found[0]["title"],
+        str([one["title"] for one in found]),
+    )
+    in_tools = FakeSpec(
+        list(audit.GATES) + ["note_for"],
+        sites={"note_for": ["crates/agent/src/tools.rs: 2"]},
+    )
+    check(
+        "counting the wrapper clears it",
+        list(audit.check_gates_pinned([in_tools], wrapped)) == [],
+    )
+
+    # A bare `guards` name is satisfied by any symbol of that name anywhere in the tree, so an
+    # entry that counts a different file is an entry about a different function.
+    elsewhere = FakeSpec(
+        list(audit.GATES) + ["note_for"],
+        sites={"note_for": ["crates/agent/src/workspace.rs: 2"]},
+    )
+    check(
+        "an entry counting another file does not clear this one",
+        kinds(list(audit.check_gates_pinned([elsewhere], wrapped))) == ["gate-forwarder-unpinned"],
+        str(kinds(list(audit.check_gates_pinned([elsewhere], wrapped)))),
+    )
+
+    # The rewrite that would answer a check reading only `impl Fn`: the same closure, taken as a
+    # generic bound in the brackets and spelled by name where the parameter is declared.
+    generic = dict(sources)
+    generic[Path("crates/agent/src/tools.rs")] = [
+        "fn note_for<T: Clone, F: FnOnce(T) -> String>(",
+        "    policy: &mut Policy,",
+        "    content: &Labelled<T>,",
+        "    shape: F,",
+        ") -> String {",
+        '    let shaped = policy.render_in_place("read_file", content, shape);',
+        "    shaped.declassify(&proof)",
+        "}",
+    ]
+    found = list(audit.check_gates_pinned([FakeSpec(audit.GATES)], generic))
+    check(
+        "a closure taken as a generic bound is the same way in",
+        kinds(found) == ["gate-forwarder-unpinned"] and "note_for" in found[0]["title"],
+        str([one["title"] for one in found]),
+    )
+
+    # A call written as an associated function rather than on a receiver reaches the same gate.
+    qualified = dict(sources)
+    qualified[Path("crates/agent/src/tools.rs")] = [
+        "fn note_for<T: Clone>(",
+        "    policy: &mut Policy,",
+        "    content: &Labelled<T>,",
+        "    shape: impl FnOnce(T) -> String,",
+        ") -> String {",
+        '    Policy::render_in_place(policy, "read_file", content, shape)',
+        "}",
+    ]
+    check(
+        "a gate called by its qualified name is still forwarded to",
+        kinds(list(audit.check_gates_pinned([FakeSpec(audit.GATES)], qualified)))
+        == ["gate-forwarder-unpinned"],
+        str(kinds(list(audit.check_gates_pinned([FakeSpec(audit.GATES)], qualified)))),
+    )
+
+    # A parenthesis inside a string literal closes nothing, so a scan that counted one would run
+    # past the end of this call and come back with no arguments, which reads as a function that
+    # forwards nothing. Every one of these calls names its tool with a string literal.
+    literal = dict(sources)
+    literal[Path("crates/agent/src/tools.rs")] = [
+        "fn note_for<T: Clone>(",
+        "    policy: &mut Policy,",
+        "    content: &Labelled<T>,",
+        "    shape: impl FnOnce(T) -> String,",
+        ") -> String {",
+        '    let shaped = policy.render_in_place("read (file", content, shape);',
+        "    shaped.declassify(&proof)",
+        "}",
+    ]
+    check(
+        "a parenthesis inside a string literal does not hide the argument list",
+        kinds(list(audit.check_gates_pinned([FakeSpec(audit.GATES)], literal)))
+        == ["gate-forwarder-unpinned"],
+        str([one["title"] for one in audit.check_gates_pinned([FakeSpec(audit.GATES)], literal)]),
+    )
+
+    # A refusal below the release is not one: the bytes are in the caller's hands by the time it
+    # runs, so a gate cannot be exempted from being counted by a line that does nothing.
+    late = {
+        Path("crates/core/src/policy.rs"): [
+            "impl Policy {",
+            "    pub fn render_in_place<T: Clone, R>(",
+            "        &mut self,",
+            "        content: &Labelled<T>,",
+            "        shape: impl FnOnce(T) -> R,",
+            "    ) -> Labelled<R> {",
+            "        let out = shape(content.clone().declassify(&proof));",
+            '        self.refuse_untrusted("render", "tool", content.label())?;',
+            "        Labelled::new(out, content.label())",
+            "    }",
+            "}",
+        ],
+        Path("crates/agent/src/tools.rs"): [
+            "fn names(policy: &mut Policy, found: &Labelled<Listing>) -> Labelled<Vec<String>> {",
+            '    policy.render_in_place("list_files", found, |found| found.names())',
+            "}",
+        ],
+    }
+    check(
+        "a refusal after the release does not excuse the count",
+        kinds(
+            list(
+                audit.check_gates_pinned(
+                    [FakeSpec([], named=["Policy::render_in_place"])], late
+                )
+            )
+        )
+        == ["gate-unpinned"],
+    )
+
+    # A callback the gate never receives is not a way into it, and reporting one would make this
+    # check fire on every function that happens to take a closure for a reason of its own.
+    callback = dict(sources)
+    callback[Path("crates/agent/src/tools.rs")] = [
+        "fn watched<T: Clone>(",
+        "    policy: &mut Policy,",
+        "    content: &Labelled<T>,",
+        "    watching: impl Fn(usize),",
+        ") -> Labelled<String> {",
+        "    watching(1);",
+        '    policy.render_in_place("read_file", content, |text| text.to_string())',
+        "}",
+    ]
+    check(
+        "a closure the call never passes on is not a way into the gate",
+        list(audit.check_gates_pinned([FakeSpec(audit.GATES)], callback)) == [],
+        str([one["title"] for one in audit.check_gates_pinned([FakeSpec(audit.GATES)], callback)]),
+    )
+
+    # The counts in `labels.md` are what makes this pass, so a gate added to the tree without one
+    # fails here rather than at whoever next reads `crates/agent/src/tools.rs`.
+    check(
+        "the tree's own gates and the wrapper that forwards to one are counted",
+        with_cwd(
+            ROOT,
+            lambda: list(
+                audit.check_gates_pinned(audit.load_specs(), audit.mechanics.load_sources())
+            ),
+        )
+        == [],
+    )
+
+
 STEP_DECLARED = [
     "pub struct Step {",
     "    pub program: String,",
@@ -2065,6 +2302,7 @@ def main():
         test_privileged_job_runs_only_its_own_code,
         test_checkout_ref_is_qualified,
         test_construction_pinned,
+        test_gates_pinned,
         test_key_sites_exhaustive,
         test_guarantee_specs_are_read,
         test_declassify_counts_match_the_spec,

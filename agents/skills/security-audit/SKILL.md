@@ -283,6 +283,8 @@ diff, from [reviewing-for-the-rule.md](../../../docs/development/reviewing-for-t
 | A field documented as read in one place that is read in two | mechanical | error |
 | A trait `impl` on `Labelled` that reaches its content | mechanical | error |
 | A constructor of `Labelled` that no spec pins to a count | mechanical | error |
+| A gate releasing content to a closure of the driver's that no spec counts | mechanical | error |
+| A function that hands its caller's own closure to a gate and no spec counts | mechanical | error |
 | A workflow step on a tag or a branch rather than a commit | mechanical | error |
 | A container image on a tag rather than a digest | mechanical | error |
 | A job holding `id-token: write` or a secret that installs or runs a dependency | mechanical | error |
