@@ -33,7 +33,11 @@ use crate::capability::{Capability, CapabilitySet};
 /// and cannot describe a delegate of its own. That is the smaller half of the same decision the
 /// prompt makes: a name that matches nothing in this enum resolves to nothing and the call is
 /// refused, so there is no spelling of `kind` that reaches a capability set nobody chose.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// The three are declared narrowest first and ordered by that, each holding what the one before
+/// it holds and more, so the meet of two of them is the narrower one rather than a set no kind
+/// goes by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind {
     /// Reads, lists, searches, and hands quarantined files to processors. Writes nothing and
     /// runs nothing.
@@ -190,6 +194,26 @@ pub fn gating_capability(tool: &str) -> Option<Capability> {
 /// delegate is offered reaches the first, so what a definition narrows is what remains.
 const HELD_WHATEVER_IT_NAMED: [Capability; 2] = [Capability::WebFetch, Capability::FileRead];
 
+/// The tools a replacement is confined to: its own `tools:` line met with the one it replaced.
+///
+/// `None` means the kind's whole set, so it is the wider of the two and loses to any list at all,
+/// including to an empty one. Two lists meet name by name in the replacement's order, so a
+/// replacement written for another agent, whose names are that agent's vocabulary, comes out with
+/// nothing in common rather than with either side's list.
+fn meet_tools(asked: Option<&[String]>, replaced: Option<&[String]>) -> Option<Vec<String>> {
+    match (asked, replaced) {
+        (None, None) => None,
+        (Some(only), None) | (None, Some(only)) => Some(only.to_vec()),
+        (Some(asked), Some(replaced)) => Some(
+            asked
+                .iter()
+                .filter(|&tool| replaced.contains(tool))
+                .cloned()
+                .collect(),
+        ),
+    }
+}
+
 /// What a tool a definition named reaches for a delegate, or nothing.
 ///
 /// A name no delegate is ever offered reaches nothing here whatever capability it would otherwise
@@ -315,6 +339,10 @@ impl Definition {
     /// those tools reaches. Reaching the network survives every narrowing, because a planner is a
     /// model call and a delegate that cannot make one cannot think; no tool reaches it, so
     /// keeping it grants nothing a tool list could spend.
+    ///
+    /// Read off this definition's own two fields, which is why [`Definitions::insert`] narrows
+    /// those rather than keeping a ceiling beside them: a replacement that has been cut down to
+    /// the kind and the tools of the one it replaced is one nothing else has to know was.
     pub fn capabilities(&self) -> CapabilitySet {
         let held = self.kind.capabilities();
         let Some(tools) = self.tools.as_deref() else {
@@ -350,6 +378,41 @@ impl Definition {
     }
 }
 
+/// What [`Definitions::insert`] did with a definition.
+///
+/// Reported rather than returned as a bare yes, because two of these are things whoever wrote
+/// the file has to be told: a name that could not be taken, and a definition admitted for less
+/// than it asked for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Admitted {
+    /// It is in the set as written.
+    AsWritten,
+    /// It is in the set, cut down to the definition of the same name it replaced.
+    Narrowed(Narrowing),
+    /// Not in the set: its name is one of the kinds' own.
+    Refused,
+}
+
+/// What a replacement asked for and did not get, for whoever wrote it to be told.
+///
+/// The words are the loader's: this is the kernel, and what it has to hand over is which of the
+/// two axes moved rather than a sentence about it. [`Admitted::Narrowed`] is answered only where
+/// one of them did, so a value of this always has something to say.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Narrowing {
+    /// The kind the file named.
+    pub named: Kind,
+    /// The kind it is loaded as, which is the narrower of its own and the one it replaced.
+    pub loaded: Kind,
+    /// The tools it is confined to, where the one it replaced named fewer than it did.
+    ///
+    /// `None` where its own `tools:` line stands, which includes the case of neither file
+    /// naming one. An empty list is the two lists having no name in common.
+    pub confined_to: Option<Vec<String>>,
+    /// Where the definition that cut it down came from.
+    pub replaced: String,
+}
+
 /// The kinds of delegate this turn can select from.
 ///
 /// Fixed before the turn and never added to while it runs. The three the program wrote are always
@@ -373,31 +436,73 @@ impl Default for Definitions {
 }
 
 impl Definitions {
-    /// Add one, replacing any of the same name.
+    /// Add one, replacing any of the same name and never widening what that name reaches.
     ///
     /// Later wins, and discovery visits the built-in kinds, then the user's own directory, then
     /// the project, so the project has the last word. That is [INSTR-4]'s rule and the same one
     /// the skill catalogue follows.
     ///
     /// [INSTR-4]: https://github.com/brave/bravebot/blob/main/docs/specs/instructions.md
+    ///
+    /// **Last word about what a name is for, and never about what it may do.** A replacement
+    /// takes over the description, the body and the model, and is cut down on the two fields
+    /// that decide what it may do: it is loaded as the narrower of the two kinds, and its
+    /// `tools:` line is met with the one it replaced. So a project cannot turn a `reader` a
+    /// person wrote into a `worker`, and cannot hand back a tool that person's own `tools:` line
+    /// had taken away. Widening it would make the checked-in file the author of authority rather
+    /// than the person who vouched for the checkout, which is the sentence [`Definition`] is
+    /// built around, and the vouch that let the file be read at all is a decision about the
+    /// project rather than about this name.
+    ///
+    /// **Both fields rather than a ceiling beside them**, so that what a definition holds is
+    /// still read off the definition, and the trail a delegate leaves names the kind and the
+    /// tools it actually got. What it asked for and did not get comes back instead, so whoever
+    /// wrote it is told rather than left to find the narrowing by running it.
+    ///
     /// A name one of the three kinds already goes by is **refused**, so the three the program
     /// wrote are in every set and a `reader` is a reader wherever a session runs. A file free to
     /// claim one would be a file renaming the narrowest kind to the widest, and a planner
     /// choosing the narrowest thing that can do the job would be choosing from a list whose order
     /// had stopped being true.
-    pub fn insert(&mut self, definition: Definition) -> bool {
+    pub fn insert(&mut self, mut definition: Definition) -> Admitted {
         if !Self::may_be_named(&definition.name) {
-            return false;
+            return Admitted::Refused;
         }
-        match self
+        let Some(existing) = self
             .entries
             .iter_mut()
             .find(|existing| existing.name == definition.name)
-        {
-            Some(existing) => *existing = definition,
-            None => self.entries.push(definition),
+        else {
+            self.entries.push(definition);
+            return Admitted::AsWritten;
+        };
+
+        // Taken against what the one being replaced was left holding rather than against what
+        // its own file named, so a third definition of the same name meets both of the first
+        // two rather than only the second.
+        let named = definition.kind;
+        let loaded = named.min(existing.kind);
+        let asked = definition.tools.take();
+        let tools = meet_tools(asked.as_deref(), existing.tools.as_deref());
+        // `None` is the kind's whole set, so it differs from any list at all, and a replacement
+        // that named no tools and inherited one has been confined as surely as one whose own
+        // list was cut down.
+        let confined_to = (tools != asked).then(|| tools.clone().unwrap_or_default());
+        let replaced = existing.origin.clone();
+
+        definition.kind = loaded;
+        definition.tools = tools;
+        *existing = definition;
+
+        if named == loaded && confined_to.is_none() {
+            return Admitted::AsWritten;
         }
-        true
+        Admitted::Narrowed(Narrowing {
+            named,
+            loaded,
+            confined_to,
+            replaced,
+        })
     }
 
     /// Whether a definition may go by this name, which is any name but a kind's own.
@@ -664,6 +769,20 @@ mod tests {
         assert!(!reader.contains(&Capability::FileWrite));
         assert!(!reader.contains(&Capability::ShellExec));
         assert!(!checker.contains(&Capability::FileWrite));
+
+        // `insert` takes the meet of two kinds with `min`, so the derived order has to be this
+        // containment. A variant moved in the enum would leave it picking the wider one.
+        for (narrower, wider) in [
+            (Kind::Reader, Kind::Checker),
+            (Kind::Checker, Kind::Worker),
+            (Kind::Reader, Kind::Worker),
+        ] {
+            assert_eq!(
+                narrower.min(wider),
+                narrower,
+                "the order the kinds compare in stopped being the order of what they hold"
+            );
+        }
     }
 
     /// A planner is a model call, so every kind can reach the endpoint and no kind can reach
@@ -843,13 +962,17 @@ mod tests {
 
     /// Most specific wins, as it does in the trust map and in the skill catalogue. A project that
     /// ships its own version of a definition means it.
+    ///
+    /// The kinds go the narrowing way round, which is the direction a replacement is free to
+    /// take: the widening one is
+    /// [`a_later_definition_cannot_widen_the_kind_the_one_it_replaces_named`].
     #[test]
     fn a_later_definition_replaces_one_of_the_same_name() {
         let mut definitions = Definitions::default();
         definitions.insert(Definition::from_file(
             "rule-reviewer",
             "the global one",
-            Kind::Reader,
+            Kind::Worker,
             None,
             "global",
             "~/.bravebot/agents/rule-reviewer.md",
@@ -866,7 +989,224 @@ mod tests {
         assert_eq!(definitions.len(), Kind::NAMES.len() + 1);
         let found = definitions.get("rule-reviewer").expect("selectable");
         assert_eq!(found.prompt(), "local");
+        assert_eq!(found.description(), "the project one");
+        assert_eq!(found.origin(), ".bravebot/agents/rule-reviewer.md");
         assert_eq!(found.kind(), Kind::Checker);
+        assert!(!found.capabilities().contains(&Capability::FileWrite));
+    }
+
+    /// A replacement has the last word about what a name is *for* and none at all about what it
+    /// may do. The source that gets the last word is the project, and the vouch that let its
+    /// file be read is a decision about the checkout rather than about this name, so a `reader`
+    /// somebody wrote in their own directory stays a reader.
+    #[test]
+    fn a_later_definition_cannot_widen_the_kind_the_one_it_replaces_named() {
+        let mut definitions = Definitions::default();
+        definitions.insert(Definition::from_file(
+            "rule-reviewer",
+            "the global one",
+            Kind::Reader,
+            None,
+            "global",
+            "~/.bravebot/agents/rule-reviewer.md",
+        ));
+        let admitted = definitions.insert(Definition::from_file(
+            "rule-reviewer",
+            "the project one",
+            Kind::Worker,
+            None,
+            "local",
+            ".bravebot/agents/rule-reviewer.md",
+        ));
+
+        let found = definitions.get("rule-reviewer").expect("selectable");
+        assert_eq!(found.prompt(), "local", "the replacement did not take");
+        assert_eq!(
+            found.kind(),
+            Kind::Reader,
+            "the project widened a name the person's own file defined as a reader"
+        );
+        let held = found.capabilities();
+        assert!(held.contains(&Capability::FileRead));
+        assert!(!held.contains(&Capability::FileWrite));
+        assert!(!held.contains(&Capability::ShellExec));
+
+        // Said rather than dropped quietly: the file that asked is the one whose author has to
+        // be told, and the file that cut it down is the answer to why.
+        assert_eq!(
+            admitted,
+            Admitted::Narrowed(Narrowing {
+                named: Kind::Worker,
+                loaded: Kind::Reader,
+                confined_to: None,
+                replaced: "~/.bravebot/agents/rule-reviewer.md".to_string(),
+            })
+        );
+    }
+
+    /// The other spelling of the same widening, and the one no kind moves in. A `tools:` line is
+    /// a narrowing of its own kind, so a replacement of the same kind that names no tools would
+    /// hand back everything the earlier file had taken away.
+    #[test]
+    fn a_later_definition_cannot_undo_the_tools_the_one_it_replaces_named() {
+        let mut definitions = Definitions::default();
+        definitions.insert(Definition::from_file(
+            "rule-reviewer",
+            "the global one",
+            Kind::Worker,
+            Some(vec!["read_file".to_string()]),
+            "global",
+            "~/.bravebot/agents/rule-reviewer.md",
+        ));
+        let admitted = definitions.insert(Definition::from_file(
+            "rule-reviewer",
+            "the project one",
+            Kind::Worker,
+            None,
+            "local",
+            ".bravebot/agents/rule-reviewer.md",
+        ));
+
+        let found = definitions.get("rule-reviewer").expect("selectable");
+        assert_eq!(found.prompt(), "local", "the replacement did not take");
+        assert_eq!(
+            found.kind(),
+            Kind::Worker,
+            "neither file named a wider kind"
+        );
+        let held = found.capabilities();
+        assert!(held.contains(&Capability::FileRead));
+        assert!(!held.contains(&Capability::FileWrite));
+        assert!(!held.contains(&Capability::ShellExec));
+        assert_eq!(
+            admitted,
+            Admitted::Narrowed(Narrowing {
+                named: Kind::Worker,
+                loaded: Kind::Worker,
+                confined_to: Some(vec!["read_file".to_string()]),
+                replaced: "~/.bravebot/agents/rule-reviewer.md".to_string(),
+            })
+        );
+    }
+
+    /// The tool list is met name by name, not only capability by capability. A replacement
+    /// naming every tool one capability reaches costs nothing at the capability level and still
+    /// hands a delegate its author confined to one tool the other four.
+    #[test]
+    fn a_later_definition_cannot_widen_a_tool_list_within_one_capability() {
+        let mut definitions = Definitions::default();
+        definitions.insert(Definition::from_file(
+            "rule-reviewer",
+            "the global one",
+            Kind::Reader,
+            Some(vec!["read_file".to_string()]),
+            "global",
+            "~/.bravebot/agents/rule-reviewer.md",
+        ));
+        let admitted = definitions.insert(Definition::from_file(
+            "rule-reviewer",
+            "the project one",
+            Kind::Reader,
+            Some(vec![
+                "read_file".to_string(),
+                "search".to_string(),
+                "spawn_processor".to_string(),
+            ]),
+            "local",
+            ".bravebot/agents/rule-reviewer.md",
+        ));
+
+        let found = definitions.get("rule-reviewer").expect("selectable");
+        assert_eq!(found.tools(), Some(["read_file".to_string()].as_slice()));
+        assert_eq!(
+            found.capabilities(),
+            CapabilitySet::from_iter(HELD_WHATEVER_IT_NAMED),
+            "the tool names moved and the capability set did not, so nothing else would notice"
+        );
+        assert_eq!(
+            admitted,
+            Admitted::Narrowed(Narrowing {
+                named: Kind::Reader,
+                loaded: Kind::Reader,
+                confined_to: Some(vec!["read_file".to_string()]),
+                replaced: "~/.bravebot/agents/rule-reviewer.md".to_string(),
+            })
+        );
+    }
+
+    /// Two lists with no name in common leave a delegate with no tools, which is what a list
+    /// naming another agent's vocabulary already produces. The alternative is falling back to
+    /// one side's list, and either side is a widening of the other.
+    #[test]
+    fn tool_lists_with_nothing_in_common_meet_at_nothing() {
+        let mut definitions = Definitions::default();
+        definitions.insert(Definition::from_file(
+            "rule-reviewer",
+            "the global one",
+            Kind::Worker,
+            Some(vec!["read_file".to_string()]),
+            "global",
+            "~/.bravebot/agents/rule-reviewer.md",
+        ));
+        let admitted = definitions.insert(Definition::from_file(
+            "rule-reviewer",
+            "the project one",
+            Kind::Worker,
+            Some(vec!["run".to_string()]),
+            "local",
+            ".bravebot/agents/rule-reviewer.md",
+        ));
+
+        let found = definitions.get("rule-reviewer").expect("selectable");
+        assert_eq!(found.tools(), Some([].as_slice()));
+        assert_eq!(
+            found.capabilities(),
+            CapabilitySet::from_iter(HELD_WHATEVER_IT_NAMED)
+        );
+        assert_eq!(
+            admitted,
+            Admitted::Narrowed(Narrowing {
+                named: Kind::Worker,
+                loaded: Kind::Worker,
+                confined_to: Some(Vec::new()),
+                replaced: "~/.bravebot/agents/rule-reviewer.md".to_string(),
+            })
+        );
+    }
+
+    /// A replacement is cut down against what the definition it replaced was left holding, not
+    /// against what that one's own file named, so the narrowing carries through a third of the
+    /// same name. Two files in one directory resolve by file name, so three of them is reachable
+    /// with one project and a home directory.
+    #[test]
+    fn a_narrowing_carries_through_a_third_definition_of_the_same_name() {
+        let mut definitions = Definitions::default();
+        definitions.insert(Definition::from_file(
+            "rule-reviewer",
+            "the person's own",
+            Kind::Worker,
+            Some(vec!["read_file".to_string()]),
+            "",
+            "~/.bravebot/agents/a-first.md",
+        ));
+        for origin in ["~/.bravebot/agents/z-last.md", ".bravebot/agents/rule.md"] {
+            definitions.insert(Definition::from_file(
+                "rule-reviewer",
+                "a later one",
+                Kind::Worker,
+                None,
+                "",
+                origin,
+            ));
+        }
+
+        let found = definitions.get("rule-reviewer").expect("selectable");
+        assert_eq!(found.origin(), ".bravebot/agents/rule.md");
+        assert_eq!(found.tools(), Some(["read_file".to_string()].as_slice()));
+        let held = found.capabilities();
+        assert!(held.contains(&Capability::FileRead));
+        assert!(!held.contains(&Capability::FileWrite));
+        assert!(!held.contains(&Capability::ShellExec));
     }
 
     /// A name nothing in the set carries selects nothing, which is what keeps `kind` from being a
@@ -959,8 +1299,8 @@ mod tests {
         let mut definitions = Definitions::default();
         for name in Kind::NAMES {
             assert!(!Definitions::may_be_named(name));
-            assert!(
-                !definitions.insert(Definition::from_file(
+            assert_eq!(
+                definitions.insert(Definition::from_file(
                     name,
                     "pretending to be a kind",
                     Kind::Worker,
@@ -968,6 +1308,7 @@ mod tests {
                     "",
                     ".bravebot/agents/escalate.md",
                 )),
+                Admitted::Refused,
                 "'{name}' was taken over by a definition"
             );
         }
