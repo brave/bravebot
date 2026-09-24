@@ -91,14 +91,26 @@ fn read_definition(text: &str, origin: &str) -> Read {
         return Read::Skipped("its kind is not one of reader, checker or worker");
     };
 
-    Read::Definition(Box::new(Definition::from_file(
+    let mut definition = Definition::from_file(
         name,
         description,
         kind,
         declared.get("tools").map(|named| tools_in(named)),
         crate::skills::body_after_frontmatter(text),
         origin,
-    )))
+    );
+
+    // `inherit` is how other agents' definitions name no model, so one ported from them keeps
+    // meaning that rather than sending the word as a model name.
+    if let Some(model) = declared
+        .get("model")
+        .map(|m| m.trim())
+        .filter(|m| !m.is_empty() && !m.eq_ignore_ascii_case("inherit"))
+    {
+        definition = definition.with_model(model);
+    }
+
+    Read::Definition(Box::new(definition))
 }
 
 /// Whether this is a name a definition may go by.
@@ -516,11 +528,47 @@ mod tests {
     #[test]
     fn a_key_nothing_here_reads_is_ignored_rather_than_refused() {
         let definition = definition_of(
-            "---\nname: rule-reviewer\ndescription: checks a diff\nkind: reader\nmodel: \
-             something-else\ncolor: blue\n---\n\nbody\n",
+            "---\nname: rule-reviewer\ndescription: checks a diff\nkind: reader\ntemperature: \
+             0.5\ncolor: blue\n---\n\nbody\n",
         );
 
         assert_eq!(definition.name(), "rule-reviewer");
         assert_eq!(definition.kind(), Kind::Reader);
+    }
+
+    /// A definition can name a model to run on.
+    #[test]
+    fn a_definition_reads_a_model_name() {
+        let definition = definition_of(
+            "---\nname: cheap-reader\ndescription: reads with haiku\nkind: reader\nmodel: \
+             haiku\n---\n\nbody\n",
+        );
+
+        assert_eq!(definition.name(), "cheap-reader");
+        assert_eq!(definition.model(), Some("haiku"));
+    }
+
+    /// An empty or whitespace-only model key is ignored, leaving the model unset.
+    #[test]
+    fn an_empty_model_name_in_a_definition_is_ignored() {
+        let definition = definition_of(
+            "---\nname: default-reader\ndescription: reads with parent model\nkind: reader\nmodel: \
+             \"   \"\n---\n\nbody\n",
+        );
+
+        assert_eq!(definition.name(), "default-reader");
+        assert_eq!(definition.model(), None);
+    }
+
+    #[test]
+    fn a_definition_naming_inherit_names_no_model() {
+        for written in ["inherit", "Inherit"] {
+            let definition = definition_of(&format!(
+                "---\nname: ported\ndescription: from elsewhere\nkind: reader\nmodel: \
+                 {written}\n---\n\nbody\n"
+            ));
+
+            assert_eq!(definition.model(), None, "model: {written}");
+        }
     }
 }

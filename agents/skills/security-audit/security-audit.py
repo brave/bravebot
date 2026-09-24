@@ -18,12 +18,15 @@ beside it declares, that the register admitting them leaves
 as many prompts out of a verdict's reach as the clause deciding that does, that a field documented
 as read in one place is read in one place, that nothing has been implemented on
 `Labelled` that would let a caller read a label's content without asking, that the constructor which
-is how a value gets a better label than its inputs had is pinned somewhere, that every workflow step
+is how a value gets a better label than its inputs had is pinned somewhere, that every gate handing
+released content to a closure the driver wrote is counted rather than merely named, and so is every
+function forwarding its caller's closure to one, that every workflow step
 names a commit rather than a tag its owner can move, that every container image this tree runs names a
 digest rather than a tag its publisher can move, that no job holding a credential installs or runs a
-dependency beside it, and that a checkout of this tree names a kind of ref rather than a bare name a
-branch and a tag can share. A rule that can be written as one of these belongs here rather than in a
-reviewer's head.
+dependency beside it, that a checkout of this tree names a kind of ref rather than a bare name a
+branch and a tag can share, and that the contexts a merge is held to are written down, name jobs
+that exist, and cover every job that runs a check. A rule that can be written as one of these
+belongs here rather than in a reviewer's head.
 """
 
 import argparse
@@ -121,6 +124,13 @@ GATES = (
 )
 WITNESS = "Declassification::authorise"
 
+# What a gate calls to turn untrusted content away before it releases anything. A gate that never
+# reaches it releases content the driver may not read, which is the difference between one a spec
+# can name and one whose call sites have to be counted.
+REFUSAL = "refuse_untrusted"
+# The release itself. A refusal after one says nothing: the bytes are already out.
+RELEASED = ".declassify("
+
 # The specs the guarantee rests on. A clause of one of these that nothing pins is worth reporting
 # even though `check-spec` already counts it, because there it is one warning among many and here it
 # is the list of what a change could break while staying green.
@@ -153,6 +163,14 @@ PLACES = re.compile(
     r"\b(" + "|".join(NUMBERS) + r")\s+places?\s+(?:in|do|that)", re.IGNORECASE
 )
 FUNCTION = re.compile(r"\bfn\s+([A-Za-z0-9_]+)")
+# A name bound to one of the `Fn` traits, which is a parameter whose value is code the caller wrote
+# or a generic the parameter is declared with. The name is what a call has to pass on for the
+# function holding it to be a way into a gate rather than a function that takes a callback.
+CLOSURE_BOUND = re.compile(r"\b([A-Za-z0-9_]+)\s*:\s*[^,;()]*\bFn(?:Once|Mut)?\s*\(")
+STRING_LITERAL = re.compile(r'"(?:[^"\\]|\\.)*"')
+# How far a call may run before this stops reading. A call written over more lines than this is
+# not one of these, and reading to the end of the file would balance on an unrelated parenthesis.
+CALL_LINES = 40
 
 # The clause that decides which of the prompts a check runs for a safe verdict may answer, the cell
 # in its table that says one of them is answered, and the sentence in `labels.md` counting the rest.
@@ -203,6 +221,24 @@ JOB = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$")
 PERMISSIONS = re.compile(r"^\s*permissions:\s*(.*)$")
 RUN = re.compile(r"^\s*(?:-\s+)?run:\s*(.*)$")
 BLOCK = ("", "|", "|-", "|+", ">", ">-", ">+")
+# A job's own `name:`, which is the name its check run reports under and so the name a required
+# context has to match. Four columns is the job's; a step's is deeper and a workflow's is at zero.
+# An unquoted scalar ends at a ` #`, so the comment is not part of the name.
+DISPLAY_NAME = re.compile(r"^ {4}name:\s*(.+?)\s*$")
+TRAILING_COMMENT = re.compile(r"\s+#.*$")
+EXPRESSION = re.compile(r"\$\{\{")
+# A `make` invocation and the check targets in it. Read as the whole command rather than the word
+# after `make`, since a target can arrive behind a flag, behind a variable, or second in a list.
+MAKE = re.compile(r"\bmake\b[^\n;&|]*")
+CHECK_TARGET = re.compile(r"\bcheck-[\w-]+\b")
+
+# Which of those check runs a merge is actually held to, and where the tree says so. The list the
+# protection enforces is a repository setting rather than a file, so this is the record of what it
+# has to hold, and the documentation is where a target's promise to fail a pull request is written.
+REQUIRED_CHECKS = Path("contrib/required-checks.txt")
+CHECKS_DOC = Path("docs/development/checks.md")
+DOC_TARGET = re.compile(r"`make (check-[\w-]+)`")
+GATES_A_PULL_REQUEST = ("fails a pull request", "fails rather than")
 
 # What a job can hold that is worth stealing, and the commands that run bytes nobody here wrote. The
 # grant is a permission to request a token rather than a token, which is the whole of the difference:
@@ -863,14 +899,7 @@ def check_construction_pinned(specs, sources):
     for constructor in CONSTRUCTORS:
         if constructor in pinned:
             continue
-        sites = sites_for(constructor, sources)
-        outside = [
-            site
-            for site in sites
-            if not site["core"]
-            and not site["test_file"]
-            and not in_test_module(sources, Path(site["path"]), site["line"])
-        ]
+        outside = outside_the_kernel(sites_for(constructor, sources), sources)
         if not outside:
             continue
         by_file = {}
@@ -894,6 +923,272 @@ def check_construction_pinned(specs, sources):
             "constructor bytes from a page or a process, with a label saying a person typed them, "
             "puts untrusted content in the planner's context and passes every check in the tree",
         )
+
+
+def outside_the_kernel(sites, sources):
+    """The sites of a symbol that driver code outside `crates/core` writes.
+
+    The kernel is where reading content belongs, and the tests hold the largest concentration of
+    every primitive because a test that proves something about a label has to build one. What a
+    pin is for is the next site somebody writes in the driver.
+    """
+    return [
+        site
+        for site in sites
+        if not site["core"]
+        and not site["test_file"]
+        and not in_test_module(sources, Path(site["path"]), site["line"])
+    ]
+
+
+def function_body(lines, start):
+    """The lines of the function beginning at `start`, by brace depth."""
+    depth = 0
+    body = []
+    for raw in lines[start:]:
+        body.append(raw)
+        depth += raw.count("{") - raw.count("}")
+        if "{" in raw and depth <= 0:
+            break
+    return body
+
+
+def refuses_before_releasing(body):
+    """Whether a body turns untrusted content away before it releases any.
+
+    A refusal below the release is not one: by the time it runs the bytes are already in the
+    caller's hands, and reading only whether the name appears anywhere would let a gate be
+    exempted from being counted by a line that does nothing.
+    """
+    refusal = next((number for number, raw in enumerate(body) if REFUSAL in raw), None)
+    release = next((number for number, raw in enumerate(body) if RELEASED in raw), None)
+    return refusal is not None and (release is None or refusal < release)
+
+
+def gate_refuses_untrusted(gate, sources):
+    """Whether every definition of a gate turns untrusted content away before releasing any.
+
+    `Policy::read_trusted_content` refuses twice over, so every closure it can reach runs on bytes
+    the driver was already allowed to read and a spec naming it catches the only thing left, a
+    rename. `Policy::render_in_place` has no refusal on the label at all, because releasing
+    untrusted content to a closure is what it is for, so for that one a name is not enough.
+
+    Every definition rather than any, since a second function of the name in another module is a
+    second way in, and a gate is only as refusing as the one a caller reaches.
+    """
+    bare = gate.split("::")[-1]
+    opens = re.compile(rf"\bfn\s+{re.escape(bare)}\b")
+    bodies = []
+    for path, lines in sources.items():
+        if not str(path).startswith("crates/core/"):
+            continue
+        code = mechanics.strip_comments(lines)
+        for number, raw in enumerate(code):
+            if opens.search(raw):
+                bodies.append(function_body(code, number))
+    return bool(bodies) and all(refuses_before_releasing(body) for body in bodies)
+
+
+def generic_names(signature):
+    """The names inside a function's angle brackets, which are types rather than parameters."""
+    found = re.search(r"\bfn\s+[A-Za-z0-9_]+\s*<", signature)
+    if not found:
+        return set()
+    # `->` inside a bound closes nothing, and reading it as a bracket ends the list at the first
+    # `FnOnce(T) -> R`, which is the one signature this has to get right.
+    text = signature[found.end() - 1 :].replace("->", "  ")
+    depth = 0
+    held = []
+    for char in text:
+        if char == "<":
+            depth += 1
+        elif char == ">":
+            depth -= 1
+            if depth == 0:
+                break
+        if depth:
+            held.append(char)
+    return set(re.findall(r"\b([A-Za-z0-9_]+)\b", "".join(held)))
+
+
+def closure_parameters(signature):
+    """The parameters of a signature whose value is code the caller wrote.
+
+    Three spellings reach the same place: an `impl FnOnce(..)` in the parameter list, a `dyn` one
+    behind a pointer, and a generic bound to `Fn` in the brackets or a `where` clause and spelled
+    by name where the parameter is declared. Reading only the first would be answered by the
+    rewrite anybody would make.
+    """
+    generics = generic_names(signature)
+    names = set()
+    for one in CLOSURE_BOUND.findall(signature):
+        if one not in generics:
+            names.add(one)
+            continue
+        carries = rf"\b([A-Za-z0-9_]+)\s*:\s*(?:&\s*)?(?:mut\s+)?{re.escape(one)}\s*[,)]"
+        names.update(found.group(1) for found in re.finditer(carries, signature))
+    return names - generics
+
+
+def enclosing_signature(lines, index):
+    """The function a line sits in, as its name and the closures its caller hands it.
+
+    `enclosing` answers the first half for a list a person reads. This answers the second, which
+    takes the parameter list rather than the name: a parameter of closure type is the one way a
+    caller's own code runs inside a function it does not own.
+    """
+    for start in range(index, -1, -1):
+        found = FUNCTION.search(lines[start])
+        if not found:
+            continue
+        signature = []
+        for raw in lines[start:]:
+            signature.append(raw)
+            if "{" in raw:
+                break
+        return found.group(1), closure_parameters(" ".join(signature))
+    return None, set()
+
+
+def call_text(lines, index, gate):
+    """A call beginning on this line, to the parenthesis that closes it.
+
+    An argument list is what says which of the function's own parameters the call passes on, and a
+    call here is as often written over five lines as over one. String literals are blanked first,
+    because a `(` inside one balances nothing and a scan that ran past the call would read the
+    rest of the file as its arguments. Nothing comes back for a call this cannot find the end of.
+    """
+    bare = gate.split("::")[-1]
+    blanked = [STRING_LITERAL.sub('""', raw) for raw in lines[index : index + CALL_LINES]]
+    column = -1
+    for form in (f".{bare}(", f"{gate}("):
+        column = blanked[0].find(form)
+        if column >= 0:
+            break
+    if column < 0:
+        return ""
+    text = []
+    depth = 0
+    for raw in blanked:
+        piece = raw[column:] if not text else raw
+        text.append(piece)
+        depth += piece.count("(") - piece.count(")")
+        if depth <= 0:
+            return " ".join(text)
+    return ""
+
+
+def gate_forwarders(gate, sources):
+    """Driver-side functions that hand a closure of their own caller's to a gate.
+
+    The count on a gate reaches the line that calls it. It does not reach the closure, and a
+    function that takes one from its caller and forwards it is a second front door: every caller
+    of it writes code that runs on released content, and none of them moves the gate's count.
+    Matching the parameter by name inside the call is what separates such a wrapper from a
+    function that happens to take a callback for something else.
+    """
+    found = []
+    seen = set()
+    for site in outside_the_kernel(sites_for(gate, sources), sources):
+        code = mechanics.strip_comments(sources[Path(site["path"])])
+        index = site["line"] - 1
+        name, closures = enclosing_signature(code, index)
+        if not closures or (site["path"], name) in seen:
+            continue
+        passed = call_text(code, index, gate)
+        if any(re.search(rf"\b{re.escape(one)}\b", passed) for one in closures):
+            seen.add((site["path"], name))
+            found.append((name, site["path"], site["line"]))
+    return found
+
+
+def counted_files(specs):
+    """Each pinned symbol and the files a spec counts its uses in.
+
+    A `guards` entry for a bare name is satisfied by any symbol of that name anywhere, so
+    clearing a wrapper on the name alone would let one be exempted by an unrelated entry that
+    happens to share it. The file the wrapper is in has to be one the entry counts.
+    """
+    where = {}
+    for spec in specs:
+        for symbol, sites in spec.allowlists.items():
+            if not isinstance(sites, list):
+                continue
+            for item in sites:
+                head, separator, _ = str(item).rpartition(":")
+                where.setdefault(symbol, set()).add(head.strip() if separator else str(item).strip())
+    return where
+
+
+def check_gates_pinned(specs, sources):
+    """A release gate no spec counts, and the driver-side wrappers that forward a closure to one.
+
+    `labels.md` pins how many times `Labelled::declassify` is called, per file, so a new release
+    cannot land quietly. A gate with no such entry leaves the same hole one level up.
+    `Policy::render_in_place` hands raw content to a closure compiled outside the kernel and gives
+    back a value that is still labelled, so a new call site needs no release of its own and moves
+    no count anywhere: the one gate whose contract only a reader can check is then the one gate
+    nothing asks anybody to read. A gate that refuses untrusted content before releasing any is
+    the exception, and a spec naming it is enough, because its callers' closures only ever see
+    bytes the driver could have read for itself.
+
+    Counting the gate is necessary and not sufficient. A function in the driver that takes a
+    closure from its own caller and passes it to a gate hides every later caller from that count,
+    so it is counted beside the gate it forwards to.
+    """
+    pinned = set()
+    named = set()
+    for spec in specs:
+        pinned.update(spec.allowlists)
+        named.update(spec.guards)
+    counted = counted_files(specs)
+
+    for gate in GATES:
+        sites = outside_the_kernel(sites_for(gate, sources), sources)
+        if not sites:
+            continue
+        by_file = {}
+        for site in sites:
+            by_file[site["path"]] = by_file.get(site["path"], 0) + site["count"]
+        if gate not in pinned and not (gate in named and gate_refuses_untrusted(gate, sources)):
+            yield finding(
+                ERROR,
+                "gate-unpinned",
+                f"no spec counts {gate}, so a new closure over released content lands green",
+                f"no spec pins `{gate}` to a count per file, so a new call site handing released "
+                f"content to a closure compiled outside the kernel lands green; there are "
+                f"{sum(by_file.values())} outside `crates/core` in non-test code",
+                "trust",
+                "low",
+                evidence=[f"{path} {count} uses" for path, count in sorted(by_file.items())],
+                fix=f"add a `guards` entry for `{gate}` to `{LABELS_SPEC}` with a `sites:` count "
+                f"per file, the way `Policy::present` already has one. A `sites:` list pins the "
+                f"whole tree, so read the counts to pin out of `check-spec` rather than off this "
+                f"finding",
+                gain="nothing on its own. What it buys is the next closure: one that drops an "
+                "entry from a listing, blanks an excerpt, or picks one string over another out of "
+                "what the bytes say. Its result reaches the planner's context or a file still "
+                "labelled, so nothing downstream reads it again either",
+            )
+        for name, path, line in gate_forwarders(gate, sources):
+            if path in counted.get(name, set()):
+                continue
+            yield finding(
+                ERROR,
+                "gate-forwarder-unpinned",
+                f"{name} forwards a caller's own closure to {gate}, and no spec counts it",
+                f"`{name}` at `{path}:{line}` takes a closure from its caller and hands it to "
+                f"`{gate}`, so another caller of it writes a new closure over released content "
+                f"while moving no count at all",
+                "trust",
+                "low",
+                evidence=[f"{path}:{line} {name} forwards to {gate}"],
+                fix=f"add a `guards` entry for `{name}` to `{LABELS_SPEC}` with a `sites:` count "
+                f"per file, or inline it into its callers so that the gate's own count reaches "
+                f"them",
+                gain="the same as the unpinned gate, reached through a helper the count does not "
+                "see: the closure is written by the caller and runs on content the gate released",
+            )
 
 
 def test_regions(lines):
@@ -1615,6 +1910,171 @@ def check_pinned_images():
             )
 
 
+def job_display_names(lines):
+    """Every job in a workflow by the name its check run reports under, with the targets it runs.
+
+    A required context matches a check run's name, which is the job's `name:` where it has one and
+    its key where it does not. A name built from an expression is one no checkout can resolve --
+    the cross-build names its six legs from a matrix -- so it is left out rather than guessed at,
+    and a context could not name it either.
+    """
+    found = {}
+    for job in workflow_jobs(lines):
+        block = nested(lines, job["line"] - 1)
+        written = next((one.group(1) for one in map(DISPLAY_NAME.match, block) if one), job["name"])
+        if not written.startswith(("'", '"')):
+            written = TRAILING_COMMENT.sub("", written).strip()
+        display = unquoted(written)
+        if EXPRESSION.search(display):
+            continue
+        targets = set()
+        for step in job["steps"]:
+            for raw in step["body"]:
+                for command in MAKE.findall(raw):
+                    targets.update(CHECK_TARGET.findall(command))
+        found.setdefault(display, set()).update(targets)
+    return found
+
+
+def required_contexts():
+    """The contexts `contrib/required-checks.txt` names, or nothing where the file is gone."""
+    if not REQUIRED_CHECKS.is_file():
+        return None
+    return [
+        line
+        for line in (raw.strip() for raw in REQUIRED_CHECKS.read_text(encoding="utf-8").split("\n"))
+        if line and not line.startswith("#")
+    ]
+
+
+def gated_targets():
+    """The make targets `checks.md` promises will fail a pull request, by the line it promises on.
+
+    A paragraph rather than the whole document, because the promise and the target it is about are
+    written together: `make check-locales` is named in four paragraphs and only one of them says
+    what CI does with it.
+    """
+    if not CHECKS_DOC.is_file():
+        return {}
+    found = {}
+    number = 1
+    for paragraph in CHECKS_DOC.read_text(encoding="utf-8").split("\n\n"):
+        flat = " ".join(paragraph.split())
+        if any(one in flat for one in GATES_A_PULL_REQUEST):
+            for target in DOC_TARGET.findall(paragraph):
+                found.setdefault(target, number)
+        number += paragraph.count("\n") + 2
+    return found
+
+
+def check_required_checks_are_the_gates():
+    """The contexts a merge is held to are written down, and they name jobs that exist.
+
+    A red job stops nothing by itself. What stops a merge is branch protection's list of required
+    contexts, which is a repository setting: no file in a checkout can read it, and a job renamed
+    here leaves that list naming a check run nothing produces -- always green, because it never
+    reports. This repository has one of those already, since the required lower-case `security` is
+    the organisation's scan and not CI's `Security`, and the cost is a check the documentation says
+    fails a pull request sitting red above an enabled merge button.
+
+    So the intended list is a file, and this decides the three things about it a checkout can: that
+    every context named is a job that exists, that every job running a `make check-` target is
+    named, since a job whose whole purpose is a check and which nothing requires reports its
+    verdict beside an enabled merge button, and that a target the documentation promises will fail
+    a pull request is run by some job at all. Comparing the file against what the protection really
+    requires is the part that needs the network, and `contrib/required-checks.txt` says how.
+
+    What this does not read is when a job runs. A check target moved into a job that runs only on a
+    push or a schedule would be demanded here and never report on a pull request, which holds every
+    merge rather than letting one through, so it is a state whoever made it finds out about at once.
+    """
+    contexts = required_contexts()
+    if contexts is None:
+        yield finding(
+            ERROR,
+            "unrecorded-required-check",
+            f"`{REQUIRED_CHECKS}` is gone, so nothing in the tree says which checks hold a merge",
+            f"`{REQUIRED_CHECKS}` is the only statement anywhere in this repository of which check "
+            "contexts branch protection has to require; without it a job can be renamed, or a "
+            "check added, with nothing to compare the protection against",
+            "infrastructure",
+            "medium",
+            evidence=[f"{REQUIRED_CHECKS}: absent"],
+            fix="restore the file, listing the display name of every job a merge is held to",
+        )
+        return
+
+    jobs = {}
+    if WORKFLOWS.is_dir():
+        for path in sorted(WORKFLOWS.glob("*.yml")) + sorted(WORKFLOWS.glob("*.yaml")):
+            lines = path.read_text(encoding="utf-8").split("\n")
+            for display, targets in job_display_names(lines).items():
+                jobs.setdefault(display, set()).update(targets)
+
+    for context in contexts:
+        if context in jobs:
+            continue
+        yield finding(
+            ERROR,
+            "orphaned-required-check",
+            f"no job is called `{context}`, so requiring it requires a check run nothing produces",
+            f"`{REQUIRED_CHECKS}` names `{context}`, which is the display name of no job in "
+            "`.github/workflows/`. A required context that nothing reports is not a gate: it is "
+            "pending forever, or it is satisfied by whatever else happens to report under that "
+            "name",
+            "infrastructure",
+            "high",
+            evidence=[f"{REQUIRED_CHECKS}: {context}"],
+            fix="spell it exactly as the job's `name:`, or drop it where the job is gone. A job "
+            "renamed on one side and not the other is how a required context comes to name "
+            "something else",
+        )
+
+    promised = gated_targets()
+    for display in sorted(jobs):
+        targets = sorted(jobs[display])
+        if not targets or display in contexts:
+            continue
+        yield finding(
+            ERROR,
+            "ungated-check",
+            f"`{display}` runs `make {targets[0]}` and is not a context a merge is held to, so it "
+            "reports its verdict beside an enabled merge button",
+            f"`{display}` exists to run {', '.join(f'`make {one}`' for one in targets)}. "
+            f"`{REQUIRED_CHECKS}` does not name it, and a check nothing requires decides nothing: "
+            "the job goes red and the merge button stays enabled"
+            + (
+                f". `{CHECKS_DOC}` promises that `make {targets[0]}` fails a pull request"
+                if targets[0] in promised
+                else ""
+            ),
+            "infrastructure",
+            "medium",
+            evidence=[f"{display} runs make {one}" for one in targets]
+            + [f"{CHECKS_DOC}:{promised[one]}" for one in targets if one in promised],
+            fix=f"add `{display}` to `{REQUIRED_CHECKS}` and require the context, or move the "
+            "target out of a job of its own where it is not meant to hold a merge",
+        )
+
+    run_somewhere = {one for targets in jobs.values() for one in targets}
+    for target, number in sorted(promised.items()):
+        if target in run_somewhere:
+            continue
+        yield finding(
+            ERROR,
+            "unrun-promise",
+            f"`{CHECKS_DOC.name}` says `make {target}` fails a pull request, and no job runs it",
+            f"`{CHECKS_DOC}` promises that `make {target}` fails a pull request rather than "
+            "holding only for whoever remembers to run it, and no job in `.github/workflows/` "
+            "runs that target, so nothing runs it on a pull request at all",
+            "infrastructure",
+            "medium",
+            evidence=[f"{CHECKS_DOC}:{number}"],
+            fix="give the target a job and require its context, or amend the paragraph to say "
+            "what actually runs it",
+        )
+
+
 def check_guarantee_specs_exist():
     """A named guarantee spec that no file answers to.
 
@@ -1858,11 +2318,13 @@ def main():
     findings += list(check_labelled_impls(sources))
     findings += list(check_exhaustive_reader_docs(sources))
     findings += list(check_construction_pinned(specs, sources))
+    findings += list(check_gates_pinned(specs, sources))
     findings += list(check_key_sites_exhaustive(specs, sources))
     findings += list(check_pinned_actions())
     findings += list(check_pinned_images())
     findings += list(check_privileged_job_runs_only_its_own_code())
     findings += list(check_checkout_ref_is_qualified())
+    findings += list(check_required_checks_are_the_gates())
     findings += list(check_guarantee_specs_exist())
     findings += list(check_unpinned_guarantee_clauses(specs))
 

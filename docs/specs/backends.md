@@ -614,6 +614,22 @@ it is reported as reading none rather than as having one in force. What one mode
 about another, and a request refused with the level gone as well settles nothing and is not
 remembered, that status being also what a prompt too long for the model comes back as.
 
+**A refusal outranks a listing that names the field.** A row stating the parameter among those its
+model takes is what the service says it would do, and a status refusing the request that carried one
+is what it did. Where the two disagree the request is the answer: the model is reported as reading
+none, and no later request carries a level to it.
+
+**A session asks again after every turn.** A refusal is learned in the middle of one, so asking the
+roster when a session opens and again only when somebody chooses another model leaves the level
+reported as in force for the rest of that session after the requests carrying one have stopped. Each
+turn ends by asking what the service has refused for the model in force, which costs nothing over
+the wire: the answer is what a request already sent came back with. It only ever takes the level
+away, a listing that stated its parameters and did not name the field having said the model reads
+none already, and a turn that was refused nothing does not say otherwise. The person is told on the
+turn that learned it and not again, the condition holding for the rest of the session. A one-shot
+run asks once, before its turn, there being no later request for the answer to govern and nobody
+left to report it to.
+
 **A level a block wrote down is not this program's to give up.** BACKEND-15 carries a configured
 model's options into the body as they stand, so a level written there fills the field again after this
 concession has been given up, and a service that refuses it refuses the request as it would refuse
@@ -645,15 +661,20 @@ it, and a settings file cannot state what its author does not know either.
 `verified-by: bravebot_aichat::client::a_level_a_block_wrote_down_is_not_given_up`
 `verified-by: bravebot_aichat::lib::a_model_whose_service_refused_a_level_is_reported_as_reading_none`
 `verified-by: bravebot_aichat::models::a_row_whose_service_refused_a_level_reads_none_however_silent_the_roster`
+`verified-by: bravebot_aichat::models::a_row_the_service_refused_reads_none_however_loudly_the_roster_advertises_it`
+`verified-by: bravebot_aichat::models::a_brave_roster_row_the_endpoint_refused_reads_none`
 `verified-by: bravebot_aichat::models::a_gateway_model_that_does_not_take_the_effort_parameter_says_so`
 `verified-by: bravebot_aichat::models::a_gateway_that_states_no_parameters_is_not_taken_to_read_no_level`
 `verified-by: bravebot_cli::running::a_run_withholds_a_level_the_roster_says_the_model_does_not_read`
 `verified-by: bravebot_cli::running::a_run_sends_a_level_the_roster_says_the_model_reads`
 `verified-by: bravebot_cli::running::a_session_in_lines_withholds_a_level_the_roster_says_the_model_does_not_read`
+`verified-by: bravebot_cli::running::a_service_that_refuses_the_level_it_advertised_is_reported_as_reading_none`
 `verified-by: bravebot_tui::app::a_level_is_withheld_from_a_model_that_reads_none`
 `verified-by: bravebot_tui::app::a_level_a_model_cannot_use_is_kept_rather_than_forgotten`
 `verified-by: bravebot_tui::app::asking_for_a_level_a_model_cannot_use_says_so`
 `verified-by: bravebot_tui::app::a_model_the_listing_did_not_describe_still_takes_a_level`
+`verified-by: bravebot_tui::app::a_level_the_service_refused_stops_being_reported_as_in_force`
+`verified-by: bravebot_tui::app::a_turn_that_refused_nothing_does_not_restore_a_level_the_roster_says_is_unread`
 `verified-by: bravebot_tui::status::a_level_the_model_does_not_read_is_reported_as_unread`
 
 

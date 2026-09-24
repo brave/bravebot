@@ -63,7 +63,8 @@ class CheckTargets(unittest.TestCase):
         overrides.write_text("\n".join(
             f'{gate}:\n\t@echo {gate} >> "$$CALL_LOG"\n\t@test "$$FAIL_COMMAND" != {gate}\n'
             for gate in sorted(gates)
-        ) + '\ncheck-ui-build check-all-selftest check-reviewdog-selftest:\n\t@true\n')
+        ) + '\ncheck-ui-build check-all-selftest check-reviewdog-selftest check-rebase-selftest:'
+          '\n\t@true\n')
         for target, expected in (("check-all-local", local), ("check-all", gates)):
             for failing in ("", *sorted(expected)):
                 with self.subTest(target=target, failing=failing):
@@ -72,10 +73,11 @@ class CheckTargets(unittest.TestCase):
                     self.assertEqual(result.returncode != 0, bool(failing), result.stderr)
                     self.assertCountEqual(self.log.read_text().splitlines(), expected)
 
-    def test_script_checks_run_both_selftests_and_preserve_failures(self):
-        """The CI entry point must cover both suites and fail when either fails."""
+    def test_script_checks_run_every_selftest_and_preserve_failures(self):
+        """The CI entry point must cover every suite and fail when any fails."""
         commands = ["python3 contrib/check-all-selftest.py",
-                    "python3 contrib/check-reviewdog-selftest.py"]
+                    "python3 contrib/check-reviewdog-selftest.py",
+                    "python3 agents/skills/rebase/selftest.py"]
         for failing in ("", *commands):
             with self.subTest(failing=failing):
                 result = self.run_make("-k", "check-scripts", FAIL_COMMAND=failing)

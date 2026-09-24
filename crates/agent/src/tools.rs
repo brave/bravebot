@@ -1640,6 +1640,56 @@ impl Produced {
         }
     }
 
+    /// A tool's own words about something that did not happen: an error, or a refusal. The driver
+    /// wrote them, so they are trusted, and they double as the line the person watching sees.
+    ///
+    /// Distinct from workspace content, which is never trusted unless the trust map says so.
+    fn problem(text: impl Into<String>) -> Produced {
+        let text = text.into();
+        Produced {
+            text: Labelled::trusted(text.clone()),
+            origin: String::new(),
+            note: text,
+            failed: true,
+            cancelled: None,
+            deferred: None,
+            entries: None,
+            incomplete: false,
+            paging: None,
+            whole: None,
+            changes: Vec::new(),
+            untrusted: false,
+            changed_a_file: false,
+            ran_a_program: false,
+            answers_for: None,
+            said: None,
+            wakeup: None,
+            watch: None,
+            content: false,
+            usage: Usage::default(),
+            inference_interval: None,
+            printed_by: None,
+            covered_by_record: false,
+            picture: None,
+            delegate: Vec::new(),
+        }
+    }
+
+    /// A refusal the planner is told the fact of and the person watching is told the detail of.
+    ///
+    /// [`Produced::problem`] says the same thing to both, which is right for almost everything:
+    /// an error is about the call, and the planner is the one that has to do something
+    /// differently. A credential found in what a write would leave is not about the call. What
+    /// was found, where, and what it looks like is a record the planner must not be given
+    /// ([`bravebot_core::credentials`]), and a screen is not the planner's context, so the detail
+    /// goes to the note and the text says only that the write did not happen.
+    fn refused_with_a_note(text: impl Into<String>, note: impl Into<String>) -> Produced {
+        Produced {
+            note: note.into(),
+            ..Produced::problem(text)
+        }
+    }
+
     /// A delegate the kernel approved, for the turn to start.
     fn delegating(
         mut self,
@@ -2076,7 +2126,8 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
     let arguments = match call.arguments() {
         Ok(value) => value,
         Err(e) => {
-            let produced = problem(format!("error: the arguments were not valid JSON: {e}"));
+            let produced =
+                Produced::problem(format!("error: the arguments were not valid JSON: {e}"));
             // Announced and closed in one breath, because there was never a call to watch.
             reporter.tool_started(Activity::running(verb, "").of_tool(&name));
             reporter.tool_finished(
@@ -2121,10 +2172,12 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         // A mode that refuses writes refuses them whether or not anybody would have been asked,
         // which is what makes it a statement about the turn rather than an answer given on the
         // person's behalf. Checked before the tool runs, so nothing is read and no path resolved.
-        writing if tools.permission_mode.refuses_writes() && writes_a_file(writing) => problem(
-            "refused: this turn is in plan mode, so writing is refused however the user would \
-             have answered. Do not retry; say what you would change and why.",
-        ),
+        writing if tools.permission_mode.refuses_writes() && writes_a_file(writing) => {
+            Produced::problem(
+                "refused: this turn is in plan mode, so writing is refused however the user would \
+                 have answered. Do not retry; say what you would change and why.",
+            )
+        }
         "read_file" => read_file(policy, tools, confirmer, reporter, &arguments),
         "list_files" => list_files(policy, tools.workspace, &arguments),
         "search" => search(policy, tools.workspace, &arguments),
@@ -2181,7 +2234,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
             tools.armed,
             &arguments,
         ),
-        other => problem(format!("error: no such tool '{other}'")),
+        other => Produced::problem(format!("error: no such tool '{other}'")),
     };
 
     // The wait the call already measured, on the line the call already draws. The turn's totals
@@ -2229,56 +2282,6 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
     }
 }
 
-/// A tool's own words about something that did not happen: an error, or a refusal. The driver
-/// wrote them, so they are trusted, and they double as the line the person watching sees.
-///
-/// Distinct from workspace content, which is never trusted unless the trust map says so.
-fn problem(text: impl Into<String>) -> Produced {
-    let text = text.into();
-    Produced {
-        text: Labelled::trusted(text.clone()),
-        origin: String::new(),
-        note: text,
-        failed: true,
-        cancelled: None,
-        deferred: None,
-        entries: None,
-        incomplete: false,
-        paging: None,
-        whole: None,
-        changes: Vec::new(),
-        untrusted: false,
-        changed_a_file: false,
-        ran_a_program: false,
-        answers_for: None,
-        said: None,
-        wakeup: None,
-        watch: None,
-        content: false,
-        usage: Usage::default(),
-        inference_interval: None,
-        printed_by: None,
-        covered_by_record: false,
-        picture: None,
-        delegate: Vec::new(),
-    }
-}
-
-/// A refusal the planner is told the fact of and the person watching is told the detail of.
-///
-/// [`problem`] says the same thing to both, which is right for almost everything: an error is
-/// about the call, and the planner is the one that has to do something differently. A credential
-/// found in what a write would leave is not about the call. What was found, where, and what it
-/// looks like is a record the planner must not be given ([`bravebot_core::credentials`]), and a
-/// screen is not the planner's context, so the detail goes to the note and the text says only
-/// that the write did not happen.
-fn refused_with_a_note(text: impl Into<String>, note: impl Into<String>) -> Produced {
-    Produced {
-        note: note.into(),
-        ..problem(text)
-    }
-}
-
 /// What a write is refused with, and what the person watching is told about why.
 ///
 /// Both halves are the driver's own words. The planner's half names the path and says a
@@ -2292,7 +2295,7 @@ fn credential_refusal(path: &str, scanned: &Scanned) -> Produced {
         .iter()
         .map(|finding| finding.describe())
         .collect();
-    refused_with_a_note(
+    Produced::refused_with_a_note(
         format!(
             "refused: writing {path} would put a credential in the tree, so nothing was \
              written. {}",
@@ -2345,12 +2348,12 @@ fn describe_all(findings: &[&bravebot_core::credentials::Finding]) -> Vec<String
 /// found, because a finding still may not enter a model's context.
 fn credential_aware_rejection(path: &str, scanned: &Scanned) -> Produced {
     if scanned.to_approve().is_empty() {
-        return problem(format!(
+        return Produced::problem(format!(
             "refused: the user did not approve writing {path}. Do not retry \
              the same write; ask what they would prefer."
         ));
     }
-    refused_with_a_note(
+    Produced::refused_with_a_note(
         format!(
             "refused: the user did not approve writing {path}, which looks like it would put a \
              credential in the tree. {}",
@@ -2484,7 +2487,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     let workspace = tools.workspace;
     let found = match path_argument(policy, "read_file", Purpose::Read, tools.slots, arguments) {
         Ok(found) => found,
-        Err(refusal) => return problem(refusal),
+        Err(refusal) => return Produced::problem(refusal),
     };
     // What the reference that comes back is said to be of. The planner's own path where it
     // typed one, and the reference's name where it did not: a read through a reference must not
@@ -2497,7 +2500,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
         // workspace and changes nothing in it.
         Destination::Named => match policy.promote_confined_read("read_file", "path", &proposed) {
             Ok(p) => p,
-            Err(denial) => return problem(format!("refused: {denial}")),
+            Err(denial) => return Produced::problem(format!("refused: {denial}")),
         },
         // Already promoted, by the gate that took the name out of the reference. Promoting it
         // again would work and would record that the model proposed a path it never saw.
@@ -2690,7 +2693,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
                 .of_content()
                 .of_a_picture(media)
             }
-            Err(e) => problem(format!("error: {}", e.describe(&shown_path))),
+            Err(e) => Produced::problem(format!("error: {}", e.describe(&shown_path))),
         });
     }
 
@@ -2713,7 +2716,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
                 Produced::deferring(Labelled::trusted(keyed), shown_path, bytes).of_content()
             }
             // A path that names nothing is said so now, exactly as an eager read would have.
-            Err(e) => problem(format!("error: {}", e.describe(&shown_path))),
+            Err(e) => Produced::problem(format!("error: {}", e.describe(&shown_path))),
         });
     }
 
@@ -2728,7 +2731,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
                 policy.render_in_place("read_file", &page, |p| render_page(&p, ChangeToken::Shown));
             Produced::new(rendered, shown_path, note).of_content()
         }
-        Err(e) => problem(format!("error: {}", e.describe(&shown_path))),
+        Err(e) => Produced::problem(format!("error: {}", e.describe(&shown_path))),
     })
 }
 
@@ -3047,17 +3050,17 @@ fn list_files<S: Sink>(
 
     let directory = match policy.promote_confined_read("list_files", "directory", &proposed) {
         Ok(d) => d,
-        Err(denial) => return problem(format!("refused: {denial}")),
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
     };
 
     // The directory a listing would walk. A rule that keeps a tree from being read keeps it from
     // being enumerated too: the names in a directory are what is in it.
     let proposed_dir = match policy.read_planner_argument("list_files", "directory", &proposed) {
         Ok(directory) => directory,
-        Err(denial) => return problem(format!("refused: {denial}")),
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
     };
     if let Err(refusal) = refuse_denied_path(policy, Purpose::Read, &proposed_dir) {
-        return problem(refusal);
+        return Produced::problem(refusal);
     }
 
     // A filter only narrows a confined, non-destructive read, so it is promotable on the
@@ -3065,7 +3068,7 @@ fn list_files<S: Sink>(
     let pattern = match argument(arguments, "pattern") {
         Some(proposed) => match policy.promote_confined_read("list_files", "pattern", &proposed) {
             Ok(p) => Some(p),
-            Err(denial) => return problem(format!("refused: {denial}")),
+            Err(denial) => return Produced::problem(format!("refused: {denial}")),
         },
         None => None,
     };
@@ -3165,7 +3168,7 @@ fn list_files<S: Sink>(
                 .of_content()
                 .capped(truncated)
         }
-        Err(e) => problem(format!("error: {e}")),
+        Err(e) => Produced::problem(format!("error: {e}")),
     }
 }
 
@@ -3263,7 +3266,7 @@ fn write_file<S: Sink, C: Confirmer>(
         arguments,
     ) {
         Ok(found) => found,
-        Err(refusal) => return problem(refusal),
+        Err(refusal) => return Produced::problem(refusal),
     };
     // The path is routing, so naming a destination from it is not a content decision, and the
     // gate that released it ran where the argument was read.
@@ -3296,19 +3299,19 @@ fn write_file<S: Sink, C: Confirmer>(
 
     let body = match (written, named) {
         (Some(_), Some(_)) => {
-            return problem(
+            return Produced::problem(
                 "error: give 'contents' or 'contents_ref', not both. Use contents_ref alone \
                  when the file is to hold quarantined content.",
             );
         }
         (None, None) => {
-            return problem("error: one of 'contents' or 'contents_ref' is required");
+            return Produced::problem("error: one of 'contents' or 'contents_ref' is required");
         }
         // The body is the model's words. Its integrity is that of the context the model was
         // working from, which the kernel tracked: nothing here upgrades anything.
         (Some(contents), None) => match policy.adopt_model_output("write_file", contents) {
             Ok(body) => body,
-            Err(denial) => return problem(format!("refused: {denial}")),
+            Err(denial) => return Produced::problem(format!("refused: {denial}")),
         },
         // Quarantined content, going where the planner said without the planner or the driver
         // having read a byte of it. The user still sees it, which is what an approval is.
@@ -3319,7 +3322,7 @@ fn write_file<S: Sink, C: Confirmer>(
                     remark = said;
                     body
                 }
-                Err(refusal) => return problem(refusal),
+                Err(refusal) => return Produced::problem(refusal),
             }
         }
     };
@@ -3479,7 +3482,7 @@ fn write_file<S: Sink, C: Confirmer>(
                 .marked_untrusted(!body_label.is_trusted())
                 .having_changed_a_file()
         }
-        Err(e) => problem(format!("error: {}", e.describe(&shown_path))),
+        Err(e) => Produced::problem(format!("error: {}", e.describe(&shown_path))),
     }
 }
 
@@ -3505,15 +3508,15 @@ fn edit_file<S: Sink, C: Confirmer>(
 ) -> Produced {
     let found = match path_argument(policy, "edit_file", Purpose::Effect, slots, arguments) {
         Ok(found) => found,
-        Err(refusal) => return problem(refusal),
+        Err(refusal) => return Produced::problem(refusal),
     };
     let (proposed, destination, shown_path, proposed_path) =
         (found.path, found.destination, found.shown, found.released);
     let Some(old_text) = argument(arguments, "old_text") else {
-        return problem("error: 'old_text' is required and must be a string");
+        return Produced::problem("error: 'old_text' is required and must be a string");
     };
     let Some(new_text) = argument(arguments, "new_text") else {
-        return problem("error: 'new_text' is required and must be a string");
+        return Produced::problem("error: 'new_text' is required and must be a string");
     };
     // Absent or non-boolean means the strict single-match behaviour, which is the safe
     // reading of an ambiguous argument.
@@ -3532,18 +3535,18 @@ fn edit_file<S: Sink, C: Confirmer>(
     // refusal that did something.
     let old_text = match policy.read_planner_argument("edit_file", "old_text", &old_text) {
         Ok(text) => text,
-        Err(denial) => return problem(format!("refused: {denial}")),
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
     };
     let new_text = match policy.read_planner_argument("edit_file", "new_text", &new_text) {
         Ok(text) => text,
-        Err(denial) => return problem(format!("refused: {denial}")),
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
     };
 
     // Reading to locate the passage is non-destructive and confined, so the path may be
     // promoted here exactly as it is for read_file. The write below is what needs a person.
     let path = match policy.promote_confined_read("edit_file", "path", &proposed) {
         Ok(p) => p,
-        Err(denial) => return problem(format!("refused: {denial}")),
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
     };
 
     // Worded about `shown_path`, which is `ref:N` where the planner named a reference, and never
@@ -3556,7 +3559,7 @@ fn edit_file<S: Sink, C: Confirmer>(
     // road in `path_argument` already swaps the same name in, through `denied_by_rule`.
     let source = match workspace.read(policy, &path) {
         Ok(contents) => contents,
-        Err(e) => return problem(format!("error: {}", e.describe(&shown_path))),
+        Err(e) => return Produced::problem(format!("error: {}", e.describe(&shown_path))),
     };
 
     // Locating the passage means comparing text, which is a decision. It is only permissible
@@ -3569,12 +3572,12 @@ fn edit_file<S: Sink, C: Confirmer>(
     // this comparison is safe to make.
     let current = match policy.read_trusted_content("edit_file", &source) {
         Ok(text) => text,
-        Err(denial) => return problem(format!("refused: {denial}")),
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
     };
 
     let replaced = match crate::replace::replace(&current, &old_text, &new_text, replace_all) {
         Ok(r) => r,
-        Err(e) => return problem(format!("error: {e}")),
+        Err(e) => return Produced::problem(format!("error: {e}")),
     };
 
     // The result is the model's edit applied to trusted text, so its integrity is that of the
@@ -3628,7 +3631,7 @@ fn edit_file<S: Sink, C: Confirmer>(
             if !scanned.to_approve().is_empty() {
                 return credential_aware_rejection(&shown_path, &scanned);
             }
-            return problem(format!(
+            return Produced::problem(format!(
                 "refused: the user did not approve editing {shown_path}. Do not retry the \
                  same edit; ask what they would prefer."
             ));
@@ -3681,7 +3684,7 @@ fn edit_file<S: Sink, C: Confirmer>(
         }
         // As the read above: the name the planner is told is the one it asked with. `Stale` is the
         // arm that reaches here in practice, and it carries the path the write was routed on.
-        Err(e) => problem(format!("error: {}", e.describe(&shown_path))),
+        Err(e) => Produced::problem(format!("error: {}", e.describe(&shown_path))),
     }
 }
 
@@ -3701,7 +3704,7 @@ fn todo_write<S: Sink, R: Reporter>(
     arguments: &Value,
 ) -> Produced {
     let Some(todos) = arguments.get("todos").and_then(Value::as_array) else {
-        return problem("error: 'todos' is required and must be an array");
+        return Produced::problem("error: 'todos' is required and must be an array");
     };
 
     // Parsing is not a decision about what happens: every entry becomes an item, and an
@@ -3721,7 +3724,7 @@ fn todo_write<S: Sink, R: Reporter>(
         .collect();
 
     if items.len() != todos.len() {
-        return problem(
+        return Produced::problem(
             "error: every todo needs a 'content' string; the list was not changed. Send the \
              whole list again.",
         );
@@ -3796,10 +3799,12 @@ fn schedule_next<S: Sink>(
     arguments: &Value,
 ) -> Produced {
     let Some(seconds) = arguments.get("delay_seconds").and_then(Value::as_u64) else {
-        return problem("error: 'delay_seconds' is required, as a whole number of seconds");
+        return Produced::problem(
+            "error: 'delay_seconds' is required, as a whole number of seconds",
+        );
     };
     let Some(quiet) = arguments.get("noop").and_then(Value::as_bool) else {
-        return problem(
+        return Produced::problem(
             "error: 'noop' is required: true where this run found nothing to do, false where \
              something happened",
         );
@@ -3878,7 +3883,7 @@ fn watch_file<S: Sink>(
     let free = match arming {
         Arming::Allowed { free } => free,
         Arming::UnderALoop => {
-            return problem(
+            return Produced::problem(
                 "refused: a loop is running, and a session does one thing at a time that happens \
                  without anybody typing. The next tick of that loop is the next look, so answer \
                  from a read now and leave the watch. Say so, since the user can stop the loop \
@@ -3886,27 +3891,27 @@ fn watch_file<S: Sink>(
             );
         }
         Arming::UnderAGoal => {
-            return problem(
+            return Produced::problem(
                 "refused: this session is working towards a goal, and a fire would spend rounds \
                  the user set aside for the work. Answer from a read now, and say that a standing \
                  watch needs the goal cleared first.",
             );
         }
         Arming::Full => {
-            return problem(
+            return Produced::problem(
                 "refused: this session already holds as many watches as it keeps. Say so: the \
                  user ends one with /watch stop <n>, and /status lists them.",
             );
         }
         Arming::Unavailable => {
-            return problem("error: no such tool 'watch_file'");
+            return Produced::problem("error: no such tool 'watch_file'");
         }
     };
 
     // The bound is on the session and this turn may have armed some of it already, so what is
     // left is counted here rather than read off the answer the turn began with.
     if *armed >= free {
-        return problem(
+        return Produced::problem(
             "refused: this session already holds as many watches as it keeps. Say so: the user \
              ends one with /watch stop <n>, and /status lists them.",
         );
@@ -3919,7 +3924,7 @@ fn watch_file<S: Sink>(
     // the sentence is built to prevent. Refused before the argument is read, so nothing resolves
     // the reference on the way to saying no.
     if arguments.get("path_ref").is_some() {
-        return problem(
+        return Produced::problem(
             "refused: watch_file takes 'path' and no reference. A reference names a file this \
              conversation was never shown the name of, and a watch reports the path it was armed \
              on, so there is nothing here a reference could be. Read the file by reference \
@@ -3928,13 +3933,13 @@ fn watch_file<S: Sink>(
     }
     let found = match path_argument(policy, "watch_file", Purpose::Read, slots, arguments) {
         Ok(found) => found,
-        Err(refusal) => return problem(refusal),
+        Err(refusal) => return Produced::problem(refusal),
     };
     // The same promotion a read of the planner's own choice of file gets, and the reason the
     // watch needs no prompt of its own. What it hands back is the path a read would open, which
     // a watch does not: the look below is a `stat` on the released name.
     if let Err(denial) = policy.promote_confined_read("watch_file", "path", &found.path) {
-        return problem(format!("refused: {denial}"));
+        return Produced::problem(format!("refused: {denial}"));
     }
     let path = found.released;
 
@@ -3943,7 +3948,7 @@ fn watch_file<S: Sink>(
     // untrusted content in the one position nothing can label; reporting only that the directory
     // moved is a fire nobody can act on.
     if !workspace.names_a_file(&path) {
-        return problem(
+        return Produced::problem(
             "refused: 'path' must name a file that exists. A directory cannot be watched: what \
              changed inside one is a name off the filesystem, and a fire may not carry one.",
         );
@@ -3952,7 +3957,7 @@ fn watch_file<S: Sink>(
         workspace.look(&path, workspace.root()),
         crate::watch::Looked::Saw(_)
     ) {
-        return problem(
+        return Produced::problem(
             "refused: that path cannot be looked at, so there is nothing for a later look to be \
              compared against.",
         );
@@ -4004,18 +4009,20 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
     arguments: &Value,
 ) -> Produced {
     let Some(named) = argument(arguments, "ref") else {
-        return problem("error: 'ref' is required and must be a reference name, e.g. \"ref:5\"");
+        return Produced::problem(
+            "error: 'ref' is required and must be a reference name, e.g. \"ref:5\"",
+        );
     };
 
     let slot = match policy.accept_reference("read_output", "ref", &named) {
         Ok(slot) => slot,
-        Err(denial) => return problem(format!("refused: {denial}")),
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
     };
 
     // Refused here as well as in the kernel, so a planner naming a file is told what to do about
     // it rather than being told a gate said no.
     if !tools.slots.is_from_command(&slot) {
-        return problem(format!(
+        return Produced::problem(format!(
             "refused: {slot} is not something a program printed, so there is nothing to show. \
              Only a reference that came back from run can be read this way."
         ));
@@ -4037,7 +4044,7 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
         false => None,
         true => match policy.before_vetting(&slot, None, tools.slots) {
             Ok(spec) => Some(spec),
-            Err(denial) => return problem(format!("refused: {denial}")),
+            Err(denial) => return Produced::problem(format!("refused: {denial}")),
         },
     };
     let (verdict, reason) = match &spec {
@@ -4093,7 +4100,7 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
         let (shown, lines) = {
             let content = match policy.resolve("read_output", &slot, tools.slots) {
                 Ok(content) => content,
-                Err(denial) => return problem(format!("refused: {denial}")),
+                Err(denial) => return Produced::problem(format!("refused: {denial}")),
             };
             let measured = policy.render_in_place("read_output", &content, |text| {
                 let lines = text.lines().count();
@@ -4123,7 +4130,7 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
         // for, nobody was asked and a check answered in their place, so naming the user would be a
         // false claim and naming the check would hand the planner the word it must not read.
         if confirmer.confirm_read_output(&request) == Decision::Reject {
-            return problem(format!(
+            return Produced::problem(format!(
                 "refused: {slot} was kept back from you. Do not ask for it again. Work with what \
                  you have, or say in your reply what you needed from it."
             ))
@@ -4144,7 +4151,7 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
                 .costing(spent)
                 .waiting(waited)
         }
-        Err(denial) => problem(format!("refused: {denial}")),
+        Err(denial) => Produced::problem(format!("refused: {denial}")),
     }
 }
 
@@ -4175,10 +4182,12 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
     arguments: &Value,
 ) -> Produced {
     let Some(named) = argument(arguments, "ref") else {
-        return problem("error: 'ref' is required and must be a reference name, e.g. \"ref:5\"");
+        return Produced::problem(
+            "error: 'ref' is required and must be a reference name, e.g. \"ref:5\"",
+        );
     };
     let Some(expects) = argument(arguments, "expects") else {
-        return problem(
+        return Produced::problem(
             "error: 'expects' is required and must say what you think this holds, e.g. \"the \
              release notes for version 2\"",
         );
@@ -4186,7 +4195,7 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
 
     let slot = match policy.accept_reference("vet_content", "ref", &named) {
         Ok(slot) => slot,
-        Err(denial) => return problem(format!("refused: {denial}")),
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
     };
 
     // A reference to a file the driver reserved and never opened has no bytes yet, and there is
@@ -4199,14 +4208,14 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
         "vet_content",
         std::slice::from_ref(&slot),
     ) {
-        return problem(refusal);
+        return Produced::problem(refusal);
     }
 
     // Before the gate below rather than inside it: what this refuses is the content, and bypassing
     // with no screening asked for makes no check to refuse it in. Before the prompt too, so a
     // picture is never released for a screen on its way to the refusal `promote_vetted` makes.
     if let Err(denial) = policy.before_promoting(&slot, tools.slots) {
-        return problem(format!("refused: {denial}"));
+        return Produced::problem(format!("refused: {denial}"));
     }
 
     // The second opinion, before the question rather than after it.
@@ -4224,7 +4233,7 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
         false => None,
         true => match policy.before_vetting(&slot, Some(&expects), tools.slots) {
             Ok(spec) => Some(spec),
-            Err(denial) => return problem(format!("refused: {denial}")),
+            Err(denial) => return Produced::problem(format!("refused: {denial}")),
         },
     };
 
@@ -4280,7 +4289,7 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
         let (shown, lines) = {
             let content = match policy.resolve("vet_content", &slot, tools.slots) {
                 Ok(content) => content,
-                Err(denial) => return problem(format!("refused: {denial}")),
+                Err(denial) => return Produced::problem(format!("refused: {denial}")),
             };
             let measured = policy.render_in_place("vet_content", &content, |text| {
                 let lines = text.lines().count();
@@ -4331,7 +4340,7 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
         // carries: under bypass with screening asked for the answer came from a check rather than
         // from a person, and neither fact is the planner's to be told.
         if confirmer.confirm_vetted_read(&request) == Decision::Reject {
-            return problem(format!(
+            return Produced::problem(format!(
                 "refused: {slot} was kept back from you. Do not ask for it again. Work with what \
                  you have, pass {slot} to spawn_processor, or say in your reply what you needed \
                  from it."
@@ -4353,7 +4362,7 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
                 .costing(spent)
                 .waiting(waited)
         }
-        Err(denial) => problem(format!("refused: {denial}")),
+        Err(denial) => Produced::problem(format!("refused: {denial}")),
     }
 }
 
@@ -4384,7 +4393,7 @@ fn remembered_record(tools: &Tools<'_>) -> Option<crate::remembered::Store> {
 /// planner is being told is the same thing either way: a person decided this in advance, so there
 /// is nothing to rewrite and nothing to substitute.
 fn refused_by_a_rule(denial: &bravebot_core::policy::Denial) -> Produced {
-    problem(format!(
+    Produced::problem(format!(
         "refused: {denial}. Do not retry, and do not look for another program that would \
          do the same thing: say in your reply what you needed it for."
     ))
@@ -4398,7 +4407,7 @@ fn refused_by_a_rule(denial: &bravebot_core::policy::Denial) -> Produced {
 /// kind, a location, a fingerprint and a masked preview.
 fn credential_refusal_in_a_line(scanned: &Scanned) -> Produced {
     let found = describe_all(&scanned.refused());
-    refused_with_a_note(
+    Produced::refused_with_a_note(
         "refused: the command line carries a credential, so none of it ran. A command line is \
          read by every account on this machine while the program lives, and it is put on a \
          screen and into the record of this session. Do not run it again with the value in it: \
@@ -4585,7 +4594,7 @@ fn credential_refusal_after_a_line(displayed: &str, left: &Left<'_>, stuck: &[St
             found.join("; ")
         ),
     };
-    refused_with_a_note(text, note)
+    Produced::refused_with_a_note(text, note)
 }
 
 /// Run a program, after a person approves the exact arguments.
@@ -4612,7 +4621,7 @@ fn run<S: Sink, C: Confirmer>(
     arguments: &Value,
 ) -> Produced {
     let Some(line) = argument(arguments, "command") else {
-        return problem(
+        return Produced::problem(
             "error: 'command' is required and must be a string holding one command line, \
              e.g. \"git log --oneline -50\"",
         );
@@ -4624,7 +4633,7 @@ fn run<S: Sink, C: Confirmer>(
     // build step and short enough that a hung program is noticed.
     let limit = match deadline_from(arguments) {
         Ok(limit) => limit,
-        Err(diagnostic) => return problem(diagnostic),
+        Err(diagnostic) => return Produced::problem(diagnostic),
     };
 
     // Absent or non-boolean means the foreground, which is the reading that waits for the program
@@ -4642,7 +4651,7 @@ fn run<S: Sink, C: Confirmer>(
         None | Some(Value::Null) => None,
         Some(Value::String(_)) => argument(arguments, "stdin_ref"),
         Some(_) => {
-            return problem(
+            return Produced::problem(
                 "error: 'stdin_ref' must be a string naming a reference, e.g. \"ref:1\"",
             );
         }
@@ -4652,7 +4661,7 @@ fn run<S: Sink, C: Confirmer>(
     // its first step an empty stdin and has nowhere to put anything else. Refused rather than
     // ignored, so a call asking for both is told which of the two it cannot have.
     if named_stdin.is_some() && in_the_background {
-        return problem(
+        return Produced::problem(
             "error: a background command cannot be fed a reference. Run it in the foreground, \
              which waits for the program and hands back what it printed.",
         );
@@ -4666,7 +4675,7 @@ fn run<S: Sink, C: Confirmer>(
     // records the read.
     let line = match policy.read_planner_argument("run", "command", &line) {
         Ok(line) => line,
-        Err(denial) => return problem(format!("refused: {denial}")),
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
     };
 
     // A value that declared itself a credential, in the line itself. Refused here, before the
@@ -4698,7 +4707,7 @@ fn run<S: Sink, C: Confirmer>(
         None | Some(Value::Null) => None,
         Some(Value::String(_)) => argument(arguments, "directory"),
         Some(_) => {
-            return problem(
+            return Produced::problem(
                 "error: 'directory' must be a string naming a directory, relative to the \
                  workspace or inside a directory the user added",
             );
@@ -4714,20 +4723,20 @@ fn run<S: Sink, C: Confirmer>(
             // is what the prompt is for, not what authorises the inspection here.
             let dir = match policy.read_planner_argument("run", "directory", &proposed) {
                 Ok(dir) => dir,
-                Err(denial) => return problem(format!("refused: {denial}")),
+                Err(denial) => return Produced::problem(format!("refused: {denial}")),
             };
             // An effect, not a read. A program's relative writes land in the directory it runs in,
             // so a tree an `Edit` rule protects is not protected by a check that consults only the
             // `Read` rules: `npm install` in `vendor` writes throughout it without naming a file.
             if let Err(refusal) = refuse_denied_path(policy, Purpose::Effect, &dir) {
-                return problem(refusal);
+                return Produced::problem(refusal);
             }
             let resolved = match tools.workspace.resolve(&dir) {
                 Ok(path) => path,
-                Err(escape) => return problem(format!("refused: {escape}")),
+                Err(escape) => return Produced::problem(format!("refused: {escape}")),
             };
             if !resolved.is_dir() {
-                return problem(format!("error: '{dir}' is not a directory"));
+                return Produced::problem(format!("error: '{dir}' is not a directory"));
             }
             resolved
         }
@@ -4744,7 +4753,7 @@ fn run<S: Sink, C: Confirmer>(
         // The refusal names the span that caused it, so the planner can rewrite that part rather
         // than guessing at the whole line. There is no degraded mode to fall back to.
         Err(crate::cmdline::Stopped::Compile(refused)) => {
-            return problem(format!("error: {refused}"));
+            return Produced::problem(format!("error: {refused}"));
         }
         Err(crate::cmdline::Stopped::Rule(denial)) => return refused_by_a_rule(&denial),
     };
@@ -4753,7 +4762,7 @@ fn run<S: Sink, C: Confirmer>(
     // through is applied here to the path.
     for path in &plan.writes {
         if let Err(escape) = tools.workspace.confines(path) {
-            return problem(format!("refused: {escape}"));
+            return Produced::problem(format!("refused: {escape}"));
         }
     }
 
@@ -4789,14 +4798,14 @@ fn run<S: Sink, C: Confirmer>(
                 .flat_map(|step| &step.routes)
                 .any(|route| matches!(route, bravebot_core::command::Route::Stdin { .. }))
             {
-                return problem(
+                return Produced::problem(
                     "error: give 'stdin_ref' or a '<' redirection, not both. They are two ways \
                      to fill the same standard input, and only one of them can be honoured.",
                 );
             }
             let slot = match policy.accept_reference("run", "stdin_ref", named) {
                 Ok(slot) => slot,
-                Err(denial) => return problem(format!("refused: {denial}")),
+                Err(denial) => return Produced::problem(format!("refused: {denial}")),
             };
             let opened = match materialise(
                 policy,
@@ -4806,11 +4815,11 @@ fn run<S: Sink, C: Confirmer>(
                 std::slice::from_ref(&slot),
             ) {
                 Ok(opened) => opened,
-                Err(refusal) => return problem(refusal),
+                Err(refusal) => return Produced::problem(refusal),
             };
             let content = match policy.resolve("run", &slot, tools.slots) {
                 Ok(content) => content,
-                Err(denial) => return problem(format!("refused: {denial}")),
+                Err(denial) => return Produced::problem(format!("refused: {denial}")),
             };
             plan.stdin = Some(content.label());
             Some((slot, content, opened))
@@ -4871,7 +4880,7 @@ fn run<S: Sink, C: Confirmer>(
         };
         let answer = confirmer.confirm_run(&request);
         if !answer.approved() {
-            return problem(
+            return Produced::problem(
                 "refused: the user did not approve running this. Do not retry the same \
                  line; ask what they would prefer."
                     .to_string(),
@@ -4921,7 +4930,7 @@ fn run<S: Sink, C: Confirmer>(
         policy.capture_files(|policy, capture| (capture.revision(), policy.before_plan(&plan)));
     let label = match checked {
         Ok(label) => label,
-        Err(denial) => return problem(format!("refused: {denial}")),
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
     };
 
     // The tree comes with the line wherever the line is said, and only where it is not the root.
@@ -4960,7 +4969,7 @@ fn run<S: Sink, C: Confirmer>(
                 steps
             }
             _ => {
-                return problem(
+                return Produced::problem(
                     "error: a background command must be one pipeline with no redirection, \
                      including one that names no file. Run the parts separately, or run this one \
                      in the foreground.",
@@ -4992,7 +5001,7 @@ fn run<S: Sink, C: Confirmer>(
                 .started_in_the_background(name)
                 .having_run_a_program()
             }
-            Err(error) => problem(format!("error: `{displayed}` did not start: {error}")),
+            Err(error) => Produced::problem(format!("error: `{displayed}` did not start: {error}")),
         };
     }
 
@@ -5200,7 +5209,7 @@ fn run<S: Sink, C: Confirmer>(
         }
         // A run that produced nothing still says what happened. The plan is safe to repeat back:
         // a person endorsed it, so it is not something an attacker chose.
-        Err(error) => problem(format!("error: `{displayed}` did not run: {error}")),
+        Err(error) => Produced::problem(format!("error: `{displayed}` did not run: {error}")),
     }
 }
 
@@ -5211,7 +5220,7 @@ fn fetch_url<S: Sink, C: Confirmer>(
     arguments: &Value,
 ) -> Produced {
     let Some(proposed) = argument(arguments, "url") else {
-        return problem(
+        return Produced::problem(
             "error: 'url' is required and must be a string holding an http or https URL",
         );
     };
@@ -5222,13 +5231,13 @@ fn fetch_url<S: Sink, C: Confirmer>(
     // prompt; that is a destination, and this is the read.
     let url = match policy.read_planner_argument("fetch_url", "url", &proposed) {
         Ok(url) => url,
-        Err(denial) => return problem(format!("refused: {denial}")),
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
     };
 
     // Worked out here rather than in the prompt, so what a person is asked about is the host the
     // request will reach and not whatever the string looks like it names.
     let Some(host) = bravebot_core::url::host_of(&url) else {
-        return problem(format!(
+        return Produced::problem(format!(
             "error: '{url}' names no host to fetch from; give an absolute http or https URL"
         ));
     };
@@ -5236,7 +5245,7 @@ fn fetch_url<S: Sink, C: Confirmer>(
     // Before the person is asked. A rule refusing something is a statement that it does not
     // happen, and there is nothing to show or approve once it has been made.
     if let Err(denial) = policy.before_fetch_rules(&url) {
-        return problem(format!(
+        return Produced::problem(format!(
             "refused: {denial}. Do not retry this URL and do not look for another route to that \
              host: say in your reply what you needed from it."
         ));
@@ -5248,7 +5257,7 @@ fn fetch_url<S: Sink, C: Confirmer>(
             host: host.clone(),
         };
         if confirmer.confirm_fetch(&request) == Decision::Reject {
-            return problem(
+            return Produced::problem(
                 "refused: the user did not approve fetching this. Do not retry the same URL; \
                  ask what they would prefer."
                     .to_string(),
@@ -5260,7 +5269,7 @@ fn fetch_url<S: Sink, C: Confirmer>(
     policy.endorse_fetch(&url);
     let label = match policy.before_fetch(&url) {
         Ok(label) => label,
-        Err(denial) => return problem(format!("refused: {denial}")),
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
     };
 
     // Recorded where the request goes out rather than where a response comes back. The metadata
@@ -5316,7 +5325,7 @@ fn fetch_url<S: Sink, C: Confirmer>(
         // chose. Nothing of the response is, and none of it is read to build this: a failure
         // names the URL that was asked for and never the hop a redirect took the request to,
         // which is the one thing of a server's that could otherwise reach this sentence.
-        Err(error) => problem(format!("error: fetching {url} failed: {error}")),
+        Err(error) => Produced::problem(format!("error: fetching {url} failed: {error}")),
     }
 }
 
@@ -5331,7 +5340,9 @@ fn job_output<S: Sink>(
     arguments: &Value,
 ) -> Produced {
     let Some(named) = argument(arguments, "job") else {
-        return problem("error: 'job' is required and must be a job name, e.g. \"job:1\"");
+        return Produced::problem(
+            "error: 'job' is required and must be a job name, e.g. \"job:1\"",
+        );
     };
 
     // Looked up against names the driver handed out, which is the same treatment a reference
@@ -5340,7 +5351,7 @@ fn job_output<S: Sink>(
     // goes through the gate that records one (LABEL-6).
     let name = match policy.read_planner_argument("job_output", "job", &named) {
         Ok(name) => name,
-        Err(denial) => return problem(format!("refused: {denial}")),
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
     };
 
     let kill = arguments
@@ -5350,11 +5361,11 @@ fn job_output<S: Sink>(
 
     let wait = match wait_from(arguments) {
         Ok(wait) => wait,
-        Err(refusal) => return problem(refusal),
+        Err(refusal) => return Produced::problem(refusal),
     };
 
     let Some(job) = tools.jobs.running.get_mut(&name) else {
-        return problem(format!(
+        return Produced::problem(format!(
             "error: there is no background job called '{name}'. Only a job name run handed back \
              in this turn can be read, and they do not outlive the turn."
         ));
@@ -5493,10 +5504,10 @@ fn spawn_processor<S: Sink>(
     arguments: &Value,
 ) -> Produced {
     let Some(instruction) = argument(arguments, "instruction") else {
-        return problem("error: 'instruction' is required and must be a string");
+        return Produced::problem("error: 'instruction' is required and must be a string");
     };
     let Some(entries) = arguments.get("reads").and_then(Value::as_array) else {
-        return problem(
+        return Produced::problem(
             "error: 'reads' is required and must be an array of reference names, e.g. \
              [\"ref:0\"]",
         );
@@ -5505,7 +5516,7 @@ fn spawn_processor<S: Sink>(
     let mut reads = Vec::with_capacity(entries.len());
     for entry in entries {
         let Some(name) = entry.as_str() else {
-            return problem(
+            return Produced::problem(
                 "error: every entry in 'reads' must be a reference name, e.g. \"ref:0\"",
             );
         };
@@ -5515,7 +5526,7 @@ fn spawn_processor<S: Sink>(
         );
         match policy.accept_reference("spawn_processor", "reads", &named) {
             Ok(slot) => reads.push(slot),
-            Err(denial) => return problem(format!("refused: {denial}")),
+            Err(denial) => return Produced::problem(format!("refused: {denial}")),
         }
     }
 
@@ -5549,7 +5560,7 @@ fn spawn_processor<S: Sink>(
         &reads,
     ) {
         Ok(opened) => opened,
-        Err(refusal) => return problem(refusal),
+        Err(refusal) => return Produced::problem(refusal),
     };
 
     // Which document the call is about: the answer replaces that one, and an answer that marks
@@ -5558,14 +5569,14 @@ fn spawn_processor<S: Sink>(
     let about = match argument(arguments, "about") {
         Some(named) => match policy.accept_reference("spawn_processor", "about", &named) {
             Ok(slot) => Some(slot),
-            Err(denial) => return problem(format!("refused: {denial}")),
+            Err(denial) => return Produced::problem(format!("refused: {denial}")),
         },
         None => None,
     };
 
     let spec = match policy.before_processor(&origin, &reads, &instruction, about, tools.slots) {
         Ok(spec) => spec,
-        Err(denial) => return problem(format!("refused: {denial}")),
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
     };
 
     let asked_at = std::time::Instant::now();
@@ -5638,7 +5649,7 @@ fn spawn_processor<S: Sink>(
             } else {
                 diagnosis.category.name()
             };
-            let mut produced = problem(format!("error: processor request {reason}"))
+            let mut produced = Produced::problem(format!("error: processor request {reason}"))
                 .costing(error.completed_usage().unwrap_or_default())
                 .waiting(waited);
             if cancelled {
@@ -5649,7 +5660,7 @@ fn spawn_processor<S: Sink>(
             produced
         }
         Err(crate::processor::ProcessorError::Denied(error)) => {
-            problem(format!("error: {error}")).waiting(waited)
+            Produced::problem(format!("error: {error}")).waiting(waited)
         }
     }
 }
@@ -5671,14 +5682,14 @@ fn spawn_agent<S: Sink, R: Reporter>(
     arguments: &Value,
 ) -> Produced {
     let Some(kind) = argument(arguments, "kind") else {
-        return problem(format!(
+        return Produced::problem(format!(
             "error: 'kind' is required and must be one of {}",
             policy.delegates().names().join(", ")
         ));
     };
     let tasks = match tasks_in(arguments) {
         Ok(tasks) => tasks,
-        Err(refusal) => return problem(refusal),
+        Err(refusal) => return Produced::problem(refusal),
     };
 
     let mut produced = Produced::new(
@@ -5706,7 +5717,7 @@ fn spawn_agent<S: Sink, R: Reporter>(
         let id = crate::report::DelegateId::nth(*tools.spawned);
         let spec = match policy.before_delegate(id, &kind, task) {
             Ok(spec) => spec,
-            Err(denial) => return problem(format!("refused: {denial}")),
+            Err(denial) => return Produced::problem(format!("refused: {denial}")),
         };
 
         // The task is released for a screen the way the target of any other call is. A person
@@ -5844,23 +5855,23 @@ fn load_skill<S: Sink>(
     arguments: &Value,
 ) -> Produced {
     let Some(proposed) = argument(arguments, "name") else {
-        return problem("error: 'name' is required and must be a string");
+        return Produced::problem("error: 'name' is required and must be a string");
     };
 
     let name = match policy.promote_confined_read("load_skill", "name", &proposed) {
         Ok(name) => name,
-        Err(denial) => return problem(format!("refused: {denial}")),
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
     };
     // Safe to read: promotion just proved this is (T,pub), and comparing trusted text decides
     // nothing an attacker steers.
     let Ok(name) = name.into_trusted() else {
-        return problem("error: the skill name was not usable");
+        return Produced::problem("error: the skill name was not usable");
     };
 
     let Some(skill) = skills.get(&name) else {
         // The names are listed in the system prompt, so this is a mistake worth naming rather
         // than a refusal worth explaining.
-        return problem(format!(
+        return Produced::problem(format!(
             "error: no skill named '{name}'. The skills available to you are listed for you; \
              there are no others."
         ));
@@ -5951,18 +5962,18 @@ fn ask_user<S: Sink, C: Confirmer>(
     arguments: &Value,
 ) -> Produced {
     let Some(entries) = arguments.get("questions").and_then(Value::as_array) else {
-        return problem(
+        return Produced::problem(
             "error: 'questions' is required and must be an array of one to four questions",
         );
     };
 
     if entries.is_empty() {
-        return problem("error: 'questions' must hold at least one question.");
+        return Produced::problem("error: 'questions' must hold at least one question.");
     }
     // Refused rather than trimmed. A question dropped here is one the model is told the person
     // was asked and the person never saw, which is worse than being made to send the call again.
     if entries.len() > ask::MOST_AT_ONCE {
-        return problem(format!(
+        return Produced::problem(format!(
             "error: at most {} questions can be asked at once; nobody was asked anything. Send \
              the ones the work turns on.",
             ask::MOST_AT_ONCE
@@ -5971,7 +5982,7 @@ fn ask_user<S: Sink, C: Confirmer>(
 
     let asked: Vec<Question> = entries.iter().filter_map(question_from).collect();
     if asked.len() != entries.len() {
-        return problem(
+        return Produced::problem(
             "error: every question needs a 'header' tag and a 'question' sentence, and every \
              option needs a label; nobody was asked anything. Send the whole set again.",
         );
@@ -5983,7 +5994,7 @@ fn ask_user<S: Sink, C: Confirmer>(
     // shown rather than the first question or the sentences alone.
     let canonical = policy.render_in_place("ask_user", &series, |s| ask::canonical_series(&s));
     if let Err(denial) = policy.before_action("ask_user", "questions", Role::Routing, &canonical) {
-        return problem(format!(
+        return Produced::problem(format!(
             "refused: {denial}. Questions can only be put to the user before anything untrusted \
              has reached your context. Continue without an answer, or say in your reply what you \
              need to know."
@@ -6001,7 +6012,7 @@ fn ask_user<S: Sink, C: Confirmer>(
     // here branches on what the person said or counts what they answered.
     match policy.record_answers("ask_user", &series, &answers) {
         Ok(text) => Produced::new(text, "", tally(entries.len(), "answer", "answers")),
-        Err(denial) => problem(format!("refused: {denial}")),
+        Err(denial) => Produced::problem(format!("refused: {denial}")),
     }
 }
 
@@ -6083,7 +6094,7 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
     arguments: &Value,
 ) -> Produced {
     let Some(named) = argument(arguments, "operation") else {
-        return problem("error: 'operation' is required");
+        return Produced::problem("error: 'operation' is required");
     };
 
     // The operation is routing: it decides what the server is asked. Promoted like any other
@@ -6094,15 +6105,15 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
             Ok(name) => match bravebot_lsp::Operation::parse(&name) {
                 Some(operation) => operation,
                 None => {
-                    return problem(format!(
+                    return Produced::problem(format!(
                         "refused: {}",
                         bravebot_lsp::LspError::UnknownOperation { named: name }
                     ));
                 }
             },
-            Err(_) => return problem("refused: the operation was not trusted"),
+            Err(_) => return Produced::problem("refused: the operation was not trusted"),
         },
-        Err(denial) => return problem(format!("refused: {denial}")),
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
     };
 
     // A position is two integers the planner states. Nothing reads the file to work one out, which
@@ -6131,9 +6142,9 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
             Some(proposed) => match policy.promote_confined_read("lsp", "query", &proposed) {
                 Ok(promoted) => match promoted.into_trusted() {
                     Ok(query) => Some(query),
-                    Err(_) => return problem("refused: the query was not trusted"),
+                    Err(_) => return Produced::problem("refused: the query was not trusted"),
                 },
-                Err(denial) => return problem(format!("refused: {denial}")),
+                Err(denial) => return Produced::problem(format!("refused: {denial}")),
             },
             None => None,
         }
@@ -6141,23 +6152,23 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
 
     let relative = if operation.needs_position() {
         let Some(proposed) = argument(arguments, "path") else {
-            return problem(format!(
+            return Produced::problem(format!(
                 "error: 'path' is required for {}",
                 operation.as_str()
             ));
         };
         let promoted = match policy.promote_confined_read("lsp", "path", &proposed) {
             Ok(promoted) => promoted,
-            Err(denial) => return problem(format!("refused: {denial}")),
+            Err(denial) => return Produced::problem(format!("refused: {denial}")),
         };
         let named = match promoted.clone().into_trusted() {
             Ok(named) => named,
-            Err(_) => return problem("refused: the path was not trusted"),
+            Err(_) => return Produced::problem("refused: the path was not trusted"),
         };
         // A deny rule covering the file covers asking a server about it too: the answer quotes
         // where things are in it, so this is a read.
         if let Err(refusal) = refuse_denied_path(policy, Purpose::Read, &named) {
-            return problem(refusal);
+            return Produced::problem(refusal);
         }
         named
     } else {
@@ -6167,7 +6178,7 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
     let Some(servers) = tools.servers.as_deref_mut() else {
         // LSP-5, and it is not a fault: a host that cannot confine a subprocess does not get to run
         // one, and saying so is better than an answer nobody could trust.
-        return problem(
+        return Produced::problem(
             "refused: no language server can be started here, because this platform offers no \
              way to confine one. Use search and read_file instead.",
         );
@@ -6196,7 +6207,7 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
         Ok(answer) => answer,
         // LSP-6: every one of these says which failure it was, and none of them reads as a
         // statement about the code. A planner told "no references" deletes a function.
-        Err(error) => return problem(format!("refused: {error}")),
+        Err(error) => return Produced::problem(format!("refused: {error}")),
     };
 
     let described = crate::lsp::describe(operation, &answer, &root);
@@ -6208,7 +6219,7 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
     // driver's own words about where things are, which is trusted.
     let text = match crate::lsp::text_of(policy, &answer) {
         Some(Ok(text)) => Some(text),
-        Some(Err(denial)) => return problem(format!("refused: {denial}")),
+        Some(Err(denial)) => return Produced::problem(format!("refused: {denial}")),
         None => None,
     };
 
@@ -6258,14 +6269,16 @@ fn search<S: Sink>(
 ) -> Produced {
     let proposed_patterns = patterns_in(arguments);
     if proposed_patterns.is_empty() {
-        return problem("error: 'pattern' is required and must be a string or a list of strings");
+        return Produced::problem(
+            "error: 'pattern' is required and must be a string or a list of strings",
+        );
     }
 
     let mut patterns = Vec::with_capacity(proposed_patterns.len());
     for proposed in &proposed_patterns {
         match policy.promote_confined_read("search", "pattern", proposed) {
             Ok(p) => patterns.push(p),
-            Err(denial) => return problem(format!("refused: {denial}")),
+            Err(denial) => return Produced::problem(format!("refused: {denial}")),
         }
     }
 
@@ -6278,23 +6291,23 @@ fn search<S: Sink>(
 
     let directory = match policy.promote_confined_read("search", "directory", &proposed_dir) {
         Ok(d) => d,
-        Err(denial) => return problem(format!("refused: {denial}")),
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
     };
 
     // The directory a search would walk, on the same footing as a listing: a match quotes the
     // line it was found on, so searching a tree is reading it.
     let proposed_where = match policy.read_planner_argument("search", "directory", &proposed_dir) {
         Ok(directory) => directory,
-        Err(denial) => return problem(format!("refused: {denial}")),
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
     };
     if let Err(refusal) = refuse_denied_path(policy, Purpose::Read, &proposed_where) {
-        return problem(refusal);
+        return Produced::problem(refusal);
     }
 
     let include = match argument(arguments, "include") {
         Some(proposed) => match policy.promote_confined_read("search", "include", &proposed) {
             Ok(p) => Some(p),
-            Err(denial) => return problem(format!("refused: {denial}")),
+            Err(denial) => return Produced::problem(format!("refused: {denial}")),
         },
         None => None,
     };
@@ -6458,7 +6471,7 @@ fn search<S: Sink>(
                 .capped(incomplete)
                 .paging(paging)
         }
-        Err(e) => problem(format!("error: {e}")),
+        Err(e) => Produced::problem(format!("error: {e}")),
     }
 }
 

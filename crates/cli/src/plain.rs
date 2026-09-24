@@ -332,11 +332,14 @@ struct Running<'a> {
     /// The name of the model in force, whichever of the two it came from, which is what a
     /// substitution is measured against (CLI-10).
     in_force: String,
-    /// Whether the roster describing the model in force says it reads an effort level.
+    /// Whether the model in force still reads an effort level.
     ///
-    /// Asked once, where the session is assembled, because that is where the listing is fetched
-    /// and this mode has no command that puts another model in force. A turn carries the recorded
-    /// level only where this is true (BACKEND-22).
+    /// The listing answers it where the session is assembled, because that is where the listing is
+    /// fetched and this mode has no command that puts another model in force. A service that
+    /// refuses the field answers the same question later, so this is taken down again after every
+    /// turn: a session that asked once went on sending the level and reporting it as in force for
+    /// the rest of its life after the requests carrying one had stopped. A turn carries the
+    /// recorded level only where this is true (BACKEND-22).
     reads_effort: bool,
     /// The last substitution said, so the same complaint is not repeated every turn.
     ///
@@ -424,7 +427,7 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
         // index of the same tree.
         self.servers = Some(servers);
 
-        match outcome {
+        let mut said = match outcome {
             Ok(outcome) => {
                 // What the turn changed about what the session carries. Taken back from the
                 // outcome rather than recorded by whoever drew the prompt, so there is one copy of
@@ -448,11 +451,38 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
                 notices: reporter.notices().to_vec(),
                 ..Said::default()
             },
-        }
+        };
+        // After either ending, because either can have learned it: the level goes out on the first
+        // request a turn makes, and a turn that then failed refused nothing about the field.
+        said.notices.extend(self.a_level_refused_this_turn());
+        said
     }
 }
 
 impl Running<'_> {
+    /// Take down a level the service refused during the turn, and what to say about it.
+    ///
+    /// The roster answered this question before the first prompt, and a service that refuses the
+    /// field answers it again mid-turn: the listing is what a gateway says it would do, and where
+    /// there is no listing at all a refusal is the only answer there has ever been. Asked after
+    /// every turn because that is the only moment the answer can have changed, and the session goes
+    /// on to send another request and to report what it carries.
+    ///
+    /// Said once, on the turn that learned it, for the reason the same sentence is said once at
+    /// startup: the condition holds for the rest of the session and repeating it between every
+    /// prompt and its reply would bury the work. Nothing is said where no level was chosen, nothing
+    /// having been withheld from somebody who asked for none, and the choice stays on disk either
+    /// way so it applies again under a model that reads one (BACKEND-22).
+    fn a_level_refused_this_turn(&mut self) -> Option<String> {
+        if !self.reads_effort
+            || !bravebot_agent::backend::refused_a_level(self.config, &self.in_force)
+        {
+            return None;
+        }
+        self.reads_effort = false;
+        bravebot_session::store::load_effort().map(|_| t!(session_effort_not_read).to_string())
+    }
+
     /// What to say where the endpoint answered with a model other than the one in force, and
     /// nothing where it answered as asked or where the two cannot be compared.
     ///

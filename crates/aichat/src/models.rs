@@ -181,7 +181,7 @@ pub fn list<S: Sink>(
         detail: format!("{e} (received {} bytes from /v1/models)", bytes.len()),
     })?;
 
-    Ok(usable(listed))
+    Ok(usable(&config.chat_completions_url(), listed))
 }
 
 /// One entry of a gateway's own roster.
@@ -339,10 +339,14 @@ fn offered_by_gateway(
             // block does, so the answer is the one this service has already given: a model whose
             // service refused the field reads no level, and one that has refused nothing takes
             // the level to be read until it says otherwise.
-            reads_effort: match entry.supported_parameters.as_ref() {
-                Some(parameters) => parameters.iter().any(|it| it == EFFORT_PARAMETER),
-                None => crate::reads_effort(&provider.chat_completions_url(), &entry.id),
-            },
+            // A refusal outranks the row either way round. A listing is what the gateway says it
+            // would do and a refusal is what it did, so a row still advertising the parameter it
+            // has already turned a request down for describes nothing that will be sent again.
+            reads_effort: crate::reads_effort(&provider.chat_completions_url(), &entry.id)
+                && entry
+                    .supported_parameters
+                    .as_ref()
+                    .is_none_or(|parameters| parameters.iter().any(|it| it == EFFORT_PARAMETER)),
             // Everything the roster said, carried through for whoever draws the row. A picker
             // that wanted this used to decode the envelope a second time to get at it, which
             // made a second declassification site out of a field nothing decides anything on.
@@ -365,16 +369,28 @@ fn offered_by_gateway(
 
 /// The models worth offering, `automatic` first.
 ///
-/// Separated from the request so the filtering is testable without a server.
-fn usable(listed: Vec<Listed>) -> Vec<Model> {
-    let mut models = vec![Model::automatic()];
+/// Separated from the request so the filtering is testable without a server. `service` is the
+/// endpoint that answered, which is what a refusal is remembered against.
+fn usable(service: &str, listed: Vec<Listed>) -> Vec<Model> {
+    // The row naming no model included: what this endpoint refused a request carrying that name is
+    // an answer about the name, whatever the server resolves it to per request.
+    let mut models = vec![Model {
+        reads_effort: crate::reads_effort(service, bravebot_config::DEFAULT_MODEL),
+        ..Model::automatic()
+    }];
     models.extend(
         listed
             .into_iter()
             .filter(|entry| entry.capabilities.iter().any(|c| c == TOOLS_CAPABILITY))
             .filter_map(|entry| {
+                let key = entry.key?;
+                // This roster describes what a model can do and never which request fields it
+                // reads, so nothing here states the subject either way and the only answer there
+                // has ever been is the one this endpoint gave a request that carried a level
+                // (BACKEND-22).
+                let reads_effort = crate::reads_effort(service, &key);
                 Some(Model {
-                    key: entry.key?,
+                    key,
                     display_name: entry.display_name,
                     premium: entry.options.access == PREMIUM_ACCESS,
                     provider: None,
@@ -384,9 +400,7 @@ fn usable(listed: Vec<Listed>) -> Vec<Model> {
                         // The endpoint sends 1 where a model reports no window at all, and zero is
                         // not a budget either: both mean "it did not say" rather than "no room".
                         .filter(|limit| *limit > 1),
-                    // This roster describes what a model can do and never which request fields it
-                    // reads, so nothing here states the subject either way.
-                    reads_effort: true,
+                    reads_effort,
                     // Its vocabulary is capabilities rather than modalities, and it names no
                     // request field, so there is nothing here it could be read as saying.
                     advertised: Advertised::default(),
@@ -404,7 +418,14 @@ mod tests {
     use super::*;
 
     fn decoded(body: &str) -> Vec<Model> {
-        usable(serde_json::from_str(body).expect("the test body parses"))
+        decoded_from("https://roster.example.invalid/v1/chat/completions", body)
+    }
+
+    fn decoded_from(service: &str, body: &str) -> Vec<Model> {
+        usable(
+            service,
+            serde_json::from_str(body).expect("the test body parses"),
+        )
     }
 
     /// The shape the deployed endpoint answers with: a bare array, the name to send back in `key`
@@ -746,6 +767,92 @@ mod tests {
         assert!(
             models[1].reads_effort,
             "one model's refusal was read as the whole gateway refusing"
+        );
+    }
+
+    /// This roster names no request field at all, so the only description of the field there has
+    /// ever been is what the endpoint answered a request that carried one. A row that went on
+    /// offering the level after that would put the interface back to reporting a charge somebody
+    /// chose and stopped getting, on the model most sessions are served by.
+    #[test]
+    fn a_brave_roster_row_the_endpoint_refused_reads_none() {
+        let service = "https://curated.example.invalid/v1/chat/completions";
+        crate::remember(
+            &crate::learned_key(service, "refused-the-field"),
+            crate::Refusals {
+                caching: false,
+                effort: true,
+            },
+        );
+
+        let models = decoded_from(
+            service,
+            r#"[{"key":"refused-the-field","display_name":"One","capabilities":["tools"],
+                 "options":{"access":"basic_and_premium"}},
+                {"key":"refused-nothing","display_name":"Two","capabilities":["tools"],
+                 "options":{"access":"basic_and_premium"}}]"#,
+        );
+
+        let refused = models
+            .iter()
+            .find(|model| model.key == "refused-the-field")
+            .expect("the refused model is offered");
+        assert!(
+            !refused.reads_effort,
+            "a row the endpoint had already refused the field for was offered as reading a level"
+        );
+        let other = models
+            .iter()
+            .find(|model| model.key == "refused-nothing")
+            .expect("the other model is offered");
+        assert!(
+            other.reads_effort,
+            "a refusal for one model took the field away from another on the same endpoint"
+        );
+    }
+
+    /// A listing is what a gateway says it would do; a refusal is what it did. A row still
+    /// advertising the parameter a request was just turned down for describes nothing that will be
+    /// sent again, and offering it as reading a level would put the interface back to reporting a
+    /// charge somebody chose and stopped getting.
+    #[test]
+    fn a_row_the_service_refused_reads_none_however_loudly_the_roster_advertises_it() {
+        let serde_json::Value::Object(root) = serde_json::from_str(
+            r#"{"provider": {"advertiser": {
+                "options": {"baseURL": "https://advertiser.example.invalid/v1"}
+            }}}"#,
+        )
+        .expect("json") else {
+            panic!("not an object");
+        };
+        let provider = bravebot_config::provider::Provider::all(&root)
+            .pop()
+            .expect("one provider");
+        crate::remember(
+            &crate::learned_key(&provider.chat_completions_url(), "advertised-and-refused"),
+            crate::Refusals {
+                caching: false,
+                effort: true,
+            },
+        );
+
+        let models = from_gateway(
+            &provider,
+            r#"{"data": [
+                {"id": "advertised-and-refused",
+                 "supported_parameters": ["tools", "reasoning_effort"]},
+                {"id": "advertised-and-taken",
+                 "supported_parameters": ["tools", "reasoning_effort"]}
+            ]}"#,
+        );
+
+        assert!(
+            !models[0].reads_effort,
+            "a row the service had already refused the field for was offered as reading a level"
+        );
+        assert!(
+            models[1].reads_effort,
+            "a refusal for one model took the field away from another the roster describes"
         );
     }
 

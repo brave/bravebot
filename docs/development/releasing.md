@@ -75,8 +75,10 @@ make darwin-arm64 darwin-amd64 strip
 make app-release
 ```
 
-The third family of artifact, and the one the tag does not produce. It is released for macOS
-only. A Linux desktop release needs a package format and a machine to test it on, and has neither.
+The third family of artifact, and the one the tag does not produce. macOS gets a disk image per
+architecture, Linux a `.deb` and an `.rpm` per architecture from
+[the Linux packages](#the-linux-packages) below, and Windows the bundle below and no installer
+around it yet.
 
 `app-release` runs on a Mac of either architecture and needs no Rust toolchain. It packages the
 app once per architecture from what the cross-build left in `dist/`, and writes a disk image for
@@ -122,3 +124,88 @@ built from an unconfigured shell starts, lists sessions, opens them, and fails a
 inference request, and Finder loads no shell configuration for the person who would then report
 that. So the credentials have to be in the environment `make` runs in, as they are for the
 cross-builds above.
+
+### The Linux packages
+
+```sh
+make linux-amd64 linux-arm64 strip
+make app-release-linux
+```
+
+On a Linux host, and needing no Rust toolchain. It packages the app once per architecture from
+what the cross-build left in `dist/`, and writes two packages for each:
+
+| Reads | Writes |
+| --- | --- |
+| `dist/bravebot-rpc-linux-arm64`, `dist/bravebot-ui-files-linux-arm64` | `dist/bravebot-app-linux-arm64.deb`, `dist/bravebot-app-linux-arm64.rpm` |
+| `dist/bravebot-rpc-linux-amd64`, `dist/bravebot-ui-files-linux-amd64` | `dist/bravebot-app-linux-amd64.deb`, `dist/bravebot-app-linux-amd64.rpm` |
+
+Both architectures are packaged on one host. `@electron/packager` downloads the Electron runtime
+for the architecture it is asked for, and `dpkg-deb` and `rpmbuild` archive a finished tree rather
+than executing anything in it, so neither step needs the machine the package is for. Each tool
+runs in a container pinned by digest, as the cross-build is: `make check-security` fails on one
+named by a tag.
+
+**Why a package and not a tarball.** Chromium's sandbox. Where unprivileged user namespaces are
+unavailable, which Ubuntu 24.04's AppArmor policy makes the default, Electron falls back to its
+setuid helper and aborts at start unless `chrome-sandbox` is owned by root with mode 4755. An
+installer can set that and something a person unpacks themselves cannot, which would leave
+`--no-sandbox` as the way to start it. That is not a supported way to run an agent.
+
+What the packages install:
+
+| Path | |
+| --- | --- |
+| `/opt/brave-bot/` | the bundle, with `chrome-sandbox` setuid root |
+| `/usr/bin/brave-bot` | a symlink to the executable inside it, whose name has a space |
+| `/usr/share/applications/brave-bot.desktop` | the launcher entry, running that symlink |
+| `/usr/share/icons/hicolor/scalable/apps/brave-bot.svg` | `build/icon.svg`, the app's icon |
+
+`ui/scripts/linux-package.mjs` writes that tree and both package descriptions, so the layout is
+the same whichever format was installed, and `make app-packages-linux` is only the packing. The
+runtime dependencies are declared there, in each distribution's names: Ubuntu 24.04's 64-bit time
+transition renamed several of them, so those are named as alternatives and a package built for one
+release still installs on the other.
+
+`brave-bot` is the package name in both formats. Upgrades and conflicts key on it, so like the
+macOS bundle id it is fixed by the first release. It is not the CLI's `bravebot`, which an apt or
+dnf repository would want as a package of its own.
+
+The packages are fused and unsigned, as the Mac bundles are. Signing them, and an apt or dnf
+repository to serve updates from, are issue #770; the app has no updater on any platform.
+
+**What is not checked here.** Installing one. That needs a virtual machine of each supported
+release, because a container shares the host's kernel and AppArmor policy and so cannot exercise
+the sandbox the packages exist for. On a machine of each, the package has to install, start from
+its launcher with the sandbox on, start its agent, ignore `ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS`
+and `--inspect`, and uninstall cleanly.
+
+### The Windows bundle
+
+```sh
+make windows-amd64 windows-arm64 strip
+make app-bundles-windows
+```
+
+The same shape as `app-bundles`, and one step in so far:
+
+| Reads | Writes |
+| --- | --- |
+| `dist/bravebot-rpc-windows-arm64.exe`, `dist/bravebot-ui-files-windows-arm64.exe` | `ui/dist/Brave Bot-win32-arm64/` |
+| `dist/bravebot-rpc-windows-amd64.exe`, `dist/bravebot-ui-files-windows-amd64.exe` | `ui/dist/Brave Bot-win32-x64/` |
+
+It runs on any host, unlike the Mac one, because everything platform-specific about a Windows
+bundle is the icon and the version resource in `Brave Bot.exe`, and `@electron/packager` writes
+both with resedit, a JavaScript library. No Windows node and no Wine is involved, so the release
+builds the bundle where it builds everything else and takes it to the Windows node only to sign it.
+
+The Windows cross-build keeps the same pair of executables beside the CLI as the Mac one does,
+`make strip` strips them with the rest, and `make checksums` leaves them out of the assets. The
+bundle is fused, in `Brave Bot.exe` rather than in a framework, and unsigned. The job signs every
+PE in it where it lies: `Brave Bot.exe`, both helpers in `resources/`, and Electron's own DLLs.
+
+The installer that a signed bundle goes into is the second step and does not exist yet. Its format,
+whether it installs per user or per machine, and the product identity it fixes for good are open
+questions on [#769](https://github.com/brave/bravebot/issues/769), and none of them is a packaging
+script's to settle. Until they are, what comes out of this target is a directory somebody can run
+the app from, not something anybody installs.

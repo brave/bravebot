@@ -61,10 +61,21 @@ def kinds(found):
 
 
 class FakeSpec:
-    """A spec that pins the symbols named and nothing else."""
+    """A spec that pins the symbols named and nothing else.
 
-    def __init__(self, pinned):
-        self.allowlists = {symbol: [] for symbol in pinned}
+    `named` is for the checks that read both halves of a `guards` entry: a symbol a spec names
+    without counting its call sites is pinned by neither this mapping nor `check-spec`, and it is
+    a different thing from one no spec mentions at all. Pinning a symbol names it too, which is
+    what a real spec does, so the default follows `pinned`.
+
+    `sites` is for a check that reads which files an entry counts rather than only that one
+    exists, and a symbol left out of it pins no file, the way a `guards` entry with no `sites:`
+    does.
+    """
+
+    def __init__(self, pinned, named=None, sites=None):
+        self.allowlists = {symbol: list((sites or {}).get(symbol, [])) for symbol in pinned}
+        self.guards = list(pinned if named is None else named)
         self.front = {}
 
 
@@ -1305,6 +1316,232 @@ def test_construction_pinned():
     )
 
 
+def test_gates_pinned():
+    kernel = [
+        "impl Policy {",
+        "    pub fn render_in_place<T: Clone, R>(",
+        "        &mut self,",
+        "        content: &Labelled<T>,",
+        "        shape: impl FnOnce(T) -> R,",
+        "    ) -> Labelled<R> {",
+        '        let proof = Declassification::authorise("reshaped");',
+        "        Labelled::new(shape(content.clone().declassify(&proof)), content.label())",
+        "    }",
+        "    pub fn read_trusted_content<T: Clone>(&mut self, value: &Labelled<T>) -> Gated<T> {",
+        '        self.refuse_untrusted("trusted-read", "tool", value.label())?;',
+        '        let proof = Declassification::authorise("examined");',
+        "        Ok(value.clone().declassify(&proof))",
+        "    }",
+        "}",
+    ]
+    sources = {
+        Path("crates/core/src/policy.rs"): kernel,
+        Path("crates/agent/src/tools.rs"): [
+            "fn names(policy: &mut Policy, found: &Labelled<Listing>) -> Labelled<Vec<String>> {",
+            '    policy.render_in_place("list_files", found, |found| found.names())',
+            "}",
+            "fn body(policy: &mut Policy, skill: &Labelled<String>) -> Gated<String> {",
+            '    policy.read_trusted_content("load_skill", skill)',
+            "}",
+        ],
+    }
+
+    found = list(audit.check_gates_pinned([FakeSpec([])], sources))
+    check(
+        "a gate no spec counts is an error, whichever way it treats a label",
+        kinds(found) == ["gate-unpinned"] * 2 and all(one["impact"] == "low" for one in found),
+        str(kinds(found)),
+    )
+
+    # The difference the check exists to draw. A gate that refuses untrusted content can only hand
+    # the driver bytes it was already allowed to read, so naming it catches the one thing left to
+    # catch. A gate that releases whatever it is given needs the count, and a name buys nothing.
+    named = FakeSpec([], named=["Policy::render_in_place", "Policy::read_trusted_content"])
+    found = list(audit.check_gates_pinned([named], sources))
+    check(
+        "naming clears the gate that refuses untrusted content and not the gate that releases it",
+        [one["title"].split(",")[0] for one in found]
+        == ["no spec counts Policy::render_in_place"],
+        str([one["title"] for one in found]),
+    )
+
+    check(
+        "a counted gate is clean",
+        list(audit.check_gates_pinned([FakeSpec(audit.GATES)], sources)) == [],
+    )
+
+    kernel_only = {Path("crates/core/src/policy.rs"): kernel}
+    check(
+        "a gate the driver never calls is not the reported surface",
+        list(audit.check_gates_pinned([FakeSpec([])], kernel_only)) == [],
+    )
+
+    # The half a count on the gate alone leaves open: every caller of this wrapper writes a closure
+    # that runs on released content, and none of them moves the gate's count.
+    wrapped = dict(sources)
+    wrapped[Path("crates/agent/src/tools.rs")] = [
+        "fn note_for<T: Clone>(",
+        "    policy: &mut Policy,",
+        "    content: &Labelled<T>,",
+        "    shape: impl FnOnce(T) -> String,",
+        ") -> String {",
+        '    let shaped = policy.render_in_place("read_file", content, shape);',
+        "    shaped.declassify(&proof)",
+        "}",
+    ]
+    found = list(audit.check_gates_pinned([FakeSpec(audit.GATES)], wrapped))
+    check(
+        "a function that forwards its caller's closure to a gate is an error of its own",
+        kinds(found) == ["gate-forwarder-unpinned"] and "note_for" in found[0]["title"],
+        str([one["title"] for one in found]),
+    )
+    in_tools = FakeSpec(
+        list(audit.GATES) + ["note_for"],
+        sites={"note_for": ["crates/agent/src/tools.rs: 2"]},
+    )
+    check(
+        "counting the wrapper clears it",
+        list(audit.check_gates_pinned([in_tools], wrapped)) == [],
+    )
+
+    # A bare `guards` name is satisfied by any symbol of that name anywhere in the tree, so an
+    # entry that counts a different file is an entry about a different function.
+    elsewhere = FakeSpec(
+        list(audit.GATES) + ["note_for"],
+        sites={"note_for": ["crates/agent/src/workspace.rs: 2"]},
+    )
+    check(
+        "an entry counting another file does not clear this one",
+        kinds(list(audit.check_gates_pinned([elsewhere], wrapped))) == ["gate-forwarder-unpinned"],
+        str(kinds(list(audit.check_gates_pinned([elsewhere], wrapped)))),
+    )
+
+    # The rewrite that would answer a check reading only `impl Fn`: the same closure, taken as a
+    # generic bound in the brackets and spelled by name where the parameter is declared.
+    generic = dict(sources)
+    generic[Path("crates/agent/src/tools.rs")] = [
+        "fn note_for<T: Clone, F: FnOnce(T) -> String>(",
+        "    policy: &mut Policy,",
+        "    content: &Labelled<T>,",
+        "    shape: F,",
+        ") -> String {",
+        '    let shaped = policy.render_in_place("read_file", content, shape);',
+        "    shaped.declassify(&proof)",
+        "}",
+    ]
+    found = list(audit.check_gates_pinned([FakeSpec(audit.GATES)], generic))
+    check(
+        "a closure taken as a generic bound is the same way in",
+        kinds(found) == ["gate-forwarder-unpinned"] and "note_for" in found[0]["title"],
+        str([one["title"] for one in found]),
+    )
+
+    # A call written as an associated function rather than on a receiver reaches the same gate.
+    qualified = dict(sources)
+    qualified[Path("crates/agent/src/tools.rs")] = [
+        "fn note_for<T: Clone>(",
+        "    policy: &mut Policy,",
+        "    content: &Labelled<T>,",
+        "    shape: impl FnOnce(T) -> String,",
+        ") -> String {",
+        '    Policy::render_in_place(policy, "read_file", content, shape)',
+        "}",
+    ]
+    check(
+        "a gate called by its qualified name is still forwarded to",
+        kinds(list(audit.check_gates_pinned([FakeSpec(audit.GATES)], qualified)))
+        == ["gate-forwarder-unpinned"],
+        str(kinds(list(audit.check_gates_pinned([FakeSpec(audit.GATES)], qualified)))),
+    )
+
+    # A parenthesis inside a string literal closes nothing, so a scan that counted one would run
+    # past the end of this call and come back with no arguments, which reads as a function that
+    # forwards nothing. Every one of these calls names its tool with a string literal.
+    literal = dict(sources)
+    literal[Path("crates/agent/src/tools.rs")] = [
+        "fn note_for<T: Clone>(",
+        "    policy: &mut Policy,",
+        "    content: &Labelled<T>,",
+        "    shape: impl FnOnce(T) -> String,",
+        ") -> String {",
+        '    let shaped = policy.render_in_place("read (file", content, shape);',
+        "    shaped.declassify(&proof)",
+        "}",
+    ]
+    check(
+        "a parenthesis inside a string literal does not hide the argument list",
+        kinds(list(audit.check_gates_pinned([FakeSpec(audit.GATES)], literal)))
+        == ["gate-forwarder-unpinned"],
+        str([one["title"] for one in audit.check_gates_pinned([FakeSpec(audit.GATES)], literal)]),
+    )
+
+    # A refusal below the release is not one: the bytes are in the caller's hands by the time it
+    # runs, so a gate cannot be exempted from being counted by a line that does nothing.
+    late = {
+        Path("crates/core/src/policy.rs"): [
+            "impl Policy {",
+            "    pub fn render_in_place<T: Clone, R>(",
+            "        &mut self,",
+            "        content: &Labelled<T>,",
+            "        shape: impl FnOnce(T) -> R,",
+            "    ) -> Labelled<R> {",
+            "        let out = shape(content.clone().declassify(&proof));",
+            '        self.refuse_untrusted("render", "tool", content.label())?;',
+            "        Labelled::new(out, content.label())",
+            "    }",
+            "}",
+        ],
+        Path("crates/agent/src/tools.rs"): [
+            "fn names(policy: &mut Policy, found: &Labelled<Listing>) -> Labelled<Vec<String>> {",
+            '    policy.render_in_place("list_files", found, |found| found.names())',
+            "}",
+        ],
+    }
+    check(
+        "a refusal after the release does not excuse the count",
+        kinds(
+            list(
+                audit.check_gates_pinned(
+                    [FakeSpec([], named=["Policy::render_in_place"])], late
+                )
+            )
+        )
+        == ["gate-unpinned"],
+    )
+
+    # A callback the gate never receives is not a way into it, and reporting one would make this
+    # check fire on every function that happens to take a closure for a reason of its own.
+    callback = dict(sources)
+    callback[Path("crates/agent/src/tools.rs")] = [
+        "fn watched<T: Clone>(",
+        "    policy: &mut Policy,",
+        "    content: &Labelled<T>,",
+        "    watching: impl Fn(usize),",
+        ") -> Labelled<String> {",
+        "    watching(1);",
+        '    policy.render_in_place("read_file", content, |text| text.to_string())',
+        "}",
+    ]
+    check(
+        "a closure the call never passes on is not a way into the gate",
+        list(audit.check_gates_pinned([FakeSpec(audit.GATES)], callback)) == [],
+        str([one["title"] for one in audit.check_gates_pinned([FakeSpec(audit.GATES)], callback)]),
+    )
+
+    # The counts in `labels.md` are what makes this pass, so a gate added to the tree without one
+    # fails here rather than at whoever next reads `crates/agent/src/tools.rs`.
+    check(
+        "the tree's own gates and the wrapper that forwards to one are counted",
+        with_cwd(
+            ROOT,
+            lambda: list(
+                audit.check_gates_pinned(audit.load_specs(), audit.mechanics.load_sources())
+            ),
+        )
+        == [],
+    )
+
+
 STEP_DECLARED = [
     "pub struct Step {",
     "    pub program: String,",
@@ -1500,6 +1737,132 @@ def test_key_sites_exhaustive():
             ),
         )
         == [],
+    )
+
+
+# One job, named the way a check run is named, running a target the documentation makes a promise
+# about. The promise is prose, so the fixture is prose: a rewording that stops matching is the thing
+# being caught, the same as the exception counts above.
+GATE_JOB = """\
+name: CI
+
+jobs:
+  specs:
+    name: Specs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the specs against the implementation
+        run: make check-spec
+"""
+
+GATE_PROMISE = """\
+# Checks
+
+`make check-spec` checks the mechanical half of the specs. CI runs it too, so a new use of a
+guarded symbol fails a pull request rather than waiting for somebody to notice it.
+"""
+
+GATE_TREE = {".github/workflows/ci.yml": GATE_JOB, "docs/development/checks.md": GATE_PROMISE}
+
+
+def gates(files):
+    return with_cwd(in_tree(files), lambda: list(audit.check_required_checks_are_the_gates()))
+
+
+def test_required_checks_are_the_gates():
+    found = gates({**GATE_TREE, "contrib/required-checks.txt": "# nothing yet\n"})
+    check(
+        "a job that runs a check and that no context names is an error",
+        kinds(found) == ["ungated-check"] and found[0]["severity"] == audit.ERROR,
+        str(kinds(found)),
+    )
+    check(
+        "it names the job, the target and the promise made about it",
+        bool(found)
+        and found[0]["evidence"] == ["Specs runs make check-spec", "docs/development/checks.md:3"],
+        str(found[0]["evidence"] if found else None),
+    )
+
+    # The rule is that a job whose purpose is a check gates, not that the page said so: a paragraph
+    # making no promise leaves the job exactly as unrequired.
+    silent = dict(GATE_TREE, **{"contrib/required-checks.txt": ""})
+    silent["docs/development/checks.md"] = GATE_PROMISE.replace(
+        "fails a pull request rather than waiting for somebody to notice it",
+        "reports into a pull request",
+    )
+    check(
+        "a job that runs a check is required whether or not the page promises anything",
+        kinds(gates(silent)) == ["ungated-check"],
+        str(kinds(gates(silent))),
+    )
+
+    # A promise about a target no job runs: the page says a pull request fails over something that
+    # never runs on one.
+    unrun = dict(GATE_TREE, **{"contrib/required-checks.txt": "Specs\n"})
+    unrun["docs/development/checks.md"] = GATE_PROMISE + (
+        "\n`make check-deps` decides deny.toml. CI runs it too, so a git dependency fails a pull\n"
+        "request rather than warning into one.\n"
+    )
+    found = gates(unrun)
+    check(
+        "a target the page promises will fail a pull request that no job runs is an error",
+        kinds(found) == ["unrun-promise"]
+        and found[0]["evidence"] == ["docs/development/checks.md:6"],
+        str(found[0]["evidence"] if found else kinds(found)),
+    )
+
+    found = gates({**GATE_TREE, "contrib/required-checks.txt": "Specs\nSecurity\n"})
+    check(
+        "a context that is the display name of no job is an error",
+        kinds(found) == ["orphaned-required-check"] and found[0]["impact"] == "high",
+        str(kinds(found)),
+    )
+
+    # The name in the file and the name of the job differ only in case, which is exactly the
+    # difference between the organisation's `security` and this repository's `Security`.
+    check(
+        "a context matching a job's name but not its case is an error",
+        kinds(gates({**GATE_TREE, "contrib/required-checks.txt": "specs\n"}))
+        == ["orphaned-required-check", "ungated-check"],
+    )
+
+    # A trailing comment is not part of an unquoted YAML scalar, so it is not part of the name a
+    # required context has to match.
+    commented = dict(GATE_TREE, **{"contrib/required-checks.txt": "Specs\n"})
+    commented[".github/workflows/ci.yml"] = GATE_JOB.replace(
+        "name: Specs", "name: Specs # the mechanical half"
+    )
+    check(
+        "a comment beside a job's name is not part of the name",
+        gates(commented) == [],
+        str(kinds(gates(commented))),
+    )
+
+    # Three ways a target arrives that reading the word after `make` would miss.
+    behind = ("make -k check-spec", "make RUST_TEST_THREADS=8 check-spec", "make fmt check-spec")
+    for command in behind:
+        hidden = dict(GATE_TREE, **{"contrib/required-checks.txt": ""})
+        hidden[".github/workflows/ci.yml"] = GATE_JOB.replace("make check-spec", command)
+        check(
+            f"a target reached by `{command}` is still a check the job runs",
+            kinds(gates(hidden)) == ["ungated-check"],
+            str(kinds(gates(hidden))),
+        )
+
+    check(
+        "a job a context names is clean",
+        gates({**GATE_TREE, "contrib/required-checks.txt": "# the gates\n\nSpecs\n"}) == [],
+    )
+
+    check(
+        "a tree with no record of its gates at all is an error",
+        kinds(gates(GATE_TREE)) == ["unrecorded-required-check"],
+    )
+
+    # The real file against the real workflows and the real page, which is what it is for.
+    check(
+        "the tree's own record names jobs that exist and covers every job running a check",
+        with_cwd(ROOT, lambda: list(audit.check_required_checks_are_the_gates())) == [],
     )
 
 
@@ -2064,7 +2427,9 @@ def main():
         test_pinned_images,
         test_privileged_job_runs_only_its_own_code,
         test_checkout_ref_is_qualified,
+        test_required_checks_are_the_gates,
         test_construction_pinned,
+        test_gates_pinned,
         test_key_sites_exhaustive,
         test_guarantee_specs_are_read,
         test_declassify_counts_match_the_spec,

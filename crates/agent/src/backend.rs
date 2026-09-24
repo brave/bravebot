@@ -260,6 +260,32 @@ pub fn bedrock_reads_effort(model: &str) -> bool {
     !bravebot_bedrock::refusals(model).effort
 }
 
+/// Whether the service answering for `model` has refused a level for it.
+///
+/// The question BACKEND-22 leaves to the service wherever no listing answers it, asked of what has
+/// already been refused rather than of a roster, so an interface can ask it again after every turn
+/// without spending a round trip on it. Which service is answering is [`Backend::select`]'s
+/// question, asked here by the same two lookups and in the same order: a refusal is remembered
+/// against the service as well as the model, so asking the wrong one would report a refusal that
+/// belongs to some other gateway offering the same slug.
+///
+/// Only ever a refusal, never a permission. A roster row that states which parameters it takes and
+/// does not name the field has said the model reads no level, and no absence of a refusal un-says
+/// it: a caller already holding that answer takes this one away from it rather than replacing it.
+///
+/// Not content. What a service refused is the transport's own report, read from a status.
+pub fn refused_a_level(config: &Config, model: &str) -> bool {
+    if config.bedrock_for(model).is_some() {
+        return !bedrock_reads_effort(model);
+    }
+    match config.provider_for(model) {
+        Some((provider, wire_model)) => {
+            !bravebot_aichat::reads_effort(&provider.chat_completions_url(), wire_model)
+        }
+        None => !bravebot_aichat::reads_effort(&config.chat_completions_url(), model),
+    }
+}
+
 /// What the model in force would be served a reply by.
 ///
 /// Asked once, before any work starts, so that somebody who has configured no service to answer is
@@ -336,8 +362,9 @@ impl<'a> Backend<'a> {
     /// an unknown model rather than substituting one, and the aichat endpoint has never heard of an
     /// inference-profile ARN.
     ///
-    /// Not content. The name comes from what `/model` listed and a person picked, or from the
-    /// configured default, and the pick is the endorsement for the request field it lands in.
+    /// Not content. The name comes from what `/model` listed and a person picked, from the
+    /// configured default, or from a delegate definition loaded from a vouched-for source
+    /// (DELEGATE-20), and that is the endorsement for the request field it lands in.
     pub fn select(config: &'a Config, egress: &'a Egress, model: &str) -> Self {
         if let Some(bedrock) = config.bedrock_for(model) {
             return Self::Bedrock {

@@ -1,0 +1,36 @@
+# The check contexts branch protection on `main` has to require, one per line.
+#
+# A job in .github/workflows/ reports whether it passed. What decides whether a pull request can
+# merge is a separate list of required contexts, and that list is a repository setting: no file in
+# a checkout can read it, and nothing in a checkout used to name it either. This file is where the
+# tree says what it has to hold, so that a change to it is a line in a diff rather than a setting
+# somebody remembers.
+#
+# `make check-security` holds the three things a checkout can decide: that every name below is the
+# display name of a job that exists, that every job running a `make check-` target is named below,
+# and that a target docs/development/checks.md promises will fail a pull request is run by some job
+# at all. What is left is the live comparison, which needs the network and, for the first of these,
+# a maintainer's token:
+#
+#   gh api repos/brave/bravebot/branches/main/protection/required_status_checks --jq '.contexts'
+#
+#   gh api graphql -f query='{repository(owner:"brave",name:"bravebot"){pullRequest(number:N){
+#     commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename
+#     ... on CheckRun{name isRequired(pullRequestNumber:N)}}}}}}}}}}'
+#
+# A required context matches a check run's name exactly, so two names that differ only in case are
+# two contexts. The organisation supplies a lower-case `security` from a workflow at
+# .github/workflows/security-action.yml that is in no checkout of this repository, and that check
+# run is not CI's `Security` below: requiring one requires nothing of the other. It is not listed
+# here because nothing in this tree produces it, which is also why this file cannot be the whole of
+# the required list.
+
+Format, lint, and test
+Minimum supported Rust
+npm lockfile
+Front end
+Specs
+Security
+Locales
+Versions
+Dependency policy

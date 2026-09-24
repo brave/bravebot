@@ -6,6 +6,13 @@
 # mechanical half is granted an exception: an ignored advisory, an allowed licence, a
 # duplicate version nobody has to account for again.
 #
+# The rest is what decides what executes with this tree checked out, and who decides it: the
+# workflows, the image the released binaries are built in, the script an install runs, the hook npm
+# runs on install, and the three lockfiles. None of these was owned, so the one approval the
+# protection requires for a change that moves a pinned step onto a movable tag was owed to nobody
+# in particular. required-checks.txt is here for the same reason: it is the tree's statement of
+# which checks hold a merge.
+#
 # Last matching pattern wins, so keep the more specific rules below the general ones.
 
 /docs/specs/ @bbondy
@@ -16,3 +23,14 @@
 /crates/*/Cargo.toml @bbondy
 /package.json @bbondy
 /deny.toml @bbondy
+
+/.github/workflows/ @bbondy
+/.github/CODEOWNERS @bbondy
+/Dockerfile.cross @bbondy
+/install.sh @bbondy
+/npm/scripts/ @bbondy
+/ui/package.json @bbondy
+/package-lock.json @bbondy
+/ui/package-lock.json @bbondy
+/Cargo.lock @bbondy
+/contrib/required-checks.txt @bbondy

@@ -103,6 +103,20 @@ guards:
       - crates/agent/src/lsp.rs: 3
       - crates/agent/src/turn.rs: 9
       - crates/core/src/policy.rs: 8
+  - symbol: Policy::render_in_place
+    sites:
+      - crates/agent/src/manifest.rs: 7
+      - crates/agent/src/skills.rs: 2
+      - crates/agent/src/tools.rs: 18
+      - crates/agent/src/turn.rs: 1
+      - crates/core/src/policy.rs: 6
+  - symbol: Policy::render_pair_in_place
+    sites:
+      - crates/agent/src/tools.rs: 1
+      - crates/core/src/policy.rs: 1
+  - symbol: note_for
+    sites:
+      - crates/agent/src/tools.rs: 9
   - symbol: Policy::label_model_output
     sites:
       - crates/agent/src/tools.rs: 4
@@ -318,6 +332,15 @@ examined on the way, so a caller holding released bytes may not then search them
 branch on them. Whatever needs reading is done by the policy layer, on a value that is still
 labelled, and recorded where it happens. Reshaping content for display is that: it is not a fourth
 destination, and it is a read a driver may not do for itself.
+
+A gate that releases content to a closure of the caller's is counted, not merely named: its call
+sites are pinned per file in the `guards` front matter, so the next reshape is a line in a diff
+rather than ordinary code. A function outside the kernel that takes a closure from its own caller
+and hands it to such a gate is counted the same way, because the closure it forwards is written in
+the driver and a new caller of the wrapper adds one without moving the gate's own count.
+`Policy::read_trusted_content` is named and not counted, in [skills.md](skills.md), because it
+refuses anything untrusted before it releases a byte: there is no content its callers' closures
+could read that the driver may not read for itself.
 
 `verified-by: bravebot_agent::tools::a_call_line_names_its_reference_inside_the_kernel`
 `verified-by: bravebot_agent::tools::a_task_list_is_named_inside_the_reshape_that_builds_it`
