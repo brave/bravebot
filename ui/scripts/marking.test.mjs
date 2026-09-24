@@ -442,3 +442,17 @@ test('a failure card reads the category and never the wording of the detail', ()
   // The detail is still shown, under the fold, which is where prose belongs.
   assert.match(draw({ detail: 'unauthorized: the credential was rejected (401)' }), /unauthorized: the credential was rejected \(401\)/)
 })
+
+// Undo can leave an undecided child beneath a refused parent. Show the separate write contract.
+test('undecided path exceptions are not shown as refusals or grants', () => {
+  const { PathPermissions } = load('src/renderer/components/Permissions.tsx')
+  const markup = renderToStaticMarkup(React.createElement(PathPermissions, {
+    paths: [{ path: 'vendor', integrity: 'untrusted' }, { path: 'vendor/ours', integrity: 'undecided' }],
+    busy: false,
+    onRevoke() {},
+  }))
+  assert.match(markup, /vendor<\/code><span>Untrusted/)
+  assert.match(markup, /vendor\/ours<\/code><span>Not decided/)
+  assert.match(markup, /require write approval/)
+  assert.doesNotMatch(markup, /<button/)
+})

@@ -469,8 +469,7 @@ goes back another. Every path in the project that a rewound turn wrote through a
 back to what it held first, and one such a turn created is removed; where two of the rewound
 turns wrote the same path, it goes back to what it held before the first of them. The
 conversation returns to the snapshot taken before the earliest rewound turn, and with it the turn
-count, the spend, the timing, the trusted programs, and the transcript. The trust map returns
-only when every required file restoration succeeds. Those turns' audit lines are dropped, since they decided about turns that are no longer in the
+count, the spend, the timing, the trusted programs, and the transcript. File trust is reconciled per path as described below. Those turns' audit lines are dropped, since they decided about turns that are no longer in the
 conversation. Their display prompts, outcomes, and task lists are removed with them. Saving and
 reopening after rewind must not restore them, and a new turn that reuses a removed turn number
 inherits none of its metadata.
@@ -479,15 +478,34 @@ inherits none of its metadata.
 `verified-by: bravebot_tui::app::rewinding_reopened_history_removes_outcomes_plans_and_audit_before_reuse`
 
 A complete rewind that goes back past the session's first turn removes its record rather than
-leaving one with nothing in it. A partial rewind saves its withdrawn file decisions even there, and a name the user gave the session before that turn stays with
+leaving one with nothing in it. A rewind with incomplete coverage, failed restorations or changed file decisions saves its state even there, and a name the user gave the session before that turn stays with
 it: the name was not the turn's to give, so it is not the rewind's to take. The directory the
 session was given of its own is not in the project: what a turn wrote there is neither put back nor
 counted against the budget below, for the reasons [trust-map.md](trust-map.md) gives.
 
-After complete restoration, a standing permission goes back with the turn that granted it.
-The map and the programs restored are the ones that stood before the earliest turn being rewound, so a path or a command vouched
-for during any of those turns is vouched for no longer, and one vouched for before them is
-untouched.
+Program approvals return to the selected snapshot. File decisions use the lower effective trust
+at each path, including inherited prefix rules and nested exceptions:
+
+- A file successfully restored gets the lower of its backup's capture trust and the selected
+  snapshot's trust for that path. Unknown capture provenance is untrusted.
+- Every untouched path, including a file whose original was not kept, gets the lower of its
+  authoritative current decision and the snapshot's decision.
+- Before attempting a restoration, mark its destination untrusted. Publish restored trust only
+  after success. A failed attempt may have partly written the file and stays untrusted.
+- Removing a file that did not exist before the turn leaves explicit distrust at that path, so
+  the removal does not grant trust to future contents.
+
+Explicit distrust in either input survives the meet for untouched paths. An absent rule stays
+absent unless the other input explicitly distrusts the path; it never supplies a grant. This
+preserves the distinction used for write prompts, including an undecided child beneath a
+retained ancestor refusal. Restoring one file grants nothing to siblings
+and preserves descendant refusals. Current file decisions must be retained after child cleanup
+on failure and cancellation too; a pre-turn fallback is not current state.
+
+`verified-by: bravebot_core::trust::meeting_maps_preserves_effective_refusals_and_absent_decisions`
+`verified-by: bravebot_agent::rewind::restored_trusted_bytes_keep_an_undecided_target_decision`
+`verified-by: bravebot_agent::rewind::failed_restore_leaves_distrust_and_attempts_other_files`
+`verified-by: bravebot_agent::rewind::restore_distrusts_before_entering_the_effect`
 
 What is kept is bounded twice over. A session remembers its last five turns, and what those turns
 wrote over is held to one budget between them rather than to one each: past it the turns furthest
@@ -495,25 +513,36 @@ back are dropped whole, and the most recent is kept whatever it cost. Inside a t
 budget decides a path: past it the path is still remembered, but what it held is not, and a
 rewind treats it as a path that will not go back rather than as a file that was never there. A
 path that will not go back is named on the line that reports the rewind, and the rest of the
-rewind still happens. On incomplete restoration, combine the current and selected snapshot's
-known file rules and convert every grant to explicit distrust. Keep both sets of explicit
-distrust, discard every older checkpoint, report the partial restoration and grant withdrawal,
-and save the resulting state. Do not compare file contents to recover trust.
+rewind still happens. One failed restoration does not withdraw unrelated grants or discard older
+checkpoints. Save the resulting file decisions. Do not compare file contents to recover trust.
 
 Every attempted tracked mutation records coverage, including same-label writes, partial failures
-and files whose original bytes were not kept. A backup lock failure invalidates the window.
-All live points become ineligible before an approved program starts, including a background job
-or a foreground redirection, before a matching configured hook starts, and before a scratch write.
-No new point opens while such a job can still write. Jobs are currently owned by the turn and
-killed and reaped before it returns. An approved language-server launch disables all current and
-future checkpoints for that workspace, even after the server set is dropped: its build-tool
-children may outlive it, and their termination is not tracked. A declined launch leaves coverage
-unchanged.
+and files whose original bytes were not kept. Programs, matching hooks, scratch writes, language
+servers, desktop execution and backup-lock failures record coverage gaps without discarding points.
+The persistent server warning is also saved outside the checkpoint list, so consuming the final
+point and reopening again cannot erase it. Forks discard checkpoints but retain this warning,
+since forking cannot stop those processes. These reasons survive save/resume, rebinding to a workspace and repeated undo, including undo
+before the first resumed turn. Transfer persistent server warnings before consuming loaded points. Report failed paths
+separately from the coverage warning, which names each recorded cause once. Unknown coverage must
+be identified as unknown rather than guessed from the available backups.
+
+`verified-by: bravebot_tui::undo_tests::undo_warnings_name_recorded_causes`
+
+Undo runs only after the turn's delegates and background jobs have finished cleanup. It stops and
+reaps the session's tracked language servers before restoring files; later questions may start
+fresh servers. Arbitrary descendants and external writers are not tracked or coordinated. Server
+children may outlive shutdown, so later points in that workspace still carry a language-server
+coverage warning. This uses the existing trust-map boundary for files written by other processes,
+not a promise to reverse or serialize every external write. A declined server launch changes no
+coverage.
+
+`verified-by: bravebot_agent::rewind::coverage_survives_rebinding_and_repeated_effects`
+`verified-by: bravebot_agent::lsp::a_server_approved_in_one_turn_answers_the_next`
 
 Anything that changes the session outside a turn gives up every point at once: `/clear`,
-`/compact`, `/btw`, `/rename`, `/add-dir`, `/cd`, and a shell-mode command, whose writes the
-workspace never saw. `/undo` then says there is nothing left to undo rather than rewinding to a
-point that describes a different session. Every point goes rather than the most recent alone,
+`/compact`, `/btw`, `/rename`, `/add-dir`, and `/cd`. Shell-mode commands retain the points and
+record incomplete command coverage. For changes that give up points, `/undo` then says there is
+nothing left to undo rather than reaching a different session. Every point goes rather than the most recent alone,
 since such a change lands after the most recent point and so before none of them.
 
 **Why.** A turn that went wrong is the case with no clean recovery: `git checkout` takes the
@@ -552,12 +581,16 @@ whether or not it is ever read.
 `verified-by: bravebot_tui::state::one_turns_writes_can_cost_the_session_the_turns_behind_it`
 `verified-by: bravebot_tui::state::backups_with_no_point_to_hang_them_on_are_dropped`
 
-`verified-by: bravebot_tui::undo_tests::oversized_original_withdraws_grants_after_live_and_resumed_successful_undo`
-`verified-by: bravebot_tui::undo_tests::oversized_original_withdraws_grants_after_failed_and_cancelled_undo`
+`verified-by: bravebot_tui::undo_tests::oversized_original_preserves_unrelated_grants_after_live_and_resumed_successful_undo`
+`verified-by: bravebot_tui::undo_tests::oversized_original_preserves_unrelated_grants_after_failed_undo`
+`verified-by: bravebot_tui::undo_tests::oversized_original_preserves_unrelated_grants_after_cancelled_undo`
+`verified-by: bravebot_tui::undo_tests::immediate_undo_after_resume_keeps_server_warnings_for_later_turns`
+`verified-by: bravebot_ui_bridge::bridge::a_resumed_server_warning_survives_a_desktop_save_without_checkpoints`
+`verified-by: bravebot_ui_bridge::bridge::a_desktop_fork_keeps_the_server_warning_without_checkpoints`
 `verified-by: bravebot_tui::undo_tests::complete_and_failed_restores_keep_files_trust_programs_and_history_aligned`
-`verified-by: bravebot_tui::undo_tests::programs_close_all_points_before_the_next_planner_round`
-`verified-by: bravebot_tui::undo_tests::matching_hooks_close_all_points_in_memory_and_after_resume`
-`verified-by: bravebot_agent::workspace::a_failed_backup_lock_invalidates_every_checkpoint`
+`verified-by: bravebot_tui::undo_tests::editing_then_running_a_program_keeps_undo_and_warns`
+`verified-by: bravebot_tui::undo_tests::matching_hooks_keep_undo_with_saved_coverage_warnings`
+`verified-by: bravebot_agent::workspace::a_failed_backup_lock_marks_every_checkpoint_incomplete`
 `verified-by: bravebot_agent::lsp::a_server_approved_in_one_turn_answers_the_next`
 `verified-by: bravebot_agent::lsp::a_turn_that_is_handed_no_set_starts_a_server_of_its_own`
 `verified-by: bravebot_agent::lsp::a_declined_language_server_preserves_rewind_coverage`
@@ -637,19 +670,30 @@ takes a number cannot also have it, so the number is on a word that has one.
 A session's rewind points are written into its record along with the conversation, and a resume
 brings them back: the exchange each one goes back to, the counts, the trust map and the programs
 that stood before its turn, what that turn was asked, and what its writes overwrote. `/undo` and
-`/rewind` after a resume reach only points with positive versioned coverage. Version 1 records
-the paths that require restoration independently of the backup payloads. Missing payloads become
-unavailable restorations; an empty backup list alone proves nothing. Missing or unknown coverage
-disables that point and every older point, while current decisions and conversation still load.
-Legacy records therefore lose undo. Older binaries do not enforce this contract; a round trip
-that loses coverage disables undo when read by a new binary. These markers use the existing
-local-record trust model and do not protect against deliberate record tampering.
+`/rewind` after a resume keep points even when coverage is missing or unknown, with a warning
+that restoration coverage is unknown. Version 1 records required paths independently of backup
+payloads, but cannot establish complete coverage. Version 2 also records coverage gaps and must
+include an explicit `gaps` list, even when empty. Version 1 and version 2 without that list warn
+that coverage is unknown while retaining their recorded paths. Unknown or malformed gap values
+also mean unknown coverage, without losing valid paths or known gap causes. Missing payloads become
+unavailable restorations; an empty backup list alone proves nothing. Capture provenance is a separate
+field on each backup.
+A missing or unknown capture label never establishes trusted bytes, even with known coverage.
+A round trip through an older binary may lose either field; each then takes its conservative
+meaning independently. These markers use the existing local-record trust model and do not protect
+against deliberate record tampering.
+
+Current and checkpoint trust maps preserve undecided boundaries as `undecided` rules. Unknown
+rule words remain explicit distrust. Older binaries read `undecided` as distrust, so reopening a
+new record in an older build does not preserve its write-prompt behavior.
+
+`verified-by: bravebot_session::sessions::undecided_children_survive_session_and_checkpoint_storage`
 
 What a path held is written base64 in the record, so the record carries the rewind budget as well
 as the conversation. Only where the map that stood before the turn vouches for the path and the
-backup's capture provenance says its bytes were trusted. The pre-turn map is the one that labelled
-those bytes, which is why SESSION-2 asks it; on its own it cannot authorize bytes captured after a
-sibling replaced the file, which is why the capture is asked as well. What neither vouches for is
+backup's capture provenance says its bytes were trusted. The pre-turn map limits what the record may
+retain, but cannot label bytes captured after a sibling replaced the file, which is why capture
+provenance is checked as well. What neither vouches for is
 written down as a path whose contents this session did not keep, which the session itself still
 holds and can still put back. Paths inside the project are recorded relative to it and come back
 under the directory the resumed session works in, as trust rules do.
@@ -692,8 +736,11 @@ names it on the line that reports the rewind.
 `verified-by: bravebot_session::sessions::a_kept_file_this_build_cannot_read_will_not_go_back_rather_than_being_deleted`
 `verified-by: bravebot_tui::state::a_restored_point_finds_its_place_in_the_transcript_it_comes_back_into`
 
-`verified-by: bravebot_session::sessions::checkpoints_require_known_coverage_even_after_a_marker_losing_round_trip`
+`verified-by: bravebot_session::sessions::unknown_coverage_keeps_undo_and_warns_after_a_marker_losing_round_trip`
+`verified-by: bravebot_session::sessions::complete_coverage_requires_explicit_version_two_gaps`
+`verified-by: bravebot_tui::undo_tests::resumed_undo_keeps_the_record_when_gap_evidence_is_missing`
 `verified-by: bravebot_session::sessions::required_paths_missing_from_backup_entries_are_unavailable_restorations`
+`verified-by: bravebot_session::sessions::backup_provenance_is_independent_of_coverage`
 
 <a id="SESSION-23"></a>
 ### SESSION-23: the record says where each turn began and ended, and what came of it
@@ -811,9 +858,10 @@ resumed and continued by the other. Everything above decides what a record holds
 found, whichever surface is asking: one directory per working directory, the naming, the ordering,
 the modes, and degrading to nothing where there is no directory to write into.
 
-Before bridge engine execution begins, every imported rewind point is discarded, even for a
-read-only turn. The bridge does not collect the terminal's byte backups. Saving a later bridge
-turn must not let terminal undo restore grants from before an uncovered write.
+Before bridge engine execution begins, imported rewind points record a desktop coverage gap.
+The bridge does not collect the terminal's byte backups. It retains current file decisions on
+every turn ending. Later terminal undo keeps the points and applies the per-path trust rule,
+so an uncovered write cannot gain trust from an older snapshot.
 
 A surface showing one list across every project asks a question a terminal never asks, and that
 question is the whole of what it adds. Which projects have sessions is read from the store rather

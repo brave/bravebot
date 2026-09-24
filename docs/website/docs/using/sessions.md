@@ -242,11 +242,14 @@ a plan with a write in it does not run at all, decided before the plan is put to
 
 [`/undo`](../reference/commands.md#undo) puts the session back where it stood before the most recent
 turn: the files that turn wrote go back to what they held, a file it created is removed, and the
-conversation, the turn count, the spend, the timing and the standing permissions go back with them.
+conversation, turn count, spend, timing and remembered command approvals go back with them.
 **Saying it again goes back another turn**, as far as the last five.
 
-A standing permission goes back with the turn that granted it, so a path or a command vouched for
-during a rewound turn is vouched for no longer, while one vouched for before them is untouched.
+File trust follows what undo restored or left on disk. Restored files get the lower of their backup's
+trust and their trust before the turn; untouched files get the lower of their current trust and their
+trust before the turn. Grants made during undone turns are withdrawn. A file you distrusted during
+those turns stays distrusted if undo leaves it untouched; you can grant trust again. One failed
+restoration leaves that path untrusted without withdrawing unrelated grants.
 
 ### Reading a rewind before running one
 
@@ -261,9 +264,10 @@ two turns younger than you believe it is would be worse than a refusal.
 
 ### What will not go back
 
-- **What a program did.** The backups are taken inside the workspace, so a turn that changed a file
-  by running a command leaves nothing to put back. The rewind still reports the turn undone, and the
-  conversation is, but those changes stay on disk.
+- **Changes outside file tools.** Commands, hooks, scratch writes, language servers and desktop
+  turns keep undo available, but their changes may remain. Undo names the recorded causes in its
+  warning. Restoring a backed-up file can overwrite later command changes to that same file;
+  undo does not reverse the command itself.
 - **An edit you made since.** What goes back is what the path held *before the turn wrote to it*, so
   an edit of your own in between is lost. Nothing compares the file first, and nothing asks.
 - **A file past the budget.** What the last five turns wrote over is held to one budget between them
@@ -274,11 +278,14 @@ two turns younger than you believe it is would be worse than a refusal.
 
 ### What gives up every point
 
-Anything that changes the session outside a turn: `/clear`, `/compact`, `/btw`, `/rename`,
-`/add-dir`, `/cd`, and a shell-mode command, whose writes the workspace never saw. `/undo` then says
-there is nothing left to undo rather than rewinding to a point that describes a different session.
-A rewind that goes back past the first turn removes the record instead of leaving an empty one, and a
-name you gave the session before that turn stays with it.
+These changes outside a turn give up every point: `/clear`, `/compact`, `/btw`, `/rename`,
+`/add-dir`, and `/cd`. After one of these, `/undo` says there is nothing left to undo rather than
+rewinding to a point that describes a different session. Shell-mode commands keep the points and
+add a coverage warning.
+
+A rewind past the first turn removes the record only when restoration is complete, there are no
+coverage warnings, and file trust matches the original snapshot. Otherwise the resulting state
+stays saved. A name you gave the session before that turn stays with it.
 
 ### A rewind survives a resume
 

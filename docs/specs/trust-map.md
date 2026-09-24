@@ -11,6 +11,7 @@ governs:
   - crates/session/src/sessions.rs
   - crates/tui/src/dropped.rs
   - crates/agent/src/workspace.rs
+  - crates/agent/src/rewind.rs
   - crates/agent/src/scratch.rs
   - crates/cli/src/main.rs
   - crates/tui/src/app.rs
@@ -61,6 +62,9 @@ the answer decorative.
 Rules are keyed by path prefix and matched by whole segments. Both polarities are expressible, so
 a trusted tree may hold an untrusted subtree, which may hold a trusted path again. Equivalent
 spellings of a path are one rule, and a later decision replaces an earlier one.
+Undo may also record an undecided boundary, overriding a broader rule without granting trust or
+recording a refusal. Reads there stay quarantined and writes still require a decision. This boundary
+also overrides scratch-directory fallback trust.
 
 **Every key is a full path, and there is one namespace of them.** A caller may name a path
 relatively, which is how a file in the project is named, and the map reads that under the working
@@ -86,6 +90,10 @@ empty prefix covering every absolute path there is, and a rule on `/` covering e
 Full paths make both unreachable rather than guarded against, and a file that has a name of each
 kind then has one rule instead of two that could disagree.
 
+`verified-by: bravebot_core::trust::meeting_maps_keeps_an_undecided_child_beneath_a_refusal`
+`verified-by: bravebot_core::policy::an_undecided_child_after_undo_still_requires_write_approval`
+`verified-by: bravebot_core::policy::an_undecided_scratch_path_does_not_inherit_workspace_trust`
+`verified-by: bravebot_core::trust::ancestor_lookups_match_whole_segment_rule_selection`
 `verified-by: bravebot_core::trust::the_deepest_rule_wins_at_any_depth`
 `verified-by: bravebot_core::trust::an_untrusted_subpath_overrides_a_trusted_parent`
 `verified-by: bravebot_core::trust::a_trusted_subpath_overrides_an_untrusted_parent`
@@ -752,14 +760,14 @@ covers it.
 <a id="TRUST-19"></a>
 ### TRUST-19: what a turn writes in the session's own directory is not rewound
 
-A write through a file tool into the session's own directory keeps nothing to put back and
-invalidates every existing rewind point before writing. Scratch bytes remain outside the backup
-budget. A later point can describe the state after the write, but cannot rewind across it.
-Directories opened by the person remain inside the backup domain.
+A write through a file tool into the session's own directory keeps no backup and records a scratch
+coverage gap. Undo stays available. Scratch bytes remain outside the backup budget, and their file
+rules meet the current and selected snapshot's effective decisions under
+[SESSION-19](sessions.md#SESSION-19). Directories opened by the person remain inside the backup domain.
 
-**Why.** Restoring a snapshot's file grants without restoring the scratch bytes it described can
-trust a replacement. Invalidating the window keeps byte restoration and authority aligned without
-spending the file-backup budget on intermediate files.
+**Why.** Intermediate files need not consume the project-file backup budget. Keeping their current
+bytes cannot justify restoring an earlier grant over them, so undo retains the lower decision
+without blocking restoration of other files.
 
 `verified-by: bravebot_agent::workspace::a_write_in_the_sessions_own_directory_is_not_kept_for_an_undo`
 `verified-by: bravebot_agent::workspace::a_write_in_the_sessions_own_directory_leaves_the_budget_for_the_project`
@@ -900,8 +908,8 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   second paragraph covers less of the traffic than it does elsewhere. No rule about that would
   help, since the same writes to the same effect are available one directory up: it is the standing
   statement about the place, met more often.
-- **Intermediate files stay until the session ends.** Scratch writes close the undo window
-  (TRUST-19); later turns can read those files under the current file decisions. Keeping their
+- **Intermediate files stay until the session ends.** Scratch writes record incomplete undo
+  coverage (TRUST-19); later turns can read those files under the current file decisions. Keeping their
   bytes for undo would spend the budget intended for project files.
 - **Confinement does not keep a program out of the session's directory.** A program that cannot
   open a temporary file fails outright, so the base of a `run` profile names the system temporary

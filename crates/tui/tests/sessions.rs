@@ -2821,7 +2821,7 @@ mod preserved_history {
         let (original, conversation) = fixture();
         let record = save(&scratch.project, &original, &conversation);
         let mut session = reopen(&scratch.project, &record);
-        let (snapshot, _) = session.take_rewind(2).unwrap();
+        let snapshot = session.take_rewind(2).unwrap().snapshot;
         assert_eq!(snapshot.turns, 2);
         assert_eq!(
             session.transcript[snapshot.transcript_len].text,
@@ -3022,7 +3022,7 @@ mod preserved_history {
             }],
             &conversation,
         );
-        let (snapshot, _) = session.take_rewind(1).unwrap();
+        let snapshot = session.take_rewind(1).unwrap().snapshot;
         assert_eq!(
             snapshot.transcript_len, 1,
             "rewind must keep only the resume note"
@@ -3270,7 +3270,7 @@ mod preserved_history {
             ]
         );
         assert_eq!(session.todos_by_turn()[&1][0].content, "task 0");
-        let (snapshot, _) = session.take_rewind(2).unwrap();
+        let snapshot = session.take_rewind(2).unwrap().snapshot;
         session.transcript.truncate(snapshot.transcript_len);
         session.turns = snapshot.turns;
         session.restore_spend(snapshot.tokens, snapshot.spend);

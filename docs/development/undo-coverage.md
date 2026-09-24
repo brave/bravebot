@@ -2,7 +2,7 @@
 
 Undo must leave file trust consistent with the bytes left on disk. The governing contracts are
 [SESSION-2](../specs/sessions.md#SESSION-2) for saved backup bytes,
-[SESSION-19](../specs/sessions.md#SESSION-19) for checkpoint eligibility and restoration, and
+[SESSION-19](../specs/sessions.md#SESSION-19) for restoration and coverage warnings, and
 [TRUST-19](../specs/trust-map.md#TRUST-19) for scratch files outside the backup journal. Their `verified-by` entries name
 the tests that pin each requirement. This guide explains how to check the boundaries between
 the engine, terminal UI and session store.
@@ -16,28 +16,28 @@ restoring the wrong state fails an assertion.
 
 | Case | What the test must distinguish |
 |---|---|
-| Original larger than the 32 MiB backup budget | The replacement remains on disk, undo reports incomplete restoration, grants are withdrawn, and the next planner request excludes the untrusted sentinel. |
+| Original larger than the 32 MiB backup budget | The replacement remains on disk, undo reports incomplete restoration, its trust stays low while unrelated grants survive, and the next planner request excludes the untrusted sentinel. |
 | Failed or cancelled turn followed by undo | Live and resumed undo produce the same safe result. Cancellation must be observed after the write, not inferred from elapsed time. |
 | Complete restore and deterministic restore failure | A directory blocking one restoration must not prevent another path from restoring. Check exact trust rules, programs, history and accounting in both cases. |
-| Multiple checkpoints and repeated undo | Each path uses its earliest selected backup. Incomplete restoration removes older checkpoints so another undo cannot revive their grants. |
-| Terminal to bridge to terminal | Save real terminal checkpoints, execute a bridge turn, save again, then resume in the terminal. Imported checkpoints must be absent even when the bridge write has no backup entry. |
+| Multiple checkpoints and repeated undo | Each path uses its earliest selected backup. Incomplete restoration preserves older checkpoints; another undo must keep replacement bytes untrusted. |
+| Terminal to bridge to terminal | Save real terminal checkpoints, execute a bridge turn, save again, then resume in the terminal. Imported checkpoints stay usable with a desktop coverage warning, even when the bridge write has no backup entry. |
 | Full-record and mid-history forks | Both keep current file decisions and discard checkpoints without changing the source record or rewinding disk. |
-| Programs and configured hooks | Existing checkpoints become invalid before untracked effects. Cover foreground redirection, a live background job, all three hook moments and a nonmatching-hook control. Check storage before UI pruning too. |
+| Programs and configured hooks | Checkpoints stay usable and record gaps before untracked effects. Cover foreground redirection, a live background job, all three hook moments and a nonmatching-hook control. Check saved warnings too. |
 
 Additional tests cover these boundaries:
 
 - [Session storage](../../crates/session/src/sessions.rs): missing, malformed or unknown coverage
-  versions disable checkpoints while current state still loads. A round trip that loses the marker
-  must not restore eligibility. A required path with no backup payload becomes `NotKept`, never
+  versions preserve checkpoints with warnings. A round trip that loses capture provenance
+  must not trust restored bytes. A required path with no backup payload becomes `NotKept`, never
   an absent original. Capture provenance and pre-turn trust both gate serialized backup bytes.
 - [Workspace writes](../../crates/agent/src/workspace.rs) and their
   [integration tests](../../crates/agent/tests/workspace.rs): first capture survives repeated and
-  same-label writes and partial failures. Scratch writes and a failed backup lock invalidate
+  same-label writes and partial failures. Scratch writes and a failed backup lock record incomplete
   coverage. The [turn tests](../../crates/agent/tests/turn.rs) check overlapping delegate writes
   in both collection orders.
-- [Language servers](../../crates/agent/tests/lsp.rs): a real approved server invalidates old
-  checkpoints and prevents new coverage across turns and after server shutdown. Build-tool
-  children can outlive the server, so coverage stays disabled for that workspace. A declined
+- [Language servers](../../crates/agent/tests/lsp.rs): a real approved server records gaps on old
+  and new checkpoints. Undo must stop it before restoration, including its last shutdown write.
+  Build-tool children can outlive the server, so later points still warn. A declined
   launch starts no process and preserves coverage.
 
 ## Running and assessing the tests
@@ -55,16 +55,16 @@ Use `BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1` when backend credentials are unavailab
 
 Apply [testing-preflight](../../agents/skills/testing-preflight/SKILL.md) before changing behavior
 or assertions. Useful fault experiments include restoring snapshot trust after a failed restore,
-retaining imported checkpoints through bridge execution, and omitting invalidation before a hook
+using a stale map after bridge failure, and omitting a coverage gap before a hook
 or language-server launch. Record the observed failure and checks for the exact revision in the
 PR's testing summary. A passing test on its own does not show that it detects the intended fault.
 
 ## Limits
 
 These tests exercise terminal handlers and storage boundaries, not a physical terminal or the
-packaged desktop UI. They do not establish caller correctness for failure or cancellation without
-undo, panic recovery, or crash recovery. Test those paths separately when changing them.
+packaged desktop UI. Bridge cases check saved file decisions on failure and cancellation before undo. They do not
+establish general panic or crash recovery. Test those paths separately when changing them.
 
 Coverage metadata assumes trusted local session records; it does not detect deliberate record
-tampering. Records without a recognized marker lose undo, and older binaries do not enforce the
-new coverage contract. The backup journal does not track external writers or entire process trees.
+tampering. Records without a recognized coverage marker warn; missing capture provenance cannot grant
+trust. Older binaries do not enforce the new contract. The backup journal does not track external writers or entire process trees.

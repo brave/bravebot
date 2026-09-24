@@ -404,7 +404,7 @@ impl Bridge {
         // Everything needed is copied out under the lock and the lock is dropped before any of
         // it is used. A fork does no I/O and no thinking, but holding a session's state across
         // work is the habit that turns into a stall later.
-        let (snapshot, said, trust, programs, directories, todos, parent_id, parent_title) = {
+        let (snapshot, said, trust, programs, directories, todos, parent) = {
             let state = open
                 .state
                 .lock()
@@ -421,8 +421,7 @@ impl Bridge {
                 state.programs.clone(),
                 state.directories.clone(),
                 state.todos.clone(),
-                parent.id().to_string(),
-                parent.title().to_string(),
+                parent.clone(),
             )
         };
 
@@ -459,7 +458,10 @@ impl Bridge {
         let known = answered_trust;
         let rules = rules_json(&trust);
 
-        let begun = self.begin_unique(&project)?;
+        let mut begun = self.begin_unique(&project)?;
+        begun.inherit_rewind_warnings(&parent);
+        let parent_id = parent.id().to_string();
+        let parent_title = parent.title().to_string();
         let id = begun.id().to_string();
 
         let child = self.mint(Open {
@@ -635,7 +637,11 @@ impl Bridge {
         let (turn_number, directories) = state
             .lock()
             .map(|mut s| {
-                s.rewind.clear();
+                for point in &mut s.rewind {
+                    point
+                        .coverage
+                        .record([bravebot_agent::rewind::CoverageGap::Desktop]);
+                }
                 (s.turns + 1, s.directories.clone())
             })
             .unwrap_or((1, Vec::new()));
@@ -850,7 +856,9 @@ impl Bridge {
             match request.string("kind")?.as_str() {
                 "path" => {
                     let path = request.string("path")?;
-                    if !state.trust.rules().any(|(held, _)| held == path) {
+                    if !state.trust.rules().any(|(held, integrity)| {
+                        held == path && integrity == Some(bravebot_core::label::Integrity::Trusted)
+                    }) {
                         return Err(Failure::bad_request(
                             "This path grant is no longer present.",
                         ));
@@ -1520,19 +1528,163 @@ fn todos_json(
 
 /// A trust map as a front-end reads it.
 ///
-/// The same two words the record is written with, so a rule reads the same whether it came off
+/// The same decisions the record is written with, so a rule reads the same whether it came off
 /// disk, out of a finished turn, or out of the session a fork inherited it from.
 fn rules_json(trust: &TrustStore) -> Vec<Value> {
     trust
         .rules()
         .map(|(path, integrity)| {
             let integrity = match integrity {
-                bravebot_core::label::Integrity::Trusted => "trusted",
-                bravebot_core::label::Integrity::Untrusted => "untrusted",
+                Some(bravebot_core::label::Integrity::Trusted) => "trusted",
+                Some(bravebot_core::label::Integrity::Untrusted) => "untrusted",
+                None => "undecided",
             };
             json!({ "path": path, "integrity": integrity })
         })
         .collect()
+}
+
+#[cfg(test)]
+#[path = "../../session/test-support/profile.rs"]
+mod test_profile;
+
+#[cfg(test)]
+mod coverage_tests {
+    use super::*;
+
+    /// A fork cannot prove that server descendants from the parent stopped writing.
+    #[test]
+    fn a_desktop_fork_keeps_the_server_warning_without_checkpoints() {
+        if !test_profile::in_isolated_profile() {
+            return;
+        }
+        let directory = test_profile::project("coverage");
+        std::fs::create_dir_all(&directory).unwrap();
+        let root = directory.as_path();
+        let mut conversation = bravebot_agent::Conversation::new();
+        conversation.push(bravebot_aichat::protocol::Message::user("work"));
+        let record: Record = serde_json::from_value(json!({
+            "id": "server-parent", "directory": root, "title": "work",
+            "started": 1, "updated": 1, "server_children_may_run": true,
+            "conversation": conversation.snapshot()
+        }))
+        .unwrap();
+        let mut bridge = Bridge::new(Box::new(|_| {}));
+        let parent = bridge.mint(Open {
+            project: root.to_path_buf(),
+            state: Arc::new(Mutex::new(State::resumed(
+                root,
+                &record,
+                TrustStore::new(root),
+            ))),
+            answered_trust: true,
+            running: None,
+            model: None,
+            watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
+            auto_vetting: false,
+        });
+        let request = Request::parse(
+            &json!({"id": 1, "method": "session.fork", "params": {
+                "session": parent, "prompt": 0, "text": "work"
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let forked = bridge.dispatch(&request).unwrap();
+        let child = bridge
+            .open
+            .get(forked["session"].as_str().unwrap())
+            .unwrap();
+        let mut state = child.state.lock().unwrap();
+        assert!(state.rewind.is_empty());
+        save(
+            root,
+            &mut state,
+            0,
+            &bravebot_session::audit::Trail::default(),
+        );
+        let loaded =
+            bravebot_session::sessions::load(root, forked["id"].as_str().unwrap()).unwrap();
+        assert!(loaded.rewind.is_empty());
+        assert!(loaded.server_children_may_run());
+        state.handle.as_mut().unwrap().discard_unwritten("");
+    }
+
+    /// Switching front ends must not drop the warning once undo has consumed every checkpoint.
+    #[test]
+    fn a_resumed_server_warning_survives_a_desktop_save_without_checkpoints() {
+        if !test_profile::in_isolated_profile() {
+            return;
+        }
+        let directory = test_profile::project("coverage");
+        std::fs::create_dir_all(&directory).unwrap();
+        let root = directory.as_path();
+        let record: Record = serde_json::from_value(json!({
+            "id": "server-warning", "directory": root, "title": "work",
+            "started": 1, "updated": 1, "server_children_may_run": true,
+            "conversation": bravebot_agent::Conversation::new().snapshot()
+        }))
+        .unwrap();
+        let mut state = State::resumed(root, &record, TrustStore::new(root));
+        assert!(state.rewind.is_empty());
+        save(
+            root,
+            &mut state,
+            0,
+            &bravebot_session::audit::Trail::default(),
+        );
+        let loaded = bravebot_session::sessions::load(root, &record.id).unwrap();
+        assert!(loaded.rewind.is_empty());
+        assert!(loaded.server_children_may_run());
+        state.handle.as_mut().unwrap().discard_unwritten("");
+    }
+}
+
+#[cfg(test)]
+mod permissions_tests {
+    use super::*;
+
+    #[test]
+    fn an_undecided_boundary_is_visible_but_cannot_be_revoked() {
+        let mut trust = TrustStore::new("/work");
+        trust.distrust("vendor");
+        trust.undecide("vendor/ours");
+        let mut bridge = Bridge::new(Box::new(|_| {}));
+        let handle = bridge.mint(Open {
+            project: "/work".into(),
+            state: Arc::new(Mutex::new(State::fresh(trust))),
+            answered_trust: true,
+            running: None,
+            model: None,
+            watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
+            auto_vetting: false,
+        });
+        let list = Request::parse(
+            &json!({"id": 1, "method": "permissions.list", "params": {"session": handle}})
+                .to_string(),
+        )
+        .unwrap();
+        let before = bridge.dispatch(&list).unwrap();
+        assert_eq!(
+            before["paths"],
+            json!([
+                {"path": "vendor", "integrity": "untrusted"},
+                {"path": "vendor/ours", "integrity": "undecided"}
+            ])
+        );
+        let revoke = Request::parse(
+            &json!({"id": 2, "method": "permissions.revoke", "params": {
+                "session": handle, "kind": "path", "path": "vendor/ours"
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            bridge.dispatch(&revoke).unwrap_err().code,
+            ErrorCode::BadRequest
+        );
+        assert_eq!(bridge.dispatch(&list).unwrap(), before);
+    }
 }
 
 #[cfg(test)]

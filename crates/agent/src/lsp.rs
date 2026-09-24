@@ -114,7 +114,7 @@ impl LanguageServers {
         workspace: &crate::Workspace,
     ) -> LspResult<Answer> {
         if self.servers.running() != 0 {
-            workspace.disable_rewind();
+            workspace.mark_rewind_gap(crate::rewind::CoverageGap::LanguageServer);
         }
         self.servers.ask(policy, question, &mut |starting| {
             let request = ServerRequest {
@@ -127,7 +127,7 @@ impl LanguageServers {
                 return false;
             }
             // Servers and their build-tool children can write beyond this turn's lifetime.
-            workspace.disable_rewind();
+            workspace.mark_rewind_gap(crate::rewind::CoverageGap::LanguageServer);
             true
         })
     }

@@ -7,11 +7,11 @@ use serde_json::json;
 #[path = "undo_endpoint.rs"]
 mod endpoint;
 
+const SENTINEL: &str = "UNTRUSTED_UNDO_REPLACEMENT_92817";
+
 #[path = "../../session/test-support/profile.rs"]
 mod profile;
 use profile::{in_isolated_profile, project as scratch_dir};
-
-const SENTINEL: &str = "UNTRUSTED_UNDO_REPLACEMENT_92817";
 
 fn save(
     stored: &mut sessions::Handle,
@@ -114,43 +114,39 @@ fn oversized_undo(ending: &str, resumed: bool) {
         None,
         &cancel,
     );
-    trust = authority.snapshot();
-    assert_eq!(trust.integrity_of("output.txt"), Some(Integrity::Untrusted));
     if ending == "cancel" {
-        let Err(turn::TurnError::Cancelled { attempts }) = result else {
-            panic!("cancellation must actually occur");
-        };
-        // The TUI adopts the live authority after the worker joins.
-        finish_cancelled_turn(&mut session, "copy", attempts);
+        assert!(
+            matches!(result, Err(turn::TurnError::Cancelled { .. })),
+            "cancellation must occur after the write"
+        );
     } else {
         assert_eq!(result.is_ok(), ending == "success");
-        let carried = fold_outcome(
-            &mut session,
-            result,
-            sink,
-            Carried {
-                trust,
-                programs,
-                asked: AskedAbout::new(),
-            },
-            Occupied {
-                budget: config.context_budget,
-                guessed: config.budget_is_guessed(),
-                last_request_tokens: conversation.last_request_tokens(),
-            },
-            Asked {
-                name: config.default_model.clone(),
-                comparable: false,
-            },
-            Line {
-                text: "copy",
-                wrote: Wrote::ThePerson,
-            },
-            &workspace,
-        );
-        trust = carried.trust;
-        programs = carried.programs;
     }
+    let continued = finish_turn(
+        &mut session,
+        &config,
+        &workspace,
+        Line {
+            text: "copy",
+            wrote: Wrote::ThePerson,
+        },
+        FinishedTurn {
+            outcome: result,
+            conversation,
+            sink,
+            servers: None,
+        },
+        RetainedTurn {
+            files: authority,
+            programs,
+            asked: AskedAbout::new(),
+            exposed: Default::default(),
+        },
+    );
+    trust = continued.trust;
+    programs = continued.programs;
+    conversation = continued.conversation;
+    assert_eq!(trust.integrity_of("output.txt"), Some(Integrity::Untrusted));
     session.record_turn(start, &conversation);
     session.keep_backups(workspace.take_backups());
     assert_eq!(session.rewind_points().len(), 2);
@@ -185,24 +181,15 @@ fn oversized_undo(ending: &str, resumed: bool) {
         &mut programs,
         &mut stored,
         &workspace,
+        &mut None,
         1,
     );
     let mut before = before;
     before.distrust("output.txt");
-    let expected: Vec<_> = before
-        .keyed()
-        .map(|(path, _)| (path.to_string(), Integrity::Untrusted))
-        .collect();
-    assert_eq!(
-        trust
-            .keyed()
-            .map(|(p, i)| (p.to_string(), i))
-            .collect::<Vec<_>>(),
-        expected
-    );
+    assert_eq!(trust, before);
     assert_eq!(session.turns, 1);
     assert_eq!(session.tokens, 17);
-    assert!(session.rewind_points().is_empty());
+    assert_eq!(session.rewind_points().len(), 1);
     assert_eq!(
         std::fs::read_to_string(root.join("output.txt")).unwrap(),
         SENTINEL
@@ -214,17 +201,10 @@ fn oversized_undo(ending: &str, resumed: bool) {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(notes.contains("output.txt"), "{notes}");
-    assert!(notes.contains("grants"), "{notes}");
+    assert!(trust.is_trusted("unaffected.txt"));
     let saved = sessions::load(root, stored.id()).unwrap();
-    assert!(saved.rewind_points(root).is_empty());
-    assert!(
-        saved
-            .trust
-            .as_ref()
-            .unwrap()
-            .iter()
-            .all(|rule| rule.integrity != "trusted")
-    );
+    assert_eq!(saved.rewind_points(root).len(), 1);
+    assert_eq!(saved.trust_map(root), Some(trust.clone()));
     rewind(
         &mut session,
         &mut conversation,
@@ -232,9 +212,14 @@ fn oversized_undo(ending: &str, resumed: bool) {
         &mut programs,
         &mut stored,
         &workspace,
+        &mut None,
         1,
     );
-    assert_eq!(session.turns, 1, "partial undo must discard older points");
+    assert_eq!(
+        session.turns, 0,
+        "partial undo must leave older points usable"
+    );
+    assert_eq!(trust.integrity_of("output.txt"), Some(Integrity::Untrusted));
     turn::resume(
         &config,
         &Egress::new(),
@@ -262,7 +247,7 @@ fn oversized_undo(ending: &str, resumed: bool) {
 
 /// A failed byte restore cannot put the old prefix grant over a replacement.
 #[test]
-fn oversized_original_withdraws_grants_after_live_and_resumed_successful_undo() {
+fn oversized_original_preserves_unrelated_grants_after_live_and_resumed_successful_undo() {
     if !in_isolated_profile() {
         return;
     }
@@ -273,14 +258,23 @@ fn oversized_original_withdraws_grants_after_live_and_resumed_successful_undo() 
 
 /// Failure and cancellation retain the completed write before undo and save/resume.
 #[test]
-fn oversized_original_withdraws_grants_after_failed_and_cancelled_undo() {
+fn oversized_original_preserves_unrelated_grants_after_failed_undo() {
     if !in_isolated_profile() {
         return;
     }
-    for ending in ["failure", "cancel"] {
-        for resumed in [false, true] {
-            oversized_undo(ending, resumed);
-        }
+    for resumed in [false, true] {
+        oversized_undo("failure", resumed);
+    }
+}
+
+/// The production completion path adopts current trust after observed cancellation too.
+#[test]
+fn oversized_original_preserves_unrelated_grants_after_cancelled_undo() {
+    if !in_isolated_profile() {
+        return;
+    }
+    for resumed in [false, true] {
+        oversized_undo("cancel", resumed);
     }
 }
 
@@ -303,7 +297,6 @@ fn complete_and_failed_restores_keep_files_trust_programs_and_history_aligned() 
         trust.trust(".");
         trust.trust("kept-child");
         trust.distrust("old-refusal");
-        let original_trust = trust.clone();
         let mut programs = TrustedPrograms::new();
         let approved = Command::new(root.join("compiler"), vec!["--check".into()], root);
         programs.trust(approved.clone());
@@ -346,7 +339,8 @@ fn complete_and_failed_restores_keep_files_trust_programs_and_history_aligned() 
             std::fs::write(root.join("blocked"), "latest").unwrap();
         }
         trust.distrust("new-refusal");
-        trust.trust("new-grant");
+        let new_grant = root.with_extension("added");
+        trust.trust(&new_grant.to_string_lossy());
         programs.trust(Command::new(
             root.join("compiler"),
             vec!["--rewrite".into()],
@@ -375,6 +369,7 @@ fn complete_and_failed_restores_keep_files_trust_programs_and_history_aligned() 
             &mut programs,
             &mut stored,
             &workspace,
+            &mut None,
             2,
         );
         assert_eq!(
@@ -392,41 +387,47 @@ fn complete_and_failed_restores_keep_files_trust_programs_and_history_aligned() 
         assert_eq!(programs.iter().cloned().collect::<Vec<_>>(), vec![approved]);
         if failed {
             assert!(root.join("blocked").is_dir());
-            assert_eq!(
-                trust.rules().collect::<Vec<_>>(),
-                vec![
-                    ("", Integrity::Untrusted),
-                    ("kept-child", Integrity::Untrusted),
-                    ("new-grant", Integrity::Untrusted),
-                    ("new-refusal", Integrity::Untrusted),
-                    ("old-refusal", Integrity::Untrusted),
-                ]
-            );
-            assert!(session.rewind_points().is_empty());
+            assert_eq!(trust.integrity_of("blocked"), Some(Integrity::Untrusted));
         } else {
             assert_eq!(
                 std::fs::read_to_string(root.join("blocked")).unwrap(),
                 "original"
             );
-            assert_eq!(trust, original_trust);
-            assert_eq!(session.rewind_points().len(), 1);
-            rewind(
-                &mut session,
-                &mut conversation,
-                &mut trust,
-                &mut programs,
-                &mut stored,
-                &workspace,
-                1,
-            );
-            assert_eq!(session.turns, 0);
+            assert!(trust.is_trusted("blocked"));
         }
+        assert!(trust.is_trusted("restorable"));
+        assert!(trust.is_trusted("kept-child"));
+        assert!(trust.is_trusted("unrelated"));
+        assert_eq!(trust.integrity_of(&new_grant.to_string_lossy()), None);
+        assert_eq!(
+            trust.integrity_of("new-refusal"),
+            Some(Integrity::Untrusted)
+        );
+        assert_eq!(
+            trust.integrity_of("old-refusal"),
+            Some(Integrity::Untrusted)
+        );
+        assert_eq!(session.rewind_points().len(), 1);
+        rewind(
+            &mut session,
+            &mut conversation,
+            &mut trust,
+            &mut programs,
+            &mut stored,
+            &workspace,
+            &mut None,
+            1,
+        );
+        assert_eq!(session.turns, 0);
+        assert_eq!(
+            trust.integrity_of("new-refusal"),
+            Some(Integrity::Untrusted)
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 }
 
-/// The bridge has no byte journal, so a real bridge turn must remove all imported undo points
-/// before saving a file decision the terminal will later use.
+/// Desktop effects keep imported checkpoints and current file decisions, including on interruption.
 #[test]
 fn terminal_bridge_terminal_handoff_and_both_forks_keep_current_file_decisions() {
     if !in_isolated_profile() {
@@ -507,7 +508,7 @@ fn bridge_handoff(ending: &str) {
     let settings = root.join("test-settings.json");
     std::fs::write(
         &settings,
-        json!({"model":"phase02/test", "provider": {"phase02": {
+        json!({"model":"undo-test/test", "provider": {"undo-test": {
             "options": {"baseURL":config.endpoint}, "models": {"test": {}}
         }}})
         .to_string(),
@@ -527,7 +528,7 @@ fn bridge_handoff(ending: &str) {
     call(
         &mut bridge,
         "turn.send",
-        json!({"session":handle,"prompt":"copy","recall":false,"model":"phase02/test"}),
+        json!({"session":handle,"prompt":"copy","recall":false,"model":"undo-test/test"}),
     );
     let mut observed = Vec::new();
     let until = std::time::Instant::now() + endpoint::LIMIT;
@@ -573,7 +574,12 @@ fn bridge_handoff(ending: &str) {
         SENTINEL
     );
     let record = sessions::load(root, stored.id()).unwrap();
-    assert!(record.rewind.is_empty());
+    assert_eq!(record.rewind.len(), 2);
+    assert!(record.rewind_points(root).iter().all(|p| {
+        p.coverage
+            .gaps()
+            .contains(&bravebot_agent::rewind::CoverageGap::Desktop)
+    }));
     trust = record.trust_map(root).unwrap();
     assert_eq!(trust.integrity_of("output.txt"), Some(Integrity::Untrusted));
     let fork = call(
@@ -612,6 +618,7 @@ fn bridge_handoff(ending: &str) {
         &mut programs,
         &mut stored,
         &workspace,
+        &mut None,
         1,
     );
     assert_eq!(trust.integrity_of("output.txt"), Some(Integrity::Untrusted));
@@ -640,7 +647,7 @@ fn bridge_handoff(ending: &str) {
 /// Program effects have no byte backup, including redirections and still-running jobs.
 #[cfg(unix)]
 #[test]
-fn programs_close_all_points_before_the_next_planner_round() {
+fn editing_then_running_a_program_keeps_undo_and_warns() {
     if !in_isolated_profile() {
         return;
     }
@@ -654,7 +661,7 @@ fn programs_close_all_points_before_the_next_planner_round() {
         fn tool_finished(&mut self, activity: Activity) {
             if activity.tool == "run" {
                 assert!(!activity.failed, "{}", activity.note.unwrap_or_default());
-                assert!(self.points.iter().all(|point| !point.is_valid()));
+                assert!(self.points.iter().all(|point| !point.is_complete()));
                 self.ran = true;
             }
         }
@@ -669,10 +676,10 @@ fn programs_close_all_points_before_the_next_planner_round() {
         let workspace = Workspace::new(&root).unwrap();
         let mut trust = TrustStore::new(workspace.root());
         trust.trust(".");
-        let programs = TrustedPrograms::new();
+        let mut programs = TrustedPrograms::new();
         let mut conversation = Conversation::new();
         let mut session = Session::new("test");
-        let stored = sessions::Handle::begin(
+        let mut stored = sessions::Handle::begin(
             workspace.root(),
             sessions::Front::Terminal,
             bravebot_stamp::BUILD,
@@ -683,6 +690,7 @@ fn programs_close_all_points_before_the_next_planner_round() {
                 prompt.into(),
             );
         }
+        std::fs::write(workspace.root().join("foo.rs"), "original").unwrap();
         session.bind_rewind_coverage(&workspace);
         let mut observe = Observe {
             points: session
@@ -694,6 +702,7 @@ fn programs_close_all_points_before_the_next_planner_round() {
         };
         let (config, requests, server) = endpoint::endpoint(
             vec![
+                endpoint::tool("write_file", json!({"path":"foo.rs","contents":"edited"})),
                 endpoint::tool("run", json!({"command":command,"background":background})),
                 endpoint::answer(),
             ],
@@ -705,7 +714,7 @@ fn programs_close_all_points_before_the_next_planner_round() {
             bravebot_agent::PermissionMode::Bypass,
             false,
         );
-        turn::resume(
+        let outcome = turn::resume(
             &config,
             &Egress::new(),
             &workspace,
@@ -714,17 +723,46 @@ fn programs_close_all_points_before_the_next_planner_round() {
             &mut confirmer,
             &mut observe,
             &mut Trail::new(),
-            trust,
-            programs,
+            trust.clone(),
+            programs.clone(),
             None,
             &Cancel::new(),
         )
         .unwrap();
         assert!(observe.ran);
         session.keep_backups(workspace.take_backups());
-        assert!(session.rewind_points().is_empty());
+        assert_eq!(session.rewind_points().len(), 2);
+        trust = outcome.trust;
+        programs = outcome.programs;
+        rewind(
+            &mut session,
+            &mut conversation,
+            &mut trust,
+            &mut programs,
+            &mut stored,
+            &workspace,
+            &mut None,
+            1,
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.root().join("foo.rs")).unwrap(),
+            "original"
+        );
+        assert!(trust.is_trusted("foo.rs"));
+        assert_eq!(session.rewind_points().len(), 1);
         assert!(
-            workspace.rewind_coverage().is_valid(),
+            session
+                .transcript
+                .iter()
+                .any(|entry| entry.text.contains("Some changes may remain"))
+        );
+        let loaded = sessions::load(workspace.root(), stored.id()).unwrap();
+        assert_eq!(
+            loaded.rewind_points(workspace.root())[0].coverage.gaps(),
+            [bravebot_agent::rewind::CoverageGap::Command].into()
+        );
+        assert!(
+            workspace.rewind_coverage().is_complete(),
             "the next turn may capture a new point after jobs are reaped"
         );
         if name == "redirection" {
@@ -734,15 +772,15 @@ fn programs_close_all_points_before_the_next_planner_round() {
             );
         }
         server.join().unwrap();
-        assert_eq!(requests.try_iter().count(), 2);
+        assert_eq!(requests.try_iter().count(), 3);
         std::fs::remove_dir_all(root).unwrap();
     }
 }
 
-/// Hooks write outside the backup journal, so no earlier checkpoint may survive their launch.
+/// Hook effects leave checkpoints available with warnings that survive save/resume.
 #[cfg(unix)]
 #[test]
-fn matching_hooks_close_all_points_in_memory_and_after_resume() {
+fn matching_hooks_keep_undo_with_saved_coverage_warnings() {
     if !in_isolated_profile() {
         return;
     }
@@ -815,9 +853,9 @@ fn matching_hooks_close_all_points_in_memory_and_after_resume() {
             session
                 .rewind_points()
                 .iter()
-                .all(|point| point.coverage.is_valid() != fires)
+                .all(|point| point.coverage.is_complete() != fires)
         );
-        // Saving must reject invalid points even before the UI prunes them.
+        // Saving preserves both points and their warning information.
         save(
             &mut stored,
             &session,
@@ -826,14 +864,253 @@ fn matching_hooks_close_all_points_in_memory_and_after_resume() {
             &outcome.programs,
         );
         let record = sessions::load(root, stored.id()).unwrap();
-        assert_eq!(record.rewind_points(root).len(), if fires { 0 } else { 2 });
+        assert_eq!(record.rewind_points(root).len(), 2);
+        assert!(
+            record
+                .rewind_points(root)
+                .iter()
+                .all(|point| point.coverage.is_complete() != fires)
+        );
         session.keep_backups(Vec::new());
-        assert_eq!(session.rewind_points().len(), if fires { 0 } else { 2 });
-        if fires {
-            assert!(session.take_rewind(1).is_none());
-        }
+        assert_eq!(session.rewind_points().len(), 2);
+        let gaps = session.take_rewind(1).unwrap().coverage.gaps();
+        assert_eq!(
+            gaps.contains(&bravebot_agent::rewind::CoverageGap::Hook),
+            fires
+        );
         server.join().unwrap();
         assert_eq!(requests.try_iter().count(), 2);
         std::fs::remove_dir_all(root).unwrap();
     }
+}
+
+/// Undo before the first resumed turn must transfer warnings before consuming every loaded point.
+#[test]
+fn immediate_undo_after_resume_keeps_server_warnings_for_later_turns() {
+    if !in_isolated_profile() {
+        return;
+    }
+    use bravebot_agent::rewind::CoverageGap;
+    let root = scratch_dir("undo-immediate-resume");
+    std::fs::create_dir_all(&root).unwrap();
+    let workspace = Workspace::new(&root).unwrap();
+    let mut trust = TrustStore::new(workspace.root());
+    let mut programs = TrustedPrograms::new();
+    let mut conversation = Conversation::new();
+    let mut session = Session::new("test");
+    let mut stored = sessions::Handle::begin(
+        workspace.root(),
+        sessions::Front::Terminal,
+        bravebot_stamp::BUILD,
+    );
+    session.open_rewind_point(
+        rewind_point(&session, &conversation, &trust, &programs, &stored),
+        "earlier".into(),
+    );
+    session.record_rewind_gap(CoverageGap::LanguageServer);
+    save(&mut stored, &session, &conversation, &trust, &programs);
+    let record = sessions::load(workspace.root(), stored.id()).unwrap();
+    // Accept older records that only kept the warning in their checkpoint.
+    let mut encoded = serde_json::to_value(record).unwrap();
+    encoded
+        .as_object_mut()
+        .unwrap()
+        .remove("server_children_may_run");
+    let record: sessions::Record = serde_json::from_value(encoded).unwrap();
+    stored = sessions::Handle::resuming(
+        workspace.root(),
+        &record,
+        sessions::Front::Terminal,
+        bravebot_stamp::BUILD,
+    );
+
+    let mut resumed = Session::new("test");
+    resumed.restore_rewind_points(record.rewind_points(workspace.root()), &conversation);
+    assert!(workspace.rewind_coverage().is_complete());
+    rewind(
+        &mut resumed,
+        &mut conversation,
+        &mut trust,
+        &mut programs,
+        &mut stored,
+        &workspace,
+        &mut None,
+        1,
+    );
+    assert!(resumed.rewind_points().is_empty());
+    // Reopen the record written by undo with a new workspace, after all points are gone.
+    let record = sessions::load(workspace.root(), stored.id()).unwrap();
+    let workspace = Workspace::new(&root).unwrap();
+    let mut resumed = Session::new("test");
+    resumed.restore_rewind(&record, &workspace, &conversation);
+    resumed.open_rewind_point(
+        rewind_point(&resumed, &conversation, &trust, &programs, &stored),
+        "next".into(),
+    );
+    resumed.bind_rewind_coverage(&workspace);
+    assert_eq!(
+        resumed.rewind_points()[0].coverage.gaps(),
+        [CoverageGap::LanguageServer].into()
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// Distinct recorded causes must remain distinct in the warning the person sees.
+#[test]
+fn undo_warnings_name_recorded_causes() {
+    if !in_isolated_profile() {
+        return;
+    }
+    use bravebot_agent::rewind::CoverageGap;
+    let root = scratch_dir("undo-warning-causes");
+    std::fs::create_dir_all(&root).unwrap();
+    for (gaps, expected) in [
+        (vec![], None),
+        (vec![CoverageGap::Command], Some("commands")),
+        (vec![CoverageGap::Hook], Some("hooks")),
+        (vec![CoverageGap::Scratch], Some("scratch writes")),
+        (vec![CoverageGap::LanguageServer], Some("language servers")),
+        (vec![CoverageGap::Desktop], Some("desktop turns")),
+        (
+            vec![CoverageGap::BackupUnavailable],
+            Some("unavailable backups"),
+        ),
+        (vec![CoverageGap::Unknown], Some("unknown coverage")),
+        (
+            vec![CoverageGap::Hook, CoverageGap::Command, CoverageGap::Hook],
+            Some("commands, hooks"),
+        ),
+    ] {
+        let workspace = Workspace::new(&root).unwrap();
+        let mut session = Session::new("test");
+        let mut conversation = Conversation::new();
+        let mut trust = TrustStore::new(workspace.root());
+        let mut programs = TrustedPrograms::new();
+        let mut stored = sessions::Handle::begin(
+            workspace.root(),
+            sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+        session.open_rewind_point(
+            rewind_point(&session, &conversation, &trust, &programs, &stored),
+            "work".into(),
+        );
+        for gap in gaps {
+            session.record_rewind_gap(gap);
+        }
+        rewind(
+            &mut session,
+            &mut conversation,
+            &mut trust,
+            &mut programs,
+            &mut stored,
+            &workspace,
+            &mut None,
+            1,
+        );
+        let warnings: Vec<_> = session
+            .transcript
+            .iter()
+            .filter(|entry| entry.text.contains("Some changes may remain"))
+            .collect();
+        if let Some(causes) = expected {
+            assert_eq!(warnings.len(), 1);
+            assert!(
+                warnings[0]
+                    .text
+                    .ends_with(&format!("Not fully covered: {causes}.")),
+                "{}",
+                warnings[0].text
+            );
+        } else {
+            assert!(warnings.is_empty());
+        }
+        stored.discard_unwritten("");
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// Missing gap evidence must warn and keep the record even when no backed-up files need restoring.
+#[test]
+fn resumed_undo_keeps_the_record_when_gap_evidence_is_missing() {
+    if !in_isolated_profile() {
+        return;
+    }
+    let root = scratch_dir("undo-missing-gap-evidence");
+    std::fs::create_dir_all(&root).unwrap();
+    let unrestored = root.join("unrestored.txt");
+    std::fs::write(&unrestored, "current bytes").unwrap();
+    for (coverage, warns, names_unrestored) in [
+        (json!({"version": 2, "paths": [], "gaps": []}), false, false),
+        (json!({"version": 1, "paths": []}), true, false),
+        (json!({"version": 2, "paths": []}), true, false),
+        (
+            json!({"version": 2, "paths": ["unrestored.txt"], "gaps": ["future-effect"]}),
+            true,
+            true,
+        ),
+    ] {
+        let workspace = Workspace::new(&root).unwrap();
+        let mut session = Session::new("test");
+        let mut conversation = Conversation::new();
+        let mut trust = TrustStore::new(workspace.root());
+        let mut programs = TrustedPrograms::new();
+        let mut stored = sessions::Handle::begin(
+            workspace.root(),
+            sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+        session.open_rewind_point(
+            rewind_point(&session, &conversation, &trust, &programs, &stored),
+            "work".into(),
+        );
+        save(&mut stored, &session, &conversation, &trust, &programs);
+        let record = sessions::load(workspace.root(), stored.id()).unwrap();
+        let mut encoded = serde_json::to_value(record).unwrap();
+        encoded["rewind"][0]["coverage"] = coverage;
+        let record: sessions::Record = serde_json::from_value(encoded).unwrap();
+        let mut resumed = Session::new("test");
+        resumed.restore_rewind(&record, &workspace, &conversation);
+        stored = sessions::Handle::resuming(
+            workspace.root(),
+            &record,
+            sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+        rewind(
+            &mut resumed,
+            &mut conversation,
+            &mut trust,
+            &mut programs,
+            &mut stored,
+            &workspace,
+            &mut None,
+            1,
+        );
+        assert!(resumed.rewind_points().is_empty());
+        assert_eq!(
+            std::fs::read_to_string(&unrestored).unwrap(),
+            "current bytes"
+        );
+        assert_eq!(
+            resumed
+                .transcript
+                .iter()
+                .any(|entry| entry.text.contains("unrestored.txt")),
+            names_unrestored
+        );
+        assert_eq!(
+            resumed
+                .transcript
+                .iter()
+                .any(|entry| entry.text.contains("unknown coverage")),
+            warns
+        );
+        assert_eq!(
+            sessions::load(workspace.root(), stored.id()).is_some(),
+            warns
+        );
+        stored.discard_unwritten("");
+    }
+    std::fs::remove_dir_all(root).unwrap();
 }

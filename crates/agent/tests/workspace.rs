@@ -11,6 +11,17 @@ use bravebot_core::value::Labelled;
 use std::path::PathBuf;
 use std::time::Duration;
 
+/// Exercise the production restore entry point with this fixture's file decisions.
+fn restore_for_test(
+    workspace: &Workspace,
+    backups: Vec<bravebot_agent::workspace::Backup>,
+) -> Vec<PathBuf> {
+    let mut current = TrustStore::new(workspace.root());
+    current.trust(".");
+    let target = current.clone();
+    bravebot_agent::rewind::restore(backups, &mut current, &target, &mut None)
+}
+
 /// A scratch directory that removes itself, so tests do not leave state behind.
 struct Scratch {
     path: PathBuf,
@@ -4142,11 +4153,7 @@ fn a_rewind_puts_back_what_a_turn_overwrote() {
         )
         .expect("write succeeds");
 
-    assert!(
-        workspace
-            .restore_backups(workspace.take_backups())
-            .is_empty()
-    );
+    assert!(restore_for_test(&workspace, workspace.take_backups()).is_empty());
 
     assert_eq!(
         std::fs::read_to_string(scratch.path.join("notes.md")).unwrap(),
@@ -4179,11 +4186,7 @@ fn a_rewind_removes_a_file_the_turn_created() {
         )
         .expect("write succeeds");
 
-    assert!(
-        workspace
-            .restore_backups(workspace.take_backups())
-            .is_empty()
-    );
+    assert!(restore_for_test(&workspace, workspace.take_backups()).is_empty());
 
     assert!(!scratch.path.join("new.txt").exists());
 }
@@ -4215,11 +4218,7 @@ fn a_path_written_twice_in_a_turn_rewinds_to_before_the_first_write() {
             .expect("write succeeds");
     }
 
-    assert!(
-        workspace
-            .restore_backups(workspace.take_backups())
-            .is_empty()
-    );
+    assert!(restore_for_test(&workspace, workspace.take_backups()).is_empty());
 
     assert_eq!(
         std::fs::read_to_string(scratch.path.join("notes.md")).unwrap(),
@@ -4270,11 +4269,14 @@ fn a_rewind_names_the_paths_it_could_not_put_back() {
     let blocked = scratch.path.join("in-the-way");
     std::fs::create_dir(&blocked).expect("create");
 
-    let refused = workspace.restore_backups(vec![Backup {
-        captured_trust: bravebot_core::label::Integrity::Trusted,
-        path: blocked.clone(),
-        was: Before::Bytes(b"whatever was there".to_vec()),
-    }]);
+    let refused = restore_for_test(
+        &workspace,
+        vec![Backup {
+            captured_trust: bravebot_core::label::Integrity::Trusted,
+            path: blocked.clone(),
+            was: Before::Bytes(b"whatever was there".to_vec()),
+        }],
+    );
 
     assert_eq!(refused, vec![blocked]);
 }
@@ -4288,11 +4290,14 @@ fn a_created_file_already_gone_is_not_reported_as_refused() {
     let scratch = Scratch::new("rewind-already-gone");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    let refused = workspace.restore_backups(vec![Backup {
-        captured_trust: bravebot_core::label::Integrity::Trusted,
-        path: scratch.path.join("never-there.txt"),
-        was: Before::Nothing,
-    }]);
+    let refused = restore_for_test(
+        &workspace,
+        vec![Backup {
+            captured_trust: bravebot_core::label::Integrity::Trusted,
+            path: scratch.path.join("never-there.txt"),
+            was: Before::Nothing,
+        }],
+    );
 
     assert!(refused.is_empty());
 }
@@ -4330,7 +4335,7 @@ fn a_file_past_the_rewind_budget_is_remembered_but_not_kept() {
     assert_eq!(backups.len(), 1);
     assert_eq!(backups[0].was, Before::NotKept);
 
-    let refused = workspace.restore_backups(backups);
+    let refused = restore_for_test(&workspace, backups);
 
     assert_eq!(refused, vec![heavy.canonicalize().unwrap()]);
     assert_eq!(
@@ -4497,8 +4502,8 @@ fn a_write_in_the_sessions_own_directory_is_not_kept_for_an_undo() {
             .expect("a write in the session's own directory");
     }
 
-    assert!(!older.is_valid());
-    assert!(!newest.is_valid());
+    assert!(!older.is_complete());
+    assert!(!newest.is_complete());
     assert!(
         workspace.take_backups().is_empty(),
         "an intermediate file was kept for an undo nobody would ask for"
@@ -4563,7 +4568,7 @@ fn a_write_in_the_sessions_own_directory_leaves_the_budget_for_the_project() {
         "the source file lost its place in the budget to an intermediate file"
     );
 
-    assert!(workspace.restore_backups(backups).is_empty());
+    assert!(restore_for_test(&workspace, backups).is_empty());
     assert_eq!(
         std::fs::read_to_string(&source).expect("the source file"),
         "what the turn is about to change"

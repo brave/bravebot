@@ -5064,7 +5064,9 @@ fn run<S: Sink, C: Confirmer>(
             }
         };
 
-        tools.workspace.invalidate_rewind();
+        tools
+            .workspace
+            .mark_rewind_gap(crate::rewind::CoverageGap::Command);
         return match crate::exec::start_steps(steps, &plan.directory, tools.workspace.scratch()) {
             Ok(running) => {
                 // Spent at the moment the programs start, which for a background line is here:
@@ -5114,7 +5116,9 @@ fn run<S: Sink, C: Confirmer>(
     // and for the credential scan below: there is no later moment to ask, because afterwards
     // every answer is the line's own.
     let mut standing: Vec<Standing> = Vec::new();
-    tools.workspace.invalidate_rewind();
+    tools
+        .workspace
+        .mark_rewind_gap(crate::rewind::CoverageGap::Command);
     let ran = crate::exec::run_plan_observed(
         &plan,
         tools.cancel,

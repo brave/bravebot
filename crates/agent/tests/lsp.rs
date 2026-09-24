@@ -264,9 +264,13 @@ fn a_server_approved_in_one_turn_answers_the_next() {
     };
 
     // The session owns the set, which is the whole of the fix: the turns borrow it.
+    // A final server write during shutdown must happen before restoration, not after it.
+    let program = scratch.path.join("bin/rust-analyzer");
+    let script = FAKE_SERVER.replace("*'\"shutdown\"'*)", "*'\"shutdown\"'*)\n      printf 'server final write' > \"$DEFINED_AT\"\n      touch \"$DEFINED_AT.stopped\"");
+    std::fs::write(program, script).unwrap();
     let mut servers = LanguageServers::new(workspace.root().to_path_buf(), None);
     let points = [workspace.rewind_coverage(), workspace.rewind_coverage()];
-    assert!(points.iter().all(|point| point.is_valid()));
+    assert!(points.iter().all(|point| point.is_complete()));
     let mut conversation = Conversation::new();
     for prompt in ["where is Held declared", "and again"] {
         turn::resume(
@@ -284,16 +288,36 @@ fn a_server_approved_in_one_turn_answers_the_next() {
             &Cancel::new(),
         )
         .expect("the turn runs");
-        assert!(points.iter().all(|point| !point.is_valid()));
+        assert!(points.iter().all(|point| !point.is_complete()));
         assert!(
-            !workspace.clone().rewind_coverage().is_valid(),
+            !workspace.clone().rewind_coverage().is_complete(),
             "later turns cannot capture coverage while server effects remain untracked"
         );
     }
 
-    drop(servers);
+    let mut servers = Some(servers);
+    let mut trust = trusting_the_workspace(&workspace);
+    let target = trust.clone();
+    let refused = bravebot_agent::rewind::restore(
+        vec![bravebot_agent::workspace::Backup {
+            path: workspace.root().join("src/a.rs"),
+            was: bravebot_agent::workspace::Before::Bytes(b"restored original".to_vec()),
+            captured_trust: bravebot_core::label::Integrity::Trusted,
+        }],
+        &mut trust,
+        &target,
+        &mut servers,
+    );
+    assert!(refused.is_empty());
+    assert!(servers.is_none());
+    assert!(workspace.root().join("src/a.rs.stopped").exists());
+    assert_eq!(
+        std::fs::read(workspace.root().join("src/a.rs")).unwrap(),
+        b"restored original"
+    );
+    assert!(trust.is_trusted("src/a.rs"));
     assert!(
-        !workspace.rewind_coverage().is_valid(),
+        !workspace.rewind_coverage().is_complete(),
         "server shutdown does not prove its build-tool children stopped"
     );
 
@@ -345,7 +369,7 @@ fn a_turn_that_is_handed_no_set_starts_a_server_of_its_own() {
     };
 
     let points = [workspace.rewind_coverage(), workspace.rewind_coverage()];
-    assert!(points.iter().all(|point| point.is_valid()));
+    assert!(points.iter().all(|point| point.is_complete()));
     let mut conversation = Conversation::new();
     for prompt in ["where is Held declared", "and again"] {
         turn::resume(
@@ -363,9 +387,9 @@ fn a_turn_that_is_handed_no_set_starts_a_server_of_its_own() {
             &Cancel::new(),
         )
         .expect("the turn runs");
-        assert!(points.iter().all(|point| !point.is_valid()));
+        assert!(points.iter().all(|point| !point.is_complete()));
         assert!(
-            !workspace.clone().rewind_coverage().is_valid(),
+            !workspace.clone().rewind_coverage().is_complete(),
             "later turns cannot capture coverage while server effects remain untracked"
         );
     }
@@ -647,6 +671,6 @@ fn a_declined_language_server_preserves_rewind_coverage() {
     .expect("the refusal still lets the turn answer");
     assert_eq!(asking.asked, 1);
     assert_eq!(starts(&recorded), 0);
-    assert!(point.is_valid());
-    assert!(workspace.rewind_coverage().is_valid());
+    assert!(point.is_complete());
+    assert!(workspace.rewind_coverage().is_complete());
 }

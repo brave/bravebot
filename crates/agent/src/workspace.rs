@@ -12,6 +12,8 @@
 //! the routing label stops content from *supplying* a path, while confinement stops a
 //! trusted-but-wrong path from escaping the project.
 
+use crate::rewind::CoverageTracker;
+pub use crate::rewind::{CoverageGap, RewindCoverage};
 use base64::Engine;
 use bravebot_core::capability::Capability;
 use bravebot_core::event::{Role, Sink};
@@ -22,7 +24,6 @@ use bravebot_core::value::Labelled;
 use std::ffi::OsString;
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -235,8 +236,7 @@ pub struct Workspace {
     /// rewind has to see what that copy wrote. Nothing here is read: the bytes are carried back to
     /// the path they came from and never inspected.
     backups: Arc<Mutex<Vec<Backup>>>,
-    rewind_epoch: Arc<AtomicU64>,
-    rewind_disabled: Arc<AtomicBool>,
+    rewind: Arc<Mutex<CoverageTracker>>,
 }
 
 #[cfg(test)]
@@ -244,21 +244,6 @@ pub struct Workspace {
 struct WriteInterruption {
     entered: std::sync::mpsc::Sender<()>,
     resume: std::sync::mpsc::Receiver<bool>,
-}
-
-/// Live evidence that no effect outside the backup domain has begun since a checkpoint.
-#[derive(Debug, Clone, Default)]
-pub struct RewindCoverage {
-    epoch: Arc<AtomicU64>,
-    disabled: Arc<AtomicBool>,
-    captured: u64,
-}
-
-impl RewindCoverage {
-    /// Whether every effect since this point remains in the tracked domain.
-    pub fn is_valid(&self) -> bool {
-        !self.disabled.load(Ordering::SeqCst) && self.epoch.load(Ordering::SeqCst) == self.captured
-    }
 }
 
 /// What a path held before a turn wrote to it.
@@ -409,8 +394,7 @@ impl Workspace {
             search_files: MAX_SEARCH_FILES,
             search_time: MAX_SEARCH_TIME,
             backups: Arc::new(Mutex::new(Vec::new())),
-            rewind_epoch: Arc::new(AtomicU64::new(0)),
-            rewind_disabled: Arc::new(AtomicBool::new(false)),
+            rewind: Arc::default(),
         })
     }
 
@@ -1399,11 +1383,11 @@ impl Workspace {
     /// the next file in the project the turn writes.
     fn record_backup(&self, resolved: &Path, captured_trust: bravebot_core::label::Integrity) {
         if self.reaches_scratch(resolved) {
-            self.invalidate_rewind();
+            self.mark_rewind_gap(CoverageGap::Scratch);
             return;
         }
         let Ok(mut backups) = self.backups.lock() else {
-            self.invalidate_rewind();
+            self.mark_rewind_gap(CoverageGap::BackupUnavailable);
             return;
         };
         if backups.iter().any(|backup| backup.path == resolved) {
@@ -1426,53 +1410,25 @@ impl Workspace {
         });
     }
 
-    /// Close all checkpoints before an effect whose original bytes are not tracked.
-    pub fn invalidate_rewind(&self) {
-        self.rewind_epoch.fetch_add(1, Ordering::SeqCst);
+    /// Record an effect that file backups do not fully cover.
+    pub fn mark_rewind_gap(&self, gap: CoverageGap) {
+        self.rewind
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .mark(gap);
     }
 
-    /// Stop issuing coverage when a process or its children may keep writing across turns.
-    /// There is no reset: this workspace cannot prove those descendants have stopped.
-    pub(crate) fn disable_rewind(&self) {
-        self.rewind_disabled.store(true, Ordering::SeqCst);
-    }
-
-    /// Capture evidence for a new checkpoint. Background jobs must have ended first.
     pub fn rewind_coverage(&self) -> RewindCoverage {
-        RewindCoverage {
-            epoch: Arc::clone(&self.rewind_epoch),
-            disabled: Arc::clone(&self.rewind_disabled),
-            captured: self.rewind_epoch.load(Ordering::SeqCst),
-        }
+        RewindCoverage::capture(Arc::clone(&self.rewind))
     }
 
     /// What this turn has written so far, clearing it so the next turn starts with none.
     pub fn take_backups(&self) -> Vec<Backup> {
         let Ok(mut guard) = self.backups.lock() else {
-            self.invalidate_rewind();
+            self.mark_rewind_gap(CoverageGap::BackupUnavailable);
             return Vec::new();
         };
         std::mem::take(&mut *guard)
-    }
-
-    /// Put back what a turn wrote over, and say which paths would not go back.
-    ///
-    /// A path whose file did not exist is removed again, and one already gone counts as removed:
-    /// the state asked for is the state that is there. A path whose contents were past
-    /// [`MAX_REWIND_BYTES`] is refused without being touched, since what it held is not here.
-    ///
-    /// Every path is attempted rather than stopping at the first failure, and the ones that
-    /// failed are returned rather than dropped. A rewind that reported a turn undone while a
-    /// file still held that turn's work would leave the transcript describing a tree that is not
-    /// there, which is the failure a rewind exists to prevent.
-    pub fn restore_backups(&self, backups: Vec<Backup>) -> Vec<PathBuf> {
-        let mut refused = Vec::new();
-        for backup in backups {
-            if put_back(&backup.path, &backup.was).is_err() {
-                refused.push(backup.path);
-            }
-        }
-        refused
     }
 }
 
@@ -2554,7 +2510,7 @@ mod tests {
 
     /// Losing the journal lock cannot turn an attempted mutation into an empty complete backup.
     #[test]
-    fn a_failed_backup_lock_invalidates_every_checkpoint() {
+    fn a_failed_backup_lock_marks_every_checkpoint_incomplete() {
         let root = crate::testutil::scratch_dir("rewind-poisoned-backups");
         std::fs::create_dir_all(&root).unwrap();
         let workspace = Workspace::new(&root).unwrap();
@@ -2573,8 +2529,8 @@ mod tests {
             &root.join("output"),
             bravebot_core::label::Integrity::Trusted,
         );
-        assert!(!old.is_valid());
-        assert!(!recent.is_valid());
+        assert!(!old.is_complete());
+        assert!(!recent.is_complete());
         assert!(workspace.take_backups().is_empty());
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -2678,7 +2634,7 @@ mod tests {
                 "PUBLICATION_SENTINEL"
             );
             assert!(
-                coverage.is_valid(),
+                coverage.is_complete(),
                 "an entered tracked write keeps known coverage even on failure"
             );
             let backups = workspace.take_backups();

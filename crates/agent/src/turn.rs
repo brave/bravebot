@@ -2036,7 +2036,7 @@ fn fire_hooks<R: Reporter + ?Sized>(
 ) -> Vec<String> {
     // Hook programs can write files outside the backup journal, regardless of their outcome.
     if hooks.firing(moment, tool).next().is_some() {
-        workspace.invalidate_rewind();
+        workspace.mark_rewind_gap(crate::rewind::CoverageGap::Hook);
     }
     let mut said = Vec::new();
     for fired in crate::hooks::fire(hooks, moment, tool, workspace.root()) {

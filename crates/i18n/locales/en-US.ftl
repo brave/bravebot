@@ -1207,7 +1207,14 @@ session-rewound = rewound the session to before turn { $turn }
 session-rewound-partly =
     rewound the session to before turn { $turn }, but these files still hold what was
     written: { $paths }
-session-rewind-grants-withdrawn = File trust grants and older undo points were withdrawn because restoration was incomplete.
+session-rewind-uncovered = Some changes may remain. Not fully covered: { $causes }.
+session-rewind-cause-command = commands
+session-rewind-cause-hook = hooks
+session-rewind-cause-scratch = scratch writes
+session-rewind-cause-server = language servers
+session-rewind-cause-desktop = desktop turns
+session-rewind-cause-backup = unavailable backups
+session-rewind-cause-unknown = unknown coverage
 session-nothing-to-undo = nothing left to undo in this session
 session-rewind-points = a rewind goes back to one of these, putting back every row down to it:
 # One point a rewind could reach: how many turns back it is, which turn it would land before,
@@ -1588,3 +1595,5 @@ doctor-agents-conflict = conflict: resolve the existing file or directory first,
 doctor-agents-unreadable = cannot inspect this path; resolve its access permissions first
 doctor-direnv-ok = available on PATH
 doctor-direnv-missing = not found on PATH; see https://direnv.net/ or run `brew install direnv`
+
+status-undecided = not decided

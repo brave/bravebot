@@ -14913,10 +14913,11 @@ fn vouching_for_a_project_file_named_absolutely_records_its_relative_rule() {
     )
     .expect("turn runs");
 
-    let rules: Vec<(&str, bravebot_core::label::Integrity)> = outcome.trust.rules().collect();
+    let rules: Vec<(&str, Option<bravebot_core::label::Integrity>)> =
+        outcome.trust.rules().collect();
     assert_eq!(
         rules,
-        vec![("game.js", bravebot_core::label::Integrity::Trusted)],
+        vec![("game.js", Some(bravebot_core::label::Integrity::Trusted))],
         "the file the user vouched for is not trusted under the name the map is asked about"
     );
 }

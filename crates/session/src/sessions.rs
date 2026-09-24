@@ -347,6 +347,9 @@ pub struct Record {
     /// a rewind may reach.
     #[serde(default)]
     pub rewind: Vec<StoredRewind>,
+    /// Server descendants may outlive both their server and the last undo point.
+    #[serde(default)]
+    pub server_children_may_run: bool,
 }
 
 /// Display-only turn boundaries in the recounted conversation. These never enter planner context.
@@ -389,7 +392,7 @@ pub enum StoredOutcome {
 /// nothing rather than what a session that is no longer running read.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredRewind {
-    /// Versioned coverage; absent or unknown evidence disables this and older points.
+    /// Versioned coverage used for warnings, never for checkpoint eligibility.
     #[serde(default, deserialize_with = "read_coverage")]
     pub coverage: Option<StoredCoverage>,
     /// The exchange as it stood before the turn.
@@ -429,9 +432,31 @@ pub struct StoredRewind {
 pub struct StoredCoverage {
     pub version: u32,
     pub paths: Vec<String>,
+    /// Missing evidence differs from an explicitly empty version 2 gap list.
+    #[serde(
+        default,
+        deserialize_with = "read_coverage_gaps",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub gaps: Option<std::collections::BTreeSet<bravebot_agent::rewind::CoverageGap>>,
 }
 
-// A later coverage format must disable undo without making current state unreadable.
+// Gap formats can evolve without discarding required paths or recognized causes.
+fn read_coverage_gaps<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<std::collections::BTreeSet<bravebot_agent::rewind::CoverageGap>>, D::Error> {
+    use bravebot_agent::rewind::CoverageGap;
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.map(|value| match value {
+        serde_json::Value::Array(values) => values
+            .into_iter()
+            .map(|value| serde_json::from_value(value).unwrap_or(CoverageGap::Unknown))
+            .collect(),
+        _ => [CoverageGap::Unknown].into(),
+    }))
+}
+
+// Unknown metadata leaves undo available with an unknown-coverage warning.
 fn read_coverage<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<StoredCoverage>, D::Error> {
@@ -448,6 +473,9 @@ pub struct StoredBackup {
     /// What was there: [`NOTHING`] for a path the turn created, [`BYTES`] for one whose contents
     /// are here, and anything else for one this session did not keep.
     pub before: String,
+    /// Capture provenance is independent of coverage. Older records do not establish it.
+    #[serde(default)]
+    pub captured_trust: Option<String>,
     /// Those contents, base64, where `before` says they are here.
     ///
     /// Only where the map that stood before the turn vouched for the path, which makes SESSION-2
@@ -484,6 +512,22 @@ pub struct StoredAside {
 }
 
 impl StoredRewind {
+    fn coverage_gaps(&self) -> std::collections::BTreeSet<bravebot_agent::rewind::CoverageGap> {
+        match &self.coverage {
+            Some(coverage) if matches!(coverage.version, 1 | 2) => {
+                let mut gaps = coverage
+                    .gaps
+                    .clone()
+                    .unwrap_or_else(|| [bravebot_agent::rewind::CoverageGap::Unknown].into());
+                if coverage.version == 1 {
+                    gaps.insert(bravebot_agent::rewind::CoverageGap::Unknown);
+                }
+                gaps
+            }
+            _ => [bravebot_agent::rewind::CoverageGap::Unknown].into(),
+        }
+    }
+
     /// Write one down, with the paths inside the project kept relative to it.
     fn of(point: &RewindPoint, project: &Path) -> Self {
         use base64::Engine;
@@ -492,7 +536,8 @@ impl StoredRewind {
         let snapshot = &point.snapshot;
         Self {
             coverage: Some(StoredCoverage {
-                version: 1,
+                version: 2,
+                gaps: Some(point.coverage.gaps()),
                 paths: point
                     .backups
                     .iter()
@@ -545,6 +590,14 @@ impl StoredRewind {
                     StoredBackup {
                         path,
                         before: before.to_string(),
+                        captured_trust: Some(
+                            if backup.captured_trust == Integrity::Trusted {
+                                TRUSTED
+                            } else {
+                                UNTRUSTED
+                            }
+                            .into(),
+                        ),
                         bytes,
                     }
                 })
@@ -570,6 +623,7 @@ impl StoredRewind {
         use base64::Engine;
         use bravebot_agent::workspace::{Backup, Before};
 
+        let gaps = self.coverage_gaps();
         let mut wrote_over = self.wrote_over;
         if let Some(coverage) = self.coverage {
             for path in coverage.paths {
@@ -577,25 +631,16 @@ impl StoredRewind {
                     wrote_over.push(StoredBackup {
                         path,
                         before: NOT_KEPT.into(),
+                        captured_trust: None,
                         bytes: None,
                     });
                 }
             }
         }
-        let mut trust = TrustStore::new(root);
-        for rule in self.trust.iter().flatten() {
-            if rule.integrity == TRUSTED {
-                trust.trust(&replayed(&rule.path));
-            }
-        }
-        for rule in self.trust.iter().flatten() {
-            if rule.integrity != TRUSTED {
-                trust.distrust(&replayed(&rule.path));
-            }
-        }
+        let trust = restored_rules(root, self.trust.as_deref().unwrap_or_default());
 
         RewindPoint {
-            coverage: Default::default(),
+            coverage: bravebot_agent::rewind::RewindCoverage::restored(gaps),
             snapshot: TurnSnapshot {
                 conversation: self.conversation,
                 turns: self.turns,
@@ -625,7 +670,11 @@ impl StoredRewind {
                         _ => Before::NotKept,
                     };
                     Backup {
-                        captured_trust: bravebot_core::label::Integrity::Trusted,
+                        captured_trust: if held.captured_trust.as_deref() == Some(TRUSTED) {
+                            Integrity::Trusted
+                        } else {
+                            Integrity::Untrusted
+                        },
                         path: root.join(held.path),
                         was,
                     }
@@ -662,6 +711,24 @@ fn vouched_for(trust: &TrustStore, path: &Path) -> bool {
     trust.is_trusted(&joined) && trust.is_trusted(&path.to_string_lossy())
 }
 
+/// Load weaker decisions last so equivalent path spellings cannot hide them.
+fn restored_rules(root: &Path, rules: &[StoredRule]) -> TrustStore {
+    let mut trust = TrustStore::new(root);
+    for rule in rules.iter().filter(|rule| rule.integrity == TRUSTED) {
+        trust.trust(&replayed(&rule.path));
+    }
+    for rule in rules.iter().filter(|rule| rule.integrity == "undecided") {
+        trust.undecide(&replayed(&rule.path));
+    }
+    for rule in rules
+        .iter()
+        .filter(|rule| rule.integrity != TRUSTED && rule.integrity != "undecided")
+    {
+        trust.distrust(&replayed(&rule.path));
+    }
+    trust
+}
+
 /// A trust map as it is written down.
 fn stored_rules(trust: &TrustStore) -> Vec<StoredRule> {
     trust
@@ -669,8 +736,9 @@ fn stored_rules(trust: &TrustStore) -> Vec<StoredRule> {
         .map(|(path, integrity)| StoredRule {
             path: path.to_string(),
             integrity: match integrity {
-                Integrity::Trusted => TRUSTED,
-                Integrity::Untrusted => UNTRUSTED,
+                Some(Integrity::Trusted) => TRUSTED,
+                Some(Integrity::Untrusted) => UNTRUSTED,
+                None => "undecided",
             }
             .to_string(),
         })
@@ -983,6 +1051,16 @@ impl StoredTask {
 }
 
 impl Record {
+    /// Old records carry this warning only in their checkpoints.
+    pub fn server_children_may_run(&self) -> bool {
+        self.server_children_may_run
+            || self.rewind.iter().any(|point| {
+                point
+                    .coverage_gaps()
+                    .contains(&bravebot_agent::rewind::CoverageGap::LanguageServer)
+            })
+    }
+
     /// The trust map this session had, or `None` if it did not record one.
     ///
     /// An integrity this build does not recognise reads as untrusted, the safe direction, as
@@ -1003,14 +1081,7 @@ impl Record {
     /// full and comes back as it was written.
     pub fn trust_map(&self, root: impl AsRef<std::path::Path>) -> Option<TrustStore> {
         let rules = self.trust.as_ref()?;
-        let mut trust = TrustStore::new(root);
-        for rule in rules.iter().filter(|rule| rule.integrity == TRUSTED) {
-            trust.trust(&replayed(&rule.path));
-        }
-        for rule in rules.iter().filter(|rule| rule.integrity != TRUSTED) {
-            trust.distrust(&replayed(&rule.path));
-        }
-        Some(trust)
+        Some(restored_rules(root.as_ref(), rules))
     }
 
     /// The programs this session's user vouched for.
@@ -1054,17 +1125,7 @@ impl Record {
     /// come back under it, as the trust map's rules do: a rewind is about the files this
     /// checkout has, not the ones the machine that wrote the record had.
     pub fn rewind_points(&self, root: impl AsRef<std::path::Path>) -> Vec<RewindPoint> {
-        let start = self
-            .rewind
-            .iter()
-            .rposition(|point| {
-                !point
-                    .coverage
-                    .as_ref()
-                    .is_some_and(|coverage| coverage.version == 1)
-            })
-            .map_or(0, |index| index + 1);
-        self.rewind[start..]
+        self.rewind
             .iter()
             .cloned()
             .map(|point| point.into_point(root.as_ref()))
@@ -1175,6 +1236,7 @@ pub struct Handle {
     /// every caller rather than defaulted: a surface that forgot to say would be recorded as the
     /// other one, which is worse than a record that says nothing.
     front: Front,
+    server_children_may_run: bool,
 }
 
 impl Handle {
@@ -1190,6 +1252,7 @@ impl Handle {
             branch: branch_of(project),
             title: String::new(),
             wrote: false,
+            server_children_may_run: false,
             build: build.to_string(),
             front,
         }
@@ -1209,6 +1272,7 @@ impl Handle {
             title: record.title.clone(),
             // The record it came from is the one being written back to.
             wrote: true,
+            server_children_may_run: record.server_children_may_run(),
             build: build.to_string(),
             front,
         }
@@ -1312,6 +1376,7 @@ impl Handle {
         };
         record.title = self.title.clone();
         record.updated = now();
+        record.server_children_may_run = record.server_children_may_run();
         record.rewind.clear();
 
         let Ok(body) = serde_json::to_vec_pretty(&record) else {
@@ -1324,12 +1389,27 @@ impl Handle {
         }
     }
 
+    /// Forks discard checkpoints, but cannot stop server descendants that may still write.
+    pub fn inherit_rewind_warnings(&mut self, parent: &Self) {
+        self.server_children_may_run |= parent.server_children_may_run;
+    }
+
+    /// Preserve warnings whose effects can outlive the point being consumed.
+    pub fn retain_rewind_coverage(&mut self, coverage: &bravebot_agent::rewind::RewindCoverage) {
+        self.server_children_may_run |= coverage
+            .gaps()
+            .contains(&bravebot_agent::rewind::CoverageGap::LanguageServer);
+    }
+
     /// Write the session down as it now stands.
     ///
     /// Called after each turn rather than at the end, because the end may never come: a session
     /// that was killed, or whose machine slept and never woke, is exactly the one worth
     /// resuming.
     pub fn save(&mut self, first_prompt: &str, standing: Standing<'_>) {
+        for point in standing.rewind {
+            self.retain_rewind_coverage(&point.coverage);
+        }
         if self.title.is_empty() {
             self.title = title_from(first_prompt);
         }
@@ -1339,6 +1419,7 @@ impl Handle {
         };
 
         let record = Record {
+            server_children_may_run: self.server_children_may_run,
             id: self.id.clone(),
             directory: self.project.display().to_string(),
             branch: self.branch.clone(),
@@ -1371,7 +1452,6 @@ impl Handle {
             rewind: standing
                 .rewind
                 .iter()
-                .filter(|point| point.coverage.is_valid())
                 .map(|point| StoredRewind::of(point, &self.project))
                 .collect(),
         };
@@ -1926,6 +2006,7 @@ pub fn fork(project: &Path, source_id: &str) -> Option<Record> {
     record.started = now();
     record.updated = now();
     record.title = format!("{} (fork)", record.title);
+    record.server_children_may_run = record.server_children_may_run();
     record.rewind.clear();
 
     if let Some(directory) = writable_project_directory(project) {
@@ -2431,6 +2512,34 @@ mod tests {
         assert_eq!(map.integrity_of("/tmp/x/src/main.rs"), None);
     }
 
+    #[test]
+    fn undecided_children_survive_session_and_checkpoint_storage() {
+        let mut current = TrustStore::new("/work");
+        current.distrust("vendor");
+        current.trust("vendor/ours");
+        let met = current.meet(&TrustStore::new("/work"));
+        let mut record = a_record();
+        record.trust = Some(stored_rules(&met));
+        let encoded = serde_json::to_value(&record).unwrap();
+        let record: Record = serde_json::from_value(encoded).unwrap();
+        let loaded = record.trust_map("/moved").unwrap();
+        assert_eq!(loaded.integrity_of("vendor/ours/file"), None);
+        assert_eq!(
+            loaded.integrity_of("vendor/other"),
+            Some(Integrity::Untrusted)
+        );
+        let mut stored = a_stored_point(vec![]);
+        stored.trust = Some(stored_rules(&met));
+        let stored: StoredRewind =
+            serde_json::from_value(serde_json::to_value(stored).unwrap()).unwrap();
+        let checkpoint = stored.into_point(Path::new("/moved")).snapshot.trust;
+        assert_eq!(checkpoint, loaded);
+        assert_eq!(
+            checkpoint.meet(&loaded).integrity_of("vendor/ours/file"),
+            None
+        );
+    }
+
     /// The rule the whole map turns on has to survive being written down: a path a write marked
     /// untrusted, inside a tree the user vouched for, stays untrusted when the session resumes.
     #[test]
@@ -2693,16 +2802,19 @@ mod tests {
 
         let point = a_stored_point(vec![
             StoredBackup {
+                captured_trust: None,
                 path: "notes.md".to_string(),
                 before: "some word from a later build".to_string(),
                 bytes: None,
             },
             StoredBackup {
+                captured_trust: None,
                 path: "draft.md".to_string(),
                 before: BYTES.to_string(),
                 bytes: Some("not base64 at all !!".to_string()),
             },
             StoredBackup {
+                captured_trust: None,
                 path: "made.md".to_string(),
                 before: NOTHING.to_string(),
                 bytes: None,
@@ -2729,7 +2841,7 @@ mod tests {
 
     /// Missing evidence cannot mean that an old transcript can restore grants over current files.
     #[test]
-    fn checkpoints_require_known_coverage_even_after_a_marker_losing_round_trip() {
+    fn unknown_coverage_keeps_undo_and_warns_after_a_marker_losing_round_trip() {
         let mut record = a_record();
         record.trust = Some(vec![StoredRule {
             path: "output".into(),
@@ -2738,7 +2850,8 @@ mod tests {
         record.rewind = vec![a_stored_point(vec![]), a_stored_point(vec![])];
         assert_eq!(record.rewind_points("/work").len(), 2);
         record.rewind[1].coverage.as_mut().unwrap().version = 99;
-        assert!(record.rewind_points("/work").is_empty());
+        assert_eq!(record.rewind_points("/work").len(), 2);
+        assert!(!record.rewind_points("/work")[1].coverage.is_complete());
         record.rewind[1].coverage.as_mut().unwrap().version = 1;
         let mut encoded = serde_json::to_value(&record).unwrap();
         for point in encoded["rewind"].as_array_mut().unwrap() {
@@ -2752,16 +2865,130 @@ mod tests {
             let mut future = encoded.clone();
             future["rewind"][1]["coverage"] = unknown;
             let loaded: Record = serde_json::from_value(future).unwrap();
-            assert!(loaded.rewind_points("/work").is_empty());
+            assert_eq!(loaded.rewind_points("/work").len(), 2);
+            assert!(
+                loaded
+                    .rewind_points("/work")
+                    .iter()
+                    .all(|p| !p.coverage.is_complete())
+            );
             assert_eq!(loaded.title, record.title);
         }
         let loaded: Record = serde_json::from_value(encoded).unwrap();
-        assert!(loaded.rewind_points("/work").is_empty());
+        assert_eq!(loaded.rewind_points("/work").len(), 2);
+        assert!(
+            loaded
+                .rewind_points("/work")
+                .iter()
+                .all(|p| !p.coverage.is_complete())
+        );
         assert_eq!(loaded.trust.as_ref().unwrap()[0].integrity, UNTRUSTED);
         assert_eq!(loaded.title, record.title);
         let roundtrip: Record =
             serde_json::from_slice(&serde_json::to_vec(&loaded).unwrap()).unwrap();
-        assert!(roundtrip.rewind_points("/work").is_empty());
+        assert_eq!(roundtrip.rewind_points("/work").len(), 2);
+        assert!(
+            roundtrip
+                .rewind_points("/work")
+                .iter()
+                .all(|p| !p.coverage.is_complete())
+        );
+    }
+
+    /// Old or incomplete metadata must preserve required paths without claiming complete coverage.
+    #[test]
+    fn complete_coverage_requires_explicit_version_two_gaps() {
+        use bravebot_agent::rewind::CoverageGap;
+        use bravebot_agent::workspace::Before;
+        for (coverage, expected) in [
+            (
+                serde_json::json!({"version": 1, "paths": ["missing.txt"]}),
+                vec![CoverageGap::Unknown],
+            ),
+            (
+                serde_json::json!({"version": 1, "paths": ["missing.txt"], "gaps": []}),
+                vec![CoverageGap::Unknown],
+            ),
+            (
+                serde_json::json!({"version": 1, "paths": ["missing.txt"], "gaps": ["language-server"]}),
+                vec![CoverageGap::LanguageServer, CoverageGap::Unknown],
+            ),
+            (
+                serde_json::json!({"version": 2, "paths": ["missing.txt"]}),
+                vec![CoverageGap::Unknown],
+            ),
+            (
+                serde_json::json!({"version": 2, "paths": ["missing.txt"], "gaps": null}),
+                vec![CoverageGap::Unknown],
+            ),
+            (
+                serde_json::json!({"version": 2, "paths": ["missing.txt"], "gaps": []}),
+                vec![],
+            ),
+            (
+                serde_json::json!({"version": 2, "paths": ["missing.txt"], "gaps": ["command"]}),
+                vec![CoverageGap::Command],
+            ),
+            (
+                serde_json::json!({"version": 2, "paths": ["missing.txt"], "gaps": ["future-effect"]}),
+                vec![CoverageGap::Unknown],
+            ),
+            (
+                serde_json::json!({"version": 2, "paths": ["missing.txt"], "gaps": ["language-server", "future-effect", 42]}),
+                vec![CoverageGap::LanguageServer, CoverageGap::Unknown],
+            ),
+            (
+                serde_json::json!({"version": 2, "paths": ["missing.txt"], "gaps": {}}),
+                vec![CoverageGap::Unknown],
+            ),
+        ] {
+            let mut encoded = serde_json::to_value(a_stored_point(vec![])).unwrap();
+            encoded["coverage"] = coverage;
+            let stored: StoredRewind = serde_json::from_value(encoded).unwrap();
+            let roundtrip: StoredRewind =
+                serde_json::from_slice(&serde_json::to_vec(&stored).unwrap()).unwrap();
+            for point in [stored, roundtrip] {
+                let point = point.into_point(Path::new("/work"));
+                assert_eq!(point.backups.len(), 1);
+                assert_eq!(point.backups[0].path, Path::new("/work/missing.txt"));
+                assert_eq!(point.backups[0].was, Before::NotKept);
+                assert_eq!(
+                    point.coverage.gaps().into_iter().collect::<Vec<_>>(),
+                    expected
+                );
+            }
+        }
+    }
+
+    /// A coverage marker proves nothing about a backup's capture label, and vice versa.
+    #[test]
+    fn backup_provenance_is_independent_of_coverage() {
+        for marker in [true, false] {
+            for (captured, expected) in [
+                (Some(TRUSTED), Integrity::Trusted),
+                (None, Integrity::Untrusted),
+                (Some("future-label"), Integrity::Untrusted),
+            ] {
+                let mut stored = a_stored_point(vec![StoredBackup {
+                    path: "file".into(),
+                    before: BYTES.into(),
+                    bytes: Some("b3JpZ2luYWw=".into()),
+                    captured_trust: captured.map(str::to_string),
+                }]);
+                if !marker {
+                    stored.coverage = None;
+                }
+                let encoded = serde_json::to_vec(&stored).unwrap();
+                let read: StoredRewind = serde_json::from_slice(&encoded).unwrap();
+                let point = read.into_point(Path::new("/work"));
+                assert_eq!(point.coverage.is_complete(), marker);
+                assert_eq!(point.backups[0].captured_trust, expected);
+                assert_eq!(
+                    point.backups[0].was,
+                    bravebot_agent::workspace::Before::Bytes(b"original".to_vec())
+                );
+            }
+        }
     }
 
     /// A missing payload is not evidence that a path never changed.
@@ -2787,7 +3014,8 @@ mod tests {
     fn a_stored_point(wrote_over: Vec<StoredBackup>) -> StoredRewind {
         StoredRewind {
             coverage: Some(StoredCoverage {
-                version: 1,
+                version: 2,
+                gaps: Some(Default::default()),
                 paths: wrote_over
                     .iter()
                     .map(|backup| backup.path.clone())
@@ -2809,6 +3037,7 @@ mod tests {
 
     fn a_record() -> Record {
         Record {
+            server_children_may_run: false,
             history: None,
             id: "1-2".to_string(),
             directory: "/tmp/x".to_string(),
