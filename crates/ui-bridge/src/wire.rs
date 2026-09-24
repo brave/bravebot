@@ -332,6 +332,14 @@ pub fn run_request(id: u64, request: &RunRequest) -> Value {
         "request": id,
         "stages": stages,
         "directory": request.directory(),
+        // The line as the planner spelled it, which is not what an approval binds to: two
+        // spellings that compile to the same plan are one endorsement. It is sent because a
+        // reader with only the plan has nothing to compare it against, and a compiler that got
+        // the line wrong would then produce a prompt indistinguishable from a correct one. Empty
+        // for a call that was spelled as argv stages rather than as a line, and a front end
+        // draws nothing for those; the field is sent either way, so a front end can tell a call
+        // with no line from a build that does not send the field at all.
+        "line": request.plan.line,
         "plan": request.plan.steps.display(),
         "writes": request.plan.writes,
         "stdin": request.stdin,
