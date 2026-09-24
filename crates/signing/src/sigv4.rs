@@ -37,6 +37,9 @@ pub const SIGNED_HEADERS: &str = "host;x-amz-content-sha256;x-amz-date";
 /// What the terminating scope segment must be.
 const TERMINATOR: &str = "aws4_request";
 
+/// What the signing key derivation puts in front of the secret access key.
+const PREFIX: &[u8] = b"AWS4";
+
 /// Credentials to sign one request with.
 ///
 /// Borrowed rather than owned: these come from a short-lived source and are used immediately, so
@@ -146,10 +149,55 @@ fn canonical_path(path: &str) -> String {
 /// The chain is what limits the damage a leaked signature does: it authorises one service in one
 /// region on one day, rather than everything the secret key can reach.
 fn signing_key(secret: &str, date: &str, region: &str, service: &str) -> Vec<u8> {
-    let mut key = hmac(format!("AWS4{secret}").as_bytes(), date.as_bytes());
+    let mut key = hmac(Seed::over(secret).bytes(), date.as_bytes());
     key = hmac(&key, region.as_bytes());
     key = hmac(&key, service.as_bytes());
     hmac(&key, TERMINATOR.as_bytes())
+}
+
+/// The secret access key with the four bytes SigV4 puts in front of it, held so that the copy is
+/// cleared rather than returned to the allocator.
+///
+/// This is not a derived value: it is the secret key itself with a prefix, so a buffer holding one
+/// holds a live credential, and one of these is built for every request a session signs.
+/// [CRED-23](../../../docs/specs/credential-protection.md#CRED-23) asks that a buffer this program
+/// owns a credential in be cleared when it is dropped. This crate depends on no other here, so the
+/// overwriting is spelled out rather than taken from the crate that owns the configuration; what
+/// has to hold across the two is that the bytes are written over where they lie.
+struct Seed(Vec<u8>);
+
+impl Seed {
+    fn over(secret: &str) -> Self {
+        // Sized exactly, so that nothing reallocates part way through and leaves the key in the
+        // buffer it grew out of, which is an allocation nothing here holds a pointer to.
+        let mut bytes = Vec::with_capacity(PREFIX.len() + secret.len());
+        bytes.extend_from_slice(PREFIX);
+        bytes.extend_from_slice(secret.as_bytes());
+        Self(bytes)
+    }
+
+    fn bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// Overwrite the credential where it lies.
+    ///
+    /// `Vec::clear` is not this and is the mistake it exists to avoid: it sets the length to
+    /// nothing and leaves every byte where it was, so the key is still in the allocation when
+    /// the allocator hands it to whoever asks next.
+    fn scrub(&mut self) {
+        self.0.fill(0);
+        // Nothing reads these zeros back, and a compiler that can see the whole life of the
+        // buffer is entitled to delete a store no one observes. An opaque use of the bytes is how
+        // safe code says otherwise; it is a barrier rather than a guarantee the language makes.
+        std::hint::black_box(&self.0);
+    }
+}
+
+impl Drop for Seed {
+    fn drop(&mut self) {
+        self.scrub();
+    }
 }
 
 fn hmac(key: &[u8], message: &[u8]) -> Vec<u8> {
@@ -458,6 +506,38 @@ mod tests {
                 .contains("SignedHeaders=host;x-amz-content-sha256;x-amz-date"),
             "{}",
             headers.authorization
+        );
+    }
+
+    /// The buffer the derivation starts from is the secret access key with four bytes in front of
+    /// it, so a request that returned it to the allocator returned the key.
+    ///
+    /// Both halves matter and neither alone says it. A buffer of zeros at a fresh address leaves
+    /// the original bytes where the allocator can hand them on, and an unmoved buffer still
+    /// holding the key is what truncating it produces: the length reads zero and every byte is
+    /// still there.
+    #[test]
+    fn scrubbing_the_signing_seed_overwrites_the_key_where_it_lies() {
+        let mut seed = Seed::over(keys().secret_access_key);
+        let length = seed.bytes().len();
+        let address = seed.bytes().as_ptr();
+        assert!(
+            seed.bytes()
+                .ends_with(b"wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"),
+            "the fixture does not hold the key the derivation starts from"
+        );
+
+        seed.scrub();
+
+        assert_eq!(
+            seed.bytes().as_ptr(),
+            address,
+            "the buffer moved, so the key is still in the one that was left behind"
+        );
+        assert_eq!(
+            seed.bytes(),
+            vec![0u8; length],
+            "the buffer the key was in still holds bytes of it"
         );
     }
 
