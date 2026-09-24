@@ -695,6 +695,8 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `narration` | `{ text }` | `Reporter::narration`, **empty ones dropped** |
 | `tool.started` | `Activity` | `Reporter::tool_started` |
 | `tool.finished` | `Activity` | `Reporter::tool_finished` |
+| `check.started` | `{ lines }` | `Reporter::check_started` |
+| `check.finished` | `{}` | `Reporter::check_finished` |
 | `landed` | `{ landing }` | `Reporter::landed` |
 | `quarantined` | `Shown` | `Reporter::quarantined` |
 | `todos` | `{ rows: [ { content, status } ] }` | `Reporter::todos` |
@@ -713,13 +715,29 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 
 ```json
 { "verb": "read", "target": "src/main.rs", "note": "412 lines",
-  "failed": false, "untrusted": false,
+  "failed": false, "untrusted": false, "waitedSeconds": null,
   "changes": [ { "kind": "added", "text": "…" } ] }
 ```
 
 `note: null` means the call is still running — that is what distinguishes an unfinished
 line from one that finished with nothing to say, and the client must render the two
 differently.
+
+`waitedSeconds` is whole seconds this call spent at a model of its own, and `null` for a
+call that asked none, which is nearly every call: only a confined check and a processor's
+own round ask one. A client has no clock on a tool call, so without it a call that was slow
+because a model was slow is indistinguishable from a slow program. A wait under a second
+arrives as `0` and is not worth drawing.
+
+`check.started` and `check.finished` bracket a confined check that runs *inside* a call
+already reported, over `lines` of quarantined content. The pair carries nothing else: not
+a fragment of the content, not the verdict, not the checker's sentence. What it decided
+reaches a person on the approval card and no model at all (`CHECK-9`). The end arrives
+however the check ended, the backend failure that yields no verdict included, so a client
+is never left saying a check is running because the backend was down. Drawn ahead of
+`phase`, not instead of it: the round's phase does not change while a check runs, so it is
+the one word here that is not what the session is waiting on, and it is what the client
+goes back to saying once the check is over.
 
 `Shown` serialises as:
 

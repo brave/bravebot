@@ -301,3 +301,87 @@ test('starting and revisiting bot conversations preserves all earlier IDs across
     assert.equal(reopened.session, null)
   } finally { rmSync(directory, {recursive:true, force:true}) }
 })
+
+// The events the agent sends, folded by the window's own reducer, read by the word both places draw.
+function liveSession() {
+  const { apply } = load('src/renderer/App.tsx')
+  const { workingWord } = load('src/renderer/components/Transcript.tsx')
+  const session = {
+    live: { handle: 's-1', summary: { title: '', project: '', branch: null, directory: '/', id: 'a' }, entries: [], turns: {}, todos: [], quarantine: [], phase: null, checking: null, tokens: 0, running: false, archived: 0, awaitingOrdinal: null, bot: null },
+  }
+  session.send = (event, data) => apply({ event, data }, (update) => { session.live = update(session.live) }, () => {}, () => {})
+  session.word = () => workingWord(session.live.phase, session.live.checking)
+  return session
+}
+
+// A check is a whole model call inside a tool call whose row is already drawn, and the round's phase
+// does not change while it runs. Where screening is on and the verdict is safe no prompt is drawn
+// either, so this word is the only thing on the screen saying the session is waiting on a check.
+test('a running check takes the working word from every phase, and gives it back', () => {
+  const session = liveSession()
+  session.send('turn.started', { turn: 1 })
+  session.send('check.started', { lines: 3 })
+  assert.equal(session.word(), 'Checking 3 lines')
+  session.send('check.finished', {})
+  assert.equal(session.word(), 'Working')
+  for (const [phase, said] of [['planning', 'Planning'], ['thinking', 'Thinking'], ['compacting', 'Compacting'], ['reconnecting', 'Reconnecting']]) {
+    session.send('phase', { phase })
+    session.send('check.started', { lines: 3 })
+    assert.equal(session.word(), 'Checking 3 lines', `the check lost the word to ${phase}`)
+    session.send('check.finished', {})
+    assert.equal(session.word(), said, `the word did not go back to ${phase}`)
+  }
+  session.send('check.started', { lines: 1 })
+  assert.equal(session.word(), 'Checking 1 line')
+  session.send('check.finished', {})
+  // An empty slot is still a check running, so a count of `0` must not read as no check.
+  session.send('check.started', { lines: 0 })
+  assert.equal(session.word(), 'Checking 0 lines')
+})
+
+// A turn that is done but consolidating is still drawn as running, so a check whose end never
+// arrived would go on being drawn through it.
+test('a check whose end was never heard does not outlive its turn', () => {
+  const session = liveSession()
+  session.send('turn.started', { turn: 1 })
+  session.send('check.started', { lines: 3 })
+  session.send('turn.done', { turn: 1, reply: 'done', prompt: 1, archived: 0, contextTokens: 0, consolidating: true })
+  assert.equal(session.live.running, true)
+  assert.equal(session.word(), 'Working', 'a consolidating turn went on drawing the check')
+
+  // Sending the next prompt draws the session running before its `turn.started` arrives, so this
+  // is the word that prompt would be shown under.
+  session.send('turn.started', { turn: 2 })
+  session.send('check.started', { lines: 3 })
+  session.send('turn.error', { kind: 'chat', message: 'backend unavailable', turn: 2, prompt: 2, contextTokens: 0, category: 'unavailable' })
+  assert.equal(session.word(), 'Working', 'a failed turn handed its check to the next prompt')
+
+  // A turn whose end never arrived at all, as when the agent went away mid-check.
+  session.send('turn.started', { turn: 3 })
+  session.send('check.started', { lines: 3 })
+  session.send('turn.started', { turn: 4 })
+  assert.equal(session.word(), 'Working', 'a new turn inherited a check')
+})
+
+// A window has no clock of its own on a tool call, so a call that was slow because a model was slow
+// looks exactly like a slow program. Rendered through the real row, because the figure arriving and
+// going undrawn is the fault.
+test('a call that waited on a model of its own says how long, and one that asked none says nothing', () => {
+  const React = require('react')
+  const { renderToStaticMarkup } = require('react-dom/server')
+  // React stays external so the component and this file share one copy of it.
+  const source = buildSync({ entryPoints: ['src/renderer/components/Transcript.tsx'], bundle: true, write: false, platform: 'node', format: 'cjs', jsx: 'automatic', external: ['react', 'react-dom', 'react/jsx-runtime'] }).outputFiles[0].text
+  const module = { exports: {} }
+  new Function('require', 'module', 'exports', source)(require, module, module.exports)
+  const { Row } = module.exports
+
+  const read = { verb: 'Read output', target: 'ref:1', note: '3 lines, read', failed: false, untrusted: false, changes: [], waitedSeconds: null }
+  const draw = (activity) => renderToStaticMarkup(React.createElement(Row, { entry: { kind: 'tool', id: 'row', activity, landing: null }, onDecide() {}, onAnswer() {}, onFork() {}, forkable: false }))
+
+  assert.match(draw({ ...read, waitedSeconds: 8 }), /3 lines, read · 8s at the model/)
+  // Past a minute, as the terminal writes it, so the two interfaces say the same thing.
+  assert.match(draw({ ...read, waitedSeconds: 65 }), /3 lines, read · 1m 05s at the model/)
+  // Nearly every call asked no model, and a figure under every row distinguishes nothing.
+  assert.doesNotMatch(draw(read), /at the model/)
+  assert.doesNotMatch(draw({ ...read, waitedSeconds: 0 }), /at the model/, 'a wait rounded to nothing is drawn')
+})

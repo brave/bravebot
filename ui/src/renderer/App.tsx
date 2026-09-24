@@ -59,6 +59,8 @@ interface Live {
   todos: TodoRow[]
   quarantine: Shown[]
   phase: Phase | null
+  /** Lines a running confined check was given. Beside the phase, which a check does not change. */
+  checking: number | null
   tokens: number
   contextTokens?: number
   running: boolean
@@ -508,6 +510,7 @@ export function App(): React.JSX.Element {
         todos: Object.values(opened.todos).flat(),
         quarantine: [],
         phase: null,
+        checking: null,
         tokens: 0,
         running: false,
         // A record with no stored map was written before maps were kept. Nothing
@@ -564,6 +567,7 @@ export function App(): React.JSX.Element {
         todos: [],
         quarantine: [],
         phase: null,
+        checking: null,
         tokens: 0,
         running: false,
         contextTokens: 0,
@@ -1078,6 +1082,7 @@ export function App(): React.JSX.Element {
           todos: Object.values(forked.todos).flat(),
           quarantine: [],
           phase: null,
+          checking: null,
           tokens: 0,
           running: false,
           contextTokens: forked.contextTokens,
@@ -1328,7 +1333,7 @@ export function App(): React.JSX.Element {
 }
 
 /** Fold one event into the live session. */
-function apply(
+export function apply(
   message: BridgeEvent,
   setLive: React.Dispatch<React.SetStateAction<Live | null>>,
   setBuild: (build: string) => void,
@@ -1348,12 +1353,17 @@ function apply(
       case 'watch.ended':
         return { ...old, entries: [...old.entries, t.narrated(`Watch ${message.data.number} ended: ${message.data.reason}${message.data.message ? `. ${message.data.message}` : ''}`)] }
       case 'turn.started':
-        return { ...old, running: true, phase: null, tokens: 0,
+        return { ...old, running: true, phase: null, checking: null, tokens: 0,
           entries: t.beginTurn(old.entries, message.data.turn) }
       case 'audit':
         return old
       case 'phase':
         return { ...old, phase: message.data.phase }
+      // The phase is left alone: it is what the word goes back to once the check is over.
+      case 'check.started':
+        return { ...old, checking: message.data.lines }
+      case 'check.finished':
+        return { ...old, checking: null }
       case 'tokens':
         return { ...old, tokens: message.data.written }
       case 'narration':
@@ -1397,6 +1407,8 @@ function apply(
           outcome: 'complete',
           running: message.data.consolidating === true,
           phase: null,
+          // A consolidating turn stays running, so a check whose end was never heard would stay drawn.
+          checking: null,
           entries: [...t.number(old.entries, old.awaitingOrdinal ?? '', message.data.prompt), t.replied(message.data.reply, message.data.turn)],
           awaitingOrdinal: null,
           archived: message.data.archived,
@@ -1412,6 +1424,7 @@ function apply(
           summary: { ...old.summary, id: message.data.id ?? old.summary.id },
           running: false,
           phase: null,
+          checking: null,
           entries: [...t.interruptPending(t.number(old.entries, old.awaitingOrdinal ?? '', message.data.prompt)), { ...t.errored(`${kind}: ${detail}`), category: kind === 'cancelled' ? 'cancelled' : message.data.category, attempts: message.data.attempts, status: message.data.status, turn: message.data.turn }],
           awaitingOrdinal: null,
           queuePaused: true,

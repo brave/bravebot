@@ -34,6 +34,11 @@ export interface Activity {
   failed: boolean
   untrusted: boolean
   changes: Change[]
+  /**
+   * Whole seconds this call spent at a model of its own, `null` where it asked none. The window
+   * cannot time this itself, so without it a slow model and a slow program look the same.
+   */
+  waitedSeconds: number | null
 }
 
 export interface Shown {
@@ -408,6 +413,8 @@ export interface EventMap {
   narration: { text: string }
   'tool.started': Activity
   'tool.finished': Activity
+  'check.started': { lines: number }
+  'check.finished': Record<string, never>
   landed: { landing: Landing }
   quarantined: Shown
   todos: { rows: TodoRow[] }
