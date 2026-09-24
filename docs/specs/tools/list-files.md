@@ -37,11 +37,21 @@ bound written down and its cost enumerated, which is where to read what a name c
 
 The planner passes the reference where it would have typed a path, and is never told a filename.
 
+That covers what a call says about itself as well as what it returns. A tool asked to act on a
+reference reports its result, its refusal and its failure about the reference, never about the file
+behind it: a sentence a tool produces is trusted text the planner reads as the driver's own
+([LABEL-3](../labels.md#LABEL-3)), so a filename formatted into one is the disclosure this clause
+withholds, arriving in the strongest position the design has.
+
 **Why.** One reference for the whole listing would leave the planner holding an address it cannot
 use. What came of that in practice was a planner guessing globs to see which came back empty.
 
 `verified-by: bravebot_core::policy::an_entry_reference_names_its_directory_and_never_its_file`
 `verified-by: bravebot_core::policy::reserving_the_wrong_number_of_names_is_refused`
+`verified-by: bravebot_agent::tools::an_edit_by_reference_that_cannot_be_read_does_not_name_the_file`
+`verified-by: bravebot_agent::workspace::a_failure_is_worded_about_the_name_the_caller_may_say`
+`verified-by: bravebot_agent::tools::a_deferred_read_that_fails_does_not_name_the_file`
+`verified-by: bravebot_agent::tools::a_deferred_read_a_rule_denies_does_not_name_the_file`
 
 <a id="LIST-3"></a>
 ### LIST-3: the glob is literal and the matcher does not backtrack

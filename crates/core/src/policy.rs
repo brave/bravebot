@@ -2126,7 +2126,16 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         // planner named passes. Without it a denied file could be opened by naming a reference to
         // it, which is that file under another spelling.
         self.before_capability(Capability::FileRead)?;
-        self.before_read(&path)?;
+        // The rule covers the file rather than the spelling of it, so the refusal is the same one
+        // a path the planner typed would get. What goes back names the slot: the path behind a
+        // reference came out of a directory nobody vouched for, and this refusal is handed to the
+        // planner, so quoting the path would say the name the reference exists to withhold. The
+        // trail still has it, because the gate wrote the path there before the message was
+        // replaced.
+        self.before_read(&path).map_err(|denial| Denial {
+            principle: denial.principle,
+            message: format!("a deny rule in the settings file covers {slot}"),
+        })?;
         let current = self.observe_path(Capability::FileRead, &path)?;
         let label = crate::label::taint_all([promised, current]);
 

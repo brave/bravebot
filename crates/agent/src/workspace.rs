@@ -96,34 +96,74 @@ pub enum WorkspaceError {
     Pattern { detail: String },
 }
 
-impl fmt::Display for WorkspaceError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl WorkspaceError {
+    /// Word this failure about `named`, which is the name the caller may say out loud.
+    ///
+    /// The path a failure carries is the one the call was made on, and a call made through a
+    /// reference was made on a filename out of a directory nobody vouched for. A filename is
+    /// content, which is LIST-1, and the reference exists so that the planner is never told
+    /// one, which is LIST-2. A tool result that interpolated the name would put bytes an
+    /// attacker chose into the planner's context inside a sentence the driver signs for, which
+    /// is what LABEL-3 forbids. So every caller that reports one of these to the planner words
+    /// it from here and passes the name it is entitled to say: `ref:1` for a reference, the
+    /// path the planner typed otherwise.
+    ///
+    /// Written as a match over the whole enum rather than a substitution over what
+    /// [`fmt::Display`] produced, so a variant added later with a path of its own has to say
+    /// here which name it reports instead of inheriting a wording that leaks.
+    ///
+    /// [`WorkspaceError::Denied`] is the arm `named` does not reach: a denial carries a sentence
+    /// the policy layer composed, and what may be in one is that layer's question rather than
+    /// this one's.
+    pub fn describe(&self, named: &str) -> String {
         match self {
-            Self::Denied(d) => write!(f, "{d}"),
-            Self::Escapes { path } => write!(
-                f,
-                "'{path}' resolves outside the workspace; refusing to touch it"
-            ),
-            Self::Invalid { path, reason } => write!(f, "'{path}' is not usable: {reason}"),
-            Self::Io { path, detail } => write!(f, "'{path}': {detail}"),
-            Self::Stale { path } => write!(
-                f,
-                "'{path}' changed after it was read; read it again before editing"
-            ),
-            Self::Contended { path } => write!(
-                f,
-                "another write to '{path}' is still in progress, so nothing was written"
-            ),
-            Self::Binary { path } => {
-                write!(f, "'{path}' is a binary file, so it cannot be read as text")
+            Self::Denied(d) => d.to_string(),
+            Self::Escapes { .. } => {
+                format!("'{named}' resolves outside the workspace; refusing to touch it")
             }
-            Self::TooLarge { path, limit } => write!(
-                f,
-                "'{path}' is larger than the {} MiB an attachment may be",
+            Self::Invalid { reason, .. } => format!("'{named}' is not usable: {reason}"),
+            Self::Io { detail, .. } => format!("'{named}': {detail}"),
+            Self::Stale { .. } => {
+                format!("'{named}' changed after it was read; read it again before editing")
+            }
+            Self::Contended { .. } => {
+                format!("another write to '{named}' is still in progress, so nothing was written")
+            }
+            Self::Binary { .. } => {
+                format!("'{named}' is a binary file, so it cannot be read as text")
+            }
+            Self::TooLarge { limit, .. } => format!(
+                "'{named}' is larger than the {} MiB an attachment may be",
                 limit / (1024 * 1024)
             ),
-            Self::Pattern { detail } => write!(f, "the search pattern is not usable: {detail}"),
+            Self::Pattern { detail } => format!("the search pattern is not usable: {detail}"),
         }
+    }
+
+    /// The path this failure carries, which is the one the call was made on.
+    ///
+    /// Only [`fmt::Display`] reads it, and what [`fmt::Display`] writes is for a log, a trail or
+    /// a person: all three are entitled to the real path, and a trail saying a file could not be
+    /// read without saying which file would be the opposite problem. Every sentence the planner
+    /// reads is worded through [`WorkspaceError::describe`] instead, for the reason written
+    /// there.
+    fn carried_path(&self) -> &str {
+        match self {
+            Self::Denied(_) | Self::Pattern { .. } => "",
+            Self::Escapes { path }
+            | Self::Invalid { path, .. }
+            | Self::Io { path, .. }
+            | Self::Stale { path }
+            | Self::Contended { path }
+            | Self::Binary { path }
+            | Self::TooLarge { path, .. } => path,
+        }
+    }
+}
+
+impl fmt::Display for WorkspaceError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.describe(self.carried_path()))
     }
 }
 
