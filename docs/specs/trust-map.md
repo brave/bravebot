@@ -14,6 +14,14 @@ governs:
   - crates/cli/src/main.rs
   - crates/tui/src/app.rs
   - crates/ui-files/src/main.rs
+  - ui/src/main/opened.ts
+  - ui/src/main/recents.ts
+  - ui/src/main/files.ts
+  - ui/src/main/project-files.ts
+  - ui/src/main/bots.ts
+  - ui/src/main/memory.ts
+  - ui/src/main/index.ts
+  - ui/scripts/bot-directory.test.mjs
 guards:
   - symbol: TrustStore::trust
   - symbol: TrustStore::distrust
@@ -781,24 +789,60 @@ directory and no link is followed, so nothing can leave the tree. What is left i
 may be handed, which is this document's.
 
 <a id="TRUST-20"></a>
-### TRUST-20: a directory such a helper is pinned to is one a person opened, and the helper grants nothing
+### TRUST-20: a directory such a helper is pinned to is one a person opened
 
-The directory is an absolute path a person chose: the working directory a session was given, or the
-state directory. Never a path a model wrote, and never one that arrived from the surface drawing the
-files, which has only the directories it was already told about to name. A relative one is refused
-rather than resolved against anything, since there is no directory it could be relative to that a
-person named.
+The directory is one somebody chose: the working directory a session was given, or the state
+directory. Never a path a model wrote, and never one that arrived from the surface drawing the
+files, which has only the directories it was already told about to name. A surface names one by
+handing back a directory it was given, so what it may name is decided by what it has been given
+and never by the shape of the string it sends.
 
-Being handed such a directory grants nothing. It is not a rule in the map, so it neither trusts what
-is under it nor makes any of it reachable by a turn: bytes a person read or wrote this way have not
-been vouched for, and a turn asking for the same path is answered by whatever the map says about it.
-The map is where the question of what a *turn* may read is settled, and this road does not reach it.
+**Why a person's directory and not any absolute path.** Deciding that a path is well formed bounds
+nothing about which tree it names: a helper that resolved each component faithfully under a
+directory its caller chose freely would still read and write anywhere on the account. The grounds
+for reading these bytes are that somebody opened this place, so the place has to be one they
+opened. A surface passes that test by construction when every directory it can name came from a
+picker or from an answer it did not compose, and that is what the test is for.
 
-**Why a person's directory and not any absolute path.** Refusing a relative path bounds where the
-walk starts and says nothing about which tree it starts in, and a helper that resolved each component
-faithfully under a directory the caller chose freely would still read any file on the machine. The
-grounds for reading these bytes are that somebody opened this place, so the place has to be one they
-opened.
+**A list of what has been opened is not the authority.** Recording where somebody has been is a
+convenience, and a surface asking to open a directory adds to that record like anything else. So
+membership in it answers "has this been opened" and not "may this be opened", and a surface
+checking its own additions is checking nothing.
+
+**The state directory is admitted for what it is.** [TRUST-11](#TRUST-11) is that the map does not
+govern `~/.bravebot`, so a path under it has no rule to be answered by, and its standing comes from
+whose directory it is rather than from anything here. That is the same footing the rest of this
+system reads it on, and it is why pinning to it is not an exception to the paragraph above but an
+instance of it: it is the person's own directory.
+
+`verified-by: none`
+
+<a id="TRUST-21"></a>
+### TRUST-21: a directory the helper cannot pin itself to is refused rather than resolved
+
+A relative directory is refused rather than resolved against anything, since there is no directory
+it could be relative to that a person named. So is one reached through a link: the place a link
+leads to is not the place somebody opened, and following one would answer a question about a
+directory with bytes from another. The refusal is the whole answer: a directory this cannot pin
+itself to gets no walk, not a walk from somewhere else.
+
+**Why this is not the rule above.** These are the refusals a process can make reading its own
+request, and neither is about where the request came from. They are what makes "pinned to a
+directory" mean anything, the walk that keeps a read inside it being
+[layering.md](layering.md)'s. They are also why a caller cannot read them as having answered
+[TRUST-20](#TRUST-20), which asks about a directory those checks have nothing to say about.
+
+`verified-by: bravebot_ui_files::main::a_root_that_is_not_an_absolute_path_is_refused`
+`verified-by: bravebot_ui_files::main::a_symlink_replacing_the_root_or_leaf_is_refused`
+`verified-by: bravebot_ui_files::main::traversal_nonregular_binary_and_oversized_reads_are_bounded`
+
+<a id="TRUST-22"></a>
+### TRUST-22: being handed such a directory grants nothing
+
+It is not a rule in the map, so it neither trusts what is under it nor makes any of it reachable by
+a turn: bytes a person read or wrote this way have not been vouched for, and a turn asking for the
+same path is answered by whatever the map says about it. The map is where the question of what a
+*turn* may read is settled, and this road does not reach it.
 
 **Why the grant is nil.** The rules here are about what a turn may read, and the reason they are
 worth having is that a turn's context is what an attacker is trying to reach. Bytes on a person's
@@ -807,15 +851,6 @@ whole tree out of somebody looking at a file, which is the largest grant this do
 ([TRUST-9](#TRUST-9)) issued for the smallest gesture. Writing there is the same: what a person
 edited themselves is theirs, and a turn reading it later is a read like any other.
 
-**The state directory is admitted for what it is.** [TRUST-11](#TRUST-11) is that the map does not
-govern `~/.bravebot`, so a path under it has no rule to be answered by, and its standing comes from
-whose directory it is rather than from anything here. That is the same footing the rest of this
-system reads it on, and it is why pinning to it is not an exception to the paragraph above but an
-instance of it: it is the person's own directory.
-
-`verified-by: bravebot_ui_files::main::a_root_that_is_not_an_absolute_path_is_refused`
-`verified-by: bravebot_ui_files::main::a_symlink_replacing_the_root_or_leaf_is_refused`
-`verified-by: bravebot_ui_files::main::traversal_nonregular_binary_and_oversized_reads_are_bounded`
 `verified-by: by-construction (the helper is a process of its own that runs no command and speaks to no turn, so a byte it read reaches a screen and has no road into a turn's context: it holds no labelled value, mints no witness, and writes nothing the map is consulted about)`
 
 ## Known costs

@@ -9,8 +9,6 @@
 
 import { saveHooks } from './agent-settings'
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
-import { randomUUID } from 'node:crypto'
-import { newAvatarSeed } from '../shared/avatar'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Bridge, BridgeError } from './bridge'
@@ -25,6 +23,7 @@ import { isProjectPath } from '../shared/recents'
 import { forks, noteFork } from './forks'
 import {
   bot,
+  botFromForm,
   bots,
   ground,
   memory,
@@ -39,10 +38,11 @@ import {
   consolidationPrompt,
   AFTER_COMPACTION,
 } from './bots'
-import { isBotModel, isSlug, slugFor, withoutBot, type Bot } from '../shared/bots'
+import { isBotModel, withoutBot, type Bot } from '../shared/bots'
 import { isSessionId, parseForkResult } from '../shared/forks'
 import { rootForSession, forgetRoot, list, noteRoot, open as openInApp, preview, search, chooseAttachments, attachmentPaths } from './files'
 import { isSubpath } from '../shared/files'
+import { chooseDirectory } from './opened'
 import {
   parseExportRequest,
   suggestedFilename,
@@ -646,44 +646,11 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle('bravebot:bots:write', (_event, value: unknown) => {
-    if (typeof value !== 'object' || value === null) return null
-    const { slug, avatar, model, name, purpose, directory } = value as Record<string, unknown>
-    if (model !== undefined && !isBotModel(model)) return null
-    if (typeof name !== 'string' || typeof purpose !== 'string') return null
-    if (!name.trim() || !purpose.trim()) return null
-    if (!isProjectPath(directory)) return null
-    if (avatar !== undefined && (typeof avatar !== 'string' || !avatar.trim() || avatar.length > 128)) {
-      return null
-    }
-
-    // An existing bot keeps everything this channel cannot say — its id, its watermark, its seed,
-    // when it was made. A new one is given a slug composed here from the name, so the thing that
-    // becomes a path segment is never a string that arrived as one.
-    const held = isSlug(slug) ? bot(slug) : null
-    const next: Bot = held
-      ? { ...held, name, purpose, model: model === undefined ? held.model : model }
-      : {
-          slug: slugFor(name, new Set(bots().map((each) => each.slug))),
-          name,
-          purpose,
-          model: typeof model === 'string' ? model : null,
-          // Use the draft's preview seed so creation keeps the face already shown. Older
-          // callers may omit it; either way it is stored and survives a rename.
-          avatar: typeof avatar === 'string' ? avatar : newAvatarSeed(randomUUID()),
-          directory,
-          session: null,
-          conversations: [],
-          archived: 0,
-          // Nothing has been remembered and nothing has gone unremembered, so a new bot starts
-          // owing no nudge. See `noteBotMemory`, which takes its first reading when its first
-          // turn ends.
-          remembered: 0,
-          quiet: 0,
-          // In use, which is what a bot somebody just filled in a form for is.
-          retired: 0,
-          created: Date.now(),
-          updated: Date.now(),
-        }
+    // Composed in `bots.ts` and not here, because the folder a new bot is pinned to is the one
+    // field on this channel that decides where files land, and the check that it is a folder
+    // somebody opened belongs beside the code that writes there.
+    const next = botFromForm(value)
+    if (!next) return null
     saveBot(next)
     if (noteProject(next.directory)) rebuildMenu()
     return next
@@ -822,15 +789,11 @@ app.whenReady().then(() => {
 
   ipcMain.handle('bravebot:choose-directory', async () => {
     if (!window) return null
-    const result = await dialog.showOpenDialog(window, {
-      title: 'Open a project',
-      properties: ['openDirectory', 'createDirectory'],
-    })
-    if (result.canceled) return null
-    const directory = result.filePaths[0] ?? null
+    // The dialog itself is `opened.ts`'s, which remembers what it handed over: a folder a window
+    // may later name is one that came back from here.
+    const directory = await chooseDirectory(window)
     // Recorded here, where a real directory has just been chosen, rather than being taken
-    // from the renderer later. The recents list is the main process's own record; the
-    // renderer can read it and ask to open something on it, and cannot write to it.
+    // from the renderer later.
     if (directory && noteProject(directory)) rebuildMenu()
     return directory
   })
