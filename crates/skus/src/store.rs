@@ -39,6 +39,7 @@
 //! ready-made cookie value would mean replaying a spent credential on the second request.
 
 use crate::device::Registration;
+use std::path::Path;
 use std::path::PathBuf;
 
 /// The directory inside the user's home the file is kept in.
@@ -232,85 +233,173 @@ fn path_named(
     Ok(PathBuf::from(home).join(DIRECTORY).join(FILE))
 }
 
-/// Write the batch, replacing whatever was there.
+/// The claim taken while the store is read and written, so two of them cannot interleave.
+///
+/// Nothing bounds how many `bravebot` processes a person runs, and each opens a wallet of its own
+/// over the one credential file, so the file is the only place they can agree about which
+/// credential is gone. The claim is a file created with `create_new`, which is one atomic operation
+/// on every filesystem this runs on and needs nothing added to a crate that depends on nothing.
+///
+/// It holds no bytes. What it says, it says by existing, so the one file
+/// [PREM-7](../../../docs/specs/premium-credentials.md#PREM-7) keeps credentials in is still one.
+struct Claim {
+    path: PathBuf,
+}
+
+/// The claim's name, beside the credentials in the same directory.
+const CLAIM: &str = "leo-premium.lock";
+
+/// How old a claim has to be before it is taken to belong to a process that died holding it.
+///
+/// A hold is one small read and one small write, so nothing that is still running keeps it for a
+/// second, let alone this. Broken rather than waited on for ever, because nothing but the process
+/// that took it removes it: one killed while holding it would otherwise cost the person their
+/// subscription until they found the file and deleted it by hand.
+const ABANDONED_AFTER: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// How long to leave a claim that is not yet abandoned before looking again.
+const LOOK_AGAIN_IN: std::time::Duration = std::time::Duration::from_millis(10);
+
+/// When to stop trying, which only means anything for longer than [`ABANDONED_AFTER`]: a claim held
+/// past that is broken below, so reaching here means the break itself is not working and waiting on
+/// is no longer the answer.
+const GIVE_UP_AFTER: std::time::Duration = std::time::Duration::from_secs(15);
+
+impl Claim {
+    /// Take the exclusive claim on the store at `store`, waiting for whoever holds it.
+    fn take(store: &Path) -> Result<Self, StoreError> {
+        prepare_directory(store)?;
+        let path = store.with_file_name(CLAIM);
+        let waiting_since = std::time::Instant::now();
+        loop {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(_) => return Ok(Self { path }),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => {
+                    return Err(StoreError::Unusable {
+                        detail: format!("{}: {e}", path.display()),
+                    });
+                }
+            }
+            if waiting_since.elapsed() >= GIVE_UP_AFTER {
+                return Err(StoreError::Unusable {
+                    detail: format!(
+                        "{} is held by another bravebot and did not come free",
+                        path.display()
+                    ),
+                });
+            }
+            if abandoned(&path) {
+                let _ = std::fs::remove_file(&path);
+            }
+            std::thread::sleep(LOOK_AGAIN_IN);
+        }
+    }
+}
+
+/// Whether the claim at `path` is old enough to have been left behind by a process that died.
+///
+/// A modification time that cannot be read, or one in the future, is not old: a clock disagreeing
+/// with the one that wrote the file is a reason to wait rather than a reason to take it.
+fn abandoned(path: &Path) -> bool {
+    std::fs::metadata(path)
+        .and_then(|found| found.modified())
+        .ok()
+        .and_then(|written| written.elapsed().ok())
+        .is_some_and(|age| age >= ABANDONED_AFTER)
+}
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// Make the directory the credentials live in, reachable by this account and no other.
+///
+/// The state directory is made by whichever subsystem writes to it first, so one that made it at
+/// the umask would decide the mode for the prompt history and the session records too. Spelled out
+/// here rather than shared with the crates that have their own helper for it: this crate depends on
+/// nothing, and an auth-only crate is not worth a dependency for four lines.
+#[cfg(unix)]
+fn prepare_directory(path: &Path) -> Result<(), StoreError> {
+    use std::os::unix::fs::DirBuilderExt;
+    use std::os::unix::fs::PermissionsExt;
+
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(parent)
+        .map_err(|e| StoreError::Unusable {
+            detail: format!("{}: {e}", parent.display()),
+        })?;
+    // A link is stepped over rather than followed. `set_permissions` resolves one, and the name
+    // this was given says where the directory sits and nothing about where it leads: somebody who
+    // keeps their sessions on a synced volume and links `~/.bravebot` into place would otherwise
+    // have importing a subscription setting the mode of the volume's directory, which is outside
+    // anything this program was given.
+    let is_link =
+        std::fs::symlink_metadata(parent).is_ok_and(|found| found.file_type().is_symlink());
+    if !is_link {
+        let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+    }
+    Ok(())
+}
+
+/// Make the directory the credentials live in.
+///
+/// It is left with whatever the profile directory grants it, which is the cost
+/// [state-directory.md](../../../docs/specs/state-directory.md) records for a platform where the
+/// mode is not there to be set: what else is kept in there is decided by the crates that write it,
+/// not by this one. The file's own list does not depend on the directory's, which is why
+/// [`create_private`] protects it.
+#[cfg(not(unix))]
+fn prepare_directory(path: &Path) -> Result<(), StoreError> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    std::fs::create_dir_all(parent).map_err(|e| StoreError::Unusable {
+        detail: format!("{}: {e}", parent.display()),
+    })
+}
+
+/// Create `path`, empty, reachable by the account this process runs as and by no other.
 ///
 /// Created 0600 before anything is written to it, rather than written and then chmod'ed: the other
 /// order leaves the secret world-readable for the moment in between.
 #[cfg(unix)]
-pub fn save(credentials: &StoredCredentials) -> Result<(), StoreError> {
-    use std::io::Write;
-    use std::os::unix::fs::DirBuilderExt;
+fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
     use std::os::unix::fs::PermissionsExt;
 
-    let path = path()?;
-    let unusable = |detail: String| StoreError::Unusable { detail };
-
-    // Created reachable only by this user, and narrowed where it is already there. The state
-    // directory is made by whichever subsystem writes to it first, so one that made it at the
-    // umask would decide the mode for the prompt history and the session records too. Spelled out
-    // here rather than shared with the crates that have their own helper for it: this crate
-    // depends on nothing, and an auth-only crate is not worth a dependency for four lines.
-    if let Some(parent) = path.parent() {
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(parent)
-            .map_err(|e| unusable(format!("{}: {e}", parent.display())))?;
-        // A link is stepped over rather than followed. `set_permissions` resolves one, and the
-        // name this was given says where the directory sits and nothing about where it leads:
-        // somebody who keeps their sessions on a synced volume and links `~/.bravebot` into place
-        // would otherwise have importing a subscription setting the mode of the volume's
-        // directory, which is outside anything this program was given.
-        let is_link =
-            std::fs::symlink_metadata(parent).is_ok_and(|found| found.file_type().is_symlink());
-        if !is_link {
-            let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
-        }
-    }
-
-    let mut file = std::fs::OpenOptions::new()
+    let file = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
         .mode(0o600)
-        .open(&path)
-        .map_err(|e| unusable(format!("{}: {e}", path.display())))?;
+        .open(path)?;
     // The mode above is asked for as the file is created and says nothing about one already there,
-    // which a person may have restored from a backup or copied between machines. Narrowed after the
-    // open and before the write, so the truncated file is private before it holds a token again.
+    // which is what a temporary a killed write left behind is. Narrowed after the open and before
+    // the write, so the file is private before it holds a token.
     let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
-
-    file.write_all(encode(credentials).expose().as_bytes())
-        .map_err(|e| unusable(format!("{}: {e}", path.display())))
+    Ok(file)
 }
 
-/// Write the batch, replacing whatever was there.
+/// Create `path`, empty, reachable by the account this process runs as and by no other.
 ///
 /// Windows has no mode, so what says the same thing is an access-control list, and the list is asked
 /// for as the file is created rather than set afterwards: the other order leaves the secret readable
 /// by whatever the directory grants for the moment in between. [`dacl_granting_only`] is the list.
 #[cfg(windows)]
-pub fn save(credentials: &StoredCredentials) -> Result<(), StoreError> {
-    use std::io::Write;
-
-    let path = path()?;
-    let unusable = |detail: String| StoreError::Unusable { detail };
-
-    // The directory is left with whatever the profile directory grants it, which is the cost
-    // state-directory.md records for a platform where the mode is not there to be set: what else is
-    // kept in there is decided by the crates that write it, not by this one. The file's own list
-    // does not depend on the directory's, which is why it is protected below.
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| unusable(format!("{}: {e}", parent.display())))?;
-    }
-
-    let mut file = acl::create_granted_to_this_account_only(&path)
-        .map_err(|e| unusable(format!("{}: {e}", path.display())))?;
-
-    file.write_all(encode(credentials).expose().as_bytes())
-        .map_err(|e| unusable(format!("{}: {e}", path.display())))
+fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
+    acl::create_granted_to_this_account_only(path)
 }
 
 /// The access-control list the credential file is kept under, written as SDDL.
@@ -322,8 +411,8 @@ pub fn save(credentials: &StoredCredentials) -> Result<(), StoreError> {
 /// with no entry in a protected list is granted nothing.
 ///
 /// A string handed to the platform's parser rather than a list built entry by entry, so that what is
-/// granted is decided by something a test can call anywhere. Nothing else in this function can be
-/// exercised off Windows, and `make check-windows` compiles it without running it.
+/// granted is decided by something a test can call anywhere. Nothing else in [`create_private`] can
+/// be exercised off Windows, and `make check-windows` compiles it without running it.
 #[cfg(any(windows, test))]
 fn dacl_granting_only(account: &str) -> String {
     format!("D:P(A;;FA;;;{account})")
@@ -340,12 +429,51 @@ fn dacl_granting_only(account: &str) -> String {
 /// Reading stays available: an existing file is no less safe for being read, and a batch imported
 /// elsewhere should still work here.
 #[cfg(not(any(unix, windows)))]
-pub fn save(_credentials: &StoredCredentials) -> Result<(), StoreError> {
-    Err(StoreError::Unusable {
-        detail: "this platform has no way to restrict the file to your account, and the \
-                 credentials are a bearer token, so they were not written"
-            .to_string(),
+fn create_private(_path: &Path) -> std::io::Result<std::fs::File> {
+    Err(std::io::Error::other(
+        "this platform has no way to restrict the file to your account, and the credentials are a \
+         bearer token, so they were not written",
+    ))
+}
+
+/// Write the batch beside the file and rename it over, replacing whatever was there.
+///
+/// Opening the real path and truncating it is the shape that loses the batch: the window between
+/// the truncate and the write holds an empty file, which PREM-7 reports as unusable, and two
+/// writers landing in it at once interleave into the same. The batch is not recoverable from
+/// anywhere else, because the credentials were minted against the order and only this file holds
+/// them, so the cost of that window is a re-import. The session record and the prompt history are
+/// written beside and renamed for less than this.
+///
+/// The caller holds the [`Claim`], so the temporary is named per process only to keep what a
+/// crashed run left behind from being handed to the next one.
+fn write_at(destination: &Path, credentials: &StoredCredentials) -> Result<(), StoreError> {
+    use std::io::Write;
+
+    let unusable = |detail: String| StoreError::Unusable { detail };
+    let temporary = destination.with_file_name(format!("{FILE}.{}.tmp", std::process::id()));
+
+    let mut file = create_private(&temporary)
+        .map_err(|e| unusable(format!("{}: {e}", destination.display())))?;
+    file.write_all(encode(credentials).expose().as_bytes())
+        .map_err(|e| unusable(format!("{}: {e}", temporary.display())))?;
+    // Closed before the rename, which Windows refuses while a handle is still open on either name.
+    drop(file);
+
+    std::fs::rename(&temporary, destination).map_err(|e| {
+        let _ = std::fs::remove_file(&temporary);
+        unusable(format!("{}: {e}", destination.display()))
     })
+}
+
+/// Write the batch, replacing whatever was there.
+///
+/// Under the [`Claim`], so an import landing while a session is spending does not interleave with
+/// the spend's own read and write.
+pub fn save(credentials: &StoredCredentials) -> Result<(), StoreError> {
+    let path = path()?;
+    let _claim = Claim::take(&path)?;
+    write_at(&path, credentials)
 }
 
 /// The Win32 calls behind the Windows [`save`], the only unsafe in this crate outside the helper
@@ -386,13 +514,12 @@ mod acl {
         let descriptor = SecurityDescriptor::of(&super::dacl_granting_only(&current_account()?))?;
         let file = open(path, &descriptor)?;
         // The list asked for in the open is the list a file gets when the open creates it, and says
-        // nothing about one already there: a file copied in from another machine carries whatever the
-        // directory it landed in offers, an inheritable entry for `Users` included. So it is set again
-        // on the handle, before anything is written.
+        // nothing about one already there, which here is a temporary a killed write left behind
+        // carrying whatever the directory it was made in offers, an inheritable entry for `Users`
+        // included. So it is set again on the handle, before anything is written.
         descriptor.apply_to(&file)?;
-        // Emptied once the list is settled rather than by the open, so that a batch somebody copied
-        // here is merely unwritten and not destroyed if setting the list fails. Importing again is
-        // how a lost batch is replaced, and this is the platform that cannot import.
+        // Emptied once the list is settled rather than by the open, so that nothing is written into
+        // a file whose list this could not settle.
         file.set_len(0)?;
         Ok(file)
     }
@@ -604,19 +731,28 @@ pub fn load() -> Result<StoredCredentials, StoreError> {
     decode(raw.expose())
 }
 
-/// A batch held open for a session, spending from memory.
+/// A batch held open for a session, spending under an exclusive claim on the file.
 ///
-/// # Why this is not read and written per request
+/// # Why the file is the coordination point
 ///
-/// A credential is spent on *every* model request, and a batch is hundreds of them, so writing the
-/// whole file per spend would rewrite the same few hundred kilobytes several times a turn to change
-/// one boolean. The batch is read once, spent from memory, and the markers are written back when
-/// the session ends or when [`Wallet::flush`] is called.
+/// Nothing bounds how many `bravebot` processes a person runs, and each one opens a wallet of its
+/// own over the one credential file. A credential is single-use, so two wallets deciding from what
+/// each read when it started both hand out the first unspent credential they can see, which is the
+/// same one, and the second presents what the first is presenting right now. The only thing both
+/// can see is the file. So a spend is taken under an exclusive claim on it, over what it says at
+/// that moment, and written back before the credential leaves this wallet.
 ///
-/// The failure mode is losing spend markers if the process dies, which means a credential that was
-/// presented is still recorded as unspent. That is deliberately the direction to fail in: a batch
-/// is hundreds of credentials valid for days, so wasting a few is free, and the alternative
-/// (recording a spend that never happened) is what runs the batch down for no benefit.
+/// # What that costs
+///
+/// A credential is spent on every model request and a batch is hundreds of them, so this rewrites
+/// a few hundred kilobytes per request, beside a request that takes seconds. Holding the markers
+/// in memory instead saves that write and loses the guarantee twice over: across processes, and
+/// within one, since a process that dies has presented every credential it spent and recorded none
+/// of them.
+///
+/// What the write does cost is a credential per abandoned request: one recorded as spent and then
+/// not presented, because the process died between the two. A batch is hundreds valid for days, so
+/// wasting one is free, where offering one twice is the thing the clause forbids.
 pub struct Wallet {
     batch: StoredCredentials,
     /// Where a flush writes, or `None` for a detached batch that must never be written.
@@ -625,7 +761,11 @@ pub struct Wallet {
     /// wallet safe: there is no path to write to, so no code path, including [`Drop`], can reach the
     /// filesystem. A boolean would leave a real destination sitting there for a later edit to use.
     destination: Option<PathBuf>,
-    /// Whether anything has been spent since the last write.
+    /// Whether this wallet holds a batch the file has not seen.
+    ///
+    /// A spend writes itself, so what sets this and leaves it set is [`Wallet::refill`]: a freshly
+    /// minted batch that nothing has been spent from yet. It is also what tells [`Wallet::spend`]
+    /// not to read the file over the top of one.
     dirty: bool,
 }
 
@@ -654,8 +794,62 @@ impl Wallet {
         }
     }
 
-    /// Take the next credential usable at `now`, marking it spent in memory.
+    /// Take the next credential usable at `now`, recording the spend before it is handed out.
+    ///
+    /// Taken under the [`Claim`], from what the file says at that moment rather than from what this
+    /// wallet read when it opened, and written back before the credential is returned. That is what
+    /// holds PREM-5 between processes: a credential recorded as spent only in the memory of one
+    /// `bravebot` is one every other is about to offer.
+    ///
+    /// A detached batch has no file to agree over and must never write to one, so it spends from
+    /// memory alone.
     pub fn spend(&mut self, now: &str) -> Result<Spent, StoreError> {
+        let Some(destination) = self.destination.clone() else {
+            return self.take(now);
+        };
+
+        let _claim = Claim::take(&destination)?;
+        self.reconcile()?;
+        let spent = self.take(now)?;
+        write_at(&destination, &self.batch)?;
+        self.dirty = false;
+        Ok(spent)
+    }
+
+    /// Take up what the file says before spending from it, so another wallet's spends are seen.
+    ///
+    /// Called under the claim, so what it reads cannot change before the write that follows it.
+    fn reconcile(&mut self) -> Result<(), StoreError> {
+        // A wallet holding a batch the file has not seen is the newer of the two: `refill` puts a
+        // freshly minted one here because the stored batch had nothing left, and reading over it
+        // would spend the exhausted batch it replaced.
+        if self.dirty {
+            return Ok(());
+        }
+        // A read that fails leaves the batch in hand. The file is gone, or holds something this
+        // version cannot read, and there are no markers to learn from either way.
+        let Ok(stored) = load() else {
+            return Ok(());
+        };
+        // A batch imported for another deployment is one this endpoint refuses (PREM-8), and the
+        // check that let this session spend at all was made against the batch it opened. Writing
+        // this one back over it would cost the person the batch they have just imported, so the
+        // spend is refused and the file left alone.
+        if stored.environment != self.batch.environment {
+            return Err(StoreError::Unusable {
+                detail: format!(
+                    "the stored credentials have been replaced by a batch for {}, which this \
+                     session cannot spend",
+                    stored.environment.as_str()
+                ),
+            });
+        }
+        self.batch = stored;
+        Ok(())
+    }
+
+    /// Mark the next credential usable at `now` spent, in the batch in hand.
+    fn take(&mut self, now: &str) -> Result<Spent, StoreError> {
         let index = match self.batch.next_usable(now) {
             Some(index) => index,
             // Nothing usable is normal rather than exceptional: a batch covers a few daily windows
@@ -699,15 +893,20 @@ impl Wallet {
         self.dirty = true;
     }
 
-    /// Write the spent markers back, if any.
+    /// Write the batch back, if the file has not seen it.
     ///
-    /// A no-op when nothing was spent, so an idle session never writes at all, and a no-op for a
-    /// detached batch, which has nowhere to write.
+    /// A spend writes itself, so what is left for this is a refill. A no-op when there is nothing
+    /// unwritten, so an idle session never writes at all, and a no-op for a detached batch, which
+    /// has nowhere to write.
     pub fn flush(&mut self) -> Result<(), StoreError> {
-        if self.destination.is_none() || !self.dirty {
+        if !self.dirty {
             return Ok(());
         }
-        save(&self.batch)?;
+        let Some(destination) = self.destination.clone() else {
+            return Ok(());
+        };
+        let _claim = Claim::take(&destination)?;
+        write_at(&destination, &self.batch)?;
         self.dirty = false;
         Ok(())
     }
@@ -717,10 +916,12 @@ impl Wallet {
     }
 }
 
-/// Writes the spent markers back, so a session that ends normally does not replay credentials.
+/// Writes back a batch the file has not seen, which after a refill is one nothing has been spent
+/// from yet.
 ///
 /// Errors are dropped: this runs during teardown where there is nothing useful to do with one, and
-/// the consequence is only that some spent credentials look unspent next time.
+/// the consequence is a batch minted again on the next run rather than a credential offered twice,
+/// which a spend records as it makes it.
 impl Drop for Wallet {
     fn drop(&mut self) {
         let _ = self.flush();
@@ -750,9 +951,6 @@ pub fn clear() -> Result<(), StoreError> {
     }
 }
 
-/// Only [`save`] writes, and the target that has neither a mode nor an access-control list has a
-/// [`save`] that refuses, so there this is reachable from the tests alone.
-#[cfg(any(unix, windows, test))]
 fn encode(credentials: &StoredCredentials) -> crate::Secret {
     // The document is built inside a guard and the text it serialises to is a secret of its own:
     // both hold every token in the batch, and the file the caller writes is the only copy meant to
@@ -989,22 +1187,6 @@ mod tests {
         }
     }
 
-    /// The reason Wallet exists: spending must not write, because a credential is spent per model
-    /// request and each write rewrites the whole batch.
-    ///
-    /// Asserted through the dirty flag, which is what decides whether a write happens at all.
-    #[test]
-    fn spending_does_not_write_until_asked_to() {
-        let mut wallet = Wallet::detached(batch());
-        assert!(!wallet.dirty, "a freshly opened batch has nothing to write");
-
-        wallet
-            .spend("2026-08-22T12:00:00")
-            .expect("a usable credential");
-        assert!(wallet.dirty, "a spend must be recorded for the next flush");
-        assert_eq!(wallet.remaining(), 1);
-    }
-
     /// A session that spends nothing must never write, so opening the agent and not using premium
     /// leaves the stored batch untouched.
     ///
@@ -1040,33 +1222,335 @@ mod tests {
         });
     }
 
-    /// A spend reaches the file when the wallet is flushed and not before, which is the whole reason
-    /// the batch is held open: one credential is spent per model request, and writing per spend
-    /// would rewrite hundreds of credentials to change one boolean.
+    /// A spend reaches the file before the credential leaves the wallet, so anything else reading
+    /// the file reads it as gone rather than offering it again.
     #[test]
-    fn a_spend_is_written_back_only_on_a_flush() {
-        with_temp_home("flush", || {
+    fn a_spend_is_written_back_as_it_is_made() {
+        with_temp_home("write-through", || {
             save(&batch()).expect("a write");
-            let path = path().expect("a path");
-            let written = std::fs::read_to_string(&path).expect("a read");
 
             let mut wallet = Wallet::open().expect("the batch just written");
             wallet
                 .spend("2026-08-22T12:00:00")
                 .expect("a usable credential");
-            assert_eq!(
-                std::fs::read_to_string(&path).expect("a read"),
-                written,
-                "spending alone must not touch the file"
-            );
 
-            wallet.flush().expect("the write back");
             let stored = load().expect("a read");
             assert!(
                 stored.credentials[0].spent,
-                "the flush must record which credential was spent"
+                "the credential was presented with the file still calling it unspent"
             );
             assert_eq!(stored.remaining(), 1);
+        });
+    }
+
+    /// A freshly minted batch is written even though nothing has been spent from it: losing it
+    /// would mint another on the next run for no reason.
+    #[test]
+    fn a_refilled_batch_is_written_back() {
+        with_temp_home("refilled", || {
+            save(&batch()).expect("a write");
+            let mut minted = batch();
+            minted.credentials[0].unblinded = crate::Secret::new("token-three");
+
+            {
+                let mut wallet = Wallet::open().expect("the batch just written");
+                wallet.refill(minted);
+            }
+            // Dropped here, having spent nothing out of the new batch.
+
+            assert_eq!(
+                load().expect("a read").credentials[0].unblinded.expose(),
+                "token-three",
+                "the minted batch was left for the next run to mint again"
+            );
+        });
+    }
+
+    /// A spend after a refill comes out of the batch the refill put here.
+    ///
+    /// A refill happens because the stored batch had nothing left to spend, so reading the file
+    /// before the next spend would find that batch again and refuse.
+    #[test]
+    fn a_spend_after_a_refill_comes_out_of_the_new_batch() {
+        with_temp_home("after-refill", || {
+            let mut nothing_left = batch();
+            for credential in &mut nothing_left.credentials {
+                credential.spent = true;
+            }
+            save(&nothing_left).expect("a write");
+
+            let mut wallet = Wallet::open().expect("the batch just written");
+            assert!(matches!(
+                wallet.spend("2026-08-22T12:00:00"),
+                Err(StoreError::Exhausted)
+            ));
+
+            let mut minted = batch();
+            minted.credentials[0].unblinded = crate::Secret::new("token-three");
+            wallet.refill(minted);
+
+            let taken = wallet
+                .spend("2026-08-22T12:00:00")
+                .expect("the batch the refill put here");
+            assert_eq!(taken.credential.unblinded.expose(), "token-three");
+        });
+    }
+
+    /// Two wallets over one file are never offered the same credential.
+    ///
+    /// A second `bravebot` process is a second wallet over the same batch, and nothing bounds how
+    /// many of them a person runs. A credential is single-use, so the second presenting what the
+    /// first is presenting right now is the outcome PREM-5 forbids.
+    #[test]
+    fn two_wallets_over_one_file_are_never_offered_the_same_credential() {
+        with_temp_home("two-wallets", || {
+            let mut batch = batch();
+            // Both windows cover the same moment, so the only thing separating the two credentials
+            // is the spent mark.
+            batch.credentials[1].valid_from = batch.credentials[0].valid_from.clone();
+            batch.credentials[1].valid_to = batch.credentials[0].valid_to.clone();
+            save(&batch).expect("a write");
+
+            // Opened together, as two processes started together are, so neither has seen the
+            // other's spend at the moment it read the file.
+            let mut first = Wallet::open().expect("the batch just written");
+            let mut second = Wallet::open().expect("the same batch again");
+
+            let one = first.spend("2026-08-22T12:00:00").expect("the first spend");
+            let other = second
+                .spend("2026-08-22T12:00:00")
+                .expect("the second spend");
+
+            assert_ne!(
+                one.credential.unblinded.expose(),
+                other.credential.unblinded.expose(),
+                "a credential one wallet had already presented was offered to another"
+            );
+        });
+    }
+
+    /// Neither of two wallets over one file erases the other's spend markers.
+    ///
+    /// A credential presented and then recorded as unspent is offered again in a later run, which
+    /// is the same failure one run later. A write of this wallet's whole view produces it from an
+    /// ordinary ordering, with no interleaving at all.
+    #[test]
+    fn neither_of_two_wallets_erases_the_others_spend_markers() {
+        with_temp_home("two-writers", || {
+            let mut batch = batch();
+            batch.credentials[1].valid_from = batch.credentials[0].valid_from.clone();
+            batch.credentials[1].valid_to = batch.credentials[0].valid_to.clone();
+            save(&batch).expect("a write");
+
+            {
+                let mut first = Wallet::open().expect("the batch just written");
+                let mut second = Wallet::open().expect("the same batch again");
+                first.spend("2026-08-22T12:00:00").expect("the first spend");
+                second
+                    .spend("2026-08-22T12:00:00")
+                    .expect("the second spend");
+            }
+            // Both dropped by here, so whichever writes last has had its chance to undo the other.
+
+            assert_eq!(
+                load().expect("a read").remaining(),
+                0,
+                "a credential that was presented is recorded as unspent and will be offered again"
+            );
+        });
+    }
+
+    /// Wallets spending at the same moment are never handed the same credential.
+    ///
+    /// The pair above spend in turn, which needs only the read before the write. What needs them
+    /// to exclude each other is two of them inside that read and write together, where both find
+    /// the same unspent credential before either has written.
+    #[test]
+    fn wallets_spending_at_the_same_moment_hand_out_different_credentials() {
+        const WALLETS: usize = 4;
+        const EACH: usize = 4;
+
+        with_temp_home("at-once", || {
+            let mut batch = batch();
+            batch.credentials = (0..WALLETS * EACH)
+                .map(|n| Credential {
+                    unblinded: crate::Secret::new(format!("token-{n}")),
+                    valid_from: "2026-08-22T00:00:00".to_string(),
+                    valid_to: "2026-08-23T00:00:00".to_string(),
+                    spent: false,
+                    rfc: true,
+                })
+                .collect();
+            save(&batch).expect("a write");
+
+            let taken: Vec<String> = std::thread::scope(|scope| {
+                let spending: Vec<_> = (0..WALLETS)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            let mut wallet = Wallet::open().expect("the batch just written");
+                            (0..EACH)
+                                .map(|_| {
+                                    wallet
+                                        .spend("2026-08-22T12:00:00")
+                                        .expect("a usable credential")
+                                        .credential
+                                        .unblinded
+                                        .expose()
+                                        .to_string()
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                    })
+                    .collect();
+                spending
+                    .into_iter()
+                    .flat_map(|wallet| wallet.join().expect("a wallet"))
+                    .collect()
+            });
+
+            let distinct: std::collections::BTreeSet<&String> = taken.iter().collect();
+            assert_eq!(
+                distinct.len(),
+                taken.len(),
+                "a credential was handed to two wallets spending at once: {taken:?}"
+            );
+        });
+    }
+
+    /// A batch imported for another deployment while a session is spending is neither spent nor
+    /// written over.
+    ///
+    /// The check that let this session spend at all was made against the batch it opened (PREM-8),
+    /// and what is on the file now would be refused by the endpoint this session talks to. Writing
+    /// the old batch back over it would cost the person the one they have just imported.
+    #[test]
+    fn a_batch_imported_for_another_environment_mid_session_is_not_spent() {
+        with_temp_home("swapped", || {
+            save(&batch()).expect("a write");
+            let mut wallet = Wallet::open().expect("the batch just written");
+
+            let mut elsewhere = batch();
+            elsewhere.environment = crate::Environment::Staging;
+            elsewhere.credentials[0].unblinded = crate::Secret::new("token-staging");
+            save(&elsewhere).expect("a second write");
+
+            assert!(matches!(
+                wallet.spend("2026-08-22T12:00:00"),
+                Err(StoreError::Unusable { .. })
+            ));
+            assert_eq!(
+                load().expect("a read").credentials[0].unblinded.expose(),
+                "token-staging",
+                "the batch that had just been imported was written over"
+            );
+        });
+    }
+
+    /// The file is replaced rather than opened and truncated, so a write killed partway leaves the
+    /// last good batch rather than an empty file.
+    ///
+    /// An empty file is what PREM-7 reports as unusable, and the batch is recoverable from nowhere
+    /// else: the credentials were minted against the order and only this file holds them, so the
+    /// cost of that window is a re-import. What a test can see of "replaced" is the inode, which
+    /// changes when a rename puts a different file at the name and does not when the file at it is
+    /// opened and emptied.
+    #[cfg(unix)]
+    #[test]
+    fn a_write_replaces_the_file_rather_than_truncating_it() {
+        use std::os::unix::fs::MetadataExt;
+
+        with_temp_home("replaced", || {
+            save(&batch()).expect("a write");
+            let path = path().expect("a path");
+            let before = std::fs::metadata(&path).expect("a stat").ino();
+
+            save(&batch()).expect("a second write");
+
+            assert_ne!(
+                before,
+                std::fs::metadata(&path).expect("a stat").ino(),
+                "the batch was written into the file that held it, so a write killed partway \
+                 leaves nothing to read"
+            );
+        });
+    }
+
+    /// A write leaves nothing beside the credentials: no temporary and no claim.
+    ///
+    /// The temporary holds every token in the batch, and a claim left behind is what a later run
+    /// waits on.
+    #[test]
+    fn a_write_leaves_neither_a_temporary_nor_a_claim_behind() {
+        with_temp_home("leftovers", || {
+            save(&batch()).expect("a write");
+
+            let path = path().expect("a path");
+            let mut left: Vec<String> = std::fs::read_dir(path.parent().expect("a directory"))
+                .expect("a listing")
+                .map(|entry| {
+                    entry
+                        .expect("an entry")
+                        .file_name()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect();
+            left.sort();
+
+            assert_eq!(left, [FILE]);
+        });
+    }
+
+    /// A claim a process died holding does not cost the person their subscription.
+    ///
+    /// Nothing removes a claim but the process that took it, so one killed while holding it leaves
+    /// the file there for ever. Waiting on that would leave every later run unable to spend, with
+    /// nothing on screen naming the file to delete.
+    #[test]
+    fn a_claim_left_by_a_dead_process_is_broken_rather_than_waited_on() {
+        with_temp_home("dead-claim", || {
+            save(&batch()).expect("a write");
+            let claim = path().expect("a path").with_file_name(CLAIM);
+            std::fs::File::create(&claim)
+                .expect("a claim")
+                .set_modified(std::time::SystemTime::now() - ABANDONED_AFTER * 2)
+                .expect("a claim as old as a dead process leaves");
+
+            let mut wallet = Wallet::open().expect("the batch just written");
+            wallet
+                .spend("2026-08-22T12:00:00")
+                .expect("a usable credential");
+
+            assert!(load().expect("a read").credentials[0].spent);
+        });
+    }
+
+    /// A claim taken a moment ago is waited for rather than taken.
+    ///
+    /// Breaking an abandoned claim is what keeps a crash from being permanent, and an age it
+    /// applied to a live holder would put two wallets back inside the file together, which is what
+    /// the claim exists to prevent.
+    #[test]
+    fn a_claim_taken_a_moment_ago_is_not_treated_as_abandoned() {
+        with_temp_home("live-claim", || {
+            let path = path().expect("a path");
+            prepare_directory(&path).expect("the directory");
+            let claim = path.with_file_name(CLAIM);
+            std::fs::File::create(&claim).expect("a claim");
+
+            assert!(!abandoned(&claim), "a claim taken now is somebody's");
+
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&claim)
+                .expect("the claim")
+                .set_modified(std::time::SystemTime::now() - ABANDONED_AFTER)
+                .expect("an aged claim");
+
+            assert!(
+                abandoned(&claim),
+                "a claim this old belongs to a process that died holding it"
+            );
         });
     }
 
@@ -1239,8 +1723,8 @@ mod tests {
     }
 
     /// A mode asked for at creation says nothing about a file already on disk, and this one may be
-    /// there from a backup or copied between machines. It holds a bearer token, so importing over
-    /// it has to narrow it rather than keep the mode it was found with.
+    /// there from a backup or copied between machines. It holds a bearer token, so what importing
+    /// leaves at the name must not be reachable by anything the file it replaced was.
     #[cfg(unix)]
     #[test]
     fn a_file_left_readable_by_something_else_is_narrowed() {
