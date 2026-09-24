@@ -53,6 +53,10 @@ applied unseen.
 `verified-by: bravebot_agent::turn::a_refused_write_does_not_happen`
 `verified-by: bravebot_agent::turn::a_refused_overwrite_leaves_the_original`
 `verified-by: bravebot_agent::turn::an_approved_write_cannot_escape_the_workspace`
+`verified-by: bravebot_agent::turn::an_approved_write_does_not_authorise_a_write_somewhere_else`
+`verified-by: bravebot_core::policy::an_unendorsed_destination_is_refused`
+`verified-by: bravebot_core::policy::an_endorsement_does_not_outlive_the_destination_it_authorised`
+`verified-by: bravebot_core::policy::an_endorsement_does_not_authorise_a_different_destination`
 
 <a id="WRITE-4"></a>
 ### WRITE-4: a write through a reference is always shown
