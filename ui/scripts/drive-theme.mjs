@@ -161,7 +161,7 @@ check(
   'brave is the first row',
 )
 
-await page.locator('.theme-list').focus()
+await page.getByRole('combobox', { name: 'Search themes', exact: true }).focus()
 await page.keyboard.press('ArrowDown')
 await page.waitForTimeout(250)
 const previewed = await token(page, '--bg')
@@ -194,7 +194,7 @@ await app.evaluate(({ BrowserWindow }) => {
   BrowserWindow.getAllWindows()[0].webContents.send('bravebot:command', 'view.theme', null)
 })
 await page.waitForTimeout(400)
-await page.locator('.theme-list').focus()
+await page.getByRole('combobox', { name: 'Search themes', exact: true }).focus()
 for (let i = 0; i < rows; i++) {
   const name = await page.locator('.theme-row.active .theme-name').textContent()
   if (name === 'nord') break

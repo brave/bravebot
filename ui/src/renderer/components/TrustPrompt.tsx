@@ -1,5 +1,13 @@
-import { Modal } from './Modal'
-import { Button } from './ui/button'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from './ui/alert-dialog'
 interface Props {
   directory: string
   onAnswer: (trusted: boolean) => void
@@ -14,8 +22,12 @@ interface Props {
  */
 export function TrustPrompt({ directory, onAnswer }: Props): React.JSX.Element {
   return (
-    <Modal title="Project trust" className="trust">
-        <h2 id="trust-title">Do you trust this directory?</h2>
+    <AlertDialog open>
+      <AlertDialogContent className="modal trust" overlayClassName="scrim">
+        <AlertDialogHeader>
+          <AlertDialogTitle id="trust-title">Do you trust this directory?</AlertDialogTitle>
+          <AlertDialogDescription>Choose how Brave Bot may handle files in this project.</AlertDialogDescription>
+        </AlertDialogHeader>
         <code className="path">{directory}</code>
         <p>
           <strong>Trust it</strong> and files here are read normally, so ordinary work
@@ -29,14 +41,15 @@ export function TrustPrompt({ directory, onAnswer }: Props): React.JSX.Element {
         <p className="aside">
           Trusted writes may apply directly. Changes involving untrusted content require review. Your trust choice is saved with this conversation.
         </p>
-        <div className="trust-actions">
-          <Button variant="outline" className="decline" onClick={() => onAnswer(false)}>
+        <AlertDialogFooter className="trust-actions">
+          <AlertDialogCancel className="decline" onClick={() => onAnswer(false)}>
             Don't trust
-          </Button>
-          <Button className="approve" onClick={() => onAnswer(true)}>
+          </AlertDialogCancel>
+          <AlertDialogAction className="approve" onClick={() => onAnswer(true)}>
             Trust this directory
-          </Button>
-        </div>
-    </Modal>
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   )
 }

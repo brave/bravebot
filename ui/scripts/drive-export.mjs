@@ -139,12 +139,13 @@ if (count === 0) {
     'announced as a checkbox that is off',
   )
 
-  // The one behaviour a bottom-of-window menu depends on, and nothing else covers it.
-  const anchorBox = await button.boundingBox()
+  // Radix chooses the side with room and keeps the menu inside the viewport.
   const menuBox = await menu.boundingBox()
+  const viewport = page.viewportSize()
   check(
-    menuBox && anchorBox && menuBox.y + menuBox.height <= anchorBox.y + 1,
-    'the menu flips above the button rather than off the bottom of the window',
+    menuBox && viewport && menuBox.x >= 0 && menuBox.y >= 0 &&
+      menuBox.x + menuBox.width <= viewport.width && menuBox.y + menuBox.height <= viewport.height,
+    'the menu remains inside the viewport',
   )
 
   await page.screenshot({ path: join(OUT, '15-export-menu.png') })

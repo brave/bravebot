@@ -35,6 +35,10 @@ import { useExperience, conversationPreferences, setConversation, experienceErro
 import { ThemePicker } from './components/ThemePicker'
 import { applyTheme, watchAppearance } from './theme'
 import { BRAVE, BRAVE_THEME, BUILTINS, findTheme, type Theme } from '../shared/theme'
+import { Badge } from './components/ui/badge'
+import { Button } from './components/ui/button'
+import { Item, ItemGroup } from './components/ui/item'
+import { Spinner } from './components/ui/spinner'
 
 /** What the app is doing, which decides most of what the interface offers. */
 interface Live {
@@ -1288,13 +1292,26 @@ export function App(): React.JSX.Element {
       <Context live={live} onClose={() => toggle('right')} audit={selectedAudit ?
         <AuditInspector key={`${selectedAudit.handle}:${selectedAudit.turn}`} details={selectedAudit.turn === null ? undefined : live?.turns[selectedAudit.turn]} onClose={closeAudit} /> : null} />
       {[...openedLives.current.values()].some((item) => item.handle !== live?.handle && item.running) && (
-        <div className="background-tasks" aria-label="Background tasks">
-          {[...openedLives.current.values()].filter((item) => item.handle !== live?.handle && item.running).map((item) => (
-            <button key={item.handle} onClick={() => setLive(item)}>
-              {t.outstanding(item.entries) ? t.outstanding(item.entries)?.kind === 'ask' ? 'Answer needed' : 'Approval needed' : 'Working'} · {item.summary.title}
-            </button>
-          ))}
-        </div>
+        <ItemGroup className="background-tasks" aria-label="Background tasks">
+          {[...openedLives.current.values()].filter((item) => item.handle !== live?.handle && item.running).map((item) => {
+            const outstanding = t.outstanding(item.entries)
+            const status = outstanding ? outstanding.kind === 'ask' ? 'Answer needed' : 'Approval needed' : 'Working'
+            return (
+              <Item key={item.handle} role="listitem" size="sm" className="p-0">
+                <Button
+                  variant="outline"
+                  className="w-full min-w-0 justify-start"
+                  aria-label={`${status}: ${item.summary.title}`}
+                  onClick={() => setLive(item)}
+                >
+                  <Spinner aria-hidden="true" />
+                  <Badge variant={outstanding ? 'secondary' : 'outline'}>{status}</Badge>
+                  <span className="min-w-0 truncate">{item.summary.title}</span>
+                </Button>
+              </Item>
+            )
+          })}
+        </ItemGroup>
       )}
       {aboutInfo && <About info={aboutInfo} onClose={() => setAboutInfo(null)} />}
       {notice && (

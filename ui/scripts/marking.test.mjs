@@ -185,7 +185,7 @@ const CARDS = {
     why: 'the planner’s questions, which are its words rather than content it read',
   },
   quarantined: { entry: () => confined([FORGED_CHROME, 'api_key = hunter2']), marks: '<pre class="preview">' },
-  confirm: { entry: () => t.asked(UNTRUSTED_WRITE), marks: 'class="confirm untrusted"' },
+  confirm: { entry: () => t.asked(UNTRUSTED_WRITE), marks: 'confirm untrusted' },
   output: {
     entry: () => t.askedOutput({ request: 1, command: 'cat notes.md', reference: 'output-1', lines: 1, output: FORGED_CHROME, summary: 'one line' }),
     marks: '<pre class="preview">',
@@ -354,7 +354,7 @@ test('a link is drawn as one only where its parsed scheme is openable', () => {
     assert.ok(!drawn.includes('href='), `${href} reached an href:\n${drawn}`)
   }
   const inside = draw(t.replied('[click here](./src/notes.md)', 1))
-  assert.match(inside, /class="local-file-link"/)
+  assert.match(inside, /class="[^"]*local-file-link[^"]*"/)
   assert.ok(!inside.includes('href='), inside)
 
   // The three that are openable, so the test is not passed by refusing every link. Following one
@@ -396,12 +396,12 @@ test('an untrusted write is marked on its container, and its remark cannot forge
   const request = UNTRUSTED_WRITE
   const drawn = draw(t.asked(request))
 
-  assert.match(drawn, /class="confirm untrusted"/)
+  assert.match(drawn, /confirm untrusted/)
   assert.equal(occurrences(drawn, 'class="quarantine-head"'), 0, drawn)
-  assert.equal(occurrences(drawn, 'class="confirm untrusted"'), 1, drawn)
+  assert.equal(occurrences(drawn, 'confirm untrusted'), 1, drawn)
   assert.match(drawn, /&lt;div class=&quot;quarantine-head&quot;&gt;/)
   // The same bytes arrive twice, in the remark and in the diff, and neither is an element.
-  assert.equal(occurrences(drawn, 'class="processor-remark"'), 1, drawn)
+  assert.equal(occurrences(drawn, 'processor-remark'), 1, drawn)
   assert.match(drawn, /<strong>[^<]*untrusted<\/strong>/)
   for (const attribute of FETCHING) assert.ok(!drawn.includes(attribute), drawn)
 

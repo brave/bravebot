@@ -1,11 +1,16 @@
 import { FilePreview } from './FilePreview'
 import type { FileSearch } from '../../shared/files'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Fold } from './Fold'
 import { FileGlyph } from './FileGlyph'
 import { type FileRow, type Listing, isSubpath, under } from '../../shared/files'
+import { Alert, AlertDescription } from './ui/alert'
 import { Button } from './ui/button'
-import { Input } from './ui/input'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
+import { Empty, EmptyDescription } from './ui/empty'
+import { InputGroup, InputGroupButton, InputGroupInput } from './ui/input-group'
+import { Item, ItemGroup } from './ui/item'
+import { Spinner } from './ui/spinner'
+import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
 
 /**
  * The folder the session is working in.
@@ -148,6 +153,7 @@ export function FileTree({
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean)
 
   return (
+    <Collapsible open={searchOpen} onOpenChange={(next) => next ? setSearchOpen(true) : closeSearch()} asChild>
     <div className="tree">
       <div className="tree-tools">
         {/* The whole path, because the panel head says only "Files" and two sessions in sibling
@@ -156,37 +162,41 @@ export function FileTree({
         <code className="tree-root" title={root}>
           {root}
         </code>
-        <Button variant="ghost" size="icon-sm" ref={searchButton} className={`tree-tool ${searchOpen ? 'on' : ''}`}
-          title="Search files" aria-label="Search files" aria-expanded={searchOpen}
-          onClick={() => searchOpen ? closeSearch() : setSearchOpen(true)}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 5 5" /></svg>
-        </Button>
+        <Tooltip><TooltipTrigger asChild><CollapsibleTrigger asChild>
+          <Button variant="ghost" size="icon-sm" ref={searchButton} className={`tree-tool ${searchOpen ? 'on' : ''}`}
+            aria-label="Search files">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 5 5" /></svg>
+          </Button>
+        </CollapsibleTrigger></TooltipTrigger><TooltipContent>Search files</TooltipContent></Tooltip>
         {/* Labelled with the thing it is about rather than with an eye or a dot: `.*` is what a
             dotfile looks like, and it is legible at 10px where a pictogram is not. */}
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className={`tree-tool dotfiles ${hidden ? 'on' : ''}`}
-          aria-pressed={hidden}
-          title={hidden ? 'Hide dotfiles' : 'Show dotfiles'}
-          onClick={() => setHidden(!hidden)}
-        >
-          .*
-        </Button>
-        <Button variant="ghost" size="icon-sm" className="tree-tool" title="Read the folder again" onClick={() => void refresh()}>
-          ↻
-        </Button>
+        <Tooltip><TooltipTrigger asChild><Button
+            variant="ghost"
+            size="icon-sm"
+            className={`tree-tool dotfiles ${hidden ? 'on' : ''}`}
+            aria-label={hidden ? 'Hide dotfiles' : 'Show dotfiles'}
+            aria-pressed={hidden}
+            onClick={() => setHidden(!hidden)}
+          >
+            .*
+          </Button></TooltipTrigger><TooltipContent>{hidden ? 'Hide dotfiles' : 'Show dotfiles'}</TooltipContent></Tooltip>
+        <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon-sm" className="tree-tool" aria-label="Read the folder again" onClick={() => void refresh()}>
+            ↻
+          </Button></TooltipTrigger><TooltipContent>Read the folder again</TooltipContent></Tooltip>
       </div>
 
-      {searchOpen && <div className="tree-search">
-        <Input autoFocus type="search" className="tree-find" value={query}
-          placeholder="Search project filenames…" aria-label="Search project files by name"
-          onChange={event => setQuery(event.target.value)}
-          onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); closeSearch() } }} />
-        <Button variant="ghost" size="icon-sm" className="tree-tool" aria-label="Close file search" onClick={closeSearch}>×</Button>
-      </div>}
+      <CollapsibleContent className="tree-search">
+        <InputGroup className="h-auto border-0 bg-transparent shadow-none dark:bg-transparent">
+          <InputGroupInput autoFocus type="search" className="tree-find" value={query}
+            placeholder="Search project filenames…" aria-label="Search project files by name"
+            onChange={event => setQuery(event.target.value)}
+            onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); closeSearch() } }} />
+          <Tooltip><TooltipTrigger asChild><InputGroupButton size="icon-sm" className="tree-tool" aria-label="Close file search" onClick={closeSearch}>×</InputGroupButton></TooltipTrigger>
+            <TooltipContent>Close file search</TooltipContent></Tooltip>
+        </InputGroup>
+      </CollapsibleContent>
 
-      {problem && <p className="tree-problem">{problem}</p>}
+      {problem && <Alert variant="destructive" className="tree-problem block p-2"><AlertDescription className="block text-inherit">{problem}</AlertDescription></Alert>}
 
       {/* The rows sit in a well of their own rather than straight on the column. Everything else
           in this panel is a short list of names the session mentioned; this is a folder somebody
@@ -195,14 +205,14 @@ export function FileTree({
           with forty things in its root would otherwise push the column's own scrollbar down and
           take the header with it. */}
       <div className="tree-body">
-        {terms.length > 0 ? <div className="file-search-results">
-          {searching && <p role="status">Searching project…</p>}
-          {!searching && results?.paths.length === 0 && <p>No matching files.</p>}
-          {results?.paths.map((path) => <Button variant="ghost" key={path} onClick={() => setPreviewPath(path)} title={path}>{path}</Button>)}
+        {terms.length > 0 ? <ItemGroup className="file-search-results">
+          {searching && <p role="status"><Spinner role="presentation" aria-hidden="true" /> Searching project…</p>}
+          {!searching && results?.paths.length === 0 && <TreeEmpty>No matching files.</TreeEmpty>}
+          {results?.paths.map((path) => <Item asChild key={path}><Button variant="ghost" onClick={() => setPreviewPath(path)} title={path}>{path}</Button></Item>)}
           <p className="tree-note">Search skips .git, node_modules, target and dist. Symbolic-link directories are not followed.</p>
-          {results?.incomplete && <p role="status">Results are limited or some folders could not be read. Narrow the search.</p>}
-        </div> : rootListing === undefined ? (
-          <p className="none">{unreadable.has('') ? 'That folder cannot be read.' : 'Reading…'}</p>
+          {results?.incomplete && <Alert className="block p-2"><AlertDescription>Results are limited or some folders could not be read. Narrow the search.</AlertDescription></Alert>}
+        </ItemGroup> : rootListing === undefined ? (
+          unreadable.has('') ? <TreeEmpty>That folder cannot be read.</TreeEmpty> : <p className="none" role="status"><Spinner role="presentation" aria-hidden="true" /> Reading…</p>
         ) : (
           <Rows
             path=""
@@ -221,7 +231,14 @@ export function FileTree({
       </div>
       {previewPath && <FilePreview session={session} path={previewPath} onClose={() => setPreviewPath(null)} />}
     </div>
+    </Collapsible>
   )
+}
+
+function TreeEmpty({ children }: { children: React.ReactNode }): React.JSX.Element {
+  return <Empty className="none min-h-0 flex-none items-start gap-0 border-0 p-0 text-left">
+    <EmptyDescription className="text-left text-inherit">{children}</EmptyDescription>
+  </Empty>
 }
 
 /** How many rows one directory has, once the toggle has had its say. */
@@ -262,10 +279,8 @@ function holds(
  * One directory's rows, and recursively the open ones below them.
  *
  * `role="tree"` at the top and `role="group"` under each open directory, so this reads out as one
- * tree rather than as a stack of unrelated lists. The children of an open directory sit inside a
- * `Fold`, which is what the panels, the session groups and the transcript's runs of tool calls all
- * use — a fourth kind of fold in this window that moved differently would read as a different
- * idea.
+ * tree rather than as a stack of unrelated lists. Each directory keeps those roles while using a
+ * complete `Collapsible` composition for its trigger and content.
  */
 function Rows({
   path,
@@ -307,13 +322,13 @@ function Rows({
 
   if (rows.length === 0) {
     return (
-      <p className="none">
+      <TreeEmpty>
         {terms.length > 0
           ? 'Nothing read so far matches.'
           : listing.rows.length === 0
             ? 'This folder is empty.'
             : 'Everything here is hidden.'}
-      </p>
+      </TreeEmpty>
     )
   }
 
@@ -331,78 +346,81 @@ function Rows({
           (terms.length > 0 &&
             !answers(row.name, terms) &&
             holds(here, listings, terms, hidden))
+        const rowButton = <Button
+          variant="ghost"
+          className={`tree-row ${row.kind}`}
+          style={{ '--depth': depth } as React.CSSProperties}
+          title={row.kind === 'directory' ? row.name : `Open ${row.name}`}
+          // A double-click is how a file is opened, which is what a file list has meant since
+          // before this app existed. Enter does the same thing for anybody who reached the row
+          // by tab — a control that needs a mouse is a control half the users do not have.
+          onDoubleClick={row.kind === 'file' ? () => onOpen(here) : undefined}
+          onKeyDown={
+            row.kind === 'file'
+              ? (event) => {
+                  if (event.key !== 'Enter') return
+                  event.preventDefault()
+                  onOpen(here)
+                }
+              : undefined
+          }
+        >
+          <span className={`chevron ${expanded ? 'open' : ''}`} aria-hidden="true">
+            {row.kind === 'directory' ? '›' : ''}
+          </span>
+          {/* A folder's badge is a slash, which is what a folder is called in a path. It
+              earns its place by holding the column the file badges stand in: without it the
+              names either side of a folder would not line up. */}
+          {row.kind === 'directory' ? (
+            <span className="tree-glyph folder" aria-hidden="true">
+              /
+            </span>
+          ) : (
+            <FileGlyph name={row.name} />
+          )}
+          <span className="tree-name">{row.name}</span>
+        </Button>
+        if (row.kind === 'file') return <li key={row.name} role="treeitem" aria-level={depth + 1}>{rowButton}</li>
         return (
-          <li
-            key={row.name}
-            role="treeitem"
-            aria-expanded={row.kind === 'directory' ? expanded : undefined}
-            aria-level={depth + 1}
-          >
-            {/* The depth rides on a custom property rather than nested padding, so a row six
-                folders deep still ellipsises against the column's own edge instead of against a
-                box that has been indented out of it. */}
-            <button
-              className={`tree-row ${row.kind}`}
-              style={{ '--depth': depth } as React.CSSProperties}
-              title={row.kind === 'directory' ? row.name : `Open ${row.name}`}
-              // A double-click is how a file is opened, which is what a file list has meant since
-              // before this app existed. Enter does the same thing for anybody who reached the row
-              // by tab — a control that needs a mouse is a control half the users do not have.
-              onClick={row.kind === 'directory' ? () => onToggle(here) : undefined}
-              onDoubleClick={row.kind === 'file' ? () => onOpen(here) : undefined}
-              onKeyDown={
-                row.kind === 'file'
-                  ? (event) => {
-                      if (event.key !== 'Enter') return
-                      event.preventDefault()
-                      onOpen(here)
-                    }
-                  : undefined
-              }
+          <Collapsible key={row.name} open={expanded} onOpenChange={() => onToggle(here)} asChild>
+            <li
+              role="treeitem"
+              aria-expanded={expanded}
+              aria-level={depth + 1}
             >
-              <span className={`chevron ${expanded ? 'open' : ''}`} aria-hidden="true">
-                {row.kind === 'directory' ? '›' : ''}
-              </span>
-              {/* A folder's badge is a slash, which is what a folder is called in a path. It
-                  earns its place by holding the column the file badges stand in: without it the
-                  names either side of a folder would not line up. */}
-              {row.kind === 'directory' ? (
-                <span className="tree-glyph folder" aria-hidden="true">
-                  /
-                </span>
-              ) : (
-                <FileGlyph name={row.name} />
-              )}
-              <span className="tree-name">{row.name}</span>
-            </button>
-            {row.kind === 'directory' && (
-              <Fold open={expanded}>
-                {unreadable.has(here) ? (
-                  <p className="none">That folder cannot be read.</p>
-                ) : below === undefined ? (
-                  <p className="none">Reading…</p>
-                ) : (
-                  <Rows
-                    path={here}
-                    listing={below}
-                    listings={listings}
-                    open={open}
-                    unreadable={unreadable}
-                    hidden={hidden}
-                    depth={depth + 1}
-                    terms={terms}
-                    onToggle={onToggle}
-                    onOpen={onOpen}
-                  />
-                )}
-              </Fold>
-            )}
-          </li>
+              {/* The depth rides on a custom property rather than nested padding, so a row six
+                  folders deep still ellipsises against the column's own edge instead of against a
+                  box that has been indented out of it. */}
+              <CollapsibleTrigger asChild>{rowButton}</CollapsibleTrigger>
+              <div className={`fold ${expanded ? 'open' : ''}`}>
+                <CollapsibleContent forceMount className="fold-clip">
+                  {unreadable.has(here) ? (
+                    <TreeEmpty>That folder cannot be read.</TreeEmpty>
+                  ) : below === undefined ? (
+                    <p className="none" role="status"><Spinner role="presentation" aria-hidden="true" /> Reading…</p>
+                  ) : (
+                    <Rows
+                      path={here}
+                      listing={below}
+                      listings={listings}
+                      open={open}
+                      unreadable={unreadable}
+                      hidden={hidden}
+                      depth={depth + 1}
+                      terms={terms}
+                      onToggle={onToggle}
+                      onOpen={onOpen}
+                    />
+                  )}
+                </CollapsibleContent>
+              </div>
+            </li>
+          </Collapsible>
         )
       })}
       {listing.truncated && (
         <li className="tree-more">
-          Too many entries to list. What is here is the first part of the folder.
+          <Alert className="block p-2"><AlertDescription>Too many entries to list. What is here is the first part of the folder.</AlertDescription></Alert>
         </li>
       )}
     </ul>

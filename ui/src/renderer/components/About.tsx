@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { BotAvatar } from './BotAvatar'
 import { Modal } from './Modal'
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from './ui/accordion'
+import { Badge } from './ui/badge'
 import { Button } from './ui/button'
+import { DialogFooter, DialogHeader, DialogTitle } from './ui/dialog'
 
 export interface AboutInfo {
   version: string
@@ -47,7 +50,7 @@ export function About({ info, onClose }: { info: AboutInfo; onClose: () => void 
     <Button variant="ghost" size="icon-sm" className="about-close" aria-label="Close About Brave Bot" onClick={onClose}>
       <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
     </Button>
-    <div className="about-hero">
+    <DialogHeader className="about-hero">
       <div className="about-stage">
         <Button variant="ghost" className="about-mascot" aria-label="Make Brave Bot wink"
           onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
@@ -58,29 +61,33 @@ export function About({ info, onClose }: { info: AboutInfo; onClose: () => void 
           </span>
         </Button>
       </div>
-      <h2>Brave Bot</h2>
-      <span className="about-version">Version {agentVersion}</span>
-    </div>
+      <DialogTitle>Brave Bot</DialogTitle>
+      <Badge variant="outline" className="about-version self-center">Version {agentVersion}</Badge>
+    </DialogHeader>
     <nav className="about-links" aria-label="Project resources">
-      <a href={project} target="_blank" rel="noreferrer">GitHub <span aria-hidden="true">↗</span></a>
-      <a href={`${project}/releases`} target="_blank" rel="noreferrer">Release notes <span aria-hidden="true">↗</span></a>
+      <Button asChild variant="link"><a href={project} target="_blank" rel="noreferrer">GitHub <span aria-hidden="true">↗</span></a></Button>
+      <Button asChild variant="link"><a href={`${project}/releases`} target="_blank" rel="noreferrer">Release notes <span aria-hidden="true">↗</span></a></Button>
     </nav>
-    <details className="about-details">
-      <summary tabIndex={0}>Build &amp; storage details</summary>
-      <dl>
-        <div><dt>Interface</dt><dd>{info.version}</dd></div>
-        <div><dt>Agent</dt><dd>{info.build}</dd></div>
-        <div><dt>Sessions</dt><dd>{info.home ?? 'Session folder unavailable'}</dd></div>
-      </dl>
-      <div className="about-copy">
-        <Button variant="outline" size="sm" onClick={() => void copyBuildInfo()}>Copy build info</Button>
-        <span role="status">{copyStatus}</span>
-      </div>
-    </details>
-    <footer className="about-footer">
-      <span>Built with <a href={project} target="_blank" rel="noreferrer">bravebot</a></span>
+    <Accordion type="single" collapsible className="about-details">
+      <AccordionItem value="build-storage" className="border-0">
+        <AccordionTrigger>Build &amp; storage details</AccordionTrigger>
+        <AccordionContent>
+          <dl>
+            <div><dt>Interface</dt><dd>{info.version}</dd></div>
+            <div><dt>Agent</dt><dd>{info.build}</dd></div>
+            <div><dt>Sessions</dt><dd>{info.home ?? 'Session folder unavailable'}</dd></div>
+          </dl>
+          <div className="about-copy">
+            <Button variant="outline" size="sm" onClick={() => void copyBuildInfo()}>Copy build info</Button>
+            <span role="status">{copyStatus}</span>
+          </div>
+        </AccordionContent>
+      </AccordionItem>
+    </Accordion>
+    <DialogFooter className="about-footer flex-row">
+      <span>Built with <Button asChild variant="link"><a href={project} target="_blank" rel="noreferrer">bravebot</a></Button></span>
       <span aria-hidden="true">·</span>
-      <a href={`${project}/blob/main/LICENSE`} target="_blank" rel="noreferrer">MPL-2.0</a>
-    </footer>
+      <Button asChild variant="link"><a href={`${project}/blob/main/LICENSE`} target="_blank" rel="noreferrer">MPL-2.0</a></Button>
+    </DialogFooter>
   </Modal>
 }

@@ -161,11 +161,11 @@ check(
 //
 // Export was the case for keeping it: writing a file to disk is the largest capability this app
 // has taken on and it reaches no agent method at all. Forking is the opposite case and the
-// reason the number became 15. Model discovery adds one read-only method, `models.list`.
+// reason the list is checked explicitly. Model discovery adds the read-only `models.list` method.
 const allowed = (readFileSync('src/main/index.ts', 'utf8').match(/const ALLOWED = new Set\(\[([^\]]*)\]/) ?? [])[1]
 check(
-  allowed !== undefined && !/approve|decide/.test(allowed) && allowed.includes("'models.list'") && allowed.split(',').filter((s) => s.trim()).length === 16,
-  'the main-process allow-list is 16 methods including model discovery, none of which decides anything',
+  allowed !== undefined && !/approve|decide/.test(allowed) && allowed.includes("'models.list'") && allowed.split(',').filter((s) => s.trim()).length === 24,
+  'the main-process allow-list is 24 methods including model discovery, none of which decides anything',
 )
 
 // --- accelerators are declared (they cannot be *dispatched* from here) -----------------
@@ -257,7 +257,7 @@ await click('app.about')
 await page.waitForTimeout(600)
 const about = page.getByRole('dialog', { name: 'About Brave Bot' })
 check(await about.isVisible(), 'About opens a panel')
-await about.locator('summary').click()
+await about.getByRole('button', { name: 'Build & storage details', exact: true }).click()
 check(
   /Agent/.test(await about.locator('dl').textContent()),
   'and it carries the agent build, which is the first thing worth knowing',

@@ -1,14 +1,14 @@
 import { Watches } from './Watches'
 import type { FileAttachment } from '../../shared/files'
 import { Permissions } from './Permissions'
-import { useLayoutEffect, useEffect, useMemo, useRef, useState } from 'react'
+import { cn } from 'cn'
+import { forwardRef, useLayoutEffect, useEffect, useMemo, useRef, useState } from 'react'
 import { isConfined, type AskAnswer, type AskPrompt, type Phase, type Shown, type TodoRow } from '../../shared/protocol'
 import * as t from '../transcript'
 import type { Side } from '../columns'
 import type { Asked } from '../App'
 import type { ExportFormat } from '../../shared/export'
 import { Diff } from './Diff'
-import { Fold } from './Fold'
 import { ModelPicker } from './ModelPicker'
 import { ForkIcon } from './ForkIcon'
 import { contextMenu } from './Sessions'
@@ -22,8 +22,32 @@ import { FilePreview } from './FilePreview'
 import { TurnFooter, TurnNotices, type OpenAudit } from './TurnDetails'
 import type { Turns, TurnDisclosure } from '../turn-details'
 import { Button } from './ui/button'
+import { ButtonGroup } from './ui/button-group'
 import { Input } from './ui/input'
-import { Textarea } from './ui/textarea'
+import { Alert, AlertDescription, AlertTitle } from './ui/alert'
+import {
+  Attachment,
+  AttachmentAction,
+  AttachmentActions,
+  AttachmentContent,
+  AttachmentGroup,
+  AttachmentTitle,
+  AttachmentTrigger,
+} from './ui/attachment'
+import { Badge } from './ui/badge'
+import { Bubble, BubbleContent } from './ui/bubble'
+import { Card as ShadCard, CardContent, CardFooter, CardHeader, CardTitle } from './ui/card'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from './ui/empty'
+import { Field, FieldContent, FieldDescription, FieldLegend, FieldSet } from './ui/field'
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput, InputGroupTextarea } from './ui/input-group'
+import { Kbd } from './ui/kbd'
+import { Marker, MarkerContent, MarkerIcon } from './ui/marker'
+import { Message, MessageContent } from './ui/message'
+import { Spinner } from './ui/spinner'
+import { Toggle } from './ui/toggle'
+import { ToggleGroup, ToggleGroupItem } from './ui/toggle-group'
+import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
 
 interface Live {
   model: string | null
@@ -133,20 +157,26 @@ function ColumnToggle({
 }): React.JSX.Element {
   const what = side === 'left' ? 'the session list' : 'the context panel'
   return (
-    <button
-      className={`fold-toggle ${side}`}
-      aria-expanded={!collapsed}
-      aria-controls={side === 'left' ? 'sessions-column' : 'context-column'}
-      aria-label={side === 'left' ? 'Session list' : 'Context panel'}
-      title={`${collapsed ? 'Show' : 'Hide'} ${what}`}
-      onClick={() => onToggle(side)}
-    >
-      {/* Pointing outward when folded — the way the column will come back — and inward
-          when open. Decorative: the button is already named and its state announced. */}
-      <span className={`fold-chevron ${collapsed ? '' : 'open'}`} aria-hidden="true">
-        {side === 'left' ? '›' : '‹'}
-      </span>
-    </button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className={`fold-toggle ${side}`}
+          aria-expanded={!collapsed}
+          aria-controls={side === 'left' ? 'sessions-column' : 'context-column'}
+          aria-label={side === 'left' ? 'Session list' : 'Context panel'}
+          onClick={() => onToggle(side)}
+        >
+          {/* Pointing outward when folded — the way the column will come back — and inward
+              when open. Decorative: the button is already named and its state announced. */}
+          <span className={`fold-chevron ${collapsed ? '' : 'open'}`} aria-hidden="true">
+            {side === 'left' ? '›' : '‹'}
+          </span>
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{collapsed ? 'Show' : 'Hide'} {what}</TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -306,23 +336,51 @@ export function Transcript({
 
   const activitySnapshot = useRef<{ handle?: string; entries?: t.Entry[]; phase?: Phase | null }>({})
   useLayoutEffect(() => {
-    const element = scroller.current
-    const anchor = readingAnchor.current
-    if (!element || !anchor || anchor.handle !== live?.handle || following.current) return
-    const wrapper = element.querySelector<HTMLElement>(`[data-entry-id="${CSS.escape(anchor.id)}"]`)
-    const row = wrapper?.firstElementChild as HTMLElement | null
-    if (!row) return
-    const offset = row.getBoundingClientRect().top - element.getBoundingClientRect().top
-    element.scrollTop += offset - anchor.offset
-    lastScroll.current = element.scrollTop
-    readingAnchor.current = { ...anchor, offset: row.getBoundingClientRect().top - element.getBoundingClientRect().top }
-  }, [live?.entries, live?.handle])
+    const restore = (): void => {
+      const element = scroller.current
+      const anchor = readingAnchor.current
+      if (!element || !anchor || anchor.handle !== live?.handle || following.current) return
+      const wrapper = element.querySelector<HTMLElement>(`[data-entry-id="${CSS.escape(anchor.id)}"]`)
+      const row = wrapper?.firstElementChild as HTMLElement | null
+      if (!row) return
+      const offset = row.getBoundingClientRect().top - element.getBoundingClientRect().top
+      element.scrollTop += offset - anchor.offset
+      lastScroll.current = element.scrollTop
+      readingAnchor.current = { ...anchor, offset: row.getBoundingClientRect().top - element.getBoundingClientRect().top }
+    }
+    restore()
+    // Radix disclosure content can finish measuring after parent layout effects. A second
+    // frame keeps the same reading anchor stable when late notices expand above it.
+    const frame = requestAnimationFrame(restore)
+    return () => cancelAnimationFrame(frame)
+  })
   useEffect(() => {
     const element = scroller.current
     if (!element) return
     const remember = () => rememberReadingAnchor(element)
     element.addEventListener('scroll', remember, { passive: true })
     return () => element.removeEventListener('scroll', remember)
+  }, [live?.handle])
+  useEffect(() => {
+    const element = scroller.current
+    if (!element) return
+    let frame = 0
+    const restore = (): void => {
+      const anchor = readingAnchor.current
+      if (!anchor || anchor.handle !== live?.handle || following.current) return
+      const wrapper = element.querySelector<HTMLElement>(`[data-entry-id="${CSS.escape(anchor.id)}"]`)
+      const row = wrapper?.firstElementChild as HTMLElement | null
+      if (!row) return
+      const offset = row.getBoundingClientRect().top - element.getBoundingClientRect().top
+      element.scrollTop += offset - anchor.offset
+      lastScroll.current = element.scrollTop
+    }
+    const observer = new MutationObserver(() => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(restore)
+    })
+    observer.observe(element, { childList: true, subtree: true, characterData: true, attributes: true })
+    return () => { observer.disconnect(); cancelAnimationFrame(frame) }
   }, [live?.handle])
   useEffect(() => {
     const previous = activitySnapshot.current
@@ -389,10 +447,10 @@ export function Transcript({
         <ColumnToggle side="right" collapsed={collapsed.right} onToggle={onToggle} />
       </div>
       {live && <div className="conversation-toolbar">
-        <button onClick={() => setSearching((value) => !value)} aria-expanded={searching}>Find</button>
-        <button onClick={() => setPermissions(true)}>Permissions</button>
-        <button onClick={() => setWatches(true)}>Watches</button>
-        <button onClick={() => {
+        <Toggle pressed={searching} onPressedChange={setSearching} aria-expanded={searching}>Find</Toggle>
+        <Button variant="ghost" onClick={() => setPermissions(true)}>Permissions</Button>
+        <Button variant="ghost" onClick={() => setWatches(true)}>Watches</Button>
+        <Toggle pressed={focusedLayout !== null} onPressedChange={() => {
           if (focusedLayout) {
             for (const side of ['left', 'right'] as const) if (collapsed[side] !== focusedLayout[side]) onToggle(side)
             setFocusedLayout(null)
@@ -400,27 +458,35 @@ export function Transcript({
             setFocusedLayout({ ...collapsed })
             for (const side of ['left', 'right'] as const) if (!collapsed[side]) onToggle(side)
           }
-        }}>{focusedLayout ? 'Exit focus' : 'Focus'}</button>
-        <button onClick={() => setExperience('density', preferences.density === 'compact' ? 'comfortable' : 'compact')}>
+        }}>{focusedLayout ? 'Exit focus' : 'Focus'}</Toggle>
+        <Toggle pressed={preferences.density === 'compact'} onPressedChange={() => setExperience('density', preferences.density === 'compact' ? 'comfortable' : 'compact')}>
           {preferences.density === 'compact' ? 'Comfortable view' : 'Compact view'}
-        </button>
+        </Toggle>
         <ExportMenu canExport={canExport} includeTools={includeTools} onToggleTools={onToggleTools} onExport={onExport} />
       </div>}
-      {backendReady === false && <div className="backend-status" role="status"><strong>Backend setup needed</strong><span>You can browse conversations and prepare drafts.</span><div><Button variant="outline" size="sm" onClick={onSetup}>Setup help</Button><Button variant="outline" size="sm" onClick={onCheckBackend}>Check again</Button><Button variant="outline" size="sm" onClick={onDiagnostics}>Diagnostics</Button></div></div>}
+      {backendReady === false && <Alert className="backend-status" role="status">
+        <AlertTitle><strong>Backend setup needed</strong></AlertTitle>
+        <AlertDescription>
+          <span>You can browse conversations and prepare drafts.</span>
+          <div><Button variant="outline" size="sm" onClick={onSetup}>Setup help</Button><Button variant="outline" size="sm" onClick={onCheckBackend}>Check again</Button><Button variant="outline" size="sm" onClick={onDiagnostics}>Diagnostics</Button></div>
+        </AlertDescription>
+      </Alert>}
       {live && <div className="context-status" title="The model’s last request size, not accumulated token usage. New messages may change the next request.">
         {live.phase === 'compacting' ? 'Summarising context…' : live.contextTokens === undefined ? 'Context measurement unavailable' : live.contextTokens === 0 ? 'Context not yet measured' : `${live.contextTokens.toLocaleString()} context tokens at last request`}
         {!!live.archived && <span> · Earlier context summarised</span>}
       </div>}
       {problem && <ErrorCard detail={problem} />}
-      {searching && <div className="conversation-search">
-        <Input autoFocus type="search" aria-label="Find in conversation" placeholder="Find in conversation…" value={query}
+      {searching && <InputGroup className="conversation-search">
+        <InputGroupInput autoFocus type="search" aria-label="Find in conversation" placeholder="Find in conversation…" value={query}
           onChange={(event) => { setQuery(event.target.value); setMatch(0) }}
           onKeyDown={(event) => { if (event.key === 'Escape') setSearching(false); if (event.key === 'Enter') setMatch((n) => n + (event.shiftKey ? -1 + matches.length : 1)) }} />
-        <span role="status">{matches.length ? `${match % matches.length + 1} of ${matches.length}` : query ? 'No matches' : ''}</span>
-        <Button variant="ghost" size="icon-sm" disabled={!matches.length} onClick={() => setMatch((n) => n + matches.length - 1)} aria-label="Previous match">↑</Button>
-        <Button variant="ghost" size="icon-sm" disabled={!matches.length} onClick={() => setMatch((n) => n + 1)} aria-label="Next match">↓</Button>
-        <Button variant="ghost" size="icon-sm" onClick={() => setSearching(false)} aria-label="Close search">×</Button>
-      </div>}
+        <InputGroupAddon align="inline-end">
+          <span role="status">{matches.length ? `${match % matches.length + 1} of ${matches.length}` : query ? 'No matches' : ''}</span>
+          <InputGroupButton size="icon-sm" disabled={!matches.length} onClick={() => setMatch((n) => n + matches.length - 1)} aria-label="Previous match">↑</InputGroupButton>
+          <InputGroupButton size="icon-sm" disabled={!matches.length} onClick={() => setMatch((n) => n + 1)} aria-label="Next match">↓</InputGroupButton>
+          <InputGroupButton size="icon-sm" onClick={() => setSearching(false)} aria-label="Close search">×</InputGroupButton>
+        </InputGroupAddon>
+      </InputGroup>}
       {live?.autoVetting && <VettingBanner />}
       {live?.forkedFrom && <ForkBanner from={live.forkedFrom} onOpen={onOpenParent} />}
     </header>
@@ -431,15 +497,19 @@ export function Transcript({
       <main className="transcript empty-state">
         {head}
         <div className="empty-body">
-          <div>
-            <div className="welcome-mark">B</div>
-            <h1>What would you like to build?</h1>
-            <p>Work with an agent in your project. Track changes and review approval requests as you work.</p>
-            <Button className="primary" onClick={() => onNew()}>Open project</Button>
-            {!!recents.length && <div className="welcome-recents"><h2>Recent projects</h2>{recents.slice(0, 5).map((directory) =>
-              <Button variant="outline" key={directory} onClick={() => onNew(directory)}><strong>{directory.split('/').pop()}</strong><span>{directory}</span></Button>)}</div>}
-            <p className="welcome-hint">Choose a conversation to resume work, or create a bot with a purpose and persistent memory.</p>
-          </div>
+          <Empty className="border-0">
+            <EmptyHeader className="max-w-none">
+              <EmptyMedia className="welcome-mark">B</EmptyMedia>
+              <EmptyTitle><h1>What would you like to build?</h1></EmptyTitle>
+              <EmptyDescription>Work with an agent in your project. Track changes and review approval requests as you work.</EmptyDescription>
+            </EmptyHeader>
+            <EmptyContent>
+              <Button className="primary" onClick={() => onNew()}>Open project</Button>
+              {!!recents.length && <div className="welcome-recents"><h2>Recent projects</h2>{recents.slice(0, 5).map((directory) =>
+                <Button variant="outline" className="h-auto flex-col items-start justify-start text-left" key={directory} onClick={() => onNew(directory)}><strong>{directory.split('/').pop()}</strong><span>{directory}</span></Button>)}</div>}
+              <p className="welcome-hint">Choose a conversation to resume work, or create a bot with a purpose and persistent memory.</p>
+            </EmptyContent>
+          </Empty>
         </div>
       </main>
     )
@@ -502,44 +572,71 @@ export function Transcript({
         )}
 
         {live.running && (
-          <div className={`working${bot ? ' working-bot' : ''}`}>
+          <Marker className={`working${bot ? ' working-bot' : ''}`}>
             {/* For a bot, the bot itself, looking down at the page — the one place in the transcript
                 its face carries something the header does not: it is *here*, at the point of
                 attention, only while something is happening, and its posture is the indicator. It
                 mounts already working, since the row exists only while a turn runs. A plain session
                 has no face and keeps the spinner. */}
-            {bot ? (
-              <BotAvatar seed={bot.avatar} size={22} doing="working" />
-            ) : (
-              <span className="spinner" />
-            )}
-            {live.phase ? phaseWord(live.phase) : 'Working'}
-            {live.tokens > 0 && <span className="count"> · {live.tokens} tokens written</span>}
+            <MarkerIcon>
+              {bot ? (
+                <BotAvatar seed={bot.avatar} size={22} doing="working" />
+              ) : (
+                <Spinner className="spinner" />
+              )}
+            </MarkerIcon>
+            <MarkerContent>
+              {live.phase ? phaseWord(live.phase) : 'Working'}
+              {live.tokens > 0 && <span className="count"> · {live.tokens} tokens written</span>}
+            </MarkerContent>
             {Object.values(live.turns).filter((turn) => turn.status === 'running').slice(-1).map((turn) =>
               <Button variant="link" className="turn-audit-link" key={turn.turn} aria-controls="turn-audit-inspector" onClick={(event) => onAudit(turn.turn, event.currentTarget)}>Audit</Button>)}
             <Button variant="outline" className="cancel" onClick={onCancel}>
               Cancel
             </Button>
-          </div>
+          </Marker>
         )}
         <div ref={bottom} />
       </div>
 
-      <div className="attention-bar" aria-live="polite">
-        {pending ? <Button variant="ghost" className="pending-jump" onClick={() => {
-          document.dispatchEvent(new CustomEvent('bravebot:reveal-entry', { detail: pending.id }))
-          const element = scroller.current?.querySelector<HTMLElement>(`[data-entry-id="${pending.id}"]`)
-          jump(element ?? bottom.current)
-        }}>{pending.kind === 'ask' ? 'Your answer is needed' : 'Approval needed'} · {waitingOn(pending.kind)} — Review ↑</Button> :
-          live.running ? <span>{live.phase ? phaseWord(live.phase) : 'Working'} · You can draft your next message</span> :
-          <span>{live.entries.at(-1)?.kind === 'error' ? 'Needs attention' : live.entries.length ? 'Ready for your next message' : 'Ready to begin'}</span>}
+      <Alert className="attention-bar" role="status" aria-live="polite">
+        <AlertDescription className="attention-content">
+          {pending ? <Button variant="ghost" className="pending-jump" onClick={() => {
+            document.dispatchEvent(new CustomEvent('bravebot:reveal-entry', { detail: pending.id }))
+            const element = scroller.current?.querySelector<HTMLElement>(`[data-entry-id="${pending.id}"]`)
+            jump(element ?? bottom.current)
+          }}>{pending.kind === 'ask' ? 'Your answer is needed' : 'Approval needed'} · {waitingOn(pending.kind)} — Review ↑</Button> :
+            live.running ? <span>{live.phase ? phaseWord(live.phase) : 'Working'} · You can draft your next message</span> :
+            <span>{live.entries.at(-1)?.kind === 'error' ? 'Needs attention' : live.entries.length ? 'Ready for your next message' : 'Ready to begin'}</span>}
+        </AlertDescription>
         {unseen && <Button variant="outline" size="sm" onClick={latest}>New activity ↓</Button>}
-      </div>
+      </Alert>
       <footer className="composer">
-        {queued.length > 0 && <div className="queued-messages"><strong>{queuePaused ? 'Queue paused' : 'Queued after this turn'}</strong>{queuePaused && <Button variant="outline" size="sm" disabled={live.running || backendReady === false} onClick={onResumeQueued}>Resume queue</Button>}{queued.map((text, index) => <div key={index}><span>{text}</span><Button variant="ghost" size="icon-xs" aria-label={`Remove queued message ${index + 1}`} onClick={() => onRemoveQueued(index)}>×</Button></div>)}</div>}
-        {attachments.length > 0 && <div className="attachment-chips"><p>These files will be sent as trusted context with your message.</p>{attachments.map((file) => <span key={file.id}><Button variant="ghost" onClick={() => setPreviewPath(file.path)}>{file.path}</Button><Button variant="ghost" size="icon-xs" aria-label={`Remove attachment ${file.path}`} onClick={() => onRemoveAttachment(file.id)}>×</Button></span>)}</div>}
-        <div className="composer-box">
-          <Textarea ref={input} rows={2} value={draft} aria-label="Message the agent" title="Unsent drafts are saved locally on this device. Clear the message to remove its saved draft."
+        {queued.length > 0 && <ShadCard className="queued-messages">
+          <CardHeader className="queued-head flex-row items-center gap-2 p-0">
+            <CardTitle><strong>{queuePaused ? 'Queue paused' : 'Queued after this turn'}</strong></CardTitle>
+            {queuePaused && <Button variant="outline" size="sm" disabled={live.running || backendReady === false} onClick={onResumeQueued}>Resume queue</Button>}
+          </CardHeader>
+          <CardContent className="queued-list p-0">
+            {queued.map((text, index) => <div className="flex items-center gap-2" key={index}><span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{text}</span><Button variant="ghost" size="icon-xs" aria-label={`Remove queued message ${index + 1}`} onClick={() => onRemoveQueued(index)}>×</Button></div>)}
+          </CardContent>
+        </ShadCard>}
+        {attachments.length > 0 && <>
+          <Alert className="attachment-context">
+            <AlertDescription>These files will be sent as trusted context with your message.</AlertDescription>
+          </Alert>
+          <AttachmentGroup className="attachment-chips">
+            {attachments.map((file) => <Attachment key={file.id} size="sm">
+              <AttachmentTrigger aria-label={`Preview attachment ${file.path}`} onClick={() => setPreviewPath(file.path)} />
+              <AttachmentContent><AttachmentTitle title={file.path}>{file.path}</AttachmentTitle></AttachmentContent>
+              <AttachmentActions>
+                <AttachmentAction aria-label={`Remove attachment ${file.path}`} onClick={() => onRemoveAttachment(file.id)}>×</AttachmentAction>
+              </AttachmentActions>
+            </Attachment>)}
+          </AttachmentGroup>
+        </>}
+        <InputGroup className="composer-box">
+          <InputGroupTextarea ref={input} rows={2} value={draft} aria-label="Message the agent" title="Unsent drafts are saved locally on this device. Clear the message to remove its saved draft."
             placeholder={pending ? 'Draft your next message while you review…' : 'Describe a task, ask a question, or paste code…'}
             onChange={(event) => onDraft(event.target.value)}
             onKeyDown={(event) => {
@@ -549,16 +646,16 @@ export function Transcript({
                 if (!event.repeat && !live.running && backendReady !== false && draft.trim()) { latest(); onSubmit() }
               }
             }} />
-          <div className="composer-toolbar">
+          <InputGroupAddon className="composer-toolbar" align="block-end">
             <ModelPicker session={live.handle} scope={bot ? 'bot' : 'conversation'} key={live.handle} model={live.model} disabled={live.running} onChoose={onModel} />
             <Button variant="outline" className="attach-files" onClick={onAttach} disabled={attachments.length >= 5} title="Choose project files to share as trusted context">Attach files</Button>
-            <span className="composer-hint">Enter to send · Shift+Enter for newline</span>
+            <span className="composer-hint"><Kbd>Enter</Kbd> to send · <Kbd>Shift+Enter</Kbd> for newline</span>
             {live.running && <Button variant="destructive" className="stop" onClick={onCancel}>Stop</Button>}
             <Button className="send" onClick={() => { latest(); live.running ? onQueue() : onSubmit() }} disabled={!draft.trim() || !!live.askingTrust || backendReady === false}>
               {live.running ? 'Queue message' : 'Send'}
             </Button>
-          </div>
-        </div>
+          </InputGroupAddon>
+        </InputGroup>
       </footer>
       {watches && <Watches session={live.handle} onClose={() => setWatches(false)} />}
       {permissions && <Permissions session={live.handle} onClose={() => setPermissions(false)} />}
@@ -628,7 +725,7 @@ function ExportMenu({
   ]
 
   return (
-    <div className="export-split">
+    <ButtonGroup className="export-split">
       <PopMenu
         open={open}
         trigger={<Button
@@ -647,7 +744,7 @@ function ExportMenu({
         onChoose={(id) => (id === TOOLS ? onToggleTools() : onExport(id as ExportFormat))}
         onOpenChange={setOpen}
       />
-    </div>
+    </ButtonGroup>
   )
 }
 
@@ -660,6 +757,27 @@ function phaseWord(phase: Phase): string {
       : phase === 'compacting'
         ? 'Compacting'
         : 'Reconnecting'
+}
+
+/**
+ * The container an approval is drawn in: a real shadcn Card, flush so its own parts carry the
+ * padding and rules, and carrying the semantic hooks the drivers and the marking tests key on.
+ * `confirm` is on every approval; the security state (`untrusted`, `releases`, `output`,
+ * `vouch`, `vetted-read`) is the class the LAYER-5 container markings are drawn from, so it
+ * lives here on the container rather than on any element content could reach.
+ */
+function ApprovalCard({ className, ...props }: React.ComponentProps<typeof ShadCard>): React.JSX.Element {
+  return <ShadCard className={cn('my-3 gap-0 py-0', className)} {...props} />
+}
+
+/** The head row of an approval: what is being asked, and what it is about. */
+function ApprovalHead({ children, className }: { children: React.ReactNode; className?: string }): React.JSX.Element {
+  return <CardTitle className={cn('confirm-head font-normal leading-snug', className)}>{children}</CardTitle>
+}
+
+/** The decisions at the foot of an approval card: buttons, or what became of the question. */
+function ApprovalActions({ children }: { children: React.ReactNode }): React.JSX.Element {
+  return <CardFooter className="confirm-actions">{children}</CardFooter>
 }
 
 /**
@@ -703,20 +821,22 @@ function ToolRun({ entries }: { entries: t.Entry[] }): React.JSX.Element {
   }, [entries])
 
   return (
-    <section className={`tool-run ${open ? 'open' : ''}`}>
-      <button
-        className="tool-run-head"
-        aria-expanded={open}
-        // The verb in the title, the name staying put — the rule `ColumnToggle` states above.
-        title={open ? 'Hide these steps' : 'Show these steps'}
-        onClick={() => setOpen(!open)}
-      >
-        <span className={`chevron ${open ? 'open' : ''}`} aria-hidden="true">
-          ›
-        </span>
-        {entries.length} step{entries.length === 1 ? '' : 's'}
-      </button>
-      <Fold open={open}>
+    <Collapsible className={`tool-run ${open ? 'open' : ''}`} open={open} onOpenChange={setOpen} asChild>
+      <section>
+        <CollapsibleTrigger asChild>
+          <Button
+            variant="ghost"
+            className="tool-run-head"
+            // The verb in the title, the name staying put — the rule `ColumnToggle` states above.
+            title={open ? 'Hide these steps' : 'Show these steps'}
+          >
+            <span className={`chevron ${open ? 'open' : ''}`} aria-hidden="true">
+              ›
+            </span>
+            {entries.length} step{entries.length === 1 ? '' : 's'}
+          </Button>
+        </CollapsibleTrigger>
+        <CollapsibleContent forceMount>
         {entries.map((entry) => (
           <div key={entry.id} data-entry-id={entry.id}><Row
             key={entry.id}
@@ -729,8 +849,9 @@ function ToolRun({ entries }: { entries: t.Entry[] }): React.JSX.Element {
             forkable={false}
           /></div>
         ))}
-      </Fold>
-    </section>
+        </CollapsibleContent>
+      </section>
+    </Collapsible>
   )
 }
 
@@ -758,16 +879,8 @@ function Questions({
   const [picked, setPicked] = useState<number[][]>(() => prompts.map(() => []))
   const [typed, setTyped] = useState<string[]>(() => prompts.map(() => ''))
 
-  const choose = (question: number, index: number, multiple: boolean): void => {
-    setPicked((old) =>
-      old.map((chosen, at) => {
-        if (at !== question) return chosen
-        if (!multiple) return chosen.includes(index) ? [] : [index]
-        return chosen.includes(index)
-          ? chosen.filter((one) => one !== index)
-          : [...chosen, index].sort((a, b) => a - b)
-      }),
-    )
+  const choose = (question: number, chosen: number[]): void => {
+    setPicked((old) => old.map((current, at) => (at === question ? chosen : current)))
   }
 
   /**
@@ -791,78 +904,81 @@ function Questions({
   // form, so they are drawn as text with no choices to press.
   if (answers || request.interrupted) {
     return (
-      <div className="confirm ask">
-        <div className="confirm-head">
-          <span className="intent">asked</span>
-          <span className="path">
-            {prompts.length} question{prompts.length === 1 ? '' : 's'}
-          </span>
-        </div>
-        {prompts.map((prompt, at) => (
-          // Keyed by position, not by `prompt.key`: that key is canonical *content*, and a
-          // series may legitimately contain the same question twice. The order never
-          // changes — the agent emits one prompt per question, in order — so the index is
-          // both stable and unique where the content is only stable.
-          <div className="asked-answer" key={at}>
-            <div className="question">{prompt.question}</div>
-            {answers && <div className="given">{describe(prompt, answers[at])}</div>}
-          </div>
-        ))}
-        {!answers && <Unanswered />}
-      </div>
+      <ApprovalCard className="confirm ask">
+        <CardHeader className="confirm-header gap-0 p-0">
+          <ApprovalHead>
+            <Badge variant="outline" className="intent">asked</Badge>
+            <span className="path">
+              {prompts.length} question{prompts.length === 1 ? '' : 's'}
+            </span>
+          </ApprovalHead>
+        </CardHeader>
+        <CardContent className="confirm-body p-0">
+          {prompts.map((prompt, at) => (
+            // Keyed by position, not by `prompt.key`: that key is canonical *content*, and a
+            // series may legitimately contain the same question twice. The order never
+            // changes — the agent emits one prompt per question, in order — so the index is
+            // both stable and unique where the content is only stable.
+            <div className="asked-answer" key={at}>
+              <div className="question">{prompt.question}</div>
+              {answers && <div className="given">{describe(prompt, answers[at])}</div>}
+            </div>
+          ))}
+          {!answers && <Unanswered />}
+        </CardContent>
+      </ApprovalCard>
     )
   }
 
   return (
-    <div className="confirm ask">
-      <div className="confirm-head">
-        <span className="intent">asked</span>
-        <span className="path">
-          {prompts.length} question{prompts.length === 1 ? '' : 's'}
-        </span>
-      </div>
+    <ApprovalCard className="confirm ask">
+      <CardHeader className="confirm-header gap-0 p-0">
+        <ApprovalHead>
+          <Badge variant="outline" className="intent">asked</Badge>
+          <span className="path">
+            {prompts.length} question{prompts.length === 1 ? '' : 's'}
+          </span>
+        </ApprovalHead>
+      </CardHeader>
 
-      {prompts.map((prompt, at) => (
-        <fieldset className="ask-question" key={at}>
-          <legend>
-            <span className="header">{prompt.header}</span>
-            {prompt.multiple && <span className="any">pick any</span>}
-          </legend>
-          <div className="question">{prompt.question}</div>
+      <CardContent className="confirm-body p-0">
+        {prompts.map((prompt, at) => (
+          <FieldSet className="ask-question" key={at}>
+            <FieldLegend>
+              <span className="header">{prompt.header}</span>
+              {prompt.multiple && <Badge variant="secondary" className="any">pick any</Badge>}
+            </FieldLegend>
+            <Field>
+              <FieldContent>
+                <FieldDescription className="question">{prompt.question}</FieldDescription>
+                <QuestionChoices
+                  multiple={prompt.multiple}
+                  rows={prompt.rows}
+                  selected={picked[at] ?? []}
+                  onChange={(selected) => choose(at, selected)}
+                />
+                <Input
+                  className="typed"
+                  value={typed[at] ?? ''}
+                  aria-label={`Answer: ${prompt.question}`}
+                  placeholder={prompt.rows.length > 0 ? 'or say something else…' : 'your answer…'}
+                  onChange={(event) =>
+                    setTyped((old) => old.map((text, index) => (index === at ? event.target.value : text)))
+                  }
+                />
+              </FieldContent>
+            </Field>
+          </FieldSet>
+        ))}
+      </CardContent>
 
-          <ul className="choices">
-            {prompt.rows.map((row) => (
-              <li key={row.index}>
-                <button
-                  className={`choice ${(picked[at] ?? []).includes(row.index) ? 'picked' : ''}`}
-                  aria-pressed={(picked[at] ?? []).includes(row.index)}
-                  onClick={() => choose(at, row.index, prompt.multiple)}
-                >
-                  <span className="label">{row.label}</span>
-                  {row.detail && <span className="detail">{row.detail}</span>}
-                </button>
-              </li>
-            ))}
-          </ul>
-
-          <input
-            className="typed"
-            value={typed[at] ?? ''}
-            placeholder={prompt.rows.length > 0 ? 'or say something else…' : 'your answer…'}
-            onChange={(event) =>
-              setTyped((old) => old.map((text, index) => (index === at ? event.target.value : text)))
-            }
-          />
-        </fieldset>
-      ))}
-
-      <div className="confirm-actions">
+      <ApprovalActions>
         {/* Declining every question is a real answer and the turn continues, so it is a
             button here rather than something a person has to leave blank and guess at. */}
-        <button className="reject" onClick={() => onAnswer(request.request.request, prompts.map(() => ({})))}>
+        <Button variant="outline" className="reject" onClick={() => onAnswer(request.request.request, prompts.map(() => ({})))}>
           Decline
-        </button>
-        <button className="approve" onClick={() => onAnswer(request.request.request, collected())}>
+        </Button>
+        <Button className="approve" onClick={() => onAnswer(request.request.request, collected())}>
           Answer
           {/* Leaving a question blank declines it, which is legitimate but should not be a
               surprise — with several questions on screen it is easy to answer two of three
@@ -870,11 +986,63 @@ function Questions({
           {blank > 0 && prompts.length > 1 && (
             <span className="aside"> · {blank} declined</span>
           )}
-        </button>
-      </div>
-    </div>
+        </Button>
+      </ApprovalActions>
+    </ApprovalCard>
   )
 }
+
+function QuestionChoices({
+  multiple,
+  rows,
+  selected,
+  onChange,
+}: {
+  multiple: boolean
+  rows: AskPrompt['rows']
+  selected: number[]
+  onChange: (selected: number[]) => void
+}): React.JSX.Element {
+  const choices = rows.map((row) => (
+    <ToggleGroupItem
+      className={`choice ${selected.includes(row.index) ? 'picked' : ''}`}
+      key={row.index}
+      value={String(row.index)}
+    >
+      <span className="label">{row.label}</span>
+      {row.detail && <span className="detail">{row.detail}</span>}
+    </ToggleGroupItem>
+  ))
+
+  return multiple ? (
+    <ToggleGroup
+      asChild
+      type="multiple"
+      className="choices"
+      value={selected.map(String)}
+      onValueChange={(values) => onChange(values.map(Number).sort((a, b) => a - b))}
+    >
+      <StylelessToggleGroupRoot>{choices}</StylelessToggleGroupRoot>
+    </ToggleGroup>
+  ) : (
+    <ToggleGroup
+      asChild
+      type="single"
+      className="choices"
+      value={selected[0] === undefined ? '' : String(selected[0])}
+      onValueChange={(value) => onChange(value ? [Number(value)] : [])}
+    >
+      <StylelessToggleGroupRoot>{choices}</StylelessToggleGroupRoot>
+    </ToggleGroup>
+  )
+}
+
+/** Keep primitive-generated inline layout styles outside security-marked transcript entries. */
+const StylelessToggleGroupRoot = forwardRef<HTMLDivElement, React.ComponentProps<'div'>>(
+  function StylelessToggleGroupRoot({ style: _style, ...props }, ref) {
+    return <div ref={ref} {...props} />
+  },
+)
 
 /**
  * The line at the top of a session that was cut out of another one.
@@ -901,9 +1069,9 @@ function ForkBanner({
         <ForkIcon />
       </span>{' '}
       Forked from{' '}
-      <button className="link" onClick={onOpen} title="Show the session this was forked from">
+      <Button variant="link" className="link" onClick={onOpen} title="Show the session this was forked from">
         {from.title}
-      </button>
+      </Button>
       , before prompt {from.prompt + 1}.
     </p>
   )
@@ -975,8 +1143,9 @@ export function Row({
   onFork,
   forkable,
 }: RowProps): React.JSX.Element {
+  const [detailsOpen, setDetailsOpen] = useState(false)
   const card = (
-    <Card
+    <EntryCard
       entry={entry}
       onRecover={onRecover}
       onChooseModel={onChooseModel}
@@ -994,13 +1163,15 @@ export function Row({
   // reach line, and for an untrusted write neither the border nor the sentence saying nobody
   // vouched for it. The turn ending declassifies nothing.
   return (
-    <div className="interrupted-request">
+    <Collapsible className="interrupted-request" open={detailsOpen} onOpenChange={setDetailsOpen}>
       <strong>Request cancelled when the turn ended</strong>
-      <details>
-        <summary>Request details</summary>
+      <CollapsibleTrigger asChild>
+        <Button variant="ghost" aria-expanded={detailsOpen}>Request details</Button>
+      </CollapsibleTrigger>
+      <CollapsibleContent forceMount>
         {card}
-      </details>
-    </div>
+      </CollapsibleContent>
+    </Collapsible>
   )
 }
 
@@ -1011,7 +1182,7 @@ export function Row({
  * false for an interrupted entry, and every arm that would draw controls draws
  * `<Unanswered />` instead. Nothing about how the content is marked depends on it.
  */
-function Card({
+function EntryCard({
   entry,
   onRecover,
   onChooseModel,
@@ -1025,33 +1196,47 @@ function Card({
     case 'turn-start': return <></>
     case 'user':
       return (
-        <div className="bubble user">
-          {entry.text}
-          {/* Inside the bubble, and positioned out of it. The wrapper this row sits in is
-              `display: contents` and has no box to hang anything off, and the bubble is the
-              only thing here that knows where the row actually is on screen. */}
-          <button
-            className="fork-here"
-            aria-label="Fork from here"
-            title={
-              forkable
-                ? 'Start a session from what was said before this'
-                : 'Wait for the turn to finish'
-            }
-            disabled={!forkable}
-            onClick={() => onFork(entry.id)}
-          >
-            <ForkIcon />
-          </button>
-        </div>
+        <Message align="end" className="message-row user-message">
+          <MessageContent>
+            <Bubble align="end">
+              <BubbleContent className="bubble user">
+              {entry.text}
+              {/* Inside the bubble, and positioned out of it. The wrapper this row sits in is
+                  `display: contents` and has no box to hang anything off, and the bubble is the
+                  only thing here that knows where the row actually is on screen. */}
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className="fork-here"
+                aria-label="Fork from here"
+                title={
+                  forkable
+                    ? 'Start a session from what was said before this'
+                    : 'Wait for the turn to finish'
+                }
+                disabled={!forkable}
+                onClick={() => onFork(entry.id)}
+              >
+                <ForkIcon />
+              </Button>
+              </BubbleContent>
+            </Bubble>
+          </MessageContent>
+        </Message>
       )
 
     case 'assistant':
       // The only formatted surface in the app. See Markdown.tsx for why it is the only one.
       return (
-        <div className="bubble assistant">
-          <Markdown text={entry.text} />
-        </div>
+        <Message className="message-row assistant-message">
+          <MessageContent>
+            <Bubble variant="ghost">
+              <BubbleContent className="bubble assistant">
+                <Markdown text={entry.text} />
+              </BubbleContent>
+            </Bubble>
+          </MessageContent>
+        </Message>
       )
 
     case 'narration':
@@ -1110,7 +1295,7 @@ function Card({
     case 'quarantined': {
       const { shown } = entry
       return (
-        <div className="quarantine">
+        <ShadCard className="quarantine my-2.5 gap-0 overflow-hidden py-0">
           <div className="quarantine-head">
             <span className="mark">confined</span>
             {/* Ellipsised, and it is a path: what gets cut is the part that identifies it. */}
@@ -1119,220 +1304,254 @@ function Card({
             </span>
             <span className="label">{shown.label}</span>
           </div>
-          <pre className="preview">{shown.preview.join('\n')}</pre>
+          <CardContent className="p-0">
+            <pre className="preview">{shown.preview.join('\n')}</pre>
+          </CardContent>
           <div className="quarantine-foot">
             {shown.lines} line{shown.lines === 1 ? '' : 's'} total ·{' '}
             {shown.reach === 'no_model'
               ? 'in no model’s context: nothing can be sent to read this'
               : 'not in the planner’s context; a processor can be sent to read it'}
           </div>
-        </div>
+        </ShadCard>
       )
     }
 
     case 'confirm': {
       const { request, decision } = entry
       return (
-        <div className={`confirm ${request.untrusted ? 'untrusted' : ''}`}>
-          <div className="confirm-head">
-            <span className="intent">{request.intent}</span>
-            <code className="path">{request.path}</code>
-            <span className="counts">
-              +{request.added} −{request.removed}
-            </span>
-          </div>
+        <ApprovalCard className={cn('confirm', request.untrusted && 'untrusted')}>
+          <CardHeader className="confirm-header gap-0 p-0">
+            <ApprovalHead>
+              <Badge variant="outline" className="intent">{request.intent}</Badge>
+              <code className="path">{request.path}</code>
+              <span className="counts">
+                +{request.added} −{request.removed}
+              </span>
+            </ApprovalHead>
+          </CardHeader>
 
-          {request.untrusted && (
-            <p className="warn">
-              This came from somewhere nobody vouched for. The agent never read it — an
-              isolated processor wrote it. Read it as you would a stranger’s patch.
-            </p>
-          )}
-          {!request.exact && (
-            <p className="warn">
-              The files were too dissimilar to diff exactly. This is an approximation of
-              the change.
-            </p>
-          )}
+          <CardContent className="confirm-body p-0">
+            {request.untrusted && (
+              <Alert className="warn">
+                <AlertDescription>This came from somewhere nobody vouched for. The agent never read it — an
+                  isolated processor wrote it. Read it as you would a stranger’s patch.</AlertDescription>
+              </Alert>
+            )}
+            {!request.exact && (
+              <Alert className="warn">
+                <AlertDescription>The files were too dissimilar to diff exactly. This is an approximation of
+                  the change.</AlertDescription>
+              </Alert>
+            )}
 
-<p className="permission-scope">{request.existing ? 'Update an existing project file.' : 'Create a new project file.'} This decision applies to the change shown below.</p>
-          {request.remark && <div className="processor-remark"><strong>Processor’s remark · untrusted</strong>
-            <pre>{request.remark.preview.join('\n')}</pre>
-            <small>{request.remark.label}{request.remark.lines > request.remark.preview.length ? ` · ${request.remark.lines - request.remark.preview.length} more lines not shown` : ''}. Review the diff before approving.</small>
-          </div>}
-          {request.credentials && request.credentials.length > 0 && <div className="credential-finding"><strong>This looks like it would put a secret in the tree</strong>
-            <ul>{request.credentials.map((found) => <li key={found}>{found}</li>)}</ul>
-            <small>Going by the name beside the value and how the value reads. Nothing recognised it as a particular provider’s key, so it is a guess and yours to settle.</small>
-          </div>}
-          <Diff changes={request.changes} />
+            <p className="permission-scope">{request.existing ? 'Update an existing project file.' : 'Create a new project file.'} This decision applies to the change shown below.</p>
+            {request.remark && <Alert className="processor-remark"><AlertDescription><strong>Processor’s remark · untrusted</strong>
+              <pre>{request.remark.preview.join('\n')}</pre>
+              <small>{request.remark.label}{request.remark.lines > request.remark.preview.length ? ` · ${request.remark.lines - request.remark.preview.length} more lines not shown` : ''}. Review the diff before approving.</small>
+            </AlertDescription></Alert>}
+            {request.credentials && request.credentials.length > 0 && <Alert className="credential-finding">
+              <AlertTitle><strong>This looks like it would put a secret in the tree</strong></AlertTitle>
+              <AlertDescription><ul>{request.credentials.map((found) => <li key={found}>{found}</li>)}</ul>
+                <small>Going by the name beside the value and how the value reads. Nothing recognised it as a particular provider’s key, so it is a guess and yours to settle.</small></AlertDescription>
+            </Alert>}
+            <Diff changes={request.changes} />
+          </CardContent>
 
           {!answerable ? (
-            <Unanswered />
+            <ApprovalActions><Unanswered /></ApprovalActions>
           ) : decision === null ? (
-            <div className="confirm-actions">
-              <button className="reject" onClick={() => onDecide('confirm', request.request, false)}>
+            <ApprovalActions>
+              <Button variant="outline" className="reject" onClick={() => onDecide('confirm', request.request, false)}>
                 Don’t write
-              </button>
-              <button className="approve" onClick={() => onDecide('confirm', request.request, true)}>
+              </Button>
+              <Button className="approve" onClick={() => onDecide('confirm', request.request, true)}>
                 {request.existing ? 'Apply this change' : 'Create this file'}
-              </button>
-            </div>
+              </Button>
+            </ApprovalActions>
           ) : (
-            <div className={`decided ${decision}`}>
-              {decision === 'approve' ? 'You approved this write' : 'You refused this write'}
-            </div>
+            <ApprovalActions>
+              <div className={`decided ${decision}`}>
+                {decision === 'approve' ? 'You approved this write' : 'You refused this write'}
+              </div>
+            </ApprovalActions>
           )}
-        </div>
+        </ApprovalCard>
       )
     }
 
     case 'run': {
       const { request, decision, remember } = entry
       return (
-        <div className={`confirm run ${request.releasesPrivate ? 'releases' : ''}`}>
-          <div className="confirm-head">
-            <span className="intent">run</span>
-            <code className="path">{request.directory}</code>
-          </div>
+        <ApprovalCard className={cn('confirm run', request.releasesPrivate && 'releases')}>
+          <CardHeader className="confirm-header gap-0 p-0">
+            <ApprovalHead>
+              <Badge variant="outline" className="intent">run</Badge>
+              <code className="path">{request.directory}</code>
+            </ApprovalHead>
+          </CardHeader>
 
-          {/* The argv, one stage per line, with what each name resolved to underneath.
-              Both are shown because they are two different claims: $PATH decides what
-              `grep` means, and a person vouching for a program should be looking at the
-              binary rather than the word. */}
-          {request.plan && <p className="permission-scope"><strong>Execution plan:</strong> <code>{request.plan}</code></p>}
-          {request.stdin && <p className="permission-scope"><strong>Standard input:</strong> <code>{request.stdin}</code></p>}
-          {!!request.writes?.length && <div className="permission-scope"><strong>Files created or modified:</strong><ul>{request.writes.map(path => <li key={path}><code>{path}</code></li>)}</ul></div>}
-          <ol className="stages">
-            {request.stages.map((stage, index) => (
-              <li key={index}>
-                <code className="argv">{stage.display}</code>
-                <span className="resolved">
-                  {stage.resolved ?? 'not found on PATH'}
-                </span>
-              </li>
-            ))}
-          </ol>
+          <CardContent className="confirm-body p-0">
+            {/* The argv, one stage per line, with what each name resolved to underneath.
+                Both are shown because they are two different claims: $PATH decides what
+                `grep` means, and a person vouching for a program should be looking at the
+                binary rather than the word. */}
+            {request.plan && <p className="permission-scope"><strong>Execution plan:</strong> <code>{request.plan}</code></p>}
+            {request.stdin && <p className="permission-scope"><strong>Standard input:</strong> <code>{request.stdin}</code></p>}
+            {!!request.writes?.length && <div className="permission-scope"><strong>Files created or modified:</strong><ul>{request.writes.map(path => <li key={path}><code>{path}</code></li>)}</ul></div>}
+            <ol className="stages">
+              {request.stages.map((stage, index) => (
+                <li key={index}>
+                  <code className="argv">{stage.display}</code>
+                  <span className="resolved">
+                    {stage.resolved ?? 'not found on PATH'}
+                  </span>
+                </li>
+              ))}
+            </ol>
 
-          <p className="permission-scope">Run this command in the project folder shown above. “Run once” approves only this execution.</p>
-          {answerable && decision === null && <p className="permission-scope"><strong>Remembered approval:</strong> {request.vouches.map((v) => v.display).join('; ')}. Covers these exact commands and trusts their output for this conversation, including after reopening it. Revoke through Permissions.</p>}
-          {!!request.ambient?.length && (
-            <div className="warn">
-              This spends access that is yours elsewhere. Nobody is asked for it at the moment it
-              is used, and nothing here takes it back afterwards.
-              <ul>
-                {request.ambient.map((spent) => (
-                  <li key={`${spent.authority}:${spent.named}`}>
-                    <code>{spent.named}</code>: {t.ambientSentence(spent.authority)}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {request.releasesPrivate && (
-            <p className="warn">
-              This hands your own data to the program. Whatever it does with those bytes
-              happens somewhere the agent stops governing them.
-            </p>
-          )}
+            <p className="permission-scope">Run this command in the project folder shown above. “Run once” approves only this execution.</p>
+            {answerable && decision === null && <p className="permission-scope"><strong>Remembered approval:</strong> {request.vouches.map((v) => v.display).join('; ')}. Covers these exact commands and trusts their output for this conversation, including after reopening it. Revoke through Permissions.</p>}
+            {!!request.ambient?.length && (
+              <Alert className="warn">
+                <AlertDescription>This spends access that is yours elsewhere. Nobody is asked for it at the moment it
+                  is used, and nothing here takes it back afterwards.
+                  <ul>
+                    {request.ambient.map((spent) => (
+                      <li key={`${spent.authority}:${spent.named}`}>
+                        <code>{spent.named}</code>: {t.ambientSentence(spent.authority)}
+                      </li>
+                    ))}
+                  </ul>
+                </AlertDescription>
+              </Alert>
+            )}
+            {request.releasesPrivate && (
+              <Alert className="warn">
+                <AlertDescription>This hands your own data to the program. Whatever it does with those bytes
+                  happens somewhere the agent stops governing them.</AlertDescription>
+              </Alert>
+            )}
+          </CardContent>
 
           {!answerable ? (
-            <Unanswered />
+            <ApprovalActions><Unanswered /></ApprovalActions>
           ) : decision === null ? (
-            <div className="confirm-actions">
-              <button className="reject" onClick={() => onDecide('run', request.request, false)}>
+            <ApprovalActions>
+              <Button variant="outline" className="reject" onClick={() => onDecide('run', request.request, false)}>
                 Don’t run
-              </button>
-              <button className="approve" onClick={() => onDecide('run', request.request, true)}>
+              </Button>
+              <Button className="approve" onClick={() => onDecide('run', request.request, true)}>
                 Run once
-              </button>
+              </Button>
               {/* Separate from "Run once" rather than a checkbox beside it: remembering
                   answers every later question about these programs, so it should take its
                   own deliberate press. The title says exactly what it would cover. */}
-              <button
+              <Button
+                variant="outline"
                 className="approve always"
                 title={`Stop asking about: ${request.vouches.map((v) => v.display).join(', ')}`}
                 onClick={() => onDecide('run', request.request, true, true)}
               >
                 Trust command and output
-              </button>
-            </div>
+              </Button>
+            </ApprovalActions>
           ) : (
-            <div className={`decided ${decision}`}>
-              {decision === 'reject'
-                ? 'You refused this command'
-                : remember
-                  ? 'You ran this and vouched for the programs'
-                  : 'You ran this once'}
-            </div>
+            <ApprovalActions>
+              <div className={`decided ${decision}`}>
+                {decision === 'reject'
+                  ? 'You refused this command'
+                  : remember
+                    ? 'You ran this and vouched for the programs'
+                    : 'You ran this once'}
+              </div>
+            </ApprovalActions>
           )}
-        </div>
+        </ApprovalCard>
       )
     }
 
     case 'output': {
       const { request, decision } = entry
       return (
-        <div className="confirm output">
-          <div className="confirm-head">
-            <span className="intent">read output</span>
-            <code className="path">{request.command}</code>
-            <span className="counts">
-              {request.lines} line{request.lines === 1 ? '' : 's'}
-            </span>
-          </div>
+        <ApprovalCard className="confirm output">
+          <CardHeader className="confirm-header gap-0 p-0">
+            <ApprovalHead>
+              <Badge variant="outline" className="intent">read output</Badge>
+              <code className="path">{request.command}</code>
+              <span className="counts">
+                {request.lines} line{request.lines === 1 ? '' : 's'}
+              </span>
+            </ApprovalHead>
+          </CardHeader>
 
-          <p className="warn">
-            The planner has not seen this. Read it yourself before deciding: approving is
-            what puts it into the model’s context, and anything in here that reads like an
-            instruction will be read there as one.
-          </p>
+          <CardContent className="confirm-body p-0">
+            <Alert className="warn">
+              <AlertDescription>The planner has not seen this. Read it yourself before deciding: approving is
+                what puts it into the model’s context, and anything in here that reads like an
+                instruction will be read there as one.</AlertDescription>
+            </Alert>
 
-          {/* In full, never truncated. The answer to this question rests on the bytes, so
-              a preview would be asking for an approval of what nobody saw. */}
-          <VettingNotice vetting={request.vetting} />
-          <pre className="preview">{request.output}</pre>
+            {/* In full, never truncated. The answer to this question rests on the bytes, so
+                a preview would be asking for an approval of what nobody saw. */}
+            <VettingNotice vetting={request.vetting} />
+            <pre className="preview">{request.output}</pre>
+          </CardContent>
 
           {!answerable ? (
-            <Unanswered />
+            <ApprovalActions><Unanswered /></ApprovalActions>
           ) : decision === null ? (
-            <div className="confirm-actions">
-              <button
+            <ApprovalActions>
+              <Button
+                variant="outline"
                 className="reject"
                 onClick={() => onDecide('output', request.request, false)}
               >
                 Keep it out
-              </button>
-              <button
+              </Button>
+              <Button
                 className="approve"
                 onClick={() => onDecide('output', request.request, true)}
               >
                 Let the planner read it
-              </button>
-            </div>
+              </Button>
+            </ApprovalActions>
           ) : (
-            <div className={`decided ${decision}`}>
-              {decision === 'approve'
-                ? 'You let the planner read this'
-                : 'You kept this out of the planner’s context'}
-            </div>
+            <ApprovalActions>
+              <div className={`decided ${decision}`}>
+                {decision === 'approve'
+                  ? 'You let the planner read this'
+                  : 'You kept this out of the planner’s context'}
+              </div>
+            </ApprovalActions>
           )}
-        </div>
+        </ApprovalCard>
       )
     }
 
     case 'vet': {
       const { request, decision } = entry
-      return <div className="confirm vetted-read">
-        <div className="confirm-head"><span className="intent">read once</span><code className="path">{request.origin}</code><span>{request.lines} lines</span></div>
-        <p className="permission-scope">Expected contents: {request.expects}</p>
-        <VettingNotice vetting={request.vetting} />
-        <p className="warn">Approval lets the planner read only this content. It does not trust this file for future reads.</p>
-        <pre className="preview">{request.content}</pre>
-        {!answerable ? <Unanswered /> : decision === null ? <div className="confirm-actions">
-          <button className="reject" onClick={() => onDecide('vet', request.request, false)}>Keep it out</button>
-          <button className="approve" onClick={() => onDecide('vet', request.request, true)}>Let the planner read once</button>
-        </div> : <div className={`decided ${decision}`}>{decision === 'approve' ? 'You allowed this content once' : 'You kept this content out'}</div>}
-      </div>
+      return (
+        <ApprovalCard className="confirm vetted-read">
+          <CardHeader className="confirm-header gap-0 p-0">
+            <ApprovalHead>
+              <Badge variant="outline" className="intent">read once</Badge>
+              <code className="path">{request.origin}</code>
+              <span className="counts">{request.lines} lines</span>
+            </ApprovalHead>
+          </CardHeader>
+          <CardContent className="confirm-body p-0">
+            <p className="permission-scope">Expected contents: {request.expects}</p>
+            <VettingNotice vetting={request.vetting} />
+            <Alert className="warn"><AlertDescription>Approval lets the planner read only this content. It does not trust this file for future reads.</AlertDescription></Alert>
+            <pre className="preview">{request.content}</pre>
+          </CardContent>
+          {!answerable ? <ApprovalActions><Unanswered /></ApprovalActions> : decision === null ? <ApprovalActions>
+            <Button variant="outline" className="reject" onClick={() => onDecide('vet', request.request, false)}>Keep it out</Button>
+            <Button className="approve" onClick={() => onDecide('vet', request.request, true)}>Let the planner read once</Button>
+          </ApprovalActions> : <ApprovalActions><div className={`decided ${decision}`}>{decision === 'approve' ? 'You allowed this content once' : 'You kept this content out'}</div></ApprovalActions>}
+        </ApprovalCard>
+      )
     }
     case 'ask':
       return <Questions request={entry} answers={entry.answers} onAnswer={onAnswer} />
@@ -1340,50 +1559,57 @@ function Card({
     case 'vouch': {
       const { request, decision } = entry
       return (
-        <div className="confirm vouch">
-          <div className="confirm-head">
-            <span className="intent">vouch</span>
-            <code className="path">{request.path}</code>
-          </div>
+        <ApprovalCard className="confirm vouch">
+          <CardHeader className="confirm-header gap-0 p-0">
+            <ApprovalHead>
+              <Badge variant="outline" className="intent">vouch</Badge>
+              <code className="path">{request.path}</code>
+            </ApprovalHead>
+          </CardHeader>
 
-          <p className="warn">
-            Vouching records a standing rule for this path, so it applies to later reads as
-            well as this one. Only do it for content you know the origin of.
-          </p>
+          <CardContent className="confirm-body p-0">
+            <Alert className="warn">
+              <AlertDescription>Vouching records a standing rule for this path, so it applies to later reads as
+                well as this one. Only do it for content you know the origin of.</AlertDescription>
+            </Alert>
 
-          <VettingNotice vetting={request.vetting} />
-          <pre className="preview">{request.preview}</pre>
-          {request.truncated && (
-            <div className="quarantine-foot">
-              This is the beginning of the file, not all of it.
-            </div>
-          )}
+            <VettingNotice vetting={request.vetting} />
+            <pre className="preview">{request.preview}</pre>
+            {request.truncated && (
+              <div className="quarantine-foot">
+                This is the beginning of the file, not all of it.
+              </div>
+            )}
+          </CardContent>
 
           {!answerable ? (
-            <Unanswered />
+            <ApprovalActions><Unanswered /></ApprovalActions>
           ) : decision === null ? (
-            <div className="confirm-actions">
-              <button
+            <ApprovalActions>
+              <Button
+                variant="outline"
                 className="reject"
                 onClick={() => onDecide('vouch', request.request, false)}
               >
                 Leave it confined
-              </button>
-              <button
+              </Button>
+              <Button
                 className="approve"
                 onClick={() => onDecide('vouch', request.request, true)}
               >
                 Vouch for this path
-              </button>
-            </div>
+              </Button>
+            </ApprovalActions>
           ) : (
-            <div className={`decided ${decision}`}>
-              {decision === 'approve'
-                ? 'You vouched for this path'
-                : 'You left it confined'}
-            </div>
+            <ApprovalActions>
+              <div className={`decided ${decision}`}>
+                {decision === 'approve'
+                  ? 'You vouched for this path'
+                  : 'You left it confined'}
+              </div>
+            </ApprovalActions>
           )}
-        </div>
+        </ApprovalCard>
       )
     }
   }
@@ -1422,10 +1648,12 @@ function landingHint(landing: string): string {
 function VettingNotice({ vetting }: { vetting?: import('../../shared/protocol').Vetting }): React.JSX.Element {
   const verdict = vetting?.verdict
   const label = verdict === 'safe' ? 'No instructions detected' : verdict === 'unsafe' ? 'Possible instructions detected' : 'Check inconclusive'
-  return <div className={`vetting-notice ${verdict === 'safe' ? 'safe' : 'caution'}`}>
-    <strong>{label}</strong>
-    {vetting?.reason && <p>{vetting.reason}</p>}
-    {vetting?.detail && <p>{vetting.detail}</p>}
-    <small>{!vetting ? 'No checker assessment was recorded. Review the content before deciding.' : verdict === 'safe' || verdict === 'unsafe' ? 'The checker received this content at the backend before this question. Its assessment can be wrong; you decide whether the planner may read it.' : 'The check did not complete. Content may already have reached the backend. You still decide whether the planner may read it.'}</small>
-  </div>
+  return <Alert className={`vetting-notice ${verdict === 'safe' ? 'safe' : 'caution'}`}>
+    <AlertTitle><strong>{label}</strong></AlertTitle>
+    <AlertDescription>
+      {vetting?.reason && <p>{vetting.reason}</p>}
+      {vetting?.detail && <p>{vetting.detail}</p>}
+      <small>{!vetting ? 'No checker assessment was recorded. Review the content before deciding.' : verdict === 'safe' || verdict === 'unsafe' ? 'The checker received this content at the backend before this question. Its assessment can be wrong; you decide whether the planner may read it.' : 'The check did not complete. Content may already have reached the backend. You still decide whether the planner may read it.'}</small>
+    </AlertDescription>
+  </Alert>
 }

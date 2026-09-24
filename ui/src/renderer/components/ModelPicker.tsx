@@ -1,9 +1,13 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ModelCatalogue, ModelOption } from '../../shared/protocol'
 import { setExperience, useExperience } from '../experience'
+import { Alert, AlertDescription } from './ui/alert'
+import { Badge } from './ui/badge'
 import { Button } from './ui/button'
-import { Input } from './ui/input'
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from './ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
+import { Separator } from './ui/separator'
+import { Spinner } from './ui/spinner'
 
 const CAPABILITIES: Record<string, [string, string]> = {
   text: ['Text', 'Generates text'],
@@ -31,11 +35,9 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
   const [loading, setLoading] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
   const [query, setQuery] = useState('')
-  const [active, setActive] = useState(0)
   const [revision, setRevision] = useState(0)
   const trigger = useRef<HTMLButtonElement>(null)
   const search = useRef<HTMLInputElement>(null)
-  const list = useRef<HTMLDivElement>(null)
   const id = useId()
   const close = () => {
     setOpen(false)
@@ -76,11 +78,6 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
       return rank(a) - rank(b)
     })
   }, [catalogue, model, query, preferences.recentModels])
-  useEffect(() => { setActive(0) }, [query, catalogue])
-  useEffect(() => {
-    list.current?.querySelector(`[data-index="${active}"]`)?.scrollIntoView({ block: 'nearest' })
-  }, [active])
-
   const heading = scope === 'bot' ? 'Bot model' : 'Conversation model'
   const selected = catalogue?.models.find((row) => row.id === model)
   const label = selected?.name ?? model ?? 'Configured default'
@@ -91,7 +88,7 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
   }
 
   return <Popover open={open} onOpenChange={(next) => {
-    if (next) { setQuery(''); setActive(0) }
+    if (next) setQuery('')
     setOpen(next)
     if (!next) requestAnimationFrame(() => trigger.current?.focus())
   }}>
@@ -105,49 +102,45 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
       <span className="model-current" aria-hidden="true">{compactLabel}</span>
     </Button></PopoverTrigger>
     </div>
-    <PopoverContent id={id} className="model-popover" aria-label={heading} side="top" align="end"
+    <PopoverContent id={id} className="model-popover p-0" aria-label={heading} side="top" align="end"
       onOpenAutoFocus={(event) => { event.preventDefault(); search.current?.focus() }}>
-      <div className="model-heading"><strong>{heading}</strong>
-        <Button variant="ghost" size="sm" type="button" className="model-refresh" disabled={loading} onClick={() => setRevision((n) => n + 1)}>Refresh</Button>
-      </div>
-      <Input ref={search} className="model-search" type="search" placeholder="Search models…" value={query}
-        role="combobox" aria-label="Search models" aria-autocomplete="list" aria-expanded="true"
-        aria-controls={`${id}-list`} aria-activedescendant={options[active] ? `${id}-option-${active}` : undefined}
-        onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => {
-          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-            event.preventDefault()
-            setActive((index) => Math.max(0, Math.min(options.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1))))
-          } else if (event.key === 'Enter') {
-            event.preventDefault()
-            if (options[active]) choose(options[active])
-          }
-        }} />
-      {loading && <p className="model-status" role="status">Loading available models…</p>}
-      {problem && <p className="model-status" role="alert">{problem}</p>}
-      {catalogue?.warnings.map((warning) => <p className="model-status" key={warning}>{warning}</p>)}
-      <div id={`${id}-list`} className="model-options" role="listbox" aria-label="Models" ref={list}>
-        {options.map((row, index) => <div key={row.id} id={`${id}-option-${index}`} role="option"
-          aria-selected={row.id === model} data-index={index}
-          className={`model-option ${index === active ? 'active' : ''}`}
-          onMouseDown={(event) => event.preventDefault()} onMouseEnter={() => setActive(index)} onClick={() => choose(row)}>
+      <Command shouldFilter={false} className="model-command">
+        <div className="model-heading"><strong>{heading}</strong>
+          <Button variant="ghost" size="sm" type="button" className="model-refresh" disabled={loading} onClick={() => setRevision((n) => n + 1)}>Refresh</Button>
+        </div>
+        <CommandInput ref={search} className="model-search" placeholder="Search models…" value={query}
+          aria-label="Search models" onValueChange={setQuery}
+          onKeyDown={(event) => { if (event.key === 'Enter' && options.length === 0) event.preventDefault() }} />
+        {loading && <div className="model-status" role="status"><Spinner data-icon="inline-start" /> Loading available models…</div>}
+        {problem && <Alert variant="destructive" className="model-status"><AlertDescription>{problem}</AlertDescription></Alert>}
+        {catalogue?.warnings.map((warning) => <Alert className="model-status" key={warning}><AlertDescription>{warning}</AlertDescription></Alert>)}
+        <CommandList id={`${id}-list`} className="model-options" aria-label="Models">
+          <CommandEmpty className="model-status">{query ? 'No models match your search.' : 'No models available. Check your backend settings.'}</CommandEmpty>
+          <CommandGroup>
+          {options.map((row) => <CommandItem key={row.id} value={row.id}
+          data-current={row.id === model}
+          className="model-option"
+          onSelect={() => choose(row)}>
           <span className="model-check" aria-hidden="true">{row.id === model ? '✓' : ''}</span>
           <span className="model-description"><span className="model-name">{row.name}</span>
             <span className="model-detail">{row.provider}{row.premium ? ' · Premium' : ''}{row.contextWindow ? ` · ${row.contextWindow.toLocaleString()} context tokens` : ''}{preferences.recentModels.includes(row.id) ? ' · Recent' : ''}</span>
             {!!row.capabilities?.length && <span className="model-capabilities" aria-label="Provider-reported capabilities">
               {row.capabilities.filter((key) => ['text', 'tools'].includes(key)).map((key) => {
                 const badge = CAPABILITIES[key]
-                return badge ? <span className="model-capability" key={key} title={`${badge[1]} · Supported by this app and reported by the provider`}>
+                return badge ? <Badge variant="outline" className="model-capability" key={key} title={`${badge[1]} · Supported by this app and reported by the provider`}>
                   {badge[0]}
-                </span> : null
+                </Badge> : null
               })}
             </span>}
           </span>
-          {row.id === catalogue?.defaultModel && <span className="model-default">Default</span>}
-        </div>)}
-      </div>
-      {!loading && options.length === 0 && <p className="model-status">{query ? 'No models match your search.' : 'No models available. Check your backend settings.'}</p>}
-      <div className="model-footnote">{scope === 'bot' ? 'Saved with this bot. Applies to its next message.' : 'Applies to the next message in this conversation.'}</div>
-      <p className="model-footnote">Brave Bot uses text and tools. Other provider capabilities, such as image or audio generation, are not available here. Pricing is not supplied by this catalogue.</p>
+          {row.id === catalogue?.defaultModel && <Badge variant="secondary" className="model-default">Default</Badge>}
+        </CommandItem>)}
+          </CommandGroup>
+        </CommandList>
+        <Separator />
+        <div className="model-footnote">{scope === 'bot' ? 'Saved with this bot. Applies to its next message.' : 'Applies to the next message in this conversation.'}</div>
+        <p className="model-footnote">Brave Bot uses text and tools. Other provider capabilities, such as image or audio generation, are not available here. Pricing is not supplied by this catalogue.</p>
+      </Command>
     </PopoverContent>
   </Popover>
 }

@@ -1,6 +1,7 @@
 import { failureSummary } from '../failure'
 import { Alert, AlertDescription } from './ui/alert'
 import { Button } from './ui/button'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
 
 /**
  * A failure, titled from the category the agent sent and never from the words in the detail.
@@ -21,6 +22,9 @@ export function ErrorCard({ detail, onRetry, onModel, category, attempts, status
       {onRetry && <Button variant="outline" size="sm" onClick={onRetry}>Draft continuation</Button>}
       {onModel && <Button variant="outline" size="sm" onClick={onModel}>Choose another model</Button>}
     </div>
-    <details><summary>Technical details</summary><pre>{detail}{attempts != null ? `\nRequests attempted: ${attempts}` : ''}{status != null ? `\nHTTP status: ${status}` : ''}</pre></details>
+    <Collapsible className="error-details">
+      <CollapsibleTrigger asChild><Button variant="ghost" size="sm">Technical details</Button></CollapsibleTrigger>
+      <CollapsibleContent forceMount><pre>{detail}{attempts != null ? `\nRequests attempted: ${attempts}` : ''}{status != null ? `\nHTTP status: ${status}` : ''}</pre></CollapsibleContent>
+    </Collapsible>
   </Alert>
 }

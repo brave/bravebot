@@ -3,15 +3,17 @@ import { createContext, useContext, useCallback, useMemo, useState } from 'react
 import type { SessionSummary } from '../../shared/protocol'
 import type { ContextTarget } from '../../shared/commands'
 import { keyOf } from '../../shared/forks'
-import { Fold } from './Fold'
 import { ForkIcon } from './ForkIcon'
 import { PopMenu, type PopItem } from './PopMenu'
 import { conversationKey } from '../../shared/experience'
 import { useExperience, setConversation } from '../experience'
 import { Badge } from './ui/badge'
 import { Button } from './ui/button'
+import { ButtonGroup } from './ui/button-group'
 import { Toggle } from './ui/toggle'
 import { ToggleGroup, ToggleGroupItem } from './ui/toggle-group'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
+import { Empty, EmptyDescription } from './ui/empty'
 export const SessionInfo = createContext<Record<string, { bot?: string; state?: string }>>({})
 
 interface Props {
@@ -129,15 +131,15 @@ export function Sessions({
 
       <div className="session-list">
         {sessions.length === 0 && (
-          <p className="empty">
+          <Empty className="empty"><EmptyDescription>
             No sessions yet. Open a project to begin — or start one in a terminal with{' '}
             <code>bravebot</code> and it will appear here.
-          </p>
+          </EmptyDescription></Empty>
         )}
         {/* Said separately, because the message above is a fact about the machine and would
             be a lie about a list that is merely filtered down to nothing. */}
         {sessions.length > 0 && shown.length === 0 && (
-          <p className="empty">{query.trim() ? `No conversation matches “${query}”.` : archive ? 'No archived conversations.' : 'No active conversations. Start a new session or restore one from Archived.'}</p>
+          <Empty className="empty"><EmptyDescription>{query.trim() ? `No conversation matches “${query}”.` : archive ? 'No archived conversations.' : 'No active conversations. Start a new session or restore one from Archived.'}</EmptyDescription></Empty>
         )}
         {!grouped &&
           shown.map((session) => (
@@ -202,25 +204,24 @@ function Group({
   onNew: (directory: string) => void
 }): React.JSX.Element {
   return (
+    <Collapsible open={open} onOpenChange={() => onToggle(group.directory)} asChild>
     <section className="session-group-section">
       {/* The full path in the tooltip, because two checkouts of one project share a basename
           and picking the wrong one is a mistake nothing later announces — the same trap the
           recents menu guards against. On both buttons: the one that starts a session here is
           exactly where that mistake would cost something. */}
       <div className="session-group-head">
-        <Button
+        <CollapsibleTrigger asChild><Button
           variant="ghost"
           className="session-group-fold"
-          aria-expanded={open}
           title={group.directory}
-          onClick={() => onToggle(group.directory)}
         >
           <span className={`chevron ${open ? 'open' : ''}`} aria-hidden="true">
             ›
           </span>
           <span className="session-group-name">{group.project}</span>
           <span className="count">{group.sessions.length}</span>
-        </Button>
+        </Button></CollapsibleTrigger>
         {/* The same thing **New session** does, minus the folder picker — the directory is
             already known, and the picker's whole job is to find one out. Named for the
             project rather than "New session" so that a reader of the button list is told
@@ -236,18 +237,19 @@ function Group({
           <span aria-hidden="true">+</span>
         </Button>
       </div>
-      <Fold open={open}>
-        {group.sessions.map((session) => (
-          <Session
-            key={`${session.directory}/${session.id}`}
-            session={session}
-            openId={openId}
-            forked={forked.has(keyOf(session.directory, session.id))}
-            onOpen={onOpen}
-          />
-        ))}
-      </Fold>
+      <CollapsibleContent forceMount className={`fold ${open ? 'open' : ''}`}>
+        <div className="fold-clip"><div>{group.sessions.map((session) => (
+            <Session
+              key={`${session.directory}/${session.id}`}
+              session={session}
+              openId={openId}
+              forked={forked.has(keyOf(session.directory, session.id))}
+              onOpen={onOpen}
+            />
+          ))}</div></div>
+      </CollapsibleContent>
     </section>
+    </Collapsible>
   )
 }
 
@@ -276,7 +278,7 @@ function Session({
   const info = useContext(SessionInfo)[key]
   const [menu, setMenu] = useState(false)
   return <div className={`session-row ${session.id === openId ? 'current' : ''}`}>
-    <Button variant="ghost" className={`session ${session.id === openId ? 'current' : ''}`} onClick={() => onOpen(session)} onContextMenu={contextMenu('session', session.id)}>
+    <Button variant="ghost" className={`session h-auto w-full flex-col items-start justify-start text-left ${session.id === openId ? 'current' : ''}`} onClick={() => onOpen(session)} onContextMenu={contextMenu('session', session.id)}>
       <span className="session-title" title={session.title}>
         {preferences?.pinned && <svg className="session-pin" width="13" height="15" viewBox="0 0 16 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" role="img" aria-label="Pinned" focusable="false">
           <path d="M5 2h6M6 2v6l-3 4h10l-3-4V2M8 12v4" />
@@ -324,7 +326,7 @@ function NewSession({ onNew }: { onNew: (directory?: string) => void }): React.J
     : [{ id: 'none', label: 'No projects opened yet', enabled: false }]
 
   return (
-    <div className="new-split">
+    <ButtonGroup className="new-split">
       <Button className="new" onClick={() => onNew()} title="Open a project">
         <span className="plus">+</span> New session
       </Button>
@@ -344,7 +346,7 @@ function NewSession({ onNew }: { onNew: (directory?: string) => void }): React.J
         label="Projects opened before"
         onChoose={(id) => onNew(id)}
       />
-    </div>
+    </ButtonGroup>
   )
 }
 

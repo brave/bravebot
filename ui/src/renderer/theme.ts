@@ -40,6 +40,7 @@ function dark(): boolean {
 export function applyTheme(theme: Theme): void {
   const root = document.documentElement
   if (theme.name === BRAVE) {
+    root.classList.toggle('dark', dark())
     root.removeAttribute('data-theme')
     root.removeAttribute('data-ground')
     for (const name of [...root.style]) {
@@ -47,7 +48,9 @@ export function applyTheme(theme: Theme): void {
     }
     return
   }
-  for (const [name, value] of Object.entries(roleVariables(theme, dark()))) {
+  const variables = roleVariables(theme, dark())
+  root.classList.toggle('dark', variables['--role-scheme'] === 'dark')
+  for (const [name, value] of Object.entries(variables)) {
     root.style.setProperty(name, value)
   }
   root.setAttribute('data-theme', theme.name)

@@ -65,7 +65,7 @@ for (const fallback of [false, true]) {
     assert.equal(await dialog.getByText('Hello, there.', { exact: true }).count(), 0)
     const project = 'https://github.com/brave/bravebot'
     assert.equal(await dialog.getByRole('link', { name: 'GitHub' }).getAttribute('href'), project)
-    await dialog.locator('summary').click()
+    await dialog.getByRole('button', { name: 'Build & storage details', exact: true }).click()
     const build = await dialog.locator('dl > div').nth(1).locator('dd').textContent()
     assert.equal(await dialog.locator('.about-version').textContent(), `Version ${build.split(' ')[0]}`)
     await page.screenshot({ path: join(tmpdir(), `bravebot-about-${fallback ? 'svg' : 'webgl'}.png`) })

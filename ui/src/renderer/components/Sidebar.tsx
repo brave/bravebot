@@ -31,7 +31,8 @@ import type { Tab } from '../../shared/view'
 import { Sessions } from './Sessions'
 import { Bots } from './Bots'
 import { Button } from './ui/button'
-import { ToggleGroup, ToggleGroupItem } from './ui/toggle-group'
+import { SidebarContent } from './ui/sidebar'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs'
 
 interface Props {
   sessions: SessionSummary[]
@@ -104,49 +105,51 @@ export function Sidebar({
 
   return (
     <aside className="sessions" id="sessions-column">
-      {/* The label stays put and `aria-pressed` carries which is on, the disclosure discipline
-          every toggle in this window follows. No tooltips: the labels are the whole of what
-          these do, and a popup could only repeat them. */}
-      <ToggleGroup type="single" value={tab} onValueChange={(value) => { if (value) show(value as Tab) }} className="sidebar-tabs" aria-label="What the column shows">
-        <ToggleGroupItem
-          value="sessions"
-          className="sidebar-tab"
-          aria-pressed={tab === 'sessions'}
-        >
-          Sessions
-        </ToggleGroupItem>
-        <ToggleGroupItem value="bots" className="sidebar-tab" aria-pressed={tab === 'bots'}>
-          Bots
-        </ToggleGroupItem>
-      </ToggleGroup>
+      <Tabs value={tab} onValueChange={(value) => show(value as Tab)} className="min-h-0 flex-1 gap-0">
+        {/* `aria-pressed` remains as a compatibility hook while Tabs adds standard tab semantics. */}
+        <TabsList className="sidebar-tabs" aria-label="What the column shows">
+          <TabsTrigger
+            value="sessions"
+            className="sidebar-tab"
+            aria-pressed={tab === 'sessions'}
+          >
+            Sessions
+          </TabsTrigger>
+          <TabsTrigger value="bots" className="sidebar-tab" aria-pressed={tab === 'bots'}>
+            Bots
+          </TabsTrigger>
+        </TabsList>
 
-      <div className="sidebar-body" hidden={tab !== 'sessions'}>
-        <Sessions
-          sessions={sessions}
-          openId={openId}
-          forked={forked}
-          onOpen={onOpen}
-          onNew={onNew}
-          grouped={grouped}
-          onGroup={setGrouped}
-          collapsed={collapsed}
-          onCollapse={setCollapsed}
-        />
-      </div>
+        <SidebarContent className="gap-0 overflow-hidden">
+          <TabsContent value="sessions" forceMount hidden={tab !== 'sessions'} className="sidebar-body data-[state=inactive]:hidden">
+            <Sessions
+              sessions={sessions}
+              openId={openId}
+              forked={forked}
+              onOpen={onOpen}
+              onNew={onNew}
+              grouped={grouped}
+              onGroup={setGrouped}
+              collapsed={collapsed}
+              onCollapse={setCollapsed}
+            />
+          </TabsContent>
 
-      <div className="sidebar-body" hidden={tab !== 'bots'}>
-        <Bots
-          bots={bots}
-          sessions={sessions}
-          onNewConversation={onNewBotConversation}
-          onConversation={onBotConversation}
-          openSlug={openSlug}
-          openDoing={openDoing}
-          onSave={onSaveBot}
-          onRetire={onRetireBot}
-          onRemove={onRemoveBot}
-        />
-      </div>
+          <TabsContent value="bots" forceMount hidden={tab !== 'bots'} className="sidebar-body data-[state=inactive]:hidden">
+            <Bots
+              bots={bots}
+              sessions={sessions}
+              onNewConversation={onNewBotConversation}
+              onConversation={onBotConversation}
+              openSlug={openSlug}
+              openDoing={openDoing}
+              onSave={onSaveBot}
+              onRetire={onRetireBot}
+              onRemove={onRemoveBot}
+            />
+          </TabsContent>
+        </SidebarContent>
+      </Tabs>
 
       <Button variant="ghost" className="agent-settings-open" onClick={onSettings}>Agent settings</Button>
       {build && (

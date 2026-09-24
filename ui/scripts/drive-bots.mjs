@@ -386,12 +386,13 @@ await openArchive()
 // removes in a refactor without noticing what it was for.
 await archivedRow.locator('.bot-delete').click()
 await back.waitForTimeout(400)
+const deleteDialog = back.getByRole('alertdialog', { name: 'Delete Release Notes?', exact: true })
 check(
-  onDisk(MINE[0]) !== null && (await archivedRow.locator('.bot-keep').count()) === 1,
+  onDisk(MINE[0]) !== null && (await deleteDialog.getByRole('button', { name: 'Keep bot', exact: true }).count()) === 1,
   'pressing Delete asks rather than deletes, and offers the way out first',
 )
 await back.screenshot({ path: '/tmp/bravebot-ui/24-bots-delete.png' })
-await archivedRow.locator('.bot-keep').click()
+await deleteDialog.getByRole('button', { name: 'Keep bot', exact: true }).click()
 await back.waitForTimeout(400)
 check(
   onDisk(MINE[0]) !== null && (await archivedRow.locator('.bot-restore').count()) === 1,
@@ -400,7 +401,7 @@ check(
 
 await archivedRow.locator('.bot-delete').click()
 await back.waitForTimeout(400)
-await archivedRow.locator('.bot-delete-armed').click()
+await back.getByRole('alertdialog', { name: 'Delete Release Notes?', exact: true }).getByRole('button', { name: 'Delete bot', exact: true }).click()
 await back.waitForTimeout(600)
 check(
   (await backMine.count()) === 0 &&

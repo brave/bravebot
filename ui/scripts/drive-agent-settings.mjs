@@ -97,7 +97,8 @@ try {
   await dialog.getByRole('alert').filter({ hasText: 'This hook fires for nothing' }).waitFor()
   // Taking the advice keeps the filter the notice was about. The notice is the agent's answer about
   // the file on disk, so an edit clears it until the file has been read again.
-  await dialog.locator('.hook-editor select').selectOption('tool-finished')
+  await dialog.getByRole('combobox', { name: /^When/ }).click()
+  await page.getByRole('option', { name: 'Tool finishes', exact: true }).click()
   assert.equal(await dialog.getByLabel('Tool filter (optional)', { exact: true }).inputValue(), 'write_file', 'choosing the moment the filter works at keeps the filter')
   await dialog.getByRole('alert').filter({ hasText: 'This hook fires for nothing' }).waitFor({ state: 'detached' })
   await dialog.getByRole('button', { name: 'Save hooks', exact: true }).click()

@@ -451,6 +451,8 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .session {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
   gap: 2px;
   width: 100%;
   padding: 8px 10px;
@@ -859,18 +861,16 @@ button { font: inherit; color: inherit; cursor: pointer; }
   letter-spacing: 0.03em;
 }
 
-/* Confined content is marked structurally, not by a line of text it could imitate. */
+/* Confined content is marked structurally, not by a line of text it could imitate.
+   The container is a shadcn Card; what stays here is the security surface it is drawn on. */
 .quarantine {
-  margin: 10px 0;
-  border: 1px solid var(--confine);
-  border-radius: var(--radius);
+  border-color: var(--confine);
   background:
     repeating-linear-gradient(
       45deg,
       transparent, transparent 7px,
       var(--confine-bg) 7px, var(--confine-bg) 14px
     );
-  overflow: hidden;
 }
 .quarantine-head {
   display: flex;
@@ -907,14 +907,8 @@ button { font: inherit; color: inherit; cursor: pointer; }
   color: var(--ink-faint);
 }
 
-/* An approval a reviewer cannot read is decorative. */
-.confirm {
-  margin: 12px 0;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  overflow: hidden;
-}
-/* Reviewing a body nobody vouched for is a different act, and must not look alike. */
+/* An approval is a shadcn Card: the container chrome is the component's, and what stays
+   here is the marking of who vouched for the body. */
 .confirm.untrusted { border-color: var(--warn); border-width: 2px; }
 
 /* A run that would hand the user's own data to a program is marked the same way, on
@@ -1061,19 +1055,19 @@ button { font: inherit; color: inherit; cursor: pointer; }
   padding: 10px 12px;
   border-top: 1px solid var(--line);
 }
-.confirm-actions button, .trust-actions button {
+.trust-actions button {
   padding: 6px 14px;
   border-radius: 7px;
   border: 1px solid var(--line);
   background: transparent;
 }
-.confirm-actions .approve, .trust-actions .approve {
+.trust-actions .approve {
   background: var(--accent);
   color: var(--accent-ink);
   border-color: transparent;
   font-weight: 500;
 }
-.confirm-actions .reject:hover, .trust-actions .decline:hover {
+.trust-actions .decline:hover {
   background: var(--removed-bg);
   color: var(--removed);
 }
@@ -1165,7 +1159,6 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .model-trigger:disabled { cursor: default; }
 .model-trigger:focus-visible, .model-refresh:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .model-popover {
-  position: absolute; z-index: 30; bottom: calc(100% + 10px); left: 0;
   width: min(360px, 60vw); max-height: min(420px, 65vh);
   display: flex; flex-direction: column; padding: 12px;
   border: 1px solid var(--line); border-radius: 12px; background: var(--bg);
@@ -1617,8 +1610,6 @@ button { font: inherit; color: inherit; cursor: pointer; }
 /* Opaque, not translucent. The window is already `vibrancy: 'sidebar'`, and a blurred panel
    over a blurred window blurs twice into something neither legible nor Mac-like. */
 .popmenu {
-  position: fixed;
-  z-index: 10;
   min-width: 220px;
   max-width: 380px;
   padding: 4px;
@@ -2145,7 +2136,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .error-actions button { border: 1px solid var(--line); background: var(--bg); border-radius: 6px; padding: 6px 10px; }
 .modal { width: min(680px, calc(100vw - 48px)); max-height: calc(100vh - 64px); overflow-y: auto; padding: 28px; background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 24px 80px #0003; }
 .modal h2 { margin-top: 0; }
-.scrim { z-index: 100; }
 .background-tasks { position: fixed; left: 12px; bottom: 12px; width: 220px; z-index: 25; display: grid; gap: 6px; }
 .background-tasks button { padding: 8px 10px; background: var(--bg); border: 1px solid var(--accent); border-radius: 8px; font-size: 12px; box-shadow: 0 3px 10px #0001; text-align: left; }
 .welcome-mark { width: 50px; height: 50px; display: grid; place-items: center; background: var(--accent); color: var(--accent-ink); font-size: 24px; font-weight: 700; border-radius: 15px; margin-bottom: 22px; }
@@ -2155,7 +2145,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .primary { border: 0; border-radius: 8px; background: var(--accent); color: var(--accent-ink); padding: 10px 18px; font-weight: 600; }
 .welcome-recents { display: grid; gap: 6px; margin-top: 32px; }
 .welcome-recents h2 { font-size: 13px; color: var(--ink-dim); }
-.welcome-recents button { display: flex; flex-direction: column; gap: 3px; text-align: left; padding: 10px 12px; background: transparent; border: 1px solid var(--line); border-radius: 8px; }
+.welcome-recents button { display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-start; gap: 3px; text-align: left; padding: 10px 12px; background: transparent; border: 1px solid var(--line); border-radius: 8px; }
 .welcome-recents span { font-size: 12px; color: var(--ink-dim); overflow-wrap: anywhere; }
 .welcome-hint { font-size: 12px; color: var(--ink-dim); margin-top: 24px; }
 @media (max-width: 1120px) {
@@ -2192,7 +2182,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .expanded-diff { width: min(1080px, calc(100vw - 48px)); }
 .expanded-diff .diff { max-height: 65vh; }
 .confirm-actions { position: sticky; bottom: 0; z-index: 1; background: var(--bg); flex-wrap: wrap; }
-.confirm-actions .always { background: transparent; color: var(--ink); border-color: var(--line); }
 .permission-scope { margin: 0; padding: 10px 12px; font-size: 12px; border-top: 1px solid var(--line); color: var(--ink-dim); overflow-wrap: anywhere; }
 
 .session-scope { display: flex; gap: 4px; margin-top: 10px; }
@@ -2238,7 +2227,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .bot-overview-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
 .bot-history-search { width: 100%; margin-bottom: 10px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--ink); }
 .bot-conversations { display: grid; gap: 6px; margin-bottom: 20px; max-height: 300px; overflow-y: auto; }
-.bot-conversations button, .bot-history-unavailable { display: grid; gap: 4px; text-align: left; padding: 10px 12px; }
+.bot-conversations button, .bot-history-unavailable { display: grid; justify-items: start; gap: 4px; text-align: left; padding: 10px 12px; }
 .bot-conversations strong { font-size: 13px; overflow-wrap: anywhere; }
 .bot-conversations span, .bot-conversations code { color: var(--ink-dim); font-size: 12px; }
 .bot-history-unavailable { border: 1px dashed var(--line); border-radius: 7px; }
@@ -2282,13 +2271,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .app .composer-toolbar { flex-wrap: wrap; }
 .app .composer-hint { min-width: 130px; }
 
-/* Shared dialog controls retain visible keyboard focus and the app's visual language. */
-.modal button:not(:where(.model-trigger, .model-option, .theme-swatch)) {
-  min-height: 32px; padding: 6px 12px; border: 1px solid var(--line);
-  border-radius: 7px; background: var(--bg); color: var(--ink); font: inherit;
-}
-.modal button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-
 /* Information scoped to a turn, beneath its prompt and reply. */
 .turn-notices { border-left: 2px solid var(--line); margin: 12px 0 16px; padding: 0 0 0 12px; color: var(--ink-dim); font-size: 12px; }
 .turn-notices summary, .turn-statistics summary, .audit-inspector summary { cursor: pointer; padding: 5px 0; }
@@ -2325,9 +2307,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
   .turn-notices summary, .turn-statistics summary, .audit-inspector summary, .turn-audit-link, .audit-close { min-height: 44px; }
   .audit-close { min-width: 44px; }
 }
-.modal button:disabled { opacity: .5; }
-.modal .bot-save, .modal button.primary { background: var(--accent); color: var(--accent-ink); }
-
 .diff .line-number { width: 3.5em; flex: 0 0 3.5em; text-align: right; padding-right: .7em; color: var(--ink-dim); user-select: none; font-variant-numeric: tabular-nums; }
 
 .interrupted-request { padding: 12px 16px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink-dim); }
@@ -2355,7 +2334,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .bot-editor .bot-actions { position: sticky; bottom: -28px; background: var(--bg); padding-block: 12px; z-index: 2; }
 
 /* About: a small stage for the app's own mascot. */
-.modal.about { position: relative; width: min(440px, calc(100vw - 32px)); padding: 30px 28px 22px; animation: about-arrive 220ms ease-out; }
+.modal.about { width: min(440px, calc(100vw - 32px)); padding: 30px 28px 22px; animation: about-arrive 220ms ease-out; }
 .about .about-close { position: absolute; z-index: 1; top: 12px; right: 12px; display: grid; place-items: center; width: 32px; padding: 0; border-color: transparent; background: transparent; color: var(--ink-dim); }
 .about .about-close:hover { background: var(--code-bg); color: var(--ink); }
 .about-hero { text-align: center; }

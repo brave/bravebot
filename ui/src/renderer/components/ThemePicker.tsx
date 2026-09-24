@@ -1,8 +1,12 @@
 import { Modal } from './Modal'
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { BRAVE, findTheme, roleVariables, type Theme } from '../../shared/theme'
 import { applyTheme } from '../theme'
+import { Badge } from './ui/badge'
 import { Button } from './ui/button'
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from './ui/command'
+import { DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog'
+import { Kbd, KbdGroup } from './ui/kbd'
 
 interface Props {
   themes: readonly Theme[]
@@ -40,20 +44,19 @@ const SWATCHES = ['ok', 'fail', 'running', 'note'] as const
 export function ThemePicker(props: Props): React.JSX.Element {
   const { themes, chosen, directory, onKeep, onClose } = props
   const opened = useRef(findTheme(themes, chosen) ?? themes[0])
-  const list = useRef<HTMLDivElement>(null)
-  const rows = useRef<(HTMLDivElement | null)[]>([])
+  const [query, setQuery] = useState('')
   const [selected, setSelected] = useState(() => {
     const at = themes.findIndex((theme) => theme.name === (chosen === 'system' ? BRAVE : chosen))
-    return at === -1 ? 0 : at
+    return themes[at === -1 ? 0 : at]?.name ?? BRAVE
   })
 
   // Previewing is a DOM write and not a render: the transcript behind this panel must not be
   // rebuilt to change the colour of its background. `theme.ts` gives the argument.
   const preview = useCallback(
-    (at: number) => {
-      const theme = themes[at]
+    (name: string) => {
+      const theme = themes.find((candidate) => candidate.name === name)
       if (theme) applyTheme(theme)
-      setSelected(at)
+      setSelected(name)
     },
     [themes],
   )
@@ -63,39 +66,17 @@ export function ThemePicker(props: Props): React.JSX.Element {
     onClose()
   }, [onClose])
 
-  useLayoutEffect(() => {
-    list.current?.focus()
-  }, [])
-
-  // Keeping the cursor on screen, which matters here more than in a short menu: there are
-  // twenty-two built-ins before anybody has written one of their own.
-  useEffect(() => {
-    rows.current[selected]?.scrollIntoView({ block: 'nearest' })
-  }, [selected])
-
   const keep = (): void => {
-    const theme = themes[selected]
+    const theme = themes.find((candidate) => candidate.name === selected)
     if (!theme) return
     applyTheme(theme)
     onKeep(theme.name)
   }
 
   const onKeyDown = (event: React.KeyboardEvent): void => {
-    const last = themes.length - 1
-    if (event.key === 'ArrowDown') {
+    if (event.key === 'Enter') {
       event.preventDefault()
-      preview(Math.min(selected + 1, last))
-    } else if (event.key === 'ArrowUp') {
-      event.preventDefault()
-      preview(Math.max(selected - 1, 0))
-    } else if (event.key === 'Home') {
-      event.preventDefault()
-      preview(0)
-    } else if (event.key === 'End') {
-      event.preventDefault()
-      preview(last)
-    } else if (event.key === 'Enter') {
-      event.preventDefault()
+      event.stopPropagation()
       keep()
     } else if (event.key === 'Escape') {
       event.preventDefault()
@@ -107,51 +88,47 @@ export function ThemePicker(props: Props): React.JSX.Element {
 
   return (
     <Modal title="Theme" className="theme-picker" onClose={cancel}>
-        <h2 id="theme-title">Theme</h2>
-        <div
-          className="theme-list"
-          role="listbox"
-          aria-activedescendant={`theme-${selected}`}
-          tabIndex={0}
-          ref={list}
-          onKeyDown={onKeyDown}
-        >
-          {themes.map((theme, at) => {
-            const inks = roleVariables(theme, dark)
-            return (
-              <div
-                key={theme.name}
-                id={`theme-${at}`}
-                ref={(node) => {
-                  rows.current[at] = node
-                }}
-                className={`theme-row${at === selected ? ' active' : ''}`}
-                role="option"
-                aria-selected={at === selected}
-                onMouseDown={() => preview(at)}
-                onDoubleClick={keep}
-              >
-                <span className="theme-name">{theme.name}</span>
-                {theme.name === opened.current?.name ? (
-                  <span className="theme-current">in use</span>
-                ) : null}
-                <span className="theme-swatches" aria-hidden="true">
-                  {SWATCHES.map((role) => (
-                    <i key={role} style={{ background: inks[`--role-${role}`] }} />
-                  ))}
-                </span>
-              </div>
-            )
-          })}
-        </div>
+        <DialogHeader>
+          <DialogTitle id="theme-title">Theme</DialogTitle>
+          <DialogDescription>Preview a palette, then keep it for this app.</DialogDescription>
+        </DialogHeader>
+        <Command shouldFilter={false} value={selected} onValueChange={preview} onKeyDownCapture={onKeyDown}>
+          <CommandInput autoFocus placeholder="Search themes…" aria-label="Search themes" value={query} onValueChange={setQuery} />
+          <CommandList className="theme-list" aria-label="Themes">
+            <CommandEmpty>No themes match your search.</CommandEmpty>
+            <CommandGroup>
+              {themes.filter((theme) => theme.name.toLowerCase().includes(query.toLowerCase().trim())).map((theme, at) => {
+                const inks = roleVariables(theme, dark)
+                return (
+                  <CommandItem
+                    key={theme.name}
+                    id={`theme-${at}`}
+                    value={theme.name}
+                    className={`theme-row${theme.name === selected ? ' active' : ''}`}
+                    onDoubleClick={keep}
+                  >
+                    <span className="theme-name">{theme.name}</span>
+                    {theme.name === opened.current?.name ? (
+                      <Badge variant="secondary" className="theme-current">in use</Badge>
+                    ) : null}
+                    <span className="theme-swatches" aria-hidden="true">
+                      {SWATCHES.map((role) => (
+                        <i key={role} style={{ background: inks[`--role-${role}`] }} />
+                      ))}
+                    </span>
+                  </CommandItem>
+                )
+              })}
+            </CommandGroup>
+          </CommandList>
+        </Command>
         <p className="theme-hint">
-          <kbd>↑</kbd>
-          <kbd>↓</kbd> preview · <kbd>⏎</kbd> keep · <kbd>esc</kbd> cancel
+          <KbdGroup><Kbd>↑</Kbd><Kbd>↓</Kbd></KbdGroup> preview · <Kbd>⏎</Kbd> keep · <Kbd>esc</Kbd> cancel
         </p>
         <p className="theme-aside">
           Add your own as JSON in <code>{directory}</code>.
         </p>
-      <div className="theme-actions"><Button variant="outline" onClick={cancel}>Cancel</Button><Button onClick={keep}>Use theme</Button></div>
+      <DialogFooter className="theme-actions"><Button variant="outline" onClick={cancel}>Cancel</Button><Button onClick={keep}>Use theme</Button></DialogFooter>
     </Modal>
   )
 }

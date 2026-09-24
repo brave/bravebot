@@ -37,7 +37,7 @@
   --bb-font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", system-ui, sans-serif;
   --bb-font-mono: ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, monospace;
 
-  /* HeroUI v3 semantic surface model, adapted to the app's existing theme API. */
+  /* Semantic surface model shared by the app and shadcn components. */
   --background: var(--bg);
   --foreground: var(--ink);
   --surface: color-mix(in srgb, var(--ink) 2.5%, var(--bg));
@@ -696,6 +696,7 @@ kbd,
 }
 
 .bot-open-button {
+  justify-content: flex-start;
   gap: 7px;
   padding: 7px 8px;
   border-radius: var(--bb-radius-md);
@@ -800,29 +801,6 @@ kbd,
   border: 1px solid var(--bb-border);
   border-radius: var(--bb-radius-md);
   background: var(--code-bg);
-}
-
-.bot-actions button,
-.bot-editor button,
-.bot-overview button {
-  border-color: var(--bb-border);
-  border-radius: var(--bb-radius-sm);
-  background: var(--bb-surface-raised);
-}
-
-.bot-actions button:hover:not(:disabled),
-.bot-editor button:hover:not(:disabled),
-.bot-overview button:hover:not(:disabled) {
-  border-color: var(--bb-border-strong);
-  background: var(--bb-hover);
-}
-
-.bot-save:not([disabled]),
-.modal .bot-save,
-.bot-overview .primary {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--accent-ink);
 }
 
 .bot-archive {
@@ -1581,8 +1559,7 @@ kbd,
 }
 
 .model-popover[data-slot='popover-content'] {
-  position: relative;
-  inset: auto;
+  z-index: 60;
 }
 
 .model-heading {
@@ -1648,8 +1625,9 @@ kbd,
    Quarantine, approvals, evidence, and decisions
    -------------------------------------------------------------------------- */
 
-.quarantine,
-.confirm,
+/* The quarantine and approval containers are shadcn Cards now: their margin, radius and
+   ground come from the component. What stays here is the interrupted request's chrome,
+   which is a plain fold rather than a Card. */
 .interrupted-request {
   margin: 13px 0;
   border-radius: var(--bb-radius-lg);
@@ -1689,12 +1667,7 @@ kbd,
   line-height: 1.45;
 }
 
-.confirm {
-  border-color: var(--bb-border-strong);
-  background: var(--bb-surface-raised);
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 4%, transparent);
-}
-
+/* A body nobody vouched for is marked on the container, which is a shadcn Card. */
 .confirm.untrusted,
 .confirm.run.releases {
   border-color: var(--warn);
@@ -1817,7 +1790,6 @@ kbd,
   background: var(--bb-surface-raised);
 }
 
-.confirm-actions button,
 .trust-actions button {
   min-height: 32px;
   padding: 6px 12px;
@@ -1826,13 +1798,11 @@ kbd,
   background: var(--bb-surface-raised);
 }
 
-.confirm-actions button:hover,
 .trust-actions button:hover {
   border-color: var(--bb-border-strong);
   background: var(--bb-hover);
 }
 
-.confirm-actions .approve,
 .trust-actions .approve {
   border-color: var(--accent);
   background: var(--accent);
@@ -1840,25 +1810,11 @@ kbd,
   font-weight: 620;
 }
 
-.confirm-actions .approve:hover,
 .trust-actions .approve:hover {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 90%, var(--ink));
 }
 
-.confirm-actions .approve.always,
-.confirm-actions .always {
-  border-color: var(--bb-accent-border);
-  background: transparent;
-  color: var(--accent-text);
-}
-
-.confirm-actions .approve.always:hover,
-.confirm-actions .always:hover {
-  background: var(--bb-accent-soft);
-}
-
-.confirm-actions .reject:hover,
 .trust-actions .decline:hover {
   border-color: color-mix(in srgb, var(--removed) 38%, transparent);
   background: var(--bb-danger-soft);
@@ -2273,8 +2229,7 @@ kbd,
 }
 
 .popmenu[data-slot='dropdown-menu-content'] {
-  position: relative;
-  inset: auto;
+  z-index: 60;
 }
 
 .popitem {
@@ -2330,7 +2285,6 @@ kbd,
   width: min(680px, calc(100vw - 40px));
   max-height: calc(100dvh - 40px);
   padding: 24px;
-  z-index: 101;
 }
 
 .modal:focus {
@@ -2349,26 +2303,6 @@ kbd,
   color: var(--ink);
   font-size: 13px;
   font-weight: 650;
-}
-
-.modal button:not(:where(.model-trigger, .model-option, .theme-swatch)) {
-  min-height: 32px;
-  border-color: var(--bb-border-strong);
-  border-radius: var(--bb-radius-sm);
-  background: var(--bb-surface-raised);
-}
-
-.modal button:not(:where(.model-trigger, .model-option, .theme-swatch)):hover:not(:disabled) {
-  border-color: var(--bb-border-strong);
-  background: var(--bb-hover);
-}
-
-.modal button.primary,
-.modal .bot-save,
-.notice-actions .approve {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--accent-ink);
 }
 
 .trust {
@@ -2789,95 +2723,6 @@ kbd,
   color: var(--accent-text);
 }
 
-/* --------------------------------------------------------------------------
-   HeroUI v3 component language
-
-   These rules map the existing behavior-rich controls onto HeroUI's semantic
-   component variants: primary, secondary, tertiary, outline, danger and soft.
-   -------------------------------------------------------------------------- */
-
-:where(
-  .primary,
-  .send,
-  .confirm-actions .approve,
-  .trust-actions .approve,
-  .bot-save,
-  .notice-actions .approve
-) {
-  border-radius: 999px;
-  transition:
-    transform 250ms var(--bb-ease),
-    background-color 100ms ease-out,
-    box-shadow 100ms ease-out;
-}
-
-:where(
-  .primary,
-  .send,
-  .confirm-actions .approve,
-  .trust-actions .approve,
-  .bot-save,
-  .notice-actions .approve
-):active:not(:disabled) {
-  transform: scale(0.97);
-}
-
-:where(
-  .conversation-toolbar > button,
-  .conversation-toolbar .export-open,
-  .attach-files,
-  .model-trigger,
-  .code-toolbar button,
-  .file-search-scope button,
-  .preview-actions button,
-  .backend-status button,
-  .attention-bar button,
-  .modal button:not(.primary):not(.bot-save):not(.theme-swatch),
-  .confirm-actions .reject,
-  .confirm-actions .always,
-  .trust-actions .decline
-) {
-  border-color: transparent;
-  border-radius: 999px;
-  background: var(--default);
-  color: var(--default-foreground);
-  box-shadow: none;
-}
-
-:where(
-  .conversation-toolbar > button,
-  .conversation-toolbar .export-open,
-  .attach-files,
-  .model-trigger,
-  .code-toolbar button,
-  .file-search-scope button,
-  .preview-actions button,
-  .backend-status button,
-  .attention-bar button,
-  .modal button:not(.primary):not(.bot-save):not(.theme-swatch),
-  .confirm-actions .reject,
-  .confirm-actions .always,
-  .trust-actions .decline
-):hover:not(:disabled) {
-  border-color: transparent;
-  background: var(--default-hover);
-}
-
-:where(
-  .conversation-toolbar > button,
-  .conversation-toolbar .export-open,
-  .attach-files,
-  .model-trigger,
-  .code-toolbar button,
-  .file-search-scope button,
-  .preview-actions button,
-  .modal button:not(.primary):not(.bot-save):not(.theme-swatch),
-  .confirm-actions button,
-  .trust-actions button
-):active:not(:disabled) {
-  transform: scale(0.97);
-}
-
 .sidebar-tab,
 .session-scope button,
 .inspector-tabs button,
@@ -3136,6 +2981,10 @@ kbd,
    -------------------------------------------------------------------------- */
 
 @media (max-width: 1120px) {
+  .app {
+    grid-template-columns: var(--col-left) 1px minmax(0, 1fr) 0 0 !important;
+  }
+
   .transcript-head {
     z-index: auto;
   }
@@ -3196,8 +3045,8 @@ kbd,
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 2px;
-    padding-left: 14px;
-    padding-right: 14px;
+    padding-left: 0;
+    padding-right: 0;
     overflow: hidden;
   }
 
@@ -3210,7 +3059,8 @@ kbd,
     overflow: hidden;
     padding-inline: 6px;
     text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow-wrap: anywhere;
+    white-space: normal;
   }
 
   .conversation-toolbar .export-split,

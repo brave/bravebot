@@ -109,14 +109,14 @@ try {
     for (let i = 0; i < presses; i++) await page.keyboard.press(key)
     await until(async () => Math.abs((await sidebar.boundingBox()).width - expectedWidth) < 1, 'sidebar resized')
     for (const tab of ['Sessions', 'Bots']) {
-      await sidebar.getByRole('button', { name: tab, exact: true }).click()
+      await sidebar.getByRole('tab', { name: tab, exact: true }).click()
       const panel = await sidebar.boundingBox(), button = await settingsButton.boundingBox()
       assert(button.x >= panel.x && button.x + button.width <= panel.x + panel.width,
         `Agent settings stays inside ${tab} sidebar at ${expectedWidth}px: ${JSON.stringify({ panel, button })}`)
       assert(await settingsButton.evaluate(el => el.scrollWidth <= el.clientWidth), 'settings label fits')
     }
   }
-  await sidebar.getByRole('button', { name: 'Sessions', exact: true }).click()
+  await sidebar.getByRole('tab', { name: 'Sessions', exact: true }).click()
   await divider.focus(); await page.keyboard.press('Home')
   console.log('PASS: Agent settings button fits both sidebar tabs at default/minimum/maximum widths')
 
@@ -129,7 +129,7 @@ try {
   for (const [key, name] of [['ArrowRight', 'Hooks'], ['ArrowRight', 'Run settings'], ['ArrowRight', 'Connection'], ['ArrowLeft', 'Run settings'], ['Home', 'Connection'], ['End', 'Run settings']]) {
     await page.keyboard.press(key)
     const tab = settings.getByRole('tab', { name, exact: true })
-    assert.equal(await tab.getAttribute('aria-selected'), 'true')
+    await until(async () => (await tab.getAttribute('aria-selected')) === 'true', `${key} selects ${name}`)
     assert(await tab.evaluate(el => el === document.activeElement))
   }
   await app.evaluate((_, path) => { globalThis.walkthroughPicker.path = path }, override)
@@ -175,7 +175,8 @@ try {
   // 4: edit hooks in the UI, execute the saved hook, then remove and prove it stays removed.
   await openSettings(); await settings.getByRole('tab', { name: 'Hooks', exact: true }).click()
   await settings.getByRole('button', { name: 'Add hook', exact: true }).click()
-  await settings.getByRole('combobox', { name: /^When/ }).selectOption('turn-finished')
+  await settings.getByRole('combobox', { name: /^When/ }).click()
+  await page.getByRole('option', { name: 'Turn ends', exact: true }).click()
   await settings.getByLabel('Program', { exact: true }).fill(process.execPath)
   for (const [i, arg] of [hookScript, hookLog].entries()) {
     await settings.getByRole('button', { name: 'Add argument', exact: true }).click()

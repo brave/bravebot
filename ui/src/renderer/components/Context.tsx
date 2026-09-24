@@ -1,11 +1,15 @@
 import { useState } from 'react'
-import { Fold } from './Fold'
 import { FileTree } from './FileTree'
 import { type PanelName } from '../../shared/state'
 import { isConfined, type Activity, type Phase, type Shown, type TodoRow } from '../../shared/protocol'
 import type { Entry } from '../transcript'
+import { Badge } from './ui/badge'
 import { Button } from './ui/button'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
+import { Empty, EmptyDescription } from './ui/empty'
+import { Item } from './ui/item'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs'
+import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
 
 interface Live {
   /** The session's handle. The file tree names it rather than naming a folder. */
@@ -83,10 +87,10 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
           work. `display: none` takes it out of the tab order and the accessibility tree just the
           same. */}
       {/* Wrapped, because `.context > *` hands every direct child of this column the width the
-          column will come back at when it unfolds — which a full-width row of buttons plus its
-          own margins overflows. The wrapper takes that width and the bar sits inside it. */}
+           column will come back at when it unfolds — which a full-width row of buttons plus its
+           own margins overflows. The wrapper takes that width and the bar sits inside it. */}
       <div className="context-head">
-        <div className="inspector-title"><strong>Project context</strong><Button variant="ghost" size="icon-sm" className="drawer-close" onClick={onClose} aria-label="Close context panel">×</Button></div>
+        <div className="inspector-title"><strong>Project context</strong><Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon-sm" className="drawer-close" onClick={onClose} aria-label="Close context panel">×</Button></TooltipTrigger><TooltipContent>Close context panel</TooltipContent></Tooltip></div>
         <TabsList className="inspector-tabs" variant="line" aria-label="Project context">
           {(['overview', 'files'] as const).map((name) => <TabsTrigger key={name} value={name}>{name === 'overview' ? 'Overview' : 'Files'}</TabsTrigger>)}
         </TabsList>
@@ -96,16 +100,16 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
       <TabsContent value="overview" forceMount className="context-overview data-[state=inactive]:hidden">
       <Section id="plan" title="Plan" count={live.todos.length} off={off.has('plan')}>
         {live.todos.length === 0 ? (
-          <p className="none">{onlyReplayed ? 'No plan was recorded.' : 'No plan yet.'}</p>
+          <ContextEmpty>{onlyReplayed ? 'No plan was recorded.' : 'No plan yet.'}</ContextEmpty>
         ) : (
           <ul className="todos">
             {live.todos.map((row, index) => (
-              <li key={index} className={row.status}>
+              <Item asChild size="sm" key={index}><li className={`${row.status} flex-nowrap rounded-none`}>
                 <span className="marker">
                   {row.status === 'done' ? '✓' : row.status === 'active' ? '▸' : '·'}
                 </span>
                 {row.content}
-              </li>
+              </li></Item>
             ))}
           </ul>
         )}
@@ -124,10 +128,10 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
       >
         {onlyReplayed ? (
           <>
-            <p className="none">
+            <ContextEmpty>
               From the record. It keeps what each turn did, not what came of it, so
               there is nothing to say about where these landed.
-            </p>
+            </ContextEmpty>
             {/* Every path in this list and the two below it ellipsises, and a path clipped
                 on the right loses the filename — the one part of it somebody is reading
                 for. The tooltip is the whole string back. It repeats what is already on
@@ -137,22 +141,22 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
             <ul className="files">
               {replayed.map((entry) =>
                 entry.kind === 'replayed-tool' ? (
-                  <li key={entry.id} className="from-record">
+                  <Item asChild size="sm" key={entry.id}><li className="from-record flex-nowrap rounded-none">
                     <code title={entry.text}>{entry.text}</code>
-                  </li>
+                  </li></Item>
                 ) : null,
               )}
             </ul>
           </>
         ) : files.length === 0 ? (
-          <p className="none">Nothing read yet.</p>
+          <ContextEmpty>Nothing read yet.</ContextEmpty>
         ) : (
           <ul className="files">
             {files.map((file) => (
-              <li key={file.target} className={file.confined ? 'confined' : ''}>
+              <Item asChild size="sm" key={file.target}><li className={`${file.confined ? 'confined ' : ''}flex-nowrap rounded-none`}>
                 <Button variant="link" className="context-link" onClick={() => reveal(file.target)} title={file.target}>{file.target}</Button>
-                {file.confined && <span className="tag">confined</span>}
-              </li>
+                {file.confined && <Badge variant="outline" className="tag">confined</Badge>}
+              </li></Item>
             ))}
           </ul>
         )}
@@ -160,18 +164,18 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
 
       <Section id="writes" title="Changes" count={writes.length} off={off.has('writes')}>
         {writes.length === 0 ? (
-          <p className="none">
+          <ContextEmpty>
             {onlyReplayed
               ? 'Not recorded for past turns.'
               : 'Nothing has been written.'}
-          </p>
+          </ContextEmpty>
         ) : (
           <ul className="files">
             {writes.map((write) => (
-              <li key={write.target} className={write.state}>
+              <Item asChild size="sm" key={write.target}><li className={`${write.state} flex-nowrap rounded-none`}>
                 <Button variant="link" className="context-link" onClick={() => reveal(write.target)} title={write.target}>{write.target}</Button>
-                <span className="tag">{write.state}</span>
-              </li>
+                <Badge variant="outline" className="tag">{write.state}</Badge>
+              </li></Item>
             ))}
           </ul>
         )}
@@ -184,22 +188,22 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
         off={off.has('confined')}
       >
         {live.quarantine.length === 0 ? (
-          <p className="none">
+          <ContextEmpty>
             {onlyReplayed
               ? 'Not recorded for past turns. Confined content is never written down.'
               : 'Nothing confined.'}
-          </p>
+          </ContextEmpty>
         ) : (
           <ul className="confined-list">
             {live.quarantine.map((shown, index) => (
-              <li key={index}>
+              <Item asChild size="sm" key={index}><li className="block rounded-none">
                 <div className="origin" title={shown.origin}>
                   {shown.origin}
                 </div>
                 <div className="detail">
                   {shown.lines} line{shown.lines === 1 ? '' : 's'} · {shown.label}
                 </div>
-              </li>
+              </li></Item>
             ))}
           </ul>
         )}
@@ -229,6 +233,12 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
   )
 }
 
+function ContextEmpty({ children }: { children: React.ReactNode }): React.JSX.Element {
+  return <Empty className="none min-h-0 flex-none items-start gap-0 border-0 p-0 text-left">
+    <EmptyDescription className="text-left text-inherit">{children}</EmptyDescription>
+  </Empty>
+}
+
 function Section({
   id,
   title,
@@ -251,25 +261,25 @@ function Section({
 }): React.JSX.Element {
   const [open, setOpen] = useState(true)
   return (
-    <section className={`panel ${off ? 'off' : ''}`} id={`panel-${id}`}>
-      <Button
-        variant="ghost"
-        className="panel-head"
-        aria-expanded={open}
-        // The verb in the title and the name staying put, the rule `ColumnToggle` states.
-        title={`${open ? 'Hide' : 'Show'} ${title.toLowerCase()}`}
-        onClick={() => setOpen(!open)}
-      >
-        <span className={`chevron ${open ? 'open' : ''}`} aria-hidden="true">
-          ›
-        </span>
-        {title}
-        {count !== undefined && count > 0 && <span className="count">{count}</span>}
-      </Button>
-      <Fold open={open} className="panel-inner">
-        {children}
-      </Fold>
-    </section>
+    <Collapsible open={open} onOpenChange={setOpen} asChild>
+      <section className={`panel ${off ? 'off' : ''}`} id={`panel-${id}`}>
+        <CollapsibleTrigger asChild><Button
+          variant="ghost"
+          className="panel-head"
+          // The verb in the title and the name staying put, the rule `ColumnToggle` states.
+          title={`${open ? 'Hide' : 'Show'} ${title.toLowerCase()}`}
+        >
+          <span className={`chevron ${open ? 'open' : ''}`} aria-hidden="true">
+            ›
+          </span>
+          {title}
+          {count !== undefined && count > 0 && <Badge variant="secondary" className="count">{count}</Badge>}
+        </Button></CollapsibleTrigger>
+        <CollapsibleContent forceMount className="panel-inner">
+          {children}
+        </CollapsibleContent>
+      </section>
+    </Collapsible>
   )
 }
 

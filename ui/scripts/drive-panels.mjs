@@ -158,40 +158,29 @@ if ((await page.locator('.tool-run').count()) === 0) {
   await page.screenshot({ path: '/tmp/bravebot-ui/12-run-open.png' })
 }
 
-// --- the row of buttons that turns panels off ------------------------------------------
-// Folding and turning off are different things and the second one is newer: the bar at the top
-// of the column decides which panels are in it at all. The assertion that matters is the last
-// one — a panel that comes back has to come back as it was, which is the whole reason it is
-// hidden rather than unmounted. A panel that forgot its fold, or a tree that forgot which
-// folders were open, would be the bar quietly undoing somebody's work.
-const picks = page.locator('.panel-pick')
-check((await picks.count()) === 5, `the bar has one button per panel (${await picks.count()})`)
+// --- the overview/files tabs retain each panel's local state ----------------------------
+const tabs = page.locator('.inspector-tabs [role="tab"]')
+check((await tabs.count()) === 2, `the context has its two tabs (${await tabs.count()})`)
+check((await tabs.first().getAttribute('aria-selected')) === 'true', 'the overview starts selected')
 
-const standing = () => page.locator('.panel:not(.off)').count()
-const before = await standing()
-check(before === 5, `every panel starts in the column (${before})`)
-
-// Folded first, so there is a state to lose.
+// Folded first, so there is a state to preserve while looking at the file tree.
 const plan = page.locator('#panel-plan')
 await plan.locator('.panel-head').click()
 await page.waitForTimeout(400)
 check((await plan.locator('.panel-head').getAttribute('aria-expanded')) === 'false', 'a panel folds')
 
-await picks.first().click()
+await tabs.nth(1).click()
 await page.waitForTimeout(300)
-check((await standing()) === before - 1, 'its button takes it out of the column')
-check((await picks.first().getAttribute('aria-pressed')) === 'false', 'and the button says so')
 check(
   !(await plan.locator('.panel-head').isVisible()),
-  'a panel that is off leaves the tab order and the accessibility tree',
+  'the inactive overview leaves the tab order and accessibility tree',
 )
 
-await picks.first().click()
+await tabs.first().click()
 await page.waitForTimeout(300)
-check((await standing()) === before, 'pressing it again brings the panel back')
 check(
   (await plan.locator('.panel-head').getAttribute('aria-expanded')) === 'false',
-  'and it comes back folded the way it was left, rather than reset',
+  'the overview returns with its panel folded the way it was left',
 )
 
 // Put it back open, because the panels are shared ground with the assertions at the top of this
@@ -200,43 +189,6 @@ await plan.locator('.panel-head').click()
 await page.waitForTimeout(400)
 check((await plan.locator('.panel-head').getAttribute('aria-expanded')) === 'true', 'and unfolds again')
 await page.screenshot({ path: '/tmp/bravebot-ui/13-panel-bar.png' })
-
-// --- and that the choice outlives the window -------------------------------------------
-// The panel is turned off, the app is restarted, and the column has to come back without it.
-// Worth a relaunch rather than a unit assertion because the failure this catches is the one a
-// single window cannot see: a preference written to the file and then read back through a
-// validator that does not recognise its own output.
-await picks.last().click()
-await page.waitForTimeout(300)
-const hidden = await page.locator('.panel.off').count()
-check(hidden === 1, `one panel is off when the window closes (${hidden})`)
 await app.close()
-
-const second = await launch()
-const relaunched = await second.firstWindow()
-await relaunched.waitForLoadState('domcontentloaded')
-await relaunched.waitForTimeout(2000)
-if (await relaunched.locator('.session').first().isVisible().catch(() => false)) {
-  await relaunched.locator('.session').first().click()
-  await relaunched.waitForTimeout(1200)
-}
-check(
-  (await relaunched.locator('.panel-pick').last().getAttribute('aria-pressed')) === 'false',
-  'the panel that was turned off is still off after a relaunch',
-)
-check(
-  (await relaunched.locator('#panel-files').getAttribute('class'))?.includes('off') === true,
-  'and the column came back without it',
-)
-
-// Put it back on: every panel on is what the other drivers expect to find, and `drive-tree.mjs`
-// has nothing to test at all if this one leaves the file tree turned off.
-await relaunched.locator('.panel-pick').last().click()
-await relaunched.waitForTimeout(400)
-check(
-  (await relaunched.locator('.panel:not(.off)').count()) === 5,
-  'and it goes back on for whatever runs next',
-)
-await second.close()
 console.log(problems.length ? `\nRESULT: ${problems.length} problem(s)` : '\nRESULT: ok')
 process.exit(problems.length ? 1 : 0)
