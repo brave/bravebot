@@ -9811,6 +9811,37 @@ five
         assert!(!policy.finish());
     }
 
+    /// An endorsement names one path, so it cannot be redirected: a write to somewhere else is
+    /// refused even while an approval for another path is outstanding. The refusal does not spend
+    /// that approval either, since the person who gave it agreed to a write that has not happened
+    /// yet, and losing it would turn a redirect into a way of cancelling their write.
+    #[test]
+    fn an_endorsement_does_not_authorise_a_different_destination() {
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing_with("task", "write a file"),
+            ReleasePlan::new(),
+            all_capabilities(),
+            &mut sink,
+        )
+        .unwrap();
+
+        policy.issue_grant("file_write", "path", "vendor/x.js".to_string());
+
+        let elsewhere = Labelled::new("vendor/y.js".to_string(), Label::untrusted_public());
+        let err = policy
+            .before_endorsed_destination("file_write", "path", &elsewhere)
+            .expect_err("an endorsement for one path must not authorise another");
+        assert_eq!(err.principle, Principle::IntegrityGate);
+
+        let endorsed = Labelled::new("vendor/x.js".to_string(), Label::untrusted_public());
+        let landed = policy
+            .before_endorsed_destination("file_write", "path", &endorsed)
+            .expect("the refused redirect spent the endorsement it did not match");
+        assert_eq!(landed, "vendor/x.js");
+        assert!(!policy.finish(), "the redirect was refused");
+    }
+
     /// Promotion is recorded, so an audit shows which choices were the model's.
     #[test]
     fn promotion_appears_in_the_audit_trail() {

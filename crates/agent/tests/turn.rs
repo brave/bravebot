@@ -2076,11 +2076,67 @@ fn an_approved_write_is_recorded_as_endorsed() {
     assert!(granted, "the endorsement was not recorded in the trail");
 }
 
+/// An approval authorises one write, not writing. The person agreeing to one file is asked again
+/// about the next one, and refusing that leaves it unwritten while the file they did agree to
+/// stands.
+///
+/// Two different paths rather than one written twice. TRUST-4 in `docs/specs/trust-map.md` makes
+/// a second write to a path the first one vouched for silent, so writing one path twice could not
+/// tell an endorsement bound to a value from a standing permission to write anywhere.
+#[test]
+fn an_approved_write_does_not_authorise_a_write_somewhere_else() {
+    let scratch = Scratch::new("write-redirect");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2("write_file", r#"{"path":"approved.txt","contents":"kept"}"#),
+        tool_request_2(
+            "write_file",
+            r#"{"path":"elsewhere.txt","contents":"redirected"}"#,
+        ),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("write two files");
+    let mut confirmer = RecordingConfirmer::approving_only_the_first();
+    turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let asked: Vec<&str> = confirmer.seen.iter().map(|r| r.path.as_str()).collect();
+    assert_eq!(
+        asked,
+        vec!["approved.txt", "elsewhere.txt"],
+        "the second path was not put to the person on its own"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("approved.txt")).unwrap(),
+        "kept",
+        "the write the person agreed to did not land"
+    );
+    assert!(
+        !scratch.path.join("elsewhere.txt").exists(),
+        "an approval for one path authorised a write to another"
+    );
+}
+
 /// Records what the user was shown, so a test can assert on the review itself rather than
 /// only on the outcome.
 struct RecordingConfirmer {
     seen: Vec<bravebot_agent::WriteRequest>,
     decision: bravebot_agent::Decision,
+    /// The answer to every write after the first, where a test needs the two to differ.
+    /// `None` answers them all the same way.
+    later: Option<bravebot_agent::Decision>,
 }
 
 impl RecordingConfirmer {
@@ -2088,6 +2144,7 @@ impl RecordingConfirmer {
         Self {
             seen: Vec::new(),
             decision: bravebot_agent::Decision::Approve,
+            later: None,
         }
     }
 
@@ -2095,6 +2152,17 @@ impl RecordingConfirmer {
         Self {
             seen: Vec::new(),
             decision: bravebot_agent::Decision::Reject,
+            later: None,
+        }
+    }
+
+    /// Agrees to one write and refuses every write after it, so a test can tell an approval that
+    /// authorised the write in front of the person from one that authorised the rest of the turn.
+    fn approving_only_the_first() -> Self {
+        Self {
+            seen: Vec::new(),
+            decision: bravebot_agent::Decision::Approve,
+            later: Some(bravebot_agent::Decision::Reject),
         }
     }
 }
@@ -2113,8 +2181,12 @@ impl bravebot_agent::Confirmer for RecordingConfirmer {
         &mut self,
         request: &bravebot_agent::WriteRequest,
     ) -> bravebot_agent::Decision {
+        let answer = match self.later {
+            Some(later) if !self.seen.is_empty() => later,
+            _ => self.decision,
+        };
         self.seen.push(request.clone());
-        self.decision
+        answer
     }
 
     /// These tests are about writes. A run they did not set up is refused.
