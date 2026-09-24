@@ -82,6 +82,7 @@ help:
 	@echo "  make publish-npm [TAG=v<version>]           Publish npm for TAG, or the latest GitHub release"
 	@echo "  make app-bundle                             Package the desktop application, release build"
 	@echo "  make app-release                            Its disk images for both Mac architectures, unsigned"
+	@echo "  make app-bundles-windows                    Its Windows bundles for both architectures, unsigned"
 	@echo
 	@echo "  make clean          Remove build output"
 
@@ -477,7 +478,8 @@ app-bundle:
 # has to come first because it rewrites the Electron binary, which a signature covers.
 #
 # Each pair is the architecture's name in an asset and Electron's name for it, which differ for
-# Intel, and this list is the one place that says so.
+# Intel, and this list is the one place that says so. Windows uses the same two names for the same
+# two architectures, so `app-bundles-windows` below reads this list too.
 APP_ARCHES = arm64:arm64 amd64:x64
 
 .PHONY: app-release
@@ -522,6 +524,42 @@ app-dmg:
 		echo "wrote dist/bravebot-app-darwin-$$arch.dmg"; \
 	done
 
+# The Windows half of the same thing, and the first of its two steps:
+#
+#   reads   dist/bravebot-rpc-windows-<arch>.exe, dist/bravebot-ui-files-windows-<arch>.exe
+#   writes  ui/dist/Brave Bot-win32-<x64|arm64>/
+#
+# for <arch> arm64 and amd64 again, from `make windows-amd64 windows-arm64 strip`. Unlike
+# `app-bundles` this runs on any host: everything platform-specific about a Windows bundle is the
+# icon and the version resource in `Brave Bot.exe`, which `@electron/packager` writes with resedit,
+# a JavaScript library, so no Windows node and no Wine is involved. The release job then signs
+# every PE in the bundle where it lies: `Brave Bot.exe`, both helpers, and Electron's own DLLs.
+#
+# The installer that a signed bundle goes into is the second step, and issue #769 is where its
+# format is still being decided, so nothing here builds one yet.
+.PHONY: app-bundles-windows
+app-bundles-windows:
+	@missing=; builds=; for pair in $(APP_ARCHES); do \
+		arch=$${pair%%:*}; lacks=; \
+		for name in bravebot-rpc bravebot-ui-files; do \
+			test -f dist/$$name-windows-$$arch.exe || lacks="$$lacks $$name-windows-$$arch.exe"; \
+		done; \
+		if [ -n "$$lacks" ]; then missing="$$missing$$lacks"; builds="$$builds windows-$$arch"; fi; \
+	done; \
+	if [ -n "$$missing" ]; then \
+		echo "missing from dist/:$$missing" >&2; \
+		echo "run \`make$$builds strip\` first" >&2; exit 1; \
+	fi
+	cd ui && npm ci && npm run typecheck && npm exec -- electron-vite build
+	@set -e; stage=$$(mktemp -d); trap 'rm -rf "$$stage"' EXIT; \
+	for pair in $(APP_ARCHES); do \
+		arch=$${pair%%:*}; electron=$${pair#*:}; \
+		mkdir "$$stage/$$arch"; \
+		install -m 0755 dist/bravebot-rpc-windows-$$arch.exe "$$stage/$$arch/bravebot-rpc.exe"; \
+		install -m 0755 dist/bravebot-ui-files-windows-$$arch.exe "$$stage/$$arch/bravebot-ui-files.exe"; \
+		(cd ui && node scripts/package.mjs --executables="$$stage/$$arch" --platform=win32 --arch=$$electron); \
+	done
+
 # Symbols are kept during the build because Rust's own strip can corrupt some targets
 # under zigbuild, so they are removed here instead.
 #
@@ -554,7 +592,7 @@ strip:
 # It is the statement of the format those files have to be in: the digest alone, with no filename
 # beside it, which is the only thing the npm postinstall accepts. SHA256SUMS is the conventional
 # form of the same hashes, for verifying a download by hand. The desktop application's two
-# executables are left out: they go into its disk images and are not assets of their own.
+# executables are left out: they go into its own packages and are not assets of their own.
 .PHONY: checksums
 checksums:
 	@cd dist && rm -f ./*.sha256 SHA256SUMS && \
@@ -710,9 +748,10 @@ define cross-build
 endef
 
 # `docker create` on a scratch image needs a command argument even though it never
-# runs; the container exists only so the binary can be copied out. A Mac target's image
-# also holds the desktop application's two executables, which land beside the CLI under
-# the names `app-bundles` reads, and are stripped with it.
+# runs; the container exists only so the binary can be copied out. A Mac or Windows target's
+# image also holds the desktop application's two executables, which land beside the CLI under
+# the names `app-bundles` and `app-bundles-windows` read, and are stripped with it. The Windows
+# pair gets the `.exe` the CLI asset beside it has, since that is the name the bundle carries.
 define extract
 	mkdir -p dist
 	docker rm -f tmp-$(BINARY)-$(2) 2>/dev/null || true
@@ -720,6 +759,8 @@ define extract
 	docker cp tmp-$(BINARY)-$(2):/$(BINARY) dist/$(call artifact,$(2))
 	$(if $(findstring darwin,$(2)),for helper in bravebot-rpc bravebot-ui-files; do \
 		docker cp tmp-$(BINARY)-$(2):/$$helper dist/$$helper-$(2) || exit 1; done)
+	$(if $(findstring windows,$(2)),for helper in bravebot-rpc bravebot-ui-files; do \
+		docker cp tmp-$(BINARY)-$(2):/$$helper dist/$$helper-$(2).exe || exit 1; done)
 	docker rm tmp-$(BINARY)-$(2)
 endef
 

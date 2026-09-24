@@ -18,6 +18,7 @@ members of lives.
 | `npm run package` | Build both Rust executables, bundle, package for macOS or Linux; does not typecheck |
 | `make app-bundle` (from the root) | The same bundle, carrying release executables built with credentials required, fused |
 | `make app-release` (from the root) | A disk image per Mac architecture, from the cross-built executables in `dist/`; see [releasing](../../docs/development/releasing.md#the-desktop-application) |
+| `make app-bundles-windows` (from the root) | A Windows bundle per architecture, from the cross-built executables in `dist/`, on any host; see [releasing](../../docs/development/releasing.md#the-windows-bundle) |
 | `make check-ui` (from the root) | Install, build the file helper, and run every `scripts/*.test.mjs` |
 | `cargo test -p bravebot-ui-bridge -p bravebot-ui-files` | Test the two front-end crates |
 | `cargo test --all` | Test the whole workspace, agent crates included |
@@ -66,6 +67,14 @@ The platform follows the Node process, and so does the architecture unless
 the cross-build's `amd64`. Rust uses its configured toolchain target; for a native bundle, use
 matching Node and Rust architectures.
 
+`--platform=win32` packages `dist/Brave Bot-win32-<arch>/` instead, and is the one platform that
+does not have to be the host's: the icon and the version resource are all that distinguishes a
+Windows bundle, and `@electron/packager` writes both with resedit rather than with a Windows tool.
+Because the bundle is somebody else's platform, it takes `--executables=<dir>` with a pair built
+for Windows in it; `make app-bundles-windows` is that command with the cross-build's pair staged
+for it. Packaging reads each executable's header, as it does for a Mac release, and refuses one
+that is not a Windows executable for the architecture asked for.
+
 Which Rust build the bundle carries is the one thing the finished bundle does not record: it is
 named, versioned and laid out identically either way, and the two overwrite each other in
 `dist/`. `npm run package` carries the debug executables, which is what a checkout has already
@@ -104,8 +113,11 @@ than wait out its launch timeout.
 
 Every macOS bundle carries the bundle id `com.brave.bravebot` and the icon `build/icon.icns`. macOS
 keys privacy grants and keychain items on the bundle id, so it does not change between releases.
+A Windows bundle carries `build/icon.ico` and a version resource naming Brave as the company and
+"Brave Bot" as the product, which is what its properties dialog and Task Manager show; without one
+they both say Electron, because the resource would be the one Electron's own build left behind.
 The icon is the About mascot in Brave orange on a macOS tile, drawn in `build/icon.svg`; after
-changing the drawing, remake the icon from it:
+changing the drawing, remake both icons from it:
 
 ```bash
 inkscape build/icon.svg -w 1024 -h 1024 -o /tmp/icon-1024.png
@@ -115,7 +127,13 @@ for s in 16 32 128 256 512; do
   sips -z $((s*2)) $((s*2)) /tmp/icon-1024.png --out /tmp/icon.iconset/icon_${s}x${s}@2x.png
 done
 iconutil -c icns /tmp/icon.iconset -o build/icon.icns
+python3 -c "from PIL import Image; Image.open('/tmp/icon-1024.png').save('build/icon.ico', \
+  sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])"
 ```
+
+The `.ico` holds every size Windows asks for, from the file list at 16 to the extra-large view at
+256. A file holding only the largest is legal, and Windows scales it down itself, but a mascot with
+two eyes in it does not survive that to 16 pixels.
 
 A development checkout can produce a configured or unconfigured binary depending
 on the build environment. Follow [credentials](setup.md#credentials) before packaging
