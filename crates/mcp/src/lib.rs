@@ -22,12 +22,21 @@ pub mod protocol;
 pub mod stdio;
 
 pub use http::HttpServer;
-pub use protocol::{ToolDescriptor, ToolResult};
+pub use protocol::{OfferedTool, ToolResult};
 pub use stdio::StdioServer;
 
+use bravebot_core::label::Label;
 use bravebot_core::policy::Denial;
 use bravebot_core::value::Labelled;
 use std::fmt;
+
+/// The label everything a server sends carries: a result, and the words it describes a tool with.
+///
+/// One function rather than a constant at each transport, because the two must not be able to
+/// disagree about it. MCP-1, SERVERS-8.
+pub fn result_label() -> Label {
+    Label::untrusted_public()
+}
 
 pub type McpResult<T> = Result<T, McpError>;
 

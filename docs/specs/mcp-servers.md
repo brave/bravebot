@@ -4,6 +4,7 @@ title: Declaring an MCP server
 status: proposed
 governs:
   - crates/mcp/src/lib.rs
+  - crates/mcp/src/protocol.rs
   - crates/mcp/src/stdio.rs
   - crates/mcp/src/http.rs
   - crates/config/src/settings.rs
@@ -24,7 +25,7 @@ surface that spec has none of.
 
 ## What exists today
 
-Almost nothing in this spec is built, and what there is amounts to half of two clauses.
+Almost nothing in this spec is built, and what there is amounts to half of three clauses.
 [SERVERS-9](#SERVERS-9)'s capability names the server it is about, so the gate `crates/mcp/`
 already runs on every call asks about one declared server rather than about the protocol, and a
 grant can be withdrawn while the run is going. What would *put* a grant there is still missing, so
@@ -32,6 +33,10 @@ a caller writing the set out itself is the only thing that grants a call today.
 [SERVERS-11](#SERVERS-11)'s gate holds a request to a remote server to the destination it was
 addressed to, and refuses a hop that leaves it. The question that hop is meant to raise is missing
 for the same reason, since there is no declaration to ask about or to write an answer into.
+[SERVERS-8](#SERVERS-8)'s namespace is composed by the client rather than reported by the server,
+and the sentence and the schema a server sends about a tool arrive labelled. What is missing there
+is the other end: no tool surface is assembled from a server's list, so nothing yet draws the
+margin those labels ask for.
 
 `crates/mcp/` is a finished client under nine normative clauses, and no crate depends on it: `mcp.md` records the gap in its own front matter, `documented-by: none
 (internal: no settings key wires up a server yet, so there is nothing a reader can configure)`.
@@ -41,11 +46,11 @@ where a server is declared, what a name and an argv is trusted for, how the untr
 below answers one of them.
 
 Read every clause here as a requirement on work nobody has started, not as a description of this
-program. The `verified-by: none` on each one but [SERVERS-9](#SERVERS-9) and
-[SERVERS-11](#SERVERS-11) is the honest form of that, and is what keeps a reader from taking the
-present tense as a claim about the current build. Those two are the exceptions because the half each
-pins is about what the client does rather than about a declaration, and the client exists: what it
-does is pinned, and nothing calls it.
+program. The `verified-by: none` on each one but [SERVERS-8](#SERVERS-8),
+[SERVERS-9](#SERVERS-9) and [SERVERS-11](#SERVERS-11) is the honest form of that, and is what keeps
+a reader from taking the present tense as a claim about the current build. Those three are the
+exceptions because the half each pins is about what the client does rather than about a
+declaration, and the client exists: what it does is pinned, and nothing calls it.
 
 ## The parity target
 
@@ -401,9 +406,19 @@ by anyone who can publish a package. Letting a server pick its own namespace is 
 earlier: a server that calls its tool `write_file` is a server asking to be mistaken for a
 primitive, and the tool surface the planner sees must be decided by names people chose.
 
-**Unbuilt, so nothing pins this.** No tool from a server reaches the planner, so no namespacing or labelling happens.
+**Half built.** Listing a server's tools returns what this process may say about each one: the name
+is the alias the server was reached by with the server's word beneath it, composed by the client, and
+the server's word is kept only for the request that goes back to that server. The description and
+the input schema come back labelled, on the same footing as a result. What is not built is the far
+end: no tool surface is assembled from a server's list, so nothing marks a description as content
+inside a margin, and no planner is offered a name from here.
 
-`verified-by: none`
+`verified-by: bravebot_mcp::protocol::a_tool_is_named_by_the_alias_and_not_by_the_word_the_server_picked`
+`verified-by: bravebot_mcp::protocol::the_same_word_from_two_servers_is_two_tools`
+`verified-by: bravebot_mcp::protocol::the_servers_word_is_kept_for_the_request_and_is_not_the_name`
+`verified-by: bravebot_mcp::protocol::a_tools_description_and_schema_are_content`
+`verified-by: bravebot_mcp::stdio::a_confined_server_completes_the_handshake_and_lists_tools`
+`verified-by: bravebot_mcp::http::a_handshake_and_tool_list_round_trip`
 
 <a id="SERVERS-9"></a>
 ### SERVERS-9: the capability is granted per server, not per protocol

@@ -117,7 +117,16 @@ fn a_handshake_and_tool_list_round_trip() {
         .list_tools(&mut policy, &egress)
         .expect("tools listed");
     assert_eq!(tools.len(), 1);
-    assert_eq!(tools[0].name, "lookup");
+    // The alias this server was declared under, not the word it reported.
+    assert_eq!(tools[0].name(), "remote:lookup");
+    assert_eq!(tools[0].on_the_wire(), "lookup");
+    assert!(
+        !tools[0]
+            .description()
+            .expect("a description")
+            .label()
+            .is_trusted()
+    );
 
     let first = received.recv().expect("initialize body");
     assert!(first.contains("\"initialize\""));

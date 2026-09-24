@@ -9,12 +9,11 @@
 //! attached to ours so its diagnostics stay visible.
 
 use crate::protocol::{
-    RpcNotification, RpcRequest, RpcResponse, ToolDescriptor, ToolList, ToolResult, call_params,
+    OfferedTool, RpcNotification, RpcRequest, RpcResponse, ToolList, ToolResult, call_params,
     initialize_params,
 };
 use crate::{McpError, McpResult, malformed};
 use bravebot_core::event::Sink;
-use bravebot_core::label::Label;
 use bravebot_core::policy::Policy;
 use bravebot_core::value::Labelled;
 use bravebot_sandbox::policy::SandboxPolicy;
@@ -199,11 +198,16 @@ impl StdioServer {
     }
 
     /// List the tools this server offers.
-    pub fn list_tools(&mut self) -> McpResult<Vec<ToolDescriptor>> {
+    ///
+    /// Each one is named by the alias this server was launched under rather than by the word the
+    /// server picked for it, and the sentence and the schema the server sent come back labelled:
+    /// they are the same third-party content a result is, and they are the part of a server that
+    /// reaches the planner before anything has been called. SERVERS-8.
+    pub fn list_tools(&mut self) -> McpResult<Vec<OfferedTool>> {
         let result = self.send_request("tools/list", None)?;
         let list: ToolList =
             serde_json::from_value(result).map_err(|e| malformed("tool list", &e))?;
-        Ok(list.tools)
+        Ok(list.offered(&self.name))
     }
 
     /// Call a tool.
@@ -242,9 +246,4 @@ impl StdioServer {
 
         Ok(Labelled::new(parsed.text(), label))
     }
-}
-
-/// The label MCP results carry.
-pub fn result_label() -> Label {
-    Label::untrusted_public()
 }

@@ -183,8 +183,17 @@ fn a_confined_server_completes_the_handshake_and_lists_tools() {
 
     let tools = server.list_tools().expect("tools listed");
     assert_eq!(tools.len(), 1);
-    assert_eq!(tools[0].name, "echo");
-    assert!(tools[0].input_schema.is_some());
+    // The alias this server was launched under, not the word it reported.
+    assert_eq!(tools[0].name(), "fake:echo");
+    assert_eq!(tools[0].on_the_wire(), "echo");
+    assert!(tools[0].input_schema().is_some());
+    assert!(
+        !tools[0]
+            .description()
+            .expect("a description")
+            .label()
+            .is_trusted()
+    );
 
     let _ = std::fs::remove_file(&script);
 }

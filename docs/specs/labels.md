@@ -22,6 +22,7 @@ guards:
       - crates/core/src/value.rs: 7
       - crates/mcp/src/http.rs: 2
       - crates/mcp/src/lib.rs: 1
+      - crates/mcp/src/protocol.rs: 2
       - crates/mcp/src/stdio.rs: 2
       - crates/net/src/lib.rs: 2
   - symbol: Labelled::declassify
