@@ -91,9 +91,11 @@ rather than a warning nobody has to read. `make write-unverified` writes the fil
 writes.
 
 `make check-security` decides the things `check-spec` structurally cannot: whether two documents
-agree about how many exceptions to the rule are admitted, whether the register admitting them leaves
-as many prompts out of a verdict's reach as the clause deciding that does, whether a field
-documented as read in one place is read in one place, whether a trait reaches into a `Labelled`,
+agree about how many exceptions to the rule are admitted, whether every crate keeping a network
+client of its own is one the egress register admits and no comment claims a dependency a manifest
+beside it declares, whether the register admitting them leaves as many prompts out of a verdict's
+reach as the clause deciding that does, whether a field documented as read in one place is read in
+one place, whether a trait reaches into a `Labelled`,
 whether a spec pins the constructors of one as well as the releases, whether every workflow step
 is on a commit rather than a tag its owner can move, whether every container image this tree runs
 names a digest rather than a tag its publisher can move, and whether a job holding `id-token: write`
@@ -101,11 +103,13 @@ or a secret installs or runs an npm dependency, which every step in that job cou
 credential from, and whether a checkout of this tree names a kind of ref rather than a bare name a
 branch and a tag can share. CI runs it too, so a pull request that moves a workflow step or a build
 image onto a movable tag, that puts an install back beside the publish credential, that points a
-checkout at a name instead of a ref, or that drops the entry pinning a constructor, fails rather than
-holding only for whoever remembers to run this. It is the deterministic half of the
+checkout at a name instead of a ref, that gives a crate a network client the egress register does
+not admit, or that drops the entry pinning a constructor, fails rather than holding only for
+whoever remembers to run this. It is the deterministic half of the
 [security-audit skill](../../agents/skills/security-audit/SKILL.md); the lanes that read code are the
-other half, and a person runs those. Run it before a commit that
-touches a label, `.github/workflows`, a Dockerfile, the Makefile's containers, or the trust specs.
+other half, and a person runs those. Run it before a commit that touches a label,
+`.github/workflows`, a Dockerfile, the Makefile's containers, a crate's manifest, or the trust
+specs.
 
 `make check-locales` holds every message catalog to
 [../../contrib/untranslated-messages.txt](../../contrib/untranslated-messages.txt), the record of what each

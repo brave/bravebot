@@ -246,6 +246,11 @@ into plaintext and hand a third party what only it had.
   order id and a credential on the wire. Holding it to the same rule means either following its
   redirects here or configuring that client to follow none, and neither is decided in this document.
 
+  This bullet is the register, and it is read rather than only written: `make check-security` takes
+  the crates it names out of it and fails on any manifest under `crates/` that declares a network
+  client and is not one of them. So a third client is a red build rather than a paragraph in the
+  gate crate assuring a reviewer that it cannot exist, which is what it used to be.
+
 - **The machine's own trust store is not read.** `SSL_CERT_FILE` and `SSL_CERT_DIR` are, so on a
   machine where neither is set an authority installed into the platform store is invisible here.
   Consulting that store takes a dependency reaching a different system library on each platform,

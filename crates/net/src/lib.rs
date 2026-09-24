@@ -1,10 +1,18 @@
 //! The single network egress path.
 //!
-//! Every outbound request in the process goes through [`Egress::fetch`]. The HTTP
-//! client is private to this module and no other crate depends on `ureq`, so there is
-//! no second path that could skip the policy gate. That is deliberate: in the design
-//! this replaces, two of three fetchers bypassed the redirect check because using the
-//! hardened helper was optional.
+//! Every outbound request carrying labelled content goes through [`Egress::fetch`], and the HTTP
+//! client behind it is private to this module, so nothing outside it can use that client to reach
+//! the network without passing the policy gate. That is deliberate: in the design this replaces,
+//! two of three fetchers bypassed the redirect check because using the hardened helper was
+//! optional.
+//!
+//! One other crate opens a socket, and it is a recorded exception rather than an oversight.
+//! `bravebot-skus` builds its own client for the subscription service, over the transport this
+//! module resolved, and carries a credential and an order id rather than workspace content or
+//! model output. What that costs, including the revalidation below, which it does not get, is
+//! under `## Known costs` in `docs/specs/network-egress.md`. `make check-security` holds every
+//! manifest under `crates/` to that list, so a third client fails a build rather than arriving
+//! with a paragraph here saying it cannot exist.
 //!
 //! Redirects are followed manually and **revalidated on every hop**. Otherwise a
 //! permitted host could redirect to a denied one and the gate would only ever have

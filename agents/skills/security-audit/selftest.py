@@ -132,6 +132,314 @@ def test_exception_counts():
     )
 
 
+# A register with one admitted second client, as the tree has. The bullet has to be about opening a
+# socket for the crates it names to be read out of it, so a crate mentioned in that section for some
+# other reason does not become permitted to keep a client.
+EGRESS_SPEC = """---
+id: NET
+title: Network egress
+---
+
+## Clauses
+
+<a id="NET-1"></a>
+### NET-1: this process has one way out, and it is not optional
+
+Every outbound request this process makes goes through a single call, and no other crate depends
+on it.
+
+## Known costs
+
+- **`bravebot-net` is not the only crate that opens a socket.** `bravebot-skus` builds its own
+  HTTP client for the subscription service. That traffic carries a credential and an order id,
+  never workspace content.
+
+- **The machine's own trust store is not read.** `SSL_CERT_FILE` is, and `bravebot-config` is what
+  reads it, which is a mention of a crate and not an admission that it opens anything.
+"""
+
+# The same register, with a second admission for a crate the fixtures below give a client to.
+EGRESS_SPEC_ADMITTING_LSP = EGRESS_SPEC + """
+- **`bravebot-lsp` keeps a client too.** It opens its own socket for the registry it downloads
+  language servers from.
+"""
+
+# The same register with the second-egress bullet taken out, for a fixture where the gate crate is
+# the only crate there is.
+EGRESS_SPEC_ADMITTING_NOBODY = EGRESS_SPEC.replace(
+    """- **`bravebot-net` is not the only crate that opens a socket.** `bravebot-skus` builds its own
+  HTTP client for the subscription service. That traffic carries a credential and an order id,
+  never workspace content.
+
+""",
+    "",
+)
+
+
+def crate_manifest(name, *deps):
+    declared = "".join(f"{one} = {{ workspace = true }}\n" for one in deps)
+    return f'[package]\nname = "{name}"\n\n[dependencies]\n{declared}'
+
+
+# The workspace as the tree has it: the gate crate and the one recorded exception.
+RECORDED_WORKSPACE = {
+    "docs/specs/network-egress.md": EGRESS_SPEC,
+    "crates/net/Cargo.toml": crate_manifest("bravebot-net", "ureq"),
+    "crates/skus/Cargo.toml": crate_manifest("bravebot-skus", "ureq"),
+    "crates/config/Cargo.toml": crate_manifest("bravebot-config", "serde_json"),
+}
+
+# The claim as the file carried it, on one line.
+CLAIM = """//! The single network egress path.
+//!
+//! Every outbound request in the process goes through [`Egress::fetch`]. The HTTP
+//! client is private to this module and no other crate depends on `ureq`, so there is
+//! no second path that could skip the policy gate.
+
+pub struct Egress;
+"""
+
+# The same claim one word further along the margin, so the sentence ends one line and names the
+# crate on the next. A doc comment wraps wherever the margin falls, so where the break lands is an
+# accident of the sentence before it, and a scan reading one line at a time sees neither half.
+CLAIM_ACROSS_TWO_LINES = """//! The single network egress path.
+//!
+//! Every outbound request in the process goes through [`Egress::fetch`]. The HTTP client
+//! is private to this module and no other crate depends on
+//! `ureq`, so there is no second path that could skip the policy gate.
+
+pub struct Egress;
+"""
+
+CLAIM_CORRECTED = """//! The single network egress path.
+//!
+//! Every outbound request carrying labelled content goes through [`Egress::fetch`]. One other
+//! crate opens a socket, recorded under `## Known costs` in `docs/specs/network-egress.md`.
+
+pub struct Egress;
+"""
+
+
+def audit_egress(files):
+    """Run the check over a fixture tree, reading its sources the way a real run reads them."""
+    where = in_tree(files)
+    return with_cwd(
+        where,
+        lambda: list(audit.check_network_clients_are_recorded(audit.mechanics.load_sources())),
+    )
+
+
+def test_network_clients_are_recorded():
+    found = audit_egress(
+        {
+            **RECORDED_WORKSPACE,
+            "crates/lsp/Cargo.toml": crate_manifest("bravebot-lsp", "reqwest"),
+        }
+    )
+    check(
+        "a crate the register does not admit keeping a client is an error",
+        kinds(found) == ["unrecorded-network-client"]
+        and found[0]["severity"] == audit.ERROR
+        and "bravebot-lsp" in found[0]["summary"]
+        and "reqwest" in found[0]["summary"],
+        str([one["summary"] for one in found]),
+    )
+
+    found = audit_egress(
+        {
+            **RECORDED_WORKSPACE,
+            "docs/specs/network-egress.md": EGRESS_SPEC_ADMITTING_LSP,
+            "crates/lsp/Cargo.toml": crate_manifest("bravebot-lsp", "reqwest"),
+        }
+    )
+    check("the same crate, once the register admits it, is clean", found == [], str(kinds(found)))
+
+    found = audit_egress(
+        {
+            **RECORDED_WORKSPACE,
+            "crates/lsp/Cargo.toml": crate_manifest(
+                "bravebot-lsp", "reqwest"
+            ).replace("[dependencies]", "[dev-dependencies]"),
+        }
+    )
+    check(
+        "a client a crate takes only for its tests is not a second egress",
+        found == [],
+        str(kinds(found)),
+    )
+
+    found = audit_egress(
+        {
+            **RECORDED_WORKSPACE,
+            "crates/lsp/Cargo.toml": '[package]\nname = "bravebot-lsp"\n\n'
+            "[target.'cfg(windows)'.dependencies]\nureq = { workspace = true }\n",
+        }
+    )
+    check(
+        "a client declared for one platform only is still a second egress",
+        kinds(found) == ["unrecorded-network-client"],
+        str(kinds(found)),
+    )
+
+    found = audit_egress(
+        {
+            **RECORDED_WORKSPACE,
+            "crates/lsp/Cargo.toml": '[package]\nname = "bravebot-lsp"\n\n[dependencies]\n'
+            'fetcher = { package = "reqwest", workspace = true }\n',
+        }
+    )
+    check(
+        "a client renamed in the manifest is still found",
+        kinds(found) == ["unrecorded-network-client"],
+        str(kinds(found)),
+    )
+
+    found = audit_egress(
+        {
+            **RECORDED_WORKSPACE,
+            "crates/lsp/Cargo.toml": '[package]\nname = "bravebot-lsp"\n\n[dependencies.reqwest]\n'
+            'version = "0.12"\n',
+        }
+    )
+    check(
+        "a client given a table of its own is still found",
+        kinds(found) == ["unrecorded-network-client"],
+        str(kinds(found)),
+    )
+
+    found = audit_egress(
+        {
+            **RECORDED_WORKSPACE,
+            "crates/lsp/Cargo.toml": '[package]\nname = "bravebot-lsp"\n\n[dependencies.fetcher]\n'
+            'package = "reqwest"\nversion = "0.12"\n',
+        }
+    )
+    check(
+        "a client renamed in a table of its own is still found",
+        kinds(found) == ["unrecorded-network-client"],
+        str(kinds(found)),
+    )
+
+    found = audit_egress(
+        {
+            **RECORDED_WORKSPACE,
+            "crates/lsp/Cargo.toml": '[package]\nname = "bravebot-lsp"\n\n[dependencies]\n'
+            "reqwest.workspace = true\n",
+        }
+    )
+    check(
+        "a client declared with a dotted key is still found",
+        kinds(found) == ["unrecorded-network-client"],
+        str(kinds(found)),
+    )
+
+    found = audit_egress(
+        {
+            **RECORDED_WORKSPACE,
+            "crates/lsp/Cargo.toml": '[package]  # the language server client\n'
+            'name = "bravebot-lsp"\n\n[dependencies]  # nothing here opens a socket\n'
+            "reqwest = { workspace = true }\n\n[dev-dependencies]  # test only\n"
+            "serde_json = { workspace = true }\n",
+        }
+    )
+    check(
+        "a comment after a table header hides neither the package name nor the table",
+        kinds(found) == ["unrecorded-network-client"] and "bravebot-lsp" in found[0]["summary"],
+        str([one["summary"] for one in found]),
+    )
+
+    found = audit_egress(
+        {
+            **RECORDED_WORKSPACE,
+            "crates/lsp/Cargo.toml": '[package]\nname = "bravebot-lsp"\n\n[dependencies]\n'
+            '# fetcher = { package = "reqwest" } was dropped when this went through the gate\n'
+            "serde_json = { workspace = true }\n",
+        }
+    )
+    check(
+        "a dependency left commented out in a manifest is not one",
+        found == [],
+        str(kinds(found)),
+    )
+
+    found = audit_egress(
+        {
+            **RECORDED_WORKSPACE,
+            "crates/skus/Cargo.toml": crate_manifest("bravebot-skus", "serde_json"),
+        }
+    )
+    check(
+        "an admission no manifest uses is a warning, not an error",
+        kinds(found) == ["network-client-record-is-stale"]
+        and found[0]["severity"] == audit.WARNING,
+        str(kinds(found)),
+    )
+
+    found = audit_egress({**RECORDED_WORKSPACE, "crates/net/src/lib.rs": CLAIM})
+    check(
+        "a claim that the crate's client is its alone is an error",
+        kinds(found) == ["exclusive-dependency-claim-is-false"]
+        and found[0]["severity"] == audit.ERROR
+        and "bravebot-skus" in found[0]["summary"],
+        str([one["summary"] for one in found]),
+    )
+
+    check(
+        "the claim is reported at the line it is on, not at the head of the comment",
+        "crates/net/src/lib.rs:4" in found[0]["summary"]
+        and "no other crate depends on `ureq`" in found[0]["evidence"][0],
+        str(found[0]["evidence"]),
+    )
+
+    found = audit_egress({**RECORDED_WORKSPACE, "crates/net/src/lib.rs": CLAIM_ACROSS_TWO_LINES})
+    check(
+        "the same claim, broken across two lines by the margin, is the same error",
+        kinds(found) == ["exclusive-dependency-claim-is-false"],
+        str([one["summary"] for one in found]),
+    )
+
+    found = audit_egress({**RECORDED_WORKSPACE, "crates/net/src/lib.rs": CLAIM_CORRECTED})
+    check(
+        "the corrected paragraph is clean",
+        found == [],
+        str([one["summary"] for one in found]),
+    )
+
+    alone = {
+        "docs/specs/network-egress.md": EGRESS_SPEC_ADMITTING_NOBODY,
+        "crates/net/Cargo.toml": crate_manifest("bravebot-net", "ureq"),
+        "crates/net/src/lib.rs": CLAIM_ACROSS_TWO_LINES,
+    }
+    found = audit_egress(alone)
+    check(
+        "the same claim, where no other manifest declares the crate, is not a finding",
+        found == [],
+        str([one["summary"] for one in found]),
+    )
+
+    check(
+        "this repository's manifests and the register agree",
+        with_cwd(
+            ROOT,
+            lambda: list(
+                audit.check_network_clients_are_recorded(audit.mechanics.load_sources())
+            ),
+        )
+        == [],
+        str(
+            with_cwd(
+                ROOT,
+                lambda: [
+                    one["summary"]
+                    for one in audit.check_network_clients_are_recorded(
+                        audit.mechanics.load_sources()
+                    )
+                ],
+            )
+        ),
+    )
+
+
 # CHECK-12's table and the sentence in the Known cost that counts what it leaves out of reach. Two
 # of the three prompts are answered here, as in the tree, so a register naming more than one out of
 # reach is the drift being caught.
@@ -1748,6 +2056,7 @@ def test_a_run_writes_a_manifest_and_posts_nothing():
 def main():
     for test in (
         test_exception_counts,
+        test_network_clients_are_recorded,
         test_prompt_split,
         test_exhaustive_reader_docs,
         test_labelled_impls,
