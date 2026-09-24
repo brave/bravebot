@@ -48,7 +48,7 @@ this spec.
 | `bravebot-stamp` | Which build this is: the version, the commit it was built from, and whether that tree was modified | none | Not presentation: draws nothing and links no terminal library, so a front end that draws nothing can still name the build it is. Asks git at compile time and holds one string; carries no workspace content and decides nothing |
 | `bravebot-skus` | Imports a Leo Premium subscription by registering as a new device | none | Auth only. Carries no workspace content and no model output. Keeps its own HTTP client, over a transport its caller states. See [premium-credentials.md](premium-credentials.md) |
 | `bravebot-ui-bridge` | Drives a turn for the graphical front end, over newline-delimited JSON on a pipe | `core`, `agent`, `aichat`, `config`, `net`, `session`, `stamp` | Not presentation: draws nothing and links no terminal library, because the surface it serves is a renderer in another process. Serialises labelled values across the transport without inspecting them, and carries the label with the content rather than dropping it at the boundary. Composes no request to a service and decodes no reply from one: what a service serves is asked of the crate that speaks to it, so a field two front ends want differently widens that crate rather than being assembled here. Only the transport binary writes to stdout or ends the process, since a stray print elsewhere would interleave with the protocol |
-| `bravebot-ui-files` | Reads and writes the files the graphical front end is asked to open, under a directory it is handed | none | Reads and writes only under a directory its caller pins, resolving each path component relative to it and never following a link, so a path cannot leave the tree a person opened. Runs no command and hands nothing to a turn. That walk is POSIX, so the Windows build refuses every request rather than compile a weaker one for a platform the app is not packaged for. Which directories may be pinned is [trust-map.md](trust-map.md)'s question rather than this document's |
+| `bravebot-ui-files` | Reads and writes the files the graphical front end is asked to open, under a directory it is handed | none | Reads and writes only under a directory its caller pins, resolving each path component relative to it and never following a link, so a path cannot leave the tree a person opened. Runs no command and hands nothing to a turn. The walk is `openat` on POSIX and `NtCreateFile` relative to a handle on Windows, the one native call there that opens relative to a directory. Which directories may be pinned is [trust-map.md](trust-map.md)'s question rather than this document's |
 
 `verified-by: bravebot_cli::layering::every_workspace_member_is_a_row_in_the_layering_table`
 `verified-by: bravebot_cli::layering::a_rows_dependency_list_is_what_the_manifest_asks_for`
@@ -91,12 +91,14 @@ so an `unsafe` block there is one of the crate's own and is named the same way.
 **Why.** Nearly every crate here contains no `unsafe` at all. Undeclared, that is a property
 nothing records: it holds by accident, and the first `unsafe` to arrive arrives silently. Declared,
 the compiler decides it, and what a reviewer reads is the sites that name themselves rather than
-every crate in the workspace. Three crates name sites: `bravebot-sandbox`, whose landlock
+every crate in the workspace. Four crates name sites: `bravebot-sandbox`, whose landlock
 syscalls and whose Win32 calls creating a process inside a container are its reason for existing,
 `bravebot-skus`, which asks Windows for the access-control list that
 keeps an imported subscription to one account ([PREM-7](premium-credentials.md#PREM-7)) and whose
 tests point `HOME` at a scratch directory, and `bravebot-agent`, which asks Windows for its own
-version ([INSTR-9](instructions.md#INSTR-9)) in the one call a platform states that in. Taking `deny` where `forbid` would do is the way the rule
+version ([INSTR-9](instructions.md#INSTR-9)) in the one call a platform states that in, and
+`bravebot-ui-files`, whose Windows walk opens, renames and removes relative to a handle in calls
+only the native API offers. Taking `deny` where `forbid` would do is the way the rule
 is kept in letter and lost in substance, because `deny` is the one an `allow` added later reopens.
 
 `verified-by: bravebot_cli::unsafe_code::every_crate_root_says_what_it_does_about_unsafe`

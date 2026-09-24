@@ -29,6 +29,7 @@ Format, lint, and test
 Minimum supported Rust
 npm lockfile
 Front end
+Desktop on Windows
 Specs
 Security
 Locales

@@ -8,9 +8,20 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-rustix = { workspace = true, features = ["fs"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true, features = ["fs"] }
+
+# Already in the lockfile for sandbox and skus. The features add the kernel-mode calls the walk is
+# made of, since Win32 has no open relative to a directory, and nothing to the tree.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Wdk_Foundation",
+    "Wdk_Storage_FileSystem",
+    "Win32_System_IO",
+] }
 
 [dev-dependencies]
 tempfile = { workspace = true }

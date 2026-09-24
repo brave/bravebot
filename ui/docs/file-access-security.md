@@ -5,13 +5,21 @@ Project text previews, attachment validation, and bot-memory reads, edits and se
 the agent crates. Only Electron's main process supplies its project root and path;
 the renderer cannot choose a helper executable or send a shell command.
 
-The helper opens each directory component with `openat`, `O_DIRECTORY`, and `O_NOFOLLOW`,
+On POSIX the helper opens each directory component with `openat`, `O_DIRECTORY`, and `O_NOFOLLOW`,
 starting from the filesystem root. Reads use the pinned parent descriptor. Memory edits
 create an exclusive temporary file and use `renameat` within the pinned parent directory.
 Replacing a path component with a symlink therefore cannot redirect a later operation.
 An operation already holding a directory descriptor stays on that authorized directory
 even if its name changes. Symlinked project paths are refused, except for macOS's fixed
 `/tmp` and `/var` aliases. Read sizes, request sizes, helper runtime and output are bounded.
+
+On Windows the same walk is `NtCreateFile` relative to the parent's handle, since Win32 has no
+relative open. `OBJ_DONT_REPARSE` and `FILE_OPEN_REPARSE_POINT` stop it following a symlink or a
+junction at any component, and one opened as itself is refused, as `O_NOFOLLOW` refuses a symlink.
+The edit's rename and the temporary file's removal act on the open handle within the pinned
+parent. The walk starts at a drive letter's root: a UNC share, a `\\?\` path and a device path are
+refused rather than walked. A reparse point that is not a link, such as a cloud-files placeholder,
+is opened as itself, since it names no other file.
 
 Before any of that, a request has to name a path inside a project at all, and that is decided in
 two places. `shared/files.ts` holds what is true on every platform: a relative path with no empty,
@@ -24,12 +32,20 @@ dot or space that Win32 drops before it looks. None of those is a way out of the
 the `realpath` check decides; each is a request resolving to something other than what it spells.
 Applying them everywhere would cost a POSIX project every file it has with a colon in its name.
 
-The helper's own walk is unchanged and is still POSIX: its Windows build refuses every request, so
-nothing above reaches a Windows filesystem yet.
+The helper refuses the same forms again on Windows, per component and before it checks what path
+was asked for, along with a reserved character and an 8.3 short name, which is another file's
+second spelling. A short name is accepted in the project root, the directory the user chose, since
+the system temporary directory is often spelt that way. NTFS matches names without regard to case,
+so `HOOKS.JSON` opens `hooks.json`; the helper compares a path exactly, and any other case is
+refused rather than normalised.
 
 The replacement helper accepts only `.bravebot-ui/bots/*.md`, checks the expected previous
 text, and writes private regular files. This protects the outside-file boundary; it does
 not claim to lock out another editor that concurrently changes the same authorized file.
+On Windows, private means an explicit, protected access list set when the helper creates the file
+or directory, granting the account it runs as full control and no one else anything: what 0600
+and 0700 are on POSIX. It is not the list inherited from the profile. A directory that was already
+there keeps the list it has, as it keeps its mode on POSIX.
 
 Grounding a bot turn goes through the same walk, on a `memory.seed` operation that accepts
 the same path shape. It makes `.bravebot-ui`, `.bravebot-ui/bots` and the memory file exist
@@ -57,7 +73,9 @@ Deletion errors are surfaced, and deletion is refused while a bot's conversation
 These are local files, not encrypted storage or a promise of secure erasure from backups.
 
 Regression coverage includes parent-directory swaps for reads, writes and seeds, root and
-leaf symlinks, links at the memory path and at the briefing path, traversal, size bounds,
-stale edits, file permissions, removal and bot recreation, and actual IPC in a packaged app.
+leaf symlinks, a link at every component (a junction as well on Windows, where CI runs the
+helper's suite), Windows name forms, links at the memory path and at the briefing path,
+traversal, size bounds, stale edits, file permissions, removal and bot recreation, and actual
+IPC in a packaged app.
 It also covers what a briefing may carry: that it names the memory file and quotes no byte
 of it, and that a second grounding leaves an existing memory alone. See [testing.md](testing.md) for reproduction commands.

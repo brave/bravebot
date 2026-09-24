@@ -15,6 +15,9 @@ governs:
   - crates/cli/src/main.rs
   - crates/tui/src/app.rs
   - crates/ui-files/src/main.rs
+  - crates/ui-files/src/names.rs
+  - crates/ui-files/src/posix.rs
+  - crates/ui-files/src/windows.rs
   - ui/src/main/opened.ts
   - ui/src/main/recents.ts
   - ui/src/main/files.ts

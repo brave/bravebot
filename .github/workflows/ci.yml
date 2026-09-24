@@ -89,7 +89,8 @@ jobs:
   #
   # Linting, not running. The suite needs a Windows host, and it spawns a POSIX shell, drives a pty
   # and exercises a confinement backend Windows has none of; whether those are made to work is the
-  # question of whether Windows is supported at all, which is #88.
+  # question of whether Windows is supported at all, which is #88. The desktop app's pair is the
+  # exception, run on a Windows host in windows-desktop below.
   windows:
     name: Lint the Windows target
     runs-on: ubuntu-latest
@@ -347,4 +348,50 @@ jobs:
 
       - name: Walkthrough regression
         timeout-minutes: 5
+        run: make check-ui-walkthrough
+
+  # The desktop app where it runs rather than cross-compiled for it. The helper's walk refuses
+  # junctions, streams and device names on NTFS, which no other host has, and the walkthrough
+  # drives the pair end to end. -gnu for the reason the windows job gives, which on this runner
+  # means asking for it: its default is -msvc. The recipes and npm's scripts are written for a
+  # POSIX shell, so both run under Git's bash.
+  windows-desktop:
+    name: Desktop on Windows
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      npm_config_script_shell: C:\Program Files\Git\bin\bash.exe
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Rust
+        # Pinned to a full commit SHA; see the note in the `check` job above.
+        # nosemgrep: brave-third-party-action-not-pinned-to-commit-sha
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable-x86_64-pc-windows-gnu
+
+      - name: Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Test the file helper on NTFS
+        run: cargo test -p bravebot-ui-files --locked
+
+      # Not `make check-ui-build`: scripts/*.test.mjs assume a POSIX host for packaging, which is
+      # the installer's work (#769), and the Front end job runs them.
+      - name: Build the desktop UI
+        run: |
+          npm --prefix ui ci
+          BRAVEBOT_BUILD_UNCONFIGURED=1 npm --prefix ui run build
+
+      - name: Walkthrough regression
+        timeout-minutes: 10
         run: make check-ui-walkthrough
