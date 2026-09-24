@@ -83,7 +83,12 @@ HOW_IT_WAS_FOUND = (
 # than this says where the rest of it is instead.
 QUOTE_LINES = 14
 CONTEXT_BEFORE, CONTEXT_AFTER = 2, 5
-TITLE_LIMIT = 110
+# GitHub's own cap on an issue title. Nothing here shortens a title to reach it. A reviewer's
+# summary states the defect first and its cost second, so cutting the end takes the cost off and
+# leaves a sentence that stops in the middle: that is how #509 and #498 were filed, from a run where
+# all 60 summaries ran past the 110 characters this used to cut at. A draft over the cap is reported
+# as wanting a shorter title instead, and the person posting it shortens it keeping both halves.
+TITLE_LIMIT = 256
 ANCHOR = re.compile(r'<a id="[^"]*"></a>')
 # `crates/core/src/policy.rs:40 the split is made here`: the place, then what is there.
 SITE = re.compile(r"([\w./\\-]+\.\w+):(\d+)\s*(.*)")
@@ -252,14 +257,14 @@ def title_for(finding):
 
     No backticks: a title is not rendered as markdown anywhere it is read, and searching for one
     that has them means guessing where they were.
+
+    Whole, however long the summary runs. `TITLE_LIMIT` says which of these a person has to shorten
+    before posting it; nothing here does that for them.
     """
     lead = finding.get("clause") or Path(finding["spec"]).stem
     summary = (finding.get("summary") or "the code does not match the spec").rstrip(".")
     title = summary if summary.replace("`", "").startswith(lead) else f"{lead}: {summary}"
-    title = title.replace("`", "")
-    if len(title) > TITLE_LIMIT:
-        title = title[:TITLE_LIMIT].rsplit(" ", 1)[0]
-    return title
+    return title.replace("`", "")
 
 
 def slug_for(finding, taken):
@@ -407,9 +412,11 @@ def draft(findings, out):
         session = session_file.read_text(encoding="utf-8") if session_file.is_file() else None
         body_file = out / f"{slug}.md"
         body_file.write_text(body_for(finding, screen, session), encoding="utf-8")
+        title = title_for(finding)
         drafts.append(
             {
-                "title": title_for(finding),
+                "title": title,
+                "title_too_long": len(title) > TITLE_LIMIT,
                 "slug": slug,
                 "body_file": str(body_file),
                 "spec": finding["spec"],
@@ -433,6 +440,11 @@ def report(drafts, out):
         mark = "error" if entry["severity"] == collect.ERROR else "warn "
         lines.append(f"  {mark}  {entry['title']}")
         lines.append(f"         {' '.join(entry['labels'])}, body {entry['body_file']}")
+        if entry["title_too_long"]:
+            lines.append(
+                f"         needs a shorter title: {len(entry['title'])} characters, "
+                f"and GitHub takes {TITLE_LIMIT}. Keep the defect and the cost"
+            )
         if entry["screen_wanted"] and not entry["has_screen"]:
             lines.append(f"         wants a screen: {entry['screen_wanted']}")
             lines.append(

@@ -29,7 +29,11 @@ _drafts = importlib.util.spec_from_file_location(
 shared = importlib.util.module_from_spec(_drafts)
 _drafts.loader.exec_module(shared)
 
-TITLE_LIMIT = shared.TITLE_LIMIT
+# The length this drafter shortens a title to, which is its own and not `check-spec`'s. That one is
+# GitHub's hard cap, reported rather than cut to, because a summary loses its cost off the end. This
+# one is the length the cut below aims at, and it cuts at a clause boundary rather than mid-sentence
+# so that what survives is a whole claim.
+TITLE_LIMIT = 110
 
 # Words that only make sense with what comes next, so a title ending on one has been cut rather than
 # shortened.

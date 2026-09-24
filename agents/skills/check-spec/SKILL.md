@@ -128,6 +128,11 @@ Print its output. One body per finding is now on disk, shaped like a pull reques
 wrong first, shown rather than described, then the clause it breaks quoted in full, then the
 failure walk, the `file:line` evidence, and the fix the reviewer proposed. Read none of them.
 
+A title runs as long as the reviewer's summary does. Nothing cuts one: a summary states the
+defect first and its cost second, so the end is where the cost is. The table marks any draft
+whose title is over GitHub's 256-character cap as needing a shorter one, which is a person's
+job in step 7.
+
 A finding `make check-spec` already fails on gets no draft, because it is red on the branch
 that caused it and will be fixed there. So the drafts are the review findings and the clauses
 nothing pins, which is what a green CI run leaves unsaid.
@@ -172,6 +177,10 @@ others, and never post one whose clause already has an open issue:
 gh issue list --repo OWNER/REPO --state open --search "CLAUSE-N in:title"
 gh issue create --repo OWNER/REPO --title "TITLE" --label FIRST --label SECOND --body-file BODY_FILE
 ```
+
+Where the table said a title needs shortening, rewrite it before posting rather than posting a
+title GitHub will refuse. Keep the defect and the cost, and say the clause id first;
+[labelling-issues.md](../../../docs/development/labelling-issues.md) is what a title carries.
 
 Apply every label the draft names and none it does not. A divergence carries two, because which
 clause it breaks and what it is in the code that ships today are different questions: `spec-mismatch`
