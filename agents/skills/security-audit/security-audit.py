@@ -18,7 +18,9 @@ beside it declares, that the register admitting them leaves
 as many prompts out of a verdict's reach as the clause deciding that does, that a field documented
 as read in one place is read in one place, that nothing has been implemented on
 `Labelled` that would let a caller read a label's content without asking, that the constructor which
-is how a value gets a better label than its inputs had is pinned somewhere, that every workflow step
+is how a value gets a better label than its inputs had is pinned somewhere, that every gate handing
+released content to a closure the driver wrote is counted rather than merely named, and so is every
+function forwarding its caller's closure to one, that every workflow step
 names a commit rather than a tag its owner can move, that every container image this tree runs names a
 digest rather than a tag its publisher can move, that no job holding a credential installs or runs a
 dependency beside it, and that a checkout of this tree names a kind of ref rather than a bare name a
@@ -121,6 +123,13 @@ GATES = (
 )
 WITNESS = "Declassification::authorise"
 
+# What a gate calls to turn untrusted content away before it releases anything. A gate that never
+# reaches it releases content the driver may not read, which is the difference between one a spec
+# can name and one whose call sites have to be counted.
+REFUSAL = "refuse_untrusted"
+# The release itself. A refusal after one says nothing: the bytes are already out.
+RELEASED = ".declassify("
+
 # The specs the guarantee rests on. A clause of one of these that nothing pins is worth reporting
 # even though `check-spec` already counts it, because there it is one warning among many and here it
 # is the list of what a change could break while staying green.
@@ -153,6 +162,14 @@ PLACES = re.compile(
     r"\b(" + "|".join(NUMBERS) + r")\s+places?\s+(?:in|do|that)", re.IGNORECASE
 )
 FUNCTION = re.compile(r"\bfn\s+([A-Za-z0-9_]+)")
+# A name bound to one of the `Fn` traits, which is a parameter whose value is code the caller wrote
+# or a generic the parameter is declared with. The name is what a call has to pass on for the
+# function holding it to be a way into a gate rather than a function that takes a callback.
+CLOSURE_BOUND = re.compile(r"\b([A-Za-z0-9_]+)\s*:\s*[^,;()]*\bFn(?:Once|Mut)?\s*\(")
+STRING_LITERAL = re.compile(r'"(?:[^"\\]|\\.)*"')
+# How far a call may run before this stops reading. A call written over more lines than this is
+# not one of these, and reading to the end of the file would balance on an unrelated parenthesis.
+CALL_LINES = 40
 
 # The clause that decides which of the prompts a check runs for a safe verdict may answer, the cell
 # in its table that says one of them is answered, and the sentence in `labels.md` counting the rest.
@@ -863,14 +880,7 @@ def check_construction_pinned(specs, sources):
     for constructor in CONSTRUCTORS:
         if constructor in pinned:
             continue
-        sites = sites_for(constructor, sources)
-        outside = [
-            site
-            for site in sites
-            if not site["core"]
-            and not site["test_file"]
-            and not in_test_module(sources, Path(site["path"]), site["line"])
-        ]
+        outside = outside_the_kernel(sites_for(constructor, sources), sources)
         if not outside:
             continue
         by_file = {}
@@ -894,6 +904,272 @@ def check_construction_pinned(specs, sources):
             "constructor bytes from a page or a process, with a label saying a person typed them, "
             "puts untrusted content in the planner's context and passes every check in the tree",
         )
+
+
+def outside_the_kernel(sites, sources):
+    """The sites of a symbol that driver code outside `crates/core` writes.
+
+    The kernel is where reading content belongs, and the tests hold the largest concentration of
+    every primitive because a test that proves something about a label has to build one. What a
+    pin is for is the next site somebody writes in the driver.
+    """
+    return [
+        site
+        for site in sites
+        if not site["core"]
+        and not site["test_file"]
+        and not in_test_module(sources, Path(site["path"]), site["line"])
+    ]
+
+
+def function_body(lines, start):
+    """The lines of the function beginning at `start`, by brace depth."""
+    depth = 0
+    body = []
+    for raw in lines[start:]:
+        body.append(raw)
+        depth += raw.count("{") - raw.count("}")
+        if "{" in raw and depth <= 0:
+            break
+    return body
+
+
+def refuses_before_releasing(body):
+    """Whether a body turns untrusted content away before it releases any.
+
+    A refusal below the release is not one: by the time it runs the bytes are already in the
+    caller's hands, and reading only whether the name appears anywhere would let a gate be
+    exempted from being counted by a line that does nothing.
+    """
+    refusal = next((number for number, raw in enumerate(body) if REFUSAL in raw), None)
+    release = next((number for number, raw in enumerate(body) if RELEASED in raw), None)
+    return refusal is not None and (release is None or refusal < release)
+
+
+def gate_refuses_untrusted(gate, sources):
+    """Whether every definition of a gate turns untrusted content away before releasing any.
+
+    `Policy::read_trusted_content` refuses twice over, so every closure it can reach runs on bytes
+    the driver was already allowed to read and a spec naming it catches the only thing left, a
+    rename. `Policy::render_in_place` has no refusal on the label at all, because releasing
+    untrusted content to a closure is what it is for, so for that one a name is not enough.
+
+    Every definition rather than any, since a second function of the name in another module is a
+    second way in, and a gate is only as refusing as the one a caller reaches.
+    """
+    bare = gate.split("::")[-1]
+    opens = re.compile(rf"\bfn\s+{re.escape(bare)}\b")
+    bodies = []
+    for path, lines in sources.items():
+        if not str(path).startswith("crates/core/"):
+            continue
+        code = mechanics.strip_comments(lines)
+        for number, raw in enumerate(code):
+            if opens.search(raw):
+                bodies.append(function_body(code, number))
+    return bool(bodies) and all(refuses_before_releasing(body) for body in bodies)
+
+
+def generic_names(signature):
+    """The names inside a function's angle brackets, which are types rather than parameters."""
+    found = re.search(r"\bfn\s+[A-Za-z0-9_]+\s*<", signature)
+    if not found:
+        return set()
+    # `->` inside a bound closes nothing, and reading it as a bracket ends the list at the first
+    # `FnOnce(T) -> R`, which is the one signature this has to get right.
+    text = signature[found.end() - 1 :].replace("->", "  ")
+    depth = 0
+    held = []
+    for char in text:
+        if char == "<":
+            depth += 1
+        elif char == ">":
+            depth -= 1
+            if depth == 0:
+                break
+        if depth:
+            held.append(char)
+    return set(re.findall(r"\b([A-Za-z0-9_]+)\b", "".join(held)))
+
+
+def closure_parameters(signature):
+    """The parameters of a signature whose value is code the caller wrote.
+
+    Three spellings reach the same place: an `impl FnOnce(..)` in the parameter list, a `dyn` one
+    behind a pointer, and a generic bound to `Fn` in the brackets or a `where` clause and spelled
+    by name where the parameter is declared. Reading only the first would be answered by the
+    rewrite anybody would make.
+    """
+    generics = generic_names(signature)
+    names = set()
+    for one in CLOSURE_BOUND.findall(signature):
+        if one not in generics:
+            names.add(one)
+            continue
+        carries = rf"\b([A-Za-z0-9_]+)\s*:\s*(?:&\s*)?(?:mut\s+)?{re.escape(one)}\s*[,)]"
+        names.update(found.group(1) for found in re.finditer(carries, signature))
+    return names - generics
+
+
+def enclosing_signature(lines, index):
+    """The function a line sits in, as its name and the closures its caller hands it.
+
+    `enclosing` answers the first half for a list a person reads. This answers the second, which
+    takes the parameter list rather than the name: a parameter of closure type is the one way a
+    caller's own code runs inside a function it does not own.
+    """
+    for start in range(index, -1, -1):
+        found = FUNCTION.search(lines[start])
+        if not found:
+            continue
+        signature = []
+        for raw in lines[start:]:
+            signature.append(raw)
+            if "{" in raw:
+                break
+        return found.group(1), closure_parameters(" ".join(signature))
+    return None, set()
+
+
+def call_text(lines, index, gate):
+    """A call beginning on this line, to the parenthesis that closes it.
+
+    An argument list is what says which of the function's own parameters the call passes on, and a
+    call here is as often written over five lines as over one. String literals are blanked first,
+    because a `(` inside one balances nothing and a scan that ran past the call would read the
+    rest of the file as its arguments. Nothing comes back for a call this cannot find the end of.
+    """
+    bare = gate.split("::")[-1]
+    blanked = [STRING_LITERAL.sub('""', raw) for raw in lines[index : index + CALL_LINES]]
+    column = -1
+    for form in (f".{bare}(", f"{gate}("):
+        column = blanked[0].find(form)
+        if column >= 0:
+            break
+    if column < 0:
+        return ""
+    text = []
+    depth = 0
+    for raw in blanked:
+        piece = raw[column:] if not text else raw
+        text.append(piece)
+        depth += piece.count("(") - piece.count(")")
+        if depth <= 0:
+            return " ".join(text)
+    return ""
+
+
+def gate_forwarders(gate, sources):
+    """Driver-side functions that hand a closure of their own caller's to a gate.
+
+    The count on a gate reaches the line that calls it. It does not reach the closure, and a
+    function that takes one from its caller and forwards it is a second front door: every caller
+    of it writes code that runs on released content, and none of them moves the gate's count.
+    Matching the parameter by name inside the call is what separates such a wrapper from a
+    function that happens to take a callback for something else.
+    """
+    found = []
+    seen = set()
+    for site in outside_the_kernel(sites_for(gate, sources), sources):
+        code = mechanics.strip_comments(sources[Path(site["path"])])
+        index = site["line"] - 1
+        name, closures = enclosing_signature(code, index)
+        if not closures or (site["path"], name) in seen:
+            continue
+        passed = call_text(code, index, gate)
+        if any(re.search(rf"\b{re.escape(one)}\b", passed) for one in closures):
+            seen.add((site["path"], name))
+            found.append((name, site["path"], site["line"]))
+    return found
+
+
+def counted_files(specs):
+    """Each pinned symbol and the files a spec counts its uses in.
+
+    A `guards` entry for a bare name is satisfied by any symbol of that name anywhere, so
+    clearing a wrapper on the name alone would let one be exempted by an unrelated entry that
+    happens to share it. The file the wrapper is in has to be one the entry counts.
+    """
+    where = {}
+    for spec in specs:
+        for symbol, sites in spec.allowlists.items():
+            if not isinstance(sites, list):
+                continue
+            for item in sites:
+                head, separator, _ = str(item).rpartition(":")
+                where.setdefault(symbol, set()).add(head.strip() if separator else str(item).strip())
+    return where
+
+
+def check_gates_pinned(specs, sources):
+    """A release gate no spec counts, and the driver-side wrappers that forward a closure to one.
+
+    `labels.md` pins how many times `Labelled::declassify` is called, per file, so a new release
+    cannot land quietly. A gate with no such entry leaves the same hole one level up.
+    `Policy::render_in_place` hands raw content to a closure compiled outside the kernel and gives
+    back a value that is still labelled, so a new call site needs no release of its own and moves
+    no count anywhere: the one gate whose contract only a reader can check is then the one gate
+    nothing asks anybody to read. A gate that refuses untrusted content before releasing any is
+    the exception, and a spec naming it is enough, because its callers' closures only ever see
+    bytes the driver could have read for itself.
+
+    Counting the gate is necessary and not sufficient. A function in the driver that takes a
+    closure from its own caller and passes it to a gate hides every later caller from that count,
+    so it is counted beside the gate it forwards to.
+    """
+    pinned = set()
+    named = set()
+    for spec in specs:
+        pinned.update(spec.allowlists)
+        named.update(spec.guards)
+    counted = counted_files(specs)
+
+    for gate in GATES:
+        sites = outside_the_kernel(sites_for(gate, sources), sources)
+        if not sites:
+            continue
+        by_file = {}
+        for site in sites:
+            by_file[site["path"]] = by_file.get(site["path"], 0) + site["count"]
+        if gate not in pinned and not (gate in named and gate_refuses_untrusted(gate, sources)):
+            yield finding(
+                ERROR,
+                "gate-unpinned",
+                f"no spec counts {gate}, so a new closure over released content lands green",
+                f"no spec pins `{gate}` to a count per file, so a new call site handing released "
+                f"content to a closure compiled outside the kernel lands green; there are "
+                f"{sum(by_file.values())} outside `crates/core` in non-test code",
+                "trust",
+                "low",
+                evidence=[f"{path} {count} uses" for path, count in sorted(by_file.items())],
+                fix=f"add a `guards` entry for `{gate}` to `{LABELS_SPEC}` with a `sites:` count "
+                f"per file, the way `Policy::present` already has one. A `sites:` list pins the "
+                f"whole tree, so read the counts to pin out of `check-spec` rather than off this "
+                f"finding",
+                gain="nothing on its own. What it buys is the next closure: one that drops an "
+                "entry from a listing, blanks an excerpt, or picks one string over another out of "
+                "what the bytes say. Its result reaches the planner's context or a file still "
+                "labelled, so nothing downstream reads it again either",
+            )
+        for name, path, line in gate_forwarders(gate, sources):
+            if path in counted.get(name, set()):
+                continue
+            yield finding(
+                ERROR,
+                "gate-forwarder-unpinned",
+                f"{name} forwards a caller's own closure to {gate}, and no spec counts it",
+                f"`{name}` at `{path}:{line}` takes a closure from its caller and hands it to "
+                f"`{gate}`, so another caller of it writes a new closure over released content "
+                f"while moving no count at all",
+                "trust",
+                "low",
+                evidence=[f"{path}:{line} {name} forwards to {gate}"],
+                fix=f"add a `guards` entry for `{name}` to `{LABELS_SPEC}` with a `sites:` count "
+                f"per file, or inline it into its callers so that the gate's own count reaches "
+                f"them",
+                gain="the same as the unpinned gate, reached through a helper the count does not "
+                "see: the closure is written by the caller and runs on content the gate released",
+            )
 
 
 def test_regions(lines):
@@ -1858,6 +2134,7 @@ def main():
     findings += list(check_labelled_impls(sources))
     findings += list(check_exhaustive_reader_docs(sources))
     findings += list(check_construction_pinned(specs, sources))
+    findings += list(check_gates_pinned(specs, sources))
     findings += list(check_key_sites_exhaustive(specs, sources))
     findings += list(check_pinned_actions())
     findings += list(check_pinned_images())
