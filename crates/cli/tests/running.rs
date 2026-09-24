@@ -1753,6 +1753,7 @@ fn a_gateway_listing(parameters: &str) -> Gateway {
 /// turn is the one that succeeds and every request after it is answered.
 ///
 /// Answers a streamed reply, because that is what a session in lines asks for.
+#[cfg(target_os = "linux")]
 fn a_gateway_that_refuses_the_level_it_advertises() -> Gateway {
     a_gateway(r#"["tools", "reasoning_effort"]"#, |body| {
         match body.contains("reasoning_effort") {
@@ -1818,6 +1819,7 @@ fn a_gateway(parameters: &str, answer: impl Fn(&str) -> String + Send + 'static)
 ///
 /// Every chunk names the model, which is what stops the run reporting the reply as served by
 /// something other than the model in force.
+#[cfg(target_os = "linux")]
 fn streamed(reply: &str) -> String {
     let chunk = |delta: &str| {
         format!(
