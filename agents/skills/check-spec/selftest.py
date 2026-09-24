@@ -747,6 +747,60 @@ def site_checks():
         shutil.rmtree(outside.parent, ignore_errors=True)
 
 
+def nest_a_spec(root):
+    """A spec in a subdirectory of `docs/specs`, which is where most of this tree's specs live
+    and the only place a selector can carry a directory at all."""
+    nested = root / "docs" / "specs" / "tools"
+    nested.mkdir(parents=True)
+    (nested / "demo-tool.md").write_text(
+        CLEAN_SPEC.replace("DEMO-", "TOOLDEMO-").replace("id: DEMO\n", "id: TOOLDEMO\n"),
+        encoding="utf-8",
+    )
+
+
+def selection_checks():
+    """Which selectors name a spec.
+
+    A scoped run that resolves nothing reports one mechanical error and writes no reviewer
+    prompt, so every form the tree itself prints has to be among them: `grep -rl` prints a path,
+    a link in a document carries one, and a person reading either types what they read.
+    """
+    specs = load_specs()
+    nested = "docs/specs/tools/demo-tool.md"
+
+    def picked(*selectors):
+        chosen, unknown = check.select(specs, list(selectors), None)
+        return [one.rel for one in chosen], unknown
+
+    return [
+        ("a path under docs/specs names its spec", picked("tools/demo-tool") == ([nested], [])),
+        ("that path takes its suffix or leaves it", picked("tools/demo-tool.md") == ([nested], [])),
+        (
+            "a path from the repository root names its spec",
+            picked("docs/specs/tools/demo-tool.md") == ([nested], []),
+        ),
+        (
+            "that path takes its suffix or leaves it too",
+            picked("docs/specs/tools/demo-tool") == ([nested], []),
+        ),
+        ("a file name carrying .md names its spec", picked("demo-tool.md") == ([nested], [])),
+        ("a bare stem names its spec", picked("demo-tool") == ([nested], [])),
+        ("an id names its spec, in any case", picked("TOOLdemo") == ([nested], [])),
+        (
+            "a path naming no spec is reported rather than passed over",
+            picked("tools/absent") == ([], ["tools/absent"]),
+        ),
+        (
+            "a directory typed in part names no spec",
+            picked("ols/demo-tool") == ([], ["ols/demo-tool"]),
+        ),
+        (
+            "an unknown name beside a known one leaves the known one chosen",
+            picked("tools/demo-tool", "tools/absent") == ([nested], ["tools/absent"]),
+        ),
+    ]
+
+
 # Which runs may write the file. A run given a filter read part of the tree, and the list is
 # about all of it.
 SELECTIONS = [
@@ -809,7 +863,18 @@ def main():
     for name, held in sited:
         note(name, held, "the drafter chose a different place")
 
-    total = len(CASES) + len(UNVERIFIED_CASES) + len(SELECTIONS) + len(drafted) + len(sited)
+    selected = in_fixture(nest_a_spec, selection_checks)
+    for name, held in selected:
+        note(name, held, "the selector resolved to something else")
+
+    total = (
+        len(CASES)
+        + len(UNVERIFIED_CASES)
+        + len(SELECTIONS)
+        + len(drafted)
+        + len(sited)
+        + len(selected)
+    )
     print()
     if failures:
         for failure in failures:

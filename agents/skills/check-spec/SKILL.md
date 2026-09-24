@@ -17,7 +17,9 @@ allowed-tools: Bash(python3 agents/skills/check-spec/*), Bash(make check-spec*)
 skill answers one question about it: **does the code do what the clauses say?**
 
 - **Full run** (default): every spec.
-- **Scoped run** (`/check-spec labels routing`, or `/check-spec LABEL`): named specs only.
+- **Scoped run** (`/check-spec labels routing`, `/check-spec LABEL`, or
+  `/check-spec tools/lsp`): named specs only. A spec answers to its id, its file name, or
+  its path, and `.md` is optional on either of the last two.
 - **Branch run** (`/check-spec changed`): only the specs governing files this branch
   touched. This is the one to run before a commit.
 - `strict` makes warnings fail as well as errors.
