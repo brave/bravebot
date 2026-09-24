@@ -4,11 +4,17 @@
 //! API for Brave's own endpoint: the server infers the version from the path, so there is no
 //! `/v2/` route to construct. `/v1/conversation` is the older, deprecated surface.
 //!
-//! Two services are reached through this one client, because they speak the same protocol. Brave's
-//! endpoint signs its requests; see [`bravebot_signing`]. A configured gateway bearer-authenticates
-//! and may carry pass-through options in the body. What differs between them is a URL, a header and
-//! a body field, which is why [`AichatClient::prepare`] is the only place that branches on it: the
-//! framing, the retries and the cancellation are the same code for both.
+//! Three ways of being authenticated are reached through this one client, because they speak the
+//! same protocol. Brave's endpoint signs its requests; see [`bravebot_signing`]. A configured
+//! gateway bearer-authenticates and may carry pass-through options in the body. Brave's endpoint
+//! again, where [`bravebot_config::env_var::API_KEY`] holds a key, presents that key instead of a
+//! signature and is answered by a handler that relays the whole parameter list to the model, so the
+//! level in [`protocol::ChatRequest::effort`] reaches the model rather than being dropped. Same host,
+//! same path, same body: the header is the whole of what decides which handler answers.
+//!
+//! What differs between them is a URL, a header and a body field, which is why
+//! [`AichatClient::prepare`] is the only place that branches on it: the framing, the retries and the
+//! cancellation are the same code for all three.
 //!
 //! All traffic goes through [`bravebot_net::Egress`] so the policy gate sees it, and the model
 //! reported in the response is preserved because the server may substitute a different
@@ -33,6 +39,13 @@ use std::time::Duration;
 /// Header that tells Brave's endpoint which product is calling.
 const BRAVE_PRODUCT_HEADER: &str = "Brave-Product";
 const BRAVE_PRODUCT: &str = "bravebot";
+
+/// Header the relay reads an API key from.
+///
+/// A constant of its own because it is known to be moving: the service intends to carry the same
+/// key in `Authorization: Bearer` instead, and when it does this is the line that changes rather
+/// than the arm below. Not `authorization` today, which is what a signed request already uses.
+const API_KEY_HEADER: &str = "x-api-key";
 
 /// Mark a request as coming from bravebot so Brave's endpoint serves this product's roster and
 /// routing rather than Leo's.
@@ -287,6 +300,16 @@ impl<'a> AichatClient<'a> {
         self
     }
 
+    /// The API key this request presents, or `None` to sign it.
+    ///
+    /// Only ever consulted on Brave's own path: [`AichatClient::prepare`] returns a gateway's request
+    /// before reaching here, so a key exported for Brave's endpoint cannot reach a third-party
+    /// service by this route. Checking the gateway again here would be a second guard on an ordering
+    /// that already decides it, and the test below pins the ordering instead.
+    fn relay_key(&self) -> Option<&bravebot_config::Secret> {
+        self.config.api_key.as_ref()
+    }
+
     /// Where this request goes, and any credential to attach.
     ///
     /// The premium host and the credential travel together: a credential belongs to the premium
@@ -298,6 +321,14 @@ impl<'a> AichatClient<'a> {
     /// nobody was told about is indistinguishable from the service getting worse.
     fn route(&mut self) -> Result<(String, Option<SubscriptionCredential>), ChatError> {
         let base = self.config.chat_completions_url();
+
+        // The relay is reached on the free host and reads no cookie: it answers the request before
+        // the premium tier is consulted at all. So no credential is asked for here, and that is the
+        // point rather than an omission: a credential is single-use, and asking for one would spend
+        // it on a request that cannot present it.
+        if self.relay_key().is_some() {
+            return Ok((base, None));
+        }
 
         let Some(premium_url) = self.config.premium_chat_completions_url() else {
             return Ok((base, None));
@@ -442,9 +473,24 @@ impl<'a> AichatClient<'a> {
         }
 
         let body = encode(&body)?;
+        // Taken before the signature, because a request presenting a key is not signed at all: the
+        // relay authenticates on the key alone, and sending both would present two credentials for
+        // one request. Copied out so the borrow ends before the route is taken.
+        let relay_key = self.relay_key().map(|key| key.expose().to_string());
+        let (url, credential) = self.route()?;
+
+        if let Some(key) = relay_key {
+            // Still `Brave-Product`: this is Brave's own endpoint either way, and what identifies the
+            // caller in its logs should not depend on which handler answered.
+            return Ok(as_brave_bot(
+                Request::post(url, body)
+                    .header("content-type", "application/json")
+                    .header(API_KEY_HEADER, key),
+            ));
+        }
+
         let headers =
             bravebot_signing::sign(self.config.signing_key.expose(), &self.config.key_id, &body);
-        let (url, credential) = self.route()?;
 
         let mut http = as_brave_bot(
             Request::post(url, body)
@@ -1020,6 +1066,33 @@ mod tests {
         .expect("configured")
     }
 
+    /// The same build, plus a key, which is the whole of what opts into the relay.
+    fn relay_config() -> Config {
+        Config::from_lookup(|key| {
+            match key {
+                "SERVICES_KEY_AICHAT" => Some("test-signing-key"),
+                "BRAVE_SERVICES_KEY_ID" => Some("test-key-id"),
+                "BRAVE_AI_CHAT_ENDPOINT" => Some("https://brave.example.invalid"),
+                "BRAVE_AI_CHAT_PREMIUM_ENDPOINT" => Some("https://premium.example.invalid"),
+                "BRAVE_AI_CHAT_API_KEY" => Some("brv_live_testkeytestkeytestkeytestkey00"),
+                _ => None,
+            }
+            .map(str::to_string)
+        })
+        .expect("configured")
+    }
+
+    /// A subscription that fails the test rather than answering, because the assertion is that it is
+    /// never consulted. A counter would let a spent credential pass as long as nothing read the
+    /// count.
+    struct NeverAsked;
+
+    impl Subscription for NeverAsked {
+        fn next_credential(&mut self) -> Result<SubscriptionCredential, String> {
+            panic!("a relayed request asked for a subscription credential");
+        }
+    }
+
     fn provider(models: &str) -> bravebot_config::provider::Provider {
         provider_block(&format!(
             r#"{{"provider": {{"openrouter": {{
@@ -1165,6 +1238,107 @@ mod tests {
             "a signed request does not bearer-authenticate"
         );
         assert_eq!(header(&http, "Brave-Product"), Some("bravebot"));
+        // An environment that exported no key is every environment that exists today, and this is
+        // the request it has always sent. Nothing about the relay reaches it.
+        assert_eq!(header(&http, API_KEY_HEADER), None);
+    }
+
+    /// The key is the whole of the opt-in, and presenting one has to mean presenting it *instead* of
+    /// a signature. Sending both authenticates one request with two credentials, and the service
+    /// decides which it reads rather than this code deciding what it sent.
+    #[test]
+    fn a_request_presenting_an_api_key_is_not_signed() {
+        let config = relay_config();
+        let egress = Egress::new();
+        let http = AichatClient::new(&config, &egress)
+            .prepare(&request(DEFAULT_MODEL))
+            .expect("prepared");
+
+        assert_eq!(
+            header(&http, API_KEY_HEADER),
+            Some("brv_live_testkeytestkeytestkeytestkey00")
+        );
+        assert_eq!(header(&http, "digest"), None);
+        assert_eq!(header(&http, "authorization"), None);
+        // Still Brave's endpoint, so it is still told which product is asking.
+        assert_eq!(header(&http, "Brave-Product"), Some("bravebot"));
+    }
+
+    /// A credential is single-use, and the handler that answers a keyed request never reads a cookie.
+    /// So asking for one spends it to buy nothing: the subscription is not consulted, and the request
+    /// goes to the free host even though a premium one is configured.
+    #[test]
+    fn a_relayed_request_spends_no_subscription_credential() {
+        let config = relay_config();
+        let egress = Egress::new();
+        let mut subscription = NeverAsked;
+        let http = AichatClient::new(&config, &egress)
+            .with_subscription(&mut subscription)
+            .prepare(&request(DEFAULT_MODEL))
+            .expect("prepared");
+
+        assert_eq!(
+            http.url,
+            "https://brave.example.invalid/v1/chat/completions"
+        );
+        assert_eq!(header(&http, "cookie"), None);
+    }
+
+    /// The level is the reason to be here: this handler relays the parameter to the model, where the
+    /// one that answers a signed request drops it. A mode that reached the relay and then withheld
+    /// the field would be the same silence in a new place.
+    #[test]
+    fn a_relayed_request_carries_the_level_somebody_asked_for() {
+        let config = relay_config();
+        let egress = Egress::new();
+        let http = AichatClient::new(&config, &egress)
+            .prepare(&request(DEFAULT_MODEL).with_effort(Some(protocol::Effort::Xhigh)))
+            .expect("prepared");
+
+        assert_eq!(
+            body(&http).get(protocol::EFFORT_FIELD),
+            Some(&serde_json::json!("xhigh"))
+        );
+    }
+
+    /// Only the header changes. The prefix is still marked where the client marks it, because those
+    /// marks are placed deliberately and are read whatever the service's own caching configuration
+    /// says, which the service-side field is not.
+    #[test]
+    fn a_relayed_request_still_marks_the_prefix_to_cache() {
+        let config = relay_config();
+        let egress = Egress::new();
+        let http = AichatClient::new(&config, &egress)
+            .prepare(&request(DEFAULT_MODEL))
+            .expect("prepared");
+
+        let body = body(&http);
+        assert_eq!(
+            body["messages"][0]["content"][0]["cache_control"],
+            serde_json::json!({"type": "ephemeral"})
+        );
+        assert!(
+            body.get("prompt_caching").is_none(),
+            "the service-side field was sent as well as the marks: {body}"
+        );
+    }
+
+    /// A gateway has its own credential and its own host, and a key exported for Brave's endpoint is
+    /// not a credential for somebody else's. What keeps them apart is the order of the arms in
+    /// [`AichatClient::prepare`], which answers a gateway before the key is ever read, so this pins
+    /// that order: move the relay arm above the gateway's and Brave's key goes to OpenRouter.
+    #[test]
+    fn a_configured_api_key_is_never_sent_to_a_gateway() {
+        let config = relay_config();
+        let egress = Egress::new();
+        let provider = provider(r#"{"z-ai/glm-4.6": {}}"#);
+        let http = AichatClient::new(&config, &egress)
+            .for_gateway(&provider, "z-ai/glm-4.6", Some(Secret::new("a-token")))
+            .prepare(&request("z-ai/glm-4.6"))
+            .expect("prepared");
+
+        assert_eq!(header(&http, API_KEY_HEADER), None);
+        assert_eq!(header(&http, "authorization"), Some("Bearer a-token"));
     }
 
     /// The interface reports what a request carries, and once a service has refused the field no

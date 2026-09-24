@@ -6,6 +6,21 @@
 pub const SIGNING_KEY: &str = "SERVICES_KEY_AICHAT";
 pub const KEY_ID: &str = "BRAVE_SERVICES_KEY_ID";
 pub const ENDPOINT: &str = "BRAVE_AI_CHAT_ENDPOINT";
+/// API key for Brave's OpenAI-compatible relay, which is what presenting one opts into.
+///
+/// Set, and a chat request authenticates with this key and is answered by a handler that relays the
+/// whole OpenAI parameter list to the model. Unset, and the request is signed with [`SIGNING_KEY`]
+/// and answered by the handler that has always answered it. There is no third state and no
+/// fallback between them: the key is the switch.
+///
+/// Additive rather than a replacement for [`SIGNING_KEY`], which is still required. Only
+/// `/v1/chat/completions` reads this key; the model listing at [`crate::Config::models_url`] is
+/// signed either way, so a build that presents a key holds both credentials.
+///
+/// Absent from [`ALL`] so no release bakes one in. The relay is reached by deployment and by
+/// opt-in, not by everyone who installs a build, and a key compiled into a binary would be
+/// presented by people who never chose it.
+pub const API_KEY: &str = "BRAVE_AI_CHAT_API_KEY";
 /// Host for the premium tier, used once a subscription has been imported.
 ///
 /// A separate variable rather than a prefix swap on ENDPOINT: the two are independent
@@ -100,16 +115,17 @@ pub const SUBPROCESS_ENV_SCRUB: &str = "BRAVEBOT_SUBPROCESS_ENV_SCRUB";
 
 /// The credentials this agent holds, which are removed from the environment of a program it runs.
 ///
-/// The signing key and the key id, and nothing else. These name a secret that reaches Brave's
-/// backend and no subprocess has any use for one: a program the planner chose is doing whatever the
-/// person approved, never authenticating as this agent. Everything else is left alone, including
-/// the endpoints and the model names, which are hosts and identifiers rather than secrets.
+/// The signing key, the key id and the relay's API key, and nothing else. These name a secret that
+/// reaches Brave's backend and no subprocess has any use for one: a program the planner chose is
+/// doing whatever the person approved, never authenticating as this agent. Everything else is left
+/// alone, including the endpoints and the model names, which are hosts and identifiers rather than
+/// secrets.
 ///
 /// **Not a list of every credential on the machine.** `AWS_PROFILE`, `GITHUB_TOKEN` and the rest of
 /// the user's own environment stay, because `run aws s3 ls` and `run gh pr list` are things people
 /// ask for and a name-matching filter cannot tell one of those from an exfiltration. What holds
 /// here is narrow and exact: this agent's own secrets are not handed to programs it starts.
-pub const SCRUBBED: [&str; 2] = [SIGNING_KEY, KEY_ID];
+pub const SCRUBBED: [&str; 3] = [SIGNING_KEY, KEY_ID, API_KEY];
 
 /// How this copy of bravebot was installed, set by a launcher that knows.
 ///

@@ -1148,7 +1148,7 @@ sent.
 `verified-by: bravebot_agent::turn::a_turn_without_attachments_sends_the_prompt_and_nothing_beside_it`
 
 <a id="BACKEND-33"></a>
-### BACKEND-33: an `env` block names these thirteen variables
+### BACKEND-33: an `env` block names these fourteen variables
 
 The `env` block of a settings file sets variables under their own names, and these are the names
 something reads:
@@ -1159,6 +1159,7 @@ something reads:
 | `BRAVE_SERVICES_KEY_ID` | which key that signature is checked against |
 | `BRAVE_AI_CHAT_ENDPOINT` | the host Brave's endpoint is reached at |
 | `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` | the host an imported subscription is spent against |
+| `BRAVE_AI_CHAT_API_KEY` | the key that reaches BACKEND-43's relay, instead of signing |
 | `BRAVE_AI_CHAT_DEFAULT_MODEL` | which model answers before anybody has chosen one |
 | `BRAVEBOT_CONTEXT_BUDGET` | how many prompt tokens a conversation may reach before it is shortened |
 | `BRAVEBOT_OUTPUT_BUDGET` | how many tokens one reply may run to before the service cuts it off |
@@ -1177,7 +1178,7 @@ choice rather than a variable, and BACKEND-11 is what ranks it.
 reading the source. Anything written *about* this system (the site somebody installs it from, a
 message telling a person what to set) is written from what is stated here, so a backend whose
 variables are named nowhere is a backend that reaches people undocumented however completely its
-behaviour is specified. Naming them is also what makes the set reviewable: a fourteenth variable is
+behaviour is specified. Naming them is also what makes the set reviewable: a fifteenth variable is
 a change to this table, which a person reads, rather than a constant added to a file nobody is
 asked to look at.
 
@@ -1584,6 +1585,52 @@ finished call except the stop reason, and the stop reason says not to trust any 
 `verified-by: bravebot_bedrock::lib::output_limit_keeps_completed_usage`
 `verified-by: bravebot_bedrock::lib::reaching_the_token_ceiling_is_not_retried`
 
+<a id="BACKEND-43"></a>
+### BACKEND-43: an API key is the whole of what reaches Brave's relay, and holding none changes nothing
+
+Brave's endpoint answers a chat request with one of two handlers, and `BRAVE_AI_CHAT_API_KEY` is what
+decides which. Holding no key, a request is signed as BACKEND-25's always has been, and this is what
+every build ships and every environment configured before the variable existed does. Holding one, the
+request presents the key instead of a signature and is answered by the handler that relays the
+parameter list, so the level BACKEND-20 carried reaches the model rather than being dropped.
+
+Presenting the key means presenting it *instead of* a signature, never alongside one. The key is
+never sent to a gateway, whose own credential BACKEND-16 names. No subscription credential is spent
+on a request that presents a key. The prefix is marked to cache exactly as BACKEND-32 marks it. The
+key is scrubbed from the environment of a program the agent runs, on the same footing as the signing
+key. A blank value is not a key, for the reason BACKEND-11 gives about blanks generally.
+
+The host and the path do not change, and the model listing is signed whichever way chat requests go
+out, so a configuration that holds a key holds both credentials.
+
+**Why.** The level was being carried, sent, and dropped, and the interface went on reporting it as in
+force; the Known cost below is the measurement. The fix is not ours to make in the protocol, the
+field being one the service reads or does not, so what is left is to reach the handler that reads it.
+Making that an opt-in rather than the new default is what keeps the sentence above true: this changes
+nothing for anyone who has not exported a key, at a moment when the handler is deployed to one
+environment and reachable only from inside Brave's network.
+
+Two credentials for one request would be the service deciding which it read rather than this deciding
+what it sent. A single-use subscription credential spent on a request whose handler reads no cookie
+buys nothing and is gone. And a key baked into a release would be presented by everybody who
+installed it, including everybody who never chose to, which is why no build carries one.
+
+The header is `x-api-key`, which the service intends to replace with `Authorization: Bearer`. That is
+a one-line change here and is deliberately not anticipated: a client that sent both would be
+authenticating against a service that had not yet asked for either.
+
+`verified-by: bravebot_aichat::lib::a_request_presenting_an_api_key_is_not_signed`
+`verified-by: bravebot_aichat::client::a_relayed_request_reaches_the_server_with_the_key_and_the_level`
+`verified-by: bravebot_aichat::lib::a_request_without_a_gateway_is_still_signed`
+`verified-by: bravebot_aichat::lib::a_relayed_request_spends_no_subscription_credential`
+`verified-by: bravebot_aichat::lib::a_relayed_request_carries_the_level_somebody_asked_for`
+`verified-by: bravebot_aichat::lib::a_relayed_request_still_marks_the_prefix_to_cache`
+`verified-by: bravebot_aichat::lib::a_configured_api_key_is_never_sent_to_a_gateway`
+`verified-by: bravebot_config::lib::a_complete_environment_presents_no_api_key`
+`verified-by: bravebot_config::lib::a_blank_api_key_is_not_an_opt_in`
+`verified-by: bravebot_config::lib::an_api_key_is_read_without_the_whitespace_around_it`
+`verified-by: bravebot_config::scrub::this_agents_credentials_are_withheld_without_being_configured`
+
 ## Known costs
 
 - **The refusal is made at startup, and a model chosen mid-session is not checked again.**
@@ -1652,14 +1699,19 @@ finished call except the stop reason, and the stop reason says not to trust any 
   is the fix if that trade stops being worth it, and it would cost a checkout the ability to say what
   its own history carries.
 
-- **The aichat endpoint Brave runs discards the effort level.** Measured against that endpoint: a
-  nonsense value in `reasoning_effort` is answered `200` with usage identical to a request that omits
-  the field, so it is not validated, and on `near-glm-5`, which reports a non-zero reasoning-token
-  count for an ordinary prompt, that count does not move with the level. The premium rows of the
-  roster were not measured, an unsubscribed request being substituted to a weaker model before the
-  request lands, so nothing here is established about them. A level chosen against a Brave-served
-  model is therefore carried, sent, and dropped, while the interface goes on reporting it as in
-  force. Bedrock is unaffected, the level reaching the model in the field that model defines.
+- **The handler that answers a signed request to Brave's endpoint discards the effort level.**
+  Measured against that endpoint: a nonsense value in `reasoning_effort` is answered `200` with usage
+  identical to a request that omits the field, so it is not validated, and on `near-glm-5`, which
+  reports a non-zero reasoning-token count for an ordinary prompt, that count does not move with the
+  level. The premium rows of the roster were not measured, an unsubscribed request being substituted
+  to a weaker model before the request lands, so nothing here is established about them. A level
+  chosen against a Brave-served model is therefore carried, sent, and dropped, while the interface
+  goes on reporting it as in force. Bedrock is unaffected, the level reaching the model in the field
+  that model defines. BACKEND-43's relay is the exception, and an unmeasured one: the service has a
+  second handler that forwards the parameters it does not itself consume, so a level should reach the
+  model there, but its host answers only from inside Brave's network and no measurement here has
+  reached it. What is established about the relay is what this client sends, not what the service
+  does with it.
 
 - **A level a service does advertise may still not mean what this sends.** `xhigh` and `max` are
   levels the Anthropic API defines, and a gateway row advertising `reasoning_effort` says it reads
