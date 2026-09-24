@@ -295,6 +295,58 @@ def define_the_gate_inside_a_module(root):
     renew_something_else(root)
 
 
+def rename_the_gate_past_its_guard(root):
+    """The guarded method renamed, beside another type's method of the name it used to have.
+
+    Nothing called `Gate` has an `open` any more; `Latch` is what spells that name now. Counting
+    the bare name on any receiver takes the latch's definition and its one call as the gate's, so
+    the guard reads as present, and the pin here is the count that answer produces. The check then
+    passes over a guard on a symbol no type defines, which is the one answer it must never give.
+    """
+    path = root / "crates" / "demo" / "src" / "lib.rs"
+    renamed = path.read_text(encoding="utf-8").replace(
+        "pub fn open(&self) {}", "pub fn opened(&self) {}"
+    )
+    path.write_text(
+        renamed
+        + "\nstruct Latch;\n\nimpl Latch {\n    fn open(&self) {}\n}\n"
+        + "\nfn reach(latch: &Latch) {\n    latch.open();\n}\n",
+        encoding="utf-8",
+    )
+    edit_spec(root, "crates/demo/src/lib.rs: 1", "crates/demo/src/lib.rs: 2")
+
+
+def guard_a_function_in_its_module_file(root):
+    """A module-qualified guard, which names no type for an `impl` to carry.
+
+    `home::write_file` is the shape, and what answers for it is a free function at the margin of
+    the file the module is. Requiring the qualifier to own the definition has to leave this
+    resolving, including where nothing in the file spells the module's own name."""
+    (root / "crates" / "demo" / "src" / "latch.rs").write_text(
+        "pub fn shut() {}\n", encoding="utf-8"
+    )
+    edit_spec(
+        root,
+        "guards:\n",
+        "guards:\n  - symbol: latch::shut\n    sites:\n      - crates/demo/src/latch.rs: 1\n",
+    )
+
+
+def guard_a_function_in_a_mod_block(root):
+    """The same free function, in a `mod` block rather than a file of its own, which is the other
+    place a module-qualified guard's definition sits."""
+    path = root / "crates" / "demo" / "src" / "lib.rs"
+    path.write_text(
+        path.read_text(encoding="utf-8") + "\npub mod latch {\n    pub fn shut() {}\n}\n",
+        encoding="utf-8",
+    )
+    edit_spec(
+        root,
+        "guards:\n",
+        "guards:\n  - symbol: latch::shut\n    sites:\n      - crates/demo/src/lib.rs: 1\n",
+    )
+
+
 def mention_the_gate_in_comments(root):
     """Prose about a gate is not a use of it, in all four shapes the tree contains: a comment at
     the margin, a comment after code, a block comment across lines, and a `//` inside a string
@@ -436,6 +488,11 @@ CASES = [
         "guard-missing",
     ),
     (
+        "a guarded symbol renamed away while another type keeps the name",
+        rename_the_gate_past_its_guard,
+        "guard-missing",
+    ),
+    (
         "a guarded symbol used in a file its allowlist does not name",
         use_the_gate_elsewhere,
         "guard-site-unlisted",
@@ -467,6 +524,12 @@ CASES = [
     ("another type's method of the same name, in an inner module", renew_in_a_test_module, None),
     ("a guarded definition inside a module", define_the_gate_inside_a_module, None),
     ("a guarded symbol named only in comments", mention_the_gate_in_comments, None),
+    (
+        "a guarded free function in the file its module is",
+        guard_a_function_in_its_module_file,
+        None,
+    ),
+    ("a guarded free function in a mod block", guard_a_function_in_a_mod_block, None),
     (
         # The exact set, because a missing count once reported the file as unlisted too, which
         # sends the author to add a path that is already there.
