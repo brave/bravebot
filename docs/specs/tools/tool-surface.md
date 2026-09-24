@@ -4,6 +4,13 @@ title: The tool surface
 status: normative
 governs:
   - crates/agent/src/tools.rs
+guards:
+  - symbol: Produced::problem
+    sites:
+      - crates/agent/src/tools.rs: 138
+  - symbol: Produced::refused_with_a_note
+    sites:
+      - crates/agent/src/tools.rs: 5
 documented-by: docs/website/docs/reference/tools.md
 ---
 
@@ -88,3 +95,35 @@ excluded. An argument vector passes the test, which is why running a pipeline of
 `verified-by: bravebot_agent::turn::an_unknown_tool_is_reported_to_the_model`
 `verified-by: bravebot_agent::turn::a_refused_call_is_reported_as_one`
 `verified-by: bravebot_agent::turn::each_tool_call_is_announced_before_it_runs_and_summarised_after`
+
+<a id="TOOL-4"></a>
+### TOOL-4: a refusal is worded by the driver
+
+The sentence a call fails or is refused with is written here. Its wording is this repository's, and
+the values in it are ones the driver may name: a routing argument a gate released, a reference the
+driver minted, a name out of a fixed set, and what this machine said about a call this process
+made. A sentence somebody on the other side of the call composed is not part of it, whether it
+arrived as a server's error message, as a page, or as what a program printed, and however well it
+would explain the failure.
+
+Where their own account of what went wrong is worth keeping, it reaches the person watching through
+the release that puts content on a screen, or it is quarantined and named by a reference. The
+planner is told the fact of the failure, the call it was about, and what to do differently.
+
+**Why.** A refusal is the one result that is trusted whatever the call touched. A read of a file
+nobody vouched for comes back as a reference, and the refusal of that same read comes back as prose
+the planner is sent verbatim and uncapped with the driver's attribution on it. So an error type that
+carries somebody else's sentence in a plain string, and a call site that formats that error into a
+refusal, are together a way into the planner's context that every other road out of a tool closes,
+and both ends of it read as ordinary code. Dropping the account altogether would leave a person no
+way to find out that their own server is misconfigured, which is why it goes to a screen rather than
+nowhere.
+
+The places a refusal is built are pinned in this spec's front matter, so a new one is an edit here
+and whoever reviews it is asked what footing its text is on.
+
+`verified-by: bravebot_mcp::lib::a_failing_tools_detail_stays_out_of_the_error_message`
+`verified-by: bravebot_lsp::server::a_server_failure_reports_a_code_and_not_the_servers_words`
+`verified-by: bravebot_agent::turn::a_failed_fetch_names_the_url_that_was_asked_for_and_not_where_a_redirect_went`
+`verified-by: bravebot_agent::turn::a_fetch_refused_for_leaving_its_host_names_no_host_the_server_chose`
+`verified-by: bravebot_agent::turn::a_credential_created_as_a_whole_file_is_not_created_and_the_planner_is_told_so`
