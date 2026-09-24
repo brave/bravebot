@@ -13,7 +13,10 @@ body {
   overflow: hidden;
 }
 
-button { font: inherit; color: inherit; cursor: pointer; }
+/* Controls inherit their family (modern.css) but not size, weight, or colour: those come from
+   the shadcn components' own utilities now, and an unlayered `color: inherit` or `font: inherit`
+   here would silently defeat every `text-*`/`font-*` class on a button. */
+button { cursor: pointer; }
 
 .app {
   display: grid;
@@ -105,36 +108,26 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 /* The two lists the column can show, and the choice between them.
 
-   The tabs carry the traffic-light clearance that `.sessions-head` used to, because they are what
-   is at the top of the column now — and both bodies get the same head below them, so the offset
-   has to be above the pair rather than inside each. */
+   The tabs are a shadcn `Tabs`; these rules are only the parts Tailwind cannot say
+   deterministically: that the strip spans the column and is part of the title bar (the
+   traffic-light clearance that `.sessions-head` used to, because the tabs are what is at the top
+   of the column now), and that each trigger stays clickable over its drag region. Everything else
+   about how a trigger looks is the component's own neutral default. */
 .sidebar-tabs {
   display: flex;
-  gap: 2px;
+  width: 100%;
+  gap: 4px;
   padding: 46px 12px 0;
+  min-height: 78px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   -webkit-app-region: drag;
 }
 
 .sidebar-tab {
   -webkit-app-region: no-drag;
-  flex: 1;
-  padding: 5px 8px;
-  border: none;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: var(--ink-faint);
-  font: inherit;
-  font-size: 12px;
 }
-.sidebar-tab:hover { color: var(--ink-dim); }
-/* The state is in the underline and in the weight of the word, not in a filled pill: this sits
-   above two lists that are themselves full of selectable rows, and a second selected-looking thing
-   in the same column would compete with whichever row is open. */
-.sidebar-tab[aria-pressed='true'] {
-  color: var(--ink);
-  border-bottom-color: var(--accent);
-}
-.sidebar-tab:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
 
 /* Each body owns the rest of the column, and the one not chosen is hidden rather than unmounted —
    a filter somebody typed and a form half filled in both survive a look at the other tab. The

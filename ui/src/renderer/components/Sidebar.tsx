@@ -110,12 +110,12 @@ export function Sidebar({
         <TabsList className="sidebar-tabs" aria-label="What the column shows">
           <TabsTrigger
             value="sessions"
-            className="sidebar-tab"
+            className="sidebar-tab bg-transparent"
             aria-pressed={tab === 'sessions'}
           >
             Sessions
           </TabsTrigger>
-          <TabsTrigger value="bots" className="sidebar-tab" aria-pressed={tab === 'bots'}>
+          <TabsTrigger value="bots" className="sidebar-tab bg-transparent" aria-pressed={tab === 'bots'}>
             Bots
           </TabsTrigger>
         </TabsList>

@@ -169,42 +169,6 @@ kbd,
    Sidebar navigation and creation tools
    -------------------------------------------------------------------------- */
 
-.sidebar-tabs {
-  gap: 18px;
-  min-height: 78px;
-  padding: 46px 16px 0;
-  border-bottom: 1px solid var(--bb-border);
-  -webkit-app-region: drag;
-}
-
-.sidebar-tab {
-  flex: none;
-  min-width: 0;
-  padding: 7px 1px 9px;
-  border-bottom-width: 1px;
-  border-radius: 0;
-  color: var(--ink-faint);
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0.01em;
-  -webkit-app-region: no-drag;
-}
-
-.sidebar-tab:hover {
-  color: var(--ink);
-}
-
-.sidebar-tab[aria-pressed='true'] {
-  color: var(--ink);
-  border-bottom-color: var(--accent);
-  font-weight: 620;
-}
-
-.sidebar-tab:focus-visible {
-  outline: 2px solid var(--bb-focus-ring);
-  outline-offset: -3px;
-}
-
 .sessions-head {
   padding: 12px 12px 9px;
   border-bottom: 1px solid color-mix(in srgb, var(--ink) 6%, transparent);
@@ -2592,7 +2556,6 @@ kbd,
   color: var(--accent-text);
 }
 
-.sidebar-tab,
 .session-scope button,
 .inspector-tabs button,
 .settings-tabs button {
@@ -2600,26 +2563,6 @@ kbd,
     color 150ms var(--bb-ease),
     background-color 150ms var(--bb-ease),
     box-shadow 150ms var(--bb-ease);
-}
-
-.sidebar-tabs {
-  gap: 4px;
-  padding-inline: 12px;
-  border-bottom: 0;
-}
-
-.sidebar-tab {
-  flex: 1;
-  min-height: 32px;
-  padding: 6px 10px;
-  border: 0;
-  border-radius: 10px;
-}
-
-.sidebar-tab[aria-pressed='true'] {
-  border: 0;
-  background: var(--default);
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 9%, transparent);
 }
 
 .session-scope {
