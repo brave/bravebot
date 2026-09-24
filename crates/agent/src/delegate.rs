@@ -27,6 +27,7 @@ use bravebot_core::delegate::DelegateSpec;
 use bravebot_core::event::Sink;
 use bravebot_core::policy::{Policy, Vouched};
 use bravebot_core::value::Labelled;
+use bravebot_i18n::t;
 use std::fmt;
 
 use crate::confirm::Confirmer;
@@ -279,14 +280,14 @@ pub struct Ended {
     /// that came back only on the success path would leave the next run asking about the build
     /// this one was already told it could run.
     pub vouched: Vouched,
-    /// What a hook that went wrong on one of its calls had to say, for the parent to fold into
-    /// its own account of itself.
+    /// What a hook that went wrong on one of its calls had to say, and what the driver said about
+    /// the model the definition named, for the parent to fold into its own account of itself.
     ///
     /// Outside the result and unconditional for the same reasons as the record above. A hook
     /// fires on a call finishing, so a delegate whose next request failed has still had one go
-    /// wrong on the calls before it. Nothing else crosses back: this is a sentence the driver
-    /// wrote about the person's own hooks file, named by moment and program, rather than
-    /// anything the delegate read or its model said (HOOK-7).
+    /// wrong on the calls before it. Nothing else crosses back: these are sentences the driver
+    /// wrote about the person's own hooks file and definitions, rather than anything the delegate
+    /// read or its model said (HOOK-7, DELEGATE-22).
     pub notices: Vec<String>,
 }
 
@@ -354,6 +355,34 @@ pub fn run(
     // presenting right now (PREM-5).
     wallet: Option<&dyn crate::shared::Spends>,
 ) -> Ended {
+    let definition_model = seeded
+        .spec
+        .model()
+        .map(|written| (written, config.model_named(written)));
+    // Refused rather than run on the turn's model, which would spend past a boundary the definition
+    // drew, and a worker thread has nowhere to show a sign-in (DELEGATE-22).
+    if let Some((written, resolved)) = &definition_model
+        && crate::backend::Backend::needs_sign_in(config, resolved)
+    {
+        let said = t!(
+            delegate_model_needs_sign_in,
+            definition = seeded.spec.definition(),
+            model = *written
+        );
+        reporter.notice(said.clone());
+        return Ended {
+            delegated: Err(TurnError::Precommit(
+                "the delegate's model needs a sign-in first".to_string(),
+            )),
+            vouched: seeded.vouched.clone(),
+            notices: vec![said],
+        };
+    }
+    let delegate_model = definition_model
+        .as_ref()
+        .map(|(_, resolved)| resolved.clone())
+        .or_else(|| model.map(str::to_string));
+
     // The mode is the spawning turn's, and inherited rather than chosen: a delegate is that turn's
     // own work done elsewhere, so a session that is planning must not have writes happening inside
     // one. Enforcement already comes down this way, the confirmer being the person's own; this is
@@ -362,7 +391,7 @@ pub fn run(
         .with_home(home.map(std::path::Path::to_path_buf))
         .with_profile(profile.map(std::path::Path::to_path_buf))
         .remembering(seeded.remembering.clone())
-        .with_model(model.map(str::to_string))
+        .with_model(delegate_model)
         .with_permissions(seeded.permissions.clone())
         .with_permission_mode(permission_mode)
         .with_auto_vetting(auto_vetting)
@@ -414,6 +443,24 @@ pub fn run(
             };
         }
     };
+
+    // Compared the way a session's own model is (DELEGATE-22). The name that answered stays out of
+    // the sentence, which is the driver's own words, and what this decides goes to no planner.
+    if let Some((written, resolved)) = &definition_model {
+        let asked = crate::backend::Backend::name_as_asked(config, resolved);
+        if crate::backend::Backend::reports_the_model_it_was_asked_for(config, resolved)
+            && asked != bravebot_config::DEFAULT_MODEL
+            && asked != outcome.model
+        {
+            let said = t!(
+                delegate_model_substituted,
+                definition = seeded.spec.definition(),
+                model = *written
+            );
+            reporter.notice(said.clone());
+            notices.push(said);
+        }
+    }
 
     Ended {
         delegated: Ok(Delegated {

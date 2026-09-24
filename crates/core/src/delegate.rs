@@ -215,6 +215,10 @@ pub struct Definition {
     name: String,
     description: String,
     kind: Kind,
+    /// The model requested for this delegate, where the definition named one.
+    ///
+    /// `None` leaves the delegate on the model the spawning turn is running on.
+    model: Option<String>,
     /// The tools the definition asked for, where it asked for any.
     ///
     /// `None` is the kind's own set. `Some` is a narrowing and only a narrowing: what it selects
@@ -238,6 +242,7 @@ impl Definition {
             name: kind.as_str().to_string(),
             description: kind.purpose().to_string(),
             kind,
+            model: None,
             tools: None,
             prompt: String::new(),
             origin: "built-in".to_string(),
@@ -257,6 +262,7 @@ impl Definition {
             name: name.into(),
             description: description.into(),
             kind,
+            model: None,
             tools,
             prompt: prompt.into(),
             origin: origin.into(),
@@ -281,6 +287,17 @@ impl Definition {
     /// The tools it asked for, before the kind's own set narrows them.
     pub fn tools(&self) -> Option<&[String]> {
         self.tools.as_deref()
+    }
+
+    /// The model requested for this delegate, where the definition named one.
+    pub fn model(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
+
+    /// Request a particular model for this delegate.
+    pub fn with_model(mut self, model: impl Into<String>) -> Self {
+        self.model = Some(model.into());
+        self
     }
 
     /// The standing instruction, empty where the file had no body.
@@ -469,6 +486,8 @@ pub struct DelegateSpec {
     /// The kind's own name where nothing was defined, so a session with no definition files
     /// describes its delegates exactly as it did before there were any.
     definition: String,
+    /// The model this delegate was requested to run on, where its definition named one.
+    model: Option<String>,
     /// The tools its definition named, where it named any, already without the ones its kind
     /// does not reach.
     tools: Option<Vec<String>>,
@@ -501,6 +520,7 @@ impl DelegateSpec {
             id,
             kind,
             definition: definition.name().to_string(),
+            model: definition.model().map(str::to_string),
             tools,
             prompt: definition.prompt().to_string(),
             task: task.into(),
@@ -515,6 +535,11 @@ impl DelegateSpec {
     /// be printed at all: a name nobody vouched for never entered the set this was selected from.
     pub fn definition(&self) -> &str {
         &self.definition
+    }
+
+    /// The model this delegate was requested to run on, where its definition named one.
+    pub fn model(&self) -> Option<&str> {
+        self.model.as_deref()
     }
 
     /// The tools its definition confined it to, where it named any, and `None` where it named
@@ -1036,5 +1061,30 @@ mod tests {
         );
 
         assert_eq!(spec.tools(), Some(["read_file".to_string()].as_slice()));
+    }
+
+    /// A definition may name a model to run on, and the spec carries it.
+    #[test]
+    fn a_definition_may_name_a_model_and_the_spec_carries_it() {
+        let definition = Definition::from_file(
+            "cheap-reader",
+            "reads with a small model",
+            Kind::Reader,
+            None,
+            "",
+            "test",
+        )
+        .with_model("haiku");
+
+        assert_eq!(definition.model(), Some("haiku"));
+
+        let spec = DelegateSpec::new(
+            DelegateId::nth(1),
+            &definition,
+            "read something",
+            Kind::Reader.capabilities(),
+            60,
+        );
+        assert_eq!(spec.model(), Some("haiku"));
     }
 }

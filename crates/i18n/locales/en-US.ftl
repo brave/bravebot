@@ -1459,6 +1459,12 @@ reach-no-model = in no model's context: nothing can be sent to read this
 
 # How many calls a delegate has made, where its block shows only the last few.
 delegate-more-calls = { $count } calls so far
+# The definition's name and the model as its file wrote it, both from a vouched-for file.
+delegate-model-needs-sign-in =
+    { $definition } asked for { $model }, which needs a sign-in first, so it did not run
+# The endpoint substitutes a model it will not serve rather than refusing. The name it answered
+# with is left out, because a notice is the driver's own words.
+delegate-model-substituted = { $definition } asked for { $model } and was answered by a different model
 
 # Advisory checks shown only in a Bravebot source checkout.
 doctor-development = development environment { $path }

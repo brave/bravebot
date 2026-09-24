@@ -16671,6 +16671,334 @@ fn a_definition_names_the_delegate_a_turn_runs_and_says_what_it_is_for() {
     );
 }
 
+/// A delegate definition can select a model to run on, and the delegate's requests
+/// use that model rather than the spawning turn's. Where none was named, it inherits
+/// the spawning turn's model.
+#[test]
+fn a_delegate_uses_the_model_its_definition_selected() {
+    let scratch = Scratch::new("delegate-definition-model");
+    let home = Scratch::new("delegate-definition-model-home");
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("cheap-reader.md"),
+        "---\nname: cheap-reader\ndescription: Reads on a cheap model.\nkind: reader\nmodel: haiku\n---\n\nREAD-CHEAP\n",
+    )
+    .expect("write the cheap definition");
+    std::fs::write(
+        home.path.join("agents").join("explicit-reader.md"),
+        "---\nname: explicit-reader\ndescription: Reads on explicit model.\nkind: reader\nmodel: custom-explicit-model\n---\n\nREAD-EXPLICIT\n",
+    )
+    .expect("write the explicit definition");
+    std::fs::write(
+        home.path.join("agents").join("blank-reader.md"),
+        "---\nname: blank-reader\ndescription: Reads on inherited model.\nkind: reader\nmodel: \"   \"\n---\n\nREAD-BLANK\n",
+    )
+    .expect("write the blank definition");
+    std::fs::write(
+        home.path.join("agents").join("plain-reader.md"),
+        "---\nname: plain-reader\ndescription: Reads on turn model.\nkind: reader\n---\n\nREAD-PLAIN\n",
+    )
+    .expect("write the plain definition");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "DELEGATE-TO-CHEAP-READER",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"cheap-reader","task":"CHECK-WITH-CHEAP-MODEL"}"#,
+                ),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"explicit-reader","task":"CHECK-WITH-EXPLICIT-MODEL"}"#,
+                ),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"blank-reader","task":"CHECK-WITH-BLANK-MODEL"}"#,
+                ),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"plain-reader","task":"CHECK-WITH-PLAIN-MODEL"}"#,
+                ),
+                reply_with("nothing to add while it works"),
+                reply_with("delegate finished"),
+            ],
+        ),
+        ("CHECK-WITH-CHEAP-MODEL", vec![reply_with("cheap clear")]),
+        (
+            "CHECK-WITH-EXPLICIT-MODEL",
+            vec![reply_with("explicit clear")],
+        ),
+        ("CHECK-WITH-BLANK-MODEL", vec![reply_with("blank clear")]),
+        ("CHECK-WITH-PLAIN-MODEL", vec![reply_with("plain clear")]),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-TO-CHEAP-READER")
+            .with_home(Some(home.path.clone()))
+            .with_model(Some("custom-parent-model".to_string())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let parent = requests
+        .iter()
+        .find(|body| body.contains("DELEGATE-TO-CHEAP-READER"))
+        .expect("parent request sent");
+    assert!(
+        parent.contains(r#""model":"custom-parent-model""#),
+        "parent turn did not use its configured model: {parent}"
+    );
+
+    let cheap = requests
+        .iter()
+        .find(|body| {
+            body.contains("CHECK-WITH-CHEAP-MODEL") && !body.contains("DELEGATE-TO-CHEAP-READER")
+        })
+        .expect("cheap delegate request sent");
+
+    let expected_haiku = config.model_named("haiku");
+    assert!(
+        cheap.contains(&format!(r#""model":"{expected_haiku}""#)),
+        "cheap delegate did not use model named in definition: {cheap}"
+    );
+
+    let explicit = requests
+        .iter()
+        .find(|body| {
+            body.contains("CHECK-WITH-EXPLICIT-MODEL") && !body.contains("DELEGATE-TO-CHEAP-READER")
+        })
+        .expect("explicit delegate request sent");
+    assert!(
+        explicit.contains(r#""model":"custom-explicit-model""#),
+        "explicit delegate did not use explicit model identifier: {explicit}"
+    );
+
+    let blank = requests
+        .iter()
+        .find(|body| {
+            body.contains("CHECK-WITH-BLANK-MODEL") && !body.contains("DELEGATE-TO-CHEAP-READER")
+        })
+        .expect("blank delegate request sent");
+    assert!(
+        blank.contains(r#""model":"custom-parent-model""#),
+        "blank model delegate did not inherit turn model: {blank}"
+    );
+
+    let plain = requests
+        .iter()
+        .find(|body| {
+            body.contains("CHECK-WITH-PLAIN-MODEL") && !body.contains("DELEGATE-TO-CHEAP-READER")
+        })
+        .expect("plain delegate request sent");
+    assert!(
+        plain.contains(r#""model":"custom-parent-model""#),
+        "plain delegate did not inherit turn model: {plain}"
+    );
+}
+
+/// The endpoint substitutes a model it will not serve rather than refusing, so a definition naming
+/// one is told so. Compared as a session's own model is: against the name that was sent, and not
+/// for the automatic name, which is answered by whichever model it routed to.
+#[test]
+fn a_delegate_answered_by_a_model_other_than_its_definitions_says_so() {
+    let scratch = Scratch::new("delegate-model-substituted");
+    let home = Scratch::new("delegate-model-substituted-home");
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    for (name, model) in [
+        ("haiku-reader", "haiku"),
+        ("typo-reader", "a-model-the-service-does-not-hold"),
+        ("auto-reader", "automatic"),
+    ] {
+        std::fs::write(
+            home.path.join("agents").join(format!("{name}.md")),
+            format!("---\nname: {name}\ndescription: Reads.\nkind: reader\nmodel: {model}\n---\n\nREAD\n"),
+        )
+        .expect("write a definition");
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let haiku = config_for("http://unused.invalid").model_named("haiku");
+    assert_ne!(
+        haiku, "haiku",
+        "the alias did not resolve, so this cannot tell the two apart"
+    );
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "DELEGATE-THREE",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"haiku-reader","task":"CHECK-ON-HAIKU"}"#,
+                ),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"typo-reader","task":"CHECK-ON-TYPO"}"#,
+                ),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"auto-reader","task":"CHECK-ON-AUTO"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("delegates finished"),
+            ],
+        ),
+        (
+            "CHECK-ON-HAIKU",
+            vec![reply_with("clear").replace("test-model", &haiku)],
+        ),
+        ("CHECK-ON-TYPO", vec![reply_with("clear")]),
+        ("CHECK-ON-AUTO", vec![reply_with("clear")]),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let outcome = turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-THREE").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        reporter.delegated.len(),
+        3,
+        "not every delegate ran, so this says nothing about the ones that did not"
+    );
+    let expected = vec![
+        "typo-reader asked for a-model-the-service-does-not-hold and was answered by a different \
+         model"
+            .to_string(),
+    ];
+    let about_models = |said: &[String]| -> Vec<String> {
+        said.iter()
+            .filter(|notice| notice.contains("asked for"))
+            .cloned()
+            .collect()
+    };
+    assert_eq!(
+        about_models(&reporter.notices),
+        expected,
+        "what the person watching was told"
+    );
+    assert_eq!(
+        about_models(&outcome.notices),
+        expected,
+        "what the turn's account holds"
+    );
+}
+
+/// A definition's model that needs a sign-in is not swapped for the turn's, which would spend past
+/// a boundary the definition drew: the delegate does not run and the person is told why.
+#[test]
+fn a_delegate_whose_model_needs_a_sign_in_does_not_run_and_says_so() {
+    let scratch = Scratch::new("delegate-model-sign-in");
+    let home = Scratch::new("delegate-model-sign-in-home");
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("bedrock-reader.md"),
+        "---\nname: bedrock-reader\ndescription: Reads on a Bedrock model.\nkind: reader\nmodel: haiku\n---\n\nREAD-ON-BEDROCK\n",
+    )
+    .expect("write the definition");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "DELEGATE-TO-BEDROCK-READER",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"bedrock-reader","task":"CHECK-ON-BEDROCK"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("delegate finished"),
+            ],
+        ),
+        ("CHECK-ON-BEDROCK", vec![reply_with("clear")]),
+    ]);
+    let config = Config::from_lookup(|key| match key {
+        "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+        "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+        "BRAVE_AI_CHAT_ENDPOINT" => Some(endpoint.clone()),
+        bravebot_config::env_var::USE_BEDROCK => Some("1".into()),
+        bravebot_config::env_var::AWS_REGION => Some("us-west-2".into()),
+        bravebot_config::env_var::BEDROCK_HAIKU_MODEL => Some("haiku-arn".into()),
+        // A profile no machine has, so no session exists whoever runs this.
+        bravebot_config::env_var::AWS_PROFILE => Some("a-profile-no-machine-has".into()),
+        _ => None,
+    })
+    .expect("config");
+    assert_eq!(
+        config.model_named("haiku"),
+        "haiku-arn",
+        "the definition's model would not have needed a sign-in"
+    );
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let outcome = turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-TO-BEDROCK-READER")
+            .with_home(Some(home.path.clone()))
+            .with_model(Some("custom-parent-model".to_string())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let requests: Vec<String> = received.try_iter().collect();
+    assert!(
+        !requests.iter().any(|body| {
+            body.contains("CHECK-ON-BEDROCK") && !body.contains("DELEGATE-TO-BEDROCK-READER")
+        }),
+        "the delegate ran on some other model: {requests:?}"
+    );
+    assert!(
+        matches!(reporter.delegates_finished.as_slice(), [(_, _, true)]),
+        "the delegate was not reported as not finishing: {:?}",
+        reporter.delegates_finished
+    );
+
+    let said = "bedrock-reader asked for haiku, which needs a sign-in first, so it did not run";
+    assert!(
+        reporter.notices.iter().any(|notice| notice == said),
+        "nobody watching was told why the delegate did not run: {:?}",
+        reporter.notices
+    );
+    assert!(
+        outcome.notices.iter().any(|notice| notice == said),
+        "the turn's account did not say why the delegate did not run: {:?}",
+        outcome.notices
+    );
+}
+
 /// Records what it was told, and whose work the driver said each report was.
 ///
 /// Both halves are the property: a report says what happened and never which run it happened in,

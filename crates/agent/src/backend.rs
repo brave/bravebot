@@ -362,8 +362,9 @@ impl<'a> Backend<'a> {
     /// an unknown model rather than substituting one, and the aichat endpoint has never heard of an
     /// inference-profile ARN.
     ///
-    /// Not content. The name comes from what `/model` listed and a person picked, or from the
-    /// configured default, and the pick is the endorsement for the request field it lands in.
+    /// Not content. The name comes from what `/model` listed and a person picked, from the
+    /// configured default, or from a delegate definition loaded from a vouched-for source
+    /// (DELEGATE-20), and that is the endorsement for the request field it lands in.
     pub fn select(config: &'a Config, egress: &'a Egress, model: &str) -> Self {
         if let Some(bedrock) = config.bedrock_for(model) {
             return Self::Bedrock {
