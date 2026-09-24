@@ -674,6 +674,20 @@ RED_IN_CI = dict(UNCOVERED, kind="clause-numbering", severity="error", clause="D
 THE_TOKEN = "github.com:\n  oauth_token: gho_SELFTEST\n"
 A_SCREEN = "the gate is open\nand a ``` fence, which must not close the block\n"
 
+# What a cut takes off a summary, which is where a reviewer puts the cost of the defect.
+THE_COST = "so every caller past the first gets in"
+
+
+def summary_of(length):
+    """A summary of exactly `length` characters, ending on the cost a cut would take off.
+
+    Whether a title survives is a question about lengths either side of a boundary, so the fixture
+    states the length and the prose is filler. What is not filler is the end: a summary that lost
+    it reads as complete, which is why a cut here went unnoticed until two issues were filed.
+    """
+    filler = "the gate opens twice, " + "and again, " * 30
+    return filler[: length - len(THE_COST)] + THE_COST
+
 
 def draft_checks():
     """What one body says, against a finding whose every field is known.
@@ -756,6 +770,31 @@ def draft_checks():
     checks.append(
         ("--errors leaves the warnings out", [e["kind"] for e in errors] == ["violation"])
     )
+
+    # Either side of GitHub's cap, counting the `DEMO-N: ` the title leads with.
+    fits, over = draft.draft(
+        [
+            dict(VIOLATION, clause="DEMO-1", summary=summary_of(200)),
+            dict(VIOLATION, clause="DEMO-2", summary=summary_of(300)),
+        ],
+        out,
+    )
+    checks += [
+        (
+            "a title longer than a tracker list shows is still filed whole",
+            fits["title"] == f"DEMO-1: {summary_of(200)}" and not fits["title_too_long"],
+        ),
+        (
+            "a title over GitHub's cap keeps the cost the end of it carries",
+            over["title"] == f"DEMO-2: {summary_of(300)}" and over["title"].endswith(THE_COST),
+        ),
+        (
+            "a title over the cap is marked for a person to shorten",
+            over["title_too_long"]
+            and "needs a shorter title" in draft.report([over], out)
+            and "needs a shorter title" not in draft.report([fits], out),
+        ),
+    ]
     return checks
 
 
