@@ -4,6 +4,7 @@ title: Confining subprocesses
 status: normative
 governs:
   - crates/sandbox/src/lib.rs
+  - crates/sandbox/src/base.rs
   - crates/sandbox/src/policy.rs
   - crates/sandbox/src/linux.rs
   - crates/sandbox/src/macos.rs
@@ -338,6 +339,46 @@ afterwards.
 `verified-by: bravebot_sandbox::policy::a_row_created_first_is_in_the_policy_the_backend_is_handed`
 `verified-by: bravebot_sandbox::policy::a_row_that_could_not_be_created_is_left_out_and_named`
 
+<a id="SANDBOX-12"></a>
+### SANDBOX-12: the base every program starts from is fixed, and names no credential
+
+The rows a confined program reaches before its own plan is read are the same for every program
+and are decided in code: what a dynamic executable needs in order to start, the temporary
+directory the session resolved as it opened, and the git configuration a stage reads for an
+identity. Nothing a program prints, no value a model supplied, no argument vector and no
+configuration file adds a row. The home directory is in no row, no directory a credential sits in
+is in one, and the only paths granted for writing are the temporary directory and the null
+device. Egress and children are left where they were, since what the base bounds is the
+filesystem. A platform whose prelude is not written down has no base, and so nothing to assemble
+a profile from.
+
+**Why.** A profile denies everything and then names what may be reached, so something has to
+carry what every program needs before any plan is read: a dynamic executable without its loader
+does not start, and a program that cannot open a temporary file fails outright. Those rows are
+shown by no prompt, because a row shown on every run teaches a person to approve without reading.
+What an invisible list has to be is small, fixed, and reviewed as code, since a row added to it
+reaches every program at once and a row a value could add is reach the model chose. What it buys
+is what it leaves out: the key a push signs with and the token a publish uses sit under a home
+directory, so a base naming that directory, or naming the configuration directory the second git
+spelling sits in, hands both to a program whose plan named neither, which is the whole of what
+confining a program was for.
+
+`verified-by: bravebot_sandbox::base::the_base_reaches_no_credential`
+`verified-by: bravebot_sandbox::base::the_only_rows_under_a_home_directory_are_the_git_configuration`
+`verified-by: bravebot_sandbox::base::the_git_configuration_is_read_and_never_written`
+`verified-by: bravebot_sandbox::base::a_machine_with_no_home_directory_gets_the_rest_of_the_base`
+`verified-by: bravebot_sandbox::base::the_temporary_directory_is_the_one_the_caller_resolved`
+`verified-by: bravebot_sandbox::base::only_the_temporary_directory_and_the_null_device_are_written`
+`verified-by: bravebot_sandbox::base::the_base_asks_for_nothing_to_be_created`
+`verified-by: bravebot_sandbox::base::the_base_leaves_egress_and_children_to_the_plan`
+`verified-by: bravebot_sandbox::base::the_base_names_no_filesystem_root`
+`verified-by: bravebot_sandbox::base::each_platform_starts_a_program_out_of_its_own_directories`
+`verified-by: bravebot_sandbox::base::a_prelude_names_the_machines_directories_and_none_of_a_persons`
+`verified-by: bravebot_sandbox::base::a_platform_with_no_prelude_written_down_has_no_base`
+`verified-by: bravebot_sandbox::linux::a_program_starts_under_the_base_this_machine_resolved`
+`verified-by: bravebot_sandbox::linux::a_program_under_the_base_can_name_the_account_it_runs_as`
+`verified-by: bravebot_sandbox::linux::a_program_under_the_base_reads_the_machine_and_not_a_private_key`
+
 ## Programs a person asked for
 
 A program `run` ([tools/run.md](tools/run.md)) starts is unconfined: it gets the access the user's
@@ -362,18 +403,23 @@ shown by no prompt, so they are a fixed part of the profile rather than a grant.
 everything and then names what may be reached, so "everything except this key" is not a profile
 anybody can write, and something has to carry what every program needs before any plan is read. That
 list is code: it is the same for every plan, nothing the model supplied and nothing an argv carries
-adds to it, and it changes only in a diff somebody reviews. What it buys is that it holds no
+adds to it, and it changes only in a diff somebody reviews. What may never be in it is
+[SANDBOX-12](#SANDBOX-12). What it buys is that it holds no
 credential directory, so `~/.ssh/id_rsa` and `~/.aws/credentials` are out of reach of a program
 whose plan never named them.
 
 | The base holds | To |
 |---|---|
-| the loader, the system libraries, the system binary directories, the locale data, terminfo, the CA bundle and the certificate directory beside it, `/etc/hosts`, `/etc/resolv.conf`, `/etc/nsswitch.conf`, `/etc/passwd`, `/dev/null`, `/dev/zero`, `/dev/random` and `/dev/urandom` | read, and write for `/dev/null` |
+| the loader, the system libraries, the system binary directories, the locale data, terminfo, the time zone data, the CA bundle and the certificate directory beside it, `/etc/hosts`, `/etc/resolv.conf`, `/etc/nsswitch.conf`, `/etc/passwd`, `/etc/group`, `/dev/null`, `/dev/zero`, `/dev/random` and `/dev/urandom` | read, and write for `/dev/null` |
 | the system temporary directory this process resolved as the session opened | read and write |
 | the git configuration any stage may read for an identity: `~/.gitconfig` and `~/.config/git/config` | read |
 
 Three rows is the whole of what stays invisible, and each one is here because every program needs it
 and none of it sits beside a token. The prelude is what a dynamic executable needs to start at all.
+A lookup reads `/etc/group` as well as `/etc/passwd`, and a program stamping a time reads the time
+zone data, so both are in it on the same ground: what a program without them produces is wrong
+rather than absent, a listing naming a number where a group belongs, and neither sits beside a
+token either.
 The git configuration is in the base rather than in one program's list because a stage that never
 mentions `git` still shells out to it for an identity, a `cargo` fetching a git dependency among
 them, and it can name a credential store without holding one. The remote scope below naming
@@ -560,6 +606,11 @@ reported as what it is.
   the socket instead. On Linux the right that governs connecting to a pathname socket arrives many
   ABI versions after the one this backend targets, so a connect there is neither granted nor
   deniable, and a profile meaning to bound one needs that ABI and a kernel carrying it.
+- What a program needs in order to start on Windows is not written down, so there is no base
+  there and nothing to assemble a profile from. The rows above are the Unix ones, and what a
+  Windows base has to settle first is whether a container reaches the system directories through
+  an access entry the platform already wrote, or whether the base names them and every run writes
+  an entry of its own onto a directory of the machine's.
 - Subprocess denial has no mechanism on Windows or on Linux. A container bounds what a process
   reaches rather than whether it creates children, and a child of a confined process is inside the
   same container rather than outside it, so a policy asking for that denial is refused on both
