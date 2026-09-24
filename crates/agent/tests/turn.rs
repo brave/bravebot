@@ -871,7 +871,7 @@ fn a_request_the_script_cannot_answer_is_told_so() {
 /// a turn's own marker goes before the tasks it hands out: a turn replays the arguments it called
 /// with, and so holds every task it asked for as well as its own prompt.
 fn serve_by_marker(rules: Vec<(&'static str, Vec<String>)>) -> (String, MockRequests) {
-    let (endpoint, received, _) = serve_by_marker_meeting(rules, &[]);
+    let (endpoint, received, _) = serve_by_marker_in(rules, Order::Any);
     (endpoint, received)
 }
 
@@ -887,15 +887,50 @@ fn serve_by_marker_meeting(
     rules: Vec<(&'static str, Vec<String>)>,
     meet: &'static [&'static str],
 ) -> (String, MockRequests, Arc<AtomicBool>) {
-    use std::collections::{BTreeSet, VecDeque};
+    serve_by_marker_in(rules, Order::Meeting(meet))
+}
+
+/// An order runs' requests must be answered in that a race between them would not give.
+#[derive(Clone, Copy)]
+enum Order {
+    /// Whatever order the runs happen to ask in.
+    Any,
+    /// See [`serve_by_marker_meeting`].
+    Meeting(&'static [&'static str]),
+    /// The run `held` names is answered only once the run `after` names has been asked `asked`
+    /// times. This is how a test says "still working when the planner answered": a reply held
+    /// until the planner's next request has arrived cannot be back before the turn looked for
+    /// finished work, however the machine schedules the two.
+    After {
+        held: &'static str,
+        after: &'static str,
+        asked: usize,
+    },
+}
+
+/// As [`serve_by_marker`], answering in `order`. The flag says whether the order was kept, since
+/// every wait for it is bounded so that a run which never gets there fails an assertion instead
+/// of never ending.
+fn serve_by_marker_in(
+    rules: Vec<(&'static str, Vec<String>)>,
+    order: Order,
+) -> (String, MockRequests, Arc<AtomicBool>) {
+    use std::collections::{BTreeMap, BTreeSet, VecDeque};
     use std::sync::{Condvar, Mutex};
 
     /// What each run has left to be told, by the marker that says which run it is.
     type Waiting = Arc<Mutex<Vec<(&'static str, VecDeque<String>)>>>;
 
-    let met = Arc::new(AtomicBool::new(meet.is_empty()));
+    let (meet, kept): (&'static [&'static str], bool) = match order {
+        Order::Any => (&[], true),
+        Order::Meeting(meet) => (meet, meet.is_empty()),
+        Order::After { .. } => (&[], false),
+    };
+    let met = Arc::new(AtomicBool::new(kept));
     let arrived: Arc<(Mutex<BTreeSet<&'static str>>, Condvar)> =
         Arc::new((Mutex::new(BTreeSet::new()), Condvar::new()));
+    let asked: Arc<(Mutex<BTreeMap<&'static str, usize>>, Condvar)> =
+        Arc::new((Mutex::new(BTreeMap::new()), Condvar::new()));
 
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().expect("addr").port();
@@ -918,6 +953,7 @@ fn serve_by_marker_meeting(
             let waiting = Arc::clone(&waiting);
             let sender = sender.clone();
             let arrived = Arc::clone(&arrived);
+            let asked = Arc::clone(&asked);
             let met = Arc::clone(&reached);
             // One thread per connection, because two runs really are asking at once and a server
             // that answered them one at a time would hide the thing under test.
@@ -965,6 +1001,39 @@ fn serve_by_marker_meeting(
                         drop(stream);
                         return;
                     };
+                    {
+                        let (counts, told) = &*asked;
+                        *counts
+                            .lock()
+                            .expect("not poisoned")
+                            .entry(marker)
+                            .or_default() += 1;
+                        told.notify_all();
+                    }
+
+                    if let Order::After {
+                        held,
+                        after,
+                        asked: times,
+                    } = order
+                        && marker == held
+                    {
+                        let (counts, told) = &*asked;
+                        let bound = std::time::Duration::from_secs(10);
+                        let began = std::time::Instant::now();
+                        let mut counts = counts.lock().expect("not poisoned");
+                        while counts.get(after).copied().unwrap_or(0) < times
+                            && began.elapsed() < bound
+                        {
+                            let (woken, _) = told
+                                .wait_timeout(counts, bound.saturating_sub(began.elapsed()))
+                                .expect("not poisoned");
+                            counts = woken;
+                        }
+                        if counts.get(after).copied().unwrap_or(0) >= times {
+                            met.store(true, Ordering::SeqCst);
+                        }
+                    }
 
                     // Held until every run the test named is waiting here at the same moment. A
                     // marker is taken out again on the way past, so what the flag records is runs
@@ -17184,24 +17253,32 @@ fn a_turn_does_not_answer_while_a_delegate_is_still_working() {
     let scratch = Scratch::new("delegate-outlives");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    // The planner answers immediately, before the delegate can have finished.
-    let (endpoint, received) = serve_by_marker(vec![
-        (
-            "ANSWER-STRAIGHT-AWAY",
-            vec![
-                tool_request(
-                    "spawn_agent",
-                    r#"{"kind":"reader","task":"TAKE-YOUR-TIME"}"#,
-                ),
-                reply_with("I am done, whatever it says"),
-                reply_with("it came back and I read it"),
-            ],
-        ),
-        (
-            "TAKE-YOUR-TIME",
-            vec![reply_with("THE-DELEGATE-FINISHED-ANYWAY")],
-        ),
-    ]);
+    // The planner answers immediately, and the delegate is not answered until the planner has
+    // been asked for that answer, so it is still working when the answer comes.
+    let (endpoint, received, held) = serve_by_marker_in(
+        vec![
+            (
+                "ANSWER-STRAIGHT-AWAY",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"reader","task":"TAKE-YOUR-TIME"}"#,
+                    ),
+                    reply_with("I am done, whatever it says"),
+                    reply_with("it came back and I read it"),
+                ],
+            ),
+            (
+                "TAKE-YOUR-TIME",
+                vec![reply_with("THE-DELEGATE-FINISHED-ANYWAY")],
+            ),
+        ],
+        Order::After {
+            held: "TAKE-YOUR-TIME",
+            after: "ANSWER-STRAIGHT-AWAY",
+            asked: 2,
+        },
+    );
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
@@ -17220,6 +17297,11 @@ fn a_turn_does_not_answer_while_a_delegate_is_still_working() {
     )
     .expect("turn runs");
 
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the planner was never asked again while the delegate worked, so this proves nothing: {:?}",
+        reporter.lines()
+    );
     // The first answer was not the turn's: the report arrived, and the planner was asked again.
     assert!(
         reporter
