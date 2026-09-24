@@ -75,8 +75,9 @@ make darwin-arm64 darwin-amd64 strip
 make app-release
 ```
 
-The third family of artifact, and the one the tag does not produce. It is released for macOS
-only. A Linux desktop release needs a package format and a machine to test it on, and has neither.
+The third family of artifact, and the one the tag does not produce. It is released for macOS, and
+for Windows as far as the bundle below goes. A Linux desktop release needs a package format and a
+machine to test it on, and has neither.
 
 `app-release` runs on a Mac of either architecture and needs no Rust toolchain. It packages the
 app once per architecture from what the cross-build left in `dist/`, and writes a disk image for
@@ -122,3 +123,33 @@ built from an unconfigured shell starts, lists sessions, opens them, and fails a
 inference request, and Finder loads no shell configuration for the person who would then report
 that. So the credentials have to be in the environment `make` runs in, as they are for the
 cross-builds above.
+
+### The Windows bundle
+
+```sh
+make windows-amd64 windows-arm64 strip
+make app-bundles-windows
+```
+
+The same shape as `app-bundles`, and one step in so far:
+
+| Reads | Writes |
+| --- | --- |
+| `dist/bravebot-rpc-windows-arm64.exe`, `dist/bravebot-ui-files-windows-arm64.exe` | `ui/dist/Brave Bot-win32-arm64/` |
+| `dist/bravebot-rpc-windows-amd64.exe`, `dist/bravebot-ui-files-windows-amd64.exe` | `ui/dist/Brave Bot-win32-x64/` |
+
+It runs on any host, unlike the Mac one, because everything platform-specific about a Windows
+bundle is the icon and the version resource in `Brave Bot.exe`, and `@electron/packager` writes
+both with resedit, a JavaScript library. No Windows node and no Wine is involved, so the release
+builds the bundle where it builds everything else and takes it to the Windows node only to sign it.
+
+The Windows cross-build keeps the same pair of executables beside the CLI as the Mac one does,
+`make strip` strips them with the rest, and `make checksums` leaves them out of the assets. The
+bundle is fused, in `Brave Bot.exe` rather than in a framework, and unsigned. The job signs every
+PE in it where it lies: `Brave Bot.exe`, both helpers in `resources/`, and Electron's own DLLs.
+
+The installer that a signed bundle goes into is the second step and does not exist yet. Its format,
+whether it installs per user or per machine, and the product identity it fixes for good are open
+questions on [#769](https://github.com/brave/bravebot/issues/769), and none of them is a packaging
+script's to settle. Until they are, what comes out of this target is a directory somebody can run
+the app from, not something anybody installs.
