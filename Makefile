@@ -176,9 +176,11 @@ check-spec:
 # its caller's closure to one, whether every workflow step is on a commit rather than a tag
 # somebody else can move, whether every container image this tree runs names a digest rather than
 # a tag its publisher can move, and whether a job holding `id-token: write` or a secret installs or
-# runs an npm dependency, which every step in that job could read the credential from, and whether
-# a checkout of this tree names a kind of ref rather than a bare name a branch and a tag can share.
-# No model takes part, so it belongs in CI.
+# runs an npm dependency, which every step in that job could read the credential from, whether a
+# checkout of this tree names a kind of ref rather than a bare name a branch and a tag can share,
+# and whether the check contexts a merge is held to are written down in
+# contrib/required-checks.txt, name jobs that exist, and cover every job whose purpose is running a
+# check. No model takes part, so it belongs in CI.
 # The lanes that read code are the skill, and a person runs those.
 #
 # It passes on this tree now that `Labelled::trusted` has a `guards` entry beside `Labelled::new`,

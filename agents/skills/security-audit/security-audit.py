@@ -23,9 +23,10 @@ released content to a closure the driver wrote is counted rather than merely nam
 function forwarding its caller's closure to one, that every workflow step
 names a commit rather than a tag its owner can move, that every container image this tree runs names a
 digest rather than a tag its publisher can move, that no job holding a credential installs or runs a
-dependency beside it, and that a checkout of this tree names a kind of ref rather than a bare name a
-branch and a tag can share. A rule that can be written as one of these belongs here rather than in a
-reviewer's head.
+dependency beside it, that a checkout of this tree names a kind of ref rather than a bare name a
+branch and a tag can share, and that the contexts a merge is held to are written down, name jobs
+that exist, and cover every job that runs a check. A rule that can be written as one of these
+belongs here rather than in a reviewer's head.
 """
 
 import argparse
@@ -220,6 +221,24 @@ JOB = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$")
 PERMISSIONS = re.compile(r"^\s*permissions:\s*(.*)$")
 RUN = re.compile(r"^\s*(?:-\s+)?run:\s*(.*)$")
 BLOCK = ("", "|", "|-", "|+", ">", ">-", ">+")
+# A job's own `name:`, which is the name its check run reports under and so the name a required
+# context has to match. Four columns is the job's; a step's is deeper and a workflow's is at zero.
+# An unquoted scalar ends at a ` #`, so the comment is not part of the name.
+DISPLAY_NAME = re.compile(r"^ {4}name:\s*(.+?)\s*$")
+TRAILING_COMMENT = re.compile(r"\s+#.*$")
+EXPRESSION = re.compile(r"\$\{\{")
+# A `make` invocation and the check targets in it. Read as the whole command rather than the word
+# after `make`, since a target can arrive behind a flag, behind a variable, or second in a list.
+MAKE = re.compile(r"\bmake\b[^\n;&|]*")
+CHECK_TARGET = re.compile(r"\bcheck-[\w-]+\b")
+
+# Which of those check runs a merge is actually held to, and where the tree says so. The list the
+# protection enforces is a repository setting rather than a file, so this is the record of what it
+# has to hold, and the documentation is where a target's promise to fail a pull request is written.
+REQUIRED_CHECKS = Path("contrib/required-checks.txt")
+CHECKS_DOC = Path("docs/development/checks.md")
+DOC_TARGET = re.compile(r"`make (check-[\w-]+)`")
+GATES_A_PULL_REQUEST = ("fails a pull request", "fails rather than")
 
 # What a job can hold that is worth stealing, and the commands that run bytes nobody here wrote. The
 # grant is a permission to request a token rather than a token, which is the whole of the difference:
@@ -1891,6 +1910,171 @@ def check_pinned_images():
             )
 
 
+def job_display_names(lines):
+    """Every job in a workflow by the name its check run reports under, with the targets it runs.
+
+    A required context matches a check run's name, which is the job's `name:` where it has one and
+    its key where it does not. A name built from an expression is one no checkout can resolve --
+    the cross-build names its six legs from a matrix -- so it is left out rather than guessed at,
+    and a context could not name it either.
+    """
+    found = {}
+    for job in workflow_jobs(lines):
+        block = nested(lines, job["line"] - 1)
+        written = next((one.group(1) for one in map(DISPLAY_NAME.match, block) if one), job["name"])
+        if not written.startswith(("'", '"')):
+            written = TRAILING_COMMENT.sub("", written).strip()
+        display = unquoted(written)
+        if EXPRESSION.search(display):
+            continue
+        targets = set()
+        for step in job["steps"]:
+            for raw in step["body"]:
+                for command in MAKE.findall(raw):
+                    targets.update(CHECK_TARGET.findall(command))
+        found.setdefault(display, set()).update(targets)
+    return found
+
+
+def required_contexts():
+    """The contexts `contrib/required-checks.txt` names, or nothing where the file is gone."""
+    if not REQUIRED_CHECKS.is_file():
+        return None
+    return [
+        line
+        for line in (raw.strip() for raw in REQUIRED_CHECKS.read_text(encoding="utf-8").split("\n"))
+        if line and not line.startswith("#")
+    ]
+
+
+def gated_targets():
+    """The make targets `checks.md` promises will fail a pull request, by the line it promises on.
+
+    A paragraph rather than the whole document, because the promise and the target it is about are
+    written together: `make check-locales` is named in four paragraphs and only one of them says
+    what CI does with it.
+    """
+    if not CHECKS_DOC.is_file():
+        return {}
+    found = {}
+    number = 1
+    for paragraph in CHECKS_DOC.read_text(encoding="utf-8").split("\n\n"):
+        flat = " ".join(paragraph.split())
+        if any(one in flat for one in GATES_A_PULL_REQUEST):
+            for target in DOC_TARGET.findall(paragraph):
+                found.setdefault(target, number)
+        number += paragraph.count("\n") + 2
+    return found
+
+
+def check_required_checks_are_the_gates():
+    """The contexts a merge is held to are written down, and they name jobs that exist.
+
+    A red job stops nothing by itself. What stops a merge is branch protection's list of required
+    contexts, which is a repository setting: no file in a checkout can read it, and a job renamed
+    here leaves that list naming a check run nothing produces -- always green, because it never
+    reports. This repository has one of those already, since the required lower-case `security` is
+    the organisation's scan and not CI's `Security`, and the cost is a check the documentation says
+    fails a pull request sitting red above an enabled merge button.
+
+    So the intended list is a file, and this decides the three things about it a checkout can: that
+    every context named is a job that exists, that every job running a `make check-` target is
+    named, since a job whose whole purpose is a check and which nothing requires reports its
+    verdict beside an enabled merge button, and that a target the documentation promises will fail
+    a pull request is run by some job at all. Comparing the file against what the protection really
+    requires is the part that needs the network, and `contrib/required-checks.txt` says how.
+
+    What this does not read is when a job runs. A check target moved into a job that runs only on a
+    push or a schedule would be demanded here and never report on a pull request, which holds every
+    merge rather than letting one through, so it is a state whoever made it finds out about at once.
+    """
+    contexts = required_contexts()
+    if contexts is None:
+        yield finding(
+            ERROR,
+            "unrecorded-required-check",
+            f"`{REQUIRED_CHECKS}` is gone, so nothing in the tree says which checks hold a merge",
+            f"`{REQUIRED_CHECKS}` is the only statement anywhere in this repository of which check "
+            "contexts branch protection has to require; without it a job can be renamed, or a "
+            "check added, with nothing to compare the protection against",
+            "infrastructure",
+            "medium",
+            evidence=[f"{REQUIRED_CHECKS}: absent"],
+            fix="restore the file, listing the display name of every job a merge is held to",
+        )
+        return
+
+    jobs = {}
+    if WORKFLOWS.is_dir():
+        for path in sorted(WORKFLOWS.glob("*.yml")) + sorted(WORKFLOWS.glob("*.yaml")):
+            lines = path.read_text(encoding="utf-8").split("\n")
+            for display, targets in job_display_names(lines).items():
+                jobs.setdefault(display, set()).update(targets)
+
+    for context in contexts:
+        if context in jobs:
+            continue
+        yield finding(
+            ERROR,
+            "orphaned-required-check",
+            f"no job is called `{context}`, so requiring it requires a check run nothing produces",
+            f"`{REQUIRED_CHECKS}` names `{context}`, which is the display name of no job in "
+            "`.github/workflows/`. A required context that nothing reports is not a gate: it is "
+            "pending forever, or it is satisfied by whatever else happens to report under that "
+            "name",
+            "infrastructure",
+            "high",
+            evidence=[f"{REQUIRED_CHECKS}: {context}"],
+            fix="spell it exactly as the job's `name:`, or drop it where the job is gone. A job "
+            "renamed on one side and not the other is how a required context comes to name "
+            "something else",
+        )
+
+    promised = gated_targets()
+    for display in sorted(jobs):
+        targets = sorted(jobs[display])
+        if not targets or display in contexts:
+            continue
+        yield finding(
+            ERROR,
+            "ungated-check",
+            f"`{display}` runs `make {targets[0]}` and is not a context a merge is held to, so it "
+            "reports its verdict beside an enabled merge button",
+            f"`{display}` exists to run {', '.join(f'`make {one}`' for one in targets)}. "
+            f"`{REQUIRED_CHECKS}` does not name it, and a check nothing requires decides nothing: "
+            "the job goes red and the merge button stays enabled"
+            + (
+                f". `{CHECKS_DOC}` promises that `make {targets[0]}` fails a pull request"
+                if targets[0] in promised
+                else ""
+            ),
+            "infrastructure",
+            "medium",
+            evidence=[f"{display} runs make {one}" for one in targets]
+            + [f"{CHECKS_DOC}:{promised[one]}" for one in targets if one in promised],
+            fix=f"add `{display}` to `{REQUIRED_CHECKS}` and require the context, or move the "
+            "target out of a job of its own where it is not meant to hold a merge",
+        )
+
+    run_somewhere = {one for targets in jobs.values() for one in targets}
+    for target, number in sorted(promised.items()):
+        if target in run_somewhere:
+            continue
+        yield finding(
+            ERROR,
+            "unrun-promise",
+            f"`{CHECKS_DOC.name}` says `make {target}` fails a pull request, and no job runs it",
+            f"`{CHECKS_DOC}` promises that `make {target}` fails a pull request rather than "
+            "holding only for whoever remembers to run it, and no job in `.github/workflows/` "
+            "runs that target, so nothing runs it on a pull request at all",
+            "infrastructure",
+            "medium",
+            evidence=[f"{CHECKS_DOC}:{number}"],
+            fix="give the target a job and require its context, or amend the paragraph to say "
+            "what actually runs it",
+        )
+
+
 def check_guarantee_specs_exist():
     """A named guarantee spec that no file answers to.
 
@@ -2140,6 +2324,7 @@ def main():
     findings += list(check_pinned_images())
     findings += list(check_privileged_job_runs_only_its_own_code())
     findings += list(check_checkout_ref_is_qualified())
+    findings += list(check_required_checks_are_the_gates())
     findings += list(check_guarantee_specs_exist())
     findings += list(check_unpinned_guarantee_clauses(specs))
 

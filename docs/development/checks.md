@@ -102,16 +102,33 @@ whether every workflow step is on a commit rather than a tag its owner can move,
 container image this tree runs
 names a digest rather than a tag its publisher can move, and whether a job holding `id-token: write`
 or a secret installs or runs an npm dependency, which every step in that job could read the
-credential from, and whether a checkout of this tree names a kind of ref rather than a bare name a
-branch and a tag can share. CI runs it too, so a pull request that moves a workflow step or a build
-image onto a movable tag, that puts an install back beside the publish credential, that points a
-checkout at a name instead of a ref, that gives a crate a network client the egress register does
-not admit, or that drops the entry pinning a constructor, fails rather than holding only for
+credential from, whether a checkout of this tree names a kind of ref rather than a bare name a
+branch and a tag can share, and whether the check contexts a merge is held to are written down,
+name jobs that exist, and cover every job whose purpose is running a check. CI runs it too, so a
+pull request that moves a workflow step or a build image onto a movable tag, that puts an install
+back beside the publish credential, that points a checkout at a name instead of a ref, that gives a
+crate a network client the egress register does not admit, that drops the entry pinning a
+constructor, or that adds a check nothing holds a merge to, fails rather than holding only for
 whoever remembers to run this. It is the deterministic half of the
 [security-audit skill](../../agents/skills/security-audit/SKILL.md); the lanes that read code are the
 other half, and a person runs those. Run it before a commit that touches a label,
-`.github/workflows`, a Dockerfile, the Makefile's containers, a crate's manifest, or the trust
-specs.
+`.github/workflows`, a Dockerfile, the Makefile's containers, a crate's manifest, the required
+check contexts, or the trust specs.
+
+Wherever this page says a check fails a pull request, what does the failing is not the job going
+red. A job reports. What holds a merge is branch protection's list of required contexts, which is
+a repository setting no file in a checkout can read, so
+[../../contrib/required-checks.txt](../../contrib/required-checks.txt) is where the tree states
+what that list has to hold. `make check-security` decides the three things about it a checkout
+can: that every name in the file is the display name of a job in `.github/workflows/`, that every
+job running a check target is named in the file, and that a target this page promises will fail a
+pull request is run by some job at all. A required context matches a check run's name exactly, so
+a job renamed on one side and not the other leaves a context nothing reports under, which is the
+shape of the one this repository already has: the required lower-case `security` is the
+organisation's scan, supplied by a workflow that is in no checkout here, and it is a different
+check run from CI's `Security`. What is left is comparing the file against what the protection
+actually requires, which needs the network and a token; the file carries the two `gh` queries
+for it.
 
 `make check-locales` holds every message catalog to
 [../../contrib/untranslated-messages.txt](../../contrib/untranslated-messages.txt), the record of what each

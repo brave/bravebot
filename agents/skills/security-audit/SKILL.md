@@ -289,6 +289,7 @@ diff, from [reviewing-for-the-rule.md](../../../docs/development/reviewing-for-t
 | A container image on a tag rather than a digest | mechanical | error |
 | A job holding `id-token: write` or a secret that installs or runs a dependency | mechanical | error |
 | A checkout of a bare name a branch and a tag can share, rather than a `refs/` ref | mechanical | error |
+| A required context naming no job, or a job running a check that no context requires | mechanical | error |
 | A clause at `verified-by: none` | mechanical | warning |
 | A label built with more trust than its inputs had | lane, then verifier | error |
 | A decision taken from a released value | lane, then verifier | error |
