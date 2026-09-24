@@ -10,10 +10,13 @@
 //
 // So every test here renders the real components through `react-dom/server` and asserts on the
 // markup, because the properties at stake are properties of the markup rather than of a string
-// the renderer was handed.
+// the renderer was handed. The exception is the property stated as an absence: there is nothing
+// to render to show that something is nowhere, so that one reads the sources and the manifest.
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { buildSync } from 'esbuild'
 import { createRequire } from 'node:module'
 
@@ -112,39 +115,178 @@ test('quarantined content cannot paint its own container', () => {
   assert.ok(drawn.includes('not in the planner'), drawn)
 })
 
-test('every card that shows released content shows it as text', () => {
-  // The quarantine block is not the only one. A command's output, a vetted read and a vouch
-  // each put bytes nobody vouched for in front of a person, inside a container of their own, so
-  // each owes the same answer and none of them is reached by the test above.
-  const cards = {
-    output: t.askedOutput({
-      request: 1,
-      command: 'cat notes.md',
-      reference: 'output-1',
-      lines: 1,
-      output: FORGED_CHROME,
-      summary: 'one line',
-    }),
-    vet: t.askedVet({
-      request: 1,
-      origin: 'notes.md',
-      expects: 'a note',
-      content: FORGED_CHROME,
-      lines: 1,
-      vetting: { verdict: 'safe' },
-    }),
-    vouch: t.askedVouch({ request: 1, path: 'notes.md', preview: FORGED_CHROME, truncated: false }),
-  }
+/** A write of bytes a processor produced, which is the card the clause marks explicitly. */
+const UNTRUSTED_WRITE = {
+  request: 1,
+  path: 'notes.md',
+  intent: 'update',
+  untrusted: true,
+  existing: true,
+  added: 1,
+  removed: 0,
+  exact: true,
+  changes: [{ kind: 'added', text: FORGED_CHROME }],
+  remark: { preview: [FORGED_CHROME], lines: 1, label: '(U,priv)' },
+}
 
-  for (const [kind, entry] of Object.entries(cards)) {
-    const drawn = draw(entry)
-    assert.equal(occurrences(drawn, 'class="quarantine-head"'), 0, `${kind}:\n${drawn}`)
-    assert.equal(occurrences(drawn, '<pre class="preview">'), 1, `${kind}:\n${drawn}`)
-    assert.match(drawn, /&lt;div class=&quot;quarantine-head&quot;&gt;/, `${kind} rendered markup`)
-    for (const attribute of FETCHING) {
-      assert.ok(!drawn.includes(attribute), `${kind} drew ${attribute}:\n${drawn}`)
+/**
+ * Every kind of entry the transcript has, one fixture each, and what the card owes it.
+ *
+ * `marks` is the container the card draws around released content, asserted to appear exactly
+ * once: the content is inside a mark the renderer drew and did not produce a second. `marks:
+ * null` is the judgement that this card shows no released content, with the reason written
+ * down, because that half of the quantifier is the half no grep can decide. Every fixture is
+ * drawn either way, and every one of them has to escape what it carries and to make no request.
+ *
+ * `carries: false` is for the two kinds with no field to put content in at all.
+ *
+ * The keys are checked against the `Entry` union below rather than trusted, which is the whole
+ * point of the table: a kind added to the transcript arrives red here until somebody either
+ * draws it with its marking or records why it shows nothing to mark.
+ */
+const CARDS = {
+  'turn-start': { entry: () => t.turnStarted(1), marks: null, why: 'an ordinal and nothing else', carries: false },
+  consolidation: { entry: () => t.consolidating(), marks: null, why: 'a sentence this window wrote', carries: false },
+  user: { entry: () => t.userSaid(FORGED_CHROME), marks: null, why: 'what the person typed themselves' },
+  assistant: { entry: () => t.replied(FORGED_CHROME, 1), marks: null, why: 'the planner’s own words, which is what the one formatted surface means' },
+  narration: { entry: () => t.narrated(FORGED_CHROME), marks: null, why: 'the agent’s account of what it did' },
+  attached: { entry: () => ({ kind: 'attached', id: 'a1', path: FORGED_CHROME }), marks: null, why: 'the path somebody named, never the file’s bytes' },
+  watch: { entry: () => t.watchFired(1, FORGED_CHROME), marks: null, why: 'the watch’s own line: a number and a path' },
+  error: { entry: () => t.errored(FORGED_CHROME), marks: null, why: 'a diagnostic from the service the agent spoke to' },
+  'replayed-tool': { entry: () => ({ kind: 'replayed-tool', id: 'r1', text: FORGED_CHROME }), marks: null, why: 'the line a record kept of a call, with no result in it' },
+  tool: {
+    // `Activity.changes` and `Activity.untrusted` are on the wire already and this card draws
+    // neither. The day it does it needs a `marks`, which is the case this table exists for.
+    entry: () => t.started({ verb: 'write', target: 'notes.md', note: FORGED_CHROME, failed: false, untrusted: false, changes: [] }),
+    marks: null,
+    why: 'the driver’s verb and the model’s own naming of its target',
+  },
+  run: {
+    entry: () => t.askedRun({
+      request: 1,
+      stages: [{ display: FORGED_CHROME, resolved: '/bin/cat' }],
+      directory: '/tmp/project',
+      releasesPrivate: false,
+      vouches: [{ program: 'cat', args: [], display: 'cat' }],
+      summary: 'one command',
+      stdin: 'output-1',
+    }),
+    marks: null,
+    // crates/agent/src/confirm.rs documents `stdin` as the reference name and never the bytes.
+    why: 'the planner’s own argv, what $PATH resolved it to, and a reference name for any input',
+  },
+  ask: {
+    entry: () => t.askedQuestions({
+      request: 1,
+      prompts: [{ header: FORGED_CHROME, question: FORGED_CHROME, rows: [{ index: 0, label: FORGED_CHROME, detail: null }], multiple: false, key: 'k' }],
+    }),
+    marks: null,
+    // labels.md:355 gives a reply out of a transport the context's label, not the network's.
+    why: 'the planner’s questions, which are its words rather than content it read',
+  },
+  quarantined: { entry: () => confined([FORGED_CHROME, 'api_key = hunter2']), marks: '<pre class="preview">' },
+  confirm: { entry: () => t.asked(UNTRUSTED_WRITE), marks: 'class="confirm untrusted"' },
+  output: {
+    entry: () => t.askedOutput({ request: 1, command: 'cat notes.md', reference: 'output-1', lines: 1, output: FORGED_CHROME, summary: 'one line' }),
+    marks: '<pre class="preview">',
+  },
+  vet: {
+    entry: () => t.askedVet({ request: 1, origin: 'notes.md', expects: 'a note', content: FORGED_CHROME, lines: 1, vetting: { verdict: 'safe' } }),
+    marks: '<pre class="preview">',
+  },
+  vouch: {
+    entry: () => t.askedVouch({ request: 1, path: 'notes.md', preview: FORGED_CHROME, truncated: false }),
+    marks: '<pre class="preview">',
+  },
+}
+
+/**
+ * Every entry kind the transcript declares, read out of the union that declares them.
+ *
+ * `Entry` is a TypeScript union, so none of it survives to runtime and no import can ask what
+ * its members are. Its source is the next best thing, and it is the same source the compiler
+ * holds the renderer's `switch` to, so the two lists cannot drift apart without this failing.
+ */
+function declaredKinds() {
+  const source = readFileSync('src/renderer/transcript.ts', 'utf8')
+  const start = source.indexOf('export type Entry = (')
+  const end = source.indexOf('\n) & {', start)
+  assert.ok(start >= 0 && end > start, 'the Entry union is not where this test looks for it')
+  return new Set([...source.slice(start, end).matchAll(/\bkind: '([a-z-]+)'/g)].map((found) => found[1]))
+}
+
+test('every entry kind is drawn with its marking, whether or not its turn ended first', () => {
+  // The quantifier the clause states, made mechanical. A new kind, or one dropped, fails here.
+  assert.deepEqual(new Set(Object.keys(CARDS)), declaredKinds())
+
+  for (const [kind, card] of Object.entries(CARDS)) {
+    // A card said to mark nothing has to say why. That is the judgement a reader checks, and
+    // leaving it out is how a card that does release something comes to sit in this column.
+    if (!card.marks) assert.ok(card.why && card.why.length > 10, `${kind} marks nothing, for no stated reason`)
+
+    // Both ways round. A turn ending sets `interrupted` on every unanswered question, and the
+    // cheap thing to draw for one is a summary of its text, which is the bytes with no
+    // container, no origin, no label, no reach line and, for an untrusted write, no border and
+    // no warning. A turn ending declassifies nothing, so the marking is owed either way.
+    for (const interrupted of [false, true]) {
+      const drawn = draw(interrupted ? { ...card.entry(), interrupted: true } : card.entry())
+      const where = `${kind}${interrupted ? ', interrupted' : ''}:\n${drawn}`
+
+      if (card.marks) assert.equal(occurrences(drawn, card.marks), 1, where)
+      // The head belongs to the one card that draws it. Anywhere else it would be content
+      // having painted the chrome the reader is meant to trust.
+      assert.equal(occurrences(drawn, 'class="quarantine-head"'), kind === 'quarantined' ? 1 : 0, where)
+      if (card.carries !== false) {
+        assert.match(drawn, /&lt;div class=&quot;quarantine-head&quot;&gt;/, where)
+        assert.ok(!drawn.includes('<span class="mark">confined</span><span class="origin">README.md'), where)
+      }
+      for (const attribute of FETCHING) assert.ok(!drawn.includes(attribute), `drew ${attribute}, ${where}`)
     }
   }
+})
+
+/**
+ * The second property is stated as an absence, so it is checked as one.
+ *
+ * `dangerouslySetInnerHTML` and a markdown plugin that turns HTML in content into elements are
+ * the two routes by which the property above would stop being a property of the renderer and
+ * become a property of whatever the content happens to hold. Neither is in the tree; an absence
+ * written in a clause and asserted nowhere is one somebody has to remember.
+ */
+test('no route from content to raw markup exists in the front end', () => {
+  const sources = []
+  const walk = (directory) => {
+    for (const item of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, item.name)
+      if (item.isDirectory()) walk(path)
+      else if (/\.(ts|tsx|js|jsx|mjs|cjs)$/.test(item.name)) sources.push(path)
+    }
+  }
+  walk('src')
+  // A walk that found nothing would pass the loop below without reading a line.
+  assert.ok(sources.length > 20, `only ${sources.length} source files were scanned`)
+
+  // Matched where it would do something, as a JSX prop or a key in a props object, rather than
+  // wherever the word occurs: `src/main/export.ts` names it in the paragraph explaining why the
+  // PDF is drawn by a real renderer instead of an injected string, and a check that forbade
+  // saying so would be a check against writing the reason down.
+  const RAW = [
+    /\bdangerouslySetInnerHTML\s*[:=]/,
+    /\.(inner|outer)HTML\s*=/,
+    /\b(document\.write|insertAdjacentHTML)\s*\(/,
+  ]
+  for (const path of sources) {
+    const source = readFileSync(path, 'utf8')
+    for (const route of RAW) assert.ok(!route.test(source), `${path} reaches raw markup: ${route}`)
+  }
+
+  const manifest = JSON.parse(readFileSync('package.json', 'utf8'))
+  const declared = Object.keys({ ...manifest.dependencies, ...manifest.devDependencies })
+  for (const plugin of ['rehype-raw', 'rehype-stringify', 'remark-html', 'remark-rehype']) {
+    assert.ok(!declared.includes(plugin), `${plugin} would turn HTML in content into elements`)
+  }
+  // And the surface all of this is about is still the one being drawn.
+  assert.ok(declared.includes('react-markdown'), declared.join(' '))
 })
 
 test('quarantined content is not formatted, so it has no vocabulary for chrome', () => {
@@ -251,18 +393,7 @@ test('an openable scheme is the one a URL parser reads, not the one the text spe
 })
 
 test('an untrusted write is marked on its container, and its remark cannot forge one', () => {
-  const request = {
-    request: 1,
-    path: 'notes.md',
-    intent: 'update',
-    untrusted: true,
-    existing: true,
-    added: 1,
-    removed: 0,
-    exact: true,
-    changes: [{ kind: 'added', text: FORGED_CHROME }],
-    remark: { preview: [FORGED_CHROME], lines: 1, label: '(U,priv)' },
-  }
+  const request = UNTRUSTED_WRITE
   const drawn = draw(t.asked(request))
 
   assert.match(drawn, /class="confirm untrusted"/)
