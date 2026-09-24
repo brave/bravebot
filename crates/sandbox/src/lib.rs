@@ -14,6 +14,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod base;
 pub mod crash;
 #[cfg(target_os = "linux")]
 pub mod linux;

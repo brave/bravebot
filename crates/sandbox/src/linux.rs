@@ -320,11 +320,13 @@ impl Sandbox for LandlockSandbox {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::base::{Prelude, base};
     use crate::testutil::{
         capturing_stdout, nothing_attached, printed_by, variable_names_received_by,
     };
     use std::io::Write;
     use std::os::unix::fs::MetadataExt;
+    use std::path::Path;
 
     /// cat reporting that the file it was asked for could not be read. Any other code
     /// means it stopped before opening the file, which says nothing about a read grant.
@@ -664,6 +666,131 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A directory standing in for the one a session resolved as it opened. Under the workspace
+    /// rather than under the machine's temporary directory, which is shared between users and
+    /// so is not a place for a test to put a file it is about to assert on.
+    fn a_temporary_directory(name: &str) -> PathBuf {
+        let path = crate::testutil::scratch_dir(name);
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("the scratch directory is creatable");
+        path
+    }
+
+    /// The base is what a program a person asked for starts with, so a program has to be able
+    /// to start under it on the machine in front of it: the rows it names have to be enough for
+    /// the loader to read a binary and the libraries it links, and the rows this machine does
+    /// not carry have to leave the rest installable rather than refusing the program.
+    #[test]
+    fn a_program_starts_under_the_base_this_machine_resolved() {
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+        let temporary_directory = a_temporary_directory("bravebot-base-starts");
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let wanted = base(Prelude::Linux, &temporary_directory, home.as_deref());
+
+        let resolved = wanted.nameable_under(&sandbox.capabilities());
+
+        let mut child = sandbox
+            .spawn(
+                "/bin/true",
+                &[],
+                &resolved.policy,
+                nothing_attached(),
+                Environment::Inherited,
+            )
+            .expect("a program starts under the base");
+        assert!(
+            child.wait().expect("should wait").success(),
+            "a program could not start under the base, so every run under one is a refusal"
+        );
+
+        let _ = std::fs::remove_dir_all(&temporary_directory);
+    }
+
+    /// A program that cannot put a name to the account it runs as is a program whose output is
+    /// wrong rather than one that failed: `ls -l` prints numbers, and an archive unpacked under
+    /// the base records them. The rows that answer a lookup are in the base for that reason, and
+    /// a lookup is the only thing that shows whether all of them are.
+    #[test]
+    fn a_program_under_the_base_can_name_the_account_it_runs_as() {
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+        let temporary_directory = a_temporary_directory("bravebot-base-account");
+        let policy = base(Prelude::Linux, &temporary_directory, None)
+            .nameable_under(&sandbox.capabilities())
+            .policy;
+
+        let mut child = sandbox
+            .spawn(
+                "/usr/bin/id",
+                &["-gn".to_owned()],
+                &policy,
+                nothing_attached(),
+                Environment::Inherited,
+            )
+            .expect("should spawn");
+
+        assert_eq!(
+            child.wait().expect("should wait").code(),
+            Some(0),
+            "a program under the base could not name the group it runs as"
+        );
+
+        let _ = std::fs::remove_dir_all(&temporary_directory);
+    }
+
+    /// What the base buys is what it leaves out, and a list is only what the kernel installs:
+    /// a key no plan named is unreadable to a program running under the base. Both halves run
+    /// under the same policy, because a program that could read nothing at all is refused the
+    /// key as surely as one the base holds to what it names.
+    #[test]
+    fn a_program_under_the_base_reads_the_machine_and_not_a_private_key() {
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+
+        let temporary_directory = a_temporary_directory("bravebot-base-private-key-tmp");
+        let home = crate::testutil::scratch_dir("bravebot-base-private-key");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".ssh")).expect("the scratch directory is creatable");
+        let key = home.join(".ssh").join("id_rsa");
+        std::fs::write(&key, CONTENTS).expect("the key file is writable");
+
+        let policy = base(Prelude::Linux, &temporary_directory, Some(&home))
+            .nameable_under(&sandbox.capabilities())
+            .policy;
+        let cat = |path: &Path| {
+            sandbox
+                .spawn(
+                    "/usr/bin/cat",
+                    &[path.display().to_string()],
+                    &policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("should spawn")
+        };
+
+        let mut granted = cat(Path::new("/etc/hosts"));
+        assert_eq!(
+            granted.wait().expect("should wait").code(),
+            Some(0),
+            "a file the base names could not be read, so the refusal below means nothing"
+        );
+
+        let mut refused = cat(&key);
+        assert_eq!(
+            refused.wait().expect("should wait").code(),
+            Some(CAT_FAILED),
+            "the key was readable, or the read failed for another reason"
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&temporary_directory);
     }
 
     /// The refusal before the spawn leaves a window: a path can go away between the check
