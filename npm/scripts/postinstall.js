@@ -13,35 +13,43 @@ const crypto = require("node:crypto");
 const { spawnSync } = require("node:child_process");
 
 const SKIP_ENV = "BRAVEBOT_INSTALL_SKIP_DOWNLOAD";
-const DEFAULT_REPO = "brave/bravebot";
+// Composed from nothing: not an argument, not a file, and not the environment. The asset and
+// its checksum are fetched from the same release, so an origin something outside this file
+// could supply would move both halves of the comparison at once, and a substituted binary
+// published beside its own true digest would pass the check and be written onto PATH.
+// install.sh states the same repository the same way.
+const REPO = "brave/bravebot";
 const MAX_REDIRECTS = 5;
 
-const repo = process.env.BRAVEBOT_REPO || DEFAULT_REPO;
-const pkg = require(path.join(__dirname, "../../package.json"));
-const tag = `v${pkg.version}`;
-
-// Lets the package install in CI or a sandbox with no network, and during local
-// development where the binary is built rather than downloaded.
-if (process.env[SKIP_ENV] === "1") {
-  console.log(`Skipping bravebot binary download because ${SKIP_ENV}=1`);
-  process.exit(0);
+function releaseBaseUrl(tag) {
+  return `https://github.com/${REPO}/releases/download/${tag}`;
 }
 
-const target = resolveTarget(process.platform, process.arch);
-if (!target) {
-  console.error(`Unsupported platform/arch: ${process.platform}/${process.arch}`);
-  process.exit(1);
+async function main() {
+  const pkg = require(path.join(__dirname, "../../package.json"));
+
+  // Lets the package install in CI or a sandbox with no network, and during local
+  // development where the binary is built rather than downloaded.
+  if (process.env[SKIP_ENV] === "1") {
+    console.log(`Skipping bravebot binary download because ${SKIP_ENV}=1`);
+    return;
+  }
+
+  const target = resolveTarget(process.platform, process.arch);
+  if (!target) {
+    console.error(`Unsupported platform/arch: ${process.platform}/${process.arch}`);
+    process.exit(1);
+  }
+
+  await install({
+    target,
+    tag: `v${pkg.version}`,
+    destination: path.join(__dirname, "..", "bin", target.binaryName),
+  });
 }
 
-const baseUrl = `https://github.com/${repo}/releases/download/${tag}`;
-const destination = path.join(__dirname, "..", "bin", target.binaryName);
-
-install().catch((error) => {
-  console.error(`Failed to install the bravebot binary: ${error.message}`);
-  process.exit(1);
-});
-
-async function install() {
+async function install({ target, tag, destination }) {
+  const baseUrl = releaseBaseUrl(tag);
   const expected = (await fetchToString(`${baseUrl}/${target.asset}.sha256`)).trim();
   if (!/^[0-9a-f]{64}$/i.test(expected)) {
     throw new Error(`Malformed checksum for ${target.asset}`);
@@ -138,8 +146,9 @@ function get(url, redirects, callback) {
         response.resume();
         // Ordinary redirect resolution, not an origin check: release downloads redirect to
         // objects.githubusercontent.com, so pinning the origin here would break installs.
-        // The chain starts at an https:// URL, every hop is TLS-verified, the redirect count
-        // is capped above, and the payload is checksum-verified before it is written.
+        // The chain starts at an https:// URL on the repository named above, which nothing
+        // outside this file chooses, every hop is TLS-verified, the redirect count is capped
+        // above, and the payload is checksum-verified before it is written.
         // nosemgrep: url-constructor-base
         get(new URL(headers.location, url).toString(), redirects + 1, callback);
         return;
@@ -153,3 +162,14 @@ function get(url, redirects, callback) {
     })
     .on("error", callback);
 }
+
+// Importable, so the origin can be checked without a network or an install: the download runs
+// only when node was pointed at this file.
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(`Failed to install the bravebot binary: ${error.message}`);
+    process.exit(1);
+  });
+}
+
+module.exports = { releaseBaseUrl };

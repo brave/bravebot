@@ -66,8 +66,10 @@ The check build leaves out backend credentials, even when your development build
 them, so the walkthrough can test the unconfigured app without using your account.
 Run `npm --prefix ui run build` afterwards to restore a configured development build.
 
-`make check-scripts` checks that every required gate runs, that UI and lockfile failures
-reach the caller, and that scanner failures cannot pass as empty scans. It runs
+`make check-scripts` checks that every required gate runs, that UI, installer and lockfile
+failures reach the caller, and that scanner failures cannot pass as empty scans. The installer
+half also holds `check-npm` to reaching the installer test before anything installs a dependency
+for it to depend on, and to failing rather than passing when that test is no longer there. It runs
 `check-all-selftest` and `check-reviewdog-selftest`, which can also run separately.
 To also exercise the installed reviewdog binary, set `REVIEWDOG_TEST_BINARY` to its
 absolute path when running the target. Without it, that integration test is reported as skipped.
@@ -148,7 +150,11 @@ check` runs it and so does CI, because the tagging path's own refusal fires on r
 is long after the pull request that moved one file and not the others. It carries a `--selftest`,
 which `make check-versions` runs first.
 
-`make check-npm` installs from the lockfile and lints it, as CI does. `make check-deps` decides
+`make check-npm` installs from the lockfile and lints it, as CI does, and runs the installer test
+under `npm/tests`, which holds the release origin the published package downloads from to this
+repository whatever the environment says. That test is the one thing in the tree that runs a
+clause of [../specs/releases.md](../specs/releases.md) as code, so run this target for a change to
+the published wrapper as well as to a lockfile. `make check-deps` decides
 `deny.toml`: an advisory against anything in the tree, a licence the binary cannot ship, a crate the
 build compiles at two versions without a recorded reason, and a dependency from anywhere but
 crates.io. CI runs this same target on every pull request, on main, and once a day, since an
