@@ -12,7 +12,7 @@ use crate::protocol::{
     RpcNotification, RpcRequest, RpcResponse, ToolDescriptor, ToolList, ToolResult, call_params,
     initialize_params,
 };
-use crate::{McpError, McpResult};
+use crate::{McpError, McpResult, malformed};
 use bravebot_core::event::Sink;
 use bravebot_core::label::Label;
 use bravebot_core::policy::Policy;
@@ -164,9 +164,13 @@ impl StdioServer {
             }
 
             if let Some(error) = response.error {
+                // The code and the method are structure, and they are the whole of what is
+                // reported: the sentence the server sent with them is prose it composed.
+                // `RpcError` does not carry it here to be dropped, because it is never
+                // deserialised.
                 return Err(McpError::Server {
                     code: error.code,
-                    message: error.message,
+                    method: method.to_string(),
                 });
             }
 
@@ -197,8 +201,8 @@ impl StdioServer {
     /// List the tools this server offers.
     pub fn list_tools(&mut self) -> McpResult<Vec<ToolDescriptor>> {
         let result = self.send_request("tools/list", None)?;
-        let list: ToolList = serde_json::from_value(result)
-            .map_err(|e| McpError::Transport(format!("malformed tool list: {e}")))?;
+        let list: ToolList =
+            serde_json::from_value(result).map_err(|e| malformed("tool list", &e))?;
         Ok(list.tools)
     }
 
@@ -222,8 +226,8 @@ impl StdioServer {
 
         let result = self.send_request("tools/call", Some(call_params(tool, arguments)))?;
 
-        let parsed: ToolResult = serde_json::from_value(result)
-            .map_err(|e| McpError::Transport(format!("malformed tool result: {e}")))?;
+        let parsed: ToolResult =
+            serde_json::from_value(result).map_err(|e| malformed("tool result", &e))?;
 
         let label = policy
             .observe(self.capability())

@@ -2076,11 +2076,67 @@ fn an_approved_write_is_recorded_as_endorsed() {
     assert!(granted, "the endorsement was not recorded in the trail");
 }
 
+/// An approval authorises one write, not writing. The person agreeing to one file is asked again
+/// about the next one, and refusing that leaves it unwritten while the file they did agree to
+/// stands.
+///
+/// Two different paths rather than one written twice. TRUST-4 in `docs/specs/trust-map.md` makes
+/// a second write to a path the first one vouched for silent, so writing one path twice could not
+/// tell an endorsement bound to a value from a standing permission to write anywhere.
+#[test]
+fn an_approved_write_does_not_authorise_a_write_somewhere_else() {
+    let scratch = Scratch::new("write-redirect");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2("write_file", r#"{"path":"approved.txt","contents":"kept"}"#),
+        tool_request_2(
+            "write_file",
+            r#"{"path":"elsewhere.txt","contents":"redirected"}"#,
+        ),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("write two files");
+    let mut confirmer = RecordingConfirmer::approving_only_the_first();
+    turn::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let asked: Vec<&str> = confirmer.seen.iter().map(|r| r.path.as_str()).collect();
+    assert_eq!(
+        asked,
+        vec!["approved.txt", "elsewhere.txt"],
+        "the second path was not put to the person on its own"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("approved.txt")).unwrap(),
+        "kept",
+        "the write the person agreed to did not land"
+    );
+    assert!(
+        !scratch.path.join("elsewhere.txt").exists(),
+        "an approval for one path authorised a write to another"
+    );
+}
+
 /// Records what the user was shown, so a test can assert on the review itself rather than
 /// only on the outcome.
 struct RecordingConfirmer {
     seen: Vec<bravebot_agent::WriteRequest>,
     decision: bravebot_agent::Decision,
+    /// The answer to every write after the first, where a test needs the two to differ.
+    /// `None` answers them all the same way.
+    later: Option<bravebot_agent::Decision>,
 }
 
 impl RecordingConfirmer {
@@ -2088,6 +2144,7 @@ impl RecordingConfirmer {
         Self {
             seen: Vec::new(),
             decision: bravebot_agent::Decision::Approve,
+            later: None,
         }
     }
 
@@ -2095,6 +2152,17 @@ impl RecordingConfirmer {
         Self {
             seen: Vec::new(),
             decision: bravebot_agent::Decision::Reject,
+            later: None,
+        }
+    }
+
+    /// Agrees to one write and refuses every write after it, so a test can tell an approval that
+    /// authorised the write in front of the person from one that authorised the rest of the turn.
+    fn approving_only_the_first() -> Self {
+        Self {
+            seen: Vec::new(),
+            decision: bravebot_agent::Decision::Approve,
+            later: Some(bravebot_agent::Decision::Reject),
         }
     }
 }
@@ -2113,8 +2181,12 @@ impl bravebot_agent::Confirmer for RecordingConfirmer {
         &mut self,
         request: &bravebot_agent::WriteRequest,
     ) -> bravebot_agent::Decision {
+        let answer = match self.later {
+            Some(later) if !self.seen.is_empty() => later,
+            _ => self.decision,
+        };
         self.seen.push(request.clone());
-        self.decision
+        answer
     }
 
     /// These tests are about writes. A run they did not set up is refused.
@@ -13261,6 +13333,69 @@ fn screening_an_unattended_run_keeps_back_content_a_check_objected_to() {
     assert!(
         last.contains("was kept back from you"),
         "the planner was not told the bytes are not coming: {last}"
+    );
+}
+
+/// The refusal this run takes has nobody to tell, so the trail is the whole of the record of what
+/// decided it, and a check whose call never came back has to leave the same kind of line there as
+/// one that objected. Otherwise a reader of the trail sees the check's setup and its egress and no
+/// verdict at all, and cannot tell a run that was warned from one whose backend was down.
+///
+/// The check's call is lost rather than answered, which is the route
+/// [`screening_an_unattended_run_keeps_back_content_a_check_objected_to`] does not take: that one
+/// records its word inside the read of a reply, and this one has no reply to read.
+#[test]
+fn the_trail_records_the_verdict_of_a_check_that_could_not_be_made() {
+    let scratch = Scratch::new("vet-content-bypass-screened-lost");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, _received) = serve_sequence_losing_every_check(vec![
+        tool_request("run", r#"{"command":"cat where.txt"}"#),
+        tool_request(
+            "vet_content",
+            r#"{"ref":"ref:1","expects":"the path the file records"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut shown = ShownAfterAVet::new(true);
+    let asked = std::sync::Arc::clone(&shown.shown);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut shown, bravebot_agent::PermissionMode::Bypass, true);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out")
+            .with_auto_vetting(true)
+            .with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    assert!(
+        asked.lock().unwrap().is_empty(),
+        "a prompt was put to somebody, so this is not the refusal with nobody to tell"
+    );
+    assert!(
+        sink.events().iter().any(|event| matches!(
+            event,
+            Event::GatePassed { gate: "vetting", detail }
+                if detail.contains("the check said inconclusive: the check could not be made")
+        )),
+        "the refusal was taken on a verdict the trail does not hold: {:#?}",
+        sink.events()
     );
 }
 

@@ -405,6 +405,11 @@ ITEM = re.compile(
     r"|macro_rules!|#\[|\}"
 )
 
+# An item that opens a block a definition inside it belongs to: the `impl` that makes a `fn` a
+# method of a type, and the `mod` that makes one a function of a module. `pub` and `pub(crate)`
+# come in front of a `mod` and never in front of an `impl`.
+BLOCK = re.compile(r"(?:pub(?:\([^)]*\))?\s+)?(?:impl|mod)\b")
+
 
 def strip_comments(lines):
     """The same lines with their comments blanked out, since a symbol named in prose is not a
@@ -474,38 +479,49 @@ def definition_of(bare):
     return re.compile(rf"\bfn\s+{re.escape(bare)}\s*(?:<[^<>]*(?:<[^<>]*>[^<>]*)*>)?\s*\(")
 
 
-def associated_definitions(bare, qualifier, sources):
-    """Where `qualifier` defines `bare` without a receiver, or `None` when it takes one.
+def its_own_file(path, qualifier):
+    """Whether `path` is the file the module `qualifier` is.
 
-    Which of the two it is decides how a use can be written, and so what counting one means. A
-    method is `receiver.name(` at nearly every call site, so those have to be counted. An
-    associated function cannot be written that way at all, and counting the form anyway counts
-    every `x.name(` on every other type in the tree. The `fn name` form fails the same way round
-    the other side: a crate holding a dozen constructors says `fn new` a dozen times, one of them
-    is the guarded one, and a count over all of them moves when an unrelated type gains one.
+    A free function at the margin of `home.rs` is `home::write_file` whether or not any line of
+    that file spells the module's name, which is the one thing a file cannot be asked about by
+    searching its text."""
+    return path.stem == qualifier or (path.stem == "mod" and path.parent.name == qualifier)
 
-    Read off the definition rather than declared in the front matter, so a `guards` entry cannot
-    assert that a method is an associated function and quietly drop the receiver form from what is
-    counted.
+
+def owned_definitions(bare, qualifier, sources):
+    """The definitions of `bare` that `qualifier` owns, as `(path, number, receiver, in_impl)`,
+    up to the first one in an `impl` that takes a receiver.
+
+    A qualifier owns a definition in one of two ways. `Type::name` is defined in an `impl` naming
+    the type. `module::name` is a free function, at the margin of a file of that name or inside a
+    `mod` block of it, which is where a module-qualified guard like `home::write_file` lives.
+
+    Owning it is what makes a qualified guard present at all, and the bare name alone is not:
+    where `dispatched` is a method of the watch list and of nothing else, a guard on
+    `Running::dispatched` names a symbol no type defines and has to come back empty. Reading the
+    bare name instead lets a renamed method collect another type's call sites, and reports a
+    guard nothing is left under as heavily used, which is the one answer this check must never
+    give.
 
     Which block a definition sits in is read from the indentation: it belongs to the nearest
-    `impl` above it that is indented less far, and an item at that indentation or further out has
-    closed that block. An `impl Labelled`, a later `fn` of the same name at the margin, and a
-    `mod tests` with a `Latch::new` of its own are three blocks, and taking the last `impl` seen
-    would read them as one.
+    `impl` or `mod` above it that is indented less far, and an item at that indentation or further
+    out has closed that block. An `impl Labelled`, a later `fn` of the same name at the margin,
+    and a `mod tests` with a `Latch::new` of its own are three blocks, and taking the last one
+    seen would read them as one.
 
-    `None` where no definition is found inside an `impl` naming the qualifier, which is the case a
-    module-qualified free function like `home::write_file` lands in. Counting too many forms fails
-    loudly on the next unrelated function of that name, and counting too few reports a new use of
-    an escape hatch as no use at all."""
+    Whether a definition takes a receiver is read off the definition rather than declared in the
+    front matter, so a `guards` entry cannot assert that a method is an associated function and
+    quietly drop the receiver form from what is counted."""
     definition = definition_of(bare)
-    owned = re.compile(rf"\b{re.escape(qualifier)}\b")
-    found = set()
+    names_it = re.compile(rf"\b{re.escape(qualifier)}\b")
+    module = re.compile(rf"\bmod\s+{re.escape(qualifier)}\b")
+    found = []
     for path, lines in sources.items():
         code = strip_comments(lines)
-        # Nothing here is the qualifier's definition unless the impl naming it is in this file,
-        # and most files in the tree never mention it.
-        if not any(qualifier in line for line in code):
+        # A free function is owned by the file it is in. Anything else needs the block naming
+        # the qualifier to be here, and most files in the tree never mention it.
+        its_file = its_own_file(path, qualifier)
+        if not its_file and not any(qualifier in line for line in code):
             continue
         blocks = []
         for number, raw in enumerate(code, start=1):
@@ -514,17 +530,55 @@ def associated_definitions(bare, qualifier, sources):
                 indent = len(raw) - len(body)
                 while blocks and blocks[-1][0] >= indent:
                     blocks.pop()
-                if body.startswith("impl"):
+                if BLOCK.match(body):
                     blocks.append((indent, body))
             hit = definition.search(raw)
-            if not hit or not blocks or not owned.search(blocks[-1][1]):
+            if not hit:
                 continue
+            block = blocks[-1][1] if blocks else None
+            if block is None:
+                in_impl = False
+                if not its_file:
+                    continue
+            elif block.startswith("impl"):
+                in_impl = True
+                if not names_it.search(block):
+                    continue
+            else:
+                in_impl = False
+                if not module.search(block):
+                    continue
             # rustfmt puts the receiver on the next line wherever the signature does not fit.
             tail = raw[hit.end() :] + " " + (code[number] if number < len(code) else "")
-            if RECEIVER.match(tail):
-                return None
-            found.add((path, number))
-    return found or None
+            receiver = bool(RECEIVER.match(tail))
+            found.append((path, number, receiver, in_impl))
+            if receiver and in_impl:
+                # Both questions a caller asks are settled: the qualifier owns the name, and it
+                # is written with a receiver, so no definition after this one changes the answer.
+                # Most guards here are methods, and stopping is the difference between reading
+                # one crate and reading the tree once per guarded symbol.
+                return found
+    return found
+
+
+def associated_sites(owned):
+    """The definitions to count for `owned`, or `None` where the name is written with a receiver.
+
+    Which of the two it is decides how a use can be written, and so what counting one means. A
+    method is `receiver.name(` at nearly every call site, so those have to be counted. An
+    associated function cannot be written that way at all, and counting the form anyway counts
+    every `x.name(` on every other type in the tree. The `fn name` form fails the same way round
+    the other side: a crate holding a dozen constructors says `fn new` a dozen times, one of them
+    is the guarded one, and a count over all of them moves when an unrelated type gains one.
+
+    `None` for a free function too, which no `impl` carries. A module path names no type, so
+    nothing about the name says whether a use is written on a receiver, and a free function is
+    counted the loose way a method is: `.name(` on any receiver joins its count, which is why
+    `goal::read` reports every read in the tree."""
+    inside = [(path, number, receiver) for path, number, receiver, in_impl in owned if in_impl]
+    if any(receiver for _, _, receiver in inside):
+        return None
+    return {(path, number) for path, number, _ in inside} or None
 
 
 def guard_sites(symbol, sources):
@@ -540,21 +594,36 @@ def guard_sites(symbol, sources):
     matching `fn vouching_for_one_command` would report a renamed symbol as present, which is the
     one answer this check must never give, and `Labelled::new` matching `Labelled::new_unchecked`
     would blame a use of the one symbol that was not used. For a qualified guard the file has to
-    name the qualifier too: an unrelated `fn present` in another crate is not `Policy::present`,
-    and counting it would put a file in the allowlist that never touches a label. For an
-    associated function that is not enough, because a file using `Labelled` says `fn new` for
-    reasons of its own, so there the definition counts at the one line that defines it."""
+    name the qualifier too, or be the file the module is: an unrelated `fn present` in another
+    crate is not `Policy::present`, and counting it would put a file in the allowlist that never
+    touches a label. For an associated function that is not enough, because a file using
+    `Labelled` says `fn new` for reasons of its own, so there the definition counts at the one
+    line that defines it.
+
+    A qualified guard whose qualifier defines the name nowhere has no uses at all, whoever else
+    in the tree spells a method that way. Otherwise a renamed method reads as present and takes
+    another type's call sites with it, which is both the one answer this check must never give
+    and the list a spec reviewer is handed as the symbol's uses."""
     parts = symbol.split("::")
     bare = parts[-1]
     qualifier = parts[0] if len(parts) > 1 else None
-    associated = associated_definitions(bare, qualifier, sources) if qualifier else None
+    associated = None
+    if qualifier:
+        owned = owned_definitions(bare, qualifier, sources)
+        if not owned:
+            return []
+        associated = associated_sites(owned)
     named = re.compile(rf"\b{re.escape(symbol)}\b")
     definition = definition_of(bare)
     call = f".{bare}("
     hits = []
     for path, lines in sources.items():
         code = strip_comments(lines)
-        owns = qualifier is None or any(qualifier in line for line in code)
+        owns = (
+            qualifier is None
+            or its_own_file(path, qualifier)
+            or any(qualifier in line for line in code)
+        )
         for number, raw in enumerate(code, start=1):
             count = len(named.findall(raw)) if symbol in raw else 0
             if associated is not None:
@@ -587,11 +656,20 @@ def check_guards(spec, sources):
     for symbol in spec.guards:
         sites = guard_sites(symbol, sources)
         if not sites:
+            parts = symbol.split("::")
+            # A qualified name reaching here is one its qualifier does not define, which another
+            # type spelling the bare name the same way does not answer. Saying which half is
+            # missing is the difference between looking for a rename and looking for a symbol.
+            said = (
+                f"`guards` names `{symbol}`, and no `{parts[0]}` in crates/ defines `{parts[-1]}`"
+                if len(parts) > 1
+                else f"`guards` names `{symbol}`, which appears nowhere in crates/"
+            )
             yield finding(
                 spec.rel,
                 ERROR,
                 "guard-missing",
-                f"`guards` names `{symbol}`, which appears nowhere in crates/",
+                said,
                 fix="a guarded symbol that was renamed stops being review-required silently",
             )
             continue
@@ -782,15 +860,28 @@ def changed_files(base):
                 yield line.strip()
 
 
+def spec_names(spec):
+    """Every form that names one spec on the command line: its id, its file name, and its path
+    both under `docs/specs` and from the repository root, each of the three with `.md` optional.
+
+    The path is the form the tree hands a person: `grep -rl SEARCH-9 docs/specs` prints
+    `docs/specs/tools/search.md`, and the table in `AGENTS.md` links the same. Matching is exact
+    against this set rather than a suffix test, so a directory typed in part names no spec instead
+    of quietly resolving to one."""
+    rel = spec.path.as_posix()
+    prefix = f"{SPEC_DIR.as_posix()}/"
+    forms = {spec.id, spec.path.name, rel}
+    if rel.startswith(prefix):
+        forms.add(rel[len(prefix) :])
+    forms |= {form.removesuffix(".md") for form in forms}
+    return {form.lower() for form in forms if form}
+
+
 def select(specs, selectors, changed_base):
     if selectors:
-        wanted = {s.lower().removesuffix(".md") for s in selectors}
-        chosen = [
-            spec
-            for spec in specs
-            if spec.path.stem.lower() in wanted or spec.id.lower() in wanted or spec.name.lower() in wanted
-        ]
-        missing = wanted - {spec.path.stem.lower() for spec in chosen} - {spec.id.lower() for spec in chosen}
+        wanted = {s.lower() for s in selectors}
+        chosen = [spec for spec in specs if spec_names(spec) & wanted]
+        missing = wanted - {name for spec in chosen for name in spec_names(spec)}
         return chosen, sorted(missing)
     if changed_base is not None:
         touched = set(changed_files(changed_base))
@@ -1009,7 +1100,9 @@ def render(findings, chosen, strict):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("specs", nargs="*", help="spec file names, stems, or ids; default all")
+    parser.add_argument(
+        "specs", nargs="*", help="spec paths, file names, stems, or ids; default all"
+    )
     parser.add_argument("--mechanical-only", action="store_true", help="skip the review pass")
     parser.add_argument("--changed", nargs="?", const="main", default=None, metavar="BASE")
     parser.add_argument("--strict", action="store_true", help="warnings fail too")

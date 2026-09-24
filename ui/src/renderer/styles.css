@@ -1085,6 +1085,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 .decided.approve { color: var(--added); }
 .decided.reject { color: var(--removed); }
+.decided.unanswered { color: var(--ink-dim); }
 
 .working {
   display: flex;
@@ -2331,6 +2332,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 
 .interrupted-request { padding: 12px 16px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink-dim); }
 .interrupted-request pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
+/* The card it was is drawn inside the fold, marking and all, so it needs room of its own. */
+.interrupted-request details { margin-top: 8px; }
+.interrupted-request details > .confirm, .interrupted-request details > .quarantine { margin-top: 8px; }
 
 .bot-open .bot-open-button { background: var(--bubble-user); color: var(--bubble-user-ink); }
 .bot-open .bot-where { color: var(--bubble-user-ink); opacity: 1; }

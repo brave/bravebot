@@ -749,7 +749,9 @@ function Questions({
 
   const blank = collected().filter((answer) => !answer.typed && !answer.chosen).length
 
-  if (answers) {
+  // Answered, or ended before it could be: either way the questions are a record rather than a
+  // form, so they are drawn as text with no choices to press.
+  if (answers || request.interrupted) {
     return (
       <div className="confirm ask">
         <div className="confirm-head">
@@ -765,9 +767,10 @@ function Questions({
           // both stable and unique where the content is only stable.
           <div className="asked-answer" key={at}>
             <div className="question">{prompt.question}</div>
-            <div className="given">{describe(prompt, answers[at])}</div>
+            {answers && <div className="given">{describe(prompt, answers[at])}</div>}
           </div>
         ))}
+        {!answers && <Unanswered />}
       </div>
     )
   }
@@ -885,6 +888,17 @@ function VettingBanner(): React.JSX.Element {
   )
 }
 
+/**
+ * Where the controls were on a question the turn ended before anybody answered.
+ *
+ * The same slot as the `decided` line, because it is the same kind of statement: what became of
+ * this question. There is nothing to press because the channel that would have carried the
+ * answer is gone, and a button that silently did nothing would be worse than none.
+ */
+function Unanswered(): React.JSX.Element {
+  return <div className="decided unanswered">Nobody answered this</div>
+}
+
 /** What somebody answered, in words, for the record left in the transcript. */
 function describe(prompt: AskPrompt, answer: AskAnswer | undefined): string {
   if (!answer) return 'Declined'
@@ -894,6 +908,17 @@ function describe(prompt: AskPrompt, answer: AskAnswer | undefined): string {
   return chosen
     .map((index) => prompt.rows.find((row) => row.index === index)?.label ?? `#${index}`)
     .join(', ')
+}
+
+type RowProps = {
+  entry: t.Entry
+  onRecover?: () => void
+  onChooseModel?: () => void
+  onDecide: Answer
+  onAnswer: AnswerQuestions
+  onFork: (id: string) => void
+  /** Whether a fork can be taken at all right now: false while a turn is running. */
+  forkable: boolean
 }
 
 /**
@@ -911,17 +936,53 @@ export function Row({
   onAnswer,
   onFork,
   forkable,
-}: {
-  entry: t.Entry
-  onRecover?: () => void
-  onChooseModel?: () => void
-  onDecide: Answer
-  onAnswer: AnswerQuestions
-  onFork: (id: string) => void
-  /** Whether a fork can be taken at all right now — false while a turn is running. */
-  forkable: boolean
-}): React.JSX.Element {
-  if (entry.interrupted) return <div className="interrupted-request"><strong>Request cancelled when the turn ended</strong><details><summary>Request details</summary><pre>{t.searchableText(entry)}</pre></details></div>
+}: RowProps): React.JSX.Element {
+  const card = (
+    <Card
+      entry={entry}
+      onRecover={onRecover}
+      onChooseModel={onChooseModel}
+      onDecide={onDecide}
+      onAnswer={onAnswer}
+      onFork={onFork}
+      forkable={forkable}
+    />
+  )
+  if (!entry.interrupted) return card
+  // A question the turn ended before anybody answered. It keeps the card it was, with its head,
+  // its label, its reach and its warnings, inside a fold saying what became of it. Summarising
+  // the entry into a bare `<pre>` instead is the cheap thing to draw and releases the bytes with
+  // none of the marking LAYER-5 owes them: no container of their own, no origin, no label, no
+  // reach line, and for an untrusted write neither the border nor the sentence saying nobody
+  // vouched for it. The turn ending declassifies nothing.
+  return (
+    <div className="interrupted-request">
+      <strong>Request cancelled when the turn ended</strong>
+      <details>
+        <summary>Request details</summary>
+        {card}
+      </details>
+    </div>
+  )
+}
+
+/**
+ * The card itself, which is the same card whether or not the turn it belongs to ended.
+ *
+ * What ending it changes is only whether the question can still be answered: `answerable` is
+ * false for an interrupted entry, and every arm that would draw controls draws
+ * `<Unanswered />` instead. Nothing about how the content is marked depends on it.
+ */
+function Card({
+  entry,
+  onRecover,
+  onChooseModel,
+  onDecide,
+  onAnswer,
+  onFork,
+  forkable,
+}: RowProps): React.JSX.Element {
+  const answerable = entry.interrupted !== true
   switch (entry.kind) {
     case 'turn-start': return <></>
     case 'user':
@@ -1067,7 +1128,9 @@ export function Row({
           </div>}
           <Diff changes={request.changes} />
 
-          {decision === null ? (
+          {!answerable ? (
+            <Unanswered />
+          ) : decision === null ? (
             <div className="confirm-actions">
               <button className="reject" onClick={() => onDecide('confirm', request.request, false)}>
                 Don’t write
@@ -1113,7 +1176,7 @@ export function Row({
           </ol>
 
           <p className="permission-scope">Run this command in the project folder shown above. “Run once” approves only this execution.</p>
-          {decision === null && <p className="permission-scope"><strong>Remembered approval:</strong> {request.vouches.map((v) => v.display).join('; ')}. Covers these exact commands and trusts their output for this conversation, including after reopening it. Revoke through Permissions.</p>}
+          {answerable && decision === null && <p className="permission-scope"><strong>Remembered approval:</strong> {request.vouches.map((v) => v.display).join('; ')}. Covers these exact commands and trusts their output for this conversation, including after reopening it. Revoke through Permissions.</p>}
           {!!request.ambient?.length && (
             <div className="warn">
               This spends access that is yours elsewhere. Nobody is asked for it at the moment it
@@ -1134,7 +1197,9 @@ export function Row({
             </p>
           )}
 
-          {decision === null ? (
+          {!answerable ? (
+            <Unanswered />
+          ) : decision === null ? (
             <div className="confirm-actions">
               <button className="reject" onClick={() => onDecide('run', request.request, false)}>
                 Don’t run
@@ -1189,7 +1254,9 @@ export function Row({
           <VettingNotice vetting={request.vetting} />
           <pre className="preview">{request.output}</pre>
 
-          {decision === null ? (
+          {!answerable ? (
+            <Unanswered />
+          ) : decision === null ? (
             <div className="confirm-actions">
               <button
                 className="reject"
@@ -1223,7 +1290,7 @@ export function Row({
         <VettingNotice vetting={request.vetting} />
         <p className="warn">Approval lets the planner read only this content. It does not trust this file for future reads.</p>
         <pre className="preview">{request.content}</pre>
-        {decision === null ? <div className="confirm-actions">
+        {!answerable ? <Unanswered /> : decision === null ? <div className="confirm-actions">
           <button className="reject" onClick={() => onDecide('vet', request.request, false)}>Keep it out</button>
           <button className="approve" onClick={() => onDecide('vet', request.request, true)}>Let the planner read once</button>
         </div> : <div className={`decided ${decision}`}>{decision === 'approve' ? 'You allowed this content once' : 'You kept this content out'}</div>}
@@ -1254,7 +1321,9 @@ export function Row({
             </div>
           )}
 
-          {decision === null ? (
+          {!answerable ? (
+            <Unanswered />
+          ) : decision === null ? (
             <div className="confirm-actions">
               <button
                 className="reject"

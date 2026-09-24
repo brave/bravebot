@@ -105,21 +105,40 @@ server-sent events is unwrapped with the last payload winning.
 `verified-by: bravebot_mcp::http::a_server_records_its_configuration`
 
 <a id="MCP-8"></a>
-### MCP-8: what a failing tool says about itself is shown to a person and to nobody else
+### MCP-8: a failure's own text is written here, and what a server wrote is shown to a person or not at all
 
-A failure carries the server's account of why the call failed as labelled content, and the
-failure's own text names the tool and nothing the server sent. Reading that account takes the
-release that puts content on a screen, so it reaches the person watching and never a message the
-planner is sent.
+The text of every failure a server can cause is structure this process chose or the protocol
+numbered: the tool a call was made to, the method that was put, and the code a rejection carries.
+
+A tool that ran and reported failure also carries the server's account of why, as labelled
+content, and reading that account takes the release that puts content on a screen, so it reaches
+the person watching and never a message the planner is sent. No other failure holds what a server
+wrote at all. The `message` beside a JSON-RPC error is not deserialised, so there is no field
+holding it. A reply this client will not parse is reported as what was being read and which of the
+parser's four kinds of failure it was, not as the parser's own sentence, which quotes the value it
+rejected.
 
 **Why.** An error's text is the part of a failure a caller formats into whatever it is building,
-including a message the planner is sent, which is the context a hostile tool result exists to
-reach. Discarding the account instead would leave a tool failure the only failure here that says
-nothing about what went wrong, and what went wrong is usually a person's own server.
+including a message the planner is sent, which is the context a hostile server exists to reach. A
+server composes `error.message` freely, with nothing in the protocol constraining it, and a
+parser's sentence quotes bytes the server chose, so both are a server's prose wearing this
+process's words. A tool's account is kept, under a label, because a tool failure is the one whose
+explanation is usually a person's own server and there is a person on the screen to read it.
+
+**A known cost.** A server that fails for a reason only its own sentence gives reports a code and
+a method and nothing else, and a reply this client rejects reports which kind of malformed it was
+and not where. Carrying either under a label instead would put it behind the release a tool
+result's account is behind, where nobody is watching a handshake or a tool listing.
 
 `verified-by: bravebot_mcp::lib::a_failing_tools_detail_stays_out_of_the_error_message`
+`verified-by: bravebot_mcp::lib::a_server_failure_reports_the_method_and_the_code`
+`verified-by: bravebot_mcp::lib::a_rejected_reply_is_reported_as_a_kind_and_not_the_parsers_sentence`
+`verified-by: bravebot_mcp::protocol::an_error_response_parses`
 `verified-by: bravebot_mcp::stdio::a_tool_level_error_is_reported_as_a_failure`
+`verified-by: bravebot_mcp::stdio::a_server_error_is_reported`
 `verified-by: bravebot_mcp::http::a_tool_level_error_is_reported_as_a_failure`
+`verified-by: bravebot_mcp::http::a_server_failure_names_the_method_and_not_the_servers_words`
+`verified-by: bravebot_mcp::http::a_rejected_reply_names_what_was_read_and_not_the_servers_words`
 
 <a id="MCP-9"></a>
 ### MCP-9: a stdio server is started with no environment
