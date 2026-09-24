@@ -16,6 +16,7 @@ import { Markdown } from './Markdown'
 import { PopMenu, type PopItem } from './PopMenu'
 import { BotAvatar, type Doing } from './BotAvatar'
 import type { Bot } from '../../shared/bots'
+import { projectLabel } from '../../shared/recents'
 import { conversationPreferences, setConversation, setExperience, useExperience } from '../experience'
 import { ErrorCard } from './ErrorCard'
 import { FilePreview } from './FilePreview'
@@ -399,7 +400,7 @@ export function Transcript({
             <p>Work with an agent in your project. Track changes and review approval requests as you work.</p>
             <button className="primary" onClick={() => onNew()}>Open project</button>
             {!!recents.length && <div className="welcome-recents"><h2>Recent projects</h2>{recents.slice(0, 5).map((directory) =>
-              <button key={directory} onClick={() => onNew(directory)}><strong>{directory.split('/').pop()}</strong><span>{directory}</span></button>)}</div>}
+              <button key={directory} onClick={() => onNew(directory)}><strong>{projectLabel(directory)}</strong><span>{directory}</span></button>)}</div>}
             <p className="welcome-hint">Choose a conversation to resume work, or create a bot with a purpose and persistent memory.</p>
           </div>
         </div>

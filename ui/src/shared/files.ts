@@ -66,16 +66,27 @@ export const ROWS_MAX = 2000
  *
  * Relative, with no empty, `.` or `..` segment, and no NUL. This is the cheap half of the
  * promise and not the whole of it: it is lexical, and a symlink is not. The main process resolves
- * the pair and checks with `realpath` that what came out is still inside the root — see
+ * the pair and checks with `realpath` that what came out is still inside the root, see
  * `main/files.ts`. Both halves are needed, and this one runs first because a request it refuses
  * never becomes a syscall.
+ *
+ * A backslash separates as a slash does, because that is what `path.relative` hands back on
+ * Windows, and because splitting on the slash alone makes `a\..\..\x` one segment this would
+ * accept and Windows would then read as two climbs out of the project. Refusing the backslash
+ * outright would have refused that path too, and refused a legitimate Windows subpath with it.
+ * On a POSIX host it costs nothing either way: `join` there treats a backslash as an ordinary
+ * character, so a file actually named `b\c` still resolves to itself.
+ *
+ * The name forms that mislead only on Windows, an alternate data stream and a device name, are
+ * not here. They are in `main/files.ts`, the only side of this that knows which platform it is
+ * running on.
  */
 export function isSubpath(value: unknown): value is string {
   if (typeof value !== 'string' || value.includes('\0')) return false
   if (value === '') return true
-  if (value.startsWith('/')) return false
+  if (/^[\\/]/.test(value)) return false
   return value
-    .split('/')
+    .split(/[\\/]/)
     .every((segment) => segment.length > 0 && segment !== '.' && segment !== '..')
 }
 

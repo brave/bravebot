@@ -26,6 +26,7 @@ import type { ExportFormat } from '../shared/export'
 import { useCommandRouter, usePublishedState } from './commands'
 import { type Fork, forkOf, forkedSessions } from '../shared/forks'
 import { type Bot } from '../shared/bots'
+import { projectLabel } from '../shared/recents'
 import type { Doing } from './components/BotAvatar'
 import * as t from './transcript'
 import { receiveTurn, type Turns, type TurnDisclosure } from './turn-details'
@@ -554,7 +555,7 @@ export function App(): React.JSX.Element {
         summary: {
           id: null,
           title: 'New session',
-          project: chosen.split('/').pop() ?? chosen,
+          project: projectLabel(chosen),
           branch: made.branch,
           directory: chosen,
         },
@@ -762,7 +763,7 @@ export function App(): React.JSX.Element {
     try {
       const [directory, id]: unknown[] = JSON.parse(key)
       if (typeof directory !== 'string' || typeof id !== 'string' || !id.startsWith('draft:') || ownSessions.some((session) => session.directory === directory && session.id === id)) continue
-      ownSessions.unshift({ id, directory, title: `Draft · ${preference.draft.slice(0, 60)}`, project: directory.split('/').pop() ?? directory, branch: null, updated: Date.now() / 1000, bytes: 0 })
+      ownSessions.unshift({ id, directory, title: `Draft · ${preference.draft.slice(0, 60)}`, project: projectLabel(directory), branch: null, updated: Date.now() / 1000, bytes: 0 })
     } catch { /* Ignore malformed preference keys. */ }
   }
   const sessionInfo: Record<string, { bot?: string; state?: string }> = {}
@@ -1068,7 +1069,7 @@ export function App(): React.JSX.Element {
             // has no record yet to read it off. Named after its parent here for the same
             // reason: this is where it came from, and the first turn will settle it.
             title: live.summary.title,
-            project: forked.directory.split('/').pop() ?? forked.directory,
+            project: projectLabel(forked.directory),
             branch: forked.branch,
             directory: forked.directory,
           },
