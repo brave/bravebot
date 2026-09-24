@@ -32,6 +32,7 @@ interface Live {
   todos: TodoRow[]
   quarantine: Shown[]
   phase: Phase | null
+  checking: number | null
   contextTokens?: number
   archived?: number
   tokens: number
@@ -471,7 +472,7 @@ export function Transcript({
             ) : (
               <span className="spinner" />
             )}
-            {live.phase ? phaseWord(live.phase) : 'Working'}
+            {workingWord(live.phase, live.checking)}
             {live.tokens > 0 && <span className="count"> · {live.tokens} tokens written</span>}
             {Object.values(live.turns).filter((turn) => turn.status === 'running').slice(-1).map((turn) =>
               <button className="turn-audit-link" key={turn.turn} aria-controls="turn-audit-inspector" onClick={(event) => onAudit(turn.turn, event.currentTarget)}>Audit</button>)}
@@ -489,7 +490,7 @@ export function Transcript({
           const element = scroller.current?.querySelector<HTMLElement>(`[data-entry-id="${pending.id}"]`)
           jump(element ?? bottom.current)
         }}>{pending.kind === 'ask' ? 'Your answer is needed' : 'Approval needed'} · {waitingOn(pending.kind)} — Review ↑</button> :
-          live.running ? <span>{live.phase ? phaseWord(live.phase) : 'Working'} · You can draft your next message</span> :
+          live.running ? <span>{workingWord(live.phase, live.checking)} · You can draft your next message</span> :
           <span>{live.entries.at(-1)?.kind === 'error' ? 'Needs attention' : live.entries.length ? 'Ready for your next message' : 'Ready to begin'}</span>}
         {unseen && <button onClick={latest}>New activity ↓</button>}
       </div>
@@ -623,6 +624,27 @@ function phaseWord(phase: Phase): string {
       : phase === 'compacting'
         ? 'Compacting'
         : 'Reconnecting'
+}
+
+/**
+ * What a finished call spent at a model of its own, written as the terminal writes it.
+ *
+ * Empty for a call that asked none and for one the agent rounded to `0`: `0s at the model` answers
+ * nothing.
+ */
+function waitedWord(waited: number | null): string {
+  if (!waited) return ''
+  const elapsed = waited < 60 ? `${waited}s` : `${Math.floor(waited / 60)}m ${String(waited % 60).padStart(2, '0')}s`
+  return ` · ${elapsed} at the model`
+}
+
+/**
+ * What the session is waiting on. A running check wins over the phase, which a check does not
+ * change, and one function serves both places the word is drawn so they cannot disagree.
+ */
+export function workingWord(phase: Phase | null, checking: number | null): string {
+  if (checking !== null) return `Checking ${checking} ${checking === 1 ? 'line' : 'lines'}`
+  return phase ? phaseWord(phase) : 'Working'
 }
 
 /**
@@ -1059,7 +1081,10 @@ function Card({
           {running ? (
             <span className="ellipsis">…</span>
           ) : (
-            <span className="note">{activity.note}</span>
+            <span className="note">
+              {activity.note}
+              {waitedWord(activity.waitedSeconds)}
+            </span>
           )}
           {landing && isConfined(landing) && (
             <span className="confined" title={landingHint(landing)}>

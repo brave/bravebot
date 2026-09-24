@@ -13,6 +13,9 @@ governs:
   - crates/ui-bridge/src/settings.rs
   - crates/ui-bridge/src/wire.rs
   - crates/ui-bridge/src/turn.rs
+  - ui/src/renderer/App.tsx
+  - ui/src/renderer/components/Transcript.tsx
+  - ui/scripts/ux-state.test.mjs
 guards:
   - symbol: VettingSpec::new
   - symbol: Policy::before_vetting
@@ -497,6 +500,12 @@ included. A display left saying a check is running because the backend was down 
 pair exists to remove, and it is exactly the state a surface that only ever hears the beginning
 ends in.
 
+The interactive terminal and the desktop window both say it, and each says it ahead of the phase
+rather than as one: the round's phase does not change while a check runs, so it is the one word on
+the screen that is not what the session is waiting on, and it is what the surface goes back to
+saying once the check is over. A surface that is handed the pair and draws neither half leaves the
+finished-looking row that made the pair necessary.
+
 **Why.** A whole model call runs inside a tool call, and the verb already on the screen names the
 thing that has not happened yet: somebody watching `Read output` cannot tell a check that is working
 from a backend that is hanging. Where auto-vetting is on and the verdict is safe, no prompt is drawn
@@ -512,6 +521,8 @@ ask them anything: progress announces, and a listener that has gone away is not 
 `verified-by: bravebot_tui::state::a_running_check_names_the_indicator_ahead_of_the_phase`
 `verified-by: bravebot_tui::state::a_check_that_is_over_gives_the_word_back_to_the_phase`
 `verified-by: bravebot_tui::state::a_finished_turn_leaves_no_check_running`
+`verified-by: bravebot_ui_bridge::reporting::a_check_crosses_as_a_pair_carrying_only_its_size`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so it is pinned instead by ui/scripts/ux-state.test.mjs, which folds the pair through the window's own reducer and reads the word both places draw it from, asserting that a running check takes the word from every phase, that a count of one reads as one line and a count of zero is still a check, that the word goes back to the phase once the check is over, and that a check whose end was never heard does not outlive a consolidating or failed turn; make check-ui and the Front end CI job both run it, and the governs list above holds the file to existing)`
 
 ## Known costs
 

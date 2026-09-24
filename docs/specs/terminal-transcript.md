@@ -10,6 +10,8 @@ governs:
   - crates/tui/src/theme.rs
   - crates/tui/src/theme_prompt.rs
   - crates/tui/src/model_prompt.rs
+  - ui/src/renderer/components/Transcript.tsx
+  - ui/scripts/ux-state.test.mjs
 documented-by: docs/website/docs/using/transcript.md
 ---
 
@@ -563,7 +565,16 @@ question somebody watching a call take eight seconds is asking.
 
 A wait too short to state is left off rather than drawn as zero.
 
+The interactive terminal, a headless run's progress and the desktop window all say it. None of them
+can measure this for itself: a front end sees a call begin and end and has no way to tell which
+part of that was a model, so a surface the figure does not reach draws a call that was slow because
+a model was slow exactly as it draws a slow program.
+
 `verified-by: bravebot_tui::render::a_call_that_waited_on_a_model_says_how_long`
 `verified-by: bravebot_tui::render::a_call_that_asked_no_model_says_nothing_about_one`
 `verified-by: bravebot_tui::render::a_wait_under_a_second_is_left_off`
+`verified-by: bravebot_cli::progress::a_finished_call_prints_what_it_spent_at_a_model`
+`verified-by: bravebot_cli::progress::a_finished_call_that_asked_no_model_prints_nothing_about_one`
+`verified-by: bravebot_ui_bridge::reporting::what_a_call_spent_at_a_model_reaches_a_front_end`
 `verified-by: bravebot_agent::turn::what_a_check_cost_reaches_the_row_the_call_drew`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so it is pinned instead by ui/scripts/ux-state.test.mjs, which renders the real transcript row through react-dom and asserts that the figure reaches the markup, written past a minute as the terminal writes it, that a call which asked no model draws none, and that a wait under a second is left off; make check-ui and the Front end CI job both run it, and the governs list above holds the file to existing)`
