@@ -2442,8 +2442,14 @@ impl Session {
 
     /// Record where the last call's result went.
     pub fn landed(&mut self, landing: Landing) {
-        if let Some(entry) = self.working_lines().last_mut()
-            && entry.speaker == Speaker::Tool
+        if let Some(entry) = self
+            .working_lines()
+            .iter_mut()
+            .rev()
+            .take_while(|entry| {
+                entry.speaker == Speaker::Delegate || entry.speaker == Speaker::Tool
+            })
+            .find(|entry| entry.speaker == Speaker::Tool)
         {
             entry.landing = Some(landing);
         }
@@ -2458,8 +2464,16 @@ impl Session {
     ///
     /// Nothing about the view moves for it, for the reason [`Session::back_to_the_tail`] gives.
     pub fn show(&mut self, shown: Shown) {
-        match self.working_lines().last_mut() {
-            Some(entry) if entry.speaker == Speaker::Tool && entry.shown.is_none() => {
+        let target = self
+            .working_lines()
+            .iter_mut()
+            .rev()
+            .take_while(|entry| {
+                entry.speaker == Speaker::Delegate || entry.speaker == Speaker::Tool
+            })
+            .find(|entry| entry.speaker == Speaker::Tool);
+        match target {
+            Some(entry) if entry.shown.is_none() => {
                 entry.shown = Some(shown);
             }
             _ => {
@@ -2472,19 +2486,27 @@ impl Session {
 
     /// Replace the call in flight with how it turned out.
     ///
-    /// Matched by position, not by name: only one call runs at a time, so the running entry at
-    /// the end of the transcript is necessarily the one that just finished. A finish with no
+    /// Matched by position, not by name: only one call runs at a time, so the running entry in
+    /// the transcript is necessarily the one that just finished. A finish with no
     /// start before it is appended rather than dropped, since losing the record of a call that
     /// happened is worse than an unpaired line.
     pub fn finish_activity(&mut self, activity: Activity) {
         self.running = None;
-        match self.working_lines().last_mut() {
-            Some(entry) if entry.speaker == Speaker::Tool && Self::still_running(entry) => {
+        let target = self
+            .working_lines()
+            .iter_mut()
+            .rev()
+            .take_while(|entry| {
+                entry.speaker == Speaker::Delegate || entry.speaker == Speaker::Tool
+            })
+            .find(|entry| entry.speaker == Speaker::Tool && Self::still_running(entry));
+        match target {
+            Some(entry) => {
                 *entry = Entry::tool(activity);
             }
             // Straight into the delegate's own count where it has one, since a call that
             // finished without this side seeing it start is still a call it made.
-            _ => match self.attributed_to.and_then(|id| self.at(id)) {
+            None => match self.attributed_to.and_then(|id| self.at(id)) {
                 Some(at) => self.transcript[at]
                     .delegate
                     .as_mut()
@@ -11825,7 +11847,9 @@ mod tests {
 
     mod progress {
         use super::*;
-        use bravebot_agent::report::{Activity, Phase};
+        use bravebot_agent::report::{
+            Activity, DelegateId, Delegation, Landing, Phase, Reach, Shown,
+        };
 
         fn working() -> Session {
             let mut s = session();
@@ -11872,6 +11896,163 @@ mod tests {
                     .as_deref(),
                 Some("12 lines")
             );
+        }
+
+        /// A spawn call begins, starts its delegate, and then finishes. The finished call replaces
+        /// the running call in place rather than appending after the delegate block.
+        #[test]
+        fn spawn_agent_replaces_the_running_line_before_the_delegate_block() {
+            let mut s = working();
+            s.start_activity(Activity::running("Delegate", "a task").of_tool("spawn_agent"));
+            s.delegate_started(Delegation {
+                id: DelegateId::nth(1),
+                kind: "reader".into(),
+                task: "a task".into(),
+            });
+            s.finish_activity(
+                Activity::running("Delegate", "a task")
+                    .of_tool("spawn_agent")
+                    .done("started 1"),
+            );
+
+            let tools: Vec<&Entry> = s
+                .transcript
+                .iter()
+                .filter(|e| e.speaker == Speaker::Tool)
+                .collect();
+            assert_eq!(tools.len(), 1, "the spawn was recorded twice");
+            assert!(
+                !tools[0]
+                    .activity
+                    .as_ref()
+                    .expect("an activity")
+                    .is_running(),
+                "the spawn stayed in running style"
+            );
+            assert_eq!(
+                tools[0]
+                    .activity
+                    .as_ref()
+                    .expect("an activity")
+                    .note
+                    .as_deref(),
+                Some("started 1")
+            );
+
+            assert_eq!(s.transcript.len(), 3);
+            assert_eq!(s.transcript[1].speaker, Speaker::Tool);
+            assert_eq!(s.transcript[2].speaker, Speaker::Delegate);
+        }
+
+        /// Fan-out of several delegates in one spawn call replaces the running tool entry in place.
+        #[test]
+        fn spawn_agent_fan_out_replaces_the_running_line_before_all_delegates() {
+            let mut s = working();
+            s.start_activity(Activity::running("Delegate", "fan-out").of_tool("spawn_agent"));
+            s.delegate_started(Delegation {
+                id: DelegateId::nth(1),
+                kind: "reader".into(),
+                task: "task 1".into(),
+            });
+            s.delegate_started(Delegation {
+                id: DelegateId::nth(2),
+                kind: "reader".into(),
+                task: "task 2".into(),
+            });
+            s.finish_activity(
+                Activity::running("Delegate", "fan-out")
+                    .of_tool("spawn_agent")
+                    .done("started 2"),
+            );
+
+            let tools: Vec<&Entry> = s
+                .transcript
+                .iter()
+                .filter(|e| e.speaker == Speaker::Tool)
+                .collect();
+            assert_eq!(tools.len(), 1, "the fan-out spawn was recorded twice");
+            assert!(
+                !tools[0]
+                    .activity
+                    .as_ref()
+                    .expect("an activity")
+                    .is_running(),
+                "the fan-out spawn stayed in running style"
+            );
+            assert_eq!(
+                tools[0]
+                    .activity
+                    .as_ref()
+                    .expect("an activity")
+                    .note
+                    .as_deref(),
+                Some("started 2")
+            );
+            assert_eq!(s.transcript.len(), 4);
+            assert_eq!(s.transcript[1].speaker, Speaker::Tool);
+            assert_eq!(s.transcript[2].speaker, Speaker::Delegate);
+            assert_eq!(s.transcript[3].speaker, Speaker::Delegate);
+        }
+
+        /// Landing and quarantined content attach to the call even when a delegate started before them.
+        #[test]
+        fn landed_and_quarantined_attach_to_spawn_across_delegates() {
+            let mut s = working();
+            s.start_activity(Activity::running("Delegate", "task").of_tool("spawn_agent"));
+            s.delegate_started(Delegation {
+                id: DelegateId::nth(1),
+                kind: "reader".into(),
+                task: "task".into(),
+            });
+            s.finish_activity(
+                Activity::running("Delegate", "task")
+                    .of_tool("spawn_agent")
+                    .done("started 1"),
+            );
+            s.landed(Landing::Reserved);
+            s.show(Shown {
+                origin: "task.txt".into(),
+                reach: Reach::NotThePlanner,
+                label: "L1".into(),
+                lines: 1,
+                preview: vec!["content".into()],
+            });
+
+            assert_eq!(s.transcript[1].landing, Some(Landing::Reserved));
+            assert!(s.transcript[1].shown.is_some());
+        }
+
+        /// When no tool is running in the current turn, show and landed do not bleed backward into an earlier turn's tool.
+        #[test]
+        fn show_and_landed_do_not_bleed_into_an_earlier_turns_tool() {
+            let mut s = working();
+            s.start_activity(Activity::running("Read", "old.rs").of_tool("read_file"));
+            s.finish_activity(
+                Activity::running("Read", "old.rs")
+                    .of_tool("read_file")
+                    .done("10 lines"),
+            );
+            // A new prompt arrives, beginning a new turn without a tool call.
+            s.transcript.push(Entry::user("next turn question"));
+            s.transcript
+                .push(Entry::assistant("assistant reply", Vec::new()));
+
+            s.landed(Landing::Reserved);
+            s.show(Shown {
+                origin: "quarantine.txt".into(),
+                reach: Reach::NotThePlanner,
+                label: "L1".into(),
+                lines: 1,
+                preview: vec!["isolated".into()],
+            });
+
+            // The earlier tool call in transcript[1] was untouched.
+            assert_eq!(s.transcript[1].landing, None);
+            assert!(s.transcript[1].shown.is_none());
+
+            // The quarantined content was held as its own system entry at the tail.
+            assert_eq!(s.transcript.last().unwrap().speaker, Speaker::System);
+            assert!(s.transcript.last().unwrap().shown.is_some());
         }
 
         /// Several calls in a row each keep their own line.
