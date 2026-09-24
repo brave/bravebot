@@ -16530,6 +16530,100 @@ fn a_definition_names_the_delegate_a_turn_runs_and_says_what_it_is_for() {
     );
 }
 
+/// A delegate definition can select a model to run on, and the delegate's requests
+/// use that model rather than the spawning turn's. Where none was named, it inherits
+/// the spawning turn's model.
+#[test]
+fn a_delegate_uses_the_model_its_definition_selected() {
+    let scratch = Scratch::new("delegate-definition-model");
+    let home = Scratch::new("delegate-definition-model-home");
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("cheap-reader.md"),
+        "---\nname: cheap-reader\ndescription: Reads on a cheap model.\nkind: reader\nmodel: haiku\n---\n\nREAD-CHEAP\n",
+    )
+    .expect("write the cheap definition");
+    std::fs::write(
+        home.path.join("agents").join("plain-reader.md"),
+        "---\nname: plain-reader\ndescription: Reads on turn model.\nkind: reader\n---\n\nREAD-PLAIN\n",
+    )
+    .expect("write the plain definition");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "DELEGATE-TO-CHEAP-READER",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"cheap-reader","task":"CHECK-WITH-CHEAP-MODEL"}"#,
+                ),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"plain-reader","task":"CHECK-WITH-PLAIN-MODEL"}"#,
+                ),
+                reply_with("nothing to add while it works"),
+                reply_with("delegate finished"),
+            ],
+        ),
+        ("CHECK-WITH-CHEAP-MODEL", vec![reply_with("cheap clear")]),
+        ("CHECK-WITH-PLAIN-MODEL", vec![reply_with("plain clear")]),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-TO-CHEAP-READER")
+            .with_home(Some(home.path.clone()))
+            .with_model(Some("custom-parent-model".to_string())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let parent = requests
+        .iter()
+        .find(|body| body.contains("DELEGATE-TO-CHEAP-READER"))
+        .expect("parent request sent");
+    assert!(
+        parent.contains(r#""model":"custom-parent-model""#),
+        "parent turn did not use its configured model: {parent}"
+    );
+
+    let cheap = requests
+        .iter()
+        .find(|body| {
+            body.contains("CHECK-WITH-CHEAP-MODEL") && !body.contains("DELEGATE-TO-CHEAP-READER")
+        })
+        .expect("cheap delegate request sent");
+
+    let expected_haiku = config.model_named("haiku");
+    assert!(
+        cheap.contains(&format!(r#""model":"{expected_haiku}""#)),
+        "cheap delegate did not use model named in definition: {cheap}"
+    );
+
+    let plain = requests
+        .iter()
+        .find(|body| {
+            body.contains("CHECK-WITH-PLAIN-MODEL") && !body.contains("DELEGATE-TO-CHEAP-READER")
+        })
+        .expect("plain delegate request sent");
+    assert!(
+        plain.contains(r#""model":"custom-parent-model""#),
+        "plain delegate did not inherit turn model: {plain}"
+    );
+}
+
 /// Records what it was told, and whose work the driver said each report was.
 ///
 /// Both halves are the property: a report says what happened and never which run it happened in,

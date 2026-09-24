@@ -358,11 +358,20 @@ pub fn run(
     // own work done elsewhere, so a session that is planning must not have writes happening inside
     // one. Enforcement already comes down this way, the confirmer being the person's own; this is
     // what tells the delegate's planner why a write would be refused.
+    // The model is the definition's where one was named, resolved the way any named model is so tier
+    // aliases and explicit identifiers are both accepted. Where the definition named none, the
+    // spawning turn's model stands.
+    let delegate_model = seeded
+        .spec
+        .model()
+        .map(|name| config.model_named(name))
+        .or_else(|| model.map(str::to_string));
+
     let mut task = Task::delegated(seeded.spec.clone())
         .with_home(home.map(std::path::Path::to_path_buf))
         .with_profile(profile.map(std::path::Path::to_path_buf))
         .remembering(seeded.remembering.clone())
-        .with_model(model.map(str::to_string))
+        .with_model(delegate_model)
         .with_permissions(seeded.permissions.clone())
         .with_permission_mode(permission_mode)
         .with_auto_vetting(auto_vetting)

@@ -91,14 +91,24 @@ fn read_definition(text: &str, origin: &str) -> Read {
         return Read::Skipped("its kind is not one of reader, checker or worker");
     };
 
-    Read::Definition(Box::new(Definition::from_file(
+    let mut definition = Definition::from_file(
         name,
         description,
         kind,
         declared.get("tools").map(|named| tools_in(named)),
         crate::skills::body_after_frontmatter(text),
         origin,
-    )))
+    );
+
+    if let Some(model) = declared
+        .get("model")
+        .map(|m| m.trim())
+        .filter(|m| !m.is_empty())
+    {
+        definition = definition.with_model(model);
+    }
+
+    Read::Definition(Box::new(definition))
 }
 
 /// Whether this is a name a definition may go by.
@@ -516,11 +526,23 @@ mod tests {
     #[test]
     fn a_key_nothing_here_reads_is_ignored_rather_than_refused() {
         let definition = definition_of(
-            "---\nname: rule-reviewer\ndescription: checks a diff\nkind: reader\nmodel: \
-             something-else\ncolor: blue\n---\n\nbody\n",
+            "---\nname: rule-reviewer\ndescription: checks a diff\nkind: reader\ntemperature: \
+             0.5\ncolor: blue\n---\n\nbody\n",
         );
 
         assert_eq!(definition.name(), "rule-reviewer");
         assert_eq!(definition.kind(), Kind::Reader);
+    }
+
+    /// A definition can name a model to run on.
+    #[test]
+    fn a_definition_reads_a_model_name() {
+        let definition = definition_of(
+            "---\nname: cheap-reader\ndescription: reads with haiku\nkind: reader\nmodel: \
+             haiku\n---\n\nbody\n",
+        );
+
+        assert_eq!(definition.name(), "cheap-reader");
+        assert_eq!(definition.model(), Some("haiku"));
     }
 }
