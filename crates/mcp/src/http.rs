@@ -15,7 +15,7 @@
 use crate::protocol::{
     RpcRequest, RpcResponse, ToolDescriptor, ToolList, ToolResult, call_params, initialize_params,
 };
-use crate::{McpError, McpResult};
+use crate::{McpError, McpResult, malformed};
 use bravebot_core::capability::{Capability, ServerAlias};
 use bravebot_core::event::Sink;
 use bravebot_core::policy::Policy;
@@ -115,12 +115,15 @@ impl HttpServer {
         })?;
 
         let parsed: RpcResponse = serde_json::from_str(payload)
-            .map_err(|e| McpError::Transport(format!("malformed reply to {method}: {e}")))?;
+            .map_err(|e| malformed(format!("reply to {method}"), &e))?;
 
         if let Some(error) = parsed.error {
+            // The code and the method are structure, and they are the whole of what is reported:
+            // the sentence the server sent with them is prose it composed. `RpcError` does not
+            // carry it here to be dropped, because it is never deserialised.
             return Err(McpError::Server {
                 code: error.code,
-                message: error.message,
+                method: method.to_string(),
             });
         }
 
@@ -153,8 +156,8 @@ impl HttpServer {
         egress: &Egress,
     ) -> McpResult<Vec<ToolDescriptor>> {
         let result = self.send(policy, egress, "tools/list", None)?;
-        let list: ToolList = serde_json::from_value(result)
-            .map_err(|e| McpError::Transport(format!("malformed tool list: {e}")))?;
+        let list: ToolList =
+            serde_json::from_value(result).map_err(|e| malformed("tool list", &e))?;
         Ok(list.tools)
     }
 
@@ -177,8 +180,8 @@ impl HttpServer {
             Some(call_params(tool, arguments)),
         )?;
 
-        let parsed: ToolResult = serde_json::from_value(result)
-            .map_err(|e| McpError::Transport(format!("malformed tool result: {e}")))?;
+        let parsed: ToolResult =
+            serde_json::from_value(result).map_err(|e| malformed("tool result", &e))?;
 
         let label = policy
             .observe(self.capability())
