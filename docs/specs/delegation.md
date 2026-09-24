@@ -513,6 +513,41 @@ is told it is.
 Two files in one directory resolve by file name, so which of them is live is the same on every
 machine.
 
+**A later definition of the same name replaces the one before it and never widens it.** It has the
+last word about what the name is *for*, taking over the description, the body and the model, and
+none at all about what it may do. Both fields that decide that are met with the one it replaced:
+
+- It is loaded as the **narrower of the two kinds**, so a project cannot turn a `reader` a person
+  wrote in their own directory into a `worker`.
+- Its **`tools:` line is met name by name** with the one it replaced, an absent line being that
+  kind's whole set and so the wider of the two. A list narrows and only narrows
+  ([DELEGATE-19](#DELEGATE-19)), so the narrowing a person wrote cannot be handed back, and two
+  lists with no name in common leave a delegate with none, exactly as a list naming another
+  agent's vocabulary does.
+
+Met on the fields rather than on the capability set they come to, because two tools one capability
+reaches are two different things a delegate may do, and a meet taken on capabilities alone would
+hand back every other tool that capability reaches.
+
+DELEGATE-19 says a checked-in file granting a capability would make the file the author of
+authority rather than the person who vouched for it, and a wider `kind:` for a name that person
+already defined is that grant written another way. The vouch that let the project's file be read at
+all is a decision about the checkout, taken once and with the longest path prefix winning, rather
+than a decision about this name.
+
+The rule is the same wherever the two files sit, including two in one directory. Which root a
+definition came from is not something the kernel knows, and giving it that would be an arrangement
+of files that gets around the rule; the cost is that a person's own two files of one name narrow
+each other, which is a configuration where one was already silently winning and where the notice
+below now says so.
+
+**What the replacement asked for and did not get is named, with the file that cut it down.** The
+kind it wrote where it is loaded as a narrower one, and the tools it is confined to where its own
+line did not stand. That is [PERM-14](permissions.md#PERM-14)'s reason for naming a dropped `allow`
+rule, and it reads the same way in this direction: a narrowing nobody is told about leaves whoever
+wrote either file believing what they wrote is in force. Both files may be named, because by here
+each came from a source somebody vouched for, which is what separates this from the count above.
+
 `verified-by: bravebot_agent::agents::a_definition_nobody_vouched_for_is_counted_and_never_named`
 `verified-by: bravebot_agent::agents::a_definition_in_a_vouched_for_project_is_selectable`
 `verified-by: bravebot_agent::agents::a_definition_in_the_users_own_directory_is_selectable`
@@ -520,7 +555,14 @@ machine.
 `verified-by: bravebot_agent::agents::a_workspace_definition_shadows_a_home_one_of_the_same_name`
 `verified-by: bravebot_agent::agents::two_definitions_in_one_directory_resolve_by_file_name`
 `verified-by: bravebot_agent::agents::a_file_that_claims_to_be_a_definition_and_is_not_says_so`
+`verified-by: bravebot_agent::agents::a_project_cannot_widen_the_kind_a_persons_own_definition_named`
+`verified-by: bravebot_agent::agents::a_project_cannot_hand_back_a_tool_a_persons_own_definition_took_away`
 `verified-by: bravebot_core::delegate::a_later_definition_replaces_one_of_the_same_name`
+`verified-by: bravebot_core::delegate::a_later_definition_cannot_widen_the_kind_the_one_it_replaces_named`
+`verified-by: bravebot_core::delegate::a_later_definition_cannot_undo_the_tools_the_one_it_replaces_named`
+`verified-by: bravebot_core::delegate::a_later_definition_cannot_widen_a_tool_list_within_one_capability`
+`verified-by: bravebot_core::delegate::tool_lists_with_nothing_in_common_meet_at_nothing`
+`verified-by: bravebot_core::delegate::a_narrowing_carries_through_a_third_definition_of_the_same_name`
 
 <a id="DELEGATE-21"></a>
 ### DELEGATE-21: a definition's name may not open with `-` or carry a colon

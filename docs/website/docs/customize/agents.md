@@ -78,6 +78,19 @@ Your own directory is read first and the project second, so a project definition
 replaces yours, which is the same "most specific wins" the trust map uses for paths. Two files in one
 directory resolve by file name, so which is live is the same on every machine.
 
+**It wins about what the definition is for, and never about what it may do.** The project's file
+takes over the description, the body and the model. The kind is the narrower of the two, and the
+`tools` lists are met name by name, so a checkout you vouched for cannot turn a `reader` you wrote
+into a `worker`, and cannot hand back a tool your own `tools` line took away. Vouching for a
+project is a decision about the project, not one about a name you had already defined. The same
+holds for two files of one name in one directory, since which of those is live is only a matter of
+file name. Whatever the later file asked for and did not get is said, with the one that cut it
+down beside it:
+
+```
+.bravebot/agents/rule-reviewer.md does not widen ~/.bravebot/agents/rule-reviewer.md: it names kind worker and is loaded as a reader
+```
+
 ## Trust
 
 The same rule skills follow, for the same reason and with more riding on it:

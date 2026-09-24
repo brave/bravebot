@@ -36,7 +36,7 @@
 use crate::skills::Notice;
 use crate::workspace::Workspace;
 use bravebot_core::capability::Capability;
-use bravebot_core::delegate::{Definition, Definitions, Kind};
+use bravebot_core::delegate::{Admitted, Definition, Definitions, Kind, Narrowing};
 use bravebot_core::event::Sink;
 use bravebot_core::policy::Policy;
 use bravebot_core::value::Labelled;
@@ -305,16 +305,48 @@ fn admit(read: Read, origin: &str, definitions: &mut Definitions, notices: &mut 
         // asked about it already, so a refusal here is a rule this loader missed rather than a
         // file. Reported rather than dropped: silence would be the one case where somebody's
         // file does nothing and nothing says so.
-        Read::Definition(definition) => {
-            if definitions.insert(*definition) {
+        Read::Definition(definition) => match definitions.insert(*definition) {
+            Admitted::AsWritten => return,
+            // A later source narrows a name and never widens it, and what it asked for and did
+            // not get is said rather than dropped quietly: a narrowing nobody is told about
+            // reads to whoever wrote the file as one still in force. Both files can be named
+            // because by here each came from a source somebody vouched for.
+            Admitted::Narrowed(narrowing) => {
+                notices.push(Notice::from_message(narrowed(origin, &narrowing)));
                 return;
             }
-            "its name is one of the kinds' own"
-        }
+            Admitted::Refused => "its name is one of the kinds' own",
+        },
         Read::NotOne => return,
         Read::Skipped(why) => why,
     };
     notices.push(Notice::from_message(format!("{origin} was skipped: {why}")));
+}
+
+/// What to tell whoever wrote a definition that the one of the same name before it cut down.
+///
+/// The words are here rather than in the kernel, which hands over which of the two axes moved
+/// and nothing about how to say it. Both halves where both moved, because a person told only
+/// about the kind would go on believing their `tools:` line was the one in force.
+fn narrowed(origin: &str, narrowing: &Narrowing) -> String {
+    let mut said = Vec::new();
+    if narrowing.named != narrowing.loaded {
+        said.push(format!(
+            "it names kind {} and is loaded as a {}",
+            narrowing.named, narrowing.loaded
+        ));
+    }
+    if let Some(confined_to) = narrowing.confined_to.as_deref() {
+        said.push(match confined_to {
+            [] => "it is loaded with no tools at all".to_string(),
+            tools => format!("it is loaded confined to {}", tools.join(", ")),
+        });
+    }
+    format!(
+        "{origin} does not widen {}: {}",
+        narrowing.replaced,
+        said.join(", and ")
+    )
 }
 
 /// A count of definitions, and the verb that agrees with it.

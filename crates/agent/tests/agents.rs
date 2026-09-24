@@ -256,6 +256,125 @@ fn a_workspace_definition_shadows_a_home_one_of_the_same_name() {
     assert_eq!(found.kind(), Kind::Reader);
 }
 
+/// Most specific wins about what a definition is *for*, and about nothing else. The vouch that
+/// let the project's file be read at all is a decision about the checkout rather than about this
+/// name, so a checkout cannot turn a reader somebody wrote in their own directory into a worker,
+/// and what it asked for reaches the person rather than being dropped in silence.
+#[test]
+fn a_project_cannot_widen_the_kind_a_persons_own_definition_named() {
+    let scratch = Scratch::new("widening");
+    let home = scratch.home();
+    let project = scratch.workspace();
+    write_definition(
+        &home,
+        "rule-reviewer",
+        &frontmatter("rule-reviewer", "reads a diff against the rule", "reader"),
+        "read the diff and report the shape",
+    );
+    write_definition(
+        &project.join(".bravebot"),
+        "rule-reviewer",
+        &frontmatter("rule-reviewer", "reads a diff against the rule", "worker"),
+        "whatever the checkout wants said here",
+    );
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (definitions, notices) = {
+        let mut policy = policy(&mut sink, &["."]);
+        agents::discover(&mut policy, &workspace, Some(&home))
+    };
+
+    let found = definitions.get("rule-reviewer").expect("selectable");
+    assert_eq!(
+        found.prompt().trim(),
+        "whatever the checkout wants said here",
+        "the project did not get the last word about what the definition is for"
+    );
+    assert_eq!(
+        found.kind(),
+        Kind::Reader,
+        "the checkout widened a name the person's own file defined as a reader"
+    );
+    let held = found.capabilities();
+    assert!(held.contains(&Capability::FileRead));
+    assert!(!held.contains(&Capability::FileWrite));
+    assert!(!held.contains(&Capability::ShellExec));
+
+    let said: Vec<&str> = notices
+        .iter()
+        .map(|notice| notice.message.as_str())
+        .collect();
+    assert_eq!(
+        said.len(),
+        1,
+        "the narrowing was not reported once: {said:?}"
+    );
+    // Asserted whole. The two paths are a suffix of one another, so a `contains` for the
+    // project's would pass on a notice naming only the person's.
+    assert_eq!(
+        said[0],
+        ".bravebot/agents/rule-reviewer.md does not widen ~/.bravebot/agents/rule-reviewer.md: \
+         it names kind worker and is loaded as a reader"
+    );
+}
+
+/// A `tools:` line is a narrowing the person wrote down, so a project cannot hand back a tool it
+/// took away, and cannot do it within one capability either: the whole of what a delegate is
+/// offered is its held set met with the names its definition kept.
+#[test]
+fn a_project_cannot_hand_back_a_tool_a_persons_own_definition_took_away() {
+    let scratch = Scratch::new("widening-tools");
+    let home = scratch.home();
+    let project = scratch.workspace();
+    write_definition(
+        &home,
+        "rule-reviewer",
+        &format!(
+            "{}\ntools: read_file",
+            frontmatter("rule-reviewer", "reads a diff against the rule", "worker")
+        ),
+        "read the diff and report the shape",
+    );
+    write_definition(
+        &project.join(".bravebot"),
+        "rule-reviewer",
+        &format!(
+            "{}\ntools: read_file, search, write_file",
+            frontmatter("rule-reviewer", "reads a diff against the rule", "worker")
+        ),
+        "whatever the checkout wants said here",
+    );
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (definitions, notices) = {
+        let mut policy = policy(&mut sink, &["."]);
+        agents::discover(&mut policy, &workspace, Some(&home))
+    };
+
+    let found = definitions.get("rule-reviewer").expect("selectable");
+    assert_eq!(
+        found.kind(),
+        Kind::Worker,
+        "neither file named a wider kind"
+    );
+    assert_eq!(found.tools(), Some(["read_file".to_string()].as_slice()));
+    let held = found.capabilities();
+    assert!(held.contains(&Capability::FileRead));
+    assert!(!held.contains(&Capability::FileWrite));
+
+    let said: Vec<&str> = notices
+        .iter()
+        .map(|notice| notice.message.as_str())
+        .collect();
+    assert_eq!(
+        said,
+        [".bravebot/agents/rule-reviewer.md does not widen \
+          ~/.bravebot/agents/rule-reviewer.md: it is loaded confined to read_file"]
+    );
+}
+
 /// A file resolves against another the same way on every machine. An order that came from the
 /// filesystem would make which of two definitions is live differ between machines, which is a
 /// difference nobody can see in the files.
