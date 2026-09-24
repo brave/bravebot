@@ -42,17 +42,20 @@ this stops a turn never dying.
 <a id="TURN-2"></a>
 ### TURN-2: the bound belongs to the caller, and an interactive turn has none
 
-Who is watching decides the limit, so the caller sets it. The terminal passes none: a person can
-see what a turn is doing and a stop reaches it mid-round, so any number would only interrupt work
-that was going fine. A one-shot `-p` run and a manifest run pass the default 200, because an
-unwatched loop has nothing else to end it.
+Who is watching decides the limit, so the caller sets it. Every caller with a person in front of
+it passes none: the terminal, the line-mode session, and the desktop window. That person sees what
+a turn is doing and their stop reaches it mid-round, so any number would only interrupt work that
+was going fine. A one-shot `-p` run and a manifest run pass the default 200, because an unwatched
+loop has nothing else to end it.
 
 The default is bounded, because a default cannot know whether anybody is watching and being wrong
 that way is the cheaper mistake. This was 40 everywhere, which interrupted real work in a large
-repository.
+repository. So an interactive caller states its bound rather than leaving it to the default:
+silence is the answer for a caller nobody is watching, and a watched turn takes it by omission.
 
 `verified-by: bravebot_agent::turn::an_unbounded_turn_is_never_made_to_answer`
 `verified-by: bravebot_agent::turn::a_turn_that_keeps_calling_tools_is_made_to_answer`
+`verified-by: bravebot_ui_bridge::rounds::a_desktop_turn_is_not_cut_off_at_the_bound_an_unwatched_run_carries`
 
 <a id="TURN-3"></a>
 ### TURN-3: a turn that has written nothing for long enough is told so

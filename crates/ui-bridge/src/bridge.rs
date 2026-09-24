@@ -1242,6 +1242,10 @@ fn work(work: Work) {
         bravebot_session::store::Entry::sent(&prompt, Some(project.display().to_string()));
     let mut task = Task::new(&prompt)
         .with_home(bravebot_agent::home::directory())
+        // No bound on the rounds, as the terminal passes: there is a person in front of this
+        // window, they see what the turn is doing, and `turn.cancel` reaches it mid-round. A
+        // number would only interrupt work that was going fine (TURN-2).
+        .with_rounds(None)
         .with_model(model)
         .with_attribution(attribution)
         .with_auto_vetting(auto_vetting);
