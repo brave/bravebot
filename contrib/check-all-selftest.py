@@ -32,6 +32,8 @@ class CheckTargets(unittest.TestCase):
         shutil.copy(ROOT / "Cargo.toml", self.root)
         (self.root / "ui/scripts").mkdir(parents=True)
         (self.root / "ui/scripts/fixture.test.mjs").touch()
+        (self.root / "npm/tests").mkdir(parents=True)
+        (self.root / "npm/tests/fixture.test.mjs").touch()
         self.bin = self.root / "bin"
         self.bin.mkdir()
         self.log = self.root / "calls"
@@ -120,15 +122,26 @@ class CheckTargets(unittest.TestCase):
                 self.assertEqual(result.returncode != 0, bool(failing), result.stderr)
                 self.assertEqual(self.log.read_text().splitlines(), [command])
 
-    def test_all_three_lockfiles_are_checked_and_website_failure_is_reported(self):
-        """The website lockfile needs the same gate as the wrapper and UI lockfiles."""
-        commands = ["npm ci --ignore-scripts", "npm run lint:lockfile",
-                    "npm run lint:lockfile:website", "npm run lint:lockfile:ui"]
-        for failing in ("", commands[2]):
+    def test_the_installer_test_precedes_the_install_and_each_failure_stops_the_gate(self):
+        """The website lockfile needs the same gate as the wrapper and UI lockfiles, and the
+        installer test must run before anything installs a dependency for it to depend on."""
+        commands = ["node --test npm/tests/fixture.test.mjs", "npm ci --ignore-scripts",
+                    "npm run lint:lockfile", "npm run lint:lockfile:website",
+                    "npm run lint:lockfile:ui"]
+        for failing in ("", *commands):
             with self.subTest(failing=failing):
                 result = self.run_make("check-npm", FAIL_COMMAND=failing)
                 self.assertEqual(result.returncode != 0, bool(failing), result.stderr)
-                self.assertEqual(self.log.read_text().splitlines(), commands[:3] if failing else commands)
+                expected = commands[:commands.index(failing) + 1] if failing else commands
+                self.assertEqual(self.log.read_text().splitlines(), expected)
+
+    def test_an_installer_test_that_is_no_longer_there_fails_the_gate(self):
+        """`node --test` given a pattern matching nothing exits 0 having run nothing, so a pin
+        renamed out of npm/tests would leave the gate green with the clause unheld."""
+        (self.root / "npm/tests/fixture.test.mjs").unlink()
+        result = self.run_make("check-npm")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(self.log.read_text().splitlines(), [])
 
     def test_check_build_discards_baked_credentials_without_changing_development_builds(self):
         """The walkthrough's unconfigured-service case must not call a developer's account."""

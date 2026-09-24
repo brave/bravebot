@@ -133,7 +133,7 @@ jobs:
           node-version: "24"
           package-manager-cache: false
 
-      - name: Install from the lockfile and lint it
+      - name: Test the installer, install from the lockfile and lint it
         run: make check-npm
 
   # The documentation website under docs/website. Docusaurus throws on broken links or

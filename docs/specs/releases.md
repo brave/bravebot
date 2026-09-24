@@ -7,6 +7,7 @@ governs:
   - .github/workflows/ci.yml
   - .github/workflows/publish-npm.yml
   - npm/scripts/postinstall.js
+  - npm/tests/postinstall.test.mjs
   - install.sh
   - package.json
   - package-lock.json
@@ -36,7 +37,9 @@ once that release exists.
 
 Nothing here is pinned by a Rust test. The rules below are enforced by a refusal in the tagging
 path, the Jenkins publish path, or the npm publish workflow rather than by anything the test
-suite can execute, so each clause says in brackets what makes it hold.
+suite can execute, so each clause says in brackets what makes it hold. One of them, what the npm
+installer downloads from, is pinned by a Node test that the npm lockfile job runs and `cargo test`
+does not reach.
 
 ## Clauses
 
@@ -219,18 +222,38 @@ the pipeline that publishes.
 
 `verified-by: by-construction (package-lock.json is in the tree, both workflows run npm ci --ignore-scripts, and lockfile-lint refuses hosts other than npm and non-https URLs)`
 
+<a id="RELEASE-13"></a>
+### RELEASE-13: each installer's release origin is composed from nothing
+
+The repository an installer downloads from is stated in the installer. Nothing outside it chooses
+that repository: not an argument, not a file, and not the environment.
+
+**Why.** An installer fetches an asset and the checksum of that asset from the same release, so an
+origin supplied from outside moves both halves of the comparison together. A substituted binary
+published beside its own true digest then satisfies the checksum check rather than failing it, and
+is written executable onto the path. Nothing else on the install path notices: the package
+manifest names the real package, the lockfile carries the registry's integrity hash for it, and
+the install prints the version it fetched rather than where it fetched it from. The line a person
+is handed to update with is one fixed line for the same reason, which [updates.md](updates.md)
+sets out.
+
+`verified-by: by-construction (install.sh states the repository as a literal, and the npm installer composes both URLs from one constant; npm/tests/postinstall.test.mjs calls that origin with an environment set against it, holds the installer to that one URL, and fails on any reach into the environment beyond the two values that choose whether to download and for which architecture. make check-npm runs it)`
+
 ## Known costs
 
 - **Nothing here is pinned by a Rust test.** Every clause is by-construction, which means a
   refusal can be removed and only a reader will notice. The tagging path is shell in a makefile,
   publication is a Jenkins job in another repository, and a test that shelled out to a real tag
-  push would have to publish something to prove anything. Two checks hold part of it from outside
+  push would have to publish something to prove anything. Three checks hold part of it from outside
   the suite. `make check-security` holds the shape of the publish workflow rather than any of these
   refusals: that no job beside the credential installs a dependency, and that the checkout names a
   kind of ref. `make check-versions` holds [RELEASE-1](#RELEASE-1) itself, over the six files that
   state a version, and carries its own selftest because a version check that is quietly partial
-  reports success forever. All three are read off files, so a refusal deleted from a `run:` block
-  passes them.
+  reports success forever. Both of those are read off files, so a refusal deleted from a `run:`
+  block passes them. `make check-npm` is the one that runs something: it calls the npm installer's
+  origin as code, so [RELEASE-13](#RELEASE-13) fails rather than reports when that origin becomes
+  something a caller supplies. It reaches the npm installer alone, and the shell script beside it
+  is read by nothing.
 
 - **Publication lives outside this repository.** `bravebot-build` in devops is what signs and
   attaches assets. A change there can break RELEASE-6 through RELEASE-8 without this tree

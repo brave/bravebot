@@ -63,7 +63,7 @@ help:
 	@echo "  make write-untranslated    Write contrib/untranslated-messages.txt, which check-locales holds it to"
 	@echo "  make check-reviewdog       The PR security scan, on this branch's changes"
 	@echo "  make check-reviewdog-full  The same scan, over the whole tree"
-	@echo "  make check-npm             Install from the lockfile and lint it, as CI does"
+	@echo "  make check-npm             The installer test, the lockfile install and its lint"
 	@echo "  make check-deps            Advisories, licences, duplicate versions, and sources"
 	@echo "  make check-msrv            Build against the declared minimum toolchain ($(MSRV))"
 	@echo "  make check-windows         Lint the Windows target that ships, cross-compiled"
@@ -236,11 +236,20 @@ check-reviewdog-full: check-reviewdog-selftest
 	@contrib/check-reviewdog.sh --full
 
 # The npm-lockfile job. The published package is a thin wrapper that downloads the
-# release binary, so the lockfile is the whole supply chain surface it has. The front end
-# under ui/ has a lockfile of its own, holding Electron's tree, and it gets the same lint:
-# it is not an npm workspace of this package deliberately, so nothing else reaches it.
+# release binary, so the lockfile and that download are the whole supply chain surface it has.
+# The front end under ui/ has a lockfile of its own, holding Electron's tree, and it gets the
+# same lint: it is not an npm workspace of this package deliberately, so nothing else reaches it.
+#
+# The installer test is the download's half, and the only thing in this tree that runs any
+# of docs/specs/releases.md as code: it calls the origin the installer composes with an
+# environment set against it, so a release repository something outside the installer can
+# choose fails here rather than at somebody's install. It needs no dependency, so it runs
+# before the install rather than after it. `ls` precedes the run because `node --test` given
+# a pattern matching nothing exits 0 having run nothing, which would make a renamed-away pin
+# a passing gate.
 .PHONY: check-npm
 check-npm:
+	ls npm/tests/*.test.mjs >/dev/null && node --test npm/tests/*.test.mjs
 	npm ci --ignore-scripts
 	npm run lint:lockfile
 	npm run lint:lockfile:website
