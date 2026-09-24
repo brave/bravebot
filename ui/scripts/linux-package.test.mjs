@@ -180,6 +180,19 @@ test('the desktop entry names the icon the package installs', (t) => {
   assert.equal(readFileSync(installed, 'utf8'), readFileSync(new URL('../build/icon.svg', import.meta.url), 'utf8'))
 })
 
+// gdk-pixbuf identifies an image by sniffing the head of the file rather than by its name, and
+// its SVG patterns are the root element and a doctype. A drawing whose first bytes are a
+// comment is one it cannot recognise at all, so the scalable icon fails to load even where
+// librsvg is installed, and what a desktop reports is an unrecognised file format.
+test('the drawing is installed starting with its root element, which is how a loader identifies it', (t) => {
+  const { dir } = bundle(t)
+  const into = mkdtempSync(join(tmpdir(), 'linux-stage-'))
+  t.after(() => rmSync(into, { recursive: true, force: true }))
+  const { payload } = stage({ bundle: dir, arch: 'amd64', into })
+  const installed = readFileSync(join(payload, 'usr/share/icons/hicolor/scalable/apps', `${ICON}.svg`), 'utf8')
+  assert.match(installed, /^<(\?xml|svg)[\s>]/, 'the drawing starts with something a loader sniffs past')
+})
+
 // The Icon Theme Specification makes PNG the format a desktop has to read and SVG one it may,
 // and GTK reads a scalable icon only through librsvg's gdk-pixbuf loader, which neither
 // dependency list names. So a package carrying the drawing alone installs a launcher entry that

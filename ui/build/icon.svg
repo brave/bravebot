@@ -1,5 +1,5 @@
-<!-- The About mascot, seed "brave-bot-mascot", drawn as FlatAvatar in src/renderer/components/BotAvatar.tsx draws it but in Brave orange, on the rounded tile a macOS icon sits on. The oranges are Leo's: primitive-brands-rorange-1 and -3, primitive-orange-40 and -80. icon.icns beside it is made from this file: docs/development.md says how. -->
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- The About mascot, seed "brave-bot-mascot", drawn as FlatAvatar in src/renderer/components/BotAvatar.tsx draws it but in Brave orange, on the rounded tile a macOS icon sits on. The oranges are Leo's: primitive-brands-rorange-1 and -3, primitive-orange-40 and -80. The icons beside it, icon.icns, icon.ico and icons/, are made from this file: docs/development.md says how. -->
   <defs>
     <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#fbfaf5"/>
