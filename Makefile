@@ -90,7 +90,7 @@ help:
 	@echo "  make app-bundle                             Package the desktop application, release build"
 	@echo "  make app-release                            Its disk images for both Mac architectures, unsigned"
 	@echo "  make app-release-linux                      Its .deb and .rpm for both Linux architectures, unsigned"
-	@echo "  make app-bundles-windows                    Its Windows bundles for both architectures, unsigned"
+	@echo "  make app-release-windows                    Its Windows installers for both architectures, unsigned"
 	@echo
 	@echo "  make clean          Remove build output"
 
@@ -631,9 +631,11 @@ app-packages-linux:
 # icon and the version resource in `Brave Bot.exe`, which `@electron/packager` writes with resedit,
 # a JavaScript library, so no Windows node and no Wine is involved. The release job then signs
 # every PE in the bundle where it lies: `Brave Bot.exe`, both helpers, and Electron's own DLLs.
-#
-# The installer that a signed bundle goes into is the second step, and issue #769 is where its
-# format is still being decided, so nothing here builds one yet.
+# `app-release-windows` is this and the second step with nothing in between.
+.PHONY: app-release-windows
+app-release-windows: app-bundles-windows
+	$(MAKE) app-installers-windows
+
 .PHONY: app-bundles-windows
 app-bundles-windows:
 	@missing=; builds=; for pair in $(APP_ARCHES); do \
@@ -657,6 +659,23 @@ app-bundles-windows:
 		(cd ui && node scripts/package.mjs --executables="$$stage/$$arch" --platform=win32 --arch=$$electron); \
 	done
 
+# The second step, which puts each signed bundle in its installer:
+#
+#   reads   ui/dist/Brave Bot-win32-<x64|arm64>/
+#   writes  dist/bravebot-desktop-windows-<arch>-setup.exe
+#
+# The installer is NSIS, per user, and written by electron-builder from the bundle as it lies, so
+# the signatures on it are the ones installed; ui/scripts/windows-installer.mjs says what else it
+# fixes. It runs on Windows or a Mac and not on Linux, where electron-builder needs Wine to write the
+# uninstaller, so a release runs it on the Windows node that signed the bundles, which then signs the
+# two installers too.
+.PHONY: app-installers-windows
+app-installers-windows:
+	cd ui && npm ci
+	@set -e; for pair in $(APP_ARCHES); do \
+		arch=$${pair%%:*}; electron=$${pair#*:}; \
+		node ui/scripts/windows-installer.mjs --bundle="ui/dist/Brave Bot-win32-$$electron" --arch=$$arch --out=dist; \
+	done
 
 # Symbols are kept during the build because Rust's own strip can corrupt some targets
 # under zigbuild, so they are removed here instead.
@@ -675,7 +694,7 @@ app-bundles-windows:
 .PHONY: strip
 strip:
 	@for f in dist/$(BINARY)-*; do \
-		case "$$f" in *.sha256|*SHA256SUMS|*.dmg|*.deb|*.rpm) continue;; esac; \
+		case "$$f" in *.sha256|*SHA256SUMS|*.dmg|*.deb|*.rpm|*-setup.exe) continue;; esac; \
 		docker run --rm -v "$(PWD)/dist:/dist" -e ASSET="/dist/$$(basename $$f)" \
 			$(ZIGBUILD_IMAGE) sh -c '\
 			lib=$$(rustc --print sysroot)/lib && \

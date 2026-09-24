@@ -19,7 +19,7 @@ members of lives.
 | `make app-bundle` (from the root) | The same bundle, carrying release executables built with credentials required, fused |
 | `make app-release` (from the root) | A disk image per Mac architecture, from the cross-built executables in `dist/`; see [releasing](../../docs/development/releasing.md#the-desktop-application) |
 | `make app-release-linux` (from the root) | A `.deb` and an `.rpm` per Linux architecture, from the same; see [releasing](../../docs/development/releasing.md#the-linux-packages) |
-| `make app-bundles-windows` (from the root) | A Windows bundle per architecture, from the cross-built executables in `dist/`, on any host; see [releasing](../../docs/development/releasing.md#the-windows-bundle) |
+| `make app-release-windows` (from the root) | A Windows installer per architecture, from the same, on Windows or a Mac; see [releasing](../../docs/development/releasing.md#the-windows-installers) |
 | `make check-ui` (from the root) | Install, build the file helper, and run every `scripts/*.test.mjs` |
 | `cargo test -p bravebot-ui-bridge -p bravebot-ui-files` | Test the two front-end crates |
 | `cargo test --all` | Test the whole workspace, agent crates included |
@@ -121,6 +121,14 @@ pinned containers. The setuid bit is the point of the exercise: where unprivileg
 namespaces are unavailable, Electron aborts at start without it, and only an installer can set
 it. `scripts/linux-package.test.mjs` covers what the two formats are told, and builds a real
 `.deb` where `dpkg-deb` is present.
+
+A Windows bundle is also a directory, and `scripts/windows-installer.mjs` puts it in a per-user
+NSIS installer with electron-builder, which is handed the bundle as `prepackaged` and so changes
+nothing in it: the release signs the bundle before this step, and those signatures are what gets
+installed. It refuses a bundle for the other architecture or one that is not fused, and refuses to
+run on Linux, where electron-builder would need Wine. `scripts/windows-installer.test.mjs` covers
+the refusals and the names the first release fixes, and builds a real installer from a stand-in
+bundle on macOS and Windows, checking the bundle comes out byte for byte as it went in.
 
 Every macOS bundle carries the bundle id `com.brave.bravebot` and the icon `build/icon.icns`. macOS
 keys privacy grants and keychain items on the bundle id, so it does not change between releases.

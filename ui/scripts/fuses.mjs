@@ -61,6 +61,14 @@ export function acceptsInspect(bytes) {
   return readFuses(bytes).every((wire) => wire[FUSES.EnableNodeCliInspectArguments] !== '0')
 }
 
+// Whether every wire already says what `setFuses` would write for `settings`. A fuse this Electron
+// lacks or has removed is not set to anything, so it reads as not fused.
+export function hasFuses(bytes, settings) {
+  return wires(bytes).every(({ start, count }) =>
+    Object.entries(settings).every(([name, on]) => FUSES[name] < count && bytes[start + FUSES[name]] === (on ? 0x31 : 0x30)),
+  )
+}
+
 // Refuses rather than skipping a fuse it cannot set: an Electron without one of these is an app
 // that would ship with that door open and a packaging step that said nothing.
 export function setFuses(bytes, settings) {
