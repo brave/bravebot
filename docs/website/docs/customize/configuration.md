@@ -419,6 +419,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `permissions` | which actions to refuse, and which to ask about ([below](#permissions)) |
 | `provider` | an OpenAI-compatible gateway ([below](#reaching-an-openai-compatible-gateway)), or an AWS account ([below](#naming-more-than-three-models)) |
 | `run.scrubEnv` | further variables to keep from a program the agent runs ([below](#runscrubenv)) |
+| `run.maxOutput` | how much of what a command printed the agent reads ([below](#runmaxoutput)) |
 | `attribution` | what a commit message or a pull request this agent writes may carry ([below](#attribution)) |
 | `keybindings` | keys rebound to your own choice ([below](#keybindings)) |
 | `search` | how large a tree a search may walk ([below](#search)) |
@@ -536,6 +537,35 @@ editing it describes your next session.
 `BRAVEBOT_SUBPROCESS_ENV_SCRUB=0` turns the withholding off entirely. Only that exact spelling does
 it: `false`, `no` and `off` change nothing, because a credential reaching every subprocess is not a
 thing to switch off by near-miss.
+
+### `run.maxOutput`
+
+```json
+{ "run": { "maxOutput": 65536 } }
+```
+
+How many bytes of what a command printed reach the agent. Past it, the output is cut in the middle:
+the beginning and the end are kept, with a line between them saying how much went, because a build
+log's verdict is at the end and its first error is near the beginning.
+
+Without this key the figure is 16 KB. It is there because your conversation has a finite amount of
+room and one command that printed a hundred thousand lines could fill it, leaving none for the work.
+That is a budget rather than a rule about what is allowed, which is why you can name your own: raise
+it when a long test run is worth the room, lower it when you would rather the agent read a summary
+and ask.
+
+One number covers a command's output, a page you asked for with `read_output`, and the account a
+background job gives when it finishes.
+
+**What was printed is never lost.** Only what reaches the conversation is cut. The whole output stays
+beside the sample, so the agent can still hand it to a check or write it to a file without running
+the command again.
+
+**Bytes, not characters**, and a cut always lands between characters rather than inside one.
+
+A cap of `0` leaves the built-in figure in force rather than meaning "no output": so does anything
+that is not a whole number, so a half-typed file costs you nothing. A delegate runs under whatever
+the session that started it is using.
 
 ### `permissions`
 

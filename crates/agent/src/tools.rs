@@ -1197,6 +1197,15 @@ pub struct Output {
 /// take seven arguments to give two tools what they need.
 pub struct Tools<'a> {
     pub workspace: &'a Workspace,
+    /// How much of what a program printed may enter the conversation, from `run.maxOutput` or
+    /// [`OUTPUT_CAP`] where nothing named one.
+    ///
+    /// The figure in force rather than what a file said, because a cap nobody named is the
+    /// built-in one and a tool runs under that. Resolved by the caller that read the settings, for
+    /// the reason the search caps are resolved there: this crate is built by every test in the
+    /// tree, and one that read a settings file would answer differently on a machine whose owner
+    /// had configured it.
+    pub output_cap: usize,
     /// The skills this turn found, which the planner selects from by name.
     pub skills: &'a crate::skills::Catalogue,
     /// Where quarantined content lives, by the names the planner was given for it.
@@ -1450,7 +1459,11 @@ impl Jobs {
     /// The output is taken as it is handed over, which is what stops it being handed over again:
     /// `seen` moves, so a `job_output` call after this reports what arrived after this and not the
     /// whole log a second time.
-    pub fn ended(&mut self) -> Vec<Ended> {
+    /// `cap` bounds what a finished job's report may spend, as it bounds a foreground run's
+    /// output. Taken as an argument because a job outlives the round that started it and this is
+    /// not the round's own call: the turn holds the figure it read from the settings and hands it
+    /// over here.
+    pub fn ended(&mut self, cap: usize) -> Vec<Ended> {
         let mut finished = Vec::new();
         for (name, job) in self.running.iter_mut() {
             if job.reported || !job.running.ended() {
@@ -1463,7 +1476,7 @@ impl Jobs {
             // not read is quarantined whole, and there is nothing of it in the conversation to
             // bound.
             let sample = if job.label.is_trusted() {
-                bounded(&printed)
+                bounded(&printed, cap)
             } else {
                 None
             };
@@ -5141,7 +5154,7 @@ fn run<S: Sink, C: Confirmer>(
             // Capped only where the planner may read it. Output it may not read is quarantined
             // whole, so nothing of it enters the conversation and there is nothing to bound.
             let sample = if label.is_trusted() {
-                bounded(&text)
+                bounded(&text, tools.output_cap)
             } else {
                 None
             };
@@ -5430,7 +5443,7 @@ fn job_output<S: Sink>(
     // Capped only where the planner may read it, exactly as a foreground run is: output it may not
     // read is quarantined whole, and there is nothing of it in the conversation to bound.
     let sample = if label.is_trusted() {
-        bounded(&fresh)
+        bounded(&fresh, tools.output_cap)
     } else {
         None
     };
@@ -5455,24 +5468,29 @@ fn job_output<S: Sink>(
     produced
 }
 
-/// How much of a command's output may enter the conversation.
+/// How much of a command's output may enter the conversation where nobody named a figure.
 ///
 /// A context-budget decision and not a safety one: a single tool result must never be able to
-/// spend a large fraction of a conversation, however useful what it printed was.
-const OUTPUT_CAP: usize = 16 * 1024;
+/// spend a large fraction of a conversation, however useful what it printed was. Because it is a
+/// budget rather than a boundary, `run.maxOutput` may name another (RUN-21), and this is what
+/// stands where nothing did.
+pub(crate) const OUTPUT_CAP: usize = 16 * 1024;
 
-/// `text` cut to [`OUTPUT_CAP`], keeping the head and the tail, or `None` where it fits.
+/// `text` cut to `cap` bytes, keeping the head and the tail, or `None` where it fits.
 ///
 /// Head and tail rather than head alone, because a build log's verdict is at the end and its first
 /// error is near the beginning: keeping only the front of one answers neither question a reader
 /// has. What went is said in between, in the driver's own words, so a planner knows it is looking
 /// at a sample rather than at a short result. Where the rest of it went is said by the turn,
 /// which is the only thing that knows the slot it went to.
-fn bounded(text: &str) -> Option<String> {
-    if text.len() <= OUTPUT_CAP {
+///
+/// The cap is a byte count, which is what a configured one is documented as: cutting on characters
+/// would make the figure a person wrote mean a different amount of context per language.
+fn bounded(text: &str, cap: usize) -> Option<String> {
+    if text.len() <= cap {
         return None;
     }
-    let half = OUTPUT_CAP / 2;
+    let half = cap / 2;
     // Cut on a character boundary, or a multi-byte character straddling the cut would panic the
     // turn on output nobody chose.
     let head_end = text
@@ -6534,7 +6552,7 @@ mod tests {
                 let effect = authority.capture().begin("independent.txt").unwrap();
                 drop(effect);
             }
-            let ended = jobs.ended();
+            let ended = jobs.ended(OUTPUT_CAP);
             assert_eq!(ended.len(), 1);
             let printed = ended[0]
                 .printed
@@ -7710,7 +7728,7 @@ mod tests {
         }
         let log = format!("the first line\n{log}the last line\n");
 
-        let sample = bounded(&log).expect("an output twice the cap is capped");
+        let sample = bounded(&log, OUTPUT_CAP).expect("an output twice the cap is capped");
 
         assert!(sample.len() < log.len(), "nothing was dropped");
         assert!(
@@ -7731,8 +7749,35 @@ mod tests {
     /// planner told that a two-line answer was cut short would narrow a command that answered it.
     #[test]
     fn an_output_inside_the_cap_is_left_alone() {
-        assert!(bounded("two\nlines\n").is_none());
-        assert!(bounded(&"x".repeat(OUTPUT_CAP)).is_none());
+        assert!(bounded("two\nlines\n", OUTPUT_CAP).is_none());
+        assert!(bounded(&"x".repeat(OUTPUT_CAP), OUTPUT_CAP).is_none());
+    }
+
+    /// The cap the caller was given is the one that holds, in both directions: a person who raised
+    /// it gets the bytes they paid for, and one who lowered it is not handed the built-in figure.
+    /// Without this the key parses, `doctor` reports it, and the output is cut where it always was.
+    #[test]
+    fn output_is_cut_to_the_cap_it_was_given() {
+        let log = "x".repeat(OUTPUT_CAP * 4);
+
+        assert!(
+            bounded(&log, OUTPUT_CAP * 8).is_none(),
+            "a raised cap still cut an output that fits under it"
+        );
+        let lowered = bounded(&log, 512).expect("an output past a lowered cap is cut");
+        let default = bounded(&log, OUTPUT_CAP).expect("an output past the built-in cap is cut");
+        assert!(
+            lowered.len() < default.len(),
+            "a lowered cap kept as much as the built-in one: {} against {}",
+            lowered.len(),
+            default.len()
+        );
+
+        // A cap an odd number of bytes wide, and a character that does not fit in one byte: the cut
+        // lands on a character boundary or the turn ends on output nobody chose.
+        let wide = "\u{3053}\u{3093}\u{306b}\u{3061}\u{306f}".repeat(100);
+        let cut = bounded(&wide, 101).expect("an output past a narrow cap is cut");
+        assert!(cut.contains("the middle of this output was dropped"));
     }
 
     mod activity {
@@ -9624,6 +9669,7 @@ mod tests {
             let mut run_directory = workspace.root().to_path_buf();
             body(&mut Tools {
                 workspace,
+                output_cap: OUTPUT_CAP,
                 skills: &skills,
                 slots: &mut slots,
                 chat: Chat {

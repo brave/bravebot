@@ -16999,6 +16999,126 @@ fn a_delegate_whose_model_needs_a_sign_in_does_not_run_and_says_so() {
     );
 }
 
+/// The figure a settings file named is the one a run is cut to, rather than the one compiled in.
+/// Only a turn shows this: the key can parse, `doctor` can report it, and the output still be cut
+/// where it always was, because the cap is spent three call sites away from where it is read.
+#[test]
+fn a_configured_output_cap_is_what_a_run_is_cut_to() {
+    let scratch = Scratch::new("configured-output-cap");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    // Comfortably past the configured cap and comfortably under the built-in one, so what the
+    // request carries says which of the two was in force.
+    let printed = "x".repeat(4096);
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", &format!(r#"{{"command":"echo {printed}"}}"#)),
+        reply_with("done"),
+    ]);
+    // Vouched for, because the cap bounds what the planner may read and output nobody vouched for
+    // is quarantined whole: a fixture that left it untrusted would pass against a cap wired to
+    // nothing.
+    let programs = vouching_for("echo", &[&printed], &scratch.path);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("run it").with_output_cap(Some(512)),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        programs,
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn finishes");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert!(
+        bodies
+            .iter()
+            .any(|body| body.contains("the middle of this output was dropped")),
+        "an output past the configured cap reached the planner whole, over {} requests",
+        bodies.len()
+    );
+}
+
+/// A delegate runs under the figure its parent holds. The budget is the person's answer about what
+/// output is worth, and it does not stop being their answer because the work moved: a delegate left
+/// at the built-in cap would spend four times the context on a build log in the one place the
+/// person is not watching.
+#[test]
+fn a_delegate_runs_under_the_output_cap_of_the_turn_that_spawned_it() {
+    let scratch = Scratch::new("delegate-output-cap");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let printed = "x".repeat(4096);
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "HAND-IT-ON",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"checker","task":"RUN-THE-BUILD"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "RUN-THE-BUILD",
+            vec![
+                tool_request("run", &format!(r#"{{"command":"echo {printed}"}}"#)),
+                reply_with("it printed a lot"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    // Vouched for by the session, so what the delegate's line prints is output the planner may
+    // read: the cap bounds that and nothing else, and a fixture leaving it quarantined would pass
+    // against a cap wired to nothing.
+    let programs = vouching_for("echo", &[&printed], &scratch.path);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("HAND-IT-ON").with_output_cap(Some(512)),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        programs,
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    let delegate: Vec<&String> = bodies
+        .iter()
+        .filter(|body| body.contains("RUN-THE-BUILD") && !body.contains("HAND-IT-ON"))
+        .collect();
+    assert!(
+        !delegate.is_empty(),
+        "the delegate never ran, so nothing was capped either way"
+    );
+    assert!(
+        delegate
+            .iter()
+            .any(|body| body.contains("the middle of this output was dropped")),
+        "the delegate ran under its own cap rather than the one its parent was given"
+    );
+}
+
 /// Records what it was told, and whose work the driver said each report was.
 ///
 /// Both halves are the property: a report says what happened and never which run it happened in,
@@ -17443,6 +17563,7 @@ fn a_delegate_spends_the_wallet_the_turn_lent_it() {
         bravebot_agent::PermissionMode::Ask,
         false,
         &bravebot_config::Attribution::default(),
+        None,
         &bravebot_core::cancel::Cancel::new(),
         &mut bravebot_agent::confirm::ApproveWrites,
         &mut bravebot_agent::IgnoreReports,

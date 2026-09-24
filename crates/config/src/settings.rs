@@ -174,6 +174,12 @@ pub struct Settings {
     keybindings: BTreeMap<String, String>,
     attribution: Attribution,
     search: SearchCaps,
+    /// What `run.maxOutput` said, if it said anything.
+    ///
+    /// `None` is the built-in cap, which is the turn's to know for the reason [`SearchCaps`] gives
+    /// about its own: answering with the number here would make this crate the second place it is
+    /// written down.
+    run_output: Option<usize>,
     providers: Vec<crate::provider::Provider>,
     layers: Vec<PathBuf>,
     contested: BTreeMap<String, PathBuf>,
@@ -433,6 +439,7 @@ impl Settings {
             keybindings: keybindings_block(root),
             attribution: attribution_block(root),
             search: search_caps(root),
+            run_output: run_output_cap(root),
             providers: crate::provider::Provider::all(root),
             layers: Vec::new(),
             contested: BTreeMap::new(),
@@ -518,6 +525,15 @@ impl Settings {
         &self.search
     }
 
+    /// How much of what a program printed the settings in force let into the conversation.
+    ///
+    /// `None` where nobody named one, for the reason [`Settings::search`] answers `None` per cap:
+    /// the built-in figure belongs to the turn that spends the context, and answering with it here
+    /// would put a second copy of it in this crate.
+    pub fn run_output_cap(&self) -> Option<usize> {
+        self.run_output
+    }
+
     /// Whether anything was set at all.
     pub fn is_empty(&self) -> bool {
         self.env.is_empty()
@@ -529,6 +545,7 @@ impl Settings {
             && self.keybindings.is_empty()
             && self.attribution.is_empty()
             && self.search.is_empty()
+            && self.run_output.is_none()
             && self.providers.is_empty()
             // A file that named `vetting.auto` and was not obeyed still said something, and
             // `doctor` reports both facts about it. Reading it as absence would print "no
@@ -600,6 +617,7 @@ impl Settings {
             .chain(self.attribution.pr.is_some().then_some("attribution.pr"))
             .chain(self.search.files.is_some().then_some("search.maxFiles"))
             .chain(self.search.time.is_some().then_some("search.maxSeconds"))
+            .chain(self.run_output.is_some().then_some("run.maxOutput"))
             .chain(self.env.keys().map(String::as_str))
     }
 
@@ -1044,6 +1062,23 @@ fn search_caps(root: &serde_json::Map<String, serde_json::Value>) -> SearchCaps 
         files: count("maxFiles").and_then(|files| usize::try_from(files).ok()),
         time: count("maxSeconds").map(Duration::from_secs),
     }
+}
+
+/// The `run.maxOutput` value: how much of what a program printed may enter the conversation.
+///
+/// Read the way a search cap is, and absent on the same terms: zero is the number somebody writes
+/// meaning "no cap", and read literally it is a program permitted to say nothing into the
+/// conversation, which answers every command with a sample of no bytes. A value that is not a whole
+/// count is absence too, so a half-typed file leaves the built-in cap in force rather than stopping
+/// a session.
+fn run_output_cap(root: &serde_json::Map<String, serde_json::Value>) -> Option<usize> {
+    let serde_json::Value::Object(run) = root.get("run")? else {
+        return None;
+    };
+    run.get("maxOutput")
+        .and_then(serde_json::Value::as_u64)
+        .filter(|cap| *cap > 0)
+        .and_then(|cap| usize::try_from(cap).ok())
 }
 
 /// The `permissions` block: three lists of rule text, and the directories to open.
@@ -1625,6 +1660,69 @@ mod tests {
                 "{text:?} capped something"
             );
         }
+    }
+
+    /// A build log worth reading is worth more than the built-in cap on some trees, and the number
+    /// cannot be changed from anywhere else, so the block has to reach the turn that spends the
+    /// context (RUN-21).
+    #[test]
+    fn a_settings_file_names_what_a_commands_output_may_spend() {
+        let settings = Settings::parse(r#"{"run": {"maxOutput": 65536}}"#);
+        assert_eq!(settings.run_output_cap(), Some(65_536));
+        assert!(!settings.is_empty());
+        assert_eq!(settings.names().collect::<Vec<_>>(), ["run.maxOutput"]);
+    }
+
+    /// Zero is the number somebody writes meaning "no cap", and read literally it is a command
+    /// permitted to say nothing into the conversation. Every other shape is absence for the reason
+    /// a search cap's is: a half-typed file leaves the built-in cap in force rather than stopping a
+    /// session.
+    #[test]
+    fn a_cap_of_zero_or_of_nonsense_leaves_the_built_in_one() {
+        for text in [
+            r#"{"run": {"maxOutput": 0}}"#,
+            r#"{"run": {"maxOutput": "65536"}}"#,
+            r#"{"run": {"maxOutput": 65536.5}}"#,
+            r#"{"run": {"maxOutput": -1}}"#,
+            r#"{"run": {"maxOutput": true}}"#,
+            r#"{"run": {"maxOutput": null}}"#,
+            r#"{"run": {"maxOutput": [65536]}}"#,
+            r#"{"run": "wide"}"#,
+            r#"{"maxOutput": 65536}"#,
+        ] {
+            assert_eq!(
+                Settings::parse(text).run_output_cap(),
+                None,
+                "{text:?} capped something"
+            );
+        }
+    }
+
+    /// The cap is one number rather than a list, so the nearest layer that named one wins and a
+    /// project does not inherit a figure somebody set for everything else they do. `run.scrubEnv`
+    /// beside it unions, and this must not be swept up in that.
+    #[test]
+    fn the_nearest_layer_that_named_an_output_cap_wins() {
+        let settings = Layers::new("output-cap-layers")
+            .global(r#"{"run": {"maxOutput": 32768, "scrubEnv": ["MY_TOKEN"]}}"#)
+            .project(r#"{"run": {"maxOutput": 65536}}"#)
+            .read();
+        assert_eq!(settings.run_output_cap(), Some(65_536));
+        assert_eq!(
+            settings.scrubbed().collect::<Vec<_>>(),
+            ["MY_TOKEN"],
+            "the union beside the cap was lost"
+        );
+
+        let only_global = Layers::new("output-cap-global")
+            .global(r#"{"run": {"maxOutput": 32768}}"#)
+            .project(r#"{"env": {"AWS_PROFILE": "this-checkout"}}"#)
+            .read();
+        assert_eq!(
+            only_global.run_output_cap(),
+            Some(32_768),
+            "a project file that said nothing about the cap dropped it"
+        );
     }
 
     /// The block a person copies out of `~/.claude/settings.json`, read without being rewritten

@@ -1123,6 +1123,48 @@ the alternative of withholding it from the case it exists for.
 `verified-by: bravebot_tui::confirm::advising_a_pattern_offers_no_key_that_grants_one`
 `verified-by: bravebot_tui::confirm::a_prompt_for_a_line_nothing_has_varied_says_nothing_about_a_pattern`
 
+<a id="RUN-21"></a>
+### RUN-21: the cap on what output may spend of the conversation is configurable
+
+`run.maxOutput`, in the settings files, names how many bytes of what a program printed may enter the
+conversation. It may be raised as well as lowered, and a key nobody set leaves the built-in cap in
+force. One key covers a foreground run, a `read_output` or `job_output` page, and the account a
+finished background job gives of itself, because those are the same bytes reaching the same context
+by three routes.
+
+A cap of zero is absence rather than a program permitted to say nothing, as is any value that is not
+a whole count. Absence leaves the built-in cap in force, which is what a layer setting the key gets
+rather than the number a weaker layer named.
+
+**Why it may be configured at all.** The cap bounds a budget and not an authority. A gate decides
+what may run and what may be read; this decides how much of a result is worth the room it takes, and
+the room belongs to whoever is paying for the conversation. A build log worth 60 KB to the person
+reading the turn is worth that whatever this program's default says, and a raised cap takes nothing
+away from a gate: output nobody vouched for is quarantined whole either way, and what the cap sets is
+how much of what the planner may read reaches it.
+
+**It bounds the conversation and never the run.** What was printed is kept whole beside the sample
+whatever the cap is, so the middle is still there to hand to a processor or write to a file, and a
+raised cap does not mean a command is run twice to see it.
+
+**The figure is in bytes.** Cutting on characters would make one number mean a different amount of
+context per language, and a cap is spent in tokens rather than in glyphs. The cut still lands on a
+character boundary, because a multi-byte character straddling it would end the turn on output nobody
+chose.
+
+**Where it is resolved.** In the caller that read the settings, as [SEARCH-9](search.md#SEARCH-9)'s
+caps are and for the same reason: every test in the tree builds a turn, and one that read a settings
+file would answer differently on a machine whose owner had configured it. A delegate runs under the
+figure the turn that spawned it holds, since the budget is a person's answer about what output is
+worth and does not stop being theirs because the work moved ([DELEGATE-1](../delegation.md)).
+
+`verified-by: bravebot_config::settings::a_settings_file_names_what_a_commands_output_may_spend`
+`verified-by: bravebot_config::settings::a_cap_of_zero_or_of_nonsense_leaves_the_built_in_one`
+`verified-by: bravebot_config::settings::the_nearest_layer_that_named_an_output_cap_wins`
+`verified-by: bravebot_agent::tools::output_is_cut_to_the_cap_it_was_given`
+`verified-by: bravebot_agent::turn::a_configured_output_cap_is_what_a_run_is_cut_to`
+`verified-by: bravebot_agent::turn::a_delegate_runs_under_the_output_cap_of_the_turn_that_spawned_it`
+
 ## Open questions
 
 - Whether output can ever be trusted by proof rather than by assertion is issue #3, and it may not

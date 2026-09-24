@@ -624,6 +624,14 @@ pub struct Task {
     /// fine. So the interface passes `None`, and an unattended run passes
     /// [`MAX_TOOL_ROUNDS`], where nothing else can end a loop.
     pub rounds: Option<usize>,
+    /// How much of what a program printed may enter this turn's conversation, or `None` for the
+    /// built-in cap.
+    ///
+    /// The caller's business for the reason `rounds` is: both are budgets on the same context, and
+    /// which of a settings file's layers named this one is something only the caller that read them
+    /// knows. `None` rather than the built-in number, so the default lives in one place
+    /// ([`crate::tools::OUTPUT_CAP`]) and a caller saying "unchanged" is not a second copy of it.
+    pub output_cap: Option<usize>,
     /// Rules the user wrote in advance about which actions to ask them about.
     ///
     /// Supplied per turn for the reason `home` and `model` are: which file they came from is the
@@ -792,6 +800,9 @@ impl Task {
             // and a default cannot know whether anybody is, so the default is the one that is
             // wrong in the cheaper direction.
             rounds: Some(MAX_TOOL_ROUNDS),
+            // The built-in cap, which is a caller that read no settings file saying nothing about
+            // what a command's output may spend.
+            output_cap: None,
             permissions: Permissions::new(),
             // Asking, which is what a turn has always done.
             permission_mode: crate::PermissionMode::default(),
@@ -915,6 +926,16 @@ impl Task {
     /// [`Task::rounds`].
     pub fn with_rounds(mut self, rounds: Option<usize>) -> Self {
         self.rounds = rounds;
+        self
+    }
+
+    /// Bound how much of what a program printed may enter the conversation, or `None` for the
+    /// built-in cap.
+    ///
+    /// What `run.maxOutput` comes to. A caller that read no settings file passes `None`, which is
+    /// the cap every turn ran under before the key existed. See [`Task::output_cap`].
+    pub fn with_output_cap(mut self, cap: Option<usize>) -> Self {
+        self.output_cap = cap;
         self
     }
 
@@ -1836,11 +1857,12 @@ fn collect_delegates<S: Sink, R: Reporter>(
 /// the same gate as any other result: a job nobody vouched for hands the planner a reference.
 fn collect_jobs<S: Sink, R: Reporter>(
     jobs: &mut tools::Jobs,
+    output_cap: usize,
     policy: &mut Policy<'_, S>,
     conversation: &mut Conversation,
     reporter: &mut R,
 ) -> Result<(), TurnError> {
-    for ended in jobs.ended() {
+    for ended in jobs.ended(output_cap) {
         let origin = format!("what `{}` printed", ended.line);
         // Whichever way the label went: it is their directory, and a person who let a program run
         // in it is entitled to read what it printed and to be told how it ended. "12 lines,
@@ -2595,7 +2617,13 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                 // And whatever exited while it was running, for the same reason and in the same place:
                 // the finish of a background job is news the turn is told rather than something the
                 // planner has to remember to ask about (CMDLINE-14).
-                collect_jobs(&mut jobs, &mut policy, conversation, &mut reporter)?;
+                collect_jobs(
+                    &mut jobs,
+                    task.output_cap.unwrap_or(tools::OUTPUT_CAP),
+                    &mut policy,
+                    conversation,
+                    &mut reporter,
+                )?;
 
                 // Before the request rather than after the reply that overflowed. The figure being
                 // compared is the last round's, so this is one round late by construction, which is why
@@ -2961,6 +2989,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         &mut policy,
                         &mut tools::Tools {
                             workspace,
+                            output_cap: task.output_cap.unwrap_or(tools::OUTPUT_CAP),
                             skills: &catalogue,
                             slots: conversation.quarantine(),
                             chat: crate::processor::Chat {
@@ -3039,6 +3068,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 task.permission_mode,
                                 task.auto_vetting,
                                 &task.attribution,
+                                task.output_cap,
                                 cancel,
                                 &mut confirmer,
                                 &mut reporter,
