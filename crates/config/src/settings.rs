@@ -120,6 +120,12 @@ pub fn name_a_settings_file(path: PathBuf) {
     let _ = NAMED.set(path);
 }
 
+/// The file [`name_a_settings_file`] named, for a caller reading the layers of a directory the
+/// process did not start in, which [`Settings::load`] cannot.
+pub fn named_settings_file() -> Option<&'static Path> {
+    NAMED.get().map(PathBuf::as_path)
+}
+
 /// The `env` block, or empty when there is no file or it cannot be read.
 ///
 /// Every failure is the same as absence. A missing home directory, no file, a syntax error, a
@@ -281,14 +287,14 @@ impl Settings {
         Self::layered(
             home(),
             std::env::current_dir().ok().as_deref(),
-            NAMED.get().map(PathBuf::as_path),
+            named_settings_file(),
         )
     }
 
     /// As [`Settings::load`], for a named home, working directory and command line, so a test needs
     /// no ambient ones.
     ///
-    /// The working directory is where the process started and not an ancestor of it. A session begun
+    /// The working directory is the session's own and not an ancestor of it. A session begun
     /// in a subdirectory therefore reads no project settings, which is the same rule Claude Code
     /// applies and is the reason this walks nothing: a search upward would make what configures a
     /// session depend on which directory somebody happened to `cd` into, and the file it eventually
@@ -298,6 +304,19 @@ impl Settings {
     /// rather than read from [`NAMED`] here, so the order and the merge rules are checked without a
     /// process-wide switch in force under every other test in this binary.
     pub fn layered(home: Option<PathBuf>, cwd: Option<&Path>, named: Option<&Path>) -> Self {
+        Self::layered_since(home, cwd, named, None)
+    }
+
+    /// As [`Settings::layered`], for a session in `cwd` that began in `started`.
+    ///
+    /// A named file inside either is a checkout's file: moving out of the checkout it sits in does
+    /// not make it the person's.
+    pub fn layered_since(
+        home: Option<PathBuf>,
+        cwd: Option<&Path>,
+        named: Option<&Path>,
+        started: Option<&Path>,
+    ) -> Self {
         let project = cwd.map(|cwd| cwd.join(PROJECT_DIR));
         let home_layer = home.map(|home| home.join(SETTINGS_FILE));
         let paths = [
@@ -337,7 +356,7 @@ impl Settings {
                     false => vetting_ignored.push(path.clone()),
                 }
             }
-            let granting = grants(&path, home_layer.as_deref(), named, cwd);
+            let granting = grants(&path, home_layer.as_deref(), named, cwd, started);
             for rule in permission_lists(&root).allow {
                 // A blank entry goes through whatever layer wrote it. It grants nothing whoever
                 // wrote it, since the rule language calls an empty rule empty and refuses it, and
@@ -784,9 +803,9 @@ fn auto_vetting(root: &serde_json::Map<String, serde_json::Value>) -> Option<boo
 
 /// Whether a rule that *grants* may be read from this layer.
 ///
-/// True for the home layer, and for a file the command line named that sits outside the workspace.
-/// False for `.bravebot/settings.json`, for `.bravebot/settings.local.json`, and for a named file
-/// that resolves inside the workspace.
+/// True for the home layer, and for a file the command line named that sits outside the workspace
+/// and outside the one the session began in. False for `.bravebot/settings.json`, for
+/// `.bravebot/settings.local.json`, and for a named file that resolves inside either.
 ///
 /// The home layer is the person's own, on the footing this module's own note on what these files
 /// are trusted for already states. A file the command line named is a path somebody typed at this
@@ -804,11 +823,12 @@ fn grants(
     home_layer: Option<&Path>,
     named: Option<&Path>,
     cwd: Option<&Path>,
+    started: Option<&Path>,
 ) -> bool {
     if Some(path) == home_layer {
         return true;
     }
-    Some(path) == named && !inside(cwd, path)
+    Some(path) == named && !inside(cwd, path) && !inside(started, path)
 }
 
 /// Whether `path` resolves to somewhere under `cwd`.
@@ -2437,6 +2457,27 @@ mod tests {
         let ignored: Vec<_> = settings.allow_ignored().collect();
         assert_eq!(ignored.len(), 1);
         assert!(ignored[0].0.ends_with("tooling.json"));
+    }
+
+    /// Outside the workspace the session moved to, and still the checkout's file it started in.
+    #[test]
+    fn a_named_layer_inside_where_the_session_began_grants_nothing_after_it_moves() {
+        let layers = Layers::new("allow-named-left-behind").named_inside_the_workspace(
+            r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)"]}}"#,
+        );
+        let elsewhere = layers.home.with_file_name("elsewhere");
+        std::fs::create_dir_all(&elsewhere).expect("the directory moved to");
+        let settings = Settings::layered_since(
+            Some(layers.home.clone()),
+            Some(&elsewhere),
+            layers.named.as_deref(),
+            Some(&layers.cwd),
+        );
+        assert!(
+            settings.permissions().allow.is_empty(),
+            "a file in the checkout left behind answered an approval prompt"
+        );
+        assert_eq!(settings.allow_ignored().count(), 1);
     }
 
     /// A blank entry is nobody's grant, so which layer wrote it decides nothing. It goes through
