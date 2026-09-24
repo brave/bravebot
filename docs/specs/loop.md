@@ -11,7 +11,7 @@ governs:
 guards:
   - symbol: Session::start_loop
   - symbol: Session::watch_again
-  - symbol: Running::dispatched
+  - symbol: Running::dispatching
 documented-by: docs/website/docs/reference/commands.md
 ---
 
