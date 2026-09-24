@@ -31,3 +31,4 @@ docs/specs/mcp-servers.md:SERVERS-10: a variable a server needs is named in the 
 docs/specs/mcp-servers.md:SERVERS-12: the managed layer may remove a server and never add one
 docs/specs/mcp-servers.md:SERVERS-13: bypassing answers these two prompts and reaches nothing else here
 docs/specs/mcp-servers.md:SERVERS-14: what is reachable is visible without running anything
+docs/specs/releases.md:RELEASE-13: on Linux, a checksum whose signature does not verify installs nothing

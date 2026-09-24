@@ -36,7 +36,8 @@ once that release exists.
 
 Nothing here is pinned by a Rust test. The rules below are enforced by a refusal in the tagging
 path, the Jenkins publish path, or the npm publish workflow rather than by anything the test
-suite can execute, so each clause says in brackets what makes it hold.
+suite can execute, so each clause says in brackets what makes it hold, or says `none` where
+nothing does yet.
 
 ## Clauses
 
@@ -219,10 +220,36 @@ the pipeline that publishes.
 
 `verified-by: by-construction (package-lock.json is in the tree, both workflows run npm ci --ignore-scripts, and lockfile-lint refuses hosts other than npm and non-https URLs)`
 
+<a id="RELEASE-13"></a>
+### RELEASE-13: on Linux, a checksum whose signature does not verify installs nothing
+
+On Linux, where `gpg` can be run, each installer also fetches the signature published beside the
+checksum and the release signing key, which is served from Brave's download host rather than from
+the release, and checks that signature over the checksum exactly as it was fetched. When either
+cannot be fetched, or the signature does not verify, no executable is written. Where `gpg` cannot
+be run, the installer says it skipped the check and installs on the checksum alone. Darwin and
+Windows are not checked this way.
+
+**Why.** The Linux binary carries no signature of its own, and its checksum is uploaded beside it,
+so whoever can replace the one can replace the other: the checksum proves the download arrived
+intact, not who produced it. A signature from a key published somewhere else means a substituted
+binary also needs that key, or control of a second host. A missing signature is refused rather than
+skipped because skipping it would let whoever can change the release turn the check off by deleting
+one file, and that is the person the check exists for. A missing `gpg` is skipped rather than
+refused because it is a property of the machine, which nobody changing a release controls, and
+requiring it would fail an install for a reason that has nothing to do with what was downloaded.
+
+**Note.** The check runs in a keyring made for it and removed afterwards, so nothing is read from
+or added to the person's own.
+
+`verified-by: none`
+
 ## Known costs
 
-- **Nothing here is pinned by a Rust test.** Every clause is by-construction, which means a
-  refusal can be removed and only a reader will notice. The tagging path is shell in a makefile,
+- **Nothing here is pinned by a Rust test.** Every clause but [RELEASE-13](#RELEASE-13) is
+  by-construction, which means a refusal can be removed and only a reader will notice. RELEASE-13
+  is `verified-by: none`: its check is shell and JavaScript that could be run against a key made
+  for the purpose, and nothing runs it yet. The tagging path is shell in a makefile,
   publication is a Jenkins job in another repository, and a test that shelled out to a real tag
   push would have to publish something to prove anything. Two checks hold part of it from outside
   the suite. `make check-security` holds the shape of the publish workflow rather than any of these
@@ -236,6 +263,16 @@ the pipeline that publishes.
   attaches assets. A change there can break RELEASE-6 through RELEASE-8 without this tree
   noticing. RELEASE-9 is the installer in this repository: a checksum Jenkins ships in the
   wrong form is refused here, not accepted.
+
+- **Nothing refuses a release whose Linux checksums carry no signature.** The publish job checks
+  for each binary, and the npm publish workflow for each binary and its checksum, but neither
+  looks for a signature. A release published without them is refused by every Linux install that has `gpg`,
+  and the install script, which always fetches the newest release, stops working for all of them
+  at once.
+
+- **The signing key is whatever Brave's download host serves.** Neither installer names the key it
+  expects, so control of that host and of the release together passes the check, where a key named
+  in the installer would also need the key's secret half.
 
 - **The refusals before a tag guard the tag, not the branch.** Tagging checks the branch, the
   remote, and the agreement among the files that state a version. The publish job builds the tip of a

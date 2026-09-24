@@ -54,7 +54,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [trace.md](trace.md) | `TRACE` | 6 | what is recorded about every decision the system makes, and what that record may contain |
 | [localization.md](localization.md) | `LOCALE` | 7 | every word said to a person, and which of them change with the reader's language |
 | [layering.md](layering.md) | `LAYER` | 6 | which crate is allowed to do what |
-| [releases.md](releases.md) | `RELEASE` | 12 | what names a version, what starts a release, and what an installer trusts about what it fetched |
+| [releases.md](releases.md) | `RELEASE` | 13 | what names a version, what starts a release, and what an installer trusts about what it fetched |
 | [updates.md](updates.md) | `UPDATE` | 10 | learning that a newer version is out, and the line that installs it |
 
 ## The tools
