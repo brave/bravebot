@@ -29,7 +29,7 @@ guards:
       - crates/agent/src/aside.rs: 2
       - crates/agent/src/manifest.rs: 5
       - crates/agent/src/processor.rs: 1
-      - crates/agent/src/tools.rs: 29
+      - crates/agent/src/tools.rs: 30
       - crates/agent/src/turn.rs: 4
       - crates/agent/src/vet.rs: 1
       - crates/agent/src/workspace.rs: 1
@@ -48,7 +48,7 @@ guards:
       - crates/agent/src/manifest.rs: 10
       - crates/agent/src/preamble.rs: 1
       - crates/agent/src/skills.rs: 3
-      - crates/agent/src/tools.rs: 13
+      - crates/agent/src/tools.rs: 16
       - crates/agent/src/turn.rs: 3
       - crates/agent/src/workspace.rs: 9
       - crates/tui/tests/sessions.rs: 4
@@ -205,6 +205,7 @@ wearing the driver's attribution, which is the thing this clause exists to stop.
 `verified-by: bravebot_core::reference::a_description_names_the_shape_and_not_the_content`
 `verified-by: bravebot_core::reference::a_description_says_how_to_refer_to_the_content`
 `verified-by: bravebot_agent::turn::a_fetched_page_names_the_url_that_was_asked_for_and_not_where_a_redirect_went`
+`verified-by: bravebot_agent::tools::an_edit_by_reference_that_cannot_be_read_does_not_name_the_file`
 
 <a id="LABEL-4"></a>
 ### LABEL-4: nothing untrusted in the driver's context
