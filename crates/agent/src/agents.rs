@@ -545,4 +545,16 @@ mod tests {
         assert_eq!(definition.name(), "cheap-reader");
         assert_eq!(definition.model(), Some("haiku"));
     }
+
+    /// An empty or whitespace-only model key is ignored, leaving the model unset.
+    #[test]
+    fn an_empty_model_name_in_a_definition_is_ignored() {
+        let definition = definition_of(
+            "---\nname: default-reader\ndescription: reads with parent model\nkind: reader\nmodel: \
+             \"   \"\n---\n\nbody\n",
+        );
+
+        assert_eq!(definition.name(), "default-reader");
+        assert_eq!(definition.model(), None);
+    }
 }

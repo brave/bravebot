@@ -464,7 +464,9 @@ authority rather than the person who vouched for it.
 A definition may also name a `model:`, selecting the model this delegate runs on (for example
 `haiku` for a cheap reader or `opus` for a complex worker). The name resolves through configuration
 the way any named model does, so tier aliases and explicit model identifiers are both accepted.
-Where `model:` is omitted, the delegate inherits the model of the turn that spawned it.
+Where `model:` is omitted, the delegate inherits the model of the turn that spawned it. Where a
+named model cannot be served by the configuration, the delegate fails rather than falling back to
+the spawning turn's model, so an intended cost boundary cannot be silently bypassed.
 
 Keys other than the ones this reads are ignored rather than refused, per
 [SKILL-1](skills.md#SKILL-1), so a definition written for another agent loads here. That is a
@@ -475,6 +477,7 @@ directory serve several of them.
 `verified-by: bravebot_agent::agents::a_kind_nobody_enumerated_is_not_a_definition`
 `verified-by: bravebot_agent::agents::a_definition_needs_a_kind_and_a_description`
 `verified-by: bravebot_agent::agents::a_definition_reads_a_model_name`
+`verified-by: bravebot_agent::agents::an_empty_model_name_in_a_definition_is_ignored`
 `verified-by: bravebot_agent::agents::an_asterisk_is_a_name_and_never_the_whole_list`
 `verified-by: bravebot_agent::agents::a_key_nothing_here_reads_is_ignored_rather_than_refused`
 `verified-by: bravebot_core::delegate::a_definition_can_only_narrow_what_its_kind_holds`

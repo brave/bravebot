@@ -18,6 +18,7 @@ Put one in `~/.bravebot/agents/<name>.md` and it is available in every project; 
 name: rule-reviewer
 description: Checks a diff against the rule in docs/development/reviewing-for-the-rule.md. Use before asking anyone to review a label change.
 kind: reader
+model: haiku
 tools: read_file, list_files
 ---
 
@@ -36,11 +37,20 @@ the task afresh every time.
 | `name` | yes | what the planner names to select it |
 | `description` | yes | what the planner decides from, so say *when* to use it rather than what it does |
 | `kind` | yes | `reader`, `checker` or `worker` |
+| `model` | no | the model this delegate runs on (`haiku`, `sonnet`, `opus`, or an explicit model identifier); absent inherits the spawning turn's |
 | `tools` | no | fewer tools than the kind's; absent means the kind's own |
 | body | no | the standing instruction |
 
 Keys other than these are ignored rather than refused, so a definition written for another agent
 loads here too.
+
+**`model` chooses what the delegate runs on.** A tier alias (`haiku`, `sonnet`, `opus`) or an
+explicit model identifier resolves through configuration the way any named model does. This lets a
+high-volume delegate like a build checker run on a cheap model rather than spending the turn's model
+on reading thousands of lines of logs, while a refactoring worker can select a stronger model. Where
+`model` is omitted, the delegate inherits the model of the turn that spawned it. Where a named model
+cannot be served by the configuration, the delegate fails rather than falling back to the parent
+turn's model, so an intended cost control cannot be silently bypassed.
 
 **`kind` picks what the delegate may do, and your file never describes it.** A `reader` reads,
 lists and searches; a `checker` also runs programs; a `worker` also writes files. Each still asks

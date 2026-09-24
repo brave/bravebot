@@ -16544,6 +16544,16 @@ fn a_delegate_uses_the_model_its_definition_selected() {
     )
     .expect("write the cheap definition");
     std::fs::write(
+        home.path.join("agents").join("explicit-reader.md"),
+        "---\nname: explicit-reader\ndescription: Reads on explicit model.\nkind: reader\nmodel: custom-explicit-model\n---\n\nREAD-EXPLICIT\n",
+    )
+    .expect("write the explicit definition");
+    std::fs::write(
+        home.path.join("agents").join("blank-reader.md"),
+        "---\nname: blank-reader\ndescription: Reads on inherited model.\nkind: reader\nmodel: \"   \"\n---\n\nREAD-BLANK\n",
+    )
+    .expect("write the blank definition");
+    std::fs::write(
         home.path.join("agents").join("plain-reader.md"),
         "---\nname: plain-reader\ndescription: Reads on turn model.\nkind: reader\n---\n\nREAD-PLAIN\n",
     )
@@ -16560,6 +16570,14 @@ fn a_delegate_uses_the_model_its_definition_selected() {
                 ),
                 tool_request(
                     "spawn_agent",
+                    r#"{"kind":"explicit-reader","task":"CHECK-WITH-EXPLICIT-MODEL"}"#,
+                ),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"blank-reader","task":"CHECK-WITH-BLANK-MODEL"}"#,
+                ),
+                tool_request(
+                    "spawn_agent",
                     r#"{"kind":"plain-reader","task":"CHECK-WITH-PLAIN-MODEL"}"#,
                 ),
                 reply_with("nothing to add while it works"),
@@ -16567,6 +16585,11 @@ fn a_delegate_uses_the_model_its_definition_selected() {
             ],
         ),
         ("CHECK-WITH-CHEAP-MODEL", vec![reply_with("cheap clear")]),
+        (
+            "CHECK-WITH-EXPLICIT-MODEL",
+            vec![reply_with("explicit clear")],
+        ),
+        ("CHECK-WITH-BLANK-MODEL", vec![reply_with("blank clear")]),
         ("CHECK-WITH-PLAIN-MODEL", vec![reply_with("plain clear")]),
     ]);
     let config = config_for(&endpoint);
@@ -16610,6 +16633,28 @@ fn a_delegate_uses_the_model_its_definition_selected() {
     assert!(
         cheap.contains(&format!(r#""model":"{expected_haiku}""#)),
         "cheap delegate did not use model named in definition: {cheap}"
+    );
+
+    let explicit = requests
+        .iter()
+        .find(|body| {
+            body.contains("CHECK-WITH-EXPLICIT-MODEL") && !body.contains("DELEGATE-TO-CHEAP-READER")
+        })
+        .expect("explicit delegate request sent");
+    assert!(
+        explicit.contains(r#""model":"custom-explicit-model""#),
+        "explicit delegate did not use explicit model identifier: {explicit}"
+    );
+
+    let blank = requests
+        .iter()
+        .find(|body| {
+            body.contains("CHECK-WITH-BLANK-MODEL") && !body.contains("DELEGATE-TO-CHEAP-READER")
+        })
+        .expect("blank delegate request sent");
+    assert!(
+        blank.contains(r#""model":"custom-parent-model""#),
+        "blank model delegate did not inherit turn model: {blank}"
     );
 
     let plain = requests
