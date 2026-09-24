@@ -37,7 +37,7 @@ the task afresh every time.
 | `name` | yes | what the planner names to select it |
 | `description` | yes | what the planner decides from, so say *when* to use it rather than what it does |
 | `kind` | yes | `reader`, `checker` or `worker` |
-| `model` | no | the model this delegate runs on (`haiku`, `sonnet`, `opus`, or an explicit model identifier); absent inherits the spawning turn's |
+| `model` | no | the model this delegate runs on (`haiku`, `sonnet`, `opus`, or an explicit model identifier); absent or `inherit` means the spawning turn's |
 | `tools` | no | fewer tools than the kind's; absent means the kind's own |
 | body | no | the standing instruction |
 

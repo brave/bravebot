@@ -461,13 +461,6 @@ cannot be had here. [DELEGATE-4](#DELEGATE-4) says delegation redistributes auth
 creates it, and a checked-in file granting a capability would make the file the author of
 authority rather than the person who vouched for it.
 
-A definition may also name a `model:`, selecting the model this delegate runs on (for example
-`haiku` for a cheap reader or `opus` for a complex worker). The name resolves through configuration
-the way any named model does, so tier aliases and explicit model identifiers are both accepted.
-Where `model:` is omitted, the delegate inherits the model of the turn that spawned it. Where a
-named model cannot be served by the configuration, the delegate fails rather than falling back to
-the spawning turn's model, so an intended cost boundary cannot be silently bypassed.
-
 Keys other than the ones this reads are ignored rather than refused, per
 [SKILL-1](skills.md#SKILL-1), so a definition written for another agent loads here. That is a
 deliberate divergence from the strict schemas those tools use, and it is what lets one checked-in
@@ -476,15 +469,12 @@ directory serve several of them.
 `verified-by: bravebot_agent::agents::a_definition_carries_a_name_a_description_a_kind_and_a_body`
 `verified-by: bravebot_agent::agents::a_kind_nobody_enumerated_is_not_a_definition`
 `verified-by: bravebot_agent::agents::a_definition_needs_a_kind_and_a_description`
-`verified-by: bravebot_agent::agents::a_definition_reads_a_model_name`
-`verified-by: bravebot_agent::agents::an_empty_model_name_in_a_definition_is_ignored`
 `verified-by: bravebot_agent::agents::an_asterisk_is_a_name_and_never_the_whole_list`
 `verified-by: bravebot_agent::agents::a_key_nothing_here_reads_is_ignored_rather_than_refused`
 `verified-by: bravebot_core::delegate::a_definition_can_only_narrow_what_its_kind_holds`
 `verified-by: bravebot_core::delegate::naming_tools_drops_the_capabilities_no_named_tool_reaches`
 `verified-by: bravebot_core::delegate::a_definition_narrowed_to_one_tool_can_still_reach_the_endpoint`
 `verified-by: bravebot_core::delegate::a_definition_that_names_no_tools_holds_its_kinds_own_set`
-`verified-by: bravebot_core::delegate::a_definition_may_name_a_model_and_the_spec_carries_it`
 `verified-by: bravebot_core::delegate::a_name_that_is_not_a_tool_selects_no_capability`
 `verified-by: bravebot_core::delegate::a_tools_line_written_for_another_agent_is_reported_name_by_name`
 `verified-by: bravebot_core::delegate::a_definition_that_names_only_a_write_tool_can_still_read`
@@ -495,7 +485,6 @@ directory serve several of them.
 `verified-by: bravebot_core::policy::a_definition_cannot_widen_past_the_run_that_spawned_it`
 `verified-by: bravebot_agent::tools::a_definition_confines_a_delegate_to_the_tools_it_named`
 `verified-by: bravebot_agent::tools::the_capability_that_gates_a_tool_here_is_the_one_the_kernel_reads`
-`verified-by: bravebot_agent::turn::a_delegate_uses_the_model_its_definition_selected`
 
 <a id="DELEGATE-20"></a>
 ### DELEGATE-20: a definition is resolved from trusted sources before the turn, or it is dropped
@@ -552,6 +541,27 @@ There is no length limit and no character class. A name is compared, never resol
 anything, so what it may hold is [SKILL-8](skills.md#SKILL-8)'s question and not this one.
 
 `verified-by: bravebot_agent::agents::a_name_that_is_or_folds_to_a_colon_is_refused`
+
+<a id="DELEGATE-22"></a>
+### DELEGATE-22: a definition may name the model its delegate runs on
+
+`model:` is optional. A definition naming one runs its delegate on that model, resolved the way any
+named model is, so a tier alias such as `haiku` means that tier's configured model and anything
+else is sent as written. A definition naming none, or naming `inherit`, runs on the model of the
+turn that spawned it.
+
+The name is configuration, not content. A definition loads only from a source somebody vouched for
+([DELEGATE-20](#DELEGATE-20)), so the file is the endorsement for the request field the name lands
+in, as a person's pick in `/model` is for the parent's.
+
+**Why `inherit` names none.** It is how other agents' definitions say so, and one ported from them
+would otherwise send the word as a model name.
+
+`verified-by: bravebot_agent::agents::a_definition_reads_a_model_name`
+`verified-by: bravebot_agent::agents::an_empty_model_name_in_a_definition_is_ignored`
+`verified-by: bravebot_agent::agents::a_definition_naming_inherit_names_no_model`
+`verified-by: bravebot_core::delegate::a_definition_may_name_a_model_and_the_spec_carries_it`
+`verified-by: bravebot_agent::turn::a_delegate_uses_the_model_its_definition_selected`
 
 ## Known costs
 

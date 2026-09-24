@@ -100,10 +100,12 @@ fn read_definition(text: &str, origin: &str) -> Read {
         origin,
     );
 
+    // `inherit` is how other agents' definitions name no model, so one ported from them keeps
+    // meaning that rather than sending the word as a model name.
     if let Some(model) = declared
         .get("model")
         .map(|m| m.trim())
-        .filter(|m| !m.is_empty())
+        .filter(|m| !m.is_empty() && !m.eq_ignore_ascii_case("inherit"))
     {
         definition = definition.with_model(model);
     }
@@ -556,5 +558,17 @@ mod tests {
 
         assert_eq!(definition.name(), "default-reader");
         assert_eq!(definition.model(), None);
+    }
+
+    #[test]
+    fn a_definition_naming_inherit_names_no_model() {
+        for written in ["inherit", "Inherit"] {
+            let definition = definition_of(&format!(
+                "---\nname: ported\ndescription: from elsewhere\nkind: reader\nmodel: \
+                 {written}\n---\n\nbody\n"
+            ));
+
+            assert_eq!(definition.model(), None, "model: {written}");
+        }
     }
 }
