@@ -165,9 +165,10 @@ target including the tests. Nothing else compiles the `#[cfg(windows)]` arms of 
 check: the cross-build produces the shipped binary and lints nothing, and compiles no test target
 at all, so a Windows arm that does not build or that trips a lint reaches main with CI green. It
 cross-compiles, which clippy allows because it stops before linking, so no Windows host is
-involved and the suite is not run on one. Worth running for anything with a platform branch in it,
-and for any test that has one: a `#[cfg(unix)]` left off a test is invisible from every platform
-that has `unix`.
+involved and the suite is not run on one. CI's `Desktop on Windows` job runs the file helper's
+suite and the walkthrough on a Windows runner, which no local target does. Worth running for
+anything with a platform branch in it, and for any test that has one: a `#[cfg(unix)]` left off a
+test is invisible from every platform that has `unix`.
 
 `make check-linux` runs fmt, clippy and the tests on Linux under the stable toolchain its container
 is pinned to, which is a digest rather than whatever `rust:slim` resolves to today, so moving it on
