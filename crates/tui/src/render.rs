@@ -6074,6 +6074,34 @@ mod tests {
         );
     }
 
+    /// A count is the front of an instruction still being assembled, so it is drawn for the reason
+    /// the rest of one is: `2` has decided what the next letter does as much as a `d` has. Read
+    /// from the wait alone, the digits would be three presses the screen said nothing about, and a
+    /// person who had typed one by accident would find out from what the next letter did.
+    #[test]
+    fn the_hint_line_draws_the_count_in_front_of_an_instruction() {
+        let mut session = Session::new("kernel-enforced");
+        session.choose_editing(crate::vim::Editing::Vi);
+        for c in "one two three four five six seven".chars() {
+            session.type_char(c);
+        }
+        session.enter_vi_normal();
+        session.type_char('0');
+
+        for (c, drawn) in [('2', "NORMAL 2"), ('d', "NORMAL 2d"), ('3', "NORMAL 2d3")] {
+            session.type_char(c);
+            let hint = hint_row_at(&session, 120, 24);
+            assert!(hint.contains(drawn), "{hint}");
+        }
+
+        session.type_char('w');
+        let hint = hint_row_at(&session, 120, 24);
+        assert!(
+            hint.contains("NORMAL") && !hint.contains("NORMAL 2"),
+            "a whole instruction was still drawn as waiting: {hint}"
+        );
+    }
+
     /// The box everybody else has is in no mode, and a word standing there for somebody who never
     /// asked for vi editing is a word they cannot account for.
     #[test]

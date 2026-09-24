@@ -948,8 +948,20 @@ pub struct Session {
     half_typed: Option<crate::vim::Pending>,
     /// The keys typed of the instruction `half_typed` holds, for the hint line to draw.
     ///
-    /// Read only while that is set, so what an abandoned wait leaves here is never drawn.
+    /// Read only while an instruction is being assembled, so what an abandoned one leaves here is
+    /// never drawn.
     typed_so_far: String,
+    /// The count typed in front of the instruction being assembled, or `None` where none is.
+    ///
+    /// Held on the session rather than passed along, because the digits arrive as presses of their
+    /// own and the instruction they belong to has not been typed yet. Cleared by the press that
+    /// carries the instruction out, and by everything that abandons a half-typed one.
+    count: Option<u32>,
+    /// The count an operator took before it began waiting for the stretch to act on.
+    ///
+    /// Separate from `count`, which starts again for the motion: the two multiply, so `2d3w` is six
+    /// words, and one field holding both would have to decide which digit won.
+    held_count: Option<u32>,
     /// The last jump to a character, for the keys that repeat one.
     ///
     /// Remembered because `;` and `,` mean nothing on their own: they say "that again", and there is
@@ -970,8 +982,9 @@ pub struct Session {
     /// The last change, for the key that does it again.
     ///
     /// The instruction rather than what it produced, so `.` acts at the caret wherever that now is.
-    /// That is the whole of why the key is worth having: the change is repeated somewhere else.
-    last_change: Option<(crate::vim::Operator, crate::vim::Extent)>,
+    /// That is the whole of why the key is worth having: the change is repeated somewhere else. The
+    /// count is part of the instruction, and a count typed in front of `.` replaces it.
+    last_change: Option<(crate::vim::Operator, crate::vim::Extent, Option<u32>)>,
     /// The line as it stood before the last change, for the key that puts it back.
     ///
     /// One step rather than a stack, on the same footing as the stash: the key that undoes and the
@@ -1373,6 +1386,8 @@ impl Session {
             bindings: crate::keybindings::Keybindings::default(),
             mode: crate::vim::Mode::default(),
             half_typed: None,
+            count: None,
+            held_count: None,
             typed_so_far: String::new(),
             last_find: None,
             anchor: None,
@@ -2696,8 +2711,11 @@ impl Session {
         // cannot account for it.
         self.anchor = None;
         // An instruction waiting for its next key goes with the mode it was typed in, for the same
-        // reason: INSERT mode would draw it beside a box that is typing its letters.
+        // reason: INSERT mode would draw it beside a box that is typing its letters. A count is the
+        // front of such an instruction and goes with it.
         self.half_typed = None;
+        self.count = None;
+        self.held_count = None;
     }
 
     /// Which vi mode the box is in, or `None` where vi is not the style.
@@ -2721,13 +2739,20 @@ impl Session {
     }
 
     /// The keys typed so far of a vi instruction still waiting for more, or `None` where none is.
+    ///
+    /// A count on its own counts as waiting: `2` has decided what the next letter does as much as a
+    /// `d` has, so it is drawn for the same reason and `2d3` is what the hint line says after three
+    /// presses.
     pub fn half_typed(&self) -> Option<&str> {
-        self.half_typed.map(|_| self.typed_so_far.as_str())
+        (self.half_typed.is_some() || self.count.is_some() || self.held_count.is_some())
+            .then_some(self.typed_so_far.as_str())
     }
 
     /// Drops a vi instruction still waiting for its next key, for a press that cannot be that key.
     pub fn abandon_half_typed(&mut self) {
         self.half_typed = None;
+        self.count = None;
+        self.held_count = None;
     }
 
     /// The stretch VISUAL mode has marked out, as byte offsets, or `None` where it is not open.
@@ -2802,10 +2827,19 @@ impl Session {
     /// A letter vi does not use does nothing at all, which is the mode's whole bargain: the box is
     /// not typing, so an instruction it does not recognise is not text to fall back on.
     fn obey(&mut self, c: char) {
-        if self.half_typed.is_none() {
+        if self.half_typed.is_none() && self.count.is_none() && self.held_count.is_none() {
             self.typed_so_far.clear();
         }
         self.typed_so_far.push(c);
+        // The digits in front of an instruction, which say how many times over it is meant. Read
+        // before the wait below, since an operator waiting for its stretch is one of the two places
+        // a digit is a count rather than the key being waited for.
+        if crate::vim::takes_a_count(self.half_typed)
+            && let Some(count) = crate::vim::counted(self.count, c)
+        {
+            self.count = Some(count);
+            return;
+        }
         // A key that was waiting for one more takes this press and nothing else looks at it. Cleared
         // first, so a pair that means nothing ends the wait rather than holding it open: one stray
         // press would otherwise swallow every letter after it until something happened to match.
@@ -2813,11 +2847,20 @@ impl Session {
             self.carry_out(pending.then(c));
             return;
         }
+        // A counted row key, which is the input's own rows rather than the ladder the bare key walks
+        // (see [`Session::vi_spells`]). Answered here because the count is what tells the two apart,
+        // and the bare key never reaches this far.
+        if let ('j' | 'k', Some(_)) = (c, self.count) {
+            let count = self.take_the_count();
+            self.move_rows(c == 'j', count);
+            return;
+        }
         // The keys that repeat a jump, which mean nothing on their own: they say "that again", and
         // what "that" was is the only thing the session remembers about a motion.
         if let (';' | ',', Some(find)) = (c, self.last_find) {
             let repeated = if c == ';' { find } else { find.reversed() };
-            self.jump_to_char(repeated);
+            let count = self.take_the_count();
+            self.repeatedly(count, |session| session.jump_to_char(repeated));
             return;
         }
         // The two modes disagree about what most of the letters mean, so each reads its own table: `u`
@@ -2834,19 +2877,32 @@ impl Session {
     fn carry_out(&mut self, command: crate::vim::Command) {
         use crate::vim::Command;
 
+        // An operator that is still waiting keeps the count typed in front of it, since the one in
+        // front of its motion has yet to arrive and the two multiply.
+        if let Command::Wait(pending) = command {
+            self.held_count = crate::vim::multiplied(self.held_count, self.count.take());
+            self.half_typed = Some(pending);
+            return;
+        }
+        // Taken before anything acts, and taken whatever the instruction turns out to be: a key that
+        // means nothing spends the count in front of it rather than leaving it for the next press.
+        let count = self.take_the_count();
+
         match command {
             Command::Insert(opening) => self.open_insert(opening),
-            Command::Move(motion) => self.move_by(motion),
-            Command::Change(operator, extent) => self.change(operator, extent),
-            Command::Wait(pending) => self.half_typed = Some(pending),
+            Command::Move(motion) => self.move_by_counted(motion, count, false),
+            Command::Change(operator, extent) => self.change(operator, extent, count),
+            Command::Wait(_) => unreachable!("a wait is answered above"),
             Command::Undo => self.undo_last_change(),
+            // A count in front of `.` replaces the one the change was made with, which is vi's rule
+            // and the useful one: `3.` is how a repeat is made bigger than what it repeats.
             Command::Again => {
-                if let Some((operator, extent)) = self.last_change {
-                    self.change(operator, extent);
+                if let Some((operator, extent, recorded)) = self.last_change {
+                    self.change(operator, extent, count.or(recorded));
                 }
             }
-            Command::Paste { before } => self.put_the_register_back(before),
-            Command::Join => self.join_the_line_below(),
+            Command::Paste { before } => self.put_the_register_back(before, count),
+            Command::Join => self.join_the_line_below(count),
             Command::Select { lines } => self.select(lines),
             Command::SwapEnds => self.swap_the_ends_of_the_selection(),
             Command::Replace(c) => self.replace_the_selection_with(c),
@@ -2855,21 +2911,66 @@ impl Session {
         }
     }
 
+    /// The count the instruction now being carried out was typed with, clearing both halves of it.
+    ///
+    /// `None` where no digit was typed, which is not the same as one: a count of one would make
+    /// `G` the first row rather than the last, and `.` forget the count its change was made with.
+    fn take_the_count(&mut self) -> Option<u32> {
+        crate::vim::multiplied(self.held_count.take(), self.count.take())
+    }
+
+    /// Do something as many times as the count says, stopping at the first go that moves nothing.
+    ///
+    /// What a count reaches is bounded by the line rather than by the number typed, which is what
+    /// makes `999l` cost the length of a line: the caret runs out of line, the step after that moves
+    /// nothing, and the rest of the count is not walked out one position at a time.
+    fn repeatedly(&mut self, count: Option<u32>, mut once: impl FnMut(&mut Self)) {
+        for _ in 0..count.unwrap_or(1) {
+            let was = self.caret;
+            once(self);
+            if self.caret == was {
+                return;
+            }
+        }
+    }
+
+    /// Move the caret that many rows within the input, stopping at the first row or the last.
+    ///
+    /// Never the prompt history, which is where the bare key goes once the input runs out: see
+    /// [`Session::vi_spells`] for why a counted one stops instead.
+    fn move_rows(&mut self, down: bool, count: Option<u32>) {
+        for _ in 0..count.unwrap_or(1) {
+            let moved = if down {
+                self.move_down_a_line()
+            } else {
+                self.move_up_a_line()
+            };
+            if !moved {
+                return;
+            }
+        }
+    }
+
     /// Do something to the stretch of the line an extent names.
     ///
     /// The one place a vi instruction changes the line, so the register, the undo step and the record
     /// of what `.` repeats are all kept here. Three copies of that bookkeeping, one per operator, is
     /// how one of them would come to be missing.
-    fn change(&mut self, operator: crate::vim::Operator, extent: crate::vim::Extent) {
+    fn change(
+        &mut self,
+        operator: crate::vim::Operator,
+        extent: crate::vim::Extent,
+        count: Option<u32>,
+    ) {
         use crate::vim::Operator;
 
-        let Some((from, to)) = self.stretch(self.as_vi_reads_it(operator, extent)) else {
+        let Some((from, to)) = self.stretch(self.as_vi_reads_it(operator, extent), count) else {
             return;
         };
 
         if !operator.reads_only() {
             self.before_last_change = Some((self.input.clone(), self.caret));
-            self.last_change = Some((operator, extent));
+            self.last_change = Some((operator, extent, count));
             self.history.leave();
             self.completion = 0;
         }
@@ -2917,7 +3018,7 @@ impl Session {
                 self.step_back_off_the_end();
             }
             Operator::Indent | Operator::Dedent => {
-                self.shift_the_line(operator == Operator::Indent)
+                self.shift_the_lines(from, to, operator == Operator::Indent)
             }
         }
         // Every operator ends the selection, the stretch it named having been acted on. A change has
@@ -2967,8 +3068,12 @@ impl Session {
     /// a marker is spelled with brackets and a digit: `di[` on one named the brackets it is written with
     /// and left `[]` standing for nothing. So every stretch is checked against the markers before it is
     /// returned, once here rather than in each kind of object.
-    fn stretch(&mut self, extent: crate::vim::Extent) -> Option<(usize, usize)> {
-        let (from, to) = self.stretch_unchecked(extent)?;
+    fn stretch(
+        &mut self,
+        extent: crate::vim::Extent,
+        count: Option<u32>,
+    ) -> Option<(usize, usize)> {
+        let (from, to) = self.stretch_unchecked(extent, count)?;
         // Widened to whole markers rather than refused, so an object that reached into one takes it with
         // what it was already taking. Refusing would leave `daw` over a marker doing nothing at all,
         // where taking the marker is plainly what was asked for.
@@ -2984,7 +3089,16 @@ impl Session {
     }
 
     /// The stretch an extent names, before the markers are taken into account.
-    fn stretch_unchecked(&mut self, extent: crate::vim::Extent) -> Option<(usize, usize)> {
+    ///
+    /// The count is how many of the extent to take: `3dd` is three lines, `3x` three characters and
+    /// `d3w` three words. The three that name no quantity of anything take no count, since there is
+    /// no second end of the line to reach, no second object the keys named and no second selection:
+    /// `3D`, `d3iw` and a counted operator in VISUAL mode act on what the uncounted one would.
+    fn stretch_unchecked(
+        &mut self,
+        extent: crate::vim::Extent,
+        count: Option<u32>,
+    ) -> Option<(usize, usize)> {
         use crate::vim::Extent;
 
         let was = self.caret;
@@ -2993,21 +3107,38 @@ impl Session {
             // newline is the operator's business rather than the extent's: `dd` takes it so the gap
             // closes, `cc` leaves it so the person is typing on the line they asked to replace, and
             // `yy` records the content and puts a newline back when it lands.
-            Extent::Line => Some(self.caret_line()),
+            Extent::Line => {
+                let (start, mut end) = self.caret_line();
+                // The rows below this one, as many as the count asks for and no further than the
+                // input goes: `9dd` on a two-row paragraph takes the two rows there are.
+                for _ in 1..count.unwrap_or(1) {
+                    if end >= self.input.len() {
+                        break;
+                    }
+                    let below = end + 1;
+                    end = self.input[below..]
+                        .find('\n')
+                        .map_or(self.input.len(), |newline| below + newline);
+                }
+                Some((start, end))
+            }
             Extent::ToLineEnd => Some((self.caret, self.caret_line().1)),
             Extent::Character => {
-                // Whole where it is a marker, which is what the caret is on rather than the bracket it
-                // begins with.
-                match self.marker_at_caret() {
-                    Some(span) => Some(span),
-                    None => self.input[self.caret..]
-                        .chars()
-                        .next()
-                        .map(|c| (self.caret, self.caret + c.len_utf8())),
+                // Whole where one is a marker, which is what the caret is on rather than the bracket
+                // it begins with. Stopping at the end of the line, since the newline is not a
+                // character `3x` was asked to take.
+                let (_, line_end) = self.caret_line();
+                let mut to = self.caret;
+                for _ in 0..count.unwrap_or(1) {
+                    if to >= line_end {
+                        break;
+                    }
+                    to = self.past(to);
                 }
+                Some((self.caret, to))
             }
             Extent::To(motion) => {
-                self.move_by_for(motion, true);
+                self.move_by_counted(motion, count, true);
                 let landed = self.caret;
                 match landed.cmp(&was) {
                     std::cmp::Ordering::Equal => None,
@@ -3217,37 +3348,67 @@ impl Session {
         None
     }
 
-    /// Move the line the caret is on towards or away from the margin.
+    /// Move every line a stretch reaches towards or away from the margin.
+    ///
+    /// Every line rather than the caret's, because this is the one operator whose unit is the line
+    /// however the stretch was named: `3>>` is three rows each moved one step, not one row moved
+    /// three. A stretch inside a single line is that line, which is what leaves `>>` where it was.
     ///
     /// A fixed step of spaces rather than a tab, because the box draws what it holds and a tab's width
     /// is the terminal's opinion: a line indented with one would sit somewhere different here than in
     /// the file it was copied from.
-    fn shift_the_line(&mut self, further: bool) {
+    fn shift_the_lines(&mut self, from: usize, to: usize, further: bool) {
         /// How far one press moves a line.
         const STEP: usize = 2;
 
-        let (start, _) = self.caret_line();
-        if further {
-            self.input.insert_str(start, &" ".repeat(STEP));
-            self.caret += STEP;
-            return;
+        let first = self.input[..from].rfind('\n').map_or(0, |at| at + 1);
+        let mut starts = vec![first];
+        starts.extend(
+            self.input[first..to]
+                .match_indices('\n')
+                .map(|(at, _)| first + at + 1),
+        );
+        // Furthest along first, since shifting a line moves every offset after it and the lines
+        // still to do are the ones in front.
+        //
+        // The caret follows every line shifted at or before it, and not only its own: the caret is
+        // a byte offset into the whole input, so spaces put into the row above move it as surely as
+        // spaces put into its own. Left where it was, it would end up past the end of an input that
+        // had just been dedented, and the next frame reads the line outside its bounds and panics
+        // with the terminal still in raw mode.
+        for start in starts.into_iter().rev() {
+            if further {
+                self.input.insert_str(start, &" ".repeat(STEP));
+                if start <= self.caret {
+                    self.caret += STEP;
+                }
+                continue;
+            }
+            let blanks = self.input[start..]
+                .chars()
+                .take(STEP)
+                .take_while(|c| *c == ' ')
+                .count();
+            self.input.replace_range(start..start + blanks, "");
+            if start <= self.caret {
+                // Never back past the start of the line shifted, which is where a caret sitting in
+                // the blanks that went ends up. A caret on a later line is further along than that
+                // already, so the clamp only ever answers for its own.
+                self.caret = self.caret.saturating_sub(blanks).max(start);
+            }
         }
-        let blanks = self.input[start..]
-            .chars()
-            .take(STEP)
-            .take_while(|c| *c == ' ')
-            .count();
-        self.input.replace_range(start..start + blanks, "");
-        self.caret = self.caret.saturating_sub(blanks).max(start);
     }
 
     /// Put the register back into the line, beside the caret or as a line of its own.
     ///
     /// Nothing where nothing has been yanked, rather than a guess at what to insert.
-    fn put_the_register_back(&mut self, before: bool) {
+    fn put_the_register_back(&mut self, before: bool, count: Option<u32>) {
         let Some(yanked) = self.register.clone() else {
             return;
         };
+        // A count is how many copies, and they go in together: one insertion is one change and one
+        // step to undo, where putting it back N times over would leave N-1 of them unreachable.
+        let copies = count.unwrap_or(1) as usize;
         self.before_last_change = Some((self.input.clone(), self.caret));
         self.abandon_the_selection();
         self.history.leave();
@@ -3260,9 +3421,9 @@ impl Session {
             // newline goes on whichever side puts the text on a line of its own.
             let (start, end) = self.caret_line();
             let (at, text) = if before {
-                (start, format!("{}\n", yanked.text))
+                (start, format!("{}\n", yanked.text).repeat(copies))
             } else {
-                (end, format!("\n{}", yanked.text))
+                (end, format!("\n{}", yanked.text).repeat(copies))
             };
             self.input.insert_str(at, &text);
             self.caret = if before { start } else { at + 1 };
@@ -3276,8 +3437,9 @@ impl Session {
         } else {
             self.after_the_caret()
         };
-        self.input.insert_str(at, &yanked.text);
-        self.caret = at + yanked.text.len();
+        let text = yanked.text.repeat(copies);
+        self.input.insert_str(at, &text);
+        self.caret = at + text.len();
         self.step_back_off_the_end();
     }
 
@@ -3297,7 +3459,7 @@ impl Session {
     /// The newline becomes a single space, which is what vi does: two sentences run together with no
     /// gap is not what somebody joining lines wants, and the blanks the next line was indented with are
     /// part of the shape it no longer has.
-    fn join_the_line_below(&mut self) {
+    fn join_the_line_below(&mut self, count: Option<u32>) {
         let (_, end) = self.caret_line();
         if end >= self.input.len() {
             return;
@@ -3307,11 +3469,20 @@ impl Session {
         self.history.leave();
         self.completion = 0;
 
-        let below = end + 1;
-        let text = self.input[below..].to_string();
-        let blanks = text.len() - text.trim_start_matches([' ', '\t']).len();
-        self.input.replace_range(end..below + blanks, " ");
-        self.caret = end;
+        // A count is how many rows end up as one, so it is one join fewer than the number typed and
+        // `2J` is the bare key: joining two rows is what one press does. One snapshot for the lot,
+        // since the rows went together in one press and come back in one.
+        for _ in 1..count.unwrap_or(2).max(2) {
+            let (_, end) = self.caret_line();
+            if end >= self.input.len() {
+                return;
+            }
+            let below = end + 1;
+            let text = self.input[below..].to_string();
+            let blanks = text.len() - text.trim_start_matches([' ', '\t']).len();
+            self.input.replace_range(end..below + blanks, " ");
+            self.caret = end;
+        }
     }
 
     /// Open VISUAL mode, or change which kind it is, or leave it.
@@ -3457,8 +3628,17 @@ impl Session {
     ///
     /// Nothing while a key is waiting for one more, where every character is that one: `f/` jumps to
     /// a slash rather than opening a search.
+    ///
+    /// Nothing for a counted `j` or `k`, which moves rows inside the input and stops at the first or
+    /// last, where the key it spells walks the history once the input runs out: `5k` on a two-row
+    /// paragraph would replace the whole line with a prompt from three back, with nothing on the
+    /// screen to say why. Those two alone, since a count says nothing about opening a search and
+    /// `2/` should still open one.
     pub fn vi_spells(&self, c: char) -> Option<Spelled> {
         if !self.vi_normal() || self.half_typed.is_some() {
+            return None;
+        }
+        if self.count.is_some() && matches!(c, 'j' | 'k') {
             return None;
         }
         match c {
@@ -3471,21 +3651,48 @@ impl Session {
         }
     }
 
-    /// Move the caret where a motion says.
+    /// The same motion, as many times over as the count in front of it asked for.
+    ///
+    /// The two that reach the ends of the input are the exception, because a count in front of them
+    /// means somewhere else entirely rather than more of the same: `3G` and `3gg` are both the third
+    /// row, which is what the count is for on a key that already goes as far as it can go.
+    /// Told whether it is moving the caret or measuring a stretch, the way [`Session::move_by_for`]
+    /// is: the stretch `d2G` names is the one `2G` would reach, so the count has to be read the same
+    /// way on both sides or the operator takes the whole input where the motion took two rows.
+    fn move_by_counted(&mut self, motion: crate::vim::Motion, count: Option<u32>, measuring: bool) {
+        use crate::vim::Motion;
+
+        match (motion, count) {
+            (Motion::InputStart | Motion::InputEnd, Some(row)) => self.move_to_row(row),
+            _ => self.repeatedly(count, |session| session.move_by_for(motion, measuring)),
+        }
+    }
+
+    /// Put the caret at the first column of a row, counting the first row as one.
+    ///
+    /// Past the last row is the last row, the way every counted thing here stops where the input
+    /// does rather than doing nothing at all.
+    fn move_to_row(&mut self, row: u32) {
+        self.caret = 0;
+        for _ in 1..row {
+            if !self.move_down_a_line() {
+                break;
+            }
+        }
+        self.move_to_line_start();
+    }
+
+    /// Move the caret where a motion says, told whether it is moving the caret or measuring a
+    /// stretch for an operator.
     ///
     /// Every one of these goes through the caret methods the arrows already use, so a marker is
     /// crossed whole and there is no position inside one for a motion to leave the caret at. A motion
     /// that did byte arithmetic on the line would have to know about markers itself, and the one that
     /// forgot would be the one that put the caret in the middle of a picture.
-    fn move_by(&mut self, motion: crate::vim::Motion) {
-        self.move_by_for(motion, false);
-    }
-
-    /// The same motion, told whether it is moving the caret or measuring a stretch for an operator.
     ///
-    /// The two differ in one place: the position after the last character of the line. The caret cannot
-    /// rest there, but it is where a stretch ending at that character ends, so a motion clamped for
-    /// both would leave `dl` on a final character measuring nothing at all.
+    /// The two callers differ in one place: the position after the last character of the line. The
+    /// caret cannot rest there, but it is where a stretch ending at that character ends, so a motion
+    /// clamped for both would leave `dl` on a final character measuring nothing at all.
     fn move_by_for(&mut self, motion: crate::vim::Motion, measuring: bool) {
         use crate::vim::Motion;
 
@@ -13987,6 +14194,272 @@ mod tests {
             s.type_char(c);
         }
         s.input
+    }
+
+    /// A count in front of a motion is how many times over it is meant, and `0` stays the key for
+    /// the first column: it continues a count that has begun and begins none of its own, so `10l`
+    /// is ten characters rather than a jump to column zero and then one step.
+    #[test]
+    fn a_count_repeats_a_motion() {
+        assert_eq!(after("one two three four", 0, "3w"), 14);
+        assert_eq!(after("one two three four", 0, "w"), 4);
+        assert_eq!(after("hello world", 0, "5l"), 5);
+        assert_eq!(after("hello world", 10, "4h"), 6);
+        assert_eq!(after("0123456789abc", 0, "10l"), 10);
+        assert_eq!(after("0123456789abc", 5, "0"), 0);
+        assert_eq!(after("a,b,c,d,e", 0, "3f,"), 5);
+        assert_eq!(after("a,b,c,d,e", 0, "f,2;"), 5);
+    }
+
+    /// The rows of the input, which a count reaches without ever leaving it. The bare key walks the
+    /// prompt history once the input runs out (INPUT-27) and a counted one stops at the first row or
+    /// the last, since `5k` on a two-row paragraph would otherwise replace the line with a prompt
+    /// from three back and nothing on the screen would say why.
+    #[test]
+    fn a_count_moves_the_caret_by_rows() {
+        assert_eq!(after("one\ntwo\nthree\nfour", 0, "3j"), 14);
+        assert_eq!(after("one\ntwo\nthree\nfour", 14, "2k"), 4);
+        assert_eq!(
+            after("one\ntwo\nthree\nfour", 0, "9j"),
+            14,
+            "it left the input"
+        );
+        assert_eq!(
+            after("one\ntwo\nthree\nfour", 14, "9k"),
+            0,
+            "it left the input"
+        );
+    }
+
+    /// What a count reaches is bounded by the line rather than by the number typed. The first step
+    /// that moves nothing is where it stops, so a held-down digit costs the length of a line rather
+    /// than the number it spelled.
+    #[test]
+    fn a_count_stops_where_the_line_does() {
+        assert_eq!(after("hello", 0, "999l"), 4);
+        assert_eq!(after("hello", 4, "999h"), 0);
+        // The last character of the line, which is where vi leaves a `w` with no word left to
+        // reach, and then the step after that moves nothing.
+        assert_eq!(after("one two", 0, "999w"), 6);
+    }
+
+    /// A count in front of the keys that reach the ends of the input is the row to go to rather than
+    /// more of the same, which is what the count is for on a key that already goes as far as it can.
+    /// Past the last row is the last row.
+    #[test]
+    fn a_count_makes_the_input_motions_a_row() {
+        assert_eq!(after("one\ntwo\nthree", 0, "2G"), 4);
+        assert_eq!(after("one\ntwo\nthree", 0, "2gg"), 4);
+        assert_eq!(after("one\ntwo\nthree", 8, "1G"), 0);
+        assert_eq!(
+            after("one\ntwo\nthree", 0, "G"),
+            8,
+            "the bare key is the last row"
+        );
+        assert_eq!(
+            after("one\ntwo\nthree", 0, "9G"),
+            8,
+            "it went past the last row"
+        );
+        // An operator reads the count the same way, or `d2G` takes the whole input where `2G`
+        // reached two rows: the stretch a motion names is the one the motion would reach.
+        assert_eq!(
+            edited("one\ntwo\nthree\nfour", 0, "d2G"),
+            "two\nthree\nfour"
+        );
+        assert_eq!(edited("one\ntwo\nthree\nfour", 0, "dG"), "four");
+    }
+
+    /// `>` and `<` move every row the stretch reaches, so the caret has to follow every one of them
+    /// and not only its own: it is a byte offset into the whole input, and spaces put into the row
+    /// above move it as surely as spaces put into its own. Left behind, it ends up past the end of a
+    /// dedented input, and the next frame reads the line outside its bounds and panics with the
+    /// terminal still in raw mode.
+    #[test]
+    fn the_caret_follows_every_row_a_shift_moves() {
+        let mut s = normal("  aa\n  bb\n  cc", 0);
+        for c in "vG<".chars() {
+            s.type_char(c);
+        }
+        assert_eq!(s.input, "aa\nbb\ncc");
+        assert!(
+            s.caret <= s.input.len(),
+            "the caret was left past the input"
+        );
+        // The last row, where the selection left it, and at the margin the dedent moved it to.
+        assert_eq!(s.caret, 6);
+
+        // The other direction, where nothing panics and the caret is simply wrong: it stays where
+        // the second row now begins rather than on the character it was on.
+        let mut s = normal("aa\nbb\ncc", 0);
+        for c in "vG>".chars() {
+            s.type_char(c);
+        }
+        assert_eq!(s.input, "  aa\n  bb\n  cc");
+        assert_eq!(
+            s.caret, 12,
+            "the caret did not follow the rows in front of it"
+        );
+    }
+
+    /// A count claims the two row keys and nothing else of what vi spells with a letter. `/` opens
+    /// the one search there is whether or not a digit was typed in front of it, and a guard reading
+    /// the count alone would swallow both presses and open nothing.
+    #[test]
+    fn a_count_claims_the_row_keys_and_leaves_the_search_key() {
+        let mut s = normal("one\ntwo", 0);
+        s.type_char('2');
+        assert_eq!(
+            s.vi_spells('j'),
+            None,
+            "a counted j was still the key it spells"
+        );
+        assert_eq!(
+            s.vi_spells('k'),
+            None,
+            "a counted k was still the key it spells"
+        );
+        assert_eq!(s.vi_spells('/'), Some(Spelled::SearchPrompts));
+    }
+
+    /// A count in front of an operator or its motion is how much of the extent to take, and the two
+    /// multiply: `2d3w` is `d6w`. Four numbers make one instruction here, so a reading that took the
+    /// first or the last rather than the product is the mistake to rule out.
+    #[test]
+    fn a_count_says_how_much_of_the_extent_an_operator_takes() {
+        assert_eq!(edited("a b c d e f", 0, "d3w"), "d e f");
+        assert_eq!(edited("a b c d e f", 0, "2d3w"), "f");
+        assert_eq!(edited("a b c d e f", 0, "3d2w"), "f");
+        assert_eq!(edited("hello", 0, "3x"), "lo");
+        assert_eq!(edited("hello", 0, "9x"), "", "it stopped short of the line");
+        assert_eq!(edited("one\ntwo\nthree\nfour", 0, "2dd"), "three\nfour");
+        assert_eq!(edited("one\ntwo\nthree\nfour", 0, "d3d"), "four");
+        assert_eq!(
+            edited("one\ntwo\nthree", 0, "9dd"),
+            "",
+            "it took more rows than there were"
+        );
+        assert_eq!(
+            edited("one\ntwo\nthree\nfour", 0, "3>>"),
+            "  one\n  two\n  three\nfour",
+            "the count is how many rows move rather than how far one moves"
+        );
+    }
+
+    /// A counted change is one change and one step to undo, because the count is part of one
+    /// instruction rather than a way of pressing the key again. Carried out as N changes, the undo
+    /// would put back the last of them and leave the rest gone with nothing left to reach them.
+    #[test]
+    fn a_counted_change_is_one_change_and_one_undo_step() {
+        let mut s = normal("hello world", 0);
+        for c in "3x".chars() {
+            s.type_char(c);
+        }
+        assert_eq!(s.input, "lo world");
+        s.type_char('u');
+        assert_eq!(s.input, "hello world", "undo put back part of one change");
+    }
+
+    /// A count in front of `.` replaces the one the change was made with, which is what the key is
+    /// for once counts exist: a repeat that could only be as big as what it repeated would be a
+    /// second way of pressing the same keys.
+    #[test]
+    fn a_count_in_front_of_the_repeat_key_replaces_the_recorded_one() {
+        assert_eq!(edited("aaaa bbbb cccc", 0, "2x"), "aa bbbb cccc");
+        assert_eq!(edited("aaaa bbbb cccc", 0, "2x."), " bbbb cccc");
+        assert_eq!(edited("aaaa bbbb cccc", 0, "2x3."), "bbbb cccc");
+    }
+
+    /// A count is how many copies go back, in one insertion: the register holds one thing and the
+    /// count says how many of it, the way it does for every other change.
+    #[test]
+    fn a_count_is_how_many_copies_the_register_puts_back() {
+        assert_eq!(edited("ab", 0, "yl3p"), "aaaab");
+        assert_eq!(edited("one\ntwo", 0, "yy2p"), "one\none\none\ntwo");
+    }
+
+    /// A count on `J` is how many rows end up as one, so it is one join fewer than the number typed
+    /// and `2J` is the bare key. A count read as the number of joins would make `3J` take three rows
+    /// off the paragraph and `2J` two, which is not what the number in front of it names.
+    #[test]
+    fn a_count_is_how_many_rows_join() {
+        assert_eq!(
+            edited("one\ntwo\nthree\nfour", 0, "J"),
+            "one two\nthree\nfour"
+        );
+        assert_eq!(
+            edited("one\ntwo\nthree\nfour", 0, "2J"),
+            "one two\nthree\nfour"
+        );
+        assert_eq!(
+            edited("one\ntwo\nthree\nfour", 0, "3J"),
+            "one two three\nfour"
+        );
+        assert_eq!(
+            edited("one\ntwo", 0, "9J"),
+            "one two",
+            "it joined more rows than there were"
+        );
+    }
+
+    /// A digit the key in front of it is waiting for is that key and not a count: `f3` jumps to a
+    /// `3`, and the prefixes with no instruction here swallow one the way they swallow a letter
+    /// (INPUT-23). A count read from every digit would make `f3` a jump to nothing and leave the
+    /// register key's digit to run as an instruction of its own.
+    #[test]
+    fn a_digit_a_waiting_key_asked_for_is_that_key() {
+        assert_eq!(after("a3b3c", 0, "f3"), 1);
+        assert_eq!(after("a3b3c", 0, "2f3"), 3);
+        // The prefix swallows the digit and the `x` after it is an instruction of its own, so one
+        // character goes. Three would mean the digit had become a count instead.
+        assert_eq!(edited("hello", 0, "\"3x"), "ello");
+        assert_eq!(edited("hello", 0, "m3x"), "ello");
+    }
+
+    /// A count belongs to the instruction it was typed in front of, so the press that carries one
+    /// out spends it and a key that means nothing spends it too. Left standing, the next
+    /// instruction would be carried out as many times as a count nobody remembers typing.
+    #[test]
+    fn an_instruction_spends_the_count_typed_in_front_of_it() {
+        assert_eq!(edited("hello world", 0, "3xx"), "o world");
+        assert_eq!(
+            edited("hello world", 0, "3\u{1}x"),
+            "ello world",
+            "a key that means nothing kept the count"
+        );
+    }
+
+    /// Escape abandons a count the way it abandons an instruction still waiting for a key
+    /// (INPUT-24): both decide what the next letter does, and one that survived the press a vi user
+    /// makes to mean "not that" would make the next key do it three times.
+    #[test]
+    fn escape_abandons_a_count() {
+        let mut s = normal("hello world", 0);
+        s.type_char('3');
+        assert_eq!(s.half_typed(), Some("3"), "the count was not drawn");
+
+        s.abandon_half_typed();
+        assert_eq!(s.half_typed(), None);
+        s.type_char('x');
+        assert_eq!(
+            s.input, "ello world",
+            "the abandoned count was still counted"
+        );
+    }
+
+    /// The keys typed of an instruction still being assembled, which the hint line draws as vi's
+    /// `showcmd` does. A count is the front of one, so `2d3` is three presses of one instruction and
+    /// not three presses of nothing.
+    #[test]
+    fn the_count_is_part_of_what_the_hint_line_draws() {
+        let mut s = normal("one two three four five six seven", 0);
+        for (c, drawn) in [('2', "2"), ('d', "2d"), ('3', "2d3")] {
+            s.type_char(c);
+            assert_eq!(s.half_typed(), Some(drawn));
+        }
+        s.type_char('w');
+        assert_eq!(s.half_typed(), None, "the instruction is whole");
+        assert_eq!(s.input, "seven");
     }
 
     /// One operator over one set of extents, which is what makes these one idea rather than a binding

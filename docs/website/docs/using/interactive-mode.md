@@ -107,13 +107,37 @@ where the word keys under Ctrl land.
 Down: they walk the rows of a paragraph, then your prompt history, then the transcript, exactly as
 the arrows do. `/` opens the search Ctrl-R opens, that being the only search here. While a key is
 waiting for the character to jump to, every press is that character, so `f/` jumps to a slash and
-`fj` to a `j`.
+`fj` to a `j`. A count in front of `k` or `j` is the other exception, and moves rows inside the
+input alone.
+
+### Counts
+
+A number in front of an instruction says how many. `1` to `9` begin a count and every digit after
+one continues it, so `0` is still the key for the first column and `10l` is ten characters. A count
+in front of an operator and one in front of its motion multiply, so `2d3w` is `d6w`.
+
+| Keys | What the count says |
+|---|---|
+| `3w`, `5l`, `2f,`, `3;` | how many times over the motion is meant |
+| `2G`, `2gg` | which row to go to |
+| `3j`, `3k` | how many rows to move, inside the input and no further |
+| `3dd`, `d3w`, `3x`, `3>>` | how much of the stretch the operator takes |
+| `3p`, `3J` | how many copies go back, and how many rows end up as one |
+| `3.` | how many the repeat is of, in place of the count it recorded |
+
+**The line bounds a count, not the number you type.** A counted motion stops at the first step that
+moves nothing, so `999l` reaches the end of the line, and an extent takes what there is, so `9dd` on
+a two-row paragraph takes the two rows. `p` is the exception, since a copy always goes somewhere: it
+puts back as many as you asked for. A counted change is one change and one step to undo.
+
+The count is drawn after the mode with the rest of the instruction, so three presses are
+`NORMAL 2d3`. Escape abandons it, as it abandons any instruction still waiting for a key.
 
 ### Operators
 
 `d` takes a stretch out, `c` takes it out and opens INSERT mode where it was, `y` keeps it and leaves
-the line alone, and `>` and `<` move the line a step from or towards the margin. Each waits for the
-stretch to act on:
+the line alone, and `>` and `<` move every row the stretch reaches a step from or towards the margin.
+Each waits for the stretch to act on:
 
 | Keys | The stretch |
 |---|---|
