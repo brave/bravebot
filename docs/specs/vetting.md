@@ -19,6 +19,7 @@ guards:
   - symbol: Policy::before_vetting_a_path
   - symbol: Policy::compose_vetting_input
   - symbol: Policy::vetting_verdict
+  - symbol: Policy::vetting_did_not_complete
   - symbol: Policy::promote_vetted
 documented-by: docs/website/docs/security/vetting.md
 ---
@@ -269,6 +270,8 @@ somebody who was never asked either question.
 `verified-by: bravebot_core::policy::what_a_check_says_is_as_untrusted_as_what_it_read`
 `verified-by: bravebot_core::policy::the_trail_records_the_verdict_and_never_the_reason`
 `verified-by: bravebot_core::policy::the_trail_tells_an_objection_apart_from_a_check_that_said_nothing`
+`verified-by: bravebot_core::policy::a_check_that_could_not_be_made_records_the_word_and_the_drivers_own_account`
+`verified-by: bravebot_agent::turn::the_trail_records_the_verdict_of_a_check_that_could_not_be_made`
 `verified-by: bravebot_agent::turn::content_a_person_refuses_after_a_check_stays_out_of_the_planner`
 `verified-by: bravebot_agent::turn::a_vouch_offer_carries_what_a_check_said_about_the_whole_file`
 `verified-by: bravebot_agent::turn::an_output_offer_carries_what_a_check_said`
