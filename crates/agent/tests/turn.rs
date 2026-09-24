@@ -16669,6 +16669,96 @@ fn a_delegate_uses_the_model_its_definition_selected() {
     );
 }
 
+/// A definition's model that needs a sign-in is not swapped for the turn's, which would spend past
+/// a boundary the definition drew: the delegate does not run and the person is told why.
+#[test]
+fn a_delegate_whose_model_needs_a_sign_in_does_not_run_and_says_so() {
+    let scratch = Scratch::new("delegate-model-sign-in");
+    let home = Scratch::new("delegate-model-sign-in-home");
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("bedrock-reader.md"),
+        "---\nname: bedrock-reader\ndescription: Reads on a Bedrock model.\nkind: reader\nmodel: haiku\n---\n\nREAD-ON-BEDROCK\n",
+    )
+    .expect("write the definition");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "DELEGATE-TO-BEDROCK-READER",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"bedrock-reader","task":"CHECK-ON-BEDROCK"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("delegate finished"),
+            ],
+        ),
+        ("CHECK-ON-BEDROCK", vec![reply_with("clear")]),
+    ]);
+    let config = Config::from_lookup(|key| match key {
+        "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+        "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+        "BRAVE_AI_CHAT_ENDPOINT" => Some(endpoint.clone()),
+        bravebot_config::env_var::USE_BEDROCK => Some("1".into()),
+        bravebot_config::env_var::AWS_REGION => Some("us-west-2".into()),
+        bravebot_config::env_var::BEDROCK_HAIKU_MODEL => Some("haiku-arn".into()),
+        // A profile no machine has, so no session exists whoever runs this.
+        bravebot_config::env_var::AWS_PROFILE => Some("a-profile-no-machine-has".into()),
+        _ => None,
+    })
+    .expect("config");
+    assert_eq!(
+        config.model_named("haiku"),
+        "haiku-arn",
+        "the definition's model would not have needed a sign-in"
+    );
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let outcome = turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-TO-BEDROCK-READER")
+            .with_home(Some(home.path.clone()))
+            .with_model(Some("custom-parent-model".to_string())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let requests: Vec<String> = received.try_iter().collect();
+    assert!(
+        !requests.iter().any(|body| {
+            body.contains("CHECK-ON-BEDROCK") && !body.contains("DELEGATE-TO-BEDROCK-READER")
+        }),
+        "the delegate ran on some other model: {requests:?}"
+    );
+    assert!(
+        matches!(reporter.delegates_finished.as_slice(), [(_, _, true)]),
+        "the delegate was not reported as not finishing: {:?}",
+        reporter.delegates_finished
+    );
+
+    let said = "bedrock-reader asked for haiku, which needs a sign-in first, so it did not run";
+    assert!(
+        reporter.notices.iter().any(|notice| notice == said),
+        "nobody watching was told why the delegate did not run: {:?}",
+        reporter.notices
+    );
+    assert!(
+        outcome.notices.iter().any(|notice| notice == said),
+        "the turn's account did not say why the delegate did not run: {:?}",
+        outcome.notices
+    );
+}
+
 /// Records what it was told, and whose work the driver said each report was.
 ///
 /// Both halves are the property: a report says what happened and never which run it happened in,

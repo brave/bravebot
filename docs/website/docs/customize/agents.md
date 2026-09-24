@@ -48,9 +48,9 @@ loads here too.
 explicit model identifier resolves through configuration the way any named model does. This lets a
 high-volume delegate like a build checker run on a cheap model rather than spending the turn's model
 on reading thousands of lines of logs, while a refactoring worker can select a stronger model. Where
-`model` is omitted, the delegate inherits the model of the turn that spawned it. Where a named model
-cannot be served by the configuration, the delegate fails rather than falling back to the parent
-turn's model, so an intended cost control cannot be silently bypassed.
+`model` is omitted, the delegate inherits the model of the turn that spawned it. Where the named
+model needs a sign-in you have not made, the delegate does not run and says so, rather than falling
+back to the turn's model, so an intended cost control cannot be silently bypassed.
 
 **`kind` picks what the delegate may do, and your file never describes it.** A `reader` reads,
 lists and searches; a `checker` also runs programs; a `worker` also writes files. Each still asks

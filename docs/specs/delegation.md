@@ -554,14 +554,22 @@ The name is configuration, not content. A definition loads only from a source so
 ([DELEGATE-20](#DELEGATE-20)), so the file is the endorsement for the request field the name lands
 in, as a person's pick in `/model` is for the parent's.
 
+A model that needs a sign-in this machine has not made is not swapped for the turn's. The delegate
+does not run, and the person is told which definition asked for which model.
+
 **Why `inherit` names none.** It is how other agents' definitions say so, and one ported from them
 would otherwise send the word as a model name.
+
+**Why refuse rather than fall back.** A definition naming a cheap model is often a cost boundary,
+and running it on the turn's model would spend past that boundary without anybody choosing to. A
+sign-in is no alternative either: a delegate runs on a worker thread with nowhere to show one.
 
 `verified-by: bravebot_agent::agents::a_definition_reads_a_model_name`
 `verified-by: bravebot_agent::agents::an_empty_model_name_in_a_definition_is_ignored`
 `verified-by: bravebot_agent::agents::a_definition_naming_inherit_names_no_model`
 `verified-by: bravebot_core::delegate::a_definition_may_name_a_model_and_the_spec_carries_it`
 `verified-by: bravebot_agent::turn::a_delegate_uses_the_model_its_definition_selected`
+`verified-by: bravebot_agent::turn::a_delegate_whose_model_needs_a_sign_in_does_not_run_and_says_so`
 
 ## Known costs
 

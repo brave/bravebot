@@ -1271,6 +1271,8 @@ reach-no-model = dans le contexte d'aucun modèle : rien ne peut être envoyé l
 
 # How many calls a delegate has made, where its block shows only the last few.
 delegate-more-calls = { $count } appels jusqu'ici
+delegate-model-needs-sign-in =
+    { $definition } a demandé { $model }, qui exige d'abord une connexion : il n'a pas été lancé
 
 ## Regarder ce que fait un delegue
 
