@@ -271,6 +271,44 @@ mod tests {
         assert_eq!(relative.revision_of("/file"), 2);
     }
 
+    /// One untrusted file does not taint its siblings, and one trusted file does not vouch for
+    /// them: a directory marked by a write nobody was asked about would turn a single fetched page
+    /// into a project the next turn may no longer edit, and the reverse would hand a whole tree
+    /// the trust of the one file written into it.
+    ///
+    /// Through the effect a live write completes, which is the route every write in the workspace
+    /// takes. `Policy::reconcile_after_write` is the other route, over a snapshot, and is pinned
+    /// in `policy`.
+    #[test]
+    fn a_completed_write_records_the_file_and_no_directory_above_it() {
+        for (tree, written) in [
+            (Integrity::Trusted, Integrity::Untrusted),
+            (Integrity::Untrusted, Integrity::Trusted),
+        ] {
+            let authority = FileAuthority::new(TrustStore::new("/work"));
+            authority.publish(".", tree);
+
+            let effect = authority.capture().begin("src/a.rs").unwrap();
+            effect.complete(written);
+
+            let trust = authority.snapshot();
+            assert_eq!(
+                trust.keyed().collect::<Vec<_>>(),
+                vec![("/work", tree), ("/work/src/a.rs", written)],
+                "the write recorded a path other than the file it wrote: {tree:?} tree, {written:?} write"
+            );
+            // What that record means to a later read: neither the directory the file is in nor a
+            // file beside it has a rule of its own, so both still answer with the tree's.
+            for path in ["src", "src/b.rs"] {
+                assert_eq!(
+                    trust.integrity_of(path),
+                    Some(tree),
+                    "{path} took the trust of a write to src/a.rs: {tree:?} tree, {written:?} write"
+                );
+            }
+        }
+    }
+
     /// A completed write must respect a newer ancestor decision, without distrusting siblings.
     #[test]
     fn completion_observes_ancestor_decisions_but_not_sibling_decisions() {

@@ -174,13 +174,16 @@ write is shown.
 <a id="TRUST-5"></a>
 ### TRUST-5: reconciliation marks the exact path, never the parent
 
-Reconciliation records the file written, and no directory above it.
+Reconciliation records the file written, and no directory above it. This holds for both routes a
+write takes: the effect a live write completes, and the reconciliation a snapshot takes.
 
 **Why.** One untrusted file does not taint its siblings. Marking the parent would turn a single
 fetched page into a project nobody may edit.
 
 `verified-by: bravebot_core::policy::untrusted_data_into_a_trusted_path_prompts_and_distrusts_the_path`
 `verified-by: bravebot_core::policy::trusted_data_into_an_untrusted_path_is_silent_and_trusts_the_path`
+`verified-by: bravebot_core::file_authority::a_completed_write_records_the_file_and_no_directory_above_it`
+`verified-by: bravebot_agent::turn::a_fetched_page_written_into_a_trusted_tree_distrusts_only_the_file`
 
 ## How long an answer lasts
 
