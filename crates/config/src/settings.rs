@@ -1723,6 +1723,18 @@ mod tests {
             Some(32_768),
             "a project file that said nothing about the cap dropped it"
         );
+
+        // A zero in the nearer layer is absence, and absence is the built-in cap rather than the
+        // figure a weaker layer named.
+        let zeroed = Layers::new("output-cap-zeroed")
+            .global(r#"{"run": {"maxOutput": 32768}}"#)
+            .project(r#"{"run": {"maxOutput": 0}}"#)
+            .read();
+        assert_eq!(
+            zeroed.run_output_cap(),
+            None,
+            "a project file that set the cap to zero was handed the home layer's figure"
+        );
     }
 
     /// The block a person copies out of `~/.claude/settings.json`, read without being rewritten

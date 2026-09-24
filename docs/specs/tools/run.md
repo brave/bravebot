@@ -1128,9 +1128,10 @@ the alternative of withholding it from the case it exists for.
 
 `run.maxOutput`, in the settings files, names how many bytes of what a program printed may enter the
 conversation. It may be raised as well as lowered, and a key nobody set leaves the built-in cap in
-force. One key covers a foreground run, a `read_output` or `job_output` page, and the account a
-finished background job gives of itself, because those are the same bytes reaching the same context
-by three routes.
+force. One key covers a foreground run, a `job_output` page, and the account a finished background
+job gives of itself, because those are the same bytes reaching the same context by three routes. It
+does not bound `read_output`, which hands over the whole of the slot it was endorsed for
+([OUTPUT-1](read-output.md#OUTPUT-1)).
 
 A cap of zero is absence rather than a program permitted to say nothing, as is any value that is not
 a whole count. Absence leaves the built-in cap in force, which is what a layer setting the key gets

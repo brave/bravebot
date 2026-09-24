@@ -548,14 +548,15 @@ How many bytes of what a command printed reach the agent. Past it, the output is
 the beginning and the end are kept, with a line between them saying how much went, because a build
 log's verdict is at the end and its first error is near the beginning.
 
-Without this key the figure is 16 KB. It is there because your conversation has a finite amount of
+Without this key the figure is 16 KiB. It is there because your conversation has a finite amount of
 room and one command that printed a hundred thousand lines could fill it, leaving none for the work.
 That is a budget rather than a rule about what is allowed, which is why you can name your own: raise
 it when a long test run is worth the room, lower it when you would rather the agent read a summary
 and ask.
 
-One number covers a command's output, a page you asked for with `read_output`, and the account a
-background job gives when it finishes.
+One number covers a command's output, a `job_output` page of a background job's output, and the
+account a background job gives when it finishes. Output released with `read_output` is not cut by
+it: that reaches the agent whole.
 
 **What was printed is never lost.** Only what reaches the conversation is cut. The whole output stays
 beside the sample, so the agent can still hand it to a check or write it to a file without running
