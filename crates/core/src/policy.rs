@@ -3053,9 +3053,14 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             message: format!("{slot}: {e}"),
         })?;
 
-        let origin = self.where_a_slot_came_from(slot, slots);
+        let origin = self.where_a_slot_came_from(slot, slots, &PathAuthority::mint());
 
-        Ok(self.fix_check(content, slot.to_string(), origin, expects))
+        Ok(self.fix_check(
+            content,
+            slot.to_string(),
+            crate::vetting::Origin::Recorded(origin),
+            expects,
+        ))
     }
 
     /// Refuse a slot whose bytes must never be promoted, whether or not a check is made first.
@@ -3099,15 +3104,47 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// built whether or not a check was made: bypassing mode makes none and still has a request
     /// to fill in, and a second copy of this match in the caller would be a second answer to
     /// where a slot came from.
-    pub fn where_a_slot_came_from(&self, slot: &SlotId, slots: &crate::slot::SlotStore) -> String {
-        match (
-            slots.command_of(slot),
-            slots.origin_of(slot, &PathAuthority::mint()),
-        ) {
+    ///
+    /// Takes the witness [`crate::slot::SlotStore::origin_of`] takes rather than minting one of
+    /// its own, so it is as reachable as that accessor is and no more: the policy module and
+    /// nothing else. What a caller outside the kernel gets is
+    /// [`Policy::release_where_a_slot_came_from`], which records the release.
+    pub(crate) fn where_a_slot_came_from(
+        &self,
+        slot: &SlotId,
+        slots: &crate::slot::SlotStore,
+        authority: &PathAuthority,
+    ) -> String {
+        match (slots.command_of(slot), slots.origin_of(slot, authority)) {
             (Some(command), _) => format!("what {command} printed"),
             (None, Some(origin)) => origin.to_string(),
             (None, None) => slot.to_string(),
         }
+    }
+
+    /// Release the driver's record of where a slot's bytes came from, for a person to read.
+    ///
+    /// The one way that sentence leaves `bravebot-core`, and the reason
+    /// [`Policy::where_a_slot_came_from`] does not have to be: a slot's address is untrusted
+    /// content held outside a [`Labelled`], so an accessor handing one to another crate is a
+    /// release, and a release that nothing records and nothing counts is the shape
+    /// `docs/specs/labels.md` LABEL-4 exists to stop. Recorded here the way a display release is
+    /// recorded, and `labels.md` pins its uses file by file, so a second reader is a line in a
+    /// diff rather than a branch nobody is shown.
+    ///
+    /// It goes on the screen that asks about the slot and stops there. Nothing decides anything
+    /// from it: the prompt draws it beside the bytes it is about.
+    pub fn release_where_a_slot_came_from(
+        &mut self,
+        slot: &SlotId,
+        slots: &crate::slot::SlotStore,
+    ) -> String {
+        let origin = self.where_a_slot_came_from(slot, slots, &PathAuthority::mint());
+        self.allow(
+            "display",
+            format!("where {slot} came from shown to the user"),
+        );
+        origin
     }
 
     /// Fix a check over a file's contents, before anybody is asked to vouch for its path.
@@ -3129,7 +3166,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         path: &str,
         content: Labelled<String>,
     ) -> crate::vetting::VettingSpec {
-        self.fix_check(content, path.to_string(), path.to_string(), None)
+        self.fix_check(
+            content,
+            path.to_string(),
+            crate::vetting::Origin::TheFileItself,
+            None,
+        )
     }
 
     /// The one place a [`crate::vetting::VettingSpec`] is built, so what a check may do is settled
@@ -3138,7 +3180,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         &mut self,
         content: Labelled<String>,
         named: String,
-        origin: String,
+        origin: crate::vetting::Origin,
         expects: Option<String>,
     ) -> crate::vetting::VettingSpec {
         let spec = crate::vetting::VettingSpec::new(
@@ -3148,14 +3190,33 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             expects,
             &SpecAuthority::mint(),
         );
+        let described = Self::describe_check(&spec);
         self.allow(
             "vetting",
-            format!(
-                "{}, with no tools, no memory and nothing it can write at all",
-                spec.describe()
-            ),
+            format!("{described}, with no tools, no memory and nothing it can write at all"),
         );
         spec
+    }
+
+    /// The check as the audit trail describes it. Never the content, and never what came back.
+    ///
+    /// A slot is named alongside where its bytes came from, because a reference name means
+    /// nothing to somebody reading a trail. A file is its own origin, and saying so twice would
+    /// be noise.
+    ///
+    /// Here rather than on [`crate::vetting::VettingSpec`] because it reads the address, and the
+    /// policy module is the one place allowed to. Which of the two sentences to write is asked of
+    /// the spec as a fact about the gate that built it, so the two addresses are never compared.
+    fn describe_check(spec: &crate::vetting::VettingSpec) -> String {
+        if spec.names_its_own_origin() {
+            format!("a check over {}", spec.named())
+        } else {
+            format!(
+                "a check over {} from {}",
+                spec.named(),
+                spec.where_it_came_from(&PathAuthority::mint())
+            )
+        }
     }
 
     /// Assemble a check's input from the content its spec carries.
@@ -3202,7 +3263,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         };
         let metadata = format!(
             "{{\"origin\": {}, \"lines\": {}, \"bytes\": {}{expectation}}}",
-            crate::vetting::as_json_string(spec.origin()),
+            crate::vetting::as_json_string(spec.where_it_came_from(&PathAuthority::mint())),
             measured.lines,
             measured.bytes,
         );
@@ -3216,7 +3277,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             "vetting",
             format!(
                 "{}: {} lines assembled into a check's input inside the kernel",
-                spec.describe(),
+                Self::describe_check(spec),
                 measured.lines
             ),
         );
@@ -3234,7 +3295,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ) -> Declassification {
         self.allow(
             "vetting",
-            format!("{}: input carried into the check", spec.describe()),
+            format!(
+                "{}: input carried into the check",
+                Self::describe_check(spec)
+            ),
         );
         Declassification::authorise("carried into a confined check")
     }
@@ -3269,7 +3333,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let stated = crate::vetting::read(&text);
         self.allow(
             "vetting",
-            format!("{}: the check said {}", spec.describe(), stated.verdict),
+            format!(
+                "{}: the check said {}",
+                Self::describe_check(spec),
+                stated.verdict
+            ),
         );
         let reason = stated.reason.map(|reason| Labelled::new(reason, tainted));
         (stated.verdict, reason)
@@ -9093,7 +9161,10 @@ five
             .expect("quarantined");
 
         let spec = a_spec(&mut policy, &slots, &slot);
-        assert_eq!(spec.origin(), "what https://example.com/notes returned");
+        assert_eq!(
+            spec.where_it_came_from(&PathAuthority::mint()),
+            "what https://example.com/notes returned"
+        );
     }
 
     /// The same, on the route the planner actually takes to ask about a file. A deferred read
@@ -9124,9 +9195,75 @@ five
 
         let spec = a_spec(&mut policy, &slots, &slot);
         assert_eq!(
-            spec.origin(),
+            spec.where_it_came_from(&PathAuthority::mint()),
             "notes.md",
             "the person is being asked about a file and was told a reference name instead"
+        );
+    }
+
+    /// The name of a file in a directory nobody vouched for decides nothing about the line the
+    /// trail carries, not even how it is worded. Whoever can create a file in a listed directory
+    /// chooses that name, so it can be made equal to the reference the entry was reserved as, and
+    /// the trail has to say both either way.
+    #[test]
+    fn a_listed_files_name_does_not_decide_how_the_trail_words_the_check() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut slots = SlotStore::new();
+        let slot = SlotId::new("ref:1");
+
+        // The one name in the listing is the reference the entry is reserved as. An attacker
+        // cannot pick which reference a listing is given, but they can name a file, and the two
+        // meeting is the case a wording that compared them would get wrong.
+        let entries = Labelled::new(vec!["ref:1".to_string()], Label::untrusted_private());
+        policy
+            .defer_entries(
+                "list_files",
+                "an entry in \".\"",
+                &entries,
+                0,
+                std::slice::from_ref(&slot),
+                &mut slots,
+            )
+            .expect("one entry may be reserved");
+        policy
+            .materialise("vet_content", &slot, &mut slots, |_| {
+                Ok("The sky over the harbour was a dull grey all morning.\n".to_string())
+            })
+            .expect("the file is read when the check needs the bytes");
+
+        policy
+            .before_vetting(&slot, None, &slots)
+            .expect("a slot with bytes in it");
+
+        let recorded = format!("{:?}", sink.events());
+        assert!(
+            recorded.contains("a check over ref:1 from ref:1"),
+            "a filename chose what the trail says about where the bytes came from: {recorded}"
+        );
+    }
+
+    /// The other route, which is where saying it twice would be noise: a read of a file says the
+    /// path once, because a path is its own origin and the driver knows that without comparing
+    /// anything.
+    #[test]
+    fn a_check_over_a_path_names_it_once() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+
+        policy.before_vetting_a_path(
+            "notes.md",
+            Labelled::new("the notes".to_string(), Label::untrusted_private()),
+        );
+
+        let recorded = format!("{:?}", sink.events());
+        assert!(
+            recorded.contains("a check over notes.md"),
+            "the trail did not say which file the check was over: {recorded}"
+        );
+        assert!(
+            !recorded.contains("from notes.md"),
+            "a file is its own origin and the trail said so twice: {recorded}"
         );
     }
 

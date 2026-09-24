@@ -32,7 +32,7 @@
 //! Content cannot end the block it is in. Do not "simplify" the encoding away: the fences are
 //! signposting for the reader on the other end, and the encoding is the containment.
 
-use crate::policy::SpecAuthority;
+use crate::policy::{PathAuthority, SpecAuthority};
 use crate::value::Labelled;
 
 /// The line that opens what the driver itself says about the content.
@@ -196,22 +196,37 @@ pub fn auto(asked: bool, chosen: Option<bool>, configured: Option<bool>) -> bool
 pub struct VettingSpec {
     reads: Labelled<String>,
     named: String,
-    origin: String,
+    origin: Origin,
     expects: Option<String>,
+}
+
+/// Where the content a check reads came from, as the route that fixed the spec already knew it.
+///
+/// Two cases rather than a second address the caller may repeat, because the difference between
+/// them is a fact about which gate built the spec and not a fact about the bytes. Recovering it by
+/// comparing the two addresses would be a decision taken from a filename whoever could write in a
+/// listed directory chose, in `bravebot-core`, outside the module that owns the gates, which is
+/// what `docs/specs/labels.md` LABEL-4 and `docs/specs/layering.md` LAYER-2 forbid.
+#[derive(Debug, Clone)]
+pub(crate) enum Origin {
+    /// A path read directly. The file is its own origin, and saying so twice would be noise.
+    TheFileItself,
+    /// A slot, with the driver's own record of where its bytes came from.
+    Recorded(String),
 }
 
 impl VettingSpec {
     pub(crate) fn new(
         reads: Labelled<String>,
         named: impl Into<String>,
-        origin: impl Into<String>,
+        origin: Origin,
         expects: Option<String>,
         _authority: &SpecAuthority,
     ) -> Self {
         Self {
             reads,
             named: named.into(),
-            origin: origin.into(),
+            origin,
             expects,
         }
     }
@@ -236,8 +251,30 @@ impl VettingSpec {
     }
 
     /// Where the content came from, as the driver's own record of it.
-    pub fn origin(&self) -> &str {
-        &self.origin
+    ///
+    /// Untrusted content: where the slot was reserved out of a quarantined listing this is a
+    /// filename chosen by whoever can create a file in the listed directory. So it takes the
+    /// witness [`crate::slot::SlotStore::origin_of`] takes, minted inside the policy module and
+    /// nowhere else, and `docs/specs/labels.md` pins its uses file by file the way it pins a
+    /// declassification.
+    ///
+    /// Named for what it answers rather than for the field, because the guard is counted by the
+    /// method's own name across the whole tree: an accessor called `origin` would pin every
+    /// unrelated `.origin()` in `crates/` alongside these.
+    pub(crate) fn where_it_came_from(&self, _authority: &PathAuthority) -> &str {
+        match &self.origin {
+            Origin::TheFileItself => &self.named,
+            Origin::Recorded(origin) => origin,
+        }
+    }
+
+    /// Whether what is named is its own origin, so a trail saying both would say one thing twice.
+    ///
+    /// A fact about which gate fixed the spec, settled by the constructor. Answering it needs no
+    /// witness because it reads no address: that is the point of keeping it rather than comparing
+    /// the two.
+    pub(crate) fn names_its_own_origin(&self) -> bool {
+        matches!(self.origin, Origin::TheFileItself)
     }
 
     /// What the planner says the content is supposed to hold, where the planner asked for the
@@ -252,18 +289,6 @@ impl VettingSpec {
     /// would be putting words the planner never said into another model's prompt.
     pub fn expects(&self) -> Option<&str> {
         self.expects.as_deref()
-    }
-
-    /// The check as the audit trail describes it. Never the content, and never what came back.
-    ///
-    /// A slot is named alongside where its bytes came from, because a reference name means nothing
-    /// to somebody reading a trail. A file is its own origin, and saying so twice would be noise.
-    pub fn describe(&self) -> String {
-        if self.named == self.origin {
-            format!("a check over {}", self.named)
-        } else {
-            format!("a check over {} from {}", self.named, self.origin)
-        }
     }
 }
 
