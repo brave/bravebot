@@ -159,7 +159,8 @@ What the packages install:
 | `/opt/brave-bot/` | the bundle, with `chrome-sandbox` setuid root |
 | `/usr/bin/brave-bot` | a symlink to the executable inside it, whose name has a space |
 | `/usr/share/applications/brave-bot.desktop` | the launcher entry, running that symlink |
-| `/usr/share/icons/hicolor/scalable/apps/brave-bot.svg` | `build/icon.svg`, the app's icon |
+| `/usr/share/icons/hicolor/<n>x<n>/apps/brave-bot.png` | `build/icons/`, the app's icon at each size a theme looks in |
+| `/usr/share/icons/hicolor/scalable/apps/brave-bot.svg` | `build/icon.svg`, the drawing those were rendered from, for a desktop that reads one |
 
 `ui/scripts/linux-package.mjs` writes that tree and both package descriptions, so the layout is
 the same whichever format was installed, and `make app-packages-linux` is only the packing. The

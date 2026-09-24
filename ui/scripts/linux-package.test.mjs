@@ -16,6 +16,7 @@ import {
   DEB_DEPENDS,
   EXECUTABLE,
   ICON,
+  ICON_SIZES,
   INSTALL_DIR,
   PACKAGE,
   SANDBOX,
@@ -45,6 +46,16 @@ function bundle(t, extra = {}) {
   writeFileSync(join(dir, 'resources', 'bravebot-rpc'), 'ELF')
   chmodSync(join(dir, 'resources', 'bravebot-rpc'), 0o755)
   return { root, dir }
+}
+
+// What a PNG states about itself in its first twenty four bytes: the signature, then an IHDR
+// chunk whose first two fields are the width and the height, big-endian. Read here rather than
+// through an image library, which packaging does not have and this should not add.
+function bitmap(path) {
+  const bytes = readFileSync(path)
+  assert.deepEqual([...bytes.subarray(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], `${path} is not a PNG`)
+  assert.equal(bytes.subarray(12, 16).toString('ascii'), 'IHDR', `${path} starts with no header chunk`)
+  return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) }
 }
 
 test('each architecture is named the way the format being built names it', () => {
@@ -169,6 +180,26 @@ test('the desktop entry names the icon the package installs', (t) => {
   assert.equal(readFileSync(installed, 'utf8'), readFileSync(new URL('../build/icon.svg', import.meta.url), 'utf8'))
 })
 
+// The Icon Theme Specification makes PNG the format a desktop has to read and SVG one it may,
+// and GTK reads a scalable icon only through librsvg's gdk-pixbuf loader, which neither
+// dependency list names. So a package carrying the drawing alone installs a launcher entry that
+// shows a generic icon wherever that loader is absent. Each bitmap has to be the size of the
+// directory it sits in, since a theme lookup reads the directory and not the file.
+test('the icon the entry names is installed as a bitmap at every size the theme is told about', (t) => {
+  const name = desktopEntry().split('\n').find((line) => line.startsWith('Icon=')).slice('Icon='.length)
+  const { dir } = bundle(t)
+  const into = mkdtempSync(join(tmpdir(), 'linux-stage-'))
+  t.after(() => rmSync(into, { recursive: true, force: true }))
+  const { payload } = stage({ bundle: dir, arch: 'amd64', into })
+
+  assert.ok(ICON_SIZES.length > 0)
+  for (const size of ICON_SIZES) {
+    const installed = join(payload, 'usr/share/icons/hicolor', `${size}x${size}`, 'apps', `${name}.png`)
+    assert.ok(existsSync(installed), `${installed} is a size the theme is told about and nothing installs`)
+    assert.deepEqual(bitmap(installed), { width: size, height: size }, `${installed} is not ${size} pixels`)
+  }
+})
+
 // The app ships an agent build rather than versioning separately, so a package naming anything
 // else is one whose version no tree states.
 test('both packages state the version the front end states', (t) => {
@@ -194,12 +225,20 @@ test('the rpm packages every path the staged tree installs', (t) => {
   for (const path of installedPaths()) {
     assert.ok(existsSync(join(payload, path.slice(1))), `${path} is packaged and not staged`)
   }
-  for (const staged of ['opt', 'usr/bin', 'usr/share/applications', 'usr/share/icons']) {
-    assert.ok(
-      installedPaths().some((path) => path.slice(1).startsWith(staged)),
-      `${staged} is staged and no %files entry claims it`,
-    )
+  // Every path outside the bundle is claimed by name, so a file added to the staging and left
+  // out of the list is found here and not by a release that has already built the bundles. The
+  // bundle is the one entry that stands for a directory, since `%files` takes a directory and
+  // rpmbuild counts what is under it as packaged.
+  const claimed = new Set(installedPaths())
+  const walk = (at, path) => {
+    for (const entry of readdirSync(at, { withFileTypes: true })) {
+      const installed = `${path}/${entry.name}`
+      if (installed === INSTALL_DIR) continue
+      if (entry.isDirectory()) walk(join(at, entry.name), installed)
+      else assert.ok(claimed.has(installed), `${installed} is staged and no %files entry claims it`)
+    }
   }
+  walk(payload, '')
 })
 
 test('a bundle with no packaged app in it is refused, rather than packaged around a broken link', (t) => {
@@ -244,5 +283,8 @@ test('dpkg builds a package whose contents and metadata are the staged tree', (t
   // dpkg applies this to the /usr/bin every machine already has.
   assert.match(contents.split('\n').find((line) => line.endsWith(' ./usr/bin/')), /^drwxr-xr-x root\/root /)
   assert.ok(contents.includes(`/usr/share/applications/${PACKAGE}.desktop`))
+  for (const size of ICON_SIZES) {
+    assert.ok(contents.includes(`/usr/share/icons/hicolor/${size}x${size}/apps/${ICON}.png`), contents)
+  }
   assert.ok(contents.includes(`/usr/share/icons/hicolor/scalable/apps/${ICON}.svg`))
 })
