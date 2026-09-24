@@ -805,13 +805,13 @@ flight, which is aimed at something else entirely and costs the answer being wri
   session record to pick up again. So the cost is having to choose, and neither half is the whole
   program.
 - **Vi's editing is what this box does with the keys, not what vi does with a file.** There is one
-  register rather than named ones, no macro and no mark, undo is a single step (INPUT-28), counts do
-  not prefix a command, and there is no `:` line. Each of those is machinery for a file being edited
-  over an afternoon, where this is a prompt being written over a minute. The keys that reach for a
-  register, a macro or a mark do nothing, and nor does the key after them (INPUT-23). A count and a
-  `:` line are the exceptions: a digit and `:` do nothing, `0` is the start of the line, and what is
-  typed after them is read as the instructions it spells, so `3j` moves one row and `d2w` moves the
-  caret a word.
+  register rather than named ones, no macro and no mark, undo is a single step (INPUT-28), and there
+  is no `:` line. Each of those is machinery for a file being edited over an afternoon, where this
+  is a prompt being written over a minute. The keys that reach for a register, a macro or a mark do
+  nothing, and nor does the key after them (INPUT-23). `:` is the exception: it does nothing, and
+  what is typed after it is read as the instructions those letters spell. Counts are not on this
+  list, because a count is how a person says how far, and a prompt has as much room to go as a file
+  has (INPUT-35).
 
 <a id="INPUT-19"></a>
 ### INPUT-19: Ctrl-R searches every prompt sent, and what is chosen goes into the box
@@ -1233,11 +1233,16 @@ transcript, exactly as the arrows do. `/` opens the search over the prompts alre
 what Ctrl-R opens.
 
 While a key is waiting for the character to jump to, every press is that character, so `f/` jumps to
-a slash and `fj` to a `j`.
+a slash and `fj` to a `j`. A count in front of `k` or `j` is the other exception, and it moves rows
+inside the input alone (INPUT-35).
 
 **Why.** What these reach is not the line. Answering them by moving the caret would leave the prompt
 somebody most wants unreachable from the mode they are in, and a person who pressed `k` on an empty
 line would get nothing where the arrow beside it walks their history.
+
+A counted one is the exception because a count says how far to go inside something, and the ladder
+goes somewhere else at the end of it: `5k` on a two-row paragraph would replace the whole line with a
+prompt from three back, and nothing on the screen would say what took the line away.
 
 They are answered by translating the letter into the key it stands for, so there is one ladder rather
 than two: a second copy would be a second set of conditions about when the history is reachable, and
@@ -1258,8 +1263,8 @@ cannot see scroll away above it.
 ### INPUT-28: an operator and an extent, and a marker is taken whole or not at all
 
 `d` takes a stretch out, `c` takes it out and opens INSERT mode where it was, `y` keeps it and leaves
-the line alone, `>` and `<` move the line a step from or towards the margin. Each waits for the
-stretch to act on:
+the line alone, `>` and `<` move every row the stretch reaches a step from or towards the margin.
+Each waits for the stretch to act on:
 
 | Keys | The stretch |
 |---|---|
@@ -1316,6 +1321,7 @@ at, and no such position is inside a marker.
 `verified-by: bravebot_tui::state::the_register_goes_back_on_either_side_of_the_caret`
 `verified-by: bravebot_tui::state::putting_back_an_empty_register_does_nothing`
 `verified-by: bravebot_tui::state::the_line_shifts_by_spaces_and_stops_at_the_margin`
+`verified-by: bravebot_tui::state::the_caret_follows_every_row_a_shift_moves`
 `verified-by: bravebot_tui::state::joining_puts_one_space_where_the_newline_was`
 `verified-by: bravebot_tui::state::undo_puts_back_what_a_change_took`
 `verified-by: bravebot_tui::state::there_is_nothing_to_undo_after_a_yank_or_before_a_change`
@@ -1686,3 +1692,75 @@ available, spent in the one place where a second press is the whole of what is b
 `verified-by: bravebot_tui::app::a_refused_way_out_says_so`
 `verified-by: bravebot_tui::app::a_return_of_its_own_still_sends`
 `verified-by: bravebot_tui::app::a_program_cannot_send_its_own_line_with_an_arrow_and_a_return`
+
+<a id="INPUT-35"></a>
+### INPUT-35: a count in front of an instruction says how many
+
+`1` to `9` begin a count and every digit after one continues it, so `0` is still the key for the
+first column and is a digit only once a count has begun: `10l` is ten characters and `0` alone is
+column one. A count in front of an operator and a count in front of its motion multiply, so `2d3w`
+is `d6w`.
+
+| What it counts | Keys |
+|---|---|
+| how many times over the motion is meant | every motion of [INPUT-26](#INPUT-26), and `;` and `,` |
+| which row to go to | `G` and `gg` |
+| how many rows to move inside the input | `j` and `k`, which reach no history counted ([INPUT-27](#INPUT-27)) |
+| how much of the extent the operator takes | `3dd`, `d3w`, `3x`, `3>>` |
+| how many copies, and how many rows end as one | `p`, `P`, and `J`, where `3J` is three rows and `2J` is the bare key |
+| how many the repeat is of, in place of the count recorded | `.` |
+
+The three extents that name no quantity take no count, since there is no second end of the line to
+reach, no second thing the keys named and no second selection: `3D`, `d3iw` and a counted operator
+in VISUAL mode act on what the uncounted one would.
+
+**The line bounds a count, and not the number typed.** Every counted motion stops at the first step
+that moves nothing, so `999l` costs the length of a line, and an extent takes what there is, so
+`9dd` on a two-row paragraph takes the two rows. `p` is the one that can ask for more than the line
+holds, since a copy always goes somewhere: what bounds it is the cap the digits are read up to, and
+nothing else. A digit typed past the cap leaves the count there.
+
+**A counted change is one change and one step to undo.** A count is spent by the instruction it was
+typed in front of, including one that means nothing, and it is abandoned by everything that abandons
+an instruction still waiting for a key ([INPUT-24](#INPUT-24)). It is drawn beside the mode word
+with the rest of that instruction, so three presses are `NORMAL 2d3`.
+
+A digit a key is already waiting for is that key rather than a count: `f3` jumps to a `3`, and a
+prefix with no instruction here swallows one the way it swallows a letter ([INPUT-23](#INPUT-23)).
+
+**Why.** A count is how a vi user says how far, and it is the half of the grammar that makes the
+motions worth having: `3j` and `d2w` are two of the first things such a person types. Without one
+the digits were keys that did nothing, which reads as a box that has stopped answering.
+
+Bounding by the line rather than by the number is what keeps that safe. A count is read before the
+instruction it belongs to is known, so somebody leaning on a digit spells a number nothing on the
+line can reach, and a box that walked it out one position at a time would stop answering for as long
+as it took.
+
+One change and one undo step is the same rule undo already keeps ([INPUT-28](#INPUT-28)), read
+against an instruction the count made bigger. Carried out as one change per step, `3x` would leave
+two of the three beyond the reach of the only undo there is.
+
+The count is drawn for the reason a half-typed instruction is: it decides what the next letter does,
+and a person who typed one by accident would otherwise find out from what the next letter did.
+
+`verified-by: bravebot_tui::vim::a_digit_begins_a_count_only_where_it_is_not_zero`
+`verified-by: bravebot_tui::vim::a_count_stops_growing_at_the_cap`
+`verified-by: bravebot_tui::vim::a_digit_is_a_count_only_where_nothing_is_waiting_for_that_key`
+`verified-by: bravebot_tui::vim::the_two_counts_of_an_instruction_multiply`
+`verified-by: bravebot_tui::state::a_count_repeats_a_motion`
+`verified-by: bravebot_tui::state::a_count_moves_the_caret_by_rows`
+`verified-by: bravebot_tui::state::a_count_stops_where_the_line_does`
+`verified-by: bravebot_tui::state::a_count_makes_the_input_motions_a_row`
+`verified-by: bravebot_tui::state::a_count_claims_the_row_keys_and_leaves_the_search_key`
+`verified-by: bravebot_tui::state::a_count_says_how_much_of_the_extent_an_operator_takes`
+`verified-by: bravebot_tui::state::a_counted_change_is_one_change_and_one_undo_step`
+`verified-by: bravebot_tui::state::a_count_in_front_of_the_repeat_key_replaces_the_recorded_one`
+`verified-by: bravebot_tui::state::a_count_is_how_many_copies_the_register_puts_back`
+`verified-by: bravebot_tui::state::a_count_is_how_many_rows_join`
+`verified-by: bravebot_tui::state::a_digit_a_waiting_key_asked_for_is_that_key`
+`verified-by: bravebot_tui::state::an_instruction_spends_the_count_typed_in_front_of_it`
+`verified-by: bravebot_tui::state::escape_abandons_a_count`
+`verified-by: bravebot_tui::state::the_count_is_part_of_what_the_hint_line_draws`
+`verified-by: bravebot_tui::app::a_counted_row_key_never_reaches_the_prompt_history`
+`verified-by: bravebot_tui::render::the_hint_line_draws_the_count_in_front_of_an_instruction`

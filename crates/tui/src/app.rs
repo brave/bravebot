@@ -9504,6 +9504,39 @@ mod tests {
         );
     }
 
+    /// A counted row key moves rows inside the input and stops at the first or the last, where the
+    /// bare key walks the prompt history once the input runs out. Answering a count by pressing the
+    /// key it spells that many times would replace a two-row paragraph with a prompt from three
+    /// back, with nothing on the screen to say what took the line away.
+    #[test]
+    fn a_counted_row_key_never_reaches_the_prompt_history() {
+        let mut session = editing_vis_way();
+        type_line(&mut session, "an earlier prompt");
+        handle_key(&mut session, key(KeyCode::Enter));
+        session.complete("an answer", Vec::new(), 0);
+        // One row, so the row above is the history and nothing else: a counted key answered by the
+        // one it spells would recall the prompt on the first of its steps.
+        type_line(&mut session, "the line being written");
+        handle_key(&mut session, key(KeyCode::Esc));
+
+        handle_key(&mut session, key(KeyCode::Char('3')));
+        handle_key(&mut session, key(KeyCode::Char('k')));
+
+        assert_eq!(
+            session.input(),
+            "the line being written",
+            "the count reached the history"
+        );
+
+        // The bare key is unchanged, so the ladder INPUT-27 describes is still there to walk.
+        handle_key(&mut session, key(KeyCode::Char('k')));
+        assert_eq!(
+            session.input(),
+            "an earlier prompt",
+            "the bare key stopped reaching the history"
+        );
+    }
+
     /// `/` searches in vi, and the prompts already sent are the only thing here to search, so it asks
     /// the question Ctrl-R asks. Nothing is typed into the line: the mode is not typing.
     #[test]

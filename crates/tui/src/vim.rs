@@ -346,6 +346,60 @@ pub enum Pending {
     UnclaimedStretch,
 }
 
+/// How large a count may be, whatever is typed in front of an instruction.
+///
+/// What a count reaches is bounded by the line rather than by this: every counted instruction stops
+/// at the first step that moves nothing, so `999l` costs the length of a line. The cap is here
+/// because the digits are read before the instruction they belong to is, and somebody leaning on a
+/// key would otherwise leave a ten-digit number for the box to walk out one step at a time. A
+/// thousand is past the end of any line a prompt box holds.
+pub const COUNT_CAP: u32 = 1000;
+
+/// The count a digit makes of the one typed so far, or `None` where the digit is not part of one.
+///
+/// `1` to `9` begin a count and every digit continues one, which is what leaves `0` as the key for
+/// the first column: a `0` with nothing in front of it is a motion, and the one in `10` is the
+/// second digit of ten.
+pub fn counted(so_far: Option<u32>, c: char) -> Option<u32> {
+    let digit = c.to_digit(10)?;
+    if digit == 0 && so_far.is_none() {
+        return None;
+    }
+    Some(
+        so_far
+            .unwrap_or(0)
+            .saturating_mul(10)
+            .saturating_add(digit)
+            .min(COUNT_CAP),
+    )
+}
+
+/// Whether a digit typed now is part of a count rather than the key an instruction is waiting for.
+///
+/// With nothing waiting, and with an operator waiting for the stretch to act on: `3w` is three words
+/// and `d3w` deletes them. Everywhere else the wait is for one particular character and a digit is
+/// that character, so `f3` jumps to a `3` and `"3` swallows one.
+pub fn takes_a_count(waiting: Option<Pending>) -> bool {
+    matches!(waiting, None | Some(Pending::Operate(_)))
+}
+
+/// The count an instruction carries, from the one in front of the operator and the one in front of
+/// the motion it acts over.
+///
+/// They multiply, which is vi's rule: `2d3w` is `d6w` rather than a question about which of the two
+/// digits won.
+pub fn multiplied(operator: Option<u32>, motion: Option<u32>) -> Option<u32> {
+    match (operator, motion) {
+        (None, None) => None,
+        (first, second) => Some(
+            first
+                .unwrap_or(1)
+                .saturating_mul(second.unwrap_or(1))
+                .min(COUNT_CAP),
+        ),
+    }
+}
+
 impl Pending {
     /// What the key that arrived after this one means, or `Nothing` where the pair is not an
     /// instruction.
@@ -1072,5 +1126,67 @@ mod tests {
         assert!(!Operator::Delete.reads_only());
         assert!(!Operator::Change.reads_only());
         assert!(!Operator::Indent.reads_only());
+    }
+
+    /// `1` to `9` begin a count and every digit continues one, which is the whole of the grammar and
+    /// the reason `0` is still the key for the first column. A `0` read as the start of a count
+    /// would leave that key doing nothing at all, and one refused as the second digit would make
+    /// `10` the digit `1` and then a jump to column zero.
+    #[test]
+    fn a_digit_begins_a_count_only_where_it_is_not_zero() {
+        assert_eq!(counted(None, '3'), Some(3));
+        assert_eq!(counted(None, '0'), None);
+        assert_eq!(counted(Some(1), '0'), Some(10));
+        assert_eq!(counted(Some(10), '0'), Some(100));
+        assert_eq!(counted(Some(2), '5'), Some(25));
+        assert_eq!(counted(None, 'w'), None);
+        // Not a digit here, whatever `char::to_digit` would make of it in another radix.
+        assert_eq!(counted(Some(1), 'a'), None);
+    }
+
+    /// The cap is what stops a held-down digit leaving a ten-digit number for the box to walk out one
+    /// step at a time, and it holds however many digits arrive after it.
+    #[test]
+    fn a_count_stops_growing_at_the_cap() {
+        assert_eq!(counted(Some(COUNT_CAP), '9'), Some(COUNT_CAP));
+        let mut count = None;
+        for _ in 0..12 {
+            count = counted(count, '9');
+        }
+        assert_eq!(count, Some(COUNT_CAP));
+    }
+
+    /// A digit is a count with nothing waiting and with an operator waiting for its stretch, and is
+    /// the key itself everywhere else: the wait in `f3` is for the character to jump to, and the one
+    /// in `"3` is for a register whose key is taken and thrown away.
+    #[test]
+    fn a_digit_is_a_count_only_where_nothing_is_waiting_for_that_key() {
+        assert!(takes_a_count(None));
+        assert!(takes_a_count(Some(Pending::Operate(Operator::Delete))));
+        assert!(!takes_a_count(Some(Pending::Find {
+            forwards: true,
+            short: false
+        })));
+        assert!(!takes_a_count(Some(Pending::Unclaimed)));
+        assert!(!takes_a_count(Some(Pending::G)));
+        assert!(!takes_a_count(Some(Pending::ReplaceWith)));
+        assert!(!takes_a_count(Some(Pending::OperateObject {
+            operator: Operator::Delete,
+            around: false
+        })));
+    }
+
+    /// The two counts multiply, which is vi's rule: `2d3w` is six words. Either one alone is itself,
+    /// and neither is a count of one, since a count of one would make `G` the first row.
+    #[test]
+    fn the_two_counts_of_an_instruction_multiply() {
+        assert_eq!(multiplied(None, None), None);
+        assert_eq!(multiplied(Some(2), None), Some(2));
+        assert_eq!(multiplied(None, Some(3)), Some(3));
+        assert_eq!(multiplied(Some(2), Some(3)), Some(6));
+        assert_eq!(
+            multiplied(Some(COUNT_CAP), Some(COUNT_CAP)),
+            Some(COUNT_CAP)
+        );
     }
 }
