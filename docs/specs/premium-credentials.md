@@ -94,12 +94,19 @@ Credentials arrive in batches covering a few days and are spent one per request.
 never offered again, consecutive spends hand out different credentials, and spending past the end
 of a batch is refused. A moment outside every validity window yields no credential.
 
-A run holds one wallet, which the turn opens and lends to every delegate it starts. A delegate
-opens none of its own and reads the store not at all.
+**Never offered twice means never on this machine, not never in this process.** A run holds one
+wallet, which the turn opens and lends to every delegate it starts: a delegate opens none of its
+own and reads the store not at all. Between runs the file is where they agree. A spend is taken
+under an exclusive claim on the store, from what the file says at that moment, and recorded on the
+file before the credential leaves the wallet, so every other `bravebot` reads it as gone. A claim
+older than any live hold belongs to a process that died holding it and is broken rather than
+waited on.
 
-**Why.** A spend reaches the file only when the wallet is written back (PREM-6), so a second
-wallet over the same batch reads every spend the first has made as unspent and offers the
-credential that one is presenting right now.
+**Why.** A spend held only in memory reaches the file when the wallet is written back, so a second
+wallet over the same batch would read every spend the first has made as unspent and offer the
+credential that one is presenting right now. Nothing bounds how many `bravebot` processes a person
+runs, and each is a wallet of its own over the one batch, so one wallet per run leaves the
+guarantee holding inside a process and failing between them.
 
 `verified-by: bravebot_skus::store::a_spent_credential_is_never_offered_again`
 `verified-by: bravebot_skus::store::consecutive_spends_hand_out_different_credentials`
@@ -107,23 +114,49 @@ credential that one is presenting right now.
 `verified-by: bravebot_skus::store::the_next_usable_credential_is_the_one_valid_at_that_moment`
 `verified-by: bravebot_skus::store::a_moment_outside_every_window_yields_no_credential`
 `verified-by: bravebot_skus::store::a_window_does_not_include_its_own_end`
+`verified-by: bravebot_skus::store::two_wallets_over_one_file_are_never_offered_the_same_credential`
+`verified-by: bravebot_skus::store::wallets_spending_at_the_same_moment_hand_out_different_credentials`
+`verified-by: bravebot_skus::store::neither_of_two_wallets_erases_the_others_spend_markers`
+`verified-by: bravebot_skus::store::a_claim_left_by_a_dead_process_is_broken_rather_than_waited_on`
+`verified-by: bravebot_skus::store::a_claim_taken_a_moment_ago_is_not_treated_as_abandoned`
 `verified-by: bravebot_agent::shared::two_runs_holding_one_wallet_are_never_offered_the_same_credential`
 `verified-by: bravebot_agent::turn::a_delegate_spends_the_wallet_the_turn_lent_it`
 `verified-by: bravebot_agent::home::a_delegate_does_not_open_a_wallet_of_its_own`
 
 <a id="PREM-6"></a>
-### PREM-6: nothing is written back unless a credential was actually spent
+### PREM-6: a spend is on the file before the credential is presented, and nothing else writes
 
 A session that spends nothing never writes, and a detached batch has nowhere to write. A spend
-reaches the file when the wallet is flushed and when the session ends, not when the spend is made.
+reaches the file as it is made, under the claim PREM-5 takes, before the credential leaves the
+wallet. What is left for a flush and for the end of a session is a batch a refill minted and
+nothing has been spent from yet.
 
-**Why.** A whole batch is hundreds of credentials and one is spent per model request, so writing
-per spend would rewrite the file several times a turn to change one boolean.
+The write goes to a temporary beside the file and is renamed over it, so a write that dies partway
+leaves the last good batch rather than half of a new one. A batch imported for another environment
+while a session is spending is not written over: the session refuses the spend instead.
 
-`verified-by: bravebot_skus::store::spending_does_not_write_until_asked_to`
+**Why.** A whole batch is hundreds of credentials and one is spent per model request, so this
+rewrites a few hundred kilobytes beside a request that takes seconds. Holding the markers in memory
+instead saves that write and loses PREM-5 twice over: between processes, which cannot see each
+other's memory, and within one, since a process that dies has presented every credential it spent
+and recorded none of them. The cost the write does carry is a credential recorded as spent and then
+not presented, one per abandoned request, which a batch of hundreds valid for days can afford and
+offering one twice is not.
+
+**Why the temporary.** Opening the real path and truncating it leaves an empty file for the length
+of the write, which PREM-7 reports as unusable, and the batch is recoverable from nowhere else:
+the credentials were minted against the order and only this file holds them, so the cost of landing
+in that window is a re-import. The session record and the prompt history are written beside and
+renamed for less than this.
+
 `verified-by: bravebot_skus::store::a_session_that_spends_nothing_never_writes`
-`verified-by: bravebot_skus::store::a_spend_is_written_back_only_on_a_flush`
+`verified-by: bravebot_skus::store::a_spend_is_written_back_as_it_is_made`
 `verified-by: bravebot_skus::store::a_spend_is_written_back_when_the_session_ends`
+`verified-by: bravebot_skus::store::a_refilled_batch_is_written_back`
+`verified-by: bravebot_skus::store::a_spend_after_a_refill_comes_out_of_the_new_batch`
+`verified-by: bravebot_skus::store::a_batch_imported_for_another_environment_mid_session_is_not_spent`
+`verified-by: bravebot_skus::store::a_write_replaces_the_file_rather_than_truncating_it`
+`verified-by: bravebot_skus::store::a_write_leaves_neither_a_temporary_nor_a_claim_behind`
 `verified-by: bravebot_skus::store::a_detached_batch_has_nowhere_to_write`
 
 <a id="PREM-7"></a>
@@ -146,7 +179,9 @@ there is nowhere a secret belongs, and that is reported rather than guessed at. 
 file and is not an error when there is nothing to remove.
 
 A malformed or empty file is reported as such rather than treated as absent credentials, and a
-credential without a token is rejected on load.
+credential without a token is rejected on load. The claim PREM-5 takes and the temporary PREM-6
+renames sit in the same directory and are not a second store: the claim holds no bytes, and the
+temporary is a file being written that is either renamed over the credentials or removed.
 
 **Why not the keychain.** It was the keychain, and that was wrong on both halves of the trade. The
 browser these are imported from keeps the same secret unencrypted in `skus.state` and
