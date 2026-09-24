@@ -15,7 +15,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 |---|---|---|---|
 | [labels.md](labels.md) | `LABEL` | 10 | the lattice, taint, who may read what, and how a first label is assigned |
 | [routing.md](routing.md) | `ROUTE` | 8 | where an effect may land and what may decide it |
-| [trust-map.md](trust-map.md) | `TRUST` | 19 | which paths the user vouched for, what a write does to that record, and how long an answer lasts |
+| [trust-map.md](trust-map.md) | `TRUST` | 21 | which paths the user vouched for, what a write does to that record, and how long an answer lasts |
 | [permissions.md](permissions.md) | `PERM` | 15 | rules written in advance about what to ask about and what to refuse |
 | [processors.md](processors.md) | `PROC` | 12 | the one component that reads untrusted content, and what it may do with it |
 | [vetting.md](vetting.md) | `CHECK` | 14 | checking quarantined content for an injection attempt before every prompt that would promote it, so a person deciding has a second opinion |

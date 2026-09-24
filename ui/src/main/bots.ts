@@ -109,7 +109,10 @@ import { app } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { lstatSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { type Bot, botOf, isSlug, withBot } from '../shared/bots'
+import { type Bot, botOf, isBotModel, isSlug, slugFor, withBot } from '../shared/bots'
+import { newAvatarSeed } from '../shared/avatar'
+import { isProjectPath } from '../shared/recents'
+import { isOpenedDirectory } from './opened'
 import { putBots, readState } from './state'
 
 /** Where a bot's files live inside the checkout it works in, relative to that checkout. */
@@ -148,6 +151,59 @@ export function bots(): Bot[] {
 /** The one with this slug, or `null`. */
 export function bot(slug: unknown): Bot | null {
   return isSlug(slug) ? botOf(bots(), slug) : null
+}
+
+/**
+ * The bot a window's form describes, or `null` if what it sent is not a bot this app may keep.
+ *
+ * Four fields cross from a window (a name, a purpose, a model and a face), and none of them is
+ * a path. The fifth is, and it is the one field that decides where on the disk this app writes:
+ * a bot's memory is made under its project folder by a helper pinned to that folder, and no
+ * session and no prompt stands between a saved bot and that write. So the folder is checked
+ * against the ones the picker handed out rather than for the shape of a path. `isProjectPath`
+ * says a string is absolute and holds no NUL, which every folder on the account satisfies.
+ *
+ * An existing bot keeps everything this road cannot say: its id, its watermark, its seed, its
+ * folder, when it was made. Its folder is fixed for the reason the form gives, to keep a bot's
+ * memory and its conversations together, and this never reads the one it was sent. A new one is
+ * given a slug composed here from the name, so the thing that becomes a path segment is never a
+ * string that arrived as one.
+ */
+export function botFromForm(value: unknown): Bot | null {
+  if (typeof value !== 'object' || value === null) return null
+  const { slug, avatar, model, name, purpose, directory } = value as Record<string, unknown>
+  if (model !== undefined && !isBotModel(model)) return null
+  if (typeof name !== 'string' || typeof purpose !== 'string') return null
+  if (!name.trim() || !purpose.trim()) return null
+  if (!isProjectPath(directory)) return null
+  if (avatar !== undefined && (typeof avatar !== 'string' || !avatar.trim() || avatar.length > 128)) {
+    return null
+  }
+
+  const held = isSlug(slug) ? bot(slug) : null
+  if (held) return { ...held, name, purpose, model: model === undefined ? held.model : model }
+  if (!isOpenedDirectory(directory)) return null
+  return {
+    slug: slugFor(name, new Set(bots().map((each) => each.slug))),
+    name,
+    purpose,
+    model: typeof model === 'string' ? model : null,
+    // Use the draft's preview seed so creation keeps the face already shown. Older callers may
+    // omit it; either way it is stored and survives a rename.
+    avatar: typeof avatar === 'string' ? avatar : newAvatarSeed(randomUUID()),
+    directory,
+    session: null,
+    conversations: [],
+    archived: 0,
+    // Nothing has been remembered and nothing has gone unremembered, so a new bot starts owing no
+    // nudge. See `noteBotMemory`, which takes its first reading when its first turn ends.
+    remembered: 0,
+    quiet: 0,
+    // In use, which is what a bot somebody just filled in a form for is.
+    retired: 0,
+    created: Date.now(),
+    updated: Date.now(),
+  }
 }
 
 /** Write a bot down, replacing whatever shared its slug, and stamp when that happened. */

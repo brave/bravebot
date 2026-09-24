@@ -6,10 +6,13 @@
  * anything meant to outlive a run lives in the file the main process owns. `state.ts` holds it
  * under its own key.
  *
- * The main process records these itself rather than taking them from the renderer. That keeps the
- * promise `chooseDirectory` already makes — the renderer is never handed a path it invented, and
- * it cannot forge one into the list either. It can read the list and it can ask to open something
- * on it; there is no channel by which it can write to it.
+ * The main process records these itself: every write below is made where a folder was just
+ * chosen, opened or forked, and there is no channel that takes a list from a window. What a
+ * window can do is ask to open a session in a folder, and that is an opening like any other, so
+ * the entry it leaves is real. It is also the reason membership here is a record of what has been
+ * opened and not an authority over what may be: a window that names a folder decides what goes on
+ * this list, so a check against the list is one it can answer for itself. `opened.ts` is the
+ * authority, and it holds only what came back from the picker.
  */
 
 import { RECENTS_MAX, withMostRecent } from '../shared/recents'
