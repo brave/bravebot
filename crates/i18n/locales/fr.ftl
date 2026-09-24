@@ -1273,6 +1273,7 @@ reach-no-model = dans le contexte d'aucun modèle : rien ne peut être envoyé l
 delegate-more-calls = { $count } appels jusqu'ici
 delegate-model-needs-sign-in =
     { $definition } a demandé { $model }, qui exige d'abord une connexion : il n'a pas été lancé
+delegate-model-substituted = { $definition } a demandé { $model } et un autre modèle a répondu
 
 ## Regarder ce que fait un delegue
 

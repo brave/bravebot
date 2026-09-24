@@ -16669,6 +16669,105 @@ fn a_delegate_uses_the_model_its_definition_selected() {
     );
 }
 
+/// The endpoint substitutes a model it will not serve rather than refusing, so a definition naming
+/// one is told so. Compared as a session's own model is: against the name that was sent, and not
+/// for the automatic name, which is answered by whichever model it routed to.
+#[test]
+fn a_delegate_answered_by_a_model_other_than_its_definitions_says_so() {
+    let scratch = Scratch::new("delegate-model-substituted");
+    let home = Scratch::new("delegate-model-substituted-home");
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    for (name, model) in [
+        ("haiku-reader", "haiku"),
+        ("typo-reader", "a-model-the-service-does-not-hold"),
+        ("auto-reader", "automatic"),
+    ] {
+        std::fs::write(
+            home.path.join("agents").join(format!("{name}.md")),
+            format!("---\nname: {name}\ndescription: Reads.\nkind: reader\nmodel: {model}\n---\n\nREAD\n"),
+        )
+        .expect("write a definition");
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let haiku = config_for("http://unused.invalid").model_named("haiku");
+    assert_ne!(
+        haiku, "haiku",
+        "the alias did not resolve, so this cannot tell the two apart"
+    );
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "DELEGATE-THREE",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"haiku-reader","task":"CHECK-ON-HAIKU"}"#,
+                ),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"typo-reader","task":"CHECK-ON-TYPO"}"#,
+                ),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"auto-reader","task":"CHECK-ON-AUTO"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("delegates finished"),
+            ],
+        ),
+        (
+            "CHECK-ON-HAIKU",
+            vec![reply_with("clear").replace("test-model", &haiku)],
+        ),
+        ("CHECK-ON-TYPO", vec![reply_with("clear")]),
+        ("CHECK-ON-AUTO", vec![reply_with("clear")]),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let outcome = turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-THREE").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        reporter.delegated.len(),
+        3,
+        "not every delegate ran, so this says nothing about the ones that did not"
+    );
+    let expected = vec![
+        "typo-reader asked for a-model-the-service-does-not-hold and was answered by a different \
+         model"
+            .to_string(),
+    ];
+    let about_models = |said: &[String]| -> Vec<String> {
+        said.iter()
+            .filter(|notice| notice.contains("asked for"))
+            .cloned()
+            .collect()
+    };
+    assert_eq!(
+        about_models(&reporter.notices),
+        expected,
+        "what the person watching was told"
+    );
+    assert_eq!(
+        about_models(&outcome.notices),
+        expected,
+        "what the turn's account holds"
+    );
+}
+
 /// A definition's model that needs a sign-in is not swapped for the turn's, which would spend past
 /// a boundary the definition drew: the delegate does not run and the person is told why.
 #[test]

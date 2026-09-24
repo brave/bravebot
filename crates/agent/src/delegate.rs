@@ -379,7 +379,8 @@ pub fn run(
         };
     }
     let delegate_model = definition_model
-        .map(|(_, resolved)| resolved)
+        .as_ref()
+        .map(|(_, resolved)| resolved.clone())
         .or_else(|| model.map(str::to_string));
 
     // The mode is the spawning turn's, and inherited rather than chosen: a delegate is that turn's
@@ -442,6 +443,24 @@ pub fn run(
             };
         }
     };
+
+    // Compared the way a session's own model is (DELEGATE-22). The name that answered stays out of
+    // the sentence, which is the driver's own words, and what this decides goes to no planner.
+    if let Some((written, resolved)) = &definition_model {
+        let asked = crate::backend::Backend::name_as_asked(config, resolved);
+        if crate::backend::Backend::reports_the_model_it_was_asked_for(config, resolved)
+            && asked != bravebot_config::DEFAULT_MODEL
+            && asked != outcome.model
+        {
+            let said = t!(
+                delegate_model_substituted,
+                definition = seeded.spec.definition(),
+                model = *written
+            );
+            reporter.notice(said.clone());
+            notices.push(said);
+        }
+    }
 
     Ended {
         delegated: Ok(Delegated {

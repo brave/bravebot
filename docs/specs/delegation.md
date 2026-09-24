@@ -557,6 +557,12 @@ in, as a person's pick in `/model` is for the parent's.
 A model that needs a sign-in this machine has not made is not swapped for the turn's. The delegate
 does not run, and the person is told which definition asked for which model.
 
+A delegate answered by a model other than the one its definition named says so, naming the
+definition and the model it asked for. It is compared the way a session's own model is: against the
+name that was sent, and not where the name is a handle the reply resolves, as a Bedrock profile or
+the automatic name is. The name that answered is left out, since a notice is the driver's own words,
+and what the comparison decides is whether a sentence is shown, which reaches no planner.
+
 **Why `inherit` names none.** It is how other agents' definitions say so, and one ported from them
 would otherwise send the word as a model name.
 
@@ -564,12 +570,17 @@ would otherwise send the word as a model name.
 and running it on the turn's model would spend past that boundary without anybody choosing to. A
 sign-in is no alternative either: a delegate runs on a worker thread with nowhere to show one.
 
+**Why the substitution is said.** The endpoint substitutes rather than refuses a name it will not
+serve, a misspelt one or a premium one this run holds no subscription for, so without it a
+definition could ask for one model and have every delegate it starts answered by another.
+
 `verified-by: bravebot_agent::agents::a_definition_reads_a_model_name`
 `verified-by: bravebot_agent::agents::an_empty_model_name_in_a_definition_is_ignored`
 `verified-by: bravebot_agent::agents::a_definition_naming_inherit_names_no_model`
 `verified-by: bravebot_core::delegate::a_definition_may_name_a_model_and_the_spec_carries_it`
 `verified-by: bravebot_agent::turn::a_delegate_uses_the_model_its_definition_selected`
 `verified-by: bravebot_agent::turn::a_delegate_whose_model_needs_a_sign_in_does_not_run_and_says_so`
+`verified-by: bravebot_agent::turn::a_delegate_answered_by_a_model_other_than_its_definitions_says_so`
 
 ## Known costs
 
@@ -584,6 +595,11 @@ sign-in is no alternative either: a delegate runs on a worker thread with nowher
   four, and normalising a name to find them would be a dependency for four code points. A
   character Unicode adds to that set later is one [DELEGATE-21](#DELEGATE-21) would not catch
   until the list is extended.
+
+- **A definition's model is checked by using it.** Whether the endpoint serves a name is learned
+  from its reply, so a definition naming one it does not serve has its delegate run on a substitute
+  and the person hears so afterwards. Checking first would mean the driver holding the endpoint's
+  roster, which only the interface fetches.
 
 - **A reference cannot be handed to a delegate.** A parent working in a directory nobody vouched
   for holds references and no filenames, and there is no argument for passing one on: quarantines
