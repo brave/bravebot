@@ -114,10 +114,10 @@ than wait out its launch timeout.
 
 What `npm run package` writes on Linux is a directory somebody has to unpack and run themselves,
 which is why it is not what a release ships. `scripts/linux-package.mjs` lays that bundle out as
-an install under `/opt/brave-bot`, with a launcher entry, the icon in the theme's scalable
-directory, and `chrome-sandbox` setuid root, and writes the `.deb` and `.rpm` descriptions from
-that one tree; `make app-release-linux` at the root packs it with `dpkg-deb` and `rpmbuild` in
-pinned containers. The setuid bit is the point of the exercise: where unprivileged user
+an install under `/opt/brave-bot`, with a launcher entry, the icon in the theme at every size in
+`build/icons/` and again as the drawing, and `chrome-sandbox` setuid root, and writes the `.deb`
+and `.rpm` descriptions from that one tree; `make app-release-linux` at the root packs it with
+`dpkg-deb` and `rpmbuild` in pinned containers. The setuid bit is the point of the exercise: where unprivileged user
 namespaces are unavailable, Electron aborts at start without it, and only an installer can set
 it. `scripts/linux-package.test.mjs` covers what the two formats are told, and builds a real
 `.deb` where `dpkg-deb` is present.
@@ -136,7 +136,7 @@ A Windows bundle carries `build/icon.ico` and a version resource naming Brave as
 "Brave Bot" as the product, which is what its properties dialog and Task Manager show; without one
 they both say Electron, because the resource would be the one Electron's own build left behind.
 The icon is the About mascot in Brave orange on a macOS tile, drawn in `build/icon.svg`; after
-changing the drawing, remake both icons from it:
+changing the drawing, remake all three sets of icons from it:
 
 ```bash
 inkscape build/icon.svg -w 1024 -h 1024 -o /tmp/icon-1024.png
@@ -148,11 +148,20 @@ done
 iconutil -c icns /tmp/icon.iconset -o build/icon.icns
 python3 -c "from PIL import Image; Image.open('/tmp/icon-1024.png').save('build/icon.ico', \
   sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])"
+for s in 16 32 48 64 128 256 512; do
+  sips -z $s $s /tmp/icon-1024.png --out build/icons/${s}x${s}.png
+done
 ```
 
 The `.ico` holds every size Windows asks for, from the file list at 16 to the extra-large view at
 256. A file holding only the largest is legal, and Windows scales it down itself, but a mascot with
 two eyes in it does not survive that to 16 pixels.
+
+`build/icons/` is the same set for Linux, where the packages install one file per size into the
+`hicolor` theme. They are rendered here rather than at packaging time for the reason the other two
+are: a bitmap committed beside the drawing keeps a rasteriser out of a release build. A desktop is
+required to read PNG and free to ignore SVG, so the drawing alone would leave the launcher entry
+without an icon anywhere GTK has no librsvg loader.
 
 A development checkout can produce a configured or unconfigured binary depending
 on the build environment. Follow [credentials](setup.md#credentials) before packaging

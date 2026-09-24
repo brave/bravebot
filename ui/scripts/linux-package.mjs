@@ -15,7 +15,7 @@
 // either tool.
 import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 // The name upgrades and conflicts key on, in both formats. Like the macOS bundle id it is fixed
 // by the first release: a later rename is a second package that installs beside the first rather
@@ -35,9 +35,22 @@ export const EXECUTABLE = 'Brave Bot'
 // Chromium's setuid sandbox helper, the reason this is a package at all.
 export const SANDBOX = 'chrome-sandbox'
 
-// The name in the icon theme, which is what `Icon=` in the desktop entry resolves. The file
-// installed under it keeps that name and not the source's.
+// The name in the icon theme, which is what `Icon=` in the desktop entry resolves. The files
+// installed under it keep that name and not the source's.
 export const ICON = PACKAGE
+
+// The sizes the icon is installed at, as bitmaps. The Icon Theme Specification makes PNG the
+// format a desktop has to read and SVG one it may: GTK draws a scalable icon only through
+// librsvg's gdk-pixbuf loader, which is not part of GTK, is named by neither dependency list
+// below, and is on a machine only because something else pulled it in. A package carrying the
+// drawing alone is one whose launcher entry shows a generic icon where it is missing, and that
+// entry is the whole of how a person starts the app.
+//
+// The set is what `build/icon.ico` holds, which is where a mascot with two eyes in it stops
+// surviving a scale down, plus 512 for a desktop drawing at 200%. They are rendered ahead of
+// time and committed beside the drawing, as the macOS and Windows icons are, so packaging
+// needs no rasteriser.
+export const ICON_SIZES = [16, 32, 48, 64, 128, 256, 512]
 
 // The asset's name for an architecture, and what each package format calls the same one. Three
 // spellings of two architectures: a package built for `arm64` and declared `x64`, or an rpm
@@ -241,6 +254,7 @@ export function installedPaths() {
     INSTALL_DIR,
     `/usr/bin/${PACKAGE}`,
     `/usr/share/applications/${PACKAGE}.desktop`,
+    ...ICON_SIZES.map((size) => `/usr/share/icons/hicolor/${size}x${size}/apps/${ICON}.png`),
     `/usr/share/icons/hicolor/scalable/apps/${ICON}.svg`,
   ]
 }
@@ -313,13 +327,22 @@ export function stage({ bundle, arch, into }) {
   mkdirSync(applications, { recursive: true })
   writeFileSync(join(applications, `${PACKAGE}.desktop`), desktopEntry())
 
-  // The drawing itself, in the theme's scalable directory, rather than a set of sizes rendered
-  // from it: every desktop that reads a `.desktop` file also loads an SVG through the same
-  // library GTK draws with, and rendering would put a rasteriser in a build that otherwise
-  // needs none.
-  const icons = join(payload, 'usr', 'share', 'icons', 'hicolor', 'scalable', 'apps')
-  mkdirSync(icons, { recursive: true })
-  cpSync(new URL('../build/icon.svg', import.meta.url), join(icons, `${ICON}.svg`))
+  // A bitmap per size, each in the directory that states its size, which is what a theme
+  // lookup reads before it draws anything: a file whose pixels are not what the directory
+  // around it claims is one the desktop scales a second time.
+  const theme = join(payload, 'usr', 'share', 'icons', 'hicolor')
+  const rendered = fileURLToPath(new URL('../build/icons/', import.meta.url))
+  for (const size of ICON_SIZES) {
+    const at = join(theme, `${size}x${size}`, 'apps')
+    mkdirSync(at, { recursive: true })
+    cpSync(join(rendered, `${size}x${size}.png`), join(at, `${ICON}.png`))
+  }
+
+  // And the drawing, for the desktops that do read one: they are the ones that draw it at a
+  // size nothing was rendered for, and they pick it over a bitmap themselves.
+  const scalable = join(theme, 'scalable', 'apps')
+  mkdirSync(scalable, { recursive: true })
+  cpSync(new URL('../build/icon.svg', import.meta.url), join(scalable, `${ICON}.svg`))
 
   normalise(payload)
 
