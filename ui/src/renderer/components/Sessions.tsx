@@ -3,6 +3,7 @@ import { createContext, useContext, useCallback, useMemo, useRef, useState } fro
 import type { SessionSummary } from '../../shared/protocol'
 import type { ContextTarget } from '../../shared/commands'
 import { keyOf } from '../../shared/forks'
+import { projectLabel } from '../../shared/recents'
 import { Fold } from './Fold'
 import { ForkIcon } from './ForkIcon'
 import { PopMenu, type PopItem } from './PopMenu'
@@ -312,7 +313,7 @@ function NewSession({ onNew }: { onNew: (directory?: string) => void }): React.J
   const items: PopItem[] = directories.length
     ? directories.map((directory) => ({
         id: directory,
-        label: directory.split('/').pop() || directory,
+        label: projectLabel(directory),
         // Two checkouts of one project share a basename, and picking the wrong one is a
         // mistake nothing later would announce.
         detail: directory,

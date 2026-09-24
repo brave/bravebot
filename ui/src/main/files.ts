@@ -108,6 +108,36 @@ function validAttachment(root: string, path: string): boolean {
 }
 
 /**
+ * Names Windows reads as a device rather than as a file in the folder that was listed.
+ *
+ * `COM1` is the serial port whatever directory it is named in, and `NUL` discards what is written
+ * to it, extension and all.
+ */
+const WINDOWS_DEVICE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i
+
+/**
+ * Whether every segment of a relative path names on Windows the file it appears to name.
+ *
+ * None of these is a way out of the project, which is what the `realpath` check below decides.
+ * Each is a request that resolves to something other than what it spells: `x:stream` reads an
+ * alternate data stream of `x`, a device name reaches a device, and Win32 drops a trailing dot or
+ * space before it looks, so `notes. ` opens `notes`. A panel whose whole job is showing somebody
+ * their own folder must not serve a path that means something else.
+ *
+ * Here rather than beside the other path rules in `shared/files.ts` because this is the only side
+ * that knows which platform it is on: that module is shared with the renderer, which is given no
+ * `process`, and applying these everywhere would cost a POSIX project every file it has with a
+ * colon in its name, which is one timestamped log away. On a POSIX host every one of these is an
+ * ordinary file name and resolves to itself.
+ */
+export function namesWhatItSpells(subpath: string, platform: NodeJS.Platform = process.platform): boolean {
+  if (platform !== 'win32') return true
+  return subpath
+    .split(/[\\/]/)
+    .every((segment) => !segment.includes(':') && !/[. ]$/.test(segment) && !WINDOWS_DEVICE.test(segment))
+}
+
+/**
  * Where a session-and-subpath actually points, or `null` if it points nowhere this may look.
  *
  * `null` covers every refusal — an unknown session, a path that does not exist, a link that leads
@@ -116,7 +146,7 @@ function validAttachment(root: string, path: string): boolean {
  * a path it may not read exists.
  */
 function inside(handle: string, subpath: string): string | null {
-  if (!isSubpath(subpath)) return null
+  if (!isSubpath(subpath) || !namesWhatItSpells(subpath)) return null
   const root = roots.get(handle)
   if (root === undefined) return null
   try {
@@ -133,7 +163,7 @@ function inside(handle: string, subpath: string): string | null {
 /** Human-only raw preview. Reading here never releases content to the agent. */
 export function preview(handle: string, subpath: string): FilePreview | null {
   const root = roots.get(handle)
-  if (!root || !isSubpath(subpath) || !subpath) return null
+  if (!root || !isSubpath(subpath) || !subpath || !namesWhatItSpells(subpath)) return null
   const file = readProjectText(root, subpath)
   return file ? { path: subpath, ...file } : null
 }

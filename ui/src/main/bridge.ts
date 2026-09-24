@@ -11,8 +11,8 @@
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { join } from 'node:path'
 import { app } from 'electron'
+import { helperPaths } from './helpers'
 import type { BridgeEvent, BridgeFailure } from '../shared/protocol'
 
 /** A request waiting for its answer. */
@@ -47,10 +47,9 @@ export class Bridge {
    * cannot reach the backend.
    */
   private binaryPath(): string {
-    const packaged = join(process.resourcesPath ?? '', 'bravebot-rpc')
+    const { packaged, development } = helperPaths('bravebot-rpc', app.getAppPath())
     if (app.isPackaged && existsSync(packaged)) return packaged
-    // The app path is `ui/`; the cargo target directory belongs to the workspace above it.
-    return join(app.getAppPath(), '..', 'target', 'debug', 'bravebot-rpc')
+    return development
   }
 
   private ensure(): ChildProcessWithoutNullStreams {
@@ -64,7 +63,7 @@ export class Bridge {
       )
     }
 
-    const child = spawn(path, this.settingsPath ? ['--settings', this.settingsPath] : [], { stdio: ['pipe', 'pipe', 'pipe'] })
+    const child = spawn(path, this.settingsPath ? ['--settings', this.settingsPath] : [], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
     child.stdout.setEncoding('utf8')
     child.stderr.setEncoding('utf8')
 

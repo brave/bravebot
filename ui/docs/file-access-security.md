@@ -13,6 +13,20 @@ An operation already holding a directory descriptor stays on that authorized dir
 even if its name changes. Symlinked project paths are refused, except for macOS's fixed
 `/tmp` and `/var` aliases. Read sizes, request sizes, helper runtime and output are bounded.
 
+Before any of that, a request has to name a path inside a project at all, and that is decided in
+two places. `shared/files.ts` holds what is true on every platform: a relative path with no empty,
+`.` or `..` segment, reading a backslash as a separator, since Windows reads `a\..\..\x` as two
+climbs out of the project and a POSIX host reads a backslash as an ordinary character either way.
+That module is shared with the renderer, which is given no `process`, so it cannot ask which
+platform it is on. `main/files.ts` holds what is a refusal only on Windows, where it can ask:
+`x:stream` naming an alternate data stream, `NUL` and its siblings naming a device, and a trailing
+dot or space that Win32 drops before it looks. None of those is a way out of the project, which
+the `realpath` check decides; each is a request resolving to something other than what it spells.
+Applying them everywhere would cost a POSIX project every file it has with a colon in its name.
+
+The helper's own walk is unchanged and is still POSIX: its Windows build refuses every request, so
+nothing above reaches a Windows filesystem yet.
+
 The replacement helper accepts only `.bravebot-ui/bots/*.md`, checks the expected previous
 text, and writes private regular files. This protects the outside-file boundary; it does
 not claim to lock out another editor that concurrently changes the same authorized file.
