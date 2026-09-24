@@ -1157,6 +1157,12 @@ function Card({
             <code className="path">{request.directory}</code>
           </div>
 
+          {/* The line the planner wrote, above the plan and as context. It is not what the
+              answer binds to: two spellings that compile alike are one thing to agree to, and
+              the plan below is the one being agreed to. Drawn all the same, because a reader
+              comparing the two is what would catch a compiler that got the line wrong. */}
+          {request.line && <p className="permission-scope"><strong>The model wrote:</strong> <code>{request.line}</code></p>}
+
           {/* The argv, one stage per line, with what each name resolved to underneath.
               Both are shown because they are two different claims: $PATH decides what
               `grep` means, and a person vouching for a program should be looking at the

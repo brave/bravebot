@@ -640,12 +640,83 @@ fn command_approval_preserves_plan_shape_environment_and_redirections() {
     );
     assert!(value["plan"].as_str().unwrap().contains(" && "));
     assert_ne!(value["plan"], "context only");
+    assert_eq!(value["line"], "context only");
     assert_eq!(value["writes"], json!(["/tmp/result.txt"]));
     assert_eq!(value["stdin"], "ref:3");
     // This line reaches nothing that is on no tier, so the desktop front end is given an empty
     // list and draws nothing. The field is sent either way: a front end reading it has to be able
     // to tell a line that reaches nothing from a build that does not send the field at all.
     assert_eq!(value["ambient"], json!([]));
+}
+
+/// A reader given only the plan has nothing to compare it against, and comparing the two is what
+/// would catch a compiler that read the line wrong: a glob resolving to a file nobody meant, or a
+/// redirection landing somewhere else, draws a prompt indistinguishable from a correct one. So the
+/// line crosses beside the plan, never instead of it, since the plan is what the answer binds to.
+#[test]
+fn a_run_prompt_carries_the_line_the_planner_wrote_beside_the_plan_it_compiled_to() {
+    use bravebot_agent::confirm::RunRequest;
+    use bravebot_core::command::{Plan, Step, Steps};
+    let request = RunRequest {
+        record: None,
+        pattern: None,
+        stdin: None,
+        plan: Plan {
+            line: "wc -l *.txt".into(),
+            directory: "/home/someone/project".into(),
+            steps: Steps::Pipeline(vec![Step {
+                program: "wc".into(),
+                resolved: "/usr/bin/wc".into(),
+                args: vec!["-l".into(), "notes.txt".into(), "report.txt".into()],
+                environment: vec![],
+                routes: vec![],
+            }]),
+            writes: vec![],
+            reads: vec![],
+            stdin: None,
+        },
+    };
+
+    let value = wire::run_request(4, &request);
+
+    assert_eq!(value["line"], "wc -l *.txt");
+    // The expansion is the whole point of showing both: one line compiled on two occasions is two
+    // plans, so a front end drawing the line alone would be drawing the wrong one of the two.
+    assert_eq!(value["plan"], "/usr/bin/wc -l notes.txt report.txt");
+    assert_ne!(value["line"], value["plan"]);
+}
+
+/// A call spelled as argv stages was never a line, so there is nothing to compare and a front end
+/// draws no context row. The field still crosses: a front end has to be able to tell that from a
+/// build that does not send it, which is the difference between drawing nothing and drawing
+/// nothing because it cannot see what would be there.
+#[test]
+fn a_call_that_was_never_spelled_as_a_line_says_so_rather_than_leaving_the_field_out() {
+    use bravebot_agent::confirm::RunRequest;
+    use bravebot_core::command::{Plan, Step, Steps};
+    let request = RunRequest {
+        record: None,
+        pattern: None,
+        stdin: None,
+        plan: Plan {
+            line: String::new(),
+            directory: "/home/someone/project".into(),
+            steps: Steps::Pipeline(vec![Step {
+                program: "ls".into(),
+                resolved: "/bin/ls".into(),
+                args: vec!["-1".into()],
+                environment: vec![],
+                routes: vec![],
+            }]),
+            writes: vec![],
+            reads: vec![],
+            stdin: None,
+        },
+    };
+
+    let value = wire::run_request(5, &request);
+
+    assert_eq!(value["line"], "");
 }
 
 /// The desktop application asks the same question as the two terminal front ends, so it is given

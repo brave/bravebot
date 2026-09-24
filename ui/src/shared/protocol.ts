@@ -284,6 +284,14 @@ export interface Stage {
 /** A pipeline the planner wants to run. */
 export interface RunRequest {
   request: number
+  /**
+   * The line as the planner spelled it, shown above the plan as context.
+   *
+   * Not what an approval binds to: two spellings that compile to the same plan are one
+   * endorsement. It is drawn all the same, because a reader given only the plan has nothing
+   * to compare it against. Empty for a call spelled as argv stages rather than as a line.
+   */
+  line?: string
   /** Resolved execution plan, including conditional joins and redirections. */
   plan?: string
   writes?: string[]

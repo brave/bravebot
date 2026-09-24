@@ -948,6 +948,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
   color: var(--ink-faint);
   overflow-wrap: anywhere;
 }
+/* The line the planner wrote and the plan it compiled to, which are read against each other.
+   A run of spaces in a quoted argument is a difference between the two, so collapsing it the way
+   HTML does by default would hide exactly the discrepancy these two rows are drawn to expose. */
+.confirm.run .permission-scope code { white-space: pre-wrap; }
 
 /* A series of questions. Drawn in the accent rather than the confine purple: unlike the
    output and vouch cards, nothing here is untrusted — the planner may only ask at all when
