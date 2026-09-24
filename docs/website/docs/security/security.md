@@ -79,8 +79,9 @@ content you are still reading for yourself.
 ## What leaves the process
 
 There is **one way out**, and it is not optional: every outbound request carrying labelled content
-goes through a single call, and the HTTP client is private to that module so no other crate can open a
-second path.
+goes through a single call, and the HTTP client behind it is private to that module, so nothing else
+can use it to open a second path. One component keeps a client of its own; the end of this section
+says which, and what it carries.
 
 - **Redirects are revalidated on every hop.** They are followed by hand and each new URL is put to the
   gate before it is fetched, so a permitted host cannot hand off to a denied one. The chain is bounded.

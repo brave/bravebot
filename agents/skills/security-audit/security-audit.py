@@ -12,7 +12,9 @@ Stdout is `{"work_dir": ..., "manifest": ...}`. The mechanical report goes to st
 findings are already decided and a reader should see them before any lane runs.
 
 The mechanical half checks what a tool can check and the specs do not yet: that the two documents
-naming the admitted exceptions agree on how many there are, that the register admitting them leaves
+naming the admitted exceptions agree on how many there are, that every crate keeping a network
+client of its own is one the egress register admits and no comment claims a dependency a manifest
+beside it declares, that the register admitting them leaves
 as many prompts out of a verdict's reach as the clause deciding that does, that a field documented
 as read in one place is read in one place, that nothing has been implemented on
 `Labelled` that would let a caller read a label's content without asking, that the constructor which
@@ -49,6 +51,52 @@ WARNING = "warning"
 
 REVIEW_DOC = Path("docs/development/reviewing-for-the-rule.md")
 LABELS_SPEC = Path("docs/specs/labels.md")
+NET_EGRESS_SPEC = Path("docs/specs/network-egress.md")
+
+# The crate holding the policy gate, which is permitted its client by being the gate.
+GATE_CRATE = "bravebot-net"
+
+# The libraries a crate takes on to open a socket of its own. The manifest is read rather than the
+# code because the manifest is where the decision is made: a crate that has one of these can open a
+# socket with it, and whether today's code happens to is not what a reviewer a year from now holds.
+# This is the list a reviewer would recognise rather than everything that could ever be a client, so
+# a client outside it is the bound on this check and the lane that reads code is what covers it.
+NETWORK_CLIENTS = frozenset(
+    {
+        "attohttpc",
+        "curl",
+        "hyper",
+        "isahc",
+        "reqwest",
+        "surf",
+        "tokio-tungstenite",
+        "tungstenite",
+        "ureq",
+    }
+)
+
+# `[dependencies]`, `[dependencies.ureq]`, `[target.'cfg(windows)'.dependencies]` and the same with a
+# named subtable. Development and build dependencies are deliberately not matched: neither is in the
+# process this guarantee is about.
+DEPENDENCY_TABLE = re.compile(r"^\[(?:target\.[^\]]+\.)?dependencies(?:\.([A-Za-z0-9_-]+))?\]$")
+PACKAGE_NAME = re.compile(r'^name\s*=\s*"([^"]+)"')
+RENAMED = re.compile(r'\bpackage\s*=\s*"([A-Za-z0-9_-]+)"')
+
+# The `## Known costs` bullet that admits a second egress, and the crates it names. Only a bullet
+# about opening a socket is read, which keeps a crate named elsewhere in that section for some other
+# reason out of the permitted set. It is prose either way: a bullet saying a crate does *not* open
+# one reads the same to this, so what the register is held to is drift rather than an author working
+# around it, and the stale direction below is a warning for the same reason.
+KNOWN_COSTS = "## Known costs"
+OPENS_A_SOCKET = re.compile(r"\bsockets?\b|\bHTTP client\b")
+WORKSPACE_CRATE = re.compile(r"`(bravebot-[a-z0-9-]+)`")
+
+# A claim in the source that names a crate nothing else may depend on. The crate has to be named for
+# this to match: NET-1 states the same property of "it" with the exception recorded in Known costs
+# beside it, and issue #87 settled that the clause body stays that way. A sentence in the code that
+# names the library has no Known costs beside it, and a reader who checks it against a manifest
+# finds it either true or false.
+EXCLUSIVE_DEPENDENCY = re.compile(r"no other crate (?:depends on|uses|links|takes) `([a-z0-9_-]+)`")
 
 # The carrier, and the two ways a value gets one. `declassify` is pinned by `labels.md`; these are
 # not, and they are the other end of the same guarantee.
@@ -341,6 +389,231 @@ def check_exception_counts():
             fix="bring the review document to the number the spec records, since the spec is where "
             "an exception is written down and the review document is what is read before a diff",
         )
+
+
+def workspace_crates():
+    """Each crate under `crates/`: its package name and the dependencies its manifest declares.
+
+    A workspace member is read from its own manifest rather than from the lockfile, because what is
+    being held here is what a crate asked for. A transitive copy of a client is somebody else's
+    dependency arriving through a crate that never names it, which is not a second egress and not a
+    line anyone could have reviewed.
+    """
+    crates = {}
+    for manifest in sorted(Path("crates").glob("*/Cargo.toml")):
+        name, deps = manifest.parent.name, set()
+        in_package, in_dependencies, in_one_dependency = False, False, False
+        for raw in manifest.read_text(encoding="utf-8", errors="replace").split("\n"):
+            line = raw.strip()
+            if line.startswith("["):
+                # A comment may follow a table header, and reading the whole line as the header
+                # leaves the parse inside the table before it, which is a dependency table hidden
+                # or a development one counted as runtime.
+                header = line.split("]", 1)[0] + "]"
+                table = DEPENDENCY_TABLE.match(header)
+                in_package = header == "[package]"
+                # `[dependencies.ureq]` names the dependency in the header, and its body is that
+                # one crate's own keys rather than more dependencies.
+                in_dependencies = bool(table) and not table.group(1)
+                in_one_dependency = bool(table) and bool(table.group(1))
+                if in_one_dependency:
+                    deps.add(table.group(1))
+                continue
+            if line.startswith("#"):
+                continue
+            if in_package:
+                stated = PACKAGE_NAME.match(line)
+                if stated:
+                    name = stated.group(1)
+                continue
+            if not (in_dependencies or in_one_dependency) or "=" not in line:
+                continue
+            # `package = "ureq"` is the real crate behind a renamed dependency, whether the rename
+            # is an inline table or a table of its own.
+            renamed = RENAMED.search(line)
+            if renamed:
+                deps.add(renamed.group(1))
+            if in_dependencies:
+                # `ureq.workspace = true` is the same declaration as `ureq = { workspace = true }`,
+                # and this tree writes its `[package]` keys that way throughout.
+                deps.add(line.split("=", 1)[0].strip().split(".", 1)[0].strip())
+        crates[manifest.parent.name] = {"name": name, "deps": deps, "manifest": str(manifest)}
+    return crates
+
+
+def recorded_network_clients():
+    """The crates `network-egress.md` admits under `## Known costs` as opening their own socket.
+
+    The spec is the register: NET-1 states the property and the Known costs beside it state the
+    exceptions, which is the editorial split this repository already uses. So the permitted set is
+    read out of the register rather than written down a second time here, where it would be one
+    more list to keep in step.
+    """
+    if not NET_EGRESS_SPEC.is_file():
+        return set()
+    named, inside, bullet = set(), False, []
+    lines = NET_EGRESS_SPEC.read_text(encoding="utf-8").split("\n") + [""]
+    for raw in lines:
+        if raw.startswith("## "):
+            inside = raw.strip() == KNOWN_COSTS
+            continue
+        if not inside:
+            continue
+        if raw.startswith("- ") or not raw.strip():
+            joined = " ".join(bullet)
+            if OPENS_A_SOCKET.search(joined):
+                named.update(WORKSPACE_CRATE.findall(joined))
+            bullet = []
+        if raw.strip():
+            bullet.append(raw.strip())
+    joined = " ".join(bullet)
+    if OPENS_A_SOCKET.search(joined):
+        named.update(WORKSPACE_CRATE.findall(joined))
+    return named
+
+
+def comment_blocks(lines):
+    """Every run of comment lines joined into one, with where each piece of it came from.
+
+    A sentence in a doc comment wraps wherever the margin falls, so where a claim breaks is an
+    accident of the sentence before it, and a regex over single lines reads half of one. Adding a
+    word three paragraphs up is enough to move a claim out of reach of a scan that reads one line.
+
+    Yields the joined text and the offset each source line starts at within it, so a match can be
+    reported at the line it is on rather than at the top of the block. A finding at the head of a
+    module comment is one a reader has to search for, and it is the excerpt that gets filed.
+    """
+    block, spans, offset = [], [], 0
+    for number, raw in enumerate(lines, start=1):
+        stripped = raw.strip()
+        if stripped.startswith("//"):
+            text = stripped.lstrip("/").lstrip("!").strip()
+            if text:
+                spans.append((offset, number))
+                block.append(text)
+                offset += len(text) + 1
+            continue
+        if block:
+            yield " ".join(block), spans
+        block, spans, offset = [], [], 0
+    if block:
+        yield " ".join(block), spans
+
+
+def line_at(spans, offset):
+    """The source line an offset into a joined comment block came from."""
+    found = spans[0][1]
+    for start, number in spans:
+        if start > offset:
+            break
+        found = number
+    return found
+
+
+def check_network_clients_are_recorded(sources):
+    """Which crates may open a socket of their own is the register's to say, not a comment's.
+
+    `bravebot-net` is the policy gate and `network-egress.md`'s Known costs admit the one crate that
+    keeps a client beside it. Nothing held that: `deny.toml` asks what a crate is licensed under and
+    not whether it may be depended on, `check-spec` reads no manifest, and the only enumeration of a
+    second client greps one library's name into a lane prompt. So a third client would arrive with
+    every check green, and the first paragraph of the gate crate told a reviewer in advance that it
+    could not exist, which is the state `reviewing-for-the-rule.md` says an unlisted exception
+    produces: meeting one means choosing between calling it a violation and assuming somebody
+    already vetted it.
+
+    The stale direction is a warning rather than an error because it is read out of prose: a bullet
+    reworded until it no longer names a crate is drift worth reporting and not worth failing a build
+    over, where a manifest naming a client nothing admits is decided.
+    """
+    crates = workspace_crates()
+    by_name = {crate["name"]: crate for crate in crates.values()}
+    declaring = {
+        crate["name"]: sorted(crate["deps"] & NETWORK_CLIENTS)
+        for crate in crates.values()
+        if crate["deps"] & NETWORK_CLIENTS
+    }
+    permitted = recorded_network_clients() | {GATE_CRATE}
+
+    for name in sorted(set(declaring) - permitted):
+        clients = ", ".join(f"`{one}`" for one in declaring[name])
+        yield finding(
+            ERROR,
+            "unrecorded-network-client",
+            "a crate keeps a network client that the egress register does not admit, so a second "
+            "way out of this process arrives unremarked",
+            f"`{name}` declares {clients} and `{NET_EGRESS_SPEC}` names it nowhere under "
+            f"`{KNOWN_COSTS}`, so nothing says what that traffic carries or what it does not get",
+            "trust",
+            "low",
+            evidence=[
+                f"{by_name[name]['manifest']} declares {clients}",
+                f"the gate is `{GATE_CRATE}` and {NET_EGRESS_SPEC} admits "
+                + (
+                    ", ".join(f"`{one}`" for one in sorted(permitted - {GATE_CRATE}))
+                    or "no crate beside it"
+                ),
+            ],
+            fix=f"record it under `{KNOWN_COSTS}` in `{NET_EGRESS_SPEC}` with what its traffic "
+            "carries and which clauses do not reach it, the way `bravebot-skus` is recorded, or "
+            "route it through the gate and drop the dependency",
+            gain="a second egress that the gate never sees, reviewed by nobody because the register "
+            "a reviewer checks it against does not mention it",
+        )
+
+    for name in sorted(permitted - set(declaring) - {GATE_CRATE}):
+        yield finding(
+            WARNING,
+            "network-client-record-is-stale",
+            "the egress register admits a second client that no manifest declares, so the standing "
+            "exception is for whatever is next given that name",
+            f"`{NET_EGRESS_SPEC}` names `{name}` under `{KNOWN_COSTS}` as keeping a client of its "
+            "own, and no manifest under `crates/` declares one for it",
+            "trust",
+            "low",
+            fix=f"drop `{name}` from `{KNOWN_COSTS}` in `{NET_EGRESS_SPEC}`, since an admission "
+            "nothing uses is a grant decided by nobody",
+        )
+
+    declarers = {}
+    for crate in crates.values():
+        for dependency in crate["deps"]:
+            declarers.setdefault(dependency, set()).add(crate["name"])
+
+    for path in sorted(sources):
+        if "/tests/" in str(path):
+            continue
+        owner = crates.get(path.parts[1], {}).get("name", "") if len(path.parts) > 1 else ""
+        for text, spans in comment_blocks(sources[path]):
+            for match in EXCLUSIVE_DEPENDENCY.finditer(text):
+                dependency = match.group(1)
+                others = sorted(declarers.get(dependency, set()) - {owner})
+                if not others:
+                    continue
+                number = line_at(spans, match.start())
+                excerpt = text[max(0, match.start() - 60) : match.end() + 60]
+                yield finding(
+                    ERROR,
+                    "exclusive-dependency-claim-is-false",
+                    "the source claims a dependency is this crate's alone and a manifest in the "
+                    "same workspace declares it, so a reviewer is told the exception cannot exist",
+                    f"`{path}:{number}` says no other crate depends on `{dependency}`, and "
+                    + ", ".join(f"`{one}`" for one in others)
+                    + " declares it",
+                    "trust",
+                    "low",
+                    evidence=[f"{path}:{number} {excerpt}"]
+                    + [
+                        f"{by_name[one]['manifest']} declares `{dependency}`"
+                        for one in others
+                        if one in by_name
+                    ],
+                    fix="state the property that holds and point at where the exception is "
+                    "recorded, rather than an absolute a reader can check against a manifest and "
+                    "find wrong",
+                    gain="a reviewer who reads the claim and stops looking, which is what an "
+                    "unlisted exception costs",
+                )
 
 
 def paragraphs(lines):
@@ -1580,6 +1853,7 @@ def main():
     sources = mechanics.load_sources()
 
     findings = list(check_exception_counts())
+    findings += list(check_network_clients_are_recorded(sources))
     findings += list(check_prompt_split())
     findings += list(check_labelled_impls(sources))
     findings += list(check_exhaustive_reader_docs(sources))

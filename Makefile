@@ -166,15 +166,17 @@ check-spec:
 	@python3 contrib/terminal-screenshot.py --selftest
 
 # The deterministic half of the security audit. It answers the questions check-spec cannot: whether
-# two documents agree about how many exceptions to the rule are admitted, whether the register
-# admitting them leaves as many prompts out of a verdict's reach as the clause deciding that does,
-# whether a field documented as read in one place is read in one place, whether anything reaches
-# into a Labelled, whether a spec pins the constructors as well as the releases, whether every
-# workflow step is on a commit rather than a tag somebody else can move, whether every container
-# image this tree runs names a digest rather than a tag its publisher can move, and whether a job
-# holding `id-token: write` or a secret installs or runs an npm dependency, which every step in that
-# job could read the credential from, and whether a checkout of this tree names a kind of ref
-# rather than a bare name a branch and a tag can share. No model takes part, so it belongs in CI.
+# two documents agree about how many exceptions to the rule are admitted, whether every crate
+# keeping a network client of its own is one the egress register admits and no comment claims a
+# dependency a manifest beside it declares, whether the register admitting them leaves as many
+# prompts out of a verdict's reach as the clause deciding that does, whether a field documented as
+# read in one place is read in one place, whether anything reaches into a Labelled, whether a spec
+# pins the constructors as well as the releases, whether every workflow step is on a commit rather
+# than a tag somebody else can move, whether every container image this tree runs names a digest
+# rather than a tag its publisher can move, and whether a job holding `id-token: write` or a secret
+# installs or runs an npm dependency, which every step in that job could read the credential from,
+# and whether a checkout of this tree names a kind of ref rather than a bare name a branch and a
+# tag can share. No model takes part, so it belongs in CI.
 # The lanes that read code are the skill, and a person runs those.
 #
 # It passes on this tree now that `Labelled::trusted` has a `guards` entry beside `Labelled::new`,

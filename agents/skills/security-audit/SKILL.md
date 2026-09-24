@@ -275,6 +275,9 @@ diff, from [reviewing-for-the-rule.md](../../../docs/development/reviewing-for-t
 |---|---|---|
 | Two documents disagree about how many exceptions are admitted | mechanical | error |
 | A document admits exceptions without counting them | mechanical | warning |
+| A crate keeping a network client that the egress register does not admit | mechanical | error |
+| A comment claiming a dependency is one crate's alone that a manifest beside it declares | mechanical | error |
+| An admitted second network client that no manifest declares | mechanical | warning |
 | The register and the clause disagree on how many prompts a verdict may answer | mechanical | error |
 | Only one of the two counts the prompts a verdict may answer | mechanical | warning |
 | A field documented as read in one place that is read in two | mechanical | error |
