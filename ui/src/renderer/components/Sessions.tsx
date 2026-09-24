@@ -16,6 +16,17 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collap
 import { Empty, EmptyDescription } from './ui/empty'
 export const SessionInfo = createContext<Record<string, { bot?: string; state?: string }>>({})
 
+/* How a session's running state is told apart at a glance. The status badge is the shadcn
+   outline variant; only the semantic workload colours (warn/removed/added) are overlaid,
+   so a row still says "needs approval" or "failed" in the same tones it always did. */
+const STATE_TONE: Record<string, string> = {
+  'working': 'border-warn/30 bg-warn/10 text-warn',
+  'needs-approval': 'border-warn/30 bg-warn/10 text-warn',
+  'needs-answer': 'border-warn/30 bg-warn/10 text-warn',
+  'failed': 'border-removed/30 bg-removed/10 text-removed',
+  'completed': 'border-added/30 bg-added/10 text-added',
+}
+
 interface Props {
   sessions: SessionSummary[]
   openId: string | undefined
@@ -213,14 +224,14 @@ function Group({
       <div className="session-group-head">
         <CollapsibleTrigger asChild><Button
           variant="ghost"
-          className="session-group-fold"
+          className="session-group-fold min-w-0 flex-1 justify-start gap-1.5 px-3 text-left"
           title={group.directory}
         >
-          <span className={`chevron ${open ? 'open' : ''}`} aria-hidden="true">
+          <span className={`chevron ${open ? 'open' : ''} shrink-0 text-muted-foreground`} aria-hidden="true">
             ›
           </span>
-          <span className="session-group-name">{group.project}</span>
-          <span className="count">{group.sessions.length}</span>
+          <span className="session-group-name min-w-0 flex-1 truncate">{group.project}</span>
+          <span className="count ml-auto shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs tabular-nums">{group.sessions.length}</span>
         </Button></CollapsibleTrigger>
         {/* The same thing **New session** does, minus the folder picker — the directory is
             already known, and the picker's whole job is to find one out. Named for the
@@ -277,16 +288,18 @@ function Session({
   const preferences = useExperience().conversations[key]
   const info = useContext(SessionInfo)[key]
   const [menu, setMenu] = useState(false)
-  return <div className={`session-row ${session.id === openId ? 'current' : ''}`}>
-    <Button variant="ghost" className={`session h-auto w-full flex-col items-start justify-start text-left ${session.id === openId ? 'current' : ''}`} onClick={() => onOpen(session)} onContextMenu={contextMenu('session', session.id)}>
-      <span className="session-title" title={session.title}>
+  const current = session.id === openId
+  const stateKey = info?.state?.toLowerCase().replaceAll(' ', '-')
+  return <div className={`session-row ${current ? 'current' : ''}`}>
+    <Button variant="ghost" className={`session h-auto w-full flex-col items-start justify-start gap-1.5 px-3 py-2 text-left ${current ? 'current bg-accent text-accent-foreground' : ''}`} onClick={() => onOpen(session)} onContextMenu={contextMenu('session', session.id)}>
+      <span className="session-title min-w-0 w-full truncate" title={session.title}>
         {preferences?.pinned && <svg className="session-pin" width="13" height="15" viewBox="0 0 16 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" role="img" aria-label="Pinned" focusable="false">
           <path d="M5 2h6M6 2v6l-3 4h10l-3-4V2M8 12v4" />
         </svg>}
         {forked && <span className="fork-mark"><ForkIcon size={11} /></span>}{session.title}
       </span>
-      <span className="session-where">{session.project}{session.branch && <span className="branch"> · {session.branch}</span>} · {ago(session.updated)}</span>
-      {(info?.bot || info?.state) && <span className="session-badges">{info.bot && <Badge variant="secondary">{info.bot}</Badge>}{info.state && <Badge variant="outline" className={`session-state ${info.state.toLowerCase().replaceAll(' ', '-')}`}>{info.state}</Badge>}</span>}
+      <span className={`session-where ${current ? 'text-accent-foreground/80' : 'text-muted-foreground'}`}>{session.project}{session.branch && <span className="branch"> · {session.branch}</span>} · {ago(session.updated)}</span>
+      {(info?.bot || info?.state) && <span className="session-badges">{info.bot && <Badge variant="secondary">{info.bot}</Badge>}{info.state && <Badge variant="outline" className={`session-state ${stateKey} ${STATE_TONE[stateKey ?? ''] ?? ''}`}>{info.state}</Badge>}</span>}
     </Button>
     <PopMenu open={menu} trigger={<Button variant="ghost" size="icon-sm" className="session-more" aria-label={`Actions for ${session.title}`}>⋯</Button>} label="Conversation actions" onOpenChange={setMenu}
       items={[{ id: 'pin', label: preferences?.pinned ? 'Unpin conversation' : 'Pin conversation' }, { id: 'archive', label: preferences?.archived ? 'Restore conversation' : 'Archive conversation' }]}
@@ -326,8 +339,8 @@ function NewSession({ onNew }: { onNew: (directory?: string) => void }): React.J
     : [{ id: 'none', label: 'No projects opened yet', enabled: false }]
 
   return (
-    <ButtonGroup className="new-split">
-      <Button className="new" onClick={() => onNew()} title="Open a project">
+    <ButtonGroup className="new-split w-full">
+      <Button className="new flex-1" onClick={() => onNew()} title="Open a project">
         <span className="plus">+</span> New session
       </Button>
       <PopMenu

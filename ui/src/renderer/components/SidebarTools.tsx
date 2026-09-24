@@ -27,7 +27,7 @@ export function SidebarTools({ action, children, query, onQuery, label }: {
       {children}
     </div>
     <CollapsibleContent id={id} className="sidebar-search">
-      <InputGroup className="h-auto border-0 bg-transparent shadow-none dark:bg-transparent">
+      <InputGroup className="h-auto">
         <InputGroupInput autoFocus type="search" className="session-find" aria-label={label} placeholder={`${label}…`}
           value={query} onChange={event => onQuery(event.target.value)}
           onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); close() } }} />

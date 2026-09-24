@@ -169,99 +169,6 @@ kbd,
    Sidebar navigation and creation tools
    -------------------------------------------------------------------------- */
 
-.sessions-head {
-  padding: 12px 12px 9px;
-  border-bottom: 1px solid color-mix(in srgb, var(--ink) 6%, transparent);
-  -webkit-app-region: drag;
-}
-
-.sidebar-actions {
-  gap: 5px;
-}
-
-.new-split {
-  gap: 1px;
-  overflow: hidden;
-  border: 1px solid var(--bb-border-strong);
-  border-radius: var(--bb-radius-md);
-  background: var(--bb-surface-raised);
-}
-
-.new-split .new,
-.new-split .new-recent {
-  border: 0;
-  border-radius: 0;
-}
-
-.new,
-.sidebar-search-toggle,
-.sidebar-actions .session-group,
-.session-group,
-.new-recent {
-  min-height: var(--bb-control-height);
-}
-
-.new {
-  padding: 7px 10px;
-  border-color: var(--bb-border);
-  border-radius: var(--bb-radius-md);
-  background: var(--bb-surface-raised);
-  color: var(--ink);
-  font-weight: 540;
-}
-
-.new:hover,
-.sidebar-search-toggle:hover,
-.sidebar-actions .session-group:hover,
-.new-recent:hover {
-  color: var(--ink);
-  background: var(--bb-hover);
-}
-
-.plus {
-  margin-right: 6px;
-  color: var(--accent-text);
-  font-weight: 700;
-}
-
-.new-recent {
-  width: 30px;
-  color: var(--ink-dim);
-  background: var(--bb-surface-raised);
-  box-shadow: inset 1px 0 var(--bb-border);
-}
-
-.sidebar-search-toggle,
-.sidebar-actions .session-group {
-  width: 32px;
-  border: 1px solid transparent;
-  border-radius: var(--bb-radius-md);
-  color: var(--ink-dim);
-}
-
-.sidebar-search-toggle[aria-expanded='true'],
-.sidebar-actions .session-group[aria-pressed='true'] {
-  border-color: var(--bb-border);
-  background: var(--bb-control);
-  color: var(--accent-text);
-}
-
-.sidebar-search {
-  gap: 5px;
-  margin-top: 8px;
-}
-
-.sidebar-search button {
-  width: 30px;
-  color: var(--ink-dim);
-}
-
-.sidebar-search button:hover {
-  color: var(--ink);
-  background: var(--bb-hover);
-}
-
-.session-find,
 .tree-find,
 .model-search,
 .bot-history-search {
@@ -273,7 +180,6 @@ kbd,
   box-shadow: inset 0 1px 1px color-mix(in srgb, var(--ink) 4%, transparent);
 }
 
-.session-find:focus,
 .tree-find:focus,
 .model-search:focus,
 .bot-history-search:focus {
@@ -281,39 +187,9 @@ kbd,
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
-.session-scope {
-  gap: 0;
-  margin-top: 9px;
-  border-bottom: 1px solid var(--bb-border);
-}
-
-.session-scope button {
-  min-height: 28px;
-  padding: 3px 7px 7px;
-  border-radius: 0;
-  border-bottom: 1px solid transparent;
-  color: var(--ink-faint);
-}
-
-.session-scope button:hover {
-  color: var(--ink);
-}
-
-.session-scope button[aria-pressed='true'] {
-  margin-bottom: -1px;
-  border-bottom-color: var(--ink-dim);
-  background: transparent;
-  color: var(--ink);
-  font-weight: 600;
-}
-
 /* --------------------------------------------------------------------------
    Session groups, rows, states, and sidebar footer
    -------------------------------------------------------------------------- */
-
-.session-list {
-  padding: 7px 8px 14px;
-}
 
 .empty,
 .none {
@@ -323,26 +199,6 @@ kbd,
   line-height: 1.55;
 }
 
-.session-group-head {
-  --ground: var(--bb-sidebar);
-  border-radius: var(--bb-radius-sm);
-  background: var(--ground);
-}
-
-.session-group-head:hover {
-  background: var(--bb-hover);
-}
-
-.session-group-fold {
-  gap: 7px;
-  padding: 9px 4px 7px 8px;
-  color: var(--ink-dim);
-  font-size: 10.5px;
-  font-weight: 650;
-  letter-spacing: 0.075em;
-}
-
-.session-group-fold .count,
 .panel-head .count {
   padding: 1px 5px;
   border: 1px solid var(--bb-border);
@@ -352,138 +208,8 @@ kbd,
   font-variant-numeric: tabular-nums;
 }
 
-.session-group-new {
-  padding: 8px 9px 6px;
-}
-
-.session-group-new:hover {
-  color: var(--accent-text);
-}
-
-.session-group-section + .session-group-section {
-  margin-top: 7px;
-}
-
 .session-row {
   margin: 1px 0;
-  border: 1px solid transparent;
-  border-radius: var(--bb-radius-md);
-}
-
-.session {
-  gap: 3px;
-  padding: 9px 34px 9px 10px;
-  margin: 0;
-  border-radius: calc(var(--bb-radius-md) - 1px);
-}
-
-.app.comfortable .session {
-  padding-top: 11px;
-  padding-bottom: 11px;
-}
-
-.session:hover {
-  background: var(--bb-hover);
-}
-
-.session-row.current {
-  border-color: color-mix(in srgb, var(--accent) 16%, transparent);
-  background: var(--bb-selected);
-  box-shadow: inset 2px 0 var(--accent);
-}
-
-.session-row.current:hover {
-  background: var(--bb-selected-hover);
-}
-
-.session.current,
-.session-row.current .session {
-  background: transparent;
-  color: var(--ink);
-}
-
-.session-title {
-  color: var(--ink);
-  font-size: 12.5px;
-  font-weight: 560;
-  letter-spacing: -0.006em;
-}
-
-.session-where {
-  color: var(--ink-faint);
-  font-size: 11px;
-}
-
-.session-row.current .session-title,
-.session-row.current .session-where,
-.session.current .session-title,
-.session.current .session-where {
-  color: var(--ink);
-}
-
-.session-row.current .session-where {
-  opacity: 0.7;
-}
-
-.session-row .session-more {
-  right: 4px;
-  top: 50%;
-  width: 27px;
-  height: 27px;
-  transform: translateY(-50%);
-  color: var(--ink-faint);
-  opacity: 0;
-}
-
-.session-row:hover .session-more,
-.session-more:focus-visible,
-.session-more[aria-expanded='true'],
-.session-row.current .session-more {
-  opacity: 1;
-}
-
-.session-more:hover,
-.session-more[aria-expanded='true'] {
-  color: var(--ink);
-  background: var(--bb-hover);
-}
-
-.session-pin,
-.fork-mark {
-  color: var(--accent-quiet);
-}
-
-.session-badges {
-  gap: 5px;
-  margin-top: 4px;
-}
-
-.session-badges > span {
-  padding: 1px 5px;
-  border: 1px solid var(--bb-border);
-  border-radius: var(--bb-radius-xs);
-  background: transparent;
-  color: var(--ink-dim);
-  line-height: 1.35;
-}
-
-.session-badges .working,
-.session-badges .needs-approval,
-.session-badges .needs-answer {
-  border-color: color-mix(in srgb, var(--warn) 30%, transparent);
-  background: var(--bb-warning-soft);
-  color: var(--warn);
-}
-
-.session-badges .failed {
-  border-color: color-mix(in srgb, var(--removed) 28%, transparent);
-  background: var(--bb-danger-soft);
-  color: var(--removed);
-}
-
-.session-badges .completed {
-  border-color: color-mix(in srgb, var(--added) 25%, transparent);
-  color: var(--added);
 }
 
 .agent-settings-open {
@@ -2556,7 +2282,6 @@ kbd,
   color: var(--accent-text);
 }
 
-.session-scope button,
 .inspector-tabs button,
 .settings-tabs button {
   transition:
@@ -2565,45 +2290,6 @@ kbd,
     box-shadow 150ms var(--bb-ease);
 }
 
-.session-scope {
-  gap: 3px;
-  padding: 3px;
-  border: 0;
-  border-radius: 14px;
-  background: var(--default);
-}
-
-.session-scope button {
-  min-height: 30px;
-  padding: 5px 8px;
-  border: 0;
-  border-radius: 10px;
-}
-
-.session-scope button[aria-pressed='true'] {
-  margin: 0;
-  border: 0;
-  background: var(--overlay);
-  box-shadow: 0 1px 3px color-mix(in srgb, var(--ink) 10%, transparent);
-}
-
-.new-split {
-  border: 0;
-  border-radius: 14px;
-  background: var(--default);
-  box-shadow: inset 0 0 0 1px var(--bb-border);
-}
-
-.new-split .new,
-.new-split .new-recent {
-  background: transparent;
-}
-
-.new,
-.sidebar-search-toggle,
-.sidebar-actions .session-group,
-.new-recent,
-.session-more,
 .bot-edit,
 .tree-tool,
 .fold-toggle,
@@ -2612,21 +2298,17 @@ kbd,
   border-radius: 999px;
 }
 
-.session-row,
-.session,
 .bot,
 .bot-open-button {
   border-radius: 12px;
 }
 
-.session-row.current,
 .bot-open .bot-open-button {
   border-color: transparent;
   background: var(--default);
   box-shadow: none;
 }
 
-.session-row.current:hover,
 .bot-open .bot-open-button:hover {
   background: var(--default-hover);
 }
@@ -2663,7 +2345,6 @@ kbd,
   box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 8%, transparent);
 }
 
-.sidebar-search,
 .tree-search {
   padding: 3px;
   border: 1px solid var(--bb-border-strong);
@@ -2671,14 +2352,12 @@ kbd,
   background: var(--field-background);
 }
 
-.sidebar-search .session-find,
 .tree-search .tree-find {
   border: 0;
   background: transparent;
   box-shadow: none;
 }
 
-.session-find,
 .tree-find,
 .model-search,
 .bot-history-search,
@@ -2998,14 +2677,12 @@ kbd,
 }
 
 @media (pointer: coarse) {
-  .session,
   .bot-open-button,
   .tree-row,
   .popitem {
     min-height: 44px;
   }
 
-  .session-more,
   .bot-edit {
     width: 40px;
     height: 40px;

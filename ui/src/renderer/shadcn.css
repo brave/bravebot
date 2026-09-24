@@ -52,6 +52,13 @@
   --color-sidebar-primary: var(--sidebar-primary);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar: var(--sidebar);
+
+  /* Session status badges speak in the semantic workload colours; exposing them to utilities
+     (`text-warn`, `border-added/30`, …) lets the badges keep their meaning without a
+     bespoke CSS override on top of the shadcn Badge. */
+  --color-warn: var(--warn);
+  --color-added: var(--added);
+  --color-removed: var(--removed);
 }
 
 :root {

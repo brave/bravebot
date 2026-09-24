@@ -151,79 +151,27 @@ button { cursor: pointer; }
   -webkit-app-region: no-drag;
 }
 
-.new {
-  -webkit-app-region: no-drag;
-  width: 100%;
-  padding: 7px 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: transparent;
-  color: var(--ink-dim);
-  text-align: left;
-}
-.new:hover { background: rgba(127, 127, 127, 0.1); color: var(--ink); }
-.plus { color: var(--accent-text); font-weight: 600; margin-right: 4px; }
-
-/* The filter and the grouping toggle share a row, so the spacing above them is set once
-   here rather than by whichever of them happens to come first. */
-.session-tools { display: flex; gap: 4px; align-items: stretch; margin-top: 6px; }
+/* The new-session split, the filter toggle and the grouping toggle share the head's first
+   row. Their shapes are the shadcn defaults now (Button/ButtonGroup/Toggle/InputGroup);
+   this is only the column layout that keeps the split filling the width beside two square
+   controls. */
 .sidebar-actions { display: flex; align-items: stretch; gap: 4px; }
 .sidebar-create { flex: 1; min-width: 0; }
-.sidebar-actions .new { border-color: transparent; color: var(--ink); font-size: 13px; }
 .sidebar-actions .new-split { width: 100%; }
-.sidebar-actions .new-recent { background: transparent; }
-.sidebar-search-toggle, .sidebar-actions .session-group { display: grid; place-items: center; flex: none; width: 30px; min-height: 32px; border: 0; border-radius: 6px; background: transparent; color: var(--ink-dim); }
-.sidebar-search-toggle:hover, .sidebar-actions .session-group:hover { background: var(--bubble-agent); color: var(--ink); }
-.sidebar-search-toggle[aria-expanded='true'], .sidebar-actions .session-group[aria-pressed='true'] { background: var(--bubble-agent); color: var(--accent-text); }
-.sidebar-search { display: flex; gap: 4px; margin-top: 8px; }
-.sidebar-search button { width: 28px; border: 0; background: transparent; border-radius: 6px; font-size: 18px; }
 
-/* `no-drag` for the same reason `.new` has it: the header this sits in is a window drag
-   region, and without it the box cannot be clicked into or selected in — the pointer moves
-   the window instead. `appearance: none` drops Chromium's search decorations, which arrive
-   with their own colours and ignore the sheet. */
-.session-find {
-  -webkit-app-region: no-drag;
-  appearance: none;
-  flex: 1;
-  min-width: 0;
-  padding: 5px 8px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--bg);
-  color: var(--ink);
-  font: inherit;
-  font-size: 12px;
-}
-.session-find::placeholder { color: var(--ink-faint); }
-.session-find:focus { outline: none; border-color: var(--accent); }
-.session-find::-webkit-search-cancel-button { appearance: none; }
-
-/* Borrows the box the filter beside it is in, so the row reads as one control rather than
-   two unrelated ones. `no-drag` for the same reason: the header is a window drag region and
-   without it the button moves the window instead of being pressed. */
-.session-group {
-  -webkit-app-region: no-drag;
-  flex: none;
-  width: 28px;
-  padding: 0;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--bg);
-  color: var(--ink-faint);
-  font-size: 12px;
-  line-height: 1;
-}
-.session-group:hover { color: var(--ink); }
-.session-group[aria-pressed='true'] { border-color: var(--accent); color: var(--accent-text); }
-.session-group:focus-visible { outline: none; border-color: var(--accent); }
+/* The filter pops in under that row. Its box is the InputGroup's own look; the column only
+   spaces it and drops Chromium's native search decorations (the clear button is an addon). */
+.sidebar-search { margin-top: 8px; }
+.sidebar-search .session-find::-webkit-search-cancel-button { display: none; }
 
 .session-list { flex: 1; overflow-y: auto; padding: 4px 8px 12px; }
 
 /* The same language the context panels' own headings speak — 11px, uppercase, a count
    pushed to the right — so the two columns do not each invent a way to head a section.
    Sticky, because the name of the checkout is the one thing worth keeping on screen while
-   its sessions scroll past. */
+   its sessions scroll past. The shape of the heading's button is the ghost Button's own;
+   what is left here is the sticky behavior and an opaque ground (the column's own surface)
+   so rows scroll *under* the heading rather than through it. */
 .session-group-head {
   position: sticky;
   top: 0;
@@ -231,78 +179,10 @@ button { cursor: pointer; }
   display: flex;
   align-items: stretch;
   width: 100%;
-  /* `--bg-side` is translucent, and a sticky heading with a see-through background lets the
-     rows scroll visibly through it. Painting it over `--bg` reproduces exactly what the
-     column already shows — the same two layers the body and the aside make between them —
-     while being opaque enough to sit on top of something.
-
-     Held in a variable because hover has to paint *over* this rather than replace it: a
-     highlight that dropped the ground would make the heading transparent again at exactly
-     the moment the pointer is on it. */
-  --ground: linear-gradient(var(--bg-side), var(--bg-side)), var(--bg);
-  background: var(--ground);
+  background: var(--bb-sidebar);
 }
-
-/* The fold takes the whole row bar the plus, not just the chevron: the name is the biggest
-   thing in reach, and asking for a 10px arrow instead would make folding the fiddliest
-   gesture in the column. Hover says so before the click proves it. */
-.session-group-fold {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 1;
-  min-width: 0;
-  padding: 8px 4px 6px 10px;
-  border: 0;
-  background: transparent;
-  text-align: left;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  /* Louder than the `--ink-dim` the context panels' headings use, because these carry more
-     weight: those name a section of one session, these name the checkout every row beneath
-     them belongs to, and the eye should be able to find the next one while scrolling. The
-     accent proper would be too much — full orange is what a *pressed* control and the
-     open row wear, and a dozen headings in it would drown both. */
-  color: var(--accent-quiet);
-}
-/* Hovering either button lights the whole heading, so the row reads as one thing rather than
-   two that happen to be adjacent. Painted *over* the ground rather than replacing it — see
-   the note there. */
-.session-group-head:hover {
-  background: linear-gradient(rgba(127, 127, 127, 0.1), rgba(127, 127, 127, 0.1)), var(--ground);
-}
-.session-group-fold:focus-visible,
-.session-group-new:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
-.session-group-fold .chevron { flex: none; color: var(--ink-faint); }
-
-/* Starting a session in the checkout the heading names. Quiet by default — a dozen of these
-   at full strength would compete with the names they sit beside — and always present rather
-   than revealed on hover: a shortcut nobody can see is not much of a shortcut, and a control
-   that appears only under the pointer cannot be found by someone who never moves it there. */
-.session-group-new {
-  flex: none;
-  padding: 8px 10px 6px 4px;
-  border: 0;
-  background: transparent;
-  color: var(--ink-faint);
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1;
-}
-.session-group-new:hover { color: var(--accent-text); }
 
 /* The column narrows to 200px, which is not enough for every checkout's name. */
-.session-group-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.session-group-fold .count {
-  margin-left: auto;
-  flex: none;
-  padding: 1px 6px;
-  border-radius: 8px;
-  background: rgba(127, 127, 127, 0.18);
-  font-size: 10px;
-}
 .session-group-section + .session-group-section { margin-top: 8px; }
 
 .empty, .none {
@@ -312,33 +192,11 @@ button { cursor: pointer; }
 }
 .empty code { font-family: var(--mono); font-size: 11px; }
 
-.session {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: flex-start;
-  gap: 2px;
-  width: 100%;
-  padding: 8px 10px;
-  margin-bottom: 1px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  text-align: left;
-}
-.session:hover { background: rgba(127, 127, 127, 0.1); }
-.session.current { background: var(--accent); }
-.session.current .session-title,
-.session.current .session-where { color: var(--accent-ink); opacity: 1; }
-
-.session-title {
-  font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.session-where { font-size: 11px; color: var(--ink-faint); }
-.session.current .session-where { opacity: 0.85; }
+/* The row's look and its open/current state are the ghost Button's own now (the Session
+   component carries the column layout and the `bg-accent` state in its classes); the only
+   thing a rule still has to say is the share of the row's width the button takes, with the
+   ⋯ menu keeping the rest. */
+.session { flex: 1; min-width: 0; }
 
 .build {
   padding: 8px 14px;
@@ -1457,20 +1315,6 @@ button { cursor: pointer; }
 
 /* ------------------------------------------------------------- popmenu */
 
-.new-split { display: flex; gap: 4px; align-items: stretch; }
-.new-split .new { flex: 1; }
-.new-recent {
-  width: 26px;
-  padding: 0;
-  border: none;
-  border-radius: 7px;
-  background: var(--code-bg);
-  color: var(--ink-dim);
-  font-size: 11px;
-  cursor: pointer;
-}
-.new-recent:hover { color: var(--ink); }
-
 /* Opaque, not translucent. The window is already `vibrancy: 'sidebar'`, and a blurred panel
    over a blurred window blurs twice into something neither legible nor Mac-like. */
 .popmenu {
@@ -2044,19 +1888,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .confirm-actions { position: sticky; bottom: 0; z-index: 1; background: var(--bg); flex-wrap: wrap; }
 .permission-scope { margin: 0; padding: 10px 12px; font-size: 12px; border-top: 1px solid var(--line); color: var(--ink-dim); overflow-wrap: anywhere; }
 
-.session-scope { display: flex; gap: 4px; margin-top: 10px; }
-.session-scope button { flex: 1; min-height: 30px; font-size: 12px; border: 0; border-radius: 6px; background: transparent; color: var(--ink-dim); }
-.session-scope button[aria-pressed="true"] { background: var(--bubble-agent); color: var(--ink); font-weight: 600; }
-.session-row { position: relative; display: flex; align-items: center; border-radius: 9px; }
-.session-row .session { flex: 1; min-width: 0; padding-right: 32px; }
-.session-row .session-more { position: absolute; right: 4px; top: 10px; padding: 0; width: 28px; height: 28px; border: 0; background: transparent; border-radius: 5px; color: var(--ink-dim); }
-.session-row.current { background: var(--bubble-user); }
-.session-row.current .session { background: transparent; color: var(--ink); }
-.session-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; font-size: 10px; }
-.session-badges > span { padding: 1px 5px; border-radius: 4px; background: var(--bubble-agent); color: var(--ink-dim); }
-.session-badges .working, .session-badges .needs-approval { color: var(--warn); background: var(--warn-bg); }
-.session-badges .failed { color: var(--removed); background: var(--removed-bg); }
-.session-badges .completed { color: var(--added); }
+/* The rows are flex so the ⋯ menu and the button share one line; the button's own shape and
+   its open/current state live in the component's classes (ghost + `bg-accent` when current),
+   so only the width split is said here. The badges row keeps wrapping — the column narrows
+   to 200px, and a badge must not push a title off the line the badges cannot have. */
+.session-row { display: flex; align-items: center; }
+.session-row .session { flex: 1; min-width: 0; }
+.session-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 4px; }
 
 .file-search-scope { display: flex; margin: 10px 0 8px; gap: 4px; }
 .file-search-scope button, .preview-actions button { padding: 6px 8px; border: 1px solid var(--line); background: var(--bg); border-radius: 6px; font-size: 12px; }
@@ -2125,8 +1963,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .app.no-session .context, .app.no-session .gutter:last-of-type { visibility: hidden; }
 .app .transcript.empty-state .empty-body { text-align: left; align-items: flex-start; justify-content: center; overflow-y: auto; }
 .app .transcript.empty-state .empty-body h1 { font-size: 28px; margin: 0 0 14px; color: var(--ink); }
-.app .session.current .session-title { color: var(--ink); }
-.app .session.current .session-where { color: var(--ink-dim); opacity: 1; }
 .app .panel:has(.none) .panel-inner { padding: 0 14px 4px; }
 .app .composer-toolbar { flex-wrap: wrap; }
 .app .composer-hint { min-width: 130px; }

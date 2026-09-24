@@ -41,6 +41,26 @@ await page.screenshot({ path: `${shots}/01-launched.png`, fullPage: false })
 // The filter box. Driven before anything is opened, and left empty, because every other
 // driver clicks `.session` first and expects that to be the newest session.
 if (sessions > 0) {
+  // The sessions search starts collapsed, and the box below only exists while it is open;
+  // the Escape pressed against it further down closes it again (that is what the
+  // `back === sessions` check afterwards verifies). The drivers share one persisted window
+  // state, so this also makes sure the column is on the sessions list first — the previous
+  // run may have left the bots list up, with the sessions panel hidden rather than unmounted.
+  const sessionTab = page.locator('.sidebar-tab').nth(0)
+  if ((await sessionTab.getAttribute('aria-pressed')) !== 'true') {
+    await sessionTab.click()
+    await page.waitForTimeout(300)
+  }
+  // Playwright locators re-resolve on every action, so `box` keeps working across the
+  // remounts; this just has to re-open the collapsible after each Escape above closes it.
+  const openSearch = async () => {
+    const searchToggle = page.locator('#sessions-column .sidebar-body').first().locator('.sidebar-search-toggle')
+    if ((await searchToggle.getAttribute('aria-expanded')) !== 'true') {
+      await searchToggle.click()
+      await page.waitForTimeout(200)
+    }
+  }
+  await openSearch()
   const box = page.locator('.session-find')
   const first = (await page.locator('.session-title').first().textContent()) ?? ''
   // A word from the newest session's title, long enough not to be in every other one.
@@ -132,6 +152,13 @@ if (sessions > 0) {
   const firstSection = page
     .locator('.session-group-section')
     .filter({ has: page.locator('.session-group-name', { hasText: new RegExp(`^${groupName}$`) }) })
+  // The drivers share the persisted window state, so the fullest group may already be shut
+  // when this runs (an interrupted run leaves `view.collapsed` behind). The point of the
+  // click is to prove a fold, so make sure the group is open to fold first.
+  if ((await firstHead.locator('.session-group-fold').getAttribute('aria-expanded')) !== 'true') {
+    await firstHead.click()
+    await page.waitForTimeout(400)
+  }
   await firstHead.click()
   await page.waitForTimeout(400)
   const stillVisible = await firstSection.locator('.session:visible').count()
@@ -152,6 +179,7 @@ if (sessions > 0) {
   // what somebody who just typed a search asked for.
   const hidden = (await firstSection.locator('.session-title').first().textContent()) ?? ''
   const hiddenWord = hidden.split(/\s+/).find((w) => w.length > 4) ?? hidden.slice(0, 6)
+  await openSearch()
   await box.fill(hiddenWord)
   await page.waitForTimeout(400)
   const found = await firstSection.locator('.session:visible').count()
@@ -172,6 +200,8 @@ if (sessions > 0) {
   console.log(
     `group reopened   : ${reopened}/${sessions} rows visible${reopened === sessions ? '' : '  FAIL'}`
   )
+
+  await openSearch()
 
   // Filtering and grouping compose: the headings left are the ones the query names, and
   // none of them is empty — a group whose rows all went is a heading with nothing under it.
@@ -200,8 +230,9 @@ if (sessions > 0) {
   await page.waitForTimeout(200)
 
   // The plus on a heading starts a session in that checkout, with no folder picker in the
-  // way. Safe to press: the bridge writes nothing until the first turn, so an
-  // opened-and-abandoned session leaves no record behind for the next driver to trip over.
+  // way. Declining the trust prompt leaves the row in the list, so the list is one row
+  // longer from here on — but the bridge still writes nothing, because a declined turn is
+  // not a turn run.
   //
   // Driven against a checkout that is still on disk. The list remembers projects that have
   // since been deleted or moved, and the bridge rightly refuses those with `not_a_directory`
@@ -236,9 +267,10 @@ if (sessions > 0) {
   await page.waitForTimeout(200)
   const restored = await page.locator('.session-group-head').count()
   const rows = await page.locator('.session').count()
+  const flatExpected = where ? sessions + 1 : sessions
   console.log(
-    `back to flat     : ${restored} headings, ${rows}/${sessions} rows` +
-      `${restored === 0 && rows === sessions ? '' : '  FAIL'}`
+    `back to flat     : ${restored} headings, ${rows}/${flatExpected} rows` +
+      `${restored === 0 && rows === flatExpected ? '' : '  FAIL'}`
   )
 }
 
