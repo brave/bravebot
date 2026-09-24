@@ -12880,6 +12880,85 @@ fn bypassing_fills_in_a_verdict_that_claims_nothing() {
     );
 }
 
+/// A picture is refused in the one mode that makes no check before promoting. What VET-2 refuses
+/// is the content rather than the check: the bytes behind a picture slot are a data URI, so a
+/// promotion would hand the planner base64 nobody read as text it may trust. Bypassing with no
+/// screening asked for makes no check, so the refusal must not depend on one.
+///
+/// Wrapped in the mode's own confirmer, as a caller must, over a double that would approve. The
+/// refusal comes before anything is released for a prompt, so the trail never says a picture was
+/// shown to the user on its way to being refused.
+#[test]
+fn bypassing_with_no_screening_still_refuses_to_promote_a_picture() {
+    let scratch = Scratch::new("vet-content-bypass-picture");
+    std::fs::write(scratch.path.join("shot.png"), a_png()).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"shot.png"}"#),
+        tool_request(
+            "vet_content",
+            r#"{"ref":"ref:1","expects":"a screenshot of the login page"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut shown = ShownAfterAVet::new(true);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut shown, bravebot_agent::PermissionMode::Bypass, false);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("look at the screenshot")
+            .with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    let wait = std::time::Duration::from_secs(5);
+    let _read = received.recv_timeout(wait).expect("the round that read");
+    let _vetted = received.recv_timeout(wait).expect("the round that asked");
+    let answered = received
+        .recv_timeout(wait)
+        .expect("the round after vet_content answered");
+    assert!(
+        !answered.contains("iVBORw0KGgo"),
+        "a picture's data URI reached the planner's context: {answered}"
+    );
+    assert!(
+        answered.contains("ref:1 is a picture"),
+        "the planner was not told the picture was refused: {answered}"
+    );
+    assert!(
+        sink.events().iter().any(|event| matches!(
+            event,
+            Event::GateBlocked { gate: "vetting", reason, .. } if reason.contains("ref:1 is a picture")
+        )),
+        "the refusal left no record in the trail: {:#?}",
+        sink.events()
+    );
+    assert!(
+        !sink.events().iter().any(|event| matches!(
+            event,
+            Event::GatePassed { gate: "display", detail }
+                if detail.contains("content the planner asked to be shown")
+        )),
+        "the trail says a picture was shown to the user on its way to being refused: {:#?}",
+        sink.events()
+    );
+}
+
 /// The line the trail keeps about one release, which is the entry a reader checks a promotion
 /// against. Picked out by the sentence the promotion writes rather than by the gate alone, since
 /// accepting the reference and releasing the bytes for a screen pass the same gate.

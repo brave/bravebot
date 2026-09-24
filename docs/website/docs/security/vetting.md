@@ -64,8 +64,8 @@ check so a page can be judged against what it was supposed to be. It must not be
 must not become another model's prompt. Where the content came from is said in Brave Bot's words, as a
 path, a URL or a command, because a reference name means something to the planner and nothing to you.
 
-It refuses a reference to nothing, a picture (a check reads text), a private sentence, and a call from a
-delegate. A reference to a file nothing has read yet is opened rather than refused, since naming one is
+It refuses a reference to nothing, a picture (a check reads text, and the planner would be handed the
+picture's encoded bytes as text it trusts), a private sentence, and a call from a delegate. A reference to a file nothing has read yet is opened rather than refused, since naming one is
 the ordinary way for the planner to ask about a file it may not read.
 
 A delegate is not offered it because the prompt would belong to you, about content you never asked to
