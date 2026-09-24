@@ -135,8 +135,12 @@ pub fn run<S: Sink, R: crate::report::Reporter>(
     let completion = match answered {
         Ok(completion) => completion,
         Err(_) => {
+            // Through the kernel, exactly as a reply that could not be read goes. The word
+            // decides a refusal wherever nothing draws a prompt, and a trail that recorded one
+            // inconclusive and not the other would tell a reader a check objected when it never
+            // ran. The account is the driver's own sentence; nothing here has seen a reply.
             return Checked {
-                verdict: Verdict::Inconclusive("the check could not be made"),
+                verdict: policy.vetting_did_not_complete(spec, "the check could not be made"),
                 reason: None,
                 usage: Usage::default(),
             };

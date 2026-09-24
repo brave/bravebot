@@ -3275,6 +3275,30 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         (stated.verdict, reason)
     }
 
+    /// Settle a check that produced no reply to read, and record the word.
+    ///
+    /// The other way a verdict comes about. [`Policy::vetting_verdict`] covers a reply that
+    /// arrived and could not be read; this covers a call that never produced one, which is a
+    /// timeout, a refusal in transit or a backend that is down. Both are `Inconclusive` and both
+    /// promote nothing, and the trail gets the same line for either, because a reader of it is
+    /// asking which word decided a refusal rather than which layer produced the word.
+    ///
+    /// `why` is the driver's own account and is a `&'static str` for that reason: there is no way
+    /// to put anything read into it. Nothing untrusted is in scope here at all, which is why this
+    /// takes no reply and hands back no reason.
+    pub fn vetting_did_not_complete(
+        &mut self,
+        spec: &crate::vetting::VettingSpec,
+        why: &'static str,
+    ) -> crate::vetting::Verdict {
+        let verdict = crate::vetting::Verdict::Inconclusive(why);
+        self.allow(
+            "vetting",
+            format!("{}: the check said {verdict}", spec.describe()),
+        );
+        verdict
+    }
+
     /// Take the word of whoever endorsed one slot's content and give the planner those bytes.
     ///
     /// **Not a relabel, and not a claim about a file.** The slot keeps the label it was
@@ -8864,11 +8888,13 @@ five
         );
     }
 
-    /// Two refusals that look the same from outside: a check that objected, and a check that could
-    /// not be read. They call for different answers, one being the check working and the other being
-    /// it failing, and where a run refuses on a verdict with nobody to tell, the trail is the only
-    /// place the difference survives. So the record carries which word it was, and where the driver
-    /// settled the word itself it carries its own account of why.
+    /// Three refusals that look the same from outside: a check that objected, a check whose reply
+    /// could not be read, and a check whose call never produced one. They call for different
+    /// answers, one being the check working and the other two being it failing in different
+    /// places, and where a run refuses on a verdict with nobody to tell, the trail is the only
+    /// place the difference survives. So the record carries which word it was, and where the
+    /// driver settled the word itself it carries its own account of why, which is the whole of
+    /// what tells the second apart from the third.
     #[test]
     fn the_trail_tells_an_objection_apart_from_a_check_that_said_nothing() {
         let mut sink = RecordingSink::new();
@@ -8890,6 +8916,7 @@ five
                 Label::untrusted_private(),
             ),
         );
+        policy.vetting_did_not_complete(&spec, "the check could not be made");
 
         let recorded = format!("{:?}", sink.events());
         assert!(
@@ -8899,6 +8926,38 @@ five
         assert!(
             recorded.contains("the check said inconclusive: the reply stated no verdict"),
             "a check that could not be read is recorded as an objection: {recorded}"
+        );
+        assert!(
+            recorded.contains("the check said inconclusive: the check could not be made"),
+            "a check that could not be made is not told from one that could not be read: \
+             {recorded}"
+        );
+    }
+
+    /// The driver settles the word itself where no reply arrived, so nothing it records about one
+    /// can have come from a check: the account is a `&'static str` the driver wrote, and the read
+    /// that turns a reply into a reason never happens on this path.
+    #[test]
+    fn a_check_that_could_not_be_made_records_the_word_and_the_drivers_own_account() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let (slots, slot) = fetched("a page");
+
+        let spec = a_spec(&mut policy, &slots, &slot);
+        let verdict = policy.vetting_did_not_complete(&spec, "the check could not be made");
+
+        assert_eq!(
+            verdict,
+            crate::vetting::Verdict::Inconclusive("the check could not be made")
+        );
+        assert!(
+            sink.events().iter().any(|event| matches!(
+                event,
+                Event::GatePassed { gate: "vetting", detail }
+                    if detail.contains("the check said inconclusive: the check could not be made")
+            )),
+            "a check that could not be made left no verdict in the trail: {:#?}",
+            sink.events()
         );
     }
 

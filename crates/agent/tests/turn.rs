@@ -13209,6 +13209,69 @@ fn screening_an_unattended_run_keeps_back_content_a_check_objected_to() {
     );
 }
 
+/// The refusal this run takes has nobody to tell, so the trail is the whole of the record of what
+/// decided it, and a check whose call never came back has to leave the same kind of line there as
+/// one that objected. Otherwise a reader of the trail sees the check's setup and its egress and no
+/// verdict at all, and cannot tell a run that was warned from one whose backend was down.
+///
+/// The check's call is lost rather than answered, which is the route
+/// [`screening_an_unattended_run_keeps_back_content_a_check_objected_to`] does not take: that one
+/// records its word inside the read of a reply, and this one has no reply to read.
+#[test]
+fn the_trail_records_the_verdict_of_a_check_that_could_not_be_made() {
+    let scratch = Scratch::new("vet-content-bypass-screened-lost");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, _received) = serve_sequence_losing_every_check(vec![
+        tool_request("run", r#"{"command":"cat where.txt"}"#),
+        tool_request(
+            "vet_content",
+            r#"{"ref":"ref:1","expects":"the path the file records"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut shown = ShownAfterAVet::new(true);
+    let asked = std::sync::Arc::clone(&shown.shown);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut shown, bravebot_agent::PermissionMode::Bypass, true);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out")
+            .with_auto_vetting(true)
+            .with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    assert!(
+        asked.lock().unwrap().is_empty(),
+        "a prompt was put to somebody, so this is not the refusal with nobody to tell"
+    );
+    assert!(
+        sink.events().iter().any(|event| matches!(
+            event,
+            Event::GatePassed { gate: "vetting", detail }
+                if detail.contains("the check said inconclusive: the check could not be made")
+        )),
+        "the refusal was taken on a verdict the trail does not hold: {:#?}",
+        sink.events()
+    );
+}
+
 /// Screening is a screen rather than a wall, so the same run promotes what the check found nothing
 /// in, and promotes it without a prompt: the two flags compose into a run that reads what it is
 /// given and stops at what it is warned about.
