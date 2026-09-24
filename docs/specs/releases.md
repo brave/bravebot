@@ -34,9 +34,11 @@ binaries are built and published by the Jenkins job `bravebot-build` in the devo
 The npm package is published afterwards, from a manually dispatched GitHub Actions workflow,
 once that release exists.
 
-Nothing here is pinned by a Rust test. The rules below are enforced by a refusal in the tagging
+Most of this is not pinned by a Rust test. Those rules are enforced by a refusal in the tagging
 path, the Jenkins publish path, or the npm publish workflow rather than by anything the test
-suite can execute, so each clause says in brackets what makes it hold.
+suite can execute, so each of those clauses says in brackets what makes it hold. What the
+installers do with a Linux signature is the exception: a test runs both of them against a release
+it made.
 
 ## Clauses
 
@@ -175,8 +177,8 @@ A branch push, a pull request, and a tag push do not publish to the registry. So
 `publish-npm.yml` with the version tag after Jenkins has created the GitHub release of that name.
 What is published is the tree that tag names, and a branch of the same name does not supply it. A
 dispatch whose tag is not `v` plus the version in the tree, or whose GitHub release is missing any
-platform asset or checksum, is refused rather than publishing a wrapper whose installer has
-nothing to fetch.
+platform asset, any checksum, or the signature beside a Linux checksum, is refused rather than
+publishing a wrapper whose installer has nothing to fetch.
 
 **Why.** The installer derives the download from the version it was published with. Publishing
 the wrapper first makes every install fail until the assets exist, which reads as the tool being
@@ -184,7 +186,7 @@ broken. Jenkins is started by hand, days later if need be, so npm publish is the
 step: it happens when somebody chooses, not when the tag lands. Publishing from a branch puts
 an unreviewed version on the registry.
 
-`verified-by: by-construction (publish-npm.yml runs only on workflow_dispatch, checks out refs/tags/ the given tag so a branch of that name cannot supply the tree and a tag that does not exist fails the run, refuses unless that tag is v plus the version in both files, and refuses unless each named asset and its checksum are on the GitHub release; make check-security faults a checkout of a bare name)`
+`verified-by: by-construction (publish-npm.yml runs only on workflow_dispatch, checks out refs/tags/ the given tag so a branch of that name cannot supply the tree and a tag that does not exist fails the run, refuses unless that tag is v plus the version in both files, and refuses unless each named asset and its checksum, and each Linux checksum's signature, are on the GitHub release; make check-security faults a checkout of a bare name)`
 
 <a id="RELEASE-11"></a>
 ### RELEASE-11: the registry authenticates the workflow, not a stored token
@@ -219,10 +221,47 @@ the pipeline that publishes.
 
 `verified-by: by-construction (package-lock.json is in the tree, both workflows run npm ci --ignore-scripts, and lockfile-lint refuses hosts other than npm and non-https URLs)`
 
+<a id="RELEASE-13"></a>
+### RELEASE-13: on Linux, a checksum whose signature does not verify installs nothing
+
+On Linux, where `gpg` can be run, each installer also fetches the signature published beside the
+checksum and the release signing key, which is served from Brave's download host rather than from
+the release, and checks that signature over the checksum exactly as it was fetched. The signature
+counts only when it was made by the key the installer names by its fingerprint, whatever else the
+fetched key file holds. When the signature or the key cannot be fetched, or the signature does not
+verify or was made by any other key, no executable is written. Where `gpg` cannot be run, the
+installer says it skipped the check and installs on the checksum alone. Darwin and Windows are not
+checked this way.
+
+**Why.** The Linux binary carries no signature of its own, and its checksum is uploaded beside it,
+so whoever can replace the one can replace the other: the checksum proves the download arrived
+intact, not who produced it. A signature from a key held somewhere else means a substituted binary
+also needs that key. The key is named in the installer because the file it is fetched from is on a
+host too, and whoever controlled that host as well as the release could otherwise sign with a key
+of their own and serve it. A missing signature is refused rather than skipped because skipping it
+would let whoever can change the release turn the check off by deleting one file, and that is the
+person the check exists for. A missing `gpg` is skipped rather than refused because it is a
+property of the machine, which nobody changing a release controls, and requiring it would fail an
+install for a reason that has nothing to do with what was downloaded.
+
+**Note.** The check runs in a keyring made for it and removed afterwards, so nothing is read from
+or added to the person's own.
+
+`verified-by: bravebot_cli::installer_signature::a_linux_checksum_signed_by_the_release_key_installs`
+`verified-by: bravebot_cli::installer_signature::a_checksum_replaced_after_it_was_signed_installs_nothing`
+`verified-by: bravebot_cli::installer_signature::a_checksum_signed_by_any_key_but_the_release_key_installs_nothing`
+`verified-by: bravebot_cli::installer_signature::a_linux_checksum_with_no_signature_installs_nothing`
+`verified-by: bravebot_cli::installer_signature::a_release_key_that_cannot_be_fetched_installs_nothing`
+`verified-by: bravebot_cli::installer_signature::without_gpg_a_linux_install_says_it_skipped_the_signature_and_installs`
+`verified-by: bravebot_cli::installer_signature::a_darwin_or_windows_install_neither_fetches_nor_needs_a_signature`
+
 ## Known costs
 
-- **Nothing here is pinned by a Rust test.** Every clause is by-construction, which means a
-  refusal can be removed and only a reader will notice. The tagging path is shell in a makefile,
+- **Only the installers' signature check is pinned by a Rust test.** Every clause but
+  [RELEASE-13](#RELEASE-13) is by-construction, which means a refusal can be removed and only a
+  reader will notice. The test for RELEASE-13 runs on Linux alone and skips where `gpg` or `node`
+  is missing, so on a macOS checkout it passes having checked nothing; the Linux job in CI has
+  both. The tagging path is shell in a makefile,
   publication is a Jenkins job in another repository, and a test that shelled out to a real tag
   push would have to publish something to prove anything. Two checks hold part of it from outside
   the suite. `make check-security` holds the shape of the publish workflow rather than any of these
@@ -236,6 +275,19 @@ the pipeline that publishes.
   attaches assets. A change there can break RELEASE-6 through RELEASE-8 without this tree
   noticing. RELEASE-9 is the installer in this repository: a checksum Jenkins ships in the
   wrong form is refused here, not accepted.
+
+- **Only the npm publish refuses a release whose Linux checksums carry no signature.** The publish
+  job in devops checks for each binary but not for a signature. The install script fetches the
+  newest GitHub release whether or not npm has been published, so a release Jenkins publishes
+  without them is refused by every Linux install that has `gpg` from the moment it exists, and the
+  npm check comes too late to prevent that.
+
+- **Changing the signing key breaks every installer that names the old one.** Each npm version
+  names a key and installs its own version's release, so the download host has to go on serving
+  every key a version still in use names, not only the newest. The install script is served from
+  the trunk and installs the newest release, so the key it names has to change at the moment the
+  first release signed by the new key is published, and either order leaves a window in which
+  Linux installs with `gpg` are refused.
 
 - **The refusals before a tag guard the tag, not the branch.** Tagging checks the branch, the
   remote, and the agreement among the files that state a version. The publish job builds the tip of a
