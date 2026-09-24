@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Fold } from './Fold'
 import { FileGlyph } from './FileGlyph'
 import { type FileRow, type Listing, isSubpath, under } from '../../shared/files'
+import { Button } from './ui/button'
+import { Input } from './ui/input'
 
 /**
  * The folder the session is working in.
@@ -154,32 +156,34 @@ export function FileTree({
         <code className="tree-root" title={root}>
           {root}
         </code>
-        <button ref={searchButton} className={`tree-tool ${searchOpen ? 'on' : ''}`}
+        <Button variant="ghost" size="icon-sm" ref={searchButton} className={`tree-tool ${searchOpen ? 'on' : ''}`}
           title="Search files" aria-label="Search files" aria-expanded={searchOpen}
           onClick={() => searchOpen ? closeSearch() : setSearchOpen(true)}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 5 5" /></svg>
-        </button>
+        </Button>
         {/* Labelled with the thing it is about rather than with an eye or a dot: `.*` is what a
             dotfile looks like, and it is legible at 10px where a pictogram is not. */}
-        <button
+        <Button
+          variant="ghost"
+          size="icon-sm"
           className={`tree-tool dotfiles ${hidden ? 'on' : ''}`}
           aria-pressed={hidden}
           title={hidden ? 'Hide dotfiles' : 'Show dotfiles'}
           onClick={() => setHidden(!hidden)}
         >
           .*
-        </button>
-        <button className="tree-tool" title="Read the folder again" onClick={() => void refresh()}>
+        </Button>
+        <Button variant="ghost" size="icon-sm" className="tree-tool" title="Read the folder again" onClick={() => void refresh()}>
           ↻
-        </button>
+        </Button>
       </div>
 
       {searchOpen && <div className="tree-search">
-        <input autoFocus type="search" className="tree-find" value={query}
+        <Input autoFocus type="search" className="tree-find" value={query}
           placeholder="Search project filenames…" aria-label="Search project files by name"
           onChange={event => setQuery(event.target.value)}
           onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); closeSearch() } }} />
-        <button className="tree-tool" aria-label="Close file search" onClick={closeSearch}>×</button>
+        <Button variant="ghost" size="icon-sm" className="tree-tool" aria-label="Close file search" onClick={closeSearch}>×</Button>
       </div>}
 
       {problem && <p className="tree-problem">{problem}</p>}
@@ -194,7 +198,7 @@ export function FileTree({
         {terms.length > 0 ? <div className="file-search-results">
           {searching && <p role="status">Searching project…</p>}
           {!searching && results?.paths.length === 0 && <p>No matching files.</p>}
-          {results?.paths.map((path) => <button key={path} onClick={() => setPreviewPath(path)} title={path}>{path}</button>)}
+          {results?.paths.map((path) => <Button variant="ghost" key={path} onClick={() => setPreviewPath(path)} title={path}>{path}</Button>)}
           <p className="tree-note">Search skips .git, node_modules, target and dist. Symbolic-link directories are not followed.</p>
           {results?.incomplete && <p role="status">Results are limited or some folders could not be read. Narrow the search.</p>}
         </div> : rootListing === undefined ? (

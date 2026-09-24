@@ -1,4 +1,5 @@
 import type { TurnDetails as Details, TurnDisclosure } from '../turn-details'
+import { Button } from './ui/button'
 
 export type OpenAudit = (turn: number | null, trigger: HTMLButtonElement) => void
 
@@ -33,10 +34,10 @@ export function TurnFooter({ details, onDisclosure, onAudit }: {
         <dt>Tool-calling rounds</dt><dd>{exact(details.steps)}</dd>
       </dl><p>Usage is summed across requests in this turn.</p></div>
     </details> : details ? <span>Final usage unavailable</span> : null}
-    <button className={`turn-audit-link${details?.clean === false ? ' has-refusal' : ''}`}
+    <Button variant="link" className={`turn-audit-link${details?.clean === false ? ' has-refusal' : ''}`}
       data-audit-turn={details?.turn ?? 'saved'}
       aria-controls="turn-audit-inspector" onClick={(event) => onAudit(details?.turn ?? null, event.currentTarget)}>
       {details?.clean === false ? 'Policy blocked an action' : details ? 'Audit' : 'Audit unavailable'} <span aria-hidden="true">↗</span>
-    </button>
+    </Button>
   </div>
 }

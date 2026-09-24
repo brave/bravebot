@@ -1,4 +1,6 @@
 import { failureSummary } from '../failure'
+import { Alert, AlertDescription } from './ui/alert'
+import { Button } from './ui/button'
 
 /**
  * A failure, titled from the category the agent sent and never from the words in the detail.
@@ -13,12 +15,12 @@ export function ErrorCard({ detail, onRetry, onModel, category, attempts, status
   detail: string; onRetry?: () => void; onModel?: () => void
 }): React.JSX.Element {
   const classified = failureSummary(category ?? '')
-  return <div className="error-card" role="alert">
-    <strong>{classified.title}</strong><p>{classified.description}</p>
+  return <Alert variant="destructive" className="error-card block">
+    <strong>{classified.title}</strong><AlertDescription><p>{classified.description}</p></AlertDescription>
     <div className="error-actions">
-      {onRetry && <button onClick={onRetry}>Draft continuation</button>}
-      {onModel && <button onClick={onModel}>Choose another model</button>}
+      {onRetry && <Button variant="outline" size="sm" onClick={onRetry}>Draft continuation</Button>}
+      {onModel && <Button variant="outline" size="sm" onClick={onModel}>Choose another model</Button>}
     </div>
     <details><summary>Technical details</summary><pre>{detail}{attempts != null ? `\nRequests attempted: ${attempts}` : ''}{status != null ? `\nHTTP status: ${status}` : ''}</pre></details>
-  </div>
+  </Alert>
 }

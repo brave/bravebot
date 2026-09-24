@@ -1580,6 +1580,11 @@ kbd,
   box-shadow: var(--bb-shadow-menu);
 }
 
+.model-popover[data-slot='popover-content'] {
+  position: relative;
+  inset: auto;
+}
+
 .model-heading {
   margin-bottom: 9px;
   padding: 0 1px;
@@ -2267,6 +2272,11 @@ kbd,
   box-shadow: var(--bb-shadow-menu);
 }
 
+.popmenu[data-slot='dropdown-menu-content'] {
+  position: relative;
+  inset: auto;
+}
+
 .popitem {
   min-height: 30px;
   padding: 6px 9px;
@@ -2320,6 +2330,7 @@ kbd,
   width: min(680px, calc(100vw - 40px));
   max-height: calc(100dvh - 40px);
   padding: 24px;
+  z-index: 101;
 }
 
 .modal:focus {

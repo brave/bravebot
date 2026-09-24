@@ -24,10 +24,11 @@ export function Fold({
   children: React.ReactNode
 }): React.JSX.Element {
   return (
-    <div className={`fold ${open ? 'open' : ''}`}>
-      <div className="fold-clip">
+    <Collapsible open={open} className={`fold ${open ? 'open' : ''}`}>
+      <CollapsibleContent forceMount className="fold-clip">
         <div className={className}>{children}</div>
-      </div>
-    </div>
+      </CollapsibleContent>
+    </Collapsible>
   )
 }
+import { Collapsible, CollapsibleContent } from './ui/collapsible'

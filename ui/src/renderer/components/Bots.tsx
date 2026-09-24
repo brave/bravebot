@@ -28,6 +28,9 @@ import { newAvatarSeed } from '../../shared/avatar'
 import { BotAvatar, type Doing } from './BotAvatar'
 import { Fold } from './Fold'
 import { ModelPicker } from './ModelPicker'
+import { Button } from './ui/button'
+import { Input } from './ui/input'
+import { Textarea } from './ui/textarea'
 
 interface Props {
   bots: Bot[]
@@ -84,12 +87,12 @@ export function Bots({
       <header className="sessions-head">
         {/* The same control the session list's own opens with, so the two tabs begin the same
             way. No split beside it: a bot's folder is asked for once, in the form. */}
-        <SidebarTools query={query} onQuery={setQuery} label="Search bots" action={<button className="new" onClick={() => setEditing('new')}>
+        <SidebarTools query={query} onQuery={setQuery} label="Search bots" action={<Button className="new" onClick={() => setEditing('new')}>
           <span className="plus" aria-hidden="true">
             +
           </span>
           New bot
-        </button>} />
+        </Button>} />
       </header>
 
       <div className="session-list">
@@ -122,21 +125,21 @@ export function Bots({
           <h3>Purpose</h3><p>{overview.purpose}</p>
           <p className="bot-note">This bot carries its purpose and saved memory into each conversation. Conversation history belongs to individual tasks.</p>
           <div className="bot-overview-actions">
-            <button className="primary" onClick={() => { onNewConversation(overview); setOverview(null) }}>New conversation</button>
-            <button onClick={() => { setEditing(overview.slug); setOverview(null) }}>Edit bot and memory</button>
+            <Button className="primary" onClick={() => { onNewConversation(overview); setOverview(null) }}>New conversation</Button>
+            <Button variant="outline" onClick={() => { setEditing(overview.slug); setOverview(null) }}>Edit bot and memory</Button>
           </div>
           <h3>Conversation history ({history.length})</h3>
           <p className="bot-note">All conversations for this bot, including archived conversations and drafts. Starting a new conversation keeps the earlier ones here.</p>
-          {history.length > 0 && <input className="bot-history-search" type="search" aria-label="Search bot conversations" placeholder="Search conversations…" value={historyQuery} onChange={event => setHistoryQuery(event.target.value)} />}
+          {history.length > 0 && <Input className="bot-history-search" type="search" aria-label="Search bot conversations" placeholder="Search conversations…" value={historyQuery} onChange={event => setHistoryQuery(event.target.value)} />}
           <div className="bot-conversations" aria-label="Bot conversation history">
             {filteredHistory.map(({ id, session, archived }) => session ?
-              <button key={id} onClick={() => { onConversation(overview, session); setOverview(null) }}>
+              <Button variant="ghost" key={id} onClick={() => { onConversation(overview, session); setOverview(null) }}>
                 <strong>{session.title}</strong><span>{id.startsWith('draft:') ? 'Draft' : new Date(session.updated * 1000).toLocaleDateString()}{archived ? ' · Archived' : ''}</span>
-              </button> : <div className="bot-history-unavailable" key={id}><strong>Unavailable conversation</strong><code>{id}</code><span>The saved record is not currently available in the session list.</span></div>)}
+              </Button> : <div className="bot-history-unavailable" key={id}><strong>Unavailable conversation</strong><code>{id}</code><span>The saved record is not currently available in the session list.</span></div>)}
             {history.length === 0 && <p>No conversations yet.</p>}
             {history.length > 0 && filteredHistory.length === 0 && <p>No conversations match “{historyQuery}”.</p>}
           </div>
-          <button onClick={() => setOverview(null)}>Done</button>
+          <Button onClick={() => setOverview(null)}>Done</Button>
         </Modal>}
       </div>
 
@@ -152,7 +155,8 @@ export function Bots({
           {/* The same folded heading the session list groups use, so a thing that opens and
               closes looks the same in both tabs. */}
           <div className="session-group-head">
-            <button
+            <Button
+              variant="ghost"
               className="session-group-fold"
               aria-expanded={showing}
               // Closing the archive puts down whatever was picked up in it. A row left armed
@@ -167,7 +171,7 @@ export function Bots({
               </span>
               <span className="session-group-name">Archived</span>
               <span className="count">{away.length}</span>
-            </button>
+            </Button>
           </div>
           {/* The rows scroll on their own once there are enough of them. A fold pinned to the
               bottom of the column has no room to grow into, and one that pushed the list of bots
@@ -220,7 +224,7 @@ function BotRow({
   const where = bot.directory.split('/').pop() ?? bot.directory
   return (
     <div className={`bot${open ? ' bot-open' : ''}`}>
-      <button className="bot-open-button" onClick={() => onOpen(bot)}>
+      <Button variant="ghost" className="bot-open-button" onClick={() => onOpen(bot)}>
         <BotAvatar seed={bot.avatar} doing={doing} />
         <span className="bot-said">
           <span className="bot-name">{bot.name}</span>
@@ -231,15 +235,17 @@ function BotRow({
             {bot.session === null && ' · not spoken to yet'}
           </span>
         </span>
-      </button>
-      <button
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon-sm"
         className="bot-edit"
         aria-label={`Edit ${bot.name}`}
         title={`Edit ${bot.name}`}
         onClick={onEdit}
       >
         <span aria-hidden="true">⋯</span>
-      </button>
+      </Button>
     </div>
   )
 }
@@ -304,36 +310,39 @@ function ArchivedRow({
       </span>
       {asking ? (
         <>
-          <button type="button" className="bot-keep" onClick={onCancel}>
+          <Button variant="outline" type="button" className="bot-keep" onClick={onCancel}>
             Keep
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="destructive"
             type="button"
             className="bot-delete bot-delete-armed"
             title={`Delete ${bot.name} and its local memory history for good. Project files and conversations are kept.`}
             onClick={onDelete}
           >
             Delete
-          </button>
+          </Button>
         </>
       ) : (
         <>
-          <button
+          <Button
+            variant="outline"
             type="button"
             className="bot-restore"
             title={`Bring ${bot.name} back, with its session, its memory and its face.`}
             onClick={onRestore}
           >
             Restore
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="destructive"
             type="button"
             className="bot-delete"
             title={`Delete ${bot.name} for good. Local memory history is deleted. Project files and conversations are kept.`}
             onClick={onAsk}
           >
             Delete
-          </button>
+          </Button>
         </>
       )}
     </div>
@@ -400,7 +409,9 @@ function BotForm({
         {!bot && (
           <div className="bot-form-avatar">
             <BotAvatar seed={avatar} size={76} doing="waiting" />
-            <button
+            <Button
+              variant="ghost"
+              size="icon-sm"
               type="button"
               className="bot-avatar-refresh"
               aria-label="Refresh avatar"
@@ -411,13 +422,13 @@ function BotForm({
                 <path d="M20 7v5h-5M4 17v-5h5" />
                 <path d="M6.1 7a7 7 0 0 1 11.6-1L20 12M4 12l2.3 6A7 7 0 0 0 17.9 17" />
               </svg>
-            </button>
+            </Button>
           </div>
         )}
 
         <label className="bot-field">
           <span>Name</span>
-          <input
+          <Input
             value={name}
             autoFocus
             placeholder="Web dev bot"
@@ -429,7 +440,7 @@ function BotForm({
 
       <label className="bot-field">
         <span>Purpose</span>
-        <textarea
+        <Textarea
           value={purpose}
           rows={4}
           placeholder="Build responsive pages, fix UI bugs, and improve accessibility. Follow the project’s existing styles and test your changes."
@@ -448,11 +459,11 @@ function BotForm({
         {bot ? (
           <div><p className="bot-fixed" title={bot.directory}>{bot.directory}</p>
           <p className="bot-note">The project stays fixed to keep this bot’s memory and conversations together.</p>
-          <button type="button" onClick={() => { void window.bravebot.chooseDirectory().then((folder) => { if (folder) void save({ name: `${name} copy`, purpose, model, directory: folder }) }) }}>Duplicate into another project</button></div>
+          <Button variant="outline" type="button" onClick={() => { void window.bravebot.chooseDirectory().then((folder) => { if (folder) void save({ name: `${name} copy`, purpose, model, directory: folder }) }) }}>Duplicate into another project</Button></div>
         ) : (
-          <button type="button" className="bot-choose" onClick={() => void choose()}>
+          <Button variant="outline" type="button" className="bot-choose" onClick={() => void choose()}>
             {directory || 'Choose a folder…'}
-          </button>
+          </Button>
         )}
       </div>
 
@@ -470,7 +481,8 @@ function BotForm({
       {saveError && <p role="alert">{saveError}</p>}
       <div className="bot-actions">
         {onArchive && (
-          <button
+          <Button
+            variant="outline"
             type="button"
             className="bot-archive-button"
             // The one thing worth saying about a bot leaving the list is what it does *not* do,
@@ -483,15 +495,15 @@ function BotForm({
             onClick={onArchive}
           >
             Archive
-          </button>
+          </Button>
         )}
         <span className="bot-spacer" />
-        <button type="button" onClick={onCancel}>
+        <Button variant="outline" type="button" onClick={onCancel}>
           Cancel
-        </button>
-        <button type="submit" className="bot-save" disabled={!ready || saving}>
+        </Button>
+        <Button type="submit" className="bot-save" disabled={!ready || saving}>
           {saving ? 'Saving…' : bot ? 'Save' : 'Create'}
-        </button>
+        </Button>
       </div>
     </form>
   )

@@ -1,5 +1,6 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import { auditDescription, isRefusal, type AuditRecord, type TurnDetails } from '../turn-details'
+import { Button } from './ui/button'
 
 const Evidence = memo(function Evidence({ record }: { record: AuditRecord }): React.JSX.Element {
   const { title, detail } = auditDescription(record.event)
@@ -26,7 +27,7 @@ export function AuditInspector({ details, onClose }: { details?: TurnDetails; on
   return <section className="audit-inspector" id="turn-audit-inspector" aria-label="Turn audit"
     onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); onClose() } }}>
     <div className="inspector-title"><strong>Audit · {details ? `Turn ${details.turn}` : 'Saved reply'}</strong>
-      <button ref={close} className="audit-close" onClick={onClose} aria-label="Close audit inspector">×</button></div>
+      <Button variant="ghost" size="icon-sm" ref={close} className="audit-close" onClick={onClose} aria-label="Close audit inspector">×</Button></div>
     <p className="audit-status">{!details ? 'Saved conversation' : details.status === 'running' ? 'Live · This turn' : incomplete ? 'Capture incomplete' : 'Captured during this session'}</p>
     {!details ? <p>Audit details aren’t available for this saved reply.</p> : <>
       {incomplete && <p>The event stream may be incomplete. Captured evidence is shown below.</p>}

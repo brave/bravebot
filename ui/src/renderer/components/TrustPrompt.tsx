@@ -1,4 +1,5 @@
 import { Modal } from './Modal'
+import { Button } from './ui/button'
 interface Props {
   directory: string
   onAnswer: (trusted: boolean) => void
@@ -29,12 +30,12 @@ export function TrustPrompt({ directory, onAnswer }: Props): React.JSX.Element {
           Trusted writes may apply directly. Changes involving untrusted content require review. Your trust choice is saved with this conversation.
         </p>
         <div className="trust-actions">
-          <button className="decline" onClick={() => onAnswer(false)}>
+          <Button variant="outline" className="decline" onClick={() => onAnswer(false)}>
             Don't trust
-          </button>
-          <button className="approve" onClick={() => onAnswer(true)}>
+          </Button>
+          <Button className="approve" onClick={() => onAnswer(true)}>
             Trust this directory
-          </button>
+          </Button>
         </div>
     </Modal>
   )

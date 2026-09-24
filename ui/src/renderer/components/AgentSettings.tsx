@@ -1,10 +1,14 @@
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Modal } from './Modal'
 import type { AgentSettings as Report, Hook, HooksDocument } from '../../shared/agent-settings'
 import { composeHooks } from '../../shared/agent-settings'
+import { Button } from './ui/button'
+import { Field, FieldLabel } from './ui/field'
+import { Input } from './ui/input'
+import { NativeSelect, NativeSelectOption } from './ui/native-select'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs'
 
 export function AgentSettings({ session, onClose, onChanged }: { session?: string; onClose: () => void; onChanged: () => void }): React.JSX.Element {
-  const id = useId()
   const tabs = ['Connection', 'Hooks', 'Run settings']
   const [tab, setTab] = useState('Connection')
   const [report, setReport] = useState<Report | null>(null)
@@ -72,18 +76,16 @@ export function AgentSettings({ session, onClose, onChanged }: { session?: strin
   // entries it did read would drop the rest.
   const editable = !!document && document.entire
   return <Modal title="Agent settings" onClose={busy ? undefined : close} className="agent-settings">
-    <div className="settings-heading"><div><h2>Agent settings</h2><p>Configuration and automation for this app.</p></div><button onClick={close} disabled={busy} aria-label="Close agent settings">×</button></div>
-    <div className="settings-tabs" role="tablist" aria-label="Agent settings sections">
-      {tabs.map((name, index) => <button key={name} id={`${id}-tab-${index}`} aria-controls={`${id}-panel`} tabIndex={tab === name ? 0 : -1} onKeyDown={event => {
-        const next = event.key === 'ArrowRight' ? (index + 1) % tabs.length : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : -1
-        if (next >= 0) { event.preventDefault(); setTab(tabs[next]!); globalThis.document.getElementById(`${id}-tab-${next}`)?.focus() }
-      }} role="tab" aria-selected={tab === name} onClick={() => { setTab(name); setProblem(''); setStatus('') }}>{name}{name === 'Hooks' && dirty ? ' •' : ''}</button>)}
-    </div>
-    {problem && <div className="settings-error"><p role="alert">{problem}</p>{tab !== 'Hooks' && <button disabled={busy} onClick={() => void load()}>Retry diagnostics</button>}</div>}
+    <div className="settings-heading"><div><h2>Agent settings</h2><p>Configuration and automation for this app.</p></div><Button variant="ghost" size="icon-sm" onClick={close} disabled={busy} aria-label="Close agent settings">×</Button></div>
+    <Tabs value={tab} onValueChange={(name) => { setTab(name); setProblem(''); setStatus('') }}>
+    <TabsList className="settings-tabs" variant="line" aria-label="Agent settings sections">
+      {tabs.map((name) => <TabsTrigger key={name} value={name}>{name}{name === 'Hooks' && dirty ? ' •' : ''}</TabsTrigger>)}
+    </TabsList>
+    {problem && <div className="settings-error"><p role="alert">{problem}</p>{tab !== 'Hooks' && <Button variant="outline" disabled={busy} onClick={() => void load()}>Retry diagnostics</Button>}</div>}
     {status && <p role="status">{status}</p>}
     {busy && <p role="status">Working…</p>}
-    <div id={`${id}-panel`} role="tabpanel" aria-labelledby={`${id}-tab-${tabs.indexOf(tab)}`} className="settings-body">
-      {tab === 'Connection' && report && <>
+    <TabsContent value="Connection" className="settings-body">
+      {report && <>
         <section><h3>{report.configured ? 'Model service configured' : 'Choose a model service'}</h3>
           {report.problem && <p>{report.problem}</p>}
           <dl><dt>Agent build</dt><dd>{report.build}</dd><dt>Default model</dt><dd>{report.model ?? 'Not configured'}</dd></dl>
@@ -100,9 +102,11 @@ export function AgentSettings({ session, onClose, onChanged }: { session?: strin
           <p>For a custom certificate authority, set <code>SSL_CERT_FILE</code> or <code>SSL_CERT_DIR</code> before opening the app. These replace bundled roots. Proxy and certificate changes require restarting the app.</p>
         </section>
         <section><h3>Managed configuration</h3>{report.managed.path ? <><p>{report.managed.path}</p><p>{report.managed.keys.length ? `Locked by your administrator: ${report.managed.keys.join(', ')}` : 'File found; no recognized values are pinned.'}</p></> : <p>No administrator-managed configuration found.</p>}<p>Administrator-pinned destinations take precedence over your settings and environment.</p></section>
-        <button onClick={() => void load()} disabled={busy}>Refresh diagnostics</button>
+        <Button variant="outline" onClick={() => void load()} disabled={busy}>Refresh diagnostics</Button>
       </>}
-      {tab === 'Hooks' && <>
+    </TabsContent>
+    <TabsContent value="Hooks" className="settings-body">
+      <>
         <p>Hooks are shared with the terminal client. Run your own programs at specific moments. These commands run with your account’s permissions in the project directory. They cannot approve or block the agent.</p>
         {document && <p className="settings-path">{document.path}</p>}
         {document && !document.entire && <p role="alert">{document.text === null
@@ -110,25 +114,28 @@ export function AgentSettings({ session, onClose, onChanged }: { session?: strin
           : 'The agent did not read all of this file, so saving it from here could drop what it passed over. Edit it directly.'}</p>}
         {document && document.entire && hooks.length === 0 && <p>No hooks configured.</p>}
         {hooks.map((hook, index) => <fieldset key={index} disabled={busy || !editable} className="hook-editor"><legend>Hook {index + 1}</legend>
-          <label>When<select value={hook.on} onChange={e => change(index, { ...hook, on: e.target.value as Hook['on'] })}><option value="turn-started">Turn starts</option><option value="tool-finished">Tool finishes</option><option value="turn-finished">Turn ends</option></select></label>
-          {(hook.on === 'tool-finished' || hook.tool !== null) && <label>Tool filter (optional)<input value={hook.tool ?? ''} placeholder="All tools" onChange={e => change(index, { ...hook, tool: e.target.value.trim() || null })} /></label>}
+          <Field><FieldLabel htmlFor={`hook-${index}-when`}>When</FieldLabel><NativeSelect id={`hook-${index}-when`} value={hook.on} onChange={e => change(index, { ...hook, on: e.target.value as Hook['on'] })}><NativeSelectOption value="turn-started">Turn starts</NativeSelectOption><NativeSelectOption value="tool-finished">Tool finishes</NativeSelectOption><NativeSelectOption value="turn-finished">Turn ends</NativeSelectOption></NativeSelect></Field>
+          {(hook.on === 'tool-finished' || hook.tool !== null) && <Field><FieldLabel htmlFor={`hook-${index}-tool`}>Tool filter (optional)</FieldLabel><Input id={`hook-${index}-tool`} value={hook.tool ?? ''} placeholder="All tools" onChange={e => change(index, { ...hook, tool: e.target.value.trim() || null })} /></Field>}
           {!dirty && document?.hooks[index]?.firesForNothing && <p role="alert">This hook fires for nothing: only a finished tool call carries a tool name. Clear the filter, or choose Tool finishes.</p>}
-          <label>Program<input value={hook.run[0]} placeholder="/path/to/program" onChange={e => change(index, { ...hook, run: [e.target.value, ...hook.run.slice(1)] })} /></label>
-          {hook.run.slice(1).map((argument, i) => <div key={i} className="hook-argument"><label>Argument {i + 1}<input value={argument} onChange={e => change(index, { ...hook, run: hook.run.map((word, j) => j === i + 1 ? e.target.value : word) })} /></label><button onClick={() => change(index, { ...hook, run: hook.run.filter((_, j) => j !== i + 1) })} aria-label={`Remove argument ${i + 1} from hook ${index + 1}`}>Remove</button></div>)}
-          <div className="settings-actions"><button onClick={() => change(index, { ...hook, run: [...hook.run, ''] })}>Add argument</button><button onClick={() => { setHooks(rows => rows.filter((_, i) => i !== index)); setDirty(true) }}>Remove hook</button></div>
+          <Field><FieldLabel htmlFor={`hook-${index}-program`}>Program</FieldLabel><Input id={`hook-${index}-program`} value={hook.run[0]} placeholder="/path/to/program" onChange={e => change(index, { ...hook, run: [e.target.value, ...hook.run.slice(1)] })} /></Field>
+          {hook.run.slice(1).map((argument, i) => <div key={i} className="hook-argument"><Field><FieldLabel htmlFor={`hook-${index}-argument-${i}`}>Argument {i + 1}</FieldLabel><Input id={`hook-${index}-argument-${i}`} value={argument} onChange={e => change(index, { ...hook, run: hook.run.map((word, j) => j === i + 1 ? e.target.value : word) })} /></Field><Button variant="outline" onClick={() => change(index, { ...hook, run: hook.run.filter((_, j) => j !== i + 1) })} aria-label={`Remove argument ${i + 1} from hook ${index + 1}`}>Remove</Button></div>)}
+          <div className="settings-actions"><Button variant="outline" onClick={() => change(index, { ...hook, run: [...hook.run, ''] })}>Add argument</Button><Button variant="destructive" onClick={() => { setHooks(rows => rows.filter((_, i) => i !== index)); setDirty(true) }}>Remove hook</Button></div>
         </fieldset>)}
         <p>Arguments are passed exactly as entered; shell syntax is not interpreted. Failed hooks appear in the turn’s notices.</p>
-        <div className="settings-actions"><button disabled={!editable || busy} onClick={() => { setHooks(rows => [...rows, { on: 'turn-finished', tool: null, run: [''], firesForNothing: false }]); setDirty(true) }}>Add hook</button><button disabled={busy} onClick={() => { if (!dirty || window.confirm('Discard unsaved hook changes and reload?')) void loadHooks() }}>Reload hooks</button><button disabled={!dirty || busy || !editable} onClick={() => void save()}>Save hooks</button></div>
-      </>}
-      {tab === 'Run settings' && report && <>
+        <div className="settings-actions"><Button variant="outline" disabled={!editable || busy} onClick={() => { setHooks(rows => [...rows, { on: 'turn-finished', tool: null, run: [''], firesForNothing: false }]); setDirty(true) }}>Add hook</Button><Button variant="outline" disabled={busy} onClick={() => { if (!dirty || window.confirm('Discard unsaved hook changes and reload?')) void loadHooks() }}>Reload hooks</Button><Button disabled={!dirty || busy || !editable} onClick={() => void save()}>Save hooks</Button></div>
+      </>
+    </TabsContent>
+    <TabsContent value="Run settings" className="settings-body">
+      {report && <>
         <h3>Model and connection override</h3><p>Choose a JSON settings file for this app run. It applies to future turns and model discovery, and is cleared when the app exits. Running turns keep their configuration. Terminal preferences and settings-file permission grants do not change this app’s approval controls.</p>
-        <p className="settings-path">{report.selected ?? 'No override selected'}</p><div className="settings-actions"><button disabled={busy} onClick={() => void select(false)}>Choose settings file…</button><button disabled={busy || !report.selected} onClick={() => void select(true)}>Clear override</button></div>
+        <p className="settings-path">{report.selected ?? 'No override selected'}</p><div className="settings-actions"><Button disabled={busy} onClick={() => void select(false)}>Choose settings file…</Button><Button variant="outline" disabled={busy || !report.selected} onClick={() => void select(true)}>Clear override</Button></div>
         <h3>Effective configuration</h3><p>Default model: <strong>{report.model ?? 'Not configured'}</strong></p>
         <p>Files merge in this order: home → project → project-local → selected override. Environment and built-in values can take precedence; administrator-pinned destinations always win.</p>
         <h4>Loaded files, in order</h4>{report.layers.length ? <ol>{report.layers.map(path => <li key={path} className="settings-path">{path}</li>)}</ol> : <p>No settings files loaded.</p>}
         {report.overrides.map(item => <p key={item.name}><code>{item.name}</code> overridden by <span className="settings-path">{item.path}</span></p>)}
         {report.managed.keys.length > 0 && <p>Managed values: {report.managed.keys.join(', ')}. This override cannot change them.</p>}
       </>}
-    </div>
+    </TabsContent>
+    </Tabs>
   </Modal>
 }

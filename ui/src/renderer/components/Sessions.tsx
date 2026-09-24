@@ -1,5 +1,5 @@
 import { SidebarTools } from './SidebarTools'
-import { createContext, useContext, useCallback, useMemo, useRef, useState } from 'react'
+import { createContext, useContext, useCallback, useMemo, useState } from 'react'
 import type { SessionSummary } from '../../shared/protocol'
 import type { ContextTarget } from '../../shared/commands'
 import { keyOf } from '../../shared/forks'
@@ -8,6 +8,10 @@ import { ForkIcon } from './ForkIcon'
 import { PopMenu, type PopItem } from './PopMenu'
 import { conversationKey } from '../../shared/experience'
 import { useExperience, setConversation } from '../experience'
+import { Badge } from './ui/badge'
+import { Button } from './ui/button'
+import { Toggle } from './ui/toggle'
+import { ToggleGroup, ToggleGroupItem } from './ui/toggle-group'
 export const SessionInfo = createContext<Record<string, { bot?: string; state?: string }>>({})
 
 interface Props {
@@ -110,17 +114,17 @@ export function Sessions({
           {/* The label stays put and `aria-pressed` carries the state, with the verb in the
               tooltip — the same disclosure discipline the column folds follow. A control
               that renamed itself would be one the reader has to re-find after every press. */}
-          <button
+          <Toggle
             className="session-group"
-            aria-pressed={grouped}
+            pressed={grouped}
             aria-label="Group by project"
             title={grouped ? 'Show one flat list' : 'Group by project'}
-            onClick={() => onGroup(!grouped)}
+            onPressedChange={onGroup}
           >
             <span aria-hidden="true">▤</span>
-          </button>
+          </Toggle>
         </SidebarTools>
-        <div className="session-scope"><button aria-pressed={!archive} onClick={() => setArchive(false)}>Conversations</button><button aria-pressed={archive} onClick={() => setArchive(true)}>Archived</button></div>
+        <ToggleGroup type="single" value={archive ? 'archived' : 'active'} onValueChange={(value) => { if (value) setArchive(value === 'archived') }} className="session-scope" aria-label="Conversation status"><ToggleGroupItem value="active" aria-pressed={!archive}>Conversations</ToggleGroupItem><ToggleGroupItem value="archived" aria-pressed={archive}>Archived</ToggleGroupItem></ToggleGroup>
       </header>
 
       <div className="session-list">
@@ -204,7 +208,8 @@ function Group({
           recents menu guards against. On both buttons: the one that starts a session here is
           exactly where that mistake would cost something. */}
       <div className="session-group-head">
-        <button
+        <Button
+          variant="ghost"
           className="session-group-fold"
           aria-expanded={open}
           title={group.directory}
@@ -215,19 +220,21 @@ function Group({
           </span>
           <span className="session-group-name">{group.project}</span>
           <span className="count">{group.sessions.length}</span>
-        </button>
+        </Button>
         {/* The same thing **New session** does, minus the folder picker — the directory is
             already known, and the picker's whole job is to find one out. Named for the
             project rather than "New session" so that a reader of the button list is told
             which of a dozen identical-looking pluses they have landed on. */}
-        <button
+        <Button
+          variant="ghost"
+          size="icon-sm"
           className="session-group-new"
           aria-label={`New session in ${group.project}`}
           title={`New session in ${group.directory}`}
           onClick={() => onNew(group.directory)}
         >
           <span aria-hidden="true">+</span>
-        </button>
+        </Button>
       </div>
       <Fold open={open}>
         {group.sessions.map((session) => (
@@ -268,9 +275,8 @@ function Session({
   const preferences = useExperience().conversations[key]
   const info = useContext(SessionInfo)[key]
   const [menu, setMenu] = useState(false)
-  const anchor = useRef<HTMLButtonElement>(null)
   return <div className={`session-row ${session.id === openId ? 'current' : ''}`}>
-    <button className={`session ${session.id === openId ? 'current' : ''}`} onClick={() => onOpen(session)} onContextMenu={contextMenu('session', session.id)}>
+    <Button variant="ghost" className={`session ${session.id === openId ? 'current' : ''}`} onClick={() => onOpen(session)} onContextMenu={contextMenu('session', session.id)}>
       <span className="session-title" title={session.title}>
         {preferences?.pinned && <svg className="session-pin" width="13" height="15" viewBox="0 0 16 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" role="img" aria-label="Pinned" focusable="false">
           <path d="M5 2h6M6 2v6l-3 4h10l-3-4V2M8 12v4" />
@@ -278,10 +284,9 @@ function Session({
         {forked && <span className="fork-mark"><ForkIcon size={11} /></span>}{session.title}
       </span>
       <span className="session-where">{session.project}{session.branch && <span className="branch"> · {session.branch}</span>} · {ago(session.updated)}</span>
-      {(info?.bot || info?.state) && <span className="session-badges">{info.bot && <span>{info.bot}</span>}{info.state && <span className={`session-state ${info.state.toLowerCase().replaceAll(' ', '-')}`}>{info.state}</span>}</span>}
-    </button>
-    <button ref={anchor} className="session-more" aria-label={`Actions for ${session.title}`} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>⋯</button>
-    <PopMenu open={menu} anchor={anchor} label="Conversation actions" onClose={() => setMenu(false)}
+      {(info?.bot || info?.state) && <span className="session-badges">{info.bot && <Badge variant="secondary">{info.bot}</Badge>}{info.state && <Badge variant="outline" className={`session-state ${info.state.toLowerCase().replaceAll(' ', '-')}`}>{info.state}</Badge>}</span>}
+    </Button>
+    <PopMenu open={menu} trigger={<Button variant="ghost" size="icon-sm" className="session-more" aria-label={`Actions for ${session.title}`}>⋯</Button>} label="Conversation actions" onOpenChange={setMenu}
       items={[{ id: 'pin', label: preferences?.pinned ? 'Unpin conversation' : 'Pin conversation' }, { id: 'archive', label: preferences?.archived ? 'Restore conversation' : 'Archive conversation' }]}
       onChoose={(id) => setConversation(key, id === 'pin' ? { pinned: !preferences?.pinned } : { archived: !preferences?.archived })} />
   </div>
@@ -298,7 +303,6 @@ function Session({
 function NewSession({ onNew }: { onNew: (directory?: string) => void }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [directories, setDirectories] = useState<string[]>([])
-  const chevron = useRef<HTMLButtonElement>(null)
 
   // Read when the menu is opened rather than held and kept in step: the list changes in the
   // main process, and a copy up here would be one more thing that can be stale.
@@ -321,27 +325,24 @@ function NewSession({ onNew }: { onNew: (directory?: string) => void }): React.J
 
   return (
     <div className="new-split">
-      <button className="new" onClick={() => onNew()} title="Open a project">
+      <Button className="new" onClick={() => onNew()} title="Open a project">
         <span className="plus">+</span> New session
-      </button>
-      <button
-        ref={chevron}
-        className="new-recent"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-label="Projects opened before"
-        title="Projects opened before"
-        onClick={() => (open ? setOpen(false) : show())}
-      >
-        <span aria-hidden="true">⌄</span>
-      </button>
+      </Button>
       <PopMenu
         open={open}
-        anchor={chevron}
+        onOpenChange={(next) => next ? show() : setOpen(false)}
+        trigger={<Button
+        variant="outline"
+        size="icon-sm"
+        className="new-recent"
+        aria-label="Projects opened before"
+        title="Projects opened before"
+      >
+        <span aria-hidden="true">⌄</span>
+      </Button>}
         items={items}
         label="Projects opened before"
         onChoose={(id) => onNew(id)}
-        onClose={() => setOpen(false)}
       />
     </div>
   )

@@ -1,4 +1,5 @@
 import { Modal } from './Modal'
+import { Button } from './ui/button'
 export function Unconfigured({ detail, onClose }: { detail: string; onClose: () => void }): React.JSX.Element {
   return <Modal title="Backend setup" onClose={onClose}>
     <h2>Connect the agent backend</h2>
@@ -10,6 +11,6 @@ export function Unconfigured({ detail, onClose }: { detail: string; onClose: () 
       <li>Restart Brave Bot, then use <strong>Check again</strong>.</li>
     </ol><p>See <code>docs/setup.md</code> for the configuration layout. Keep credentials outside the repository.</p></details>
     <details><summary>Technical details</summary><pre>{detail}</pre></details>
-    <button onClick={onClose}>Continue browsing</button>
+    <Button onClick={onClose}>Continue browsing</Button>
   </Modal>
 }

@@ -30,6 +30,8 @@ import type { Doing } from './BotAvatar'
 import type { Tab } from '../../shared/view'
 import { Sessions } from './Sessions'
 import { Bots } from './Bots'
+import { Button } from './ui/button'
+import { ToggleGroup, ToggleGroupItem } from './ui/toggle-group'
 
 interface Props {
   sessions: SessionSummary[]
@@ -105,18 +107,18 @@ export function Sidebar({
       {/* The label stays put and `aria-pressed` carries which is on, the disclosure discipline
           every toggle in this window follows. No tooltips: the labels are the whole of what
           these do, and a popup could only repeat them. */}
-      <div className="sidebar-tabs" role="group" aria-label="What the column shows">
-        <button
+      <ToggleGroup type="single" value={tab} onValueChange={(value) => { if (value) show(value as Tab) }} className="sidebar-tabs" aria-label="What the column shows">
+        <ToggleGroupItem
+          value="sessions"
           className="sidebar-tab"
           aria-pressed={tab === 'sessions'}
-          onClick={() => show('sessions')}
         >
           Sessions
-        </button>
-        <button className="sidebar-tab" aria-pressed={tab === 'bots'} onClick={() => show('bots')}>
+        </ToggleGroupItem>
+        <ToggleGroupItem value="bots" className="sidebar-tab" aria-pressed={tab === 'bots'}>
           Bots
-        </button>
-      </div>
+        </ToggleGroupItem>
+      </ToggleGroup>
 
       <div className="sidebar-body" hidden={tab !== 'sessions'}>
         <Sessions
@@ -146,7 +148,7 @@ export function Sidebar({
         />
       </div>
 
-      <button className="agent-settings-open" onClick={onSettings}>Agent settings</button>
+      <Button variant="ghost" className="agent-settings-open" onClick={onSettings}>Agent settings</Button>
       {build && (
         <footer className="build" title="The agent build these sessions are stamped with">
           {build}

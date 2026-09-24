@@ -21,6 +21,9 @@ import { ErrorCard } from './ErrorCard'
 import { FilePreview } from './FilePreview'
 import { TurnFooter, TurnNotices, type OpenAudit } from './TurnDetails'
 import type { Turns, TurnDisclosure } from '../turn-details'
+import { Button } from './ui/button'
+import { Input } from './ui/input'
+import { Textarea } from './ui/textarea'
 
 interface Live {
   model: string | null
@@ -403,20 +406,20 @@ export function Transcript({
         </button>
         <ExportMenu canExport={canExport} includeTools={includeTools} onToggleTools={onToggleTools} onExport={onExport} />
       </div>}
-      {backendReady === false && <div className="backend-status" role="status"><strong>Backend setup needed</strong><span>You can browse conversations and prepare drafts.</span><div><button onClick={onSetup}>Setup help</button><button onClick={onCheckBackend}>Check again</button><button onClick={onDiagnostics}>Diagnostics</button></div></div>}
+      {backendReady === false && <div className="backend-status" role="status"><strong>Backend setup needed</strong><span>You can browse conversations and prepare drafts.</span><div><Button variant="outline" size="sm" onClick={onSetup}>Setup help</Button><Button variant="outline" size="sm" onClick={onCheckBackend}>Check again</Button><Button variant="outline" size="sm" onClick={onDiagnostics}>Diagnostics</Button></div></div>}
       {live && <div className="context-status" title="The model’s last request size, not accumulated token usage. New messages may change the next request.">
         {live.phase === 'compacting' ? 'Summarising context…' : live.contextTokens === undefined ? 'Context measurement unavailable' : live.contextTokens === 0 ? 'Context not yet measured' : `${live.contextTokens.toLocaleString()} context tokens at last request`}
         {!!live.archived && <span> · Earlier context summarised</span>}
       </div>}
       {problem && <ErrorCard detail={problem} />}
       {searching && <div className="conversation-search">
-        <input autoFocus type="search" aria-label="Find in conversation" placeholder="Find in conversation…" value={query}
+        <Input autoFocus type="search" aria-label="Find in conversation" placeholder="Find in conversation…" value={query}
           onChange={(event) => { setQuery(event.target.value); setMatch(0) }}
           onKeyDown={(event) => { if (event.key === 'Escape') setSearching(false); if (event.key === 'Enter') setMatch((n) => n + (event.shiftKey ? -1 + matches.length : 1)) }} />
         <span role="status">{matches.length ? `${match % matches.length + 1} of ${matches.length}` : query ? 'No matches' : ''}</span>
-        <button disabled={!matches.length} onClick={() => setMatch((n) => n + matches.length - 1)} aria-label="Previous match">↑</button>
-        <button disabled={!matches.length} onClick={() => setMatch((n) => n + 1)} aria-label="Next match">↓</button>
-        <button onClick={() => setSearching(false)} aria-label="Close search">×</button>
+        <Button variant="ghost" size="icon-sm" disabled={!matches.length} onClick={() => setMatch((n) => n + matches.length - 1)} aria-label="Previous match">↑</Button>
+        <Button variant="ghost" size="icon-sm" disabled={!matches.length} onClick={() => setMatch((n) => n + 1)} aria-label="Next match">↓</Button>
+        <Button variant="ghost" size="icon-sm" onClick={() => setSearching(false)} aria-label="Close search">×</Button>
       </div>}
       {live?.autoVetting && <VettingBanner />}
       {live?.forkedFrom && <ForkBanner from={live.forkedFrom} onOpen={onOpenParent} />}
@@ -432,9 +435,9 @@ export function Transcript({
             <div className="welcome-mark">B</div>
             <h1>What would you like to build?</h1>
             <p>Work with an agent in your project. Track changes and review approval requests as you work.</p>
-            <button className="primary" onClick={() => onNew()}>Open project</button>
+            <Button className="primary" onClick={() => onNew()}>Open project</Button>
             {!!recents.length && <div className="welcome-recents"><h2>Recent projects</h2>{recents.slice(0, 5).map((directory) =>
-              <button key={directory} onClick={() => onNew(directory)}><strong>{directory.split('/').pop()}</strong><span>{directory}</span></button>)}</div>}
+              <Button variant="outline" key={directory} onClick={() => onNew(directory)}><strong>{directory.split('/').pop()}</strong><span>{directory}</span></Button>)}</div>}
             <p className="welcome-hint">Choose a conversation to resume work, or create a bot with a purpose and persistent memory.</p>
           </div>
         </div>
@@ -513,30 +516,30 @@ export function Transcript({
             {live.phase ? phaseWord(live.phase) : 'Working'}
             {live.tokens > 0 && <span className="count"> · {live.tokens} tokens written</span>}
             {Object.values(live.turns).filter((turn) => turn.status === 'running').slice(-1).map((turn) =>
-              <button className="turn-audit-link" key={turn.turn} aria-controls="turn-audit-inspector" onClick={(event) => onAudit(turn.turn, event.currentTarget)}>Audit</button>)}
-            <button className="cancel" onClick={onCancel}>
+              <Button variant="link" className="turn-audit-link" key={turn.turn} aria-controls="turn-audit-inspector" onClick={(event) => onAudit(turn.turn, event.currentTarget)}>Audit</Button>)}
+            <Button variant="outline" className="cancel" onClick={onCancel}>
               Cancel
-            </button>
+            </Button>
           </div>
         )}
         <div ref={bottom} />
       </div>
 
       <div className="attention-bar" aria-live="polite">
-        {pending ? <button className="pending-jump" onClick={() => {
+        {pending ? <Button variant="ghost" className="pending-jump" onClick={() => {
           document.dispatchEvent(new CustomEvent('bravebot:reveal-entry', { detail: pending.id }))
           const element = scroller.current?.querySelector<HTMLElement>(`[data-entry-id="${pending.id}"]`)
           jump(element ?? bottom.current)
-        }}>{pending.kind === 'ask' ? 'Your answer is needed' : 'Approval needed'} · {waitingOn(pending.kind)} — Review ↑</button> :
+        }}>{pending.kind === 'ask' ? 'Your answer is needed' : 'Approval needed'} · {waitingOn(pending.kind)} — Review ↑</Button> :
           live.running ? <span>{live.phase ? phaseWord(live.phase) : 'Working'} · You can draft your next message</span> :
           <span>{live.entries.at(-1)?.kind === 'error' ? 'Needs attention' : live.entries.length ? 'Ready for your next message' : 'Ready to begin'}</span>}
-        {unseen && <button onClick={latest}>New activity ↓</button>}
+        {unseen && <Button variant="outline" size="sm" onClick={latest}>New activity ↓</Button>}
       </div>
       <footer className="composer">
-        {queued.length > 0 && <div className="queued-messages"><strong>{queuePaused ? 'Queue paused' : 'Queued after this turn'}</strong>{queuePaused && <button disabled={live.running || backendReady === false} onClick={onResumeQueued}>Resume queue</button>}{queued.map((text, index) => <div key={index}><span>{text}</span><button aria-label={`Remove queued message ${index + 1}`} onClick={() => onRemoveQueued(index)}>×</button></div>)}</div>}
-        {attachments.length > 0 && <div className="attachment-chips"><p>These files will be sent as trusted context with your message.</p>{attachments.map((file) => <span key={file.id}><button onClick={() => setPreviewPath(file.path)}>{file.path}</button><button aria-label={`Remove attachment ${file.path}`} onClick={() => onRemoveAttachment(file.id)}>×</button></span>)}</div>}
+        {queued.length > 0 && <div className="queued-messages"><strong>{queuePaused ? 'Queue paused' : 'Queued after this turn'}</strong>{queuePaused && <Button variant="outline" size="sm" disabled={live.running || backendReady === false} onClick={onResumeQueued}>Resume queue</Button>}{queued.map((text, index) => <div key={index}><span>{text}</span><Button variant="ghost" size="icon-xs" aria-label={`Remove queued message ${index + 1}`} onClick={() => onRemoveQueued(index)}>×</Button></div>)}</div>}
+        {attachments.length > 0 && <div className="attachment-chips"><p>These files will be sent as trusted context with your message.</p>{attachments.map((file) => <span key={file.id}><Button variant="ghost" onClick={() => setPreviewPath(file.path)}>{file.path}</Button><Button variant="ghost" size="icon-xs" aria-label={`Remove attachment ${file.path}`} onClick={() => onRemoveAttachment(file.id)}>×</Button></span>)}</div>}
         <div className="composer-box">
-          <textarea ref={input} rows={2} value={draft} aria-label="Message the agent" title="Unsent drafts are saved locally on this device. Clear the message to remove its saved draft."
+          <Textarea ref={input} rows={2} value={draft} aria-label="Message the agent" title="Unsent drafts are saved locally on this device. Clear the message to remove its saved draft."
             placeholder={pending ? 'Draft your next message while you review…' : 'Describe a task, ask a question, or paste code…'}
             onChange={(event) => onDraft(event.target.value)}
             onKeyDown={(event) => {
@@ -548,12 +551,12 @@ export function Transcript({
             }} />
           <div className="composer-toolbar">
             <ModelPicker session={live.handle} scope={bot ? 'bot' : 'conversation'} key={live.handle} model={live.model} disabled={live.running} onChoose={onModel} />
-            <button className="attach-files" onClick={onAttach} disabled={attachments.length >= 5} title="Choose project files to share as trusted context">Attach files</button>
+            <Button variant="outline" className="attach-files" onClick={onAttach} disabled={attachments.length >= 5} title="Choose project files to share as trusted context">Attach files</Button>
             <span className="composer-hint">Enter to send · Shift+Enter for newline</span>
-            {live.running && <button className="stop" onClick={onCancel}>Stop</button>}
-            <button className="send" onClick={() => { latest(); live.running ? onQueue() : onSubmit() }} disabled={!draft.trim() || !!live.askingTrust || backendReady === false}>
+            {live.running && <Button variant="destructive" className="stop" onClick={onCancel}>Stop</Button>}
+            <Button className="send" onClick={() => { latest(); live.running ? onQueue() : onSubmit() }} disabled={!draft.trim() || !!live.askingTrust || backendReady === false}>
               {live.running ? 'Queue message' : 'Send'}
-            </button>
+            </Button>
           </div>
         </div>
       </footer>
@@ -606,7 +609,6 @@ function ExportMenu({
   onExport: (format: ExportFormat) => void
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
-  const trigger = useRef<HTMLButtonElement>(null)
 
   // Rebuilt with the tick rather than held in state: the setting lives in `App`, which is
   // also what the File menu's copy of this row is drawn from, and a second copy here could
@@ -627,29 +629,23 @@ function ExportMenu({
 
   return (
     <div className="export-split">
-      <button
-        ref={trigger}
-        className="export-open"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        disabled={!canExport}
-        title={canExport ? 'Export this conversation' : 'Nothing has been said yet'}
-        onClick={() => setOpen(!open)}
-      >
-        Export
-        <span className="export-chevron" aria-hidden="true">
-          ⌄
-        </span>
-      </button>
-      {/* `PopMenu` already flips above its anchor when there is no room below, which is the
-          whole reason a menu can hang off a control at the bottom of the window. */}
       <PopMenu
         open={open}
-        anchor={trigger}
+        trigger={<Button
+          variant="outline"
+          className="export-open"
+          disabled={!canExport}
+          title={canExport ? 'Export this conversation' : 'Nothing has been said yet'}
+        >
+          Export
+          <span className="export-chevron" aria-hidden="true">
+            ⌄
+          </span>
+        </Button>}
         items={items}
         label="Export the conversation as"
         onChoose={(id) => (id === TOOLS ? onToggleTools() : onExport(id as ExportFormat))}
-        onClose={() => setOpen(false)}
+        onOpenChange={setOpen}
       />
     </div>
   )

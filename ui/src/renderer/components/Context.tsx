@@ -4,6 +4,8 @@ import { FileTree } from './FileTree'
 import { type PanelName } from '../../shared/state'
 import { isConfined, type Activity, type Phase, type Shown, type TodoRow } from '../../shared/protocol'
 import type { Entry } from '../transcript'
+import { Button } from './ui/button'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs'
 
 interface Live {
   /** The session's handle. The file tree names it rather than naming a folder. */
@@ -71,7 +73,7 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
 
   return (
     <aside className={`context ${tab === 'files' ? 'context-files' : ''}`} id="context-column">
-      <div className="context-content" hidden={!!audit}>
+      <Tabs value={tab} onValueChange={(value) => setTab(value as typeof tab)} className="context-content gap-0" hidden={!!audit}>
       {/* One connected row, because these five are one choice about one column rather than five
           unrelated switches — the shape a segmented control has on this platform.
 
@@ -84,13 +86,14 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
           column will come back at when it unfolds — which a full-width row of buttons plus its
           own margins overflows. The wrapper takes that width and the bar sits inside it. */}
       <div className="context-head">
-        <div className="inspector-title"><strong>Project context</strong><button className="drawer-close" onClick={onClose} aria-label="Close context panel">×</button></div>
-        <div className="inspector-tabs" role="tablist" aria-label="Project context">
-          {(['overview', 'files'] as const).map((name) => <button key={name} role="tab" aria-selected={tab === name} onClick={() => setTab(name)}>{name === 'overview' ? 'Overview' : 'Files'}</button>)}
-        </div>
+        <div className="inspector-title"><strong>Project context</strong><Button variant="ghost" size="icon-sm" className="drawer-close" onClick={onClose} aria-label="Close context panel">×</Button></div>
+        <TabsList className="inspector-tabs" variant="line" aria-label="Project context">
+          {(['overview', 'files'] as const).map((name) => <TabsTrigger key={name} value={name}>{name === 'overview' ? 'Overview' : 'Files'}</TabsTrigger>)}
+        </TabsList>
 
       </div>
 
+      <TabsContent value="overview" forceMount className="context-overview data-[state=inactive]:hidden">
       <Section id="plan" title="Plan" count={live.todos.length} off={off.has('plan')}>
         {live.todos.length === 0 ? (
           <p className="none">{onlyReplayed ? 'No plan was recorded.' : 'No plan yet.'}</p>
@@ -147,7 +150,7 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
           <ul className="files">
             {files.map((file) => (
               <li key={file.target} className={file.confined ? 'confined' : ''}>
-                <button className="context-link" onClick={() => reveal(file.target)} title={file.target}>{file.target}</button>
+                <Button variant="link" className="context-link" onClick={() => reveal(file.target)} title={file.target}>{file.target}</Button>
                 {file.confined && <span className="tag">confined</span>}
               </li>
             ))}
@@ -166,7 +169,7 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
           <ul className="files">
             {writes.map((write) => (
               <li key={write.target} className={write.state}>
-                <button className="context-link" onClick={() => reveal(write.target)} title={write.target}>{write.target}</button>
+                <Button variant="link" className="context-link" onClick={() => reveal(write.target)} title={write.target}>{write.target}</Button>
                 <span className="tag">{write.state}</span>
               </li>
             ))}
@@ -201,6 +204,7 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
           </ul>
         )}
       </Section>
+      </TabsContent>
 
       {/* Last, and on purpose. The four panels above are derived from the transcript — what the
           session touched — and this one reads the disk. Putting it under them keeps that boundary
@@ -211,15 +215,15 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
 
           Keyed by the handle so switching sessions resets the tree rather than showing one
           project's folders under another's root while the new listing arrives. */}
-      <section className={`files-panel ${off.has('files') ? 'off' : ''}`} id="panel-files" aria-label="Project files">
+      <TabsContent value="files" forceMount className={`files-panel ${off.has('files') ? 'off' : ''} data-[state=inactive]:hidden`} id="panel-files" aria-label="Project files">
         <FileTree
           key={live.handle}
           session={live.handle}
           root={live.summary.directory}
           running={live.running}
         />
-      </section>
-      </div>
+      </TabsContent>
+      </Tabs>
       {audit}
     </aside>
   )
@@ -248,7 +252,8 @@ function Section({
   const [open, setOpen] = useState(true)
   return (
     <section className={`panel ${off ? 'off' : ''}`} id={`panel-${id}`}>
-      <button
+      <Button
+        variant="ghost"
         className="panel-head"
         aria-expanded={open}
         // The verb in the title and the name staying put, the rule `ColumnToggle` states.
@@ -260,7 +265,7 @@ function Section({
         </span>
         {title}
         {count !== undefined && count > 0 && <span className="count">{count}</span>}
-      </button>
+      </Button>
       <Fold open={open} className="panel-inner">
         {children}
       </Fold>

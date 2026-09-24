@@ -2,6 +2,8 @@ import type { Change } from '../../shared/protocol'
 import { numberedDiffLines } from '../transcript'
 import { useState } from 'react'
 import { Modal } from './Modal'
+import { Button } from './ui/button'
+import { Toggle } from './ui/toggle'
 
 /**
  * A condensed diff, as the reviewer sees it.
@@ -27,10 +29,10 @@ export function Diff({ changes }: { changes: Change[] }): React.JSX.Element {
     </pre>
   )
   return <div className="diff-review">
-    <div className="code-toolbar"><span>Proposed changes</span><button onClick={() => setWrap(!wrap)} aria-pressed={wrap}>Wrap lines</button><button onClick={() => setExpanded(true)}>Expand diff</button></div>
+    <div className="code-toolbar"><span>Proposed changes</span><Toggle variant="outline" pressed={wrap} onPressedChange={setWrap}>Wrap lines</Toggle><Button variant="outline" size="sm" onClick={() => setExpanded(true)}>Expand diff</Button></div>
     {body}
     {expanded && <Modal title="Review proposed changes" onClose={() => setExpanded(false)} className="expanded-diff">
-      <div className="code-toolbar"><h2>Review proposed changes</h2><button onClick={() => setWrap(!wrap)} aria-pressed={wrap}>Wrap lines</button><button onClick={() => setExpanded(false)}>Done</button></div>
+      <div className="code-toolbar"><h2>Review proposed changes</h2><Toggle variant="outline" pressed={wrap} onPressedChange={setWrap}>Wrap lines</Toggle><Button variant="outline" size="sm" onClick={() => setExpanded(false)}>Done</Button></div>
       <p>Review the supplied changes here, then return to the approval card to decide.</p>{body}
     </Modal>}
   </div>

@@ -1,6 +1,9 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ModelCatalogue, ModelOption } from '../../shared/protocol'
 import { setExperience, useExperience } from '../experience'
+import { Button } from './ui/button'
+import { Input } from './ui/input'
+import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 
 const CAPABILITIES: Record<string, [string, string]> = {
   text: ['Text', 'Generates text'],
@@ -30,12 +33,14 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(0)
   const [revision, setRevision] = useState(0)
-  const root = useRef<HTMLDivElement>(null)
   const trigger = useRef<HTMLButtonElement>(null)
   const search = useRef<HTMLInputElement>(null)
   const list = useRef<HTMLDivElement>(null)
   const id = useId()
-  const close = () => { setOpen(false); trigger.current?.focus() }
+  const close = () => {
+    setOpen(false)
+    requestAnimationFrame(() => trigger.current?.focus())
+  }
 
   useEffect(() => {
     if (!open) return
@@ -52,15 +57,6 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
     }).finally(() => { if (!gone) setLoading(false) })
     return () => { gone = true }
   }, [open, revision, session])
-
-  useEffect(() => {
-    if (!open) return
-    const outside = (event: PointerEvent) => {
-      if (!root.current?.contains(event.target as Node)) setOpen(false)
-    }
-    document.addEventListener('pointerdown', outside)
-    return () => document.removeEventListener('pointerdown', outside)
-  }, [open])
 
   useEffect(() => { if (disabled) setOpen(false) }, [disabled])
 
@@ -94,26 +90,27 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
     onChoose(row.id); close()
   }
 
-  return <div className="model-picker" ref={root} onBlur={(event) => {
-    if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false)
+  return <Popover open={open} onOpenChange={(next) => {
+    if (next) { setQuery(''); setActive(0) }
+    setOpen(next)
+    if (!next) requestAnimationFrame(() => trigger.current?.focus())
   }}>
-    <button ref={trigger} className="model-trigger" type="button" disabled={disabled}
+    <div className="model-picker">
+    <PopoverTrigger asChild><Button ref={trigger} variant="outline" className="model-trigger" type="button" disabled={disabled}
       title={`Choose model · ${model ?? label}`} aria-label={`Choose model: ${label}`}
-      aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? id : undefined}
-      onClick={() => { setQuery(''); setActive(0); setOpen((value) => !value) }}>
+      aria-controls={open ? id : undefined}>
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
         <path d="m12 3 9 5-9 5-9-5 9-5Z M3 12l9 5 9-5 M3 16l9 5 9-5" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
       <span className="model-current" aria-hidden="true">{compactLabel}</span>
-    </button>
-    {open && <div id={id} className="model-popover" role="dialog" aria-label={heading}
-      onKeyDown={(event) => {
-        if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close() }
-      }}>
+    </Button></PopoverTrigger>
+    </div>
+    <PopoverContent id={id} className="model-popover" aria-label={heading} side="top" align="end"
+      onOpenAutoFocus={(event) => { event.preventDefault(); search.current?.focus() }}>
       <div className="model-heading"><strong>{heading}</strong>
-        <button type="button" className="model-refresh" disabled={loading} onClick={() => setRevision((n) => n + 1)}>Refresh</button>
+        <Button variant="ghost" size="sm" type="button" className="model-refresh" disabled={loading} onClick={() => setRevision((n) => n + 1)}>Refresh</Button>
       </div>
-      <input ref={search} className="model-search" type="search" placeholder="Search models…" value={query}
+      <Input ref={search} className="model-search" type="search" placeholder="Search models…" value={query}
         role="combobox" aria-label="Search models" aria-autocomplete="list" aria-expanded="true"
         aria-controls={`${id}-list`} aria-activedescendant={options[active] ? `${id}-option-${active}` : undefined}
         onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => {
@@ -151,6 +148,6 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
       {!loading && options.length === 0 && <p className="model-status">{query ? 'No models match your search.' : 'No models available. Check your backend settings.'}</p>}
       <div className="model-footnote">{scope === 'bot' ? 'Saved with this bot. Applies to its next message.' : 'Applies to the next message in this conversation.'}</div>
       <p className="model-footnote">Brave Bot uses text and tools. Other provider capabilities, such as image or audio generation, are not available here. Pricing is not supplied by this catalogue.</p>
-    </div>}
-  </div>
+    </PopoverContent>
+  </Popover>
 }

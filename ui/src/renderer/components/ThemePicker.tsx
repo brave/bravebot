@@ -2,6 +2,7 @@ import { Modal } from './Modal'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { BRAVE, findTheme, roleVariables, type Theme } from '../../shared/theme'
 import { applyTheme } from '../theme'
+import { Button } from './ui/button'
 
 interface Props {
   themes: readonly Theme[]
@@ -150,7 +151,7 @@ export function ThemePicker(props: Props): React.JSX.Element {
         <p className="theme-aside">
           Add your own as JSON in <code>{directory}</code>.
         </p>
-      <div className="theme-actions"><button onClick={cancel}>Cancel</button><button onClick={keep}>Use theme</button></div>
+      <div className="theme-actions"><Button variant="outline" onClick={cancel}>Cancel</Button><Button onClick={keep}>Use theme</Button></div>
     </Modal>
   )
 }

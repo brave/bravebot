@@ -3,6 +3,8 @@ import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkBreaks from 'remark-breaks'
 import remarkGfm from 'remark-gfm'
 import { isSubpath } from '../../shared/files'
+import { Button } from './ui/button'
+import { Toggle } from './ui/toggle'
 
 /**
  * The model's own words, formatted.
@@ -139,8 +141,8 @@ function CodeBlock({ children }: { children: ReactNode }): React.JSX.Element {
   const language = isValidElement<{ className?: string }>(children) ? children.props.className?.replace('language-', '') : undefined
   return <div className="code-block">
     <div className="code-toolbar"><span>{language || 'Code'}</span>
-      <button aria-pressed={wrap} onClick={() => setWrap(!wrap)}>Wrap</button>
-      <button onClick={() => { void navigator.clipboard.writeText(plain(children)).then(() => { setCopied(true); setError(false) }).catch(() => setError(true)) }}>{copied ? 'Copied' : 'Copy code'}</button>
+      <Toggle pressed={wrap} onPressedChange={setWrap}>Wrap</Toggle>
+      <Button variant="outline" size="sm" onClick={() => { void navigator.clipboard.writeText(plain(children)).then(() => { setCopied(true); setError(false) }).catch(() => setError(true)) }}>{copied ? 'Copied' : 'Copy code'}</Button>
     </div>
     {error && <p role="alert">Could not copy. Select the code and copy it manually.</p>}
     <pre className={wrap ? 'code-wrapped' : ''}>{children}</pre>
