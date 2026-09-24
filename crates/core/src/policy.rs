@@ -301,6 +301,13 @@ pub struct Policy<'sink, S: Sink> {
     /// retrying a read does not put the same question up twice, but it is not a standing refusal
     /// and the next turn may ask again.
     vouch_asked: std::collections::BTreeSet<String>,
+    /// The files a person agreed to have read despite what the scan found in them.
+    ///
+    /// Session-scoped, unlike [`Policy::vouch_asked`] beside it, because the answer is worth
+    /// honouring for longer than a turn: a planner working through a tree opens the same `.env`
+    /// on round after round, and a question re-put every turn is a question people learn to
+    /// answer without reading. It is carried in and out by the caller, as the run prompts are.
+    exposed: crate::credentials::Exposed,
     /// The host a `fetch_url` call is approved for, while one is in flight.
     ///
     /// Set by [`Policy::before_fetch`] and cleared by [`Policy::fetch_finished`], so the egress
@@ -411,6 +418,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             // every session was in before there were files to find.
             delegates: crate::delegate::Definitions::default(),
             vouch_asked: std::collections::BTreeSet::new(),
+            exposed: crate::credentials::Exposed::new(),
             fetching: None,
             calling_server: None,
             context: Integrity::Trusted,
@@ -829,6 +837,23 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// The run prompts put to this person, for the caller to carry into the next turn.
     pub fn asked(&self) -> &crate::programs::AskedAbout {
         &self.asked
+    }
+
+    /// Seed the session's record of reads a person agreed to despite a finding.
+    ///
+    /// The session's rather than the turn's, for the reason the run prompts are: a turn is where
+    /// a question is drawn and a session is where somebody answers the same one all day. It
+    /// grants nothing a gate reads, so a wrong list can cost at most a question drawn or not
+    /// drawn: the read it covers was already allowed by the trust map before the scan ran, and
+    /// what the answer buys is that the planner is given text the person has been warned about.
+    pub fn with_exposed(mut self, exposed: crate::credentials::Exposed) -> Self {
+        self.exposed = exposed;
+        self
+    }
+
+    /// The reads agreed to despite a finding, for the caller to carry into the next turn.
+    pub fn exposed(&self) -> &crate::credentials::Exposed {
+        &self.exposed
     }
 
     /// Hand over the record of lines somebody asked to be remembered past the session.
@@ -3891,6 +3916,91 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             ),
         );
         scanned
+    }
+
+    /// What a read would carry to the planner that would authenticate somewhere.
+    ///
+    /// The same engine the write gate runs, turned the other way round. A write asks what a turn
+    /// would leave in the tree; this asks what the tree would put in a model's context, which is
+    /// the disclosure [CRED-15] is about: the planner's context goes to whoever performs
+    /// inference, so a `.env` in a vouched tree is disclosed the moment a turn opens it.
+    ///
+    /// Run before the text reaches the planner rather than after, for the reason the write gate
+    /// runs before the bytes reach the file: a disclosure cannot be taken back, and a scan that
+    /// reported afterwards would be reporting on something that had already happened.
+    ///
+    /// **Only trusted text is scanned, and a quarantined read is not scanned at all.** Those
+    /// bytes never reach the planner, so there is no disclosure to hold back, and reading them to
+    /// decide whether to ask about them would be a decision taken from untrusted content, which
+    /// nothing in this system may take. It is the same gap a credential written through a
+    /// reference falls into, and it is written down as such in the credential spec.
+    ///
+    /// `first_line` is where in the file the text starts, so a finding in the second page of a
+    /// large file names the line the person would open their editor at rather than the line of
+    /// the window. It is the driver's own number, from the read the caller just made.
+    ///
+    /// Nothing about a finding reaches the planner: see [`crate::credentials`] for what a finding
+    /// is allowed to hold, and the caller for which half of its result is said to whom.
+    ///
+    /// [CRED-15]: ../../../docs/specs/credential-protection.md
+    pub fn scan_a_read(
+        &mut self,
+        tool: &str,
+        path: &str,
+        first_line: usize,
+        text: &Labelled<String>,
+    ) -> Vec<crate::credentials::Finding> {
+        let label = text.label();
+        if !label.is_trusted() {
+            self.allow(
+                "credential-scan",
+                format!("{tool}: {path} reads as {label}, so what it holds is not scanned"),
+            );
+            return Vec::new();
+        }
+
+        // Cannot fail: the label was just checked, and this is how the bytes are taken so that
+        // reading them stays one gate rather than two.
+        let Ok(body) = self.read_trusted_content(tool, text) else {
+            return Vec::new();
+        };
+
+        let mut found = crate::credentials::scan(path, &body, crate::credentials::run_salt());
+        for finding in &mut found {
+            finding.line += first_line.saturating_sub(1);
+        }
+        self.allow(
+            "credential-scan",
+            format!(
+                "{tool}: {path} scanned before the planner is given it, {} found in it",
+                found.len()
+            ),
+        );
+        found
+    }
+
+    /// Whether this file is one a person has already agreed the planner may be given.
+    ///
+    /// Asked before the question is put, so a planner reading the same file on round after round
+    /// puts it up once. It answers a question about a prompt and never about a gate: the read was
+    /// already allowed by the trust map before the scan ran, which is what [CRED-17] means by a
+    /// finding deciding nothing.
+    ///
+    /// [CRED-17]: ../../../docs/specs/credential-protection.md
+    pub fn read_exposure_is_allowed(&self, path: &str) -> bool {
+        self.exposed.holds(path)
+    }
+
+    /// Record that a person, having read the question, agreed to this file reaching the planner.
+    ///
+    /// Only ever called because somebody answered. The path is the one the trust map is keyed by,
+    /// so the spelling a planner used does not decide whether the question comes back.
+    pub fn allow_exposing_read(&mut self, path: &str) {
+        self.exposed.allow(path);
+        self.allow(
+            "approval",
+            format!("{path}: the user agreed to the planner being given it despite the scan"),
+        );
     }
 
     /// Reconcile a completed write in a non-overlapping snapshot.

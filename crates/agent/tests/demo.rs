@@ -391,6 +391,13 @@ impl bravebot_agent::Confirmer for ApprovesRuns {
     ) -> bravebot_agent::Decision {
         bravebot_agent::Decision::Reject
     }
+
+    fn confirm_exposing_read(
+        &mut self,
+        _r: &bravebot_agent::confirm::ExposureRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
     fn ask_user(&mut self, _a: &bravebot_core::ask::Asking) -> Vec<bravebot_core::ask::Answer> {
         Vec::new()
     }

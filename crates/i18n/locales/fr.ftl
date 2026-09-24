@@ -693,6 +693,20 @@ vouch-yes = l'approuver
 vouch-no = le laisser en quarantaine
 
 
+## Lire un fichier contenant ce qui ressemble à un identifiant
+
+expose-title = laisser le modèle lire un fichier contenant un identifiant ?
+expose-verb = Envoyer
+expose-explained =
+    le modèle peut lire ce fichier, et ce qu'il lit parvient à qui effectue l'inférence.
+    L'analyse y a trouvé quelque chose qui ressemble à un identifiant. L'envoyer divulgue
+    cette valeur ; refuser garde le texte de ce fichier hors du modèle et ne change rien
+    d'autre. Une réponse couvre ce fichier pour le reste de cette session.
+expose-found = ce que l'analyse a trouvé, sans rien de la valeur :
+expose-yes = l'envoyer quand même
+expose-no = le garder à l'écart
+
+
 ## Compter ce qu'une session accumule
 
 count-rules = { $count ->
@@ -1005,6 +1019,7 @@ session-trusting-unasked =
 session-not-trusting =
     ce répertoire n'est pas approuvé ; chaque écriture vous sera montrée
 session-vouched-for = { $path } approuvé pour cette session
+session-exposed = { $path } montré au modèle pour cette session, identifiant compris
 session-vetting-on =
     une vérification qui ne trouve rien donnera désormais le contenu au modèle sans vous
     demander (~/.bravebot/vetting)

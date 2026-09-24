@@ -22,8 +22,8 @@
 
 use crate::exit::{Ending, fail};
 use bravebot_agent::confirm::{
-    Confirmer, Decision, FetchRequest, ManifestRequest, OutputRequest, RunDecision, RunRequest,
-    ServerRequest, VetRequest, VouchRequest, WriteRequest,
+    Confirmer, Decision, ExposureRequest, FetchRequest, ManifestRequest, OutputRequest,
+    RunDecision, RunRequest, ServerRequest, VetRequest, VouchRequest, WriteRequest,
 };
 use bravebot_agent::diff::Change;
 use bravebot_agent::turn::{self, Task};
@@ -217,6 +217,7 @@ pub fn session(skip_permissions: bool) -> ExitCode {
         programs: TrustedPrograms::new(),
         servers: None,
         asked_about: AskedAbout::new(),
+        exposed: bravebot_core::credentials::Exposed::new(),
         auto_vetting: bravebot_core::vetting::auto(
             bravebot_core::vetting::asked_for(),
             bravebot_session::store::load_vetting(),
@@ -356,6 +357,8 @@ struct Running<'a> {
     programs: TrustedPrograms,
     servers: Option<bravebot_agent::lsp::LanguageServers>,
     asked_about: AskedAbout,
+    /// The files this session has agreed the planner may be given despite what the scan found.
+    exposed: bravebot_core::credentials::Exposed,
     /// What the settings say a commit message and a pull request this session writes may carry.
     ///
     /// Read once, where the session is assembled, for the reason the permission rules are: a file
@@ -388,7 +391,8 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
             .with_permission_mode(self.mode)
             .with_attribution(self.attribution.clone())
             .with_auto_vetting(self.auto_vetting)
-            .already_asked_about(self.asked_about.clone());
+            .already_asked_about(self.asked_about.clone())
+            .already_exposed(self.exposed.clone());
 
         // The mode as the session holds it. The confirmer below is what enforces it, and the task
         // above is the half the planner is told about; both are set from the one value, and
@@ -435,6 +439,7 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
                 self.trust = outcome.trust.clone();
                 self.programs = outcome.programs.clone();
                 self.asked_about = outcome.asked_about.clone();
+                self.exposed = outcome.exposed.clone();
                 Said {
                     reply: outcome.reply_for_display().to_string(),
                     failure: None,
@@ -882,6 +887,21 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             false => lines.extend(quarantined(&request.preview)),
         }
         self.ask(&lines, t!(vouch_title))
+    }
+
+    /// The findings, and nothing of the file.
+    ///
+    /// Each line is already a kind, a place and a mask, so there is no content here to picture or
+    /// to put behind a margin. `shown` is still applied, for the reason the manifest's steps get
+    /// it: a control character reaching a terminal from any direction is a cursor somewhere else,
+    /// and the path in a finding is a path the planner may have spelled.
+    fn confirm_exposing_read(&mut self, request: &ExposureRequest) -> Decision {
+        let mut lines = vec![shown(&request.path), t!(expose_explained).to_string()];
+        lines.push(t!(expose_found).to_string());
+        for finding in &request.credentials {
+            lines.push(format!("  {}", shown(finding)));
+        }
+        self.ask(&lines, t!(expose_title))
     }
 
     /// The plan, before anything has run.

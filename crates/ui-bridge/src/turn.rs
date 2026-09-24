@@ -16,8 +16,8 @@ use crate::emit::Emitter;
 use crate::protocol::Event;
 use crate::wire;
 use bravebot_agent::confirm::{
-    Confirmer, Decision, FetchRequest, ManifestRequest, OutputRequest, RunDecision, RunRequest,
-    ServerRequest, VetRequest, VouchRequest, WriteRequest,
+    Confirmer, Decision, ExposureRequest, FetchRequest, ManifestRequest, OutputRequest,
+    RunDecision, RunRequest, ServerRequest, VetRequest, VouchRequest, WriteRequest,
 };
 use bravebot_agent::report::{Activity, Landing, Phase, Reporter, Shown};
 use bravebot_core::ask::{Answer, Asking};
@@ -361,6 +361,13 @@ impl Confirmer for BridgeConfirmer {
     // These upstream capabilities have no approval UI yet. Never grant authority
     // for a request the person could not review.
     fn confirm_fetch(&mut self, _request: &FetchRequest) -> Decision {
+        Decision::Reject
+    }
+
+    /// Refuses, for the reason the three above do: this application draws no screen for it, and a
+    /// yes here would send a credential to a model on nobody's word. What it costs is the text of
+    /// one file, and the planner is told why it did not get it.
+    fn confirm_exposing_read(&mut self, _request: &ExposureRequest) -> Decision {
         Decision::Reject
     }
 

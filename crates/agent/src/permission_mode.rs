@@ -322,6 +322,26 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         }
     }
 
+    /// Asked in every mode but bypass, including accepting edits.
+    ///
+    /// Accepting edits does not accept this. What that mode grants is writes to this tree, and
+    /// this is a disclosure off it: the planner's context goes to whoever performs inference, so
+    /// a person who said yes to diffs has said nothing about their `.env` reaching a model. Plan
+    /// mode asks rather than refusing, because reading is how a plan gets written and this read
+    /// changes nothing here.
+    ///
+    /// Bypassing answers it yes, as it answers every other prompt, and screening does not reach
+    /// it: a check is a model being shown the content, which is the disclosure the question is
+    /// about, so asking one would perform the act it was deciding about.
+    fn confirm_exposing_read(&mut self, request: &crate::confirm::ExposureRequest) -> Decision {
+        match self.mode {
+            PermissionMode::Bypass => Decision::Approve,
+            PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
+                self.inner.confirm_exposing_read(request)
+            }
+        }
+    }
+
     /// Always the inner confirmer's. A question the planner posed is not a permission, and an answer
     /// invented here would be reported to the model as the user's own words.
     fn ask_user(&mut self, asking: &bravebot_core::ask::Asking) -> Vec<bravebot_core::ask::Answer> {

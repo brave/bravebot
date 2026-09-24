@@ -525,26 +525,59 @@ is owed there is the test, which scans the trail for every secret the process ho
 `verified-by: bravebot_config::scrub::a_name_from_the_settings_file_is_not_one_of_this_agents_own`
 
 <a id="CRED-15"></a>
-### CRED-15: the tree is scanned before it is vouched for
+### CRED-15: what a turn reads is scanned before the planner receives it
 
-The scan runs before the first turn touches a tree, and its findings are shown to the person before
-anything in the tree can reach the planner. The question it runs ahead of is the one
-[trust-map.md](trust-map.md) puts at startup.
+The text a read would hand the planner is scanned first, with the layers CRED-16 uses and under
+CRED-18 and CRED-19. On a finding the result is held back and the person is asked whether to go
+ahead, told that the read would expose a credential to the model. The question names the path and
+the finding, which is a kind, a location and a masked preview, and never the value. On yes the
+result reaches the planner as it would have; on no the planner is told the read was declined
+because the file holds what looks like a credential, and gets none of its text. The finding goes to
+the person and never to the planner, whichever way it was answered, which is what CRED-19 requires
+of a finding however it arose.
 
-**Why the ordering is the whole design.** After vouching, the tree's contents are disclosed to
-whoever performs inference. A scan that runs later reports on a disclosure that already happened.
+**Why the ordering is the whole design.** The planner's context goes to whoever performs inference,
+so a file handed to it has been handed to them. A scan that ran afterwards would be reporting a
+disclosure that had already happened, which is why this runs at the read rather than at the end of
+the turn or at the moment somebody vouches for the tree.
 
-`verified-by: none`
+**Only trusted text is scanned.** A read of content nobody vouched for hands the planner a
+reference rather than bytes, so there is nothing disclosed to hold back, and reading those bytes to
+decide whether to ask would be a decision taken from untrusted content, which
+[labels.md](labels.md) admits nowhere. It is the same bound a credential written through a
+reference falls under, and the Known costs record both.
+
+**What the question covers, and for how long.** The file, for the session. An answer writes no
+rule, moves no credential between tiers and grants nothing a gate reads: the read was already
+allowed by the trust map before the scan ran, which is what CRED-17 means by a finding deciding
+nothing. Remembering it per path is what stops a planner reading the same `.env` on round after
+round putting the same question up each time. It does not outlive the session, and the Known costs
+say what that rests on.
+
+**Why the person is asked rather than the read refused.** The rarity layer is a guess, and a tree
+holds development passwords, test fixtures and inline manifests as readily as it holds keys. A gate
+that refused every such read with no way to say otherwise would make an ordinary `.env` unreadable
+to a planner working on one, and a scan people have to fight is a scan they turn off. The person
+owns the tree and is the one who can say which it is.
+
+`verified-by: bravebot_agent::turn::a_read_that_would_expose_a_credential_is_held_back_until_the_person_agrees`
+`verified-by: bravebot_agent::turn::what_a_read_would_expose_is_told_to_the_person_and_never_to_the_planner`
+`verified-by: bravebot_agent::turn::the_read_prompt_says_which_value_it_is_asking_about`
+`verified-by: bravebot_agent::turn::a_file_agreed_to_once_is_not_asked_about_again_this_session`
+`verified-by: bravebot_agent::turn::a_file_agreed_to_in_an_earlier_turn_is_not_asked_about_again`
+`verified-by: bravebot_agent::turn::a_read_of_a_file_nobody_vouched_for_is_not_scanned`
+`verified-by: bravebot_agent::turn::a_read_of_a_file_holding_no_credential_is_not_asked_about`
 
 <a id="CRED-16"></a>
 ### CRED-16: what a turn writes to the tree is scanned before the change is recorded as complete
 
 The tree diff a turn produces is scanned with the same layers and the same finding shape as the
-pre-run scan, under CRED-18 and CRED-19. A finding in that diff is attributed to the turn, is a
+read scan, under CRED-18 and CRED-19. A finding in that diff is attributed to the turn, is a
 violation of CRED-11 or CRED-13, and the value does not remain in the tree.
 
-**Why.** CRED-15 scans before the run, so the one thing this system causes is the only thing never
-checked. The pre-run scan establishes what was already there; this one is the difference between a
+**Why.** CRED-15 scans what leaves the tree for a model, so without this the one thing this system
+causes is the only thing never checked. The two are the two directions a credential travels: that
+one is about disclosure of what was already there, and this one is the difference between a
 credential the person left and a credential a turn wrote.
 
 **Why attribution is better here than before.** An untracked `.env` found at the start has no blame
@@ -825,8 +858,9 @@ an issuer on a person's behalf.
 **Where the person is given it.** Not yet from a leak. CRED-16's scan of what a turn writes
 exists and refuses, but it reports the finding and reaches no part of this record: somebody told a
 credential would have landed in a file is not thereby told what would end the one they already
-hold. CRED-15's scan of the tree before a run does not exist, and nor does the place CRED-19 would
-write a finding. What exists is the record and one surface that reads it, `doctor`, which reports
+hold. CRED-15's scan of what a turn reads reports the same way and reaches this record no more
+than the other one does. What exists is the record and one surface that reads it, `doctor`, which
+reports
 what would end each credential this configuration holds, a gateway's bearer token and an imported
 subscription's credential batch included. A scan reaching it later reads that record rather than
 writing a second one.
@@ -967,8 +1001,8 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   a line opens are the ones a redirection names, which is the set the driver reserves as file
   effects before anything runs. `cp .env .env.bak`, `tee`, `git commit` and an installer writing
   its own config are outside it: the path is the program's business and the driver never learns
-  it. What would close this is a scan of the whole tree diff a turn produced, which needs the
-  record of what was there before it, which is CRED-15's scan and CRED-22's baseline.
+  it. What would close this is a scan of the whole tree diff a turn produced, which needs a record
+  of what the tree held before it, which is CRED-22's baseline.
 
 - **A destination past the scan's budget is passed over.** What a line left is read back for the
   scan, and what it held beforehand is kept so a refused destination can be put back; both are
@@ -987,8 +1021,8 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
 - **A file a turn creates is attributed to it whole.** A carried value is told from an authored one
   by what the file at that path already held, and a file that did not exist held nothing. So a turn
   that moves a file already holding a key is refused, where the clause above says that case is
-  reported. What would tell the two apart is the scan before the run, which is what records what
-  was already there.
+  reported. What would tell the two apart is a record of what the tree held before the run, which
+  is CRED-22's baseline.
 
 - **A fingerprint is salted per run and kept nowhere.** It tells two findings in one run apart and
   says nothing between runs, so an acceptance cannot be carried forward and the baseline has
@@ -1002,11 +1036,29 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   it needs the durable salt and the store above, so this is the cost of not having them yet rather
   than a separate gap.
 
-- **Only what a turn writes is scanned, never what it reads.** A secret already in the tree reaches
-  the planner's context the moment a turn reads the file holding it, and nothing looks at it on the
-  way through. The gate here is about what this system *causes*; disclosure of what was already
-  there is CRED-15's business, and CRED-15 is unbuilt. The two together are why reading a `.env` is
-  currently unexamined in both directions.
+- **`read_file` is the only read that is scanned.** CRED-15 runs at the tool whose whole purpose
+  is putting a file's text in front of the planner. Three other results carry a vouched file's
+  bytes there and are not scanned: `search` quotes the lines it matched, `load_skill` carries the
+  body of a skill, and `read_output` hands over what a program printed. Each needs its own answer
+  rather than the same one. A search walks many files at once and mixes vouched ones with
+  quarantined ones, so a question about it is a question about a set rather than a path, and the
+  finding's location is the thing a person would act on. A skill is a file the person installed
+  under their own state directory rather than something the tree proposed. What a program printed
+  is quarantined unless the line was vouched for, and where it was not there is a prompt in front
+  of it already. Until those are settled a credential in a file reaches the planner through any of
+  the three, and the disclosure is the same one CRED-15 is about.
+
+- **The desktop application declines rather than asking.** Its protocol has no question of this
+  shape and its front end draws no screen for one, so a file the scan objects to is held back from
+  the planner there whatever the person would have said. It is the same answer that application
+  gives a fetch, a language server and a manifest plan, and it is the safe direction: what it costs
+  is the text of one file, and the planner is told why it did not get it.
+
+- **An answer lasts the session and no longer.** Agreeing that a file may be read is remembered per
+  path while the session lives and is written nowhere, so the next session asks about the same
+  `.env` again. Carrying it forward needs a name an answer can be filed under across runs, which is
+  the durable salt and the store the entry above describes: a path alone is not one, since the file
+  at that path is not the file that was answered about.
 
 - **Half of CRED-14 is pinned and half is argued.** The tests on it are the environment of a program
   this agent starts. That what it holds reaches no session record rests on
@@ -1017,6 +1069,6 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
 - **Most of this is not implemented.** What runs is the scan of what a turn writes, at the three
   write tools and at the two places a `run` line writes, and one performer: a credential a vault
   obtained itself, and a mail send carried out against it so that the asking agent never holds the
-  token, and the record CRED-19 writes each finding to. There is no scan of the tree before it is
-  vouched for, no baseline over that record, and no authority at the tier these clauses describe.
-  The rest of every clause here is a target.
+  token, and the record CRED-19 writes each finding to. The scan of what a turn reads runs at
+  `read_file` and nowhere else. There is no baseline over that record, and no authority at the tier
+  these clauses describe. The rest of every clause here is a target.

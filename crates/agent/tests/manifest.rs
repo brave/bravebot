@@ -1252,6 +1252,13 @@ impl bravebot_agent::confirm::Confirmer for RecordsEveryQuestion {
         bravebot_agent::Decision::Reject
     }
 
+    fn confirm_exposing_read(
+        &mut self,
+        _request: &bravebot_agent::confirm::ExposureRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
     /// Nobody is there to answer the planner, which is moot in this mode anyway.
     fn ask_user(
         &mut self,
@@ -1376,6 +1383,13 @@ impl bravebot_agent::confirm::Confirmer for ApprovesThePlanOnly {
     fn confirm_vouch(
         &mut self,
         _request: &bravebot_agent::confirm::VouchRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_exposing_read(
+        &mut self,
+        _request: &bravebot_agent::confirm::ExposureRequest,
     ) -> bravebot_agent::Decision {
         bravebot_agent::Decision::Reject
     }

@@ -593,6 +593,15 @@ pub struct Task {
     /// Carried by the caller for the reason `home` and `remembering` are: a turn is where a prompt
     /// is drawn, and a session is where somebody answers the same shape of prompt all day.
     pub asked_about: bravebot_core::programs::AskedAbout,
+    /// The files this session has been asked about, and agreed to the planner being given.
+    ///
+    /// Empty by default and for a caller that keeps nothing between turns, which costs one extra
+    /// question about each such file per turn rather than anything a gate reads: the read was
+    /// already allowed by the trust map before the scan ran.
+    ///
+    /// Carried by the caller for the reason [`Task::asked_about`] is: a turn is where a question
+    /// is drawn, and a session is where somebody answers the same one all day.
+    pub exposed: bravebot_core::credentials::Exposed,
     /// The session this turn belongs to, where a run prompt's answer may outlive it.
     ///
     /// `None` by default and for every turn with nobody to put a prompt to: a one-shot run, a
@@ -775,6 +784,8 @@ impl Task {
             // Nothing has been asked about until a caller says so, which is what a caller keeping
             // nothing between turns is saying.
             asked_about: bravebot_core::programs::AskedAbout::new(),
+            // Nothing agreed to until a caller says so, for the same reason.
+            exposed: bravebot_core::credentials::Exposed::new(),
             // Nothing is remembered past the session unless a caller says which session this is,
             // which is the caller saying there is somebody a prompt could be put to.
             remembering: None,
@@ -885,6 +896,15 @@ impl Task {
     /// with nothing to compare a line against, so no prompt says a line's arguments have varied.
     pub fn already_asked_about(mut self, asked: bravebot_core::programs::AskedAbout) -> Self {
         self.asked_about = asked;
+        self
+    }
+
+    /// Carry in the files this session has already agreed the planner may be given.
+    ///
+    /// Said by a caller that holds a session together across turns. Without it every turn asks
+    /// again about each file the scan finds something in.
+    pub fn already_exposed(mut self, exposed: bravebot_core::credentials::Exposed) -> Self {
+        self.exposed = exposed;
         self
     }
 
@@ -1046,6 +1066,11 @@ pub struct Outcome {
     /// Travels back for the reason [`Outcome::programs`] does, and grants nothing at all: a caller
     /// that drops it loses a sentence of advice at a later prompt and nothing else.
     pub asked_about: bravebot_core::programs::AskedAbout,
+    /// The files agreed to be shown to the planner after the turn, including any it asked about.
+    ///
+    /// Travels back for the reason [`Outcome::asked_about`] does, and grants as little: a caller
+    /// that drops it asks about the same file once more next turn and nothing else.
+    pub exposed: bravebot_core::credentials::Exposed,
     /// Tokens the turn cost in total, summed over every round.
     ///
     /// A turn is several requests when the model calls tools, and each re-sends the whole
@@ -2202,6 +2227,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         .with_scratch(workspace.scratch())
         .with_programs(programs)
         .with_asked(task.asked_about.clone())
+        .with_exposed(task.exposed.clone())
         .with_permissions(task.permissions.clone())
         .resuming(conversation.context());
 
@@ -3666,6 +3692,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     let trust = policy.trust();
     let programs = policy.programs().clone();
     let asked_about = policy.asked().clone();
+    let exposed = policy.exposed().clone();
 
     // Read last, so everything the turn did is inside it, including the presentation just above.
     spent.wall = began.elapsed();
@@ -3678,6 +3705,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         trust,
         programs,
         asked_about,
+        exposed,
         tokens,
         output_tokens,
         context_tokens,
