@@ -18374,6 +18374,67 @@ fn a_fetch_refused_for_leaving_its_host_names_no_host_the_server_chose() {
     );
 }
 
+/// The case the record exists to get right: a page from the web lands in a directory a person
+/// vouched for, so the file it lands in stops being trusted and nothing else does. Marking the
+/// directory instead would quarantine every file beside it, which is a project the next turn can
+/// no longer read or edit on the strength of one fetch.
+///
+/// End to end, over the record the turn hands back, because that is the route a person's fetch and
+/// write take. A test over a snapshot reconciled by hand would keep passing if the live write
+/// marked the directory.
+#[test]
+fn a_fetched_page_written_into_a_trusted_tree_distrusts_only_the_file() {
+    let scratch = Scratch::new("fetch-write-keeps-the-directory");
+    std::fs::create_dir_all(scratch.path.join("docs")).unwrap();
+    std::fs::write(scratch.path.join("docs/other.md"), "our own notes\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (site, _requests) = serve_pages(vec![page("from the web")]);
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2("fetch_url", &format!(r#"{{"url":"{site}/page"}}"#)),
+        tool_request_2(
+            "write_file",
+            r#"{"path":"docs/page.html","contents_ref":"ref:1"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let outcome = turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("save that page under docs"),
+        &mut ApprovesFetchesAndWrites::default(),
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    // The write happened, so what follows is about a page that really landed there.
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("docs/page.html")).unwrap(),
+        "from the web",
+        "the fetched page never reached the file"
+    );
+    assert!(
+        !outcome.trust.is_trusted("docs/page.html"),
+        "a file holding a page from the web reads back trusted"
+    );
+    // Neither of these has a rule of its own, so each answers with the workspace's until a write
+    // gives it one.
+    assert!(
+        outcome.trust.is_trusted("docs"),
+        "one fetched page cost the directory around it the trust the workspace gave it"
+    );
+    assert!(
+        outcome.trust.is_trusted("docs/other.md"),
+        "one fetched page quarantined the file beside it"
+    );
+}
+
 /// The reference is usable at both destinations the planner has for one: a processor can be asked
 /// a question about the page, and the page itself can be written to a file. Neither route lets the
 /// planner read it, which is what makes a fetch worth having without making it a way in.
