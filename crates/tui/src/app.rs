@@ -2478,6 +2478,10 @@ fn event_loop(
     // written down anywhere: a session that ends forgets what it asked, which is the same lifetime
     // the list of programs it vouched for has.
     let mut asked_about = AskedAbout::new();
+    // And every file this session has agreed the planner may be given despite the credential
+    // scan. Same lifetime and same reason: the answer is worth honouring while the session
+    // lasts, and a session that ends forgets it.
+    let mut exposed = bravebot_core::credentials::Exposed::new();
     let (mut conversation, mut stored, mut programs) = match start {
         // Already answered before the loop was entered: the picker runs once, in `run`.
         Start::Fresh | Start::Choose => (
@@ -3108,6 +3112,8 @@ fn event_loop(
                 // And nothing has been asked about, since the questions this list holds were put
                 // in a session that is over.
                 asked_about = AskedAbout::new();
+                // And nothing agreed to be shown, for the same reason.
+                exposed = bravebot_core::credentials::Exposed::new();
                 // And a new directory, since nothing in the old one outlives the session that
                 // wrote it. The old one is removed either way: what the cleared context wrote is
                 // not something the session after it should find lying there.
@@ -3158,6 +3164,7 @@ fn event_loop(
                         programs,
                         servers,
                         asked_about,
+                        exposed,
                         &rules.permissions,
                         settings.attribution(),
                         stored.id(),
@@ -3168,6 +3175,7 @@ fn event_loop(
                     programs = continued.programs;
                     servers = continued.servers;
                     asked_about = continued.asked_about;
+                    exposed = continued.exposed;
 
                     session.record_turn(history_start, &conversation);
                     session.keep_backups(workspace.take_backups());
@@ -5080,6 +5088,13 @@ fn manifest_animated(
                 }
                 let _ = answer_tx.send(crate::remote_confirm::Reply::Vouch(answer.decision()));
             }
+            crate::remote_confirm::ToMain::Exposure(request) => {
+                let answer = crate::confirm::ask_exposure(terminal, &request);
+                if answer == crate::confirm::Answer::Interrupt {
+                    stop_what_is_running(session, &cancel);
+                }
+                let _ = answer_tx.send(crate::remote_confirm::Reply::Exposure(answer.decision()));
+            }
             // Progress, with no reply to give. The goal as the planner understood it and the frozen
             // plan both arrive as narration, and each step as an activity, so the transcript of a
             // run reads the way the transcript of a turn does.
@@ -5467,6 +5482,7 @@ struct Continued {
     programs: TrustedPrograms,
     servers: Option<LanguageServers>,
     asked_about: AskedAbout,
+    exposed: bravebot_core::credentials::Exposed,
     events: Vec<Stamped>,
 }
 
@@ -5495,6 +5511,7 @@ fn run_turn_animated(
     // and the next message would ask the same person about the same language.
     servers: Option<LanguageServers>,
     asked_about: AskedAbout,
+    exposed: bravebot_core::credentials::Exposed,
     permissions: &Permissions,
     attribution: &Attribution,
     // This session's own identifier. It travels with the task because a run prompt may be answered
@@ -5569,6 +5586,9 @@ fn run_turn_animated(
         .ticking(tick)
         .arming(arming)
         .looking_again(looking_again)
+        // And the files this session has already agreed the planner may be given, so a planner
+        // reading the same `.env` on turn after turn is asked about it once.
+        .already_exposed(exposed.clone())
         .working_towards(working_towards);
     // Every file named with `@` becomes context, which a turn treats as trusted: the user typed the
     // path and their keystroke is what vouches for it, exactly as `--file` does on the command
@@ -5602,6 +5622,7 @@ fn run_turn_animated(
     let fallback = trust.clone();
     let fallback_programs = programs.clone();
     let fallback_asked = asked_about.clone();
+    let fallback_exposed = exposed.clone();
 
     let worker = thread::spawn(move || {
         let mut sink = Trail::new();
@@ -5791,6 +5812,19 @@ fn run_turn_animated(
                 }
                 let _ = answer_tx.send(crate::remote_confirm::Reply::Vouch(answer.decision()));
             }
+            crate::remote_confirm::ToMain::Exposure(request) => {
+                let answer = crate::confirm::ask_exposure(terminal, &request);
+                if answer.stops_the_turn() {
+                    stop_what_is_running(session, &cancel);
+                }
+                if answer == crate::confirm::Answer::Approve {
+                    // Said on the transcript because it lasts the session and the box it was
+                    // answered in is gone: what is left otherwise is a read that looks like any
+                    // other, with nothing to say a credential went with it.
+                    session.note(t!(session_exposed, path = &request.path));
+                }
+                let _ = answer_tx.send(crate::remote_confirm::Reply::Exposure(answer.decision()));
+            }
             crate::remote_confirm::ToMain::Server(request) => {
                 let answer = crate::confirm::ask_server(terminal, &request);
                 if answer.stops_the_turn() {
@@ -5930,6 +5964,7 @@ fn run_turn_animated(
             programs: fallback_programs,
             servers,
             asked_about: fallback_asked,
+            exposed: fallback_exposed,
             events,
         });
     }
@@ -5953,6 +5988,7 @@ fn run_turn_animated(
             trust: fallback,
             programs: fallback_programs,
             asked: fallback_asked,
+            exposed: fallback_exposed,
         },
         Occupied {
             budget: config.context_budget,
@@ -5972,6 +6008,7 @@ fn run_turn_animated(
         programs: carried.programs,
         servers,
         asked_about: carried.asked,
+        exposed: carried.exposed,
         events,
     })
 }
@@ -6199,6 +6236,7 @@ struct Carried {
     trust: TrustStore,
     programs: TrustedPrograms,
     asked: AskedAbout,
+    exposed: bravebot_core::credentials::Exposed,
 }
 
 /// A quit keeps the session quitting; an ordinary stop may return its prompt to the editor.
@@ -6285,6 +6323,7 @@ fn fold_outcome(
                 trust: outcome.trust,
                 programs: outcome.programs,
                 asked: outcome.asked_about,
+                exposed: outcome.exposed,
             }
         }
         Err(error) => {
@@ -11703,6 +11742,7 @@ mod tests {
                 trust: TrustStore::new("/work"),
                 programs: TrustedPrograms::new(),
                 asked: AskedAbout::new(),
+                exposed: bravebot_core::credentials::Exposed::new(),
             },
             Occupied {
                 budget: 100_000,
@@ -15871,6 +15911,7 @@ mod tests {
                 trust: fallback,
                 programs: fallback_programs,
                 asked: AskedAbout::new(),
+                exposed: bravebot_core::credentials::Exposed::new(),
             },
             Occupied {
                 budget: 100_000,
@@ -16073,6 +16114,7 @@ mod tests {
                 trust: TrustStore::new("/work"),
                 programs: TrustedPrograms::new(),
                 asked: AskedAbout::new(),
+                exposed: bravebot_core::credentials::Exposed::new(),
             },
             Occupied {
                 budget: 100_000,
@@ -16124,6 +16166,7 @@ mod tests {
                 trust: TrustStore::new("/work"),
                 programs: TrustedPrograms::new(),
                 asked: AskedAbout::new(),
+                exposed: bravebot_core::credentials::Exposed::new(),
             },
             Occupied {
                 budget: 100_000,
@@ -16163,6 +16206,7 @@ mod tests {
                 trust: fallback,
                 programs: fallback_programs,
                 asked: AskedAbout::new(),
+                exposed: bravebot_core::credentials::Exposed::new(),
             },
             Occupied {
                 budget: 100_000,
@@ -16203,6 +16247,7 @@ mod tests {
             Trail::new(),
             Carried {
                 asked: Default::default(),
+                exposed: Default::default(),
                 trust: TrustStore::new("/work"),
                 programs: TrustedPrograms::new(),
             },
@@ -16361,6 +16406,7 @@ mod tests {
                         trust: TrustStore::new("/work"),
                         programs: TrustedPrograms::new(),
                         asked: AskedAbout::new(),
+                        exposed: Default::default(),
                     },
                     Occupied {
                         budget: 1000,
@@ -16417,6 +16463,7 @@ mod tests {
                 trust: TrustStore::new("/work"),
                 programs: TrustedPrograms::new(),
                 asked: AskedAbout::new(),
+                exposed: bravebot_core::credentials::Exposed::new(),
             },
             Occupied {
                 budget: 1000,

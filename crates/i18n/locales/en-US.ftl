@@ -777,6 +777,20 @@ vouch-yes = trust it
 vouch-no = leave it quarantined
 
 
+## Reading a file that holds what looks like a credential
+
+expose-title = let the model read a file holding a credential?
+expose-verb = Send
+expose-explained =
+    the model may read this file, and what it reads goes to whoever performs inference.
+    The scan found something in it that looks like a credential. Sending it discloses
+    that value; declining keeps this file's text from the model and changes nothing else.
+    An answer covers this file for the rest of this session.
+expose-found = what the scan found, without any of the value:
+expose-yes = send it anyway
+expose-no = keep it back
+
+
 ## Counting the things a session accumulates
 
 count-rules = { $count ->
@@ -1175,6 +1189,8 @@ session-trusting-unasked =
     trusting { $directory } (--dangerously-skip-permissions, so you were not asked)
 session-not-trusting = this directory is not trusted; every write will be shown to you
 session-vouched-for = trusting { $path } for this session
+# Said when a person agrees that a file the scan found a credential in may reach the model.
+session-exposed = showing { $path } to the model for this session, credential and all
 # Said when the person pressed the standing key at a vetting prompt. What it changes is that a
 # later prompt does not appear, so it is the one decision here they would otherwise see no record
 # of, and the file is named because that is where they undo it.

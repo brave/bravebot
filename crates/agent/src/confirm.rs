@@ -507,6 +507,45 @@ pub struct VouchRequest {
     pub reason: Option<String>,
 }
 
+/// A file the planner has asked to read that holds something the scan took for a credential.
+///
+/// The one question in this file that is not about an effect. Nothing is written, nothing runs
+/// and nothing leaves the machine; what a yes agrees to is a *disclosure*, because the planner's
+/// context goes to whoever performs inference and a file handed to it has been handed to them.
+///
+/// Separate from [`VouchRequest`] because the two ask opposite things about the same file. That
+/// one asks whether a file nobody vouched for may be believed, and a yes writes a standing rule
+/// into the trust map. This one is about a file already vouched for, asks whether it may be sent,
+/// and writes no rule: the trust map already says the planner may read this path, and the scan
+/// found a reason the person might not have meant it about this file.
+///
+/// It carries no preview of the file and no value. A finding is a kind, a location and a mask,
+/// which is the whole of what [CRED-19] allows one to hold, and showing the person the line their
+/// key is on would put the key on a screen to warn them it was about to be on a screen.
+///
+/// [CRED-19]: ../../../docs/specs/credential-protection.md
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExposureRequest {
+    /// The file, as the person knows it.
+    pub path: String,
+    /// One line per finding: the kind, where it is, and a mask of the value.
+    ///
+    /// Already said the one way a finding may be said, so drawing one repeats no part of the
+    /// value. See [`bravebot_core::credentials::Finding::describe`].
+    pub credentials: Vec<String>,
+}
+
+impl ExposureRequest {
+    /// A short description for a prompt line.
+    pub fn summary(&self) -> String {
+        format!(
+            "let the model read {}, which holds {}",
+            self.path,
+            tally(self.credentials.len(), "credential", "credentials")
+        )
+    }
+}
+
 /// A frozen plan a manifest run is about to walk.
 ///
 /// The whole run in one question, which is what makes it different from every other request here:
@@ -693,6 +732,19 @@ pub trait Confirmer {
     /// and the verdict travels with it for the same reason it travels with the other two.
     fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision;
 
+    /// Ask whether the planner may be given a vouched file the scan found a credential in.
+    /// Implementations must default to refusal when they cannot ask.
+    ///
+    /// Separate from [`Confirmer::confirm_vouch`] because it is the opposite question about the
+    /// same file: that one asks whether a file may be believed, and this asks whether a file that
+    /// already is may be sent. A yes covers this path for the session and writes no rule
+    /// anywhere, so it widens nothing and the next session asks again.
+    ///
+    /// An implementation that cannot ask must refuse, and refusing costs only the text: the
+    /// planner is told the file was held back and why, so it can work without it or say what it
+    /// needed it for.
+    fn confirm_exposing_read(&mut self, request: &ExposureRequest) -> Decision;
+
     /// Put a series of questions to the person, one answer per question in the order they were
     /// asked.
     ///
@@ -777,6 +829,12 @@ impl Confirmer for Unattended {
         Decision::Reject
     }
 
+    /// Refuses, so a file nobody can be warned about is not sent to a model. The read itself was
+    /// allowed; what this declines is handing the text over, and the planner is told why.
+    fn confirm_exposing_read(&mut self, _request: &ExposureRequest) -> Decision {
+        Decision::Reject
+    }
+
     fn ask_user(&mut self, _asking: &Asking) -> Vec<Answer> {
         Vec::new()
     }
@@ -834,6 +892,10 @@ impl Confirmer for ApproveWrites {
         Decision::Reject
     }
 
+    fn confirm_exposing_read(&mut self, _request: &ExposureRequest) -> Decision {
+        Decision::Reject
+    }
+
     fn ask_user(&mut self, _asking: &Asking) -> Vec<Answer> {
         Vec::new()
     }
@@ -881,6 +943,10 @@ impl Confirmer for ChoosesFirst {
     }
 
     fn confirm_vouch(&mut self, _request: &VouchRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_exposing_read(&mut self, _request: &ExposureRequest) -> Decision {
         Decision::Reject
     }
 
@@ -950,6 +1016,10 @@ impl Confirmer for ApproveRuns {
         Decision::Reject
     }
 
+    fn confirm_exposing_read(&mut self, _request: &ExposureRequest) -> Decision {
+        Decision::Reject
+    }
+
     fn ask_user(&mut self, _asking: &Asking) -> Vec<Answer> {
         Vec::new()
     }
@@ -1000,6 +1070,10 @@ impl Confirmer for RemembersRuns {
         Decision::Reject
     }
 
+    fn confirm_exposing_read(&mut self, _request: &ExposureRequest) -> Decision {
+        Decision::Reject
+    }
+
     fn ask_user(&mut self, _asking: &Asking) -> Vec<Answer> {
         Vec::new()
     }
@@ -1047,6 +1121,10 @@ impl Confirmer for ReadsOutput {
     }
 
     fn confirm_vouch(&mut self, _request: &VouchRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_exposing_read(&mut self, _request: &ExposureRequest) -> Decision {
         Decision::Reject
     }
 
@@ -1105,6 +1183,72 @@ impl Confirmer for VetsContent {
         Decision::Reject
     }
 
+    fn confirm_exposing_read(&mut self, _request: &ExposureRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn ask_user(&mut self, _asking: &Asking) -> Vec<Answer> {
+        Vec::new()
+    }
+
+    /// Nobody is typing.
+    fn interjection(&mut self) -> Option<String> {
+        None
+    }
+}
+
+/// Approves a read the scan found a credential in, and nothing else. Test-only, and named so its
+/// use is conspicuous.
+///
+/// Its own double rather than a wider reading of [`VetsContent`], because the two grants are
+/// about different content: that one promotes bytes nobody vouched for, and this one lets a file
+/// already vouched for reach the planner despite what is in it. A test that used one for the
+/// other would be asserting that an answer to one question is taken for an answer to another.
+#[derive(Debug, Default)]
+pub struct ExposesReads;
+
+impl Confirmer for ExposesReads {
+    /// Refuses: this double approves one exposing read and nothing else.
+    fn confirm_server(&mut self, _request: &ServerRequest) -> Decision {
+        Decision::Reject
+    }
+
+    /// Refuses: this double approves one exposing read and nothing else.
+    fn confirm_manifest(&mut self, _request: &ManifestRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_write(&mut self, _request: &WriteRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_run(&mut self, _request: &RunRequest) -> RunDecision {
+        RunDecision::reject()
+    }
+
+    fn confirm_read_output(&mut self, _request: &OutputRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_vetted_read(&mut self, _request: &VetRequest) -> Decision {
+        Decision::Reject
+    }
+
+    /// Refuses. Nothing about a test double is a person agreeing to talk to a host.
+    fn confirm_fetch(&mut self, _request: &FetchRequest) -> Decision {
+        Decision::Reject
+    }
+
+    /// Refuses. Agreeing that a vouched file may be sent says nothing about a file nobody vouched
+    /// for, which is the opposite question.
+    fn confirm_vouch(&mut self, _request: &VouchRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_exposing_read(&mut self, _request: &ExposureRequest) -> Decision {
+        Decision::Approve
+    }
+
     fn ask_user(&mut self, _asking: &Asking) -> Vec<Answer> {
         Vec::new()
     }
@@ -1151,6 +1295,10 @@ impl Confirmer for ApproveFetches {
     }
 
     fn confirm_vouch(&mut self, _request: &VouchRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_exposing_read(&mut self, _request: &ExposureRequest) -> Decision {
         Decision::Reject
     }
 
@@ -1202,6 +1350,10 @@ impl Confirmer for ApprovePlans {
     }
 
     fn confirm_vouch(&mut self, _request: &VouchRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_exposing_read(&mut self, _request: &ExposureRequest) -> Decision {
         Decision::Reject
     }
 
@@ -1275,6 +1427,10 @@ impl<C: Confirmer + ?Sized> Confirmer for Timed<'_, C> {
 
     fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision {
         self.timing(|inner| inner.confirm_vouch(request))
+    }
+
+    fn confirm_exposing_read(&mut self, request: &ExposureRequest) -> Decision {
+        self.timing(|inner| inner.confirm_exposing_read(request))
     }
 
     fn confirm_server(&mut self, request: &ServerRequest) -> Decision {
@@ -1392,6 +1548,11 @@ mod tests {
         }
 
         fn confirm_vouch(&mut self, _request: &VouchRequest) -> Decision {
+            std::thread::sleep(self.0);
+            Decision::Reject
+        }
+
+        fn confirm_exposing_read(&mut self, _request: &ExposureRequest) -> Decision {
             std::thread::sleep(self.0);
             Decision::Reject
         }

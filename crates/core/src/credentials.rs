@@ -505,6 +505,45 @@ fn standing_alone(lines: &[&str]) -> Option<(usize, String)> {
     looks_rare(value).then(|| (index, value.to_string()))
 }
 
+/// The reads a person agreed to despite a finding, for as long as the session lasts.
+///
+/// Kept per path, so a planner that opens the same `.env` on three rounds asks once. An answer
+/// here grants nothing beyond the file it names: it is not a trust rule, it writes nothing to the
+/// map, and it moves no credential between tiers, which is what [CRED-17] requires of everything
+/// the scan produces.
+///
+/// It does not outlive the session, and cannot. A fingerprint is salted with
+/// [`run_salt`], drawn once per process and kept nowhere, so there is no name an answer given
+/// today could be filed under tomorrow. Remembering the path instead is what this holds, and the
+/// cost of that is written down where the spec keeps its costs: the next session asks again.
+///
+/// [CRED-17]: ../../../docs/specs/credential-protection.md
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Exposed {
+    paths: std::collections::BTreeSet<String>,
+}
+
+impl Exposed {
+    /// Nothing agreed to yet, which is where every session starts.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record that a person agreed to this file being read despite what the scan found in it.
+    ///
+    /// Only ever called because somebody read the question and answered it. Nothing infers
+    /// membership from a file having been read before, from a finding having been recorded, or
+    /// from the same value turning up somewhere else.
+    pub fn allow(&mut self, path: &str) {
+        self.paths.insert(path.to_string());
+    }
+
+    /// Whether this file is one they have already agreed to.
+    pub fn holds(&self, path: &str) -> bool {
+        self.paths.contains(path)
+    }
+}
+
 /// Whether this text is one value and nothing else, which is what [`Scanned::only_the_value`]
 /// carries to the caller deciding what to tell a turn.
 pub fn stands_alone(text: &str) -> bool {

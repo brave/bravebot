@@ -1936,6 +1936,13 @@ fn time_spent_waiting_for_an_approval_is_not_charged_to_the_tool() {
             bravebot_agent::confirm::Decision::Reject
         }
 
+        fn confirm_exposing_read(
+            &mut self,
+            _request: &bravebot_agent::confirm::ExposureRequest,
+        ) -> bravebot_agent::confirm::Decision {
+            bravebot_agent::confirm::Decision::Reject
+        }
+
         fn ask_user(
             &mut self,
             _asking: &bravebot_core::ask::Asking,
@@ -2298,6 +2305,13 @@ impl bravebot_agent::Confirmer for RecordingConfirmer {
     fn confirm_vouch(
         &mut self,
         _request: &bravebot_agent::confirm::VouchRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_exposing_read(
+        &mut self,
+        _request: &bravebot_agent::confirm::ExposureRequest,
     ) -> bravebot_agent::Decision {
         bravebot_agent::Decision::Reject
     }
@@ -3086,6 +3100,13 @@ impl bravebot_agent::Confirmer for SaysOnce {
         bravebot_agent::Decision::Reject
     }
 
+    fn confirm_exposing_read(
+        &mut self,
+        _request: &bravebot_agent::confirm::ExposureRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
     fn ask_user(
         &mut self,
         _asking: &bravebot_core::ask::Asking,
@@ -3852,6 +3873,13 @@ fn a_stale_edit_is_refused() {
         fn confirm_vouch(
             &mut self,
             _request: &bravebot_agent::confirm::VouchRequest,
+        ) -> bravebot_agent::Decision {
+            bravebot_agent::Decision::Reject
+        }
+
+        fn confirm_exposing_read(
+            &mut self,
+            _request: &bravebot_agent::confirm::ExposureRequest,
         ) -> bravebot_agent::Decision {
             bravebot_agent::Decision::Reject
         }
@@ -5820,6 +5848,13 @@ fn a_cancelled_turn_stops_before_running_a_tool() {
         fn confirm_vouch(
             &mut self,
             _request: &bravebot_agent::confirm::VouchRequest,
+        ) -> bravebot_agent::Decision {
+            bravebot_agent::Decision::Reject
+        }
+
+        fn confirm_exposing_read(
+            &mut self,
+            _request: &bravebot_agent::confirm::ExposureRequest,
         ) -> bravebot_agent::Decision {
             bravebot_agent::Decision::Reject
         }
@@ -10240,6 +10275,13 @@ impl bravebot_agent::Confirmer for AnswersWith {
         bravebot_agent::Decision::Reject
     }
 
+    fn confirm_exposing_read(
+        &mut self,
+        _request: &bravebot_agent::confirm::ExposureRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
     /// Refuses. A test double is not a person agreeing to start a process.
     fn confirm_server(
         &mut self,
@@ -10719,6 +10761,13 @@ impl bravebot_agent::Confirmer for AskedAboutRuns {
     fn confirm_vouch(
         &mut self,
         _request: &bravebot_agent::confirm::VouchRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_exposing_read(
+        &mut self,
+        _request: &bravebot_agent::confirm::ExposureRequest,
     ) -> bravebot_agent::Decision {
         bravebot_agent::Decision::Reject
     }
@@ -12492,6 +12541,13 @@ impl bravebot_agent::Confirmer for ShownAfterAVet {
         bravebot_agent::Decision::Reject
     }
 
+    fn confirm_exposing_read(
+        &mut self,
+        _request: &bravebot_agent::confirm::ExposureRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
     fn ask_user(
         &mut self,
         _asking: &bravebot_core::ask::Asking,
@@ -14160,6 +14216,13 @@ impl bravebot_agent::Confirmer for ReadsWhatItRan {
         bravebot_agent::Decision::Reject
     }
 
+    fn confirm_exposing_read(
+        &mut self,
+        _request: &bravebot_agent::confirm::ExposureRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
     fn ask_user(
         &mut self,
         _asking: &bravebot_core::ask::Asking,
@@ -14596,6 +14659,14 @@ impl bravebot_agent::Confirmer for VouchesForFiles {
         } else {
             bravebot_agent::Decision::Reject
         }
+    }
+
+    /// Refuses. Vouching for a file is not agreeing that one already vouched for may be sent.
+    fn confirm_exposing_read(
+        &mut self,
+        _request: &bravebot_agent::confirm::ExposureRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
     }
 
     fn ask_user(
@@ -19238,6 +19309,13 @@ impl bravebot_agent::Confirmer for ApprovesFetchesAndWrites {
         bravebot_agent::Decision::Reject
     }
 
+    fn confirm_exposing_read(
+        &mut self,
+        _request: &bravebot_agent::confirm::ExposureRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
     fn ask_user(
         &mut self,
         _asking: &bravebot_core::ask::Asking,
@@ -23857,6 +23935,13 @@ impl bravebot_agent::confirm::Confirmer for RemembersWrites {
         bravebot_agent::confirm::ApproveWrites.confirm_vouch(request)
     }
 
+    fn confirm_exposing_read(
+        &mut self,
+        request: &bravebot_agent::confirm::ExposureRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::ApproveWrites.confirm_exposing_read(request)
+    }
+
     fn ask_user(&mut self, asking: &bravebot_core::ask::Asking) -> Vec<bravebot_core::ask::Answer> {
         bravebot_agent::confirm::ApproveWrites.ask_user(asking)
     }
@@ -24086,6 +24171,466 @@ fn what_the_scan_found_is_told_to_the_person_and_not_to_the_planner() {
     assert!(
         !answered.contains("an AWS access key id"),
         "a finding reached the planner's context: {answered}"
+    );
+}
+
+/// Answers the question a read raises and keeps what it was shown, so a test can read the question
+/// rather than only the answer. Everything else is [`bravebot_agent::confirm::ApproveWrites`]'s
+/// refusal.
+#[derive(Default)]
+struct RemembersExposures {
+    asked: std::sync::Arc<std::sync::Mutex<Vec<bravebot_agent::confirm::ExposureRequest>>>,
+    allow: bool,
+}
+
+impl bravebot_agent::confirm::Confirmer for RemembersExposures {
+    fn confirm_exposing_read(
+        &mut self,
+        request: &bravebot_agent::confirm::ExposureRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        self.asked.lock().unwrap().push(request.clone());
+        match self.allow {
+            true => bravebot_agent::confirm::Decision::Approve,
+            false => bravebot_agent::confirm::Decision::Reject,
+        }
+    }
+
+    fn confirm_write(
+        &mut self,
+        request: &bravebot_agent::confirm::WriteRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::ApproveWrites.confirm_write(request)
+    }
+
+    fn confirm_server(
+        &mut self,
+        request: &bravebot_agent::confirm::ServerRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::confirm::ApproveWrites.confirm_server(request)
+    }
+
+    fn confirm_run(
+        &mut self,
+        request: &bravebot_agent::confirm::RunRequest,
+    ) -> bravebot_agent::confirm::RunDecision {
+        bravebot_agent::confirm::ApproveWrites.confirm_run(request)
+    }
+
+    fn confirm_read_output(
+        &mut self,
+        request: &bravebot_agent::confirm::OutputRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::ApproveWrites.confirm_read_output(request)
+    }
+
+    fn confirm_vetted_read(
+        &mut self,
+        request: &bravebot_agent::confirm::VetRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::ApproveWrites.confirm_vetted_read(request)
+    }
+
+    fn confirm_fetch(
+        &mut self,
+        request: &bravebot_agent::confirm::FetchRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::ApproveWrites.confirm_fetch(request)
+    }
+
+    fn confirm_manifest(
+        &mut self,
+        request: &bravebot_agent::confirm::ManifestRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::ApproveWrites.confirm_manifest(request)
+    }
+
+    fn confirm_vouch(
+        &mut self,
+        request: &bravebot_agent::confirm::VouchRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::ApproveWrites.confirm_vouch(request)
+    }
+
+    fn ask_user(&mut self, asking: &bravebot_core::ask::Asking) -> Vec<bravebot_core::ask::Answer> {
+        bravebot_agent::confirm::ApproveWrites.ask_user(asking)
+    }
+
+    fn interjection(&mut self) -> Option<String> {
+        None
+    }
+}
+
+/// CRED-15. The planner's context goes to whoever performs inference, so a `.env` in a vouched
+/// tree is disclosed the moment a turn opens it. Nothing looked at what a turn read, and the one
+/// thing that could stop the disclosure is a question asked before the bytes leave.
+///
+/// Both directions, because the interesting one is not the whole of it: a scan that held every
+/// such file back whatever the person said would pass a test that only checked the refusal, and
+/// would make a `.env` unreadable to a planner working on one.
+#[test]
+fn a_read_that_would_expose_a_credential_is_held_back_until_the_person_agrees() {
+    // Declined: the planner gets none of the file.
+    let scratch = Scratch::new("credential-read-declined");
+    std::fs::write(
+        scratch.path.join(".env"),
+        format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n"),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":".env"}"#),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what is in .env"),
+        // Refuses every question, which is what a person saying no looks like here.
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let answered = tool_results(&received.recv().expect("second request"));
+    assert!(
+        !answered.contains(DECLARED_KEY),
+        "a read the person declined still put the credential in the planner's context: {answered}"
+    );
+    assert!(
+        answered.contains("refused") && answered.contains(".env"),
+        "the planner was not told the read did not happen: {answered}"
+    );
+
+    // Approved: the read hands over what it always did. The person owns the tree and is the one
+    // who gets to say that their own `.env` may be worked on.
+    let scratch = Scratch::new("credential-read-approved");
+    std::fs::write(
+        scratch.path.join(".env"),
+        format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n"),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":".env"}"#),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what is in .env"),
+        &mut bravebot_agent::confirm::ExposesReads,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let answered = tool_results(&received.recv().expect("second request"));
+    assert!(
+        answered.contains(DECLARED_KEY),
+        "the person agreed to the read and the planner still got nothing: {answered}"
+    );
+}
+
+/// CRED-19, on the read side. A finding is a record of where a credential is, so it goes to the
+/// person watching and never into the context of a model. The planner is still told the read did
+/// not happen, or it reads the same file another way.
+///
+/// The value is checked separately from the finding. A refusal that named the kind and the line
+/// would disclose the map without disclosing the key, which is the half of this a test that only
+/// looked for the value would miss.
+#[test]
+fn what_a_read_would_expose_is_told_to_the_person_and_never_to_the_planner() {
+    let scratch = Scratch::new("credential-read-audience");
+    std::fs::write(
+        scratch.path.join(".env"),
+        format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n"),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":".env"}"#),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    turn::run_cancellable(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what is in .env"),
+        &mut bravebot_agent::confirm::Unattended,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let told = reporter
+        .finished
+        .iter()
+        .filter_map(|activity| activity.note.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        told.contains("an AWS access key id") && told.contains(".env:1"),
+        "the person was not told what was found or where: {told}"
+    );
+    assert!(
+        !told.contains(DECLARED_KEY),
+        "the value itself was put on the screen: {told}"
+    );
+
+    let _first = received.recv().expect("first request");
+    let answered = tool_results(&received.recv().expect("second request"));
+    assert!(
+        !answered.contains(DECLARED_KEY),
+        "the value reached the planner's context: {answered}"
+    );
+    assert!(
+        !answered.contains("an AWS access key id"),
+        "a finding reached the planner's context: {answered}"
+    );
+}
+
+/// The question has to say why it is being asked. A person shown "may the model read .env?" is
+/// being asked the question they already answered at startup, and the finding is the whole of what
+/// makes this one different.
+///
+/// What reaches them is the finding's own words, a kind, a location and a masked preview, and
+/// never the value: a prompt that quoted the key would put it on a screen in order to warn that it
+/// was about to be on one.
+#[test]
+fn the_read_prompt_says_which_value_it_is_asking_about() {
+    let scratch = Scratch::new("credential-read-prompt");
+    std::fs::write(
+        scratch.path.join(".env"),
+        format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n"),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":".env"}"#),
+        reply_with("understood"),
+    ]);
+    let mut confirmer = RemembersExposures::default();
+    let asked = confirmer.asked.clone();
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what is in .env"),
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let asked = asked.lock().unwrap();
+    let request = asked
+        .first()
+        .expect("the person was asked before the file reached the planner");
+    assert_eq!(request.path, ".env");
+    let said = request.credentials.join("; ");
+    assert!(
+        said.contains("an AWS access key id") && said.contains(".env:1"),
+        "the prompt did not say what was found or where: {said}"
+    );
+    assert!(
+        !said.contains(DECLARED_KEY),
+        "the prompt repeated the value it was asking about: {said}"
+    );
+}
+
+/// An answer covers the file for the session. A planner working through a tree opens the same
+/// `.env` on round after round, and a question re-put each time is a question people learn to
+/// answer without reading.
+///
+/// Two reads in one turn, and the second is where the test bites: a session store that recorded
+/// nothing, or recorded under the spelling the planner happened to use, asks twice.
+#[test]
+fn a_file_agreed_to_once_is_not_asked_about_again_this_session() {
+    let scratch = Scratch::new("credential-read-asked-once");
+    std::fs::write(
+        scratch.path.join(".env"),
+        format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n"),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":".env"}"#),
+        tool_request_2("read_file", r#"{"path":".env"}"#),
+        reply_with("understood"),
+    ]);
+    let mut confirmer = RemembersExposures {
+        allow: true,
+        ..Default::default()
+    };
+    let asked = confirmer.asked.clone();
+    let mut sink = RecordingSink::new();
+    let outcome = turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what is in .env"),
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        asked.lock().unwrap().len(),
+        1,
+        "the same file was put to the person twice in one session"
+    );
+    // And the answer leaves the turn, or the next one starts over and the session lasts a turn.
+    assert!(
+        outcome.exposed.holds(".env"),
+        "the answer did not reach the caller that holds the session together"
+    );
+}
+
+/// The other end of the same round trip. A caller carrying the answer in puts no question at all,
+/// which is what makes the field on the outcome worth having: a turn that took the list and
+/// ignored it would pass the test above and still ask on every message.
+#[test]
+fn a_file_agreed_to_in_an_earlier_turn_is_not_asked_about_again() {
+    let scratch = Scratch::new("credential-read-agreed-earlier");
+    std::fs::write(
+        scratch.path.join(".env"),
+        format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n"),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":".env"}"#),
+        reply_with("understood"),
+    ]);
+    let mut already = bravebot_core::credentials::Exposed::new();
+    already.allow(".env");
+    let mut confirmer = RemembersExposures::default();
+    let asked = confirmer.asked.clone();
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        // Refusing every question, so an answer carried in is the only thing that can let this
+        // read through.
+        &Task::new("what is in .env").already_exposed(already),
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert!(
+        asked.lock().unwrap().is_empty(),
+        "a file the session had already agreed to was put to the person again"
+    );
+    let _first = received.recv().expect("first request");
+    let answered = tool_results(&received.recv().expect("second request"));
+    assert!(
+        answered.contains(DECLARED_KEY),
+        "the carried answer was recorded and then not spent: {answered}"
+    );
+}
+
+/// A quarantined read is not scanned, and nothing about it is asked. Those bytes never reach the
+/// planner, so there is no disclosure to hold back, and reading them to decide whether to ask
+/// would be a decision taken from untrusted content, which nothing here may take.
+///
+/// The same file and the same key as the tests above, with the one difference that nobody vouched
+/// for the tree: a scan that ran on whatever it was handed would put the question up here too.
+#[test]
+fn a_read_of_a_file_nobody_vouched_for_is_not_scanned() {
+    let scratch = Scratch::new("credential-read-quarantined");
+    std::fs::write(
+        scratch.path.join(".env"),
+        format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n"),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":".env"}"#),
+        reply_with("understood"),
+    ]);
+    let mut confirmer = RemembersExposures::default();
+    let asked = confirmer.asked.clone();
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what is in .env"),
+        &mut confirmer,
+        &mut sink,
+        // Nothing vouched for, so the read hands back a reference rather than the text.
+        bravebot_core::trust::TrustStore::new("/work"),
+    )
+    .expect("turn runs");
+
+    assert!(
+        asked.lock().unwrap().is_empty(),
+        "a file nobody vouched for was scanned, and the question was put from untrusted bytes"
+    );
+    let _first = received.recv().expect("first request");
+    let answered = tool_results(&received.recv().expect("second request"));
+    assert!(
+        !answered.contains(DECLARED_KEY),
+        "a quarantined file's text reached the planner: {answered}"
+    );
+}
+
+/// The fixture has to be able to say no. A gate that held every read up would pass every test
+/// above, and would make the tool useless on an ordinary file.
+#[test]
+fn a_read_of_a_file_holding_no_credential_is_not_asked_about() {
+    let scratch = Scratch::new("credential-read-ordinary");
+    std::fs::write(scratch.path.join("notes.md"), "nothing secret here\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":"notes.md"}"#),
+        reply_with("understood"),
+    ]);
+    let mut confirmer = RemembersExposures::default();
+    let asked = confirmer.asked.clone();
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what is in the notes"),
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert!(
+        asked.lock().unwrap().is_empty(),
+        "an ordinary file was put to the person as though it held a credential"
+    );
+    let _first = received.recv().expect("first request");
+    let answered = tool_results(&received.recv().expect("second request"));
+    assert!(
+        answered.contains("nothing secret here"),
+        "an ordinary read was held back: {answered}"
     );
 }
 

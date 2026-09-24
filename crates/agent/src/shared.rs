@@ -270,6 +270,10 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
         self.lent.hold().confirm_vouch(request)
     }
 
+    fn confirm_exposing_read(&mut self, request: &crate::confirm::ExposureRequest) -> Decision {
+        self.lent.hold().confirm_exposing_read(request)
+    }
+
     fn confirm_server(&mut self, request: &crate::confirm::ServerRequest) -> Decision {
         self.lent.hold().confirm_server(request)
     }

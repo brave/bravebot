@@ -8,8 +8,8 @@
 //! event all resolve to refusal.
 
 use bravebot_agent::confirm::{
-    Confirmer, Decision, FetchRequest, Intent, ManifestRequest, OutputRequest, RunDecision,
-    RunRequest, ServerRequest, VetRequest, VouchRequest, WriteRequest,
+    Confirmer, Decision, ExposureRequest, FetchRequest, Intent, ManifestRequest, OutputRequest,
+    RunDecision, RunRequest, ServerRequest, VetRequest, VouchRequest, WriteRequest,
 };
 use bravebot_agent::diff::Change;
 use bravebot_agent::report::{Reach, Shown};
@@ -75,6 +75,10 @@ impl<B: Backend> Confirmer for TerminalConfirmer<'_, B> {
 
     fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision {
         ask_vouch(self.terminal, request).decision()
+    }
+
+    fn confirm_exposing_read(&mut self, request: &ExposureRequest) -> Decision {
+        ask_exposure(self.terminal, request).decision()
     }
 
     fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
@@ -1876,6 +1880,137 @@ fn draw_vouch(frame: &mut ratatui::Frame, request: &VouchRequest, scroll: u16) -
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(format!(" {}    ", t!(vouch_no))),
+        Span::styled(
+            "ctrl-c",
+            Style::default()
+                .fg(theme::muted())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" {}", t!(stop_the_turn)),
+            Style::default().fg(theme::muted()),
+        ),
+    ]);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(inside);
+
+    let body = Paragraph::new(lines).wrap(Wrap { trim: false });
+    let drawn = body.line_count(rows[0].width) as u16;
+    let furthest = drawn.saturating_sub(rows[0].height);
+    let offset = scroll.min(furthest);
+    frame.render_widget(body.scroll((offset, 0)), rows[0]);
+
+    let mut keys = keys;
+    if furthest > 0 {
+        let below = furthest - offset;
+        keys.push_span(Span::styled(
+            scroll_hint(below),
+            Style::default().fg(theme::ok()),
+        ));
+    }
+    frame.render_widget(Paragraph::new(keys), rows[1]);
+
+    furthest
+}
+
+/// Put a file the scan found a credential in to the person, blocking until answered.
+///
+/// The one prompt here that is not about an effect. Nothing is written, nothing runs and nothing
+/// leaves the machine; what a yes agrees to is that the file's text goes into a model's context,
+/// and so to whoever performs inference. CRED-15 is where that is settled.
+pub fn ask_exposure<B: Backend>(terminal: &mut Terminal<B>, request: &ExposureRequest) -> Answer {
+    let mut scroll = 0u16;
+    loop {
+        let mut most = 0u16;
+        // A terminal that cannot be drawn to cannot show what was found, and sending a credential
+        // to a model nobody warned anybody about is the one thing this question cannot mean.
+        if terminal
+            .draw(|frame| most = draw_exposure(frame, request, scroll))
+            .is_err()
+        {
+            return Answer::Reject;
+        }
+
+        match input::read() {
+            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
+                continue;
+            }
+            Ok(TermEvent::Key(key)) => match answer_for(key) {
+                Some(Response::Answer(answer)) => return answer,
+                Some(Response::Scroll(by)) => {
+                    scroll = scroll.saturating_add_signed(by).min(most);
+                }
+                None => continue,
+            },
+            Ok(_) => continue,
+            Err(_) => return Answer::Reject,
+        }
+    }
+}
+
+/// Draw the exposure question, returning how far it can be scrolled.
+///
+/// No preview and no margin, which is what makes this different from every other prompt that
+/// shows content. There is nothing quarantined here: the file is one the trust map already covers,
+/// and the rows under the heading are findings rather than bytes. A finding is a kind, a place and
+/// a mask of the value, so drawing one repeats no part of what it describes, and showing the line
+/// the key is on would put the key on a screen in order to warn that it was about to be on one.
+fn draw_exposure(frame: &mut ratatui::Frame, request: &ExposureRequest, scroll: u16) -> u16 {
+    let area = centred(frame.area());
+    let inside = panel(frame, area, theme::fail(), t!(expose_title));
+
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(
+                format!("{} ", t!(expose_verb)),
+                Style::default()
+                    .fg(theme::fail())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                request.path.clone(),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::raw(""),
+    ];
+    lines.extend(indented(
+        t!(expose_explained),
+        Style::default().fg(theme::muted()),
+        inside.width as usize,
+    ));
+    lines.push(Line::raw(""));
+    lines.extend(indented(
+        t!(expose_found),
+        Style::default().fg(theme::muted()),
+        inside.width as usize,
+    ));
+    for finding in &request.credentials {
+        lines.extend(indented(
+            finding.clone(),
+            Style::default().fg(theme::fail()),
+            inside.width as usize,
+        ));
+    }
+
+    let keys = Line::from(vec![
+        Span::styled(
+            "  y",
+            Style::default()
+                .fg(theme::ok())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(format!(" {}    ", t!(expose_yes))),
+        Span::styled(
+            "n",
+            Style::default()
+                .fg(theme::fail())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(format!(" {}    ", t!(expose_no))),
         Span::styled(
             "ctrl-c",
             Style::default()
@@ -4104,6 +4239,64 @@ mod tests {
             drawn.matches(BAR).count(),
             2,
             "the one line of preview and the check's sentence, each inside a bar: {drawn}"
+        );
+    }
+
+    /// The question a read raises says what was found and where, and repeats no part of the value.
+    ///
+    /// A person shown "may the model read .env?" is being asked the question they already answered
+    /// at startup, so the finding is the whole of what makes this one different and has to be on
+    /// the screen. The value is the one thing that must not be: a prompt that quoted the key would
+    /// put it in front of whoever is watching in order to warn that it was about to be in front of
+    /// a model.
+    ///
+    /// No margin bar either, unlike every other prompt here that shows something. There is no
+    /// quarantined content on this screen: the file is one the trust map already covers, and the
+    /// rows under the heading are the driver's own description of a finding rather than bytes.
+    #[test]
+    fn the_exposure_prompt_says_what_was_found_and_never_the_value() {
+        let request = ExposureRequest {
+            path: ".env".into(),
+            credentials: vec![
+                "an AWS access key id at .env:1 (20 characters, upper and digits, 3f2a1c0d)".into(),
+            ],
+        };
+        let mut terminal = Terminal::new(TestBackend::new(100, 40)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                draw_exposure(frame, &request, 0);
+            })
+            .expect("draw");
+        let drawn: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+
+        assert!(
+            drawn.contains(".env"),
+            "the prompt did not name the file: {drawn}"
+        );
+        assert!(
+            drawn.contains("an AWS access key id at .env:1"),
+            "the prompt did not say what was found or where: {drawn}"
+        );
+        // The sentence that makes this a different question from the one asked at startup.
+        assert!(
+            drawn.contains("whoever performs inference"),
+            "the prompt did not say what a yes discloses: {drawn}"
+        );
+        // Both answers are offered: the finding informs and decides nothing.
+        assert!(
+            drawn.contains("send it anyway") && drawn.contains("keep it back"),
+            "{drawn}"
+        );
+        assert_eq!(
+            drawn.matches(BAR).count(),
+            0,
+            "a finding was drawn behind the margin that marks content nobody vouched for: {drawn}"
         );
     }
 

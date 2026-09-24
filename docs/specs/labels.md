@@ -107,7 +107,7 @@ guards:
     sites:
       - crates/agent/src/manifest.rs: 7
       - crates/agent/src/skills.rs: 2
-      - crates/agent/src/tools.rs: 18
+      - crates/agent/src/tools.rs: 19
       - crates/agent/src/turn.rs: 1
       - crates/core/src/policy.rs: 6
   - symbol: Policy::render_pair_in_place

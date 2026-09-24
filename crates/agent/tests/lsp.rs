@@ -205,6 +205,13 @@ impl bravebot_agent::Confirmer for AskedAboutServers {
         bravebot_agent::Decision::Reject
     }
 
+    fn confirm_exposing_read(
+        &mut self,
+        _request: &bravebot_agent::confirm::ExposureRequest,
+    ) -> bravebot_agent::Decision {
+        bravebot_agent::Decision::Reject
+    }
+
     fn ask_user(
         &mut self,
         _asking: &bravebot_core::ask::Asking,

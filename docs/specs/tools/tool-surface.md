@@ -10,7 +10,7 @@ guards:
       - crates/agent/src/tools.rs: 138
   - symbol: Produced::refused_with_a_note
     sites:
-      - crates/agent/src/tools.rs: 5
+      - crates/agent/src/tools.rs: 6
 documented-by: docs/website/docs/reference/tools.md
 ---
 

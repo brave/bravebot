@@ -2720,19 +2720,93 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
         });
     }
 
-    priced(match workspace.read_page(policy, &path, offset, limit) {
-        Ok(page) => {
-            // Reshaped inside the kernel, so the driver never holds the text. Only
-            // `Policy::present` decides whether the planner sees what comes out.
-            let note = note_for(policy, "read_file", &page, |p| {
-                tally(p.lines.len(), "line", "lines")
-            });
-            let rendered =
-                policy.render_in_place("read_file", &page, |p| render_page(&p, ChangeToken::Shown));
-            Produced::new(rendered, shown_path, note).of_content()
+    let page = match workspace.read_page(policy, &path, offset, limit) {
+        Ok(page) => page,
+        Err(e) => {
+            return priced(Produced::problem(format!(
+                "error: {}",
+                e.describe(&shown_path)
+            )));
         }
-        Err(e) => Produced::problem(format!("error: {}", e.describe(&shown_path))),
-    })
+    };
+
+    // What this read would put in a model's context, scanned before it gets there. The planner's
+    // context goes to whoever performs inference, so a file handed to it has been handed to them,
+    // and a scan that ran afterwards would be reporting a disclosure that had already happened
+    // (CRED-15).
+    //
+    // Over the window rather than the whole file, because the window is what is disclosed: a key
+    // five thousand lines below the page the planner asked for is not this read's exposure, and
+    // holding the read back over it would refuse work on grounds the person cannot see in what
+    // they were shown. `offset` is where the window starts, so a finding names the line they
+    // would open their editor at; it is the caller's own number and no part of the file.
+    let body = policy.render_in_place("read_file", &page, |p| p.lines.join("\n"));
+    let found = policy.scan_a_read("read_file", &shown_path, offset, &body);
+
+    if !found.is_empty() && !policy.read_exposure_is_allowed(&keyed) {
+        // Written down before anybody is asked, which is the other half of where a finding goes:
+        // a line drawn while nobody was looking is gone when the turn ends, and the scan exists
+        // to tell a person what is in their own tree (CRED-19). Written whichever way the
+        // question below is answered, because a refusal and an approval are equally findings.
+        //
+        // Here rather than beside the scan so that a planner reading one file on round after
+        // round writes one entry rather than one per round. The session's answer is what bounds
+        // it: this branch is reached once per path per session.
+        tools
+            .recording()
+            .record(workspace.root(), &found.iter().collect::<Vec<_>>());
+
+        let request = crate::confirm::ExposureRequest {
+            path: shown_path.clone(),
+            credentials: described(&found),
+        };
+        if confirmer.confirm_exposing_read(&request) != Decision::Approve {
+            // The planner is told that much and no more. Enough to stop it reading the same file
+            // a second way, and nothing about what was found, because a finding may not enter a
+            // model's context however the question was answered.
+            return priced(Produced::refused_with_a_note(
+                format!(
+                    "refused: {shown_path} holds what looks like a credential, and the user did \
+                     not agree to you being shown it, so none of its text was read. Do not try \
+                     to read it another way: work without it, or say in your reply what you \
+                     needed from it."
+                ),
+                format!("not shown, it holds {}", exposure_note(&found)),
+            ));
+        }
+        policy.allow_exposing_read(&keyed);
+    }
+
+    // Reshaped inside the kernel, so the driver never holds the text. Only
+    // `Policy::present` decides whether the planner sees what comes out.
+    let note = note_for(policy, "read_file", &page, |p| {
+        tally(p.lines.len(), "line", "lines")
+    });
+    let rendered =
+        policy.render_in_place("read_file", &page, |p| render_page(&p, ChangeToken::Shown));
+    priced(Produced::new(rendered, shown_path, exposed_note(note, &found)).of_content())
+}
+
+/// The findings in a file, each said the one way a finding may be said.
+fn described(found: &[bravebot_core::credentials::Finding]) -> Vec<String> {
+    describe_all(&found.iter().collect::<Vec<_>>())
+}
+
+/// The same list as one phrase, for a line rather than a screen.
+fn exposure_note(found: &[bravebot_core::credentials::Finding]) -> String {
+    described(found).join("; ")
+}
+
+/// What the person watching is told beside a read that carried a credential to the planner.
+///
+/// The person's half of the result and never the planner's, which is the same split the write
+/// gate's findings go through: the text reached a model because somebody agreed it should, and
+/// the line they read afterwards says what went with it.
+fn exposed_note(note: String, found: &[bravebot_core::credentials::Finding]) -> String {
+    if found.is_empty() {
+        return note;
+    }
+    format!("{note}; shown despite holding {}", exposure_note(found))
 }
 
 /// The text a slot holds for a file, read at the moment something needs it.
@@ -7934,6 +8008,13 @@ mod tests {
             }
 
             fn confirm_vouch(&mut self, _request: &crate::confirm::VouchRequest) -> Decision {
+                Decision::Reject
+            }
+
+            fn confirm_exposing_read(
+                &mut self,
+                _request: &crate::confirm::ExposureRequest,
+            ) -> Decision {
                 Decision::Reject
             }
 
