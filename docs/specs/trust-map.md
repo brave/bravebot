@@ -427,6 +427,9 @@ names the file it always named, and what changes is which of them a relative nam
 each is spelled back. The new directory is then vouched for, on the same footing as `/add-dir`:
 the person typed the path, and a later decision replaces an earlier one.
 
+The permission rules do not travel. They are read again for the new directory, and an `allow` rule
+granted for the checkout left behind stays with it ([PERM-15](permissions.md#PERM-15)).
+
 **Why.** A yes given for one project must not become a yes for another, and a no given inside the
 old one must not be forgotten. Both follow from a rule naming the file rather than the directory it
 was written from, and neither grants nor withdraws anything, which is what makes this something
@@ -448,6 +451,7 @@ them.
 `verified-by: bravebot_tui::app::changing_directory_moves_the_workspace_and_vouches_for_where_it_moved`
 `verified-by: bravebot_tui::app::changing_directory_leaves_the_previous_answer_where_it_was_given`
 `verified-by: bravebot_tui::app::moving_into_a_directory_keeps_the_answers_given_inside_it`
+`verified-by: bravebot_tui::app::a_rule_granted_in_one_checkout_is_not_in_force_after_moving_to_another`
 
 ## A scratch directory outside the workspace
 

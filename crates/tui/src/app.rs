@@ -2585,9 +2585,10 @@ fn event_loop(
         session.note(newer);
     }
 
-    // The rules the user wrote in advance, read once for the session: a person editing the file
+    // The rules the user wrote in advance, read once for the workspace: a person editing the file
     // mid-session is describing the next one, and rules that changed halfway through a turn would
-    // be the harder thing to explain. Every turn below is given these.
+    // be the harder thing to explain. Every turn below is given these, until `/cd` or `/clear`
+    // reads them again.
     let settings = bravebot_config::Settings::load();
     // Settled before a key can be pressed, since this is what decides whether a letter is a letter.
     session.adopt_editing(settings.editor_mode());
@@ -2596,57 +2597,22 @@ fn event_loop(
     // line's switch is read here and nowhere else in the interface.
     session.adopt_vetting(bravebot_core::vetting::asked_for(), settings.auto_vetting());
     session.adopt_keybindings(settings.keybindings());
-    // The `allow` rules a checkout proposed, which decide something only where this session's own
-    // user grants them. Settled before the rules are built, because a granted one is a rule and the
-    // list has to be complete before anything is parsed out of it.
-    let proposed = proposed_rules(&settings);
-    let grants = bravebot_agent::home::directory()
-        .map(|home| bravebot_agent::granted::Store::new(&home, workspace.root()));
-    let Some(granted) = grant_proposed_rules(
-        terminal,
+    let sources = RuleSources::ambient(workspace.root());
+    let Some(permissions) = rules_from(
         &mut session,
+        &settings,
+        sources.grants(workspace.root()).as_ref(),
         whence,
-        grants.as_ref(),
-        &proposed,
         stored.id(),
+        |asking, carried| crate::trust_prompt::ask_granted(terminal, asking, carried),
     ) else {
         return Ok(left_behind(&stored));
     };
-    let (permissions, rejected) = bravebot_agent::permissions::with_granted(
-        &settings,
-        &granted
-            .iter()
-            .map(|rule| rule.rule.clone())
-            .collect::<Vec<_>>(),
-        bravebot_agent::home::profile().as_deref(),
-    );
-    // Said out loud, because a rule that parses as nothing is a rule somebody believes is in
-    // force. A misspelled deny rule reads as protection that is not there.
-    for problem in &rejected {
-        session.note(t!(
-            session_permission_rule_ignored,
-            problem = bravebot_agent::permissions::describe(problem)
-        ));
-    }
-    // And said out loud for the same reason: an `allow` entry a checkout wrote that nobody granted
-    // is dropped, so the prompt it was meant to answer still appears. Somebody told nothing reads
-    // that prompt as a second fault rather than as the rule not being in force. One this session
-    // granted is not named here, because it is in force and there is nothing to explain.
-    //
-    // Matched on the file as well as the text, since two layers may write one rule and only one of
-    // them be granted: a comparison on the text alone would report neither, leaving an entry that
-    // answers nothing with nothing said about it.
-    for rule in proposed.iter().filter(|rule| !granted.contains(rule)) {
-        session.note(t!(
-            session_permission_allow_ignored,
-            rule = &rule.rule,
-            path = rule.path.display().to_string()
-        ));
-    }
-    // For the same reason, and it matters more: this one is not a rule that quietly does nothing but
-    // every rule at once. Said before the first prompt can be typed, so a person who did not mean to
-    // pass the flag finds out before a write happens rather than after one. `/status` says it too,
-    // for the rest of the session, since a note scrolls away.
+    // Said out loud, as a rule that parses as nothing is, and it matters more: this one is not a
+    // rule that quietly does nothing but every rule at once. Said before the first prompt can
+    // be typed, so a person who did not mean to pass the flag finds out before a write happens
+    // rather than after one. `/status` says it too, for the rest of the session, since a note
+    // scrolls away.
     if skip_permissions {
         session.note(t!(session_permissions_skipped));
     }
@@ -2680,6 +2646,10 @@ fn event_loop(
         }
     };
     open_named(&mut session, &mut workspace, &mut trust, &opening);
+    let mut rules = Rules {
+        sources,
+        permissions,
+    };
 
     // Drawn when something has changed rather than on every pass. A drag arrives as a stream of
     // positions, and a frame for each costs more than the whole gesture is worth: with a long
@@ -2851,13 +2821,17 @@ fn event_loop(
                 // The record moves with the working directory, so the snapshot describes a
                 // session that is no longer written where it was.
                 session.close_rewind_window();
-                if change_directory(
+                let changed = change_directory(
                     &mut session,
                     &mut workspace,
                     &mut trust,
                     &mut servers,
+                    &mut rules,
+                    stored.id(),
                     &directory,
-                ) {
+                    |asking, carried| crate::trust_prompt::ask_granted(terminal, asking, carried),
+                );
+                if changed != Changed::Stayed {
                     stored.move_to(
                         workspace.root(),
                         bravebot_session::sessions::Standing {
@@ -2877,6 +2851,10 @@ fn event_loop(
                             rewind: session.rewind_points(),
                         },
                     );
+                }
+                // After the move, so the session picked up again is picked up where it went.
+                if changed == Changed::Left {
+                    return Ok(left_behind(&stored));
                 }
             }
             Action::Rename(name) => {
@@ -3039,7 +3017,7 @@ fn event_loop(
                         &pasted,
                         &attached,
                         &mut trust,
-                        &permissions,
+                        &rules.permissions,
                         settings.attribution(),
                     )?;
 
@@ -3105,12 +3083,25 @@ fn event_loop(
                 // Where this map came from decides nothing further: a directory a settings file
                 // named was opened by an answer the cleared session's user gave, and it closed
                 // with that session rather than carrying into this one.
-                let Some((fresh, _)) =
+                let Some((fresh, whence)) =
                     opening_trust(terminal, &mut session, workspace.root(), Beginning::New)
                 else {
                     return Ok(left_behind(&stored));
                 };
                 trust = fresh;
+                // And the rules a new session opens with, for the root it is in: the grants the
+                // cleared session installed were answered by its user, and the files may have
+                // changed since. Where the person already granted a rule the record says so, and
+                // nothing is asked twice.
+                if !rules.read_for(
+                    &mut session,
+                    workspace.root(),
+                    whence,
+                    stored.id(),
+                    |asking, carried| crate::trust_prompt::ask_granted(terminal, asking, carried),
+                ) {
+                    return Ok(left_behind(&stored));
+                }
                 // A new session vouches for no program, on the same reasoning as the map: the
                 // list is a standing permission, and this begins a session that was never asked.
                 programs = TrustedPrograms::new();
@@ -3167,7 +3158,7 @@ fn event_loop(
                         programs,
                         servers,
                         asked_about,
-                        &permissions,
+                        &rules.permissions,
                         settings.attribution(),
                         stored.id(),
                     )?;
@@ -3323,16 +3314,24 @@ fn add_directory(
 ///
 /// Session-scoped like everything else the map holds. A later session in the directory the user
 /// started in is asked the opening question there, exactly as it would have been.
+///
+/// The permission rules are read again for the new root, PERM-15: a rule granted for the old
+/// checkout's file is not a rule anybody granted here, and this checkout's own `deny` rules are in
+/// force from the first turn. What it proposes is put to the person through `ask`.
+#[allow(clippy::too_many_arguments)]
 fn change_directory(
     session: &mut Session,
     workspace: &mut Workspace,
     trust: &mut TrustStore,
     servers: &mut Option<LanguageServers>,
+    rules: &mut Rules,
+    id: &str,
     directory: &str,
-) -> bool {
+    ask: impl FnOnce(&[bravebot_agent::granted::Proposed], &mut String) -> Option<bool>,
+) -> Changed {
     if directory.is_empty() {
         session.note(t!(session_cd_needs_a_path));
-        return false;
+        return Changed::Stayed;
     }
 
     // Against where the session is now, which is what changing directory means everywhere else: a
@@ -3348,7 +3347,7 @@ fn change_directory(
                 directory = directory,
                 problem = problem
             ));
-            return false;
+            return Changed::Stayed;
         }
     };
 
@@ -3378,7 +3377,28 @@ fn change_directory(
     // left to the next look, which is up to five seconds away and would let a watch that has
     // already seen a change fire about a path this directory resolves elsewhere.
     session.end_watches_left_behind(&moved.root);
-    true
+    // Asked, since the person who typed the path is here to answer, unless the mode in force answers
+    // every question. Never resumed: no record holds an answer for a directory the session was not in.
+    let whence = match crate::trust_prompt::answered_by(session.permission_mode(), &moved.root) {
+        Some(_) => Whence::Unasked,
+        None => Whence::Asked,
+    };
+    if rules.read_for(session, &moved.root, whence, id, ask) {
+        Changed::Moved
+    } else {
+        Changed::Left
+    }
+}
+
+/// What `/cd` did.
+#[derive(Debug, PartialEq, Eq)]
+enum Changed {
+    /// Nothing, because the path named nowhere the session could go.
+    Stayed,
+    /// Moved, under the new directory's rules.
+    Moved,
+    /// Moved, and the person asked to leave at the new directory's rules question.
+    Left,
 }
 
 /// The name a settings file gave a directory, as an absolute path.
@@ -4028,14 +4048,14 @@ fn granting_proposed_rules(
 /// Which proposed rules this session installs, or `None` where the person asked to leave.
 ///
 /// A rule is granted for the file that proposed it, so what comes back is the text alone: which
-/// layer wrote it decided whether to ask, and by here that is answered.
+/// layer wrote it decided whether to ask, and by here that is answered. `ask` puts the question.
 fn grant_proposed_rules(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     session: &mut Session,
     whence: Whence,
     grants: Option<&bravebot_agent::granted::Store>,
     proposed: &[bravebot_agent::granted::Proposed],
     id: &str,
+    ask: impl FnOnce(&[bravebot_agent::granted::Proposed], &mut String) -> Option<bool>,
 ) -> Option<Vec<bravebot_agent::granted::Proposed>> {
     // Nothing proposed is nothing to ask about and no record to read (PERM-12), which is every
     // session in a checkout that carries no such rule.
@@ -4082,7 +4102,7 @@ fn grant_proposed_rules(
     // Carried for the reason the other two questions carry it: words another program typed while this
     // was up are not dropped, they go to the box where somebody can read them.
     let mut carried = String::new();
-    let granting = crate::trust_prompt::ask_granted(terminal, &asking, &mut carried);
+    let granting = ask(&asking, &mut carried);
     if !carried.is_empty() {
         session.paste_text(&carried);
     }
@@ -4094,6 +4114,125 @@ fn grant_proposed_rules(
     }
     granted.extend(asking);
     Some(granted)
+}
+
+/// The rules in force for a workspace whose layers read as `settings`, or `None` where the person
+/// asked to leave at the question [`grant_proposed_rules`] puts.
+fn rules_from(
+    session: &mut Session,
+    settings: &bravebot_config::Settings,
+    grants: Option<&bravebot_agent::granted::Store>,
+    whence: Whence,
+    id: &str,
+    ask: impl FnOnce(&[bravebot_agent::granted::Proposed], &mut String) -> Option<bool>,
+) -> Option<Permissions> {
+    // The `allow` rules a checkout proposed, which decide something only where this session's own
+    // user grants them. Settled before the rules are built, because a granted one is a rule and the
+    // list has to be complete before anything is parsed out of it.
+    let proposed = proposed_rules(settings);
+    let granted = grant_proposed_rules(session, whence, grants, &proposed, id, ask)?;
+    let (permissions, rejected) = bravebot_agent::permissions::with_granted(
+        settings,
+        &granted
+            .iter()
+            .map(|rule| rule.rule.clone())
+            .collect::<Vec<_>>(),
+        bravebot_agent::home::profile().as_deref(),
+    );
+    // Said out loud, because a rule that parses as nothing is a rule somebody believes is in
+    // force. A misspelled deny rule reads as protection that is not there.
+    for problem in &rejected {
+        session.note(t!(
+            session_permission_rule_ignored,
+            problem = bravebot_agent::permissions::describe(problem)
+        ));
+    }
+    // And said out loud for the same reason: an `allow` entry a checkout wrote that nobody granted
+    // is dropped, so the prompt it was meant to answer still appears. Somebody told nothing reads
+    // that prompt as a second fault rather than as the rule not being in force. One this session
+    // granted is not named here, because it is in force and there is nothing to explain.
+    //
+    // Matched on the file as well as the text, since two layers may write one rule and only one of
+    // them be granted: a comparison on the text alone would report neither, leaving an entry that
+    // answers nothing with nothing said about it.
+    for rule in proposed.iter().filter(|rule| !granted.contains(rule)) {
+        session.note(t!(
+            session_permission_allow_ignored,
+            rule = &rule.rule,
+            path = rule.path.display().to_string()
+        ));
+    }
+    Some(permissions)
+}
+
+/// Where a workspace's rules are read from, bar the workspace itself.
+///
+/// The state directory holds the person's own settings layer and the record of what they granted,
+/// and `named` is the file `--settings` named. Neither moves with the session, so rules read again
+/// after `/cd` differ from the ones before it by the checkout's layers alone. `started` is the root
+/// the session opened in, which keeps a named file inside it the checkout's wherever the session goes.
+struct RuleSources {
+    state: Option<std::path::PathBuf>,
+    named: Option<std::path::PathBuf>,
+    started: std::path::PathBuf,
+}
+
+impl RuleSources {
+    /// The ones this process reads, for a session that opened in `started`.
+    fn ambient(started: &std::path::Path) -> Self {
+        Self {
+            state: bravebot_agent::home::directory(),
+            named: bravebot_config::named_settings_file().map(std::path::Path::to_path_buf),
+            started: started.to_path_buf(),
+        }
+    }
+
+    /// Every layer in force for a session in `root`.
+    ///
+    /// The root rather than the process's own directory, which `/cd` does not change.
+    fn settings(&self, root: &std::path::Path) -> bravebot_config::Settings {
+        bravebot_config::Settings::layered_since(
+            self.state.clone(),
+            Some(root),
+            self.named.as_deref(),
+            Some(&self.started),
+        )
+    }
+
+    /// The record of what was granted in `root`.
+    fn grants(&self, root: &std::path::Path) -> Option<bravebot_agent::granted::Store> {
+        self.state
+            .as_deref()
+            .map(|state| bravebot_agent::granted::Store::new(state, root))
+    }
+}
+
+/// The rules every turn is given, built from the settings of the workspace the session is in.
+struct Rules {
+    sources: RuleSources,
+    permissions: Permissions,
+}
+
+impl Rules {
+    /// Replace these with the rules for `root`, or leave them and say `false` where the person asked
+    /// to leave at the question.
+    fn read_for(
+        &mut self,
+        session: &mut Session,
+        root: &std::path::Path,
+        whence: Whence,
+        id: &str,
+        ask: impl FnOnce(&[bravebot_agent::granted::Proposed], &mut String) -> Option<bool>,
+    ) -> bool {
+        let settings = self.sources.settings(root);
+        let grants = self.sources.grants(root);
+        let Some(permissions) = rules_from(session, &settings, grants.as_ref(), whence, id, ask)
+        else {
+            return false;
+        };
+        self.permissions = permissions;
+        true
+    }
 }
 
 /// The directories the names in a settings file would open, in the order they were named.
@@ -15033,6 +15172,393 @@ mod tests {
         }
     }
 
+    /// The rules a session opened in `root` holds once its person accepted whatever the checkout
+    /// proposed, with `state` standing in for `~/.bravebot` so nothing of the real one is read.
+    fn starting_rules(
+        session: &mut Session,
+        state: &std::path::Path,
+        root: &std::path::Path,
+    ) -> Rules {
+        starting_rules_naming(session, state, root, None)
+    }
+
+    /// As [`starting_rules`], for a command line whose `--settings` named `named`.
+    fn starting_rules_naming(
+        session: &mut Session,
+        state: &std::path::Path,
+        root: &std::path::Path,
+        named: Option<&std::path::Path>,
+    ) -> Rules {
+        let sources = RuleSources {
+            state: Some(state.to_path_buf()),
+            named: named.map(std::path::Path::to_path_buf),
+            started: root.to_path_buf(),
+        };
+        let settings = sources.settings(root);
+        let permissions = rules_from(
+            session,
+            &settings,
+            sources.grants(root).as_ref(),
+            Whence::Asked,
+            "the-first-session",
+            |_, _| Some(true),
+        )
+        .expect("nobody left");
+        Rules {
+            sources,
+            permissions,
+        }
+    }
+
+    /// The answer for a move that must put no question.
+    fn never_asked(_: &[bravebot_agent::granted::Proposed], _: &mut String) -> Option<bool> {
+        panic!("a question was put about a checkout's rules")
+    }
+
+    /// A checkout at `root` whose own settings file says `body`.
+    fn checkout_with_settings(root: &std::path::Path, body: &str) {
+        std::fs::create_dir_all(root.join(".bravebot")).expect("scratch");
+        std::fs::write(root.join(".bravebot").join("settings.json"), body)
+            .expect("write the project layer");
+    }
+
+    const CHECK: &str = r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)"]}}"#;
+
+    /// PERM-15 and TRUST-13: a rule granted for one checkout's file answers nothing in the checkout
+    /// `/cd` moves to. Kept, it runs that checkout's `scripts/check.sh` with no prompt, on an answer
+    /// the person gave about another file (#843).
+    #[test]
+    fn a_rule_granted_in_one_checkout_is_not_in_force_after_moving_to_another() {
+        use bravebot_core::permissions::{Decision, Ruling};
+        let root = crate::testutil::scratch_dir("bravebot-cd-granted-test");
+        let _ = std::fs::remove_dir_all(&root);
+        let (a, b) = (root.join("a"), root.join("b"));
+        checkout_with_settings(&a, CHECK);
+        std::fs::create_dir_all(&b).expect("scratch");
+
+        let mut workspace = Workspace::new(&a).expect("workspace");
+        let mut session = Session::new("none");
+        let mut trust = TrustStore::new(workspace.root());
+        let mut rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        assert_eq!(
+            rules.permissions.for_command("bash scripts/check.sh"),
+            Decision::Ruled(Ruling::Allow),
+            "the rule was not granted where it was proposed"
+        );
+
+        let mut asked = 0;
+        assert_eq!(
+            change_directory(
+                &mut session,
+                &mut workspace,
+                &mut trust,
+                &mut None,
+                &mut rules,
+                "a-session",
+                b.to_str().expect("utf-8 path"),
+                |_, _| {
+                    asked += 1;
+                    Some(true)
+                },
+            ),
+            Changed::Moved
+        );
+
+        assert_eq!(
+            rules.permissions.for_command("bash scripts/check.sh"),
+            Decision::Unmatched,
+            "the grant for the checkout left behind still answers the run prompt"
+        );
+        assert_eq!(
+            asked, 0,
+            "a question was put about a checkout that proposes nothing"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// PERM-15: the checkout moved to has its own settings read, so a `deny` rule it writes is in
+    /// force from the first turn there, as it is for a session started in it.
+    #[test]
+    fn moving_to_a_checkout_puts_its_own_deny_rules_in_force() {
+        use bravebot_core::permissions::{Decision, Ruling};
+        let root = crate::testutil::scratch_dir("bravebot-cd-deny-test");
+        let _ = std::fs::remove_dir_all(&root);
+        let (a, b) = (root.join("a"), root.join("b"));
+        std::fs::create_dir_all(&a).expect("scratch");
+        checkout_with_settings(&b, r#"{"permissions": {"deny": ["Bash(rm -rf build)"]}}"#);
+
+        let mut workspace = Workspace::new(&a).expect("workspace");
+        let mut session = Session::new("none");
+        let mut trust = TrustStore::new(workspace.root());
+        let mut rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        assert_eq!(
+            rules.permissions.for_command("rm -rf build"),
+            Decision::Unmatched
+        );
+
+        assert_eq!(
+            change_directory(
+                &mut session,
+                &mut workspace,
+                &mut trust,
+                &mut None,
+                &mut rules,
+                "a-session",
+                b.to_str().expect("utf-8 path"),
+                never_asked,
+            ),
+            Changed::Moved
+        );
+
+        assert_eq!(
+            rules.permissions.for_command("rm -rf build"),
+            Decision::Ruled(Ruling::Deny),
+            "the deny rule of the checkout moved to is not in force"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// PERM-15: what the checkout moved to proposes is put to the person, naming that checkout's
+    /// file, and accepting it is recorded for that checkout. The same text granted for the one left
+    /// behind was a grant for a different file, so it does not stand in for this answer.
+    #[test]
+    fn a_rule_the_checkout_moved_to_proposes_is_asked_about_and_granted_there() {
+        use bravebot_core::permissions::{Decision, Ruling};
+        let root = crate::testutil::scratch_dir("bravebot-cd-proposed-test");
+        let _ = std::fs::remove_dir_all(&root);
+        let (a, b, state) = (root.join("a"), root.join("b"), root.join("state"));
+        checkout_with_settings(&a, CHECK);
+        checkout_with_settings(&b, CHECK);
+
+        let mut workspace = Workspace::new(&a).expect("workspace");
+        let mut session = Session::new("none");
+        let mut trust = TrustStore::new(workspace.root());
+        let mut rules = starting_rules(&mut session, &state, workspace.root());
+
+        let mut offered = Vec::new();
+        assert_eq!(
+            change_directory(
+                &mut session,
+                &mut workspace,
+                &mut trust,
+                &mut None,
+                &mut rules,
+                "a-session",
+                b.to_str().expect("utf-8 path"),
+                |asking, _| {
+                    offered = asking.to_vec();
+                    Some(true)
+                },
+            ),
+            Changed::Moved
+        );
+
+        let file = workspace.root().join(".bravebot").join("settings.json");
+        assert_eq!(
+            offered,
+            [bravebot_agent::granted::Proposed::new(
+                &file,
+                "Bash(bash scripts/check.sh)"
+            )],
+            "the question did not name the rule the checkout moved to proposed"
+        );
+        assert_eq!(
+            rules.permissions.for_command("bash scripts/check.sh"),
+            Decision::Ruled(Ruling::Allow),
+            "the rule accepted after the move is not in force"
+        );
+        assert_eq!(
+            bravebot_agent::granted::Store::new(&state, workspace.root())
+                .granted(&offered)
+                .len(),
+            1,
+            "the grant was not recorded for the checkout it was given in"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// PERM-15: leaving at the rules question after a move leaves the session, as leaving at it
+    /// when the session opened does.
+    #[test]
+    fn leaving_at_the_rules_question_after_moving_leaves_the_session() {
+        let root = crate::testutil::scratch_dir("bravebot-cd-leave-test");
+        let _ = std::fs::remove_dir_all(&root);
+        let (a, b) = (root.join("a"), root.join("b"));
+        std::fs::create_dir_all(&a).expect("scratch");
+        checkout_with_settings(&b, CHECK);
+
+        let mut workspace = Workspace::new(&a).expect("workspace");
+        let mut session = Session::new("none");
+        let mut trust = TrustStore::new(workspace.root());
+        let mut rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+
+        assert_eq!(
+            change_directory(
+                &mut session,
+                &mut workspace,
+                &mut trust,
+                &mut None,
+                &mut rules,
+                "a-session",
+                b.to_str().expect("utf-8 path"),
+                |_, _| None,
+            ),
+            Changed::Left
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// PERM-15: the mode that answers every question answers the one a move would put, on the terms
+    /// it answers at startup: in force for the session, asked of nobody, recorded nowhere.
+    #[test]
+    fn bypassing_grants_what_the_checkout_moved_to_proposes_without_asking() {
+        use bravebot_core::permissions::{Decision, Ruling};
+        let root = crate::testutil::scratch_dir("bravebot-cd-bypass-test");
+        let _ = std::fs::remove_dir_all(&root);
+        let (a, b, state) = (root.join("a"), root.join("b"), root.join("state"));
+        std::fs::create_dir_all(&a).expect("scratch");
+        checkout_with_settings(&b, CHECK);
+
+        let mut workspace = Workspace::new(&a).expect("workspace");
+        let mut session = Session::new("none").allowing_bypass();
+        let mut trust = TrustStore::new(workspace.root());
+        let mut rules = starting_rules(&mut session, &state, workspace.root());
+
+        assert_eq!(
+            change_directory(
+                &mut session,
+                &mut workspace,
+                &mut trust,
+                &mut None,
+                &mut rules,
+                "a-session",
+                b.to_str().expect("utf-8 path"),
+                never_asked,
+            ),
+            Changed::Moved
+        );
+
+        assert_eq!(
+            rules.permissions.for_command("bash scripts/check.sh"),
+            Decision::Ruled(Ruling::Allow),
+            "the mode did not grant what the checkout moved to proposed"
+        );
+        let file = workspace.root().join(".bravebot").join("settings.json");
+        assert!(
+            bravebot_agent::granted::Store::new(&state, workspace.root())
+                .granted(&[bravebot_agent::granted::Proposed::new(
+                    &file,
+                    "Bash(bash scripts/check.sh)"
+                )])
+                .is_empty(),
+            "a grant nobody was asked for was written down"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// PERM-14: a file `--settings` named inside the checkout the session opened in is still that
+    /// checkout's after `/cd` leaves it, so its rule is put to the person rather than granted by
+    /// the move.
+    #[test]
+    fn a_named_file_in_the_checkout_left_behind_is_still_asked_about_after_moving() {
+        use bravebot_core::permissions::Decision;
+        let root = crate::testutil::scratch_dir("bravebot-cd-named-test");
+        let _ = std::fs::remove_dir_all(&root);
+        let (a, b) = (root.join("a"), root.join("b"));
+        std::fs::create_dir_all(&a).expect("scratch");
+        std::fs::create_dir_all(&b).expect("scratch");
+        let tooling = a.join("tooling.json");
+        std::fs::write(&tooling, CHECK).expect("the named file");
+
+        let mut workspace = Workspace::new(&a).expect("workspace");
+        let mut session = Session::new("none");
+        let mut trust = TrustStore::new(workspace.root());
+        let mut rules = starting_rules_naming(
+            &mut session,
+            &root.join("state"),
+            workspace.root(),
+            Some(&tooling),
+        );
+
+        let mut offered = Vec::new();
+        assert_eq!(
+            change_directory(
+                &mut session,
+                &mut workspace,
+                &mut trust,
+                &mut None,
+                &mut rules,
+                "a-session",
+                b.to_str().expect("utf-8 path"),
+                |asking, _| {
+                    offered = asking.to_vec();
+                    Some(false)
+                },
+            ),
+            Changed::Moved
+        );
+
+        assert_eq!(
+            rules.permissions.for_command("bash scripts/check.sh"),
+            Decision::Unmatched,
+            "moving out of the checkout made its file the person's"
+        );
+        assert_eq!(
+            offered,
+            [bravebot_agent::granted::Proposed::new(
+                &tooling,
+                "Bash(bash scripts/check.sh)"
+            )],
+            "the named file left behind was not asked about"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// PERM-15: reading the rules again where the session is, as `/clear` does, asks nothing about
+    /// a rule the person granted there and puts in force what the file says now.
+    #[test]
+    fn reading_the_rules_again_in_the_same_checkout_asks_nothing_granted_and_reads_the_file_anew() {
+        use bravebot_core::permissions::{Decision, Ruling};
+        let root = crate::testutil::scratch_dir("bravebot-reread-test");
+        let _ = std::fs::remove_dir_all(&root);
+        let a = root.join("a");
+        checkout_with_settings(&a, CHECK);
+
+        let workspace = Workspace::new(&a).expect("workspace");
+        let mut session = Session::new("none");
+        let mut rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        checkout_with_settings(
+            &a,
+            r#"{"permissions": {"allow": ["Bash(bash scripts/check.sh)"], "deny": ["Bash(rm -rf build)"]}}"#,
+        );
+
+        assert!(rules.read_for(
+            &mut session,
+            workspace.root(),
+            Whence::Asked,
+            "the-next-session",
+            never_asked,
+        ));
+        assert_eq!(
+            rules.permissions.for_command("bash scripts/check.sh"),
+            Decision::Ruled(Ruling::Allow),
+            "the rule granted here is no longer in force"
+        );
+        assert_eq!(
+            rules.permissions.for_command("rm -rf build"),
+            Decision::Ruled(Ruling::Deny),
+            "the file was not read again"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     /// Both halves of what `/cd` does, together: the working directory moves, and the directory
     /// moved to is vouched for, which is what a relative path means and what decides a write there.
     #[test]
@@ -15046,14 +15572,21 @@ mod tests {
         let mut workspace = Workspace::new(&project).expect("workspace");
         let mut session = Session::new("none");
         let mut trust = TrustStore::new("/work");
+        let mut rules = starting_rules(&mut session, &root.join("state"), workspace.root());
 
-        assert!(change_directory(
-            &mut session,
-            &mut workspace,
-            &mut trust,
-            &mut None,
-            other.to_str().expect("utf-8 path")
-        ));
+        assert_eq!(
+            change_directory(
+                &mut session,
+                &mut workspace,
+                &mut trust,
+                &mut None,
+                &mut rules,
+                "a-session",
+                other.to_str().expect("utf-8 path"),
+                never_asked,
+            ),
+            Changed::Moved
+        );
 
         let canonical = other.canonicalize().expect("canonical");
         assert_eq!(workspace.root(), canonical);
@@ -15089,17 +15622,24 @@ mod tests {
         let mut workspace = Workspace::new(&project).expect("workspace");
         let mut session = Session::new("none");
         let mut trust = TrustStore::new(workspace.root());
+        let mut rules = starting_rules(&mut session, &root.join("state"), workspace.root());
         let under = workspace.root();
         session.arm_watch("notes.md", under, workspace.look("notes.md", under));
         assert_eq!(session.watches().len(), 1, "the watch was not armed");
 
-        assert!(change_directory(
-            &mut session,
-            &mut workspace,
-            &mut trust,
-            &mut None,
-            other.to_str().expect("utf-8 path")
-        ));
+        assert_eq!(
+            change_directory(
+                &mut session,
+                &mut workspace,
+                &mut trust,
+                &mut None,
+                &mut rules,
+                "a-session",
+                other.to_str().expect("utf-8 path"),
+                never_asked,
+            ),
+            Changed::Moved
+        );
 
         assert!(
             session.watches().is_empty(),
@@ -15143,17 +15683,24 @@ mod tests {
         let mut workspace = Workspace::new(&project).expect("workspace");
         let mut session = Session::new("none");
         let mut trust = TrustStore::new(workspace.root());
+        let mut rules = starting_rules(&mut session, &root.join("state"), workspace.root());
         // Nothing is started by building the set, which is LSP-8: a server comes up on the first
         // question that needs one. What is being asserted is who holds the set afterwards.
         let mut servers = Some(LanguageServers::new(workspace.root().to_path_buf(), None));
 
-        assert!(change_directory(
-            &mut session,
-            &mut workspace,
-            &mut trust,
-            &mut servers,
-            other.to_str().expect("utf-8 path")
-        ));
+        assert_eq!(
+            change_directory(
+                &mut session,
+                &mut workspace,
+                &mut trust,
+                &mut servers,
+                &mut rules,
+                "a-session",
+                other.to_str().expect("utf-8 path"),
+                never_asked,
+            ),
+            Changed::Moved
+        );
 
         assert!(
             servers.is_none(),
@@ -15177,17 +15724,24 @@ mod tests {
         let mut workspace = Workspace::new(&project).expect("workspace");
         let mut session = Session::new("none");
         let mut trust = TrustStore::new(workspace.root());
+        let mut rules = starting_rules(&mut session, &root.join("state"), workspace.root());
         trust.trust(".");
         trust.distrust("vendor");
 
         let left = workspace.root().to_path_buf();
-        assert!(change_directory(
-            &mut session,
-            &mut workspace,
-            &mut trust,
-            &mut None,
-            other.to_str().expect("utf-8 path")
-        ));
+        assert_eq!(
+            change_directory(
+                &mut session,
+                &mut workspace,
+                &mut trust,
+                &mut None,
+                &mut rules,
+                "a-session",
+                other.to_str().expect("utf-8 path"),
+                never_asked,
+            ),
+            Changed::Moved
+        );
 
         assert!(
             trust.is_trusted(&left.display().to_string()),
@@ -15218,16 +15772,23 @@ mod tests {
         let mut workspace = Workspace::new(&project).expect("workspace");
         let mut session = Session::new("none");
         let mut trust = TrustStore::new(workspace.root());
+        let mut rules = starting_rules(&mut session, &root.join("state"), workspace.root());
         trust.trust(".");
         trust.distrust("src/vendor");
 
-        assert!(change_directory(
-            &mut session,
-            &mut workspace,
-            &mut trust,
-            &mut None,
-            "src"
-        ));
+        assert_eq!(
+            change_directory(
+                &mut session,
+                &mut workspace,
+                &mut trust,
+                &mut None,
+                &mut rules,
+                "a-session",
+                "src",
+                never_asked,
+            ),
+            Changed::Moved
+        );
 
         assert!(
             trust.is_trusted("main.rs"),
@@ -15251,15 +15812,22 @@ mod tests {
         let mut workspace = Workspace::new(&root).expect("workspace");
         let mut session = Session::new("none");
         let mut trust = TrustStore::new("/work");
+        let mut rules = starting_rules(&mut session, &root.join("state"), workspace.root());
         let before = workspace.root().to_path_buf();
 
-        assert!(!change_directory(
-            &mut session,
-            &mut workspace,
-            &mut trust,
-            &mut None,
-            "nowhere"
-        ));
+        assert_eq!(
+            change_directory(
+                &mut session,
+                &mut workspace,
+                &mut trust,
+                &mut None,
+                &mut rules,
+                "a-session",
+                "nowhere",
+                never_asked,
+            ),
+            Changed::Stayed
+        );
         assert_eq!(workspace.root(), before);
         assert!(trust.is_empty(), "a refused move vouched for something");
 

@@ -387,7 +387,7 @@ extend reach: it cannot open a path the workspace and the directories you opened
 `.bravebot/settings.json` and `.bravebot/settings.local.json` that arrive with a repository, because
 both of those only ever take something away. `allow` is the one list that hands something back, so it
 is read from `~/.bravebot/settings.json`, and from a file you passed to `--settings` that sits outside
-the project you are working in. An `allow` entry in a checkout's file takes effect on nothing by
+the project you are working in and the one you started in. An `allow` entry in a checkout's file takes effect on nothing by
 itself: whoever last edited the repository would otherwise be answering an approval prompt on your
 behalf, which is a program run with your privileges, a file written without the question, or a
 redirect to a host you were never shown.
@@ -398,6 +398,12 @@ rules; saying no grants none and the session carries on asking about each action
 The answer is kept per project, in `~/.bravebot/granted/`, so the next session there does not ask
 again, and a project that edits a rule after you granted it asks about the new one. Delete the file,
 or the line in it, to take a grant back.
+
+A grant stays with the project it was given in. `/cd` into another checkout reads that checkout's
+rules and puts its own box where it proposes something, so a rule you granted for the first one
+answers nothing in the second, and the second's `deny` rules are in force from the first turn there.
+A subdirectory has no rules of its own to read, so `/cd` into one leaves the checkout's behind, as
+starting there would. `/clear` reads the rules again for the directory you are in.
 
 `bravebot doctor` names every such rule and says which of the two it is, for the directory you run it
 in, so neither the prompt you still get nor the one you no longer get is a mystery. Waiving a prompt

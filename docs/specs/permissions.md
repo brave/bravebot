@@ -376,8 +376,9 @@ train the habit of answering without reading, which is the whole of what asking 
 ### PERM-14: only the person's own file may write a rule that grants
 
 An `allow` rule is read from `~/.bravebot/settings.json`, and from a file `--settings` named that
-resolves outside the workspace. An `allow` rule in `.bravebot/settings.json`, in
-`.bravebot/settings.local.json`, or in a `--settings` file that resolves inside the workspace takes
+resolves outside the workspace and outside the one the session opened in. An `allow` rule in
+`.bravebot/settings.json`, in `.bravebot/settings.local.json`, or in a `--settings` file that resolves
+inside either takes
 effect on being read by nothing: it answers no prompt and permits no fetch. Every one is reported,
 with the file it was written in, on `doctor` and in the session that read the file: as dropped, or as
 granted where the person granted it at the question [PERM-15](#PERM-15) puts.
@@ -398,7 +399,7 @@ name in a checkout's file is a request, not a grant. The local layer is the same
 name, since nothing stops one being committed, which is why `vetting` reads the two identically. A
 `--settings` file is a path somebody typed at this invocation, which is their own claim, but the
 flag can name a file inside the checkout and a README saying so would be the same grant by another
-route. The report is [PERM-11](#PERM-11)'s reasoning applied to a readable rule: a rule dropped in
+route. Moving out of that checkout with `/cd` does not change who wrote the file. The report is [PERM-11](#PERM-11)'s reasoning applied to a readable rule: a rule dropped in
 silence reads to whoever wrote it as one in force.
 
 `verified-by: bravebot_config::settings::a_project_layer_allow_rule_is_not_granted`
@@ -409,6 +410,8 @@ silence reads to whoever wrote it as one in force.
 `verified-by: bravebot_config::settings::a_project_layer_may_still_name_a_directory_to_ask_about`
 `verified-by: bravebot_config::settings::a_named_layer_outside_the_workspace_may_write_an_allow_rule`
 `verified-by: bravebot_config::settings::a_named_layer_inside_the_workspace_is_the_checkouts_file_under_another_name`
+`verified-by: bravebot_config::settings::a_named_layer_inside_where_the_session_began_grants_nothing_after_it_moves`
+`verified-by: bravebot_tui::app::a_named_file_in_the_checkout_left_behind_is_still_asked_about_after_moving`
 `verified-by: bravebot_agent::permissions::a_checkout_cannot_write_a_rule_that_answers_a_prompt`
 `verified-by: bravebot_config::settings::a_blank_allow_entry_is_not_reported_as_a_rule_that_was_withheld`
 `verified-by: bravebot_cli::running::doctor_names_an_allow_rule_a_checkout_wrote`
@@ -450,6 +453,16 @@ the flag that made it. A session resumed with the map its own user left is asked
 what its workspace's record already says, which is [PERM-10](#PERM-10)'s treatment of a resume that
 brought its own map.
 
+**Moving and starting over.** `/cd` reads the settings of the directory it moves to and builds the
+rules again from them, as a session begun there would. That checkout's `deny` and `ask` rules are in
+force from the first turn, what it proposes is put to the person in this question, and a rule granted
+for the checkout left behind is not in force. The mode that answers every question answers this one
+too, and leaving at it ends the session. `/clear` does the same for the directory it is in. The
+person's own layer and the file `--settings` named are read from the same place before and after
+either, and the named file grants only on [PERM-14](#PERM-14)'s terms. A subdirectory of the
+checkout reads no project layer, as a session begun there reads none, so moving into one leaves the
+checkout's own `deny` and `ask` rules behind with its grants.
+
 **Why.** [PERM-14](#PERM-14) closes the hole and costs the per-project answer with it. This is the
 way back: the checkout proposes and the person grants, which is what [#140](https://github.com/brave/bravebot/issues/140)
 and [PERM-10](#PERM-10) already settled for `additionalDirectories`.
@@ -471,6 +484,10 @@ screen. A checkout that changes its rule after a grant is proposing something no
 record in the person's own directory rather than in the tree it governs is [PERM-14](#PERM-14) one
 level up: a grant written inside the checkout could be committed.
 
+A grant is for one file in one workspace, so a session that carried it through `/cd` would be
+answering a prompt in a tree nobody was asked about, with another checkout's script run on an answer
+about the first one's ([#843](https://github.com/brave/bravebot/issues/843)).
+
 `verified-by: bravebot_tui::trust_prompt::the_rules_are_granted_only_where_the_person_accepts_them`
 `verified-by: bravebot_tui::app::a_checkouts_entry_is_proposed_here_only_where_it_is_a_rule`
 `verified-by: bravebot_tui::trust_prompt::nothing_is_asked_where_there_is_nothing_to_grant`
@@ -482,6 +499,12 @@ level up: a grant written inside the checkout could be committed.
 `verified-by: bravebot_tui::app::one_rule_text_in_two_files_is_granted_for_the_file_it_was_granted_in`
 `verified-by: bravebot_tui::app::bypassing_grants_the_rules_a_checkout_proposed_without_asking`
 `verified-by: bravebot_tui::app::a_resume_grants_only_the_rules_the_record_already_held`
+`verified-by: bravebot_tui::app::a_rule_granted_in_one_checkout_is_not_in_force_after_moving_to_another`
+`verified-by: bravebot_tui::app::moving_to_a_checkout_puts_its_own_deny_rules_in_force`
+`verified-by: bravebot_tui::app::a_rule_the_checkout_moved_to_proposes_is_asked_about_and_granted_there`
+`verified-by: bravebot_tui::app::leaving_at_the_rules_question_after_moving_leaves_the_session`
+`verified-by: bravebot_tui::app::bypassing_grants_what_the_checkout_moved_to_proposes_without_asking`
+`verified-by: bravebot_tui::app::reading_the_rules_again_in_the_same_checkout_asks_nothing_granted_and_reads_the_file_anew`
 `verified-by: bravebot_agent::permissions::a_rule_the_person_granted_answers_the_prompt_and_one_they_did_not_does_not`
 `verified-by: bravebot_agent::permissions::a_granted_rule_does_not_beat_a_deny_rule`
 `verified-by: bravebot_agent::permissions::a_granted_line_that_is_not_a_rule_is_reported_and_decides_nothing`

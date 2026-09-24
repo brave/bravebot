@@ -156,6 +156,11 @@ Your trust map comes with you rather than being carried over unchanged. See
 each rule, and [Sessions](../using/sessions.md#a-session-that-changed-directory) for where the record
 goes.
 
+Your permission rules do not come with you. The new directory's rules are read, and anything its
+checkout proposes is put to you in the box a session opening there would show, so a rule you granted
+for the directory you left answers nothing here. See
+[Rules you write down in advance](../security/permissions.md#rules-you-write-down-in-advance).
+
 ## `/loop [interval] <prompt>`
 
 Sends one prompt again and again until you stop it, says what is repeating, or ends it.
