@@ -381,6 +381,10 @@ file, or one naming a level this program does not define, is no choice at all, l
 to carry none. Asking for no level removes the record rather than writing an empty one, so somebody
 who unsets it is back where they were before they ever chose.
 
+This is not the only route to a level: a settings file may name one, below whatever is recorded here
+([BACKEND-43](backends.md#BACKEND-43)), which is what a checkout and an unattended machine have. With
+one written, somebody back where they were before they ever chose is somebody the file answers for.
+
 **Why.** Asking again in every project for the same preference is answering it repeatedly, and
 nothing about how hard to think depends on which files are open. Refusing to store a word this
 program does not define is what keeps an edited file from putting an unrecognised level into a

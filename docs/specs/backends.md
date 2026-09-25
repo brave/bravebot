@@ -1590,6 +1590,53 @@ finished call except the stop reason, and the stop reason says not to trust any 
 `verified-by: bravebot_bedrock::lib::output_limit_keeps_completed_usage`
 `verified-by: bravebot_bedrock::lib::reaching_the_token_ceiling_is_not_retried`
 
+<a id="BACKEND-43"></a>
+### BACKEND-43: a settings file names the effort level below a recorded pick
+
+An `effort` key in the settings files names how hard the model is asked to think, taking the words
+`/effort` takes. A level already recorded with `/effort` wins over it. Where nothing is recorded the
+key is what every surface asks for: the interface, a session in lines, and a one-shot run.
+
+The word is read on the terms [SESSION-15](sessions.md#SESSION-15) reads the recorded one on, by the
+same rule and in one place. A word this program does not define is no level at all rather than a
+level of something, so it never reaches a request field; a blank is absence, on the footing the
+`model` key's is. Whether the level then goes out at all is still [BACKEND-22](#BACKEND-22)'s
+question, and a level the model in force reads none of is withheld and not forgotten, whichever of
+the two named it. Nothing is recorded: a level a file named is not a pick, and writing one down would
+make reading a file once enough to outlive the file.
+
+Where the key sits against the other layers is settled by the record alone, there being no other. It
+outranks nothing else, because nothing else can name a level: no release bakes one in, no variable is
+read for one, and the machine-level layer of [BACKEND-38](#BACKEND-38) does not pin it.
+
+**Why.** The model can be named in four places and the level in one, and that one is a pick stored
+once per person, read back by every run. So a script inherits whatever the last person to open the
+interface chose and cannot ask for its own: two checkouts in one account cannot want different
+levels, which is the argument [CLI-9](cli.md#CLI-9) already makes for `--model`. A project cannot
+state one either, so "the work in this repository is worth thinking hard about" has nowhere to live,
+and a machine where nobody ever opens the interface has no route to a level at all.
+
+**The record wins, which is the rule `model` follows.** A pick outlives the session that made it, and
+a file read afterwards would undo what somebody had just asked for. [BACKEND-11](#BACKEND-11)'s other
+half does not transfer: the `model` key sits above the baked-in default because every release bakes a
+model in, and a key ranked below it would change nothing on any binary anybody was given. Nothing
+bakes in a level, so there is no such rung here.
+
+**One rule reads both words.** Both come out of a file somebody may have edited by hand, so a
+settings file naming nonsense is read the way a hand-edited record naming nonsense is, rather than
+each being trusted where it came from. Two spellings of that rule is where the two would drift, and
+what drifting costs is a word no service defines in a request field.
+
+`verified-by: bravebot_config::settings::a_top_level_effort_key_is_read`
+`verified-by: bravebot_config::settings::an_effort_word_is_read_as_the_file_spelled_it`
+`verified-by: bravebot_config::settings::an_effort_that_is_blank_or_not_a_string_names_nothing`
+`verified-by: bravebot_config::settings::the_closest_layer_that_named_an_effort_wins`
+`verified-by: bravebot_session::store::a_recorded_level_outranks_the_one_a_settings_file_named`
+`verified-by: bravebot_session::store::a_settings_file_naming_no_level_asks_for_none`
+`verified-by: bravebot_tui::persist::a_recorded_level_is_read_back_and_a_settings_file_answers_where_none_is`
+`verified-by: bravebot_cli::running::a_run_sends_the_level_a_settings_file_named_where_nothing_is_recorded`
+`verified-by: bravebot_config::managed::a_name_outside_the_pinnable_set_pins_nothing`
+
 ## Known costs
 
 - **The refusal is made at startup, and a model chosen mid-session is not checked again.**
@@ -1605,6 +1652,21 @@ finished call except the stop reason, and the stop reason says not to trust any 
   making that choice unavailable is a change to what a person is offered rather than to where a
   request goes. An organisation with a reason to care, a cost or a data-handling consequence
   attached to one model, has the endpoint and the account to say it with and not the name.
+
+- **Asking for no level does not outlive the session against a file that names one.**
+  [SESSION-15](sessions.md#SESSION-15) removes the record rather than writing an empty one, because
+  absence and a chosen absence were the same request while nothing else could name a level. With
+  BACKEND-43 they are not: somebody whose settings say `high` and who picks no level is asking for
+  none, and the next session reads the file and asks for `high` again. Distinguishing the two needs a
+  recorded absence, which is a change to what that clause writes down and to what reads it, and the
+  level is a preference somebody re-picks in one keystroke rather than an effect. `/effort` is what
+  says so for the session in front of them, and the file is what says so for every session.
+
+- **How hard a model thinks is not something an administrator pins.** The machine-level layer reads
+  the names that decide where a request goes, and a level decides what a request costs and how long
+  it takes at a destination already settled. An organisation with a reason to care about the bill has
+  the endpoint and the account to say it with, and a layer that could pin this is a layer somebody
+  uses to pin a preference, which is the argument BACKEND-38 makes about the theme.
 
 - **The layer binds nobody who can write the file, and what that takes differs per platform.** Its
   whole authority is the permissions on the path. On a machine whose user is also its administrator,

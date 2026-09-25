@@ -110,7 +110,9 @@ asking for no level at all, so a first pick is not permanent. With a word, `/eff
 directly, and a word that names no level changes nothing and says so rather than reaching a request
 field.
 
-The choice is written to `~/.bravebot`, so it outlives the session and applies in every directory. See
+The choice is written to `~/.bravebot`, so it outlives the session and applies in every directory, and
+it outranks the [`effort`](../customize/configuration.md#effort) key, which is what a settings file
+answers with for somebody who has never picked one. See
 [Choosing how hard to think](../customize/configuration.md#choosing-how-hard-to-think), which is also
 where the two cases worth knowing are: the models that read no level, and the Brave endpoint, which
 accepts one and discards it.

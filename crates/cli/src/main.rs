@@ -648,7 +648,12 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
             named,
             bravebot_session::store::load_model(),
         ))
-        .with_effort(bravebot_session::store::load_effort())
+        // The recorded pick, and otherwise the level the settings layers named (BACKEND-43), which
+        // is the only route a machine where nobody ever opens the interface has to one.
+        .with_effort(bravebot_session::store::effort(
+            bravebot_session::store::load_effort(),
+            settings.effort(),
+        ))
         .with_permissions(permissions)
         .with_permission_mode(permission_mode)
         // What the settings say this run may add to a commit message or a pull request it writes

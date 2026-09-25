@@ -2698,6 +2698,10 @@ fn event_loop(
     let settings = bravebot_config::Settings::load();
     // Settled before a key can be pressed, since this is what decides whether a letter is a letter.
     session.adopt_editing(settings.editor_mode());
+    // And the level a turn asks for, which the record or this file answers (BACKEND-43). Read once
+    // beside the rest: a file edited mid-session describes the next one, and `/effort` is how this
+    // one is changed.
+    session.adopt_effort(settings.effort());
     // Settled here too, and once, for the reason the mode is read once per turn: what decides
     // whether somebody is asked must not change under a prompt already on the screen. The command
     // line's switch is read here and nowhere else in the interface.

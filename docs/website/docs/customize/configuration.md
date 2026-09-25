@@ -193,6 +193,10 @@ service applies its own default. Taking the row for no level removes the record 
 empty one, which puts you back where you were before you ever chose. A word bravebot does not define
 changes nothing and says so.
 
+The picker is not the only route: the [`effort`](#effort) key names a level in a settings file, below
+whatever `/effort` recorded, which is how a project asks for one and how an unattended machine has one
+at all.
+
 **A level goes only where the roster says it is read.** Reasoning is two parameters rather than one on
 a gateway, so a model can reason and still not read a level sent this way. Where the listing describing
 your model says it reads none, no level is sent and `/status` says so. The choice is kept either way
@@ -418,6 +422,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | Key | What it holds |
 |---|---|
 | `model` | the model to request when nobody has chosen one ([below](#model)) |
+| `effort` | how hard the model is asked to think when nobody has chosen ([below](#effort)) |
 | `editorMode` | whether the input box edits the ordinary way or vi's ([below](#editormode)) |
 | `env` | variables, in Claude Code's own shape |
 | `permissions` | which actions to refuse, and which to ask about ([below](#permissions)) |
@@ -501,6 +506,32 @@ named for that tier, and otherwise that tier's name on the Brave roster. A tier 
 written, because a service has never heard of it. Any other name is used exactly as you wrote it.
 Bedrock refuses a model it does not recognise, and the aichat endpoint silently resets one to
 `automatic-bravebot`, which is the key appearing to work while changing nothing.
+
+### `effort`
+
+```json
+{ "effort": "high" }
+```
+
+How hard the model is asked to think when nobody has chosen, in the words
+[`/effort`](../reference/commands.md#effort-level) takes: `low`, `medium`, `high`, `xhigh` and `max`,
+read whatever their case. A word bravebot does not define is no level at all, so nothing you mistype
+reaches a request; the request carries no such field and the service applies its own default.
+
+A level recorded by `/effort` outranks this file, which answers for somebody who has never picked one.
+That is the whole of the ranking: nothing bakes a level in and no variable names one, so this key and
+the picker are the only two routes to one.
+
+This is the way a **project** can ask for a level, and the way a machine where nobody ever opens the
+interactive interface gets one at all: `bravebot -p` and `bravebot --plain` read the key just as the
+interface does. A record is stored once per person, so without this two checkouts cannot ask for
+different levels.
+
+Everything under [Choosing how hard to think](#choosing-how-hard-to-think) still applies, including
+the two cases worth knowing: the models that read no level, and the Brave endpoint, which accepts one
+and discards it. Taking the row for no level in the picker removes the record rather than writing an
+empty one, so a file that names a level answers again in the next session; unset it there if you want
+none.
 
 ### `editorMode`
 

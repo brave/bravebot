@@ -31,7 +31,13 @@
 //! that a name the server does not recognise is reset to [`bravebot_config::DEFAULT_MODEL`] rather
 //! than obeyed.
 
-use bravebot_aichat::protocol::Effort;
+/// Re-exported so a caller can hold what [`effort`] answered with.
+///
+/// The level is a field of the protocol that carries it, and the crates that resolve one do not all
+/// speak that protocol: `bravebot-cli` reaches a model through `bravebot-agent` and names nothing of
+/// the wire format ([layering](../../../docs/specs/layering.md)). It already takes this type from
+/// here and hands it back; naming it through the same door is what lets it keep one.
+pub use bravebot_aichat::protocol::Effort;
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -409,6 +415,25 @@ pub fn parse_effort(contents: &str) -> Option<Effort> {
     Effort::named(contents.lines().next()?)
 }
 
+/// The level in force, given the pick that was recorded and the word a settings file named.
+///
+/// The record wins, which is the rule the `model` key follows: a pick outlives the session that made
+/// it, and a file read afterwards would undo what somebody had just asked for. Where there is no
+/// record the file answers, and where neither says anything the request carries no level at all
+/// ([BACKEND-43](../../../docs/specs/backends.md#BACKEND-43)).
+///
+/// A word neither this program nor the protocol defines is no choice at all, whichever of the two
+/// spelled it: both come out of a file somebody may have edited by hand, so both are read by the one
+/// rule here rather than each being trusted where it came from. A settings file naming nonsense
+/// therefore leaves the request carrying nothing, rather than putting a word a service has never
+/// heard of into a request field.
+///
+/// Both answers are arguments rather than read here, so nothing about the rule depends on what is on
+/// the machine running the test.
+pub fn effort(recorded: Option<Effort>, configured: Option<&str>) -> Option<Effort> {
+    recorded.or_else(|| Effort::named(configured?))
+}
+
 /// Record the effort level the user chose, or forget the choice where they asked for none.
 ///
 /// Written to a temporary file and renamed, so an interrupted write leaves the previous choice
@@ -771,6 +796,35 @@ and this?
     #[test]
     fn only_the_first_effort_line_is_read() {
         assert_eq!(parse_effort("low\nmax\n"), Some(Effort::Low));
+    }
+
+    /// BACKEND-43. A pick outlives the session that made it, so a file read afterwards must not undo
+    /// what somebody had just asked for; with nothing recorded the file is the only thing that can
+    /// answer, which on a machine where nobody opens the interface is every run.
+    #[test]
+    fn a_recorded_level_outranks_the_one_a_settings_file_named() {
+        assert_eq!(
+            effort(Some(Effort::Low), Some("max")),
+            Some(Effort::Low),
+            "a settings file overrode a pick"
+        );
+        assert_eq!(effort(None, Some("max")), Some(Effort::Max));
+        assert_eq!(effort(None, None), None);
+    }
+
+    /// A word the protocol does not define must not reach a request field, wherever it was spelled.
+    /// A settings file gets the reading a hand-edited record gets, because both are a file somebody
+    /// may have typed into.
+    #[test]
+    fn a_settings_file_naming_no_level_asks_for_none() {
+        for word in ["", "   ", "highest", "9", "MAXIMUM"] {
+            assert_eq!(effort(None, Some(word)), None, "{word:?} became a choice");
+        }
+        assert_eq!(
+            effort(None, Some("HIGH")),
+            Some(Effort::High),
+            "a level spelled in capitals is the same request"
+        );
     }
 
     /// Both answers round-trip, and off is an answer rather than absence: somebody who turned

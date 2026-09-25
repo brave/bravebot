@@ -232,6 +232,7 @@ mod tests {
             "managed-unpinnable",
             r#"{
                 "model": "a-model",
+                "effort": "max",
                 "editorMode": "vim",
                 "keybindings": {"stash": "ctrl-s"},
                 "env": {
@@ -249,6 +250,9 @@ mod tests {
             env_var::CONTEXT_BUDGET,
             env_var::SUBPROCESS_ENV_SCRUB,
             "model",
+            // How hard a model thinks is what it costs and how long it takes, not where the request
+            // goes, so it is a preference on the footing the theme is one (BACKEND-43).
+            "effort",
         ] {
             assert_eq!(managed.get(name), None, "{name} is not pinnable");
         }
