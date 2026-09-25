@@ -1,14 +1,23 @@
 ---
 id: ADDRESS
 title: Addressing a definition
-status: proposed
+status: normative
 governs:
   - crates/tui/src/app.rs
+  - crates/tui/src/state.rs
+  - crates/tui/src/render.rs
   - crates/core/src/delegate.rs
+  - crates/core/src/policy.rs
   - crates/agent/src/agents.rs
+  - crates/agent/src/delegate.rs
   - crates/agent/src/tools.rs
   - crates/agent/src/turn.rs
-documented-by: none (unbuilt: nothing here is built, so a reader can address nothing yet. The reference page lands with the work, and this line is what says it is missing)
+guards:
+  - symbol: Policy::address
+  - symbol: Session::address
+documented-by:
+  - docs/website/docs/reference/commands.md
+  - docs/website/docs/customize/agents.md
 ---
 
 ## Scope
@@ -24,16 +33,19 @@ that file too, and nothing below relaxes any of it. The `/` surface every comman
 
 ## What exists today
 
-Nothing in this spec is built. Every clause carries `verified-by: none`, which is the honest form
-of that, and every sentence below is a requirement on work nobody has started rather than a
-description of this program.
+A definition is a file naming a kind, narrowing that kind's tools and optionally naming a model; it
+is resolved before every turn from the person's own directory and from a checkout they vouched for,
+and a source nobody vouched for is counted rather than named. All of that is
+[delegation.md](delegation.md)'s and holds whoever selects from the set.
 
-What does exist is the half this rests on. A definition is a file naming a kind, narrowing that
-kind's tools and optionally naming a model; it is resolved before every turn from the person's own
-directory and from a checkout they vouched for, and a source nobody vouched for is counted rather
-than named. All of that is [delegation.md](delegation.md)'s and holds whoever selects from the set.
-The one thing missing is a person being able to select from it: today the planner names a kind and
-a person writes prose in the hope that it picks the file they wrote.
+The interactive session selects from it with `/agent <name> <task>`. The interface resolves the set
+when the line is submitted, and a name matching nothing, a missing task or a model needing a sign-in
+runs nothing and says so. Otherwise the next turn carries the name. The driver resolves the set
+again for that turn and the kernel decides the rest in `Policy::address`: the capabilities, the tools
+offered, and the refusal of a name that is not there. The driver offers only those tools and refuses
+a call to any other by name, and the interface draws the reply under the name the driver matched.
+
+`bravebot -p` and the desktop front end address nothing. Both are open questions below.
 
 ## The comparison, and what it is worth
 
@@ -74,7 +86,7 @@ is over. So the answer is a different kind of run and not a delegate with three 
 relaxing them would leave the reasons behind and keep the words, and the next thing spawned by a
 planner would inherit the relaxation.
 
-`verified-by: none`
+`verified-by: bravebot_agent::turn::an_addressed_turn_runs_under_its_definitions_prompt_model_and_kind`
 
 ## The line
 
@@ -97,7 +109,8 @@ would make one prefix mean two things at the moment a person is typing fastest. 
 is the shape every other command here already has, and the whole word is the command, so
 `/agents are useful` stays a prompt.
 
-`verified-by: none`
+`verified-by: bravebot_tui::app::a_session_can_address_a_definition`
+`verified-by: bravebot_tui::app::a_longer_word_starting_with_agent_is_a_prompt`
 
 <a id="ADDRESS-3"></a>
 ### ADDRESS-3: only a line a person typed into the box
@@ -111,7 +124,8 @@ screen as six characters.
 narrowing it did not choose, which is a decision a turn is not allowed to take on its own. The
 endorsement for it is the keystroke, so the keystroke is the only thing that may produce one.
 
-`verified-by: none`
+`verified-by: bravebot_tui::app::a_line_addressing_a_definition_queued_while_a_turn_ran_addresses_it_when_the_turn_ends`
+`verified-by: by-construction (a name reaches a turn only through Session::address; its one caller settles the Action::Address that only the /agent branch of dispatch_command returns; dispatch_command is reached from the input box's key handler and from the queue that handler filled; and the turn takes the name off the session as it starts, so nothing a turn produced sets one)`
 
 <a id="ADDRESS-4"></a>
 ### ADDRESS-4: a conversation that has met untrusted content addresses a definition anyway
@@ -128,7 +142,7 @@ attacker wrote reaches either. Refusing here anyway would take the words of that
 its reason behind, and it would make a person's own tools less reachable the longer their session
 went on.
 
-`verified-by: none`
+`verified-by: bravebot_core::policy::a_context_that_has_met_untrusted_content_addresses_anyway`
 
 ## Which definition
 
@@ -148,7 +162,11 @@ keystroke. The set it is compared against is the thing an attacker would want to
 that is already settled: a definition loads from a trusted source or it is dropped, so a name
 nobody vouched for never entered the set to be matched.
 
-`verified-by: none`
+`verified-by: bravebot_core::policy::a_name_this_session_did_not_resolve_is_refused_with_the_names_it_did`
+`verified-by: bravebot_agent::turn::a_name_this_session_did_not_resolve_sends_nothing_and_lists_what_it_did`
+`verified-by: bravebot_agent::agents::the_set_an_interface_resolves_is_the_one_a_turn_would`
+`verified-by: bravebot_tui::app::a_name_this_session_did_not_resolve_runs_nothing_and_lists_what_it_did`
+`verified-by: bravebot_tui::app::a_name_with_no_task_runs_nothing_and_says_a_task_is_needed`
 
 <a id="ADDRESS-6"></a>
 ### ADDRESS-6: a resolved name is printed where somebody asked for it, and never offered in the box
@@ -166,7 +184,8 @@ program had written it, and Enter submits the highlighted one: a name composed t
 instruction would then be one keystroke from dispatching itself. Discovery is what a completion
 list is for, and the bare word gives it on demand instead.
 
-`verified-by: none`
+`verified-by: bravebot_tui::app::the_bare_word_says_what_this_session_resolved`
+`verified-by: by-construction (the completion list reads the command table and nothing else, and the resolved set exists only in the event loop after a line is submitted, so nothing drawn while a person types can hold a definition name)`
 
 ## What it may do
 
@@ -184,7 +203,10 @@ in and for the same reason: a checked-in file may choose what a run is for and m
 what it may reach. A file that could add a capability would be a configuration file handing out
 authority, which is the one thing a definition is not.
 
-`verified-by: none`
+`verified-by: bravebot_core::policy::an_addressed_turn_holds_only_what_the_session_and_the_kind_both_hold`
+`verified-by: bravebot_core::policy::a_definition_wider_than_the_session_gets_the_sessions_reach`
+`verified-by: bravebot_core::policy::an_addressed_turn_is_offered_only_the_tools_its_definition_named`
+`verified-by: bravebot_agent::turn::a_tool_an_addressed_definition_left_out_is_refused_when_the_model_calls_it`
 
 <a id="ADDRESS-8"></a>
 ### ADDRESS-8: the tools withheld from every delegate are not withheld here
@@ -206,7 +228,8 @@ other turn starts from.
 addresses it. The alternative is withholding a tool from a person who has it, for a reason that
 does not apply to them.
 
-`verified-by: none`
+`verified-by: bravebot_core::policy::the_tools_no_delegate_is_offered_are_offered_to_an_addressed_turn`
+`verified-by: bravebot_agent::turn::an_addressed_turn_runs_under_its_definitions_prompt_model_and_kind`
 
 ## How long it lasts
 
@@ -226,7 +249,7 @@ Addressing a definition therefore buys reachability and spends context, where de
 buys context and spends reachability. The two are the same set of files reached two ways, and which
 one a person wants depends on whether they are watching.
 
-`verified-by: none`
+`verified-by: bravebot_agent::turn::the_turn_after_an_addressed_one_holds_the_exchange_and_not_the_definition`
 
 <a id="ADDRESS-10"></a>
 ### ADDRESS-10: the definition's prompt lasts the turn it was addressed in
@@ -239,7 +262,8 @@ like while it is on, what key leaves it, and what a queued line means when the m
 it. What a person wants from a file they checked in is that it does the piece of work they named,
 and the line they typed is where they named it. Addressing it twice costs one word.
 
-`verified-by: none`
+`verified-by: bravebot_tui::app::an_addressed_line_runs_the_named_definition_on_its_task_for_one_turn`
+`verified-by: bravebot_agent::turn::the_turn_after_an_addressed_one_holds_the_exchange_and_not_the_definition`
 
 <a id="ADDRESS-11"></a>
 ### ADDRESS-11: a definition naming a model this machine cannot use does not run, and says which asked for what
@@ -256,7 +280,9 @@ chosen. The substitution is said because the endpoint substitutes rather than re
 will not serve, so without it a definition could ask for one model and be answered by another every
 time.
 
-`verified-by: none`
+`verified-by: bravebot_agent::turn::an_addressed_definition_whose_model_needs_a_sign_in_sends_nothing_and_says_so`
+`verified-by: bravebot_tui::app::a_definition_whose_model_needs_a_sign_in_runs_nothing_and_says_so`
+`verified-by: bravebot_agent::turn::an_addressed_definition_answered_by_another_model_says_so`
 
 <a id="ADDRESS-12"></a>
 ### ADDRESS-12: the driver says which definition answered
@@ -269,7 +295,7 @@ would be taking that decision from model output, which is the thing this reposit
 everywhere else. Which definition was addressed is a fact the driver already holds, because it is
 the one that matched the name.
 
-`verified-by: none`
+`verified-by: bravebot_tui::render::a_reply_from_an_addressed_turn_is_drawn_under_the_name_the_driver_matched`
 
 ## Open questions
 
@@ -306,6 +332,10 @@ the one that matched the name.
   lands in the session, so addressing a definition for a job that reads a large tree costs what
   doing the job in the session costs. A person who wanted the reading kept out of their context
   wanted a delegate, and the two are reached differently on purpose.
+
+- **The name is drawn only in the session that addressed it.** The session record does not keep
+  which definition answered, so a resumed session and an exported transcript show the reply as the
+  session's own. What the reply says is kept whole; only the heading is missing.
 
 - **A definition's body is trusted exactly as far as a configuration file somebody pasted is.**
   That cost is already recorded for a definition a planner spawns, and addressing one does not add

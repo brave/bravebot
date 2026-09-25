@@ -1258,6 +1258,13 @@ pub struct Tools<'a> {
     /// rule resting on the tool list alone rests on the model reading it, and a model naming a
     /// tool it was never offered is ordinary.
     pub delegated: bool,
+    /// The only tools this turn was offered, where an addressed definition narrowed them, and
+    /// `None` where the table itself is the list.
+    ///
+    /// A name outside it is answered the way any other unknown name is, for the reason
+    /// [`Tools::delegated`] gives: a narrowing that rested on the offer alone would rest on the
+    /// model reading it.
+    pub confined_to: Option<&'a [String]>,
     /// The language servers this session has started, or `None` where the host offers none.
     ///
     /// Held across calls rather than per call because indexing is the whole cost of a server, and
@@ -2207,6 +2214,13 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
     reporter.tool_started(Activity::running(verb, target.clone()).of_tool(&name));
 
     let produced = match name.as_str() {
+        unoffered
+            if tools
+                .confined_to
+                .is_some_and(|offered| !offered.iter().any(|tool| tool == unoffered)) =>
+        {
+            Produced::problem(format!("error: no such tool '{unoffered}'"))
+        }
         // A mode that refuses writes refuses them whether or not anybody would have been asked,
         // which is what makes it a statement about the turn rather than an answer given on the
         // person's behalf. Checked before the tool runs, so nothing is read and no path resolved.
@@ -9870,6 +9884,7 @@ mod tests {
                 home: None,
                 profile: None,
                 delegated: false,
+                confined_to: None,
                 servers: None,
                 mcp: None,
                 spawned: &mut spawned,

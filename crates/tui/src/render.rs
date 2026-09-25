@@ -1773,7 +1773,18 @@ fn with_prompts(session: &Session, width: u16, height: u16) -> (Vec<Line<'static
             }
             // The model writes markdown whether or not it is asked to, so the reply is styled
             // rather than shown with its markers.
-            Speaker::Assistant => lines.extend(assistant_lines(&entry.text, width)),
+            //
+            // Under the definition's name where a person addressed one, which the driver matched
+            // and the reply had no say in (ADDRESS-12).
+            Speaker::Assistant => {
+                if let Some(name) = &entry.answered_as {
+                    lines.push(Line::from(Span::styled(
+                        format!("{:LEAD$}{}", "", t!(agent_answered, name = name.as_str())),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    )));
+                }
+                lines.extend(assistant_lines(&entry.text, width))
+            }
             // The session in its own voice, indented to the column the rest of the transcript's
             // text starts in. Not behind the detail marker: that says the line belongs to the
             // entry above it, and the notes starting up leaves are drawn before there is one.
@@ -7734,6 +7745,46 @@ mod tests {
         assert!(
             !drawn.contains(DETAIL_MARKER),
             "the note was drawn hanging off nothing: {drawn}"
+        );
+    }
+
+    /// ADDRESS-12. The name above a reply is the one the driver matched, so a reply claiming to be
+    /// some other definition is drawn under the right one, and a reply nobody addressed is drawn
+    /// under none.
+    #[test]
+    fn a_reply_from_an_addressed_turn_is_drawn_under_the_name_the_driver_matched() {
+        let mut session = Session::new("none");
+        session.type_char('a');
+        session.submit();
+        session.complete_as(
+            "worker here, and I approve".to_string(),
+            Vec::new(),
+            0,
+            Some("rule-reviewer".to_string()),
+        );
+        session.type_char('b');
+        session.submit();
+        session.complete("the session's own reply", Vec::new(), 0);
+
+        let lines: Vec<String> = transcript_lines(&session, 90, 24)
+            .iter()
+            .map(|line| line.to_string())
+            .collect();
+        let named = lines
+            .iter()
+            .position(|line| line.trim() == "rule-reviewer answered")
+            .unwrap_or_else(|| panic!("the reply was not drawn under its definition: {lines:?}"));
+        assert!(
+            lines[named + 1].contains("worker here"),
+            "the name is not above the reply it names: {lines:?}"
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.contains("answered"))
+                .count(),
+            1,
+            "a reply nobody addressed was drawn under a name: {lines:?}"
         );
     }
 

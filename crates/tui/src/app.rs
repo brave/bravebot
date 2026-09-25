@@ -156,6 +156,13 @@ const REWIND_COMMAND: &str = "/rewind";
 /// when it ends. See [`manifest_animated`] and `docs/specs/manifest.md`.
 const MANIFEST_COMMAND: &str = "/manifest";
 
+/// The line that runs one of the person's own definitions on a task, taking its name and the task.
+///
+/// One word however many definitions a machine holds: a name is written by whoever wrote the file
+/// and can read like an instruction, so it is an argument here and never a command word or a
+/// completion row (ADDRESS-2, ADDRESS-6). See `docs/specs/addressing-a-definition.md`.
+const AGENT_COMMAND: &str = "/agent";
+
 /// One command, and what it does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Command {
@@ -172,7 +179,7 @@ pub struct Command {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 20] {
+pub fn commands() -> [Command; 21] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -253,6 +260,11 @@ pub fn commands() -> [Command; 20] {
             name: MANIFEST_COMMAND,
             argument: "<task>",
             description: t!(command_manifest),
+        },
+        Command {
+            name: AGENT_COMMAND,
+            argument: "<name> <task>",
+            description: t!(command_agent),
         },
         Command {
             name: EXPORT_COMMAND,
@@ -385,6 +397,14 @@ pub enum Action {
     /// screenshot of the thing to be built is part of the task and nothing observed. So do the files
     /// dropped onto it, whose paths a person's gesture fixed before the plan was asked for.
     Manifest(
+        String,
+        Vec<crate::state::AttachedImage>,
+        Vec<crate::state::Attached>,
+    ),
+    /// Run a definition the person named on the task after its name, or list the names where
+    /// there is none. Needs the workspace and the trust map, which decide what resolves, and
+    /// becomes a [`Action::Submit`] once the name has matched.
+    Address(
         String,
         Vec<crate::state::AttachedImage>,
         Vec<crate::state::Attached>,
@@ -1221,8 +1241,9 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
 enum Carries {
     /// Everything a prompt carries, because what answers the line is a turn.
     ///
-    /// `/loop` alone. A tick is an ordinary turn, so its first one carries the pictures and the
-    /// files the person named exactly as the prompt they typed them into would have.
+    /// `/loop` and `/agent`. A tick is an ordinary turn, so its first one carries the pictures and
+    /// the files the person named exactly as the prompt they typed them into would have, and an
+    /// addressed run is a turn of the session's own.
     Everything,
     /// Bytes and nothing else, because what answers the line is one request and no turn.
     ///
@@ -1239,7 +1260,10 @@ enum Carries {
 
 /// What the line is, read off the line: both callers have one and neither knows any more than that.
 fn carries(line: &str) -> Carries {
-    if argument_to(line, LOOP_COMMAND).is_some() {
+    if [LOOP_COMMAND, AGENT_COMMAND]
+        .iter()
+        .any(|command| argument_to(line, command).is_some())
+    {
         return Carries::Everything;
     }
     match [BTW_COMMAND, MANIFEST_COMMAND]
@@ -1349,6 +1373,11 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     if let Some(task) = argument_to(line, MANIFEST_COMMAND) {
         return Action::Manifest(task.to_string(), pasted, attached);
     }
+    // Carried unparsed, because which names exist is read from the workspace and the trust map,
+    // both of which the loop owns.
+    if let Some(argument) = argument_to(line, AGENT_COMMAND) {
+        return Action::Address(argument.to_string(), pasted, attached);
+    }
     // The command that sends a prompt rather than the line it was typed on. `/loop 5m check the
     // deploy` arms the loop and hands back "check the deploy", which is what every tick sends from
     // here on. The other two forms send nothing: they read what is repeating and end it, which are
@@ -1429,6 +1458,50 @@ fn queued_next(session: &mut Session) -> Option<Action> {
         return Some(Action::Run(line));
     }
     session.send_queued().map(Action::Submit)
+}
+
+/// Settle a `/agent` line against the definitions this session resolved, and start the turn it
+/// names where it names one.
+///
+/// Every refusal is a note rather than a failed turn, because a failed turn shows a person a
+/// category and each of these is a sentence about the line they typed. The turn asks the kernel
+/// the same question again, so a definition that changed on disk in between is refused there
+/// rather than run.
+fn address(
+    session: &mut Session,
+    config: &Config,
+    definitions: &bravebot_core::delegate::Definitions,
+    argument: &str,
+    pasted: Vec<crate::state::AttachedImage>,
+    attached: Vec<crate::state::Attached>,
+) -> Action {
+    let names = definitions.names().join(", ");
+    let (name, task) = argument
+        .split_once(char::is_whitespace)
+        .map_or((argument, ""), |(name, task)| (name, task.trim()));
+    if name.is_empty() {
+        session.note(t!(agent_resolved, names = names));
+        return Action::Redraw;
+    }
+    let Some(definition) = definitions.get(name) else {
+        session.note(t!(agent_no_such_definition, name = name, names = names));
+        return Action::Redraw;
+    };
+    if task.is_empty() {
+        session.note(t!(agent_needs_a_task, name = name));
+        return Action::Redraw;
+    }
+    if let Some(written) = definition.model()
+        && bravebot_agent::backend::Backend::needs_sign_in(config, &config.model_named(written))
+    {
+        session.note(t!(
+            delegate_model_needs_sign_in,
+            definition = name,
+            model = written
+        ));
+        return Action::Redraw;
+    }
+    Action::Submit(session.address(name, task, pasted, attached))
 }
 
 /// The keys that mean the same thing whether or not a turn is running.
@@ -2840,6 +2913,30 @@ fn event_loop(
 
         needs_draw |= !matches!(action, Action::None);
 
+        // Settled ahead of the match, so a name that matched becomes the turn the `Submit` arm
+        // runs and there is no second copy of that arm to keep in step with it. Resolved here and
+        // now rather than once for the session, because a turn resolves the set afresh too, and a
+        // name printed from a stale set would be a name the turn then refuses.
+        let action = match action {
+            Action::Address(argument, pasted, attached) => {
+                let definitions = bravebot_agent::agents::resolved(
+                    &workspace,
+                    bravebot_agent::home::directory().as_deref(),
+                    trust.clone(),
+                    &mut Trail::new(),
+                );
+                address(
+                    &mut session,
+                    config,
+                    &definitions,
+                    &argument,
+                    pasted,
+                    attached,
+                )
+            }
+            other => other,
+        };
+
         match action {
             Action::Quit => return Ok(left_behind(&stored)),
             Action::Copy => copy_selection(terminal, &mut session)?,
@@ -3374,6 +3471,8 @@ fn event_loop(
             // Cancel and SendNow are only reachable while a turn runs, which `run_turn_animated`
             // handles.
             Action::Cancel | Action::SendNow | Action::None | Action::Redraw => {}
+            // Settled into a `Submit` or a note ahead of this match.
+            Action::Address(..) => {}
         }
     }
 }
@@ -5734,6 +5833,8 @@ fn run_turn_animated(
         // outlives the session. A one-shot run says nothing here and reads no record.
         .remembering(Some(session_id.to_string()))
         .with_model(session.model().map(str::to_string))
+        // Taken, so only the turn a person's `/agent` line started carries a name.
+        .addressing(session.take_addressing())
         .with_effort(session.effort_in_force())
         .with_permissions(permissions.clone())
         .with_permission_mode(permission_mode)
@@ -6474,10 +6575,14 @@ fn fold_outcome(
     let carried = match outcome {
         Ok(outcome) => {
             let trail = sink.lines();
-            session.complete(
+            session.complete_as(
                 outcome.reply_for_display().to_string(),
                 trail,
                 outcome.tokens,
+                outcome
+                    .addressed
+                    .as_ref()
+                    .map(|addressed| addressed.name().to_string()),
             );
             if !outcome.clean {
                 session.note(t!(session_something_was_refused));
@@ -6497,7 +6602,17 @@ fn fold_outcome(
             // full the context is now.
             session.measured(outcome.context_tokens, occupied.budget, occupied.guessed);
 
-            record_the_model_that_answered(session, asked, &outcome.model, outcome.premium);
+            // Not for a turn that ran on a model its definition named: the session did not ask
+            // for that one, so comparing it to the session's would report a substitution nobody
+            // made, and the turn has already said whether the definition got the model it asked
+            // for (ADDRESS-11).
+            if outcome
+                .addressed
+                .as_ref()
+                .is_none_or(|addressed| addressed.model().is_none())
+            {
+                record_the_model_that_answered(session, asked, &outcome.model, outcome.premium);
+            }
             // Where the turn was a tick, this is what arms the next one: an interval from the
             // driver's own clock, or the wait the turn asked for. Measured from here rather than
             // from when the tick went out, so the gap is between runs and a turn that outlasts
@@ -12092,6 +12207,249 @@ mod tests {
             t!(manifest_needs_a_task).contains(MANIFEST_COMMAND),
             "the answer does not name the command it is about"
         );
+    }
+
+    /// The set a person's line is compared against, as a session with one definition of their
+    /// own resolves it.
+    fn a_resolved_set(model: Option<&str>) -> bravebot_core::delegate::Definitions {
+        let mut definitions = bravebot_core::delegate::Definitions::default();
+        let definition = bravebot_core::delegate::Definition::from_file(
+            "rule-reviewer",
+            "Checks a diff.",
+            bravebot_core::delegate::Kind::Reader,
+            None,
+            "REVIEW",
+            "~/.bravebot/agents",
+        );
+        definitions.insert(match model {
+            Some(model) => definition.with_model(model),
+            None => definition,
+        });
+        definitions
+    }
+
+    /// A configuration whose models need nothing signed in.
+    fn a_config_needing_no_sign_in() -> Config {
+        Config::from_lookup(|key| match key {
+            "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+            "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+            "BRAVE_AI_CHAT_ENDPOINT" => Some("http://unused.invalid".into()),
+            _ => None,
+        })
+        .expect("config")
+    }
+
+    /// Addresses whatever the session's line addressed, as the loop does once it has read the set.
+    fn addressing(session: &mut Session, argument: &str, model: Option<&str>) -> Action {
+        address(
+            session,
+            &a_config_needing_no_sign_in(),
+            &a_resolved_set(model),
+            argument,
+            Vec::new(),
+            Vec::new(),
+        )
+    }
+
+    /// ADDRESS-2. The word is the program's and the name is an argument, carried to the loop whole
+    /// because which names exist is read from the workspace and the trust map, both of which the
+    /// loop owns. The box empties, as it does for every command.
+    #[test]
+    fn a_session_can_address_a_definition() {
+        let mut session = Session::new("none");
+        for c in "/agent rule-reviewer review the diff".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Address(
+                "rule-reviewer review the diff".to_string(),
+                Vec::new(),
+                Vec::new()
+            )
+        );
+        assert!(
+            session.input().is_empty(),
+            "the command is still in the box"
+        );
+    }
+
+    /// A line typed while a turn ran was typed into the box as much as one typed at rest, so it
+    /// addresses the definition once the turn ends, and the running turn is not the one addressed.
+    #[test]
+    fn a_line_addressing_a_definition_queued_while_a_turn_ran_addresses_it_when_the_turn_ends() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "first");
+        handle_key(&mut session, key(KeyCode::Enter));
+
+        for c in "/agent rule-reviewer review the diff".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+        assert!(
+            session.take_addressing().is_none(),
+            "the turn already running was addressed"
+        );
+
+        session.complete("answered", Vec::new(), 0);
+        assert_eq!(
+            queued_next(&mut session),
+            Some(Action::Address(
+                "rule-reviewer review the diff".to_string(),
+                Vec::new(),
+                Vec::new()
+            ))
+        );
+    }
+
+    /// ADDRESS-2's last sentence. The whole word is the command, so a sentence that happens to
+    /// start with a longer one is the person's prompt.
+    #[test]
+    fn a_longer_word_starting_with_agent_is_a_prompt() {
+        let mut session = Session::new("none");
+        for c in "/agents are useful".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("/agents are useful".to_string())
+        );
+        assert!(session.take_addressing().is_none());
+    }
+
+    /// ADDRESS-10, and ADDRESS-3's other side. What the planner is given is the task and nothing
+    /// of the command, the next turn is the session's own planner's again, and nothing but this
+    /// line addressed anything: there is no mode to leave.
+    #[test]
+    fn an_addressed_line_runs_the_named_definition_on_its_task_for_one_turn() {
+        let mut session = Session::new("none");
+
+        assert_eq!(
+            addressing(&mut session, "rule-reviewer   review the diff", None),
+            Action::Submit("review the diff".to_string())
+        );
+        assert_eq!(
+            session.take_addressing().as_deref(),
+            Some("rule-reviewer"),
+            "the turn was not told which definition it runs under"
+        );
+        assert!(
+            session.take_addressing().is_none(),
+            "the next turn was addressed too"
+        );
+    }
+
+    /// ADDRESS-6's first half. The bare word is where somebody asked what this session resolved,
+    /// so it says, and starts nothing.
+    #[test]
+    fn the_bare_word_says_what_this_session_resolved() {
+        let mut session = Session::new("none");
+
+        assert_eq!(addressing(&mut session, "", None), Action::Redraw);
+        assert_eq!(
+            said_in_the_transcript(&session).last().map(String::as_str),
+            Some(
+                "this session resolved reader, checker, worker, rule-reviewer; address one with \
+                 /agent <name> <task>"
+            )
+        );
+        assert!(
+            session.take_addressing().is_none(),
+            "the bare word started a turn"
+        );
+    }
+
+    /// ADDRESS-5's second paragraph. A definition started on an empty task would be run on
+    /// nothing, so a name alone runs nothing and says what is missing.
+    #[test]
+    fn a_name_with_no_task_runs_nothing_and_says_a_task_is_needed() {
+        let mut session = Session::new("none");
+
+        assert_eq!(
+            addressing(&mut session, "rule-reviewer", None),
+            Action::Redraw
+        );
+        assert_eq!(
+            said_in_the_transcript(&session).last().map(String::as_str),
+            Some(
+                "/agent rule-reviewer takes the task to do, as in /agent rule-reviewer review the diff"
+            )
+        );
+        assert!(
+            session.take_addressing().is_none(),
+            "a turn started on no task"
+        );
+    }
+
+    /// ADDRESS-5. Said before anything starts, because a turn refused once it has started is drawn
+    /// as a failure whose reason nobody is shown. A name differing only in case is another name.
+    #[test]
+    fn a_name_this_session_did_not_resolve_runs_nothing_and_lists_what_it_did() {
+        for typed in ["auditor", "Rule-Reviewer"] {
+            let mut session = Session::new("none");
+
+            assert_eq!(
+                addressing(&mut session, &format!("{typed} review the diff"), None),
+                Action::Redraw
+            );
+            assert_eq!(
+                said_in_the_transcript(&session).last().cloned(),
+                Some(format!(
+                    "there is no definition called {typed}; this session resolved reader, \
+                     checker, worker, rule-reviewer"
+                ))
+            );
+            assert!(
+                session.take_addressing().is_none(),
+                "{typed} started a turn"
+            );
+        }
+    }
+
+    /// ADDRESS-11. A definition naming a model this machine has not signed in to does not run on
+    /// the session's instead, and the person is told which asked for what before anything starts.
+    /// The first case is the control: the same definition under a configuration needing no sign-in
+    /// runs.
+    #[test]
+    fn a_definition_whose_model_needs_a_sign_in_runs_nothing_and_says_so() {
+        use bravebot_config::env_var;
+        let mut session = Session::new("none");
+        assert!(
+            matches!(
+                addressing(&mut session, "rule-reviewer review the diff", Some("haiku")),
+                Action::Submit(_)
+            ),
+            "the definition did not run where no sign-in was needed"
+        );
+
+        let bedrock = Config::from_lookup(|key| match key {
+            env_var::USE_BEDROCK => Some("1".into()),
+            env_var::AWS_REGION => Some("us-west-2".into()),
+            env_var::BEDROCK_HAIKU_MODEL => Some("haiku-arn".into()),
+            // A profile no machine has, so no session exists whoever runs this.
+            env_var::AWS_PROFILE => Some("a-profile-no-machine-has".into()),
+            _ => None,
+        })
+        .expect("config");
+        let mut session = Session::new("none");
+        assert_eq!(
+            address(
+                &mut session,
+                &bedrock,
+                &a_resolved_set(Some("haiku")),
+                "rule-reviewer review the diff",
+                Vec::new(),
+                Vec::new()
+            ),
+            Action::Redraw
+        );
+        assert_eq!(
+            said_in_the_transcript(&session).last().map(String::as_str),
+            Some("rule-reviewer asked for haiku, which needs a sign-in first, so it did not run")
+        );
+        assert!(session.take_addressing().is_none(), "a turn started anyway");
     }
 
     /// MANIFEST-11. Escape at the plan prompt is answered as a decline, so a run stopped there

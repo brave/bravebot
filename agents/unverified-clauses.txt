@@ -7,18 +7,6 @@
 # where the lists themselves merge cleanly, and a count nothing reads is wrong quietly. Count the
 # lines, or read the warnings check-spec prints.
 
-docs/specs/addressing-a-definition.md:ADDRESS-1: what a person addresses is a run of their own, and never a delegate
-docs/specs/addressing-a-definition.md:ADDRESS-2: the word is written in this program, and the name is an argument
-docs/specs/addressing-a-definition.md:ADDRESS-3: only a line a person typed into the box
-docs/specs/addressing-a-definition.md:ADDRESS-4: a conversation that has met untrusted content addresses a definition anyway
-docs/specs/addressing-a-definition.md:ADDRESS-5: a name selects from the set this session resolved, or it selects nothing
-docs/specs/addressing-a-definition.md:ADDRESS-6: a resolved name is printed where somebody asked for it, and never offered in the box
-docs/specs/addressing-a-definition.md:ADDRESS-7: a definition narrows what the person already holds, and widens nothing
-docs/specs/addressing-a-definition.md:ADDRESS-8: the tools withheld from every delegate are not withheld here
-docs/specs/addressing-a-definition.md:ADDRESS-9: the exchange is the session's own
-docs/specs/addressing-a-definition.md:ADDRESS-10: the definition's prompt lasts the turn it was addressed in
-docs/specs/addressing-a-definition.md:ADDRESS-11: a definition naming a model this machine cannot use does not run, and says which asked for what
-docs/specs/addressing-a-definition.md:ADDRESS-12: the driver says which definition answered
 docs/specs/credential-protection.md:CRED-4: nothing climbs a tier without the arrangement changing
 docs/specs/credential-protection.md:CRED-6: a handle the agent can redeem alone is not a handle
 docs/specs/credential-protection.md:CRED-7: a bound is decided before issue and enforced beyond the agent's reach

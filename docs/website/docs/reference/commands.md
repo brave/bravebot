@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: Slash commands
-description: The twenty commands the interface acts on itself, and the rules every one of them shares.
+description: The twenty-one commands the interface acts on itself, and the rules every one of them shares.
 ---
 
 # Slash commands
@@ -26,13 +26,14 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/goal` | `[<condition> \| clear]` | Keep working until a condition you set is judged met |
 | `/watch` | `[stop <n>]` | List the files this session is watching, and stop one by its number |
 | `/manifest` | `<task>` | Plan one task in full, show you the plan, then run it with nothing re-planned |
+| `/agent` | `<name> <task>` | Run one of your definitions on a task, by its name |
 | `/export` | `[path]` | Export the session transcript to a markdown file |
 | `/undo` | | Rewind one turn and put back the files it wrote |
 | `/rewind` | `[turns]` | List the turns a rewind could go back to, or go back that many |
 | `/exit` | | Leave |
 
 Typing `/` offers the list in that order, and Tab completes. The list is one row per command, and a
-terminal without the room for all twenty drops the last of them: every command is still typeable in
+terminal without the room for all twenty-one drops the last of them: every command is still typeable in
 full, but a short terminal costs you the discovery the list is there for.
 
 ## `/status`
@@ -392,6 +393,59 @@ own record and the session records its name, so the session still resumes as a c
 In [plan mode](../security/permissions.md#answering-in-advance-modes) a plan with a write in it does
 not run at all, decided from the frozen plan before the plan is put to anybody. See
 [Non-interactive use](../using/headless.md) for the `--mode manifest` form.
+
+## `/agent <name> <task>`
+
+Runs one of your [delegate definitions](../customize/agents.md) on a task yourself, rather than
+describing the work and hoping the planner picks it.
+
+```
+/agent rule-reviewer check the diff on this branch
+```
+
+**It is your turn, run under the definition.** The definition supplies three things: the
+instruction in its body, its `model`, and its narrowing (its `kind` and its `tools` line). Nothing
+else changes. The run can still ask you a question, keep a task list and ask before every write, and
+what it reads and answers stays in the conversation, exactly as any turn of yours does. The line
+after it goes to the session's own planner again. There is no mode to leave.
+
+**It can only take away.** The turn holds what the session holds, cut down to the definition's kind
+and its `tools` line. A `reader` addressed from a session that may write is a turn that may not. A
+`worker` addressed from a session that may only read gets no write, and a tool the definition names
+that the session is not offered is dropped and said in the trail. A tool the definition left out is
+refused if the model calls it anyway. The six tools a delegate never gets (asking you, the task
+list, scheduling a next turn, fetching a URL, vetting content and spawning a delegate) are offered
+here, because each is withheld from a delegate for a reason about nobody watching it.
+
+**The name is compared against what this session resolved**, from `~/.bravebot/agents` and from a
+project you vouched for. The bare word lists those names, and so does a name that matches nothing:
+
+```
+/agent
+this session resolved reader, checker, worker, rule-reviewer; address one with /agent <name> <task>
+
+/agent auditor check the diff
+there is no definition called auditor; this session resolved reader, checker, worker, rule-reviewer
+```
+
+A definition in a project you did not vouch for is not in that list, and no spelling of its name
+reaches it. The names are never offered as completions: you type the whole name every time, because
+a completion row is one keystroke from being sent and a name is text somebody else may have written.
+
+**A definition naming a model you have not signed in to does not run**, and says which definition
+asked for which model, rather than running on the session's model instead:
+
+```
+rule-reviewer asked for haiku, which needs a sign-in first, so it did not run
+```
+
+A reply answered by a different model than the one named says that too. The reply is drawn under
+the definition's name (`rule-reviewer answered`), taken from the name that matched and never from
+anything the reply says about itself. The name is not written into the session record, so a
+resumed session draws the same reply without it.
+
+Only a line you typed into the box addresses a definition. `/agent` in a reply, in a file, or in a
+line this program wrote is text.
 
 ## `/rename <name>`
 

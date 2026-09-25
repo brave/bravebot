@@ -198,6 +198,20 @@ pub fn prompt_for(held: &CapabilitySet, standing_instruction: &str) -> String {
     )
 }
 
+/// What a turn a person addressed to a definition is told about it.
+///
+/// A sentence of the driver's naming the definition and saying who chose it, then the body as a
+/// delegate's is carried. Nothing here says what the turn may not do: the tools it is offered
+/// already say that, and the gates hold whether it reads this or not.
+pub(crate) fn addressed_prompt(addressed: &bravebot_core::delegate::Addressed) -> String {
+    format!(
+        "\n\nThe person addressed this turn to {}, a definition of theirs, so do what they ask \
+         in the way it describes.{}",
+        addressed.name(),
+        standing(addressed.prompt())
+    )
+}
+
 /// A definition's body, set off from the paragraphs around it, or nothing where there was none.
 fn standing(body: &str) -> String {
     let body = body.trim();

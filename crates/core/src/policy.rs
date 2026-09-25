@@ -2837,6 +2837,131 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         Ok(spec)
     }
 
+    /// Select the definition a person's line addressed, and narrow this turn to it.
+    ///
+    /// `None` where the line addressed none. The name is the [`crate::delegate::ADDRESSED`]
+    /// routing field, so it came from the keystroke that started this turn (ADDRESS-3).
+    ///
+    /// **No integrity check**, unlike [`Policy::before_delegate`]. That refusal is about who
+    /// composes what steers a new run, and here the person did: the name and the task are both
+    /// their line, so nothing this context has met reaches either (ADDRESS-4).
+    ///
+    /// The turn keeps only what it holds that the definition also asks for, so a definition can
+    /// take away and never add (ADDRESS-7). What stays offered is `offered` less every tool whose
+    /// capability is gone and every tool the definition did not name. [`NEVER_DELEGATED`] plays
+    /// no part, because this is the person's own turn and not a delegate (ADDRESS-8). Both
+    /// narrowings are recorded, so the trail says what the definition cost.
+    ///
+    /// [`NEVER_DELEGATED`]: crate::delegate::NEVER_DELEGATED
+    pub fn address(&mut self, offered: &[&str]) -> Gated<Option<crate::delegate::Addressed>> {
+        let Some(name) = self
+            .routing
+            .get(crate::delegate::ADDRESSED)
+            .map(str::to_string)
+        else {
+            return Ok(None);
+        };
+        let Some(selected) = self.delegates.get(&name).cloned() else {
+            return Err(self.deny(
+                "address",
+                Principle::Capability,
+                format!(
+                    "there is no definition called '{name}'; this session resolved {}",
+                    self.delegates.names().join(", ")
+                ),
+            ));
+        };
+
+        let wanted = selected.capabilities();
+        let held: CapabilitySet = self
+            .capabilities
+            .iter()
+            .filter(|capability| wanted.contains(capability))
+            .collect();
+        let given_up: Vec<String> = self
+            .capabilities
+            .iter()
+            .filter(|capability| !held.contains(capability))
+            .map(|capability| capability.to_string())
+            .collect();
+        if !given_up.is_empty() {
+            self.allow(
+                "address",
+                format!(
+                    "{name} is a {} and asks for less than this turn holds, so it runs without {}",
+                    selected.kind(),
+                    given_up.join(", ")
+                ),
+            );
+        }
+        let not_held: Vec<String> = wanted
+            .iter()
+            .filter(|capability| !self.capabilities.contains(capability))
+            .map(|capability| capability.to_string())
+            .collect();
+        if !not_held.is_empty() {
+            self.allow(
+                "address",
+                format!(
+                    "{name} asks for {} which this turn does not hold, so it runs without them",
+                    not_held.join(", ")
+                ),
+            );
+        }
+        self.capabilities = held;
+
+        let named = selected.tools();
+        let kept: Vec<String> = offered
+            .iter()
+            .filter(|tool| {
+                crate::delegate::gating_capability(tool)
+                    .is_none_or(|needs| self.capabilities.contains(&needs))
+                    && named.is_none_or(|named| named.iter().any(|written| written == *tool))
+            })
+            .map(|tool| tool.to_string())
+            .collect();
+        let dropped: Vec<&str> = named
+            .unwrap_or_default()
+            .iter()
+            .filter(|written| !kept.contains(written))
+            .map(String::as_str)
+            .collect();
+        if !dropped.is_empty() {
+            self.allow(
+                "address",
+                format!(
+                    "{name} names {} which this turn is not offered, so it runs without them",
+                    dropped.join(", ")
+                ),
+            );
+        }
+
+        let holding: Vec<String> = self
+            .capabilities
+            .iter()
+            .map(|capability| capability.to_string())
+            .collect();
+        self.allow(
+            "address",
+            format!(
+                "{name} ({}, from {}) addressed by a line a person typed, holding {} and offered {}",
+                selected.kind(),
+                selected.origin(),
+                if holding.is_empty() {
+                    "nothing".to_string()
+                } else {
+                    holding.join(", ")
+                },
+                if kept.is_empty() {
+                    "no tools".to_string()
+                } else {
+                    kept.join(", ")
+                }
+            ),
+        );
+        Ok(Some(crate::delegate::Addressed::new(&selected, kept)))
+    }
+
     /// Lend the audit trail to a nested run.
     ///
     /// A delegate is a run of its own and needs a policy of its own, which needs somewhere to
@@ -12678,6 +12803,245 @@ five
                 "an answer about the version in front of the person was not spent on it"
             );
             assert!(policy.trust().is_trusted("vendor/lib.js"));
+        }
+    }
+
+    mod addressing {
+        use super::*;
+        use crate::delegate::{ADDRESSED, Definition, Definitions, Kind};
+
+        /// Every tool name a turn might be offered that the tests below turn on.
+        const OFFERED: [&str; 11] = [
+            "read_file",
+            "list_files",
+            "write_file",
+            "run",
+            "lsp",
+            "ask_user",
+            "todo_write",
+            "schedule_next",
+            "fetch_url",
+            "vet_content",
+            "spawn_agent",
+        ];
+
+        fn addressing<'s>(
+            name: &str,
+            capabilities: CapabilitySet,
+            sink: &'s mut RecordingSink,
+        ) -> Policy<'s, RecordingSink> {
+            let mut routing = routing_with("task", "look into it");
+            routing.insert_trusted(ADDRESSED, name);
+            let mut policy =
+                Policy::begin(routing, ReleasePlan::new(), capabilities, sink).unwrap();
+            let mut definitions = Definitions::default();
+            definitions.insert(Definition::from_file(
+                "rule-reviewer",
+                "checks a diff",
+                Kind::Reader,
+                None,
+                "You review diffs against the rules.",
+                ".bravebot/agents/rule-reviewer.md",
+            ));
+            definitions.insert(Definition::from_file(
+                "asker",
+                "asks before it reads",
+                Kind::Reader,
+                Some(
+                    [
+                        "read_file",
+                        "ask_user",
+                        "todo_write",
+                        "schedule_next",
+                        "fetch_url",
+                        "vet_content",
+                        "spawn_agent",
+                    ]
+                    .map(str::to_string)
+                    .to_vec(),
+                ),
+                "",
+                ".bravebot/agents/asker.md",
+            ));
+            definitions.insert(Definition::from_file(
+                "narrow",
+                "reads one file at a time",
+                Kind::Worker,
+                Some(
+                    ["read_file", "Bash", "watch_file"]
+                        .map(str::to_string)
+                        .to_vec(),
+                ),
+                "",
+                ".bravebot/agents/narrow.md",
+            ));
+            policy.install_delegates(definitions);
+            policy
+        }
+
+        fn trail(sink: &RecordingSink) -> String {
+            format!("{:?}", sink.events())
+        }
+
+        /// ADDRESS-7. A definition is a person choosing which of their own capabilities to work
+        /// under, so a reader addressed from a session that may write and run is a turn that may
+        /// do neither. The gate is what refuses, not only the tool list, so a call to a tool the
+        /// list left out still finds nothing to spend.
+        #[test]
+        fn an_addressed_turn_holds_only_what_the_session_and_the_kind_both_hold() {
+            let mut sink = RecordingSink::new();
+            let mut policy = addressing("rule-reviewer", all_capabilities(), &mut sink);
+
+            let addressed = policy
+                .address(&OFFERED)
+                .expect("a resolved name is addressed")
+                .expect("the line named a definition");
+            assert_eq!(addressed.name(), "rule-reviewer");
+            assert_eq!(addressed.kind(), Kind::Reader);
+            assert_eq!(addressed.prompt(), "You review diffs against the rules.");
+
+            for refused in [
+                Capability::FileWrite,
+                Capability::ShellExec,
+                Capability::LanguageServer,
+            ] {
+                assert!(
+                    policy.before_capability(refused.clone()).is_err(),
+                    "a reader addressed from a wider session still holds {refused}"
+                );
+            }
+            assert!(policy.before_capability(Capability::FileRead).is_ok());
+            for gone in ["write_file", "run", "lsp"] {
+                assert!(
+                    !addressed.tools().iter().any(|tool| tool == gone),
+                    "a reader is offered {gone}"
+                );
+            }
+            let trail = trail(&sink);
+            assert!(
+                trail.contains("runs without file_write, shell_exec, language_server"),
+                "the trail does not say what the definition cost: {trail}"
+            );
+        }
+
+        /// ADDRESS-7, from the other side. A worker addressed from a session that may only read
+        /// is a turn that may only read: a file naming a wider kind is still a file, and a file
+        /// that added a capability would be configuration handing out authority.
+        #[test]
+        fn a_definition_wider_than_the_session_gets_the_sessions_reach() {
+            let mut sink = RecordingSink::new();
+            let session = CapabilitySet::from_iter([Capability::WebFetch, Capability::FileRead]);
+            let mut policy = addressing("worker", session, &mut sink);
+
+            policy
+                .address(&OFFERED)
+                .expect("a resolved name is addressed")
+                .expect("the line named a definition");
+            assert!(
+                policy.before_capability(Capability::FileWrite).is_err(),
+                "a worker widened a session that could not write"
+            );
+            let trail = trail(&sink);
+            assert!(
+                trail.contains("asks for file_write, shell_exec which this turn does not hold"),
+                "the trail does not say what the kind asked for and did not get: {trail}"
+            );
+        }
+
+        /// ADDRESS-4. The name and the task are both the person's line, so nothing a context
+        /// has met reaches either. Refusing here would make a person's own definitions less
+        /// reachable the longer their session went on, for a reason about who composes a task.
+        #[test]
+        fn a_context_that_has_met_untrusted_content_addresses_anyway() {
+            let mut sink = RecordingSink::new();
+            let mut policy = addressing("rule-reviewer", all_capabilities(), &mut sink)
+                .resuming(Integrity::Untrusted);
+
+            let addressed = policy
+                .address(&OFFERED)
+                .expect("a fallen context still lets a person address their own definition");
+            assert!(addressed.is_some());
+        }
+
+        /// ADDRESS-5. A name selects from the set this session resolved or it selects nothing,
+        /// and the refusal lists that set, so a person who mistyped learns what they could have
+        /// typed. A name spelling a path or a kind in another case matches nothing.
+        #[test]
+        fn a_name_this_session_did_not_resolve_is_refused_with_the_names_it_did() {
+            for name in ["auditor", "../rule-reviewer", "Reader", "rule-reviewer "] {
+                let mut sink = RecordingSink::new();
+                let mut policy = addressing(name, all_capabilities(), &mut sink);
+
+                let err = policy
+                    .address(&OFFERED)
+                    .expect_err("a name nobody resolved must select nothing");
+                assert_eq!(err.principle, Principle::Capability, "for '{name}'");
+                let said = err.to_string();
+                for resolved in ["reader", "checker", "worker", "rule-reviewer", "asker"] {
+                    assert!(
+                        said.contains(resolved),
+                        "the refusal for '{name}' does not name {resolved}: {said}"
+                    );
+                }
+                assert!(
+                    policy.before_capability(Capability::ShellExec).is_ok(),
+                    "a refused name narrowed the turn anyway"
+                );
+                assert!(!policy.finish());
+            }
+        }
+
+        /// ADDRESS-8. Each of the six is kept from a delegate for a reason naming the thing this
+        /// turn is not: nobody watching, no turn to outlive, a depth nobody chose. An addressed
+        /// turn is the person's own, so a definition naming them gets them.
+        #[test]
+        fn the_tools_no_delegate_is_offered_are_offered_to_an_addressed_turn() {
+            let mut sink = RecordingSink::new();
+            let mut policy = addressing("asker", all_capabilities(), &mut sink);
+
+            let addressed = policy
+                .address(&OFFERED)
+                .expect("a resolved name is addressed")
+                .expect("the line named a definition");
+            for tool in crate::delegate::NEVER_DELEGATED {
+                assert!(
+                    addressed.tools().iter().any(|kept| kept == tool),
+                    "a person addressing a definition naming {tool} was not offered it"
+                );
+            }
+        }
+
+        /// ADDRESS-7's second term. A definition naming its tools is confined to them even
+        /// where the capability behind another is held, and a name the turn is not offered, or
+        /// that is not a tool at all, is dropped and said rather than lost in silence.
+        #[test]
+        fn an_addressed_turn_is_offered_only_the_tools_its_definition_named() {
+            let mut sink = RecordingSink::new();
+            let mut policy = addressing("narrow", all_capabilities(), &mut sink);
+
+            let addressed = policy
+                .address(&OFFERED)
+                .expect("a resolved name is addressed")
+                .expect("the line named a definition");
+            assert_eq!(addressed.tools(), ["read_file".to_string()]);
+            let trail = trail(&sink);
+            assert!(
+                trail.contains("names Bash, watch_file which this turn is not offered"),
+                "the trail does not say which named tools were dropped: {trail}"
+            );
+        }
+
+        /// A line that addressed nothing is a turn for the session's own planner, holding what
+        /// it held. Without this the tests above would pass against an address that narrowed
+        /// every turn.
+        #[test]
+        fn a_turn_nobody_addressed_is_left_as_it_began() {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+
+            assert!(policy.address(&OFFERED).unwrap().is_none());
+            assert!(policy.before_capability(Capability::ShellExec).is_ok());
+            assert!(policy.before_capability(Capability::FileWrite).is_ok());
         }
     }
 

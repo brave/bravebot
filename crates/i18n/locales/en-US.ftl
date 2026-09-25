@@ -1372,6 +1372,7 @@ command-loop = Send a prompt again and again, say what is repeating, or stop it
 command-goal = Keep working until a condition you set is judged met
 command-watch = List the files this session is watching, and stop one by its number
 command-manifest = Plan one task in full, show you the plan, then run it with nothing re-planned
+command-agent = Run one of your definitions on a task, by its name
 command-export = Export the session transcript to a markdown file
 command-undo = Rewind one turn and put back the files it wrote
 command-rewind = List the turns a rewind could go back to, or go back that many
@@ -1714,6 +1715,16 @@ manifest-began = planning the whole task first; the session waits here until the
 manifest-ended-unexpectedly = the run ended unexpectedly
 manifest-failed = the run stopped: { $problem }
 manifest-recorded = recorded as { $id }; read it again with bravebot --resume { $id }
+
+# What the session says about a definition a person addressed with /agent. Every name here is one
+# the session resolved from a source somebody vouched for, so it may be printed; it is never offered
+# as a completion.
+agent-needs-a-task = /agent { $name } takes the task to do, as in /agent { $name } review the diff
+agent-resolved = this session resolved { $names }; address one with /agent <name> <task>
+agent-no-such-definition = there is no definition called { $name }; this session resolved { $names }
+# Drawn above a reply from an addressed turn. The name is the one the driver matched, never
+# anything the reply says about itself.
+agent-answered = { $name } answered
 
 
 ## The opening screen
