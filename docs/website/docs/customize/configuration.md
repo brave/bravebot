@@ -854,7 +854,9 @@ decide where your key is sent.
 named. An opencode `provider` entry reached through an OpenAI-compatible SDK, with only the fields
 bravebot reads, and an `auth.json` API key for a gateway whose endpoint bravebot knows. opencode's
 `disabled_providers` and `enabled_providers` are honoured, and a name already set in your settings file,
-or pinned by an administrator, is left as it is.
+or pinned by an administrator, is left as it is. A model opencode's `amazon-bedrock` entry lists that
+one of your Bedrock tiers already names, such as the Claude Code import's
+`ANTHROPIC_DEFAULT_OPUS_MODEL`, is not added to the entry again.
 
 **Keys.** A source that names a variable has only the name written, and opencode's `{env:VAR}` becomes
 `"env": ["VAR"]`. A key the source holds itself is asked about on its own question, which names the host

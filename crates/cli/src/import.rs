@@ -8,6 +8,7 @@ use crate::exit::{Ending, fail};
 use crate::plain::Prompting;
 use crate::progress::printable;
 use bravebot_agent::confirm::Decision;
+use bravebot_config::bedrock::{Bedrock, Tier};
 use bravebot_config::import::{self, Destination, Found, Gateway, Key, Left, Reason, Source};
 use bravebot_config::provider::{Credential, Provider};
 use bravebot_config::{Config, Managed};
@@ -104,7 +105,7 @@ fn at_the_start(a_service_is_configured: bool) -> Start {
     let Some(file) = destination_file() else {
         return Start::Refuse(Looked::default());
     };
-    let found = import::found(&import::Places::from_env(), |name| std::env::var(name).ok());
+    let found = import::found(&import::Places::from_env(), exported);
     if found.is_empty() {
         return Start::Refuse(Looked::default());
     }
@@ -116,7 +117,13 @@ fn at_the_start(a_service_is_configured: bool) -> Start {
     // The process's own stdin, whose buffer is shared with every later reader of it, so an answer
     // typed ahead here reaches whatever asks next rather than a buffer that is dropped.
     let mut asking = Prompting::new(std::io::stdin().lock(), std::io::stderr());
-    let offered = offer(&mut asking, found, &mut destination, &Managed::load());
+    let offered = offer(
+        &mut asking,
+        found,
+        &mut destination,
+        &Managed::load(),
+        &exported,
+    );
     if offered.imported.is_empty() {
         return Start::Refuse(Looked::default());
     }
@@ -188,8 +195,8 @@ pub(crate) fn looked(a_service_is_configured: bool) -> Looked {
     };
     let destination = Destination::open(&file);
     let managed = Managed::load();
-    for found in import::found(&import::Places::from_env(), |name| std::env::var(name).ok()) {
-        let plan = plan(found, destination.as_ref().ok(), &managed);
+    for found in import::found(&import::Places::from_env(), exported) {
+        let plan = plan(found, destination.as_ref().ok(), &managed, &exported);
         if plan.adds_anything() {
             looked.importable.push(plan.source);
         }
@@ -226,9 +233,15 @@ pub(crate) fn providers(args: &[String]) -> ExitCode {
         Err(why) => return fail(Ending::Failed, unwritable(why, &file)),
     };
 
-    let found = import::found(&import::Places::from_env(), |name| std::env::var(name).ok());
+    let found = import::found(&import::Places::from_env(), exported);
     let mut asking = Prompting::new(std::io::stdin().lock(), std::io::stderr());
-    let offered = offer(&mut asking, found, &mut destination, &Managed::load());
+    let offered = offer(
+        &mut asking,
+        found,
+        &mut destination,
+        &Managed::load(),
+        &exported,
+    );
     if !offered.asked {
         asking.say(match offered.settled {
             true => t!(import_nothing_new),
@@ -253,6 +266,10 @@ pub(crate) fn providers(args: &[String]) -> ExitCode {
         }
     }
     ExitCode::SUCCESS
+}
+
+fn exported(name: &str) -> Option<String> {
+    std::env::var(name).ok()
 }
 
 /// The user's own settings file, or `None` where nothing may be written.
@@ -284,14 +301,17 @@ fn offer<R: BufRead, W: Write>(
     found: Vec<Found>,
     destination: &mut Destination,
     managed: &Managed,
+    environment: &dyn Fn(&str) -> Option<String>,
 ) -> Offered {
     let mut offered = Offered::default();
     for found in found {
-        let plan = plan(found, Some(destination), managed);
+        let plan = plan(found, Some(destination), managed, environment);
         if !plan.adds_anything() {
-            offered.settled |= !plan.kept.is_empty() || !plan.pinned.is_empty();
+            offered.settled |=
+                !plan.kept.is_empty() || !plan.pinned.is_empty() || !plan.named.is_empty();
             let lines = [
                 kept_lines(&plan, destination.path()),
+                named_lines(&plan),
                 pinned_lines(&plan, managed),
                 left_lines(plan.source, &plan.left),
             ];
@@ -381,6 +401,8 @@ struct Plan {
     gateways: Vec<Gateway>,
     /// Names the file already sets, which keep their values.
     kept: Vec<String>,
+    /// Models left out of an AWS entry because a tier names them, by entry id.
+    named: Vec<(String, String, Tier)>,
     /// Names the managed layer pins, which it would override.
     pinned: Vec<String>,
     left: Vec<Left>,
@@ -394,7 +416,12 @@ impl Plan {
 
 /// `destination` is `None` where the file could not be read as a document, which is said when the
 /// import is asked for rather than here.
-fn plan(found: Found, destination: Option<&Destination>, managed: &Managed) -> Plan {
+fn plan(
+    found: Found,
+    destination: Option<&Destination>,
+    managed: &Managed,
+    environment: &dyn Fn(&str) -> Option<String>,
+) -> Plan {
     let mut plan = Plan {
         source: found.source,
         read: found.read,
@@ -402,6 +429,7 @@ fn plan(found: Found, destination: Option<&Destination>, managed: &Managed) -> P
         model: None,
         gateways: Vec::new(),
         kept: Vec::new(),
+        named: Vec::new(),
         pinned: Vec::new(),
         left: found.left,
     };
@@ -416,17 +444,49 @@ fn plan(found: Found, destination: Option<&Destination>, managed: &Managed) -> P
             plan.env.push((name, value));
         }
     }
+    // The tiers as a start will read them once this plan is written: pinned, then exported, then
+    // the file.
+    let tiers = Bedrock::from_lookup(|name| {
+        managed
+            .get(name)
+            .map(str::to_string)
+            .or_else(|| environment(name).filter(|value| !value.trim().is_empty()))
+            .or_else(|| {
+                plan.env
+                    .iter()
+                    .find(|(set, _)| set == name)
+                    .map(|(_, value)| value.clone())
+            })
+            .or_else(|| {
+                destination
+                    .and_then(|file| file.env(name))
+                    .map(str::to_string)
+            })
+    });
     // A managed `provider` block is the whole list of gateways on this machine, so one added here
     // would never be read.
     let gateways_pinned = managed.gateways().is_some();
-    for gateway in found.gateways {
+    for mut gateway in found.gateways {
         let name = format!("provider.{}", gateway.id);
         if gateways_pinned {
             plan.pinned.push(name);
         } else if holds(&|file| file.holds_gateway(&gateway.id)) {
             plan.kept.push(name);
         } else {
-            plan.gateways.push(gateway);
+            let taken = tiers
+                .as_ref()
+                .map(|tiers| gateway.take_tier_models(tiers))
+                .unwrap_or_default();
+            // An AWS entry offers only the models it names, so one left with none adds nothing.
+            let emptied = !taken.is_empty() && !gateway.names_models();
+            plan.named.extend(
+                taken
+                    .into_iter()
+                    .map(|(model, tier)| (gateway.id.clone(), model, tier)),
+            );
+            if !emptied {
+                plan.gateways.push(gateway);
+            }
         }
     }
     // An opencode model answers through the entry written beside it, and through no entry this
@@ -501,8 +561,29 @@ fn shown(plan: &Plan, destination: &Path, managed: &Managed) -> Vec<String> {
         }
     }
     lines.extend(kept_lines(plan, destination));
+    lines.extend(named_lines(plan));
     lines.extend(pinned_lines(plan, managed));
     lines.extend(left_lines(plan.source, &plan.left));
+    lines
+}
+
+/// The models a tier already names, which are not added to an entry a second time.
+fn named_lines(plan: &Plan) -> Vec<String> {
+    if plan.named.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = vec![t!(import_named).to_string()];
+    lines.extend(plan.named.iter().map(|(id, model, tier)| {
+        format!(
+            "  {}",
+            t!(
+                import_named_model,
+                id = printable(id),
+                model = printable(&import::quoted(model)),
+                variable = tier.env_var()
+            )
+        )
+    }));
     lines
 }
 
@@ -717,21 +798,22 @@ mod tests {
     /// Run the questions over `answers` against this home's settings file, returning what was said
     /// and what they came to.
     fn asked(scratch: &Scratch, answers: &str, managed: &Managed) -> (String, Offered) {
-        asked_about(scratch, scratch.found(), answers, managed)
+        asked_about(scratch, scratch.found(), answers, managed, &|_| None)
     }
 
-    /// [`asked`], about what `found` holds.
+    /// [`asked`], about what `found` holds, with `environment` exported.
     fn asked_about(
         scratch: &Scratch,
         found: Vec<Found>,
         answers: &str,
         managed: &Managed,
+        environment: &dyn Fn(&str) -> Option<String>,
     ) -> (String, Offered) {
         let mut said = Vec::new();
         let offered = {
             let mut asking = Prompting::new(answers.as_bytes(), &mut said);
             let mut destination = Destination::open(&scratch.settings()).expect("a document");
-            let offered = offer(&mut asking, found, &mut destination, managed);
+            let offered = offer(&mut asking, found, &mut destination, managed, environment);
             if !offered.imported.is_empty() {
                 write(&destination).expect("written");
             }
@@ -812,7 +894,7 @@ mod tests {
         };
         let found = import::found(&Places::from_lookup(lookup), lookup);
 
-        let (said, _) = asked_about(&scratch, found, "", &Managed::default());
+        let (said, _) = asked_about(&scratch, found, "", &Managed::default(), &lookup);
 
         let question = said
             .find("Import this from Claude Code?")
@@ -870,6 +952,91 @@ mod tests {
         let file = written(&scratch);
         assert!(file.contains(r#""model":"opus""#), "{file}");
         assert!(file.contains(r#""openrouter":{"#), "{file}");
+    }
+
+    const OPUS: &str = "arn:aws:bedrock:us-west-2:1:application-inference-profile/opus";
+    const SOL: &str = "arn:aws:bedrock:us-west-2:1:application-inference-profile/sol";
+
+    /// An opencode AWS entry in us-west-2 naming `models`.
+    fn aws_entry(models: &[&str]) -> String {
+        let models: Vec<String> = models.iter().map(|id| format!(r#""{id}": {{}}"#)).collect();
+        format!(
+            r#"{{"provider": {{"amazon-bedrock": {{"options": {{"region": "us-west-2"}}, "models": {{{}}}}}}}}}"#,
+            models.join(", ")
+        )
+    }
+
+    /// IMPORT-5: the tiers answer for a model before any entry does, so a model the first answer's
+    /// tier names is not written into the second's AWS entry as well, and an entry left naming
+    /// nothing is not offered.
+    #[test]
+    fn a_model_a_tier_names_is_not_added_to_an_aws_entry_again() {
+        let scratch = Scratch::new("cli-import-tier-named");
+        scratch.write(".claude/settings.json", BEDROCK);
+        scratch.write(".config/opencode/opencode.json", &aws_entry(&[OPUS, SOL]));
+
+        let (said, offered) = asked(&scratch, "y\ny\n", &Managed::default());
+
+        assert_eq!(offered.imported, [Source::ClaudeCode, Source::Opencode]);
+        let second = &said[said.find("Import this from Claude Code?").expect("asked")..];
+        let entry = second
+            .lines()
+            .find(|line| line.contains("provider.amazon-bedrock, reached at"))
+            .expect("the entry was shown");
+        assert!(entry.contains(SOL) && !entry.contains(OPUS), "{said}");
+        assert!(
+            second.contains(&format!(
+                r#""{OPUS}" in provider.amazon-bedrock, named by ANTHROPIC_DEFAULT_OPUS_MODEL"#
+            )),
+            "{said}"
+        );
+        let file = written(&scratch);
+        assert_eq!(file.matches(OPUS).count(), 1, "{file}");
+        assert!(file.contains(SOL), "{file}");
+
+        // Declined, no tier names it, so the entry keeps it.
+        let _ = std::fs::remove_file(scratch.settings());
+        let (said, _) = asked(&scratch, "n\ny\n", &Managed::default());
+        assert!(!said.contains("Not added"), "{said}");
+        let file = written(&scratch);
+        assert!(file.contains(OPUS) && file.contains(SOL), "{file}");
+
+        let _ = std::fs::remove_file(scratch.settings());
+        scratch.write(".config/opencode/opencode.json", &aws_entry(&[OPUS]));
+        let (said, offered) = asked(&scratch, "y\ny\n", &Managed::default());
+        assert_eq!(offered.imported, [Source::ClaudeCode]);
+        assert!(!said.contains("Import this from opencode?"), "{said}");
+        assert!(
+            said.contains("named by ANTHROPIC_DEFAULT_OPUS_MODEL"),
+            "{said}"
+        );
+        assert!(!written(&scratch).contains("provider"), "{said}");
+    }
+
+    /// IMPORT-5: an exported tier is read at run time as a written one is, so it names the model
+    /// just the same.
+    #[test]
+    fn an_exported_tier_names_a_model_as_a_written_one_does() {
+        let scratch = Scratch::new("cli-import-tier-exported");
+        scratch.write(".config/opencode/opencode.json", &aws_entry(&[OPUS, SOL]));
+        let home = scratch.path.display().to_string();
+        let lookup = |name: &str| match name {
+            "HOME" => Some(home.clone()),
+            "BRAVEBOT_USE_BEDROCK" => Some("1".to_string()),
+            "AWS_REGION" => Some("us-west-2".to_string()),
+            "ANTHROPIC_DEFAULT_OPUS_MODEL" => Some(OPUS.to_string()),
+            _ => None,
+        };
+        let found = import::found(&Places::from_lookup(lookup), lookup);
+
+        let (said, _) = asked_about(&scratch, found, "y\n", &Managed::default(), &lookup);
+
+        assert!(
+            said.contains("named by ANTHROPIC_DEFAULT_OPUS_MODEL"),
+            "{said}"
+        );
+        let file = written(&scratch);
+        assert!(!file.contains(OPUS) && file.contains(SOL), "{file}");
     }
 
     /// IMPORT-6: a key the source holds is its own question, which names where it goes and says it
@@ -978,6 +1145,7 @@ mod tests {
             scratch.found(),
             &mut destination,
             &Managed::default(),
+            &|_| None,
         );
         assert_eq!(offered.imported, [Source::ClaudeCode]);
 

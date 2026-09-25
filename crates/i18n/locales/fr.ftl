@@ -370,6 +370,8 @@ import-key-held = provider.{ $id } : une clé est détenue pour cette entrée ; 
 import-key-file =
     provider.{ $id } : sa clé est lue dans { $path }, un chemin qui n'est pas suivi, donc aucune clé n'est écrite
 import-kept = Laissés tels quels, puisque { $file } les définit déjà :
+import-named = Non ajoutés, puisqu'un niveau les nomme déjà :
+import-named-model = { $model } dans provider.{ $id }, nommé par { $variable }
 import-pinned = Non proposés, puisque { $file } les définit pour tous les utilisateurs de cette machine :
 import-left-heading = Trouvés dans { $source } et non importés :
 import-left-anthropic-api = l'API native d'Anthropic, dont aucun service ici ne parle le format d'échange

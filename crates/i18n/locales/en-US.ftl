@@ -445,6 +445,9 @@ import-key-held = provider.{ $id }: a key is held for it, which is asked about o
 import-key-file =
     provider.{ $id }: its key is read from { $path }, which is not followed, so no key is written
 import-kept = Left as they are, since { $file } already sets them:
+# A model a Bedrock tier variable names, which the tiers answer for before any entry does.
+import-named = Not added, since a tier already names them:
+import-named-model = { $model } in provider.{ $id }, named by { $variable }
 import-pinned = Not offered, since { $file } sets them for every user of this machine:
 # Found and not imported, one line each, by name and reason and never by value.
 import-left-heading = Found in { $source } and not imported:

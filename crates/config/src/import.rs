@@ -6,7 +6,7 @@
 //! taken from one would let a clone decide where the person's key is sent.
 
 use crate::Secret;
-use crate::bedrock::Tier;
+use crate::bedrock::{Bedrock, Tier};
 use crate::env_var;
 use crate::provider::{self, AWS_PROVIDER_ID, Provider};
 use serde_json::{Map, Value};
@@ -213,6 +213,38 @@ impl Gateway {
             self.entry
                 .insert("env".to_string(), Value::Array(vec![Value::from(name)]));
         }
+    }
+
+    /// Take out of an AWS entry every model a tier of `tiers` names, with that tier.
+    ///
+    /// The tiers answer for a model before any entry does ([`crate::Config::bedrock_for`]), so a
+    /// copy here would be a second row in the picker that nothing ever sends to.
+    pub fn take_tier_models(&mut self, tiers: &Bedrock) -> Vec<(String, Tier)> {
+        if self.id != AWS_PROVIDER_ID {
+            return Vec::new();
+        }
+        let Some(Value::Object(models)) = self.entry.get_mut("models") else {
+            return Vec::new();
+        };
+        let mut taken = Vec::new();
+        models.retain(
+            |model, _| match tiers.entry(model).and_then(|entry| entry.tier) {
+                Some(tier) => {
+                    taken.push((model.clone(), tier));
+                    false
+                }
+                None => true,
+            },
+        );
+        if models.is_empty() {
+            self.entry.remove("models");
+        }
+        taken
+    }
+
+    /// Whether the entry names any model, which is all an AWS entry offers.
+    pub fn names_models(&self) -> bool {
+        self.entry.contains_key("models")
     }
 }
 
@@ -929,6 +961,11 @@ impl Destination {
             Some(Value::Object(block)) => block.get(name).is_some_and(Value::is_string),
             Some(_) => true,
         }
+    }
+
+    /// The string `env` sets `name` to, which is the only value the settings reader takes from it.
+    pub fn env(&self, name: &str) -> Option<&str> {
+        self.root.0.get("env")?.get(name)?.as_str()
     }
 
     /// Whether `provider` already has an entry for `id`, or is something other than a block.

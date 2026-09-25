@@ -212,16 +212,25 @@ the end of input.
 is shown as left as it is ([IMPORT-7](#IMPORT-7)). A source left with nothing to add is not asked
 about.
 
+**A model a tier names.** A model an `amazon-bedrock` entry lists is left out of it where a tier
+variable names that model, read the way a start will read it once the file is written: pinned,
+exported, or in the file, including what the first answer wrote. It is shown under its own line,
+with the variable that names it. An entry left listing no model is not written.
+
 **Why.** A prompt shows what is at stake rather than a summary of it ([prompting.md](prompting.md)).
 The host is where a credential will be sent, and a host is something a person can approve on sight,
 shown exactly as it will be written. One question per source, rather than one per item, keeps a
 Bedrock setup from being half imported; one per source rather than one for both lets the person
-choose when the two disagree.
+choose when the two disagree. The tiers answer for a model before any entry does, so a copy in the
+entry would be a second row in the model picker that no request is ever sent through, and an entry
+listing only such models reaches nothing.
 
 `verified-by: bravebot_cli::import::every_host_and_name_written_is_shown_before_the_question`
 `verified-by: bravebot_cli::import::only_the_affirmative_writes_and_the_end_of_input_declines`
 `verified-by: bravebot_cli::import::a_name_the_first_answer_wrote_is_left_by_the_second`
 `verified-by: bravebot_cli::import::a_setup_found_only_in_the_environment_says_so`
+`verified-by: bravebot_cli::import::a_model_a_tier_names_is_not_added_to_an_aws_entry_again`
+`verified-by: bravebot_cli::import::an_exported_tier_names_a_model_as_a_written_one_does`
 
 <a id="IMPORT-6"></a>
 ### IMPORT-6: a credential value is written only on its own question, and is never shown
