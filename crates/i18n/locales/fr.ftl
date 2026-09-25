@@ -361,6 +361,9 @@ mcp-needs-a-command = bravebot mcp a besoin d'une commande
 mcp-unknown-command = bravebot mcp n'a pas de commande { $command }
 mcp-needs-an-alias = { $command } a besoin de l'alias d'un serveur
 mcp-unexpected-argument = { $command } ne prend pas { $argument }
+mcp-add-stray-argument =
+    le mot { $position } après add n'est pas une option, et n'est pas répété car il peut être une
+    valeur : --env, --dir et --http prennent un mot chacun, et --stdio -- prend le reste
 mcp-not-an-alias =
     { $alias } ne peut pas nommer un serveur : un alias est fait de lettres, de chiffres, de - et
     de _, commence par une lettre ou un chiffre, et fait au plus 64 caractères

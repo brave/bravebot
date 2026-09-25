@@ -57,7 +57,7 @@ replaces that declaration.
 
 `--stdio` takes the program and its arguments after a bare `--`, each one as its own argument. They
 are never joined into a line and never read by a shell, so an argument holding a space is one
-argument.
+argument, and a flag of bravebot's own among them, such as `--settings`, is the server's.
 
 | Flag | What it does |
 |---|---|

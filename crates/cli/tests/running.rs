@@ -2230,6 +2230,67 @@ fn a_value_given_to_a_variable_is_refused_and_never_repeated() {
     );
 }
 
+/// SERVERS-10: a value written where `add` expects none, as a stray word or joined to a flag, is
+/// refused without being repeated either.
+#[test]
+fn a_value_in_a_stray_word_or_a_joined_flag_is_never_repeated() {
+    let scratch = Scratch::new("cli-running-mcp-stray");
+    let program = ["--stdio", "--", "npx", "weather-mcp"];
+    for flags in [
+        vec!["--env=WEATHER_TOKEN=hunter2-token"],
+        vec!["--env", "PATH", "WEATHER_TOKEN=hunter2-token"],
+        vec!["--env", "WEATHER_TOKEN", "hunter2-token"],
+        vec!["--http=https://user:hunter2-token@mcp.example.com/mcp"],
+    ] {
+        let mut args = vec!["mcp", "add", "weather"];
+        args.extend(&flags);
+        args.extend(program);
+        let output = bravebot(&scratch.path, &[], &args);
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(2), "{flags:?}: {stderr}");
+        assert!(
+            !stdout.contains("hunter2") && !stderr.contains("hunter2"),
+            "{flags:?} repeated the value: {stdout}{stderr}"
+        );
+    }
+    assert!(
+        !scratch.path.join(".bravebot").join("mcp.json").exists(),
+        "a refused declaration was written"
+    );
+}
+
+/// SERVERS-3: everything after `--stdio --` is the server's argv, bravebot's own flags included.
+#[test]
+fn a_flag_of_bravebots_after_the_bare_dashes_is_the_servers_argument() {
+    let scratch = Scratch::new("cli-running-mcp-foreign");
+    let argv = [
+        "srv",
+        "--settings",
+        "/nowhere/srv.json",
+        "--incognito",
+        "--vet",
+        "--dangerously-skip-permissions",
+    ];
+    let mut args = vec!["mcp", "add", "srv", "--stdio", "--"];
+    args.extend(argv);
+    let output = bravebot(&scratch.path, &[], &args);
+    let (_, stderr) = said(&output);
+    assert!(output.status.success(), "{stderr}");
+    let written = std::fs::read_to_string(scratch.path.join(".bravebot").join("mcp.json"))
+        .expect("the declaration was written");
+    let read = bravebot_config::mcp::Declarations::parse(&written).expect("it reads back");
+    let declared = bravebot_config::mcp::Declaration::stdio(
+        argv.iter().map(|word| word.to_string()).collect(),
+        Vec::new(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        read.get("srv").map(|entry| entry.declaration),
+        Some(Ok(declared))
+    );
+}
+
 /// SERVERS-5: `remove` takes the approval out with the declaration, since an approval outliving
 /// its declaration is a digest nothing resolves, and one that would answer for the same argv
 /// written back later without anybody seeing it. An approval another alias still resolves to is

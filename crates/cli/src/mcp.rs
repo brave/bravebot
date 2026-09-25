@@ -240,10 +240,18 @@ fn declared(flags: &[String]) -> Result<Declaration, Refusal> {
                 transport = Some(Transport::Stdio(argv));
                 break;
             }
+            // Shown up to its `=`, since `--env=NAME=value` and `--http=https://user:pass@host`
+            // carry the very value SERVERS-10 never repeats.
             other if other.starts_with('-') => {
-                return Err(argument(t!(cli_unknown_option, flag = shown(other))).into());
+                let flag = other.split('=').next().unwrap_or(other);
+                return Err(argument(t!(cli_unknown_option, flag = shown(flag))).into());
             }
-            other => return Err(unexpected("add", other).into()),
+            // Named by its place and not by its text: a stray word here is most often a value,
+            // as in `--env TOKEN sk-live` or `--env PATH TOKEN=sk-live`.
+            _ => {
+                let position = index as i64 + 2;
+                return Err(argument(t!(mcp_add_stray_argument, position = position)).into());
+            }
         }
         index += 2;
     }

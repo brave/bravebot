@@ -430,6 +430,9 @@ mcp-needs-a-command = bravebot mcp needs a command
 mcp-unknown-command = bravebot mcp has no command { $command }
 mcp-needs-an-alias = { $command } needs the alias of a server
 mcp-unexpected-argument = { $command } does not take { $argument }
+mcp-add-stray-argument =
+    word { $position } after add is not a flag, and is not repeated since it may be a value:
+    --env, --dir and --http take one word each, and --stdio -- takes the rest
 mcp-not-an-alias =
     { $alias } cannot name a server: an alias is letters, digits, - and _, starts with a letter or
     a digit, and is at most 64 characters
