@@ -340,6 +340,8 @@ pub enum Action {
     Paste,
     /// Stop the turn in flight.
     Cancel,
+    /// Stop the turn in flight so what is waiting goes now, the prompts among it as one turn.
+    SendNow,
     /// Take what the selection covers, which needs the screen as it was last drawn.
     Copy,
     /// Write the prompt somewhere with room to think. Needs the terminal, which the loop hands
@@ -474,6 +476,15 @@ fn starts_a_line(key: KeyEvent) -> bool {
     }
 }
 
+/// Whether a press asks for what is waiting to go now rather than when the turn in flight ends.
+///
+/// Ctrl-Enter, which reaches this process only where the terminal reports the modifier, for the
+/// reason Shift-Enter does. Elsewhere it arrives as Enter and queues the line, which is the half of
+/// what it asks for that Enter does too.
+fn sends_now(key: KeyEvent) -> bool {
+    key.code == KeyCode::Enter && key.modifiers.contains(KeyModifiers::CONTROL)
+}
+
 /// The key a press stands for in vi's NORMAL mode, where vi spells one of these with a letter.
 ///
 /// `None` for every other press, including every press at all in the ordinary box. Only the bindings
@@ -555,6 +566,18 @@ fn stop_what_is_running(session: &mut Session, cancel: &Cancel) {
     session.cleared_by_interrupt = false;
     session.abandon_half_typed();
     cancel.cancel();
+}
+
+/// A press during a turn that is not one of the keys that only stop it.
+///
+/// Ctrl-Enter is stopped here like any other stop, and what is waiting goes from the queue once the
+/// turn has ended, as it would have after any turn.
+fn turn_key(session: &mut Session, key: KeyEvent, cancel: &Cancel) {
+    let action = handle_key_while_working(session, key);
+    if action == Action::SendNow {
+        stop_what_is_running(session, cancel);
+    }
+    act_while_working(session, action, crate::clipboard::paste);
 }
 
 /// Whether a press is a character typed, which is the only kind of press a half-typed vi
@@ -1746,7 +1769,7 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     // Reachable because a turn can begin with nobody pressing anything, from a loop's tick or a
     // watch firing, which leaves the mode armed over a line that was typed at rest to be run.
     if key.code == KeyCode::Enter && session.shell && session.queue_shell() {
-        return Action::Redraw;
+        return queued(session, key);
     }
 
     // Before the arm that queues a prompt, because the two do the same thing to the box and differ
@@ -1762,7 +1785,7 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
         && command_typed(session.input()).is_some()
         && session.queue_command()
     {
-        return Action::Redraw;
+        return queued(session, key);
     }
 
     // After the arm that starts a line, so Shift-Enter still writes a paragraph, and before the
@@ -1770,7 +1793,13 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     // flight; what changes is that the line no longer waits in the box for the person to notice
     // the turn has ended and press Enter again.
     if key.code == KeyCode::Enter && session.queue() {
-        return Action::Redraw;
+        return queued(session, key);
+    }
+
+    // Over an empty box, where there was nothing to queue and what is already waiting can go all
+    // the same.
+    if sends_now(key) && session.hurry() {
+        return Action::SendNow;
     }
 
     // Refused here rather than left to fall through the ladder's catch-all for control chords. The
@@ -1785,6 +1814,17 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     // The same ladder the idle path uses, rather than a shorter copy of it. Nothing in it sends,
     // so there is nothing here for a running turn to refuse.
     navigate(session, key)
+}
+
+/// What a press that has just queued the line asks for next.
+///
+/// Enter asks for nothing more. Ctrl-Enter queues the line the same way, so a line typed with it
+/// joins what goes, and then asks for the turn to stop.
+fn queued(session: &mut Session, key: KeyEvent) -> Action {
+    if sends_now(key) && session.hurry() {
+        return Action::SendNow;
+    }
+    Action::Redraw
 }
 
 /// Interpret a paste.
@@ -2510,6 +2550,9 @@ fn event_loop(
         .on_tier(config);
     let absent = std::mem::take(&mut mcp_servers.notes);
     session.servers = mcp_servers;
+    // Windows reports modifiers on every key without being asked, and crossterm says it cannot be
+    // asked there, so the question only settles it elsewhere.
+    session.ctrl_enter_arrives = cfg!(windows) || enhanced_keys();
     // The flag both opens the session in bypass and puts that rung on the ladder the key walks.
     if skip_permissions {
         session = session.allowing_bypass();
@@ -3323,8 +3366,9 @@ fn event_loop(
                 stored.append_audit(session.turns, &events);
                 needs_draw = true;
             }
-            // Cancel is only reachable while a turn runs, which `run_turn_animated` handles.
-            Action::Cancel | Action::None | Action::Redraw => {}
+            // Cancel and SendNow are only reachable while a turn runs, which `run_turn_animated`
+            // handles.
+            Action::Cancel | Action::SendNow | Action::None | Action::Redraw => {}
         }
     }
 }
@@ -5818,10 +5862,7 @@ fn run_turn_animated(
                     TermEvent::Key(key) if stops_the_turn(session, key) => {
                         stop_what_is_running(session, &cancel);
                     }
-                    TermEvent::Key(key) => {
-                        let action = handle_key_while_working(session, key);
-                        act_while_working(session, action, crate::clipboard::paste);
-                    }
+                    TermEvent::Key(key) => turn_key(session, key, &cancel),
                     TermEvent::Paste(text) => {
                         let action = handle_paste_while_working(session, &text);
                         act_while_working(session, action, crate::clipboard::paste);
@@ -13459,6 +13500,163 @@ mod tests {
         assert!(
             reaching.take().is_none(),
             "the prompt was sent as a turn and left waiting to be interjected as well"
+        );
+    }
+
+    fn ctrl_enter() -> KeyEvent {
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL)
+    }
+
+    /// Ctrl-Enter does to the line what Enter does and then asks for the turn to stop. Enter must
+    /// never ask that: somebody queueing a follow-up is not asking to lose the answer being written.
+    #[test]
+    fn ctrl_enter_queues_the_line_and_stops_the_turn_where_enter_only_queues() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "first");
+        handle_key(&mut session, key(KeyCode::Enter));
+
+        for c in "a".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key_while_working(&mut session, key(KeyCode::Enter)),
+            Action::Redraw,
+            "Enter stopped the turn"
+        );
+        for c in "b".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key_while_working(&mut session, ctrl_enter()),
+            Action::SendNow
+        );
+        assert_eq!(session.input(), "", "the line was left in the box");
+        assert_eq!(
+            session
+                .queued
+                .iter()
+                .map(|line| line.prompt.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b"]
+        );
+    }
+
+    /// The turn loop's half of it: the press that asks for the turn to stop stops it, and Enter
+    /// beside it leaves the turn running.
+    #[test]
+    fn ctrl_enter_stops_the_turn_in_flight_and_enter_does_not() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "first");
+        handle_key(&mut session, key(KeyCode::Enter));
+        let cancel = Cancel::new();
+
+        for c in "a".chars() {
+            turn_key(&mut session, key(KeyCode::Char(c)), &cancel);
+        }
+        turn_key(&mut session, key(KeyCode::Enter), &cancel);
+        assert!(!cancel.is_cancelled(), "Enter stopped the turn");
+
+        turn_key(&mut session, ctrl_enter(), &cancel);
+        assert!(cancel.is_cancelled(), "Ctrl-Enter left the turn running");
+    }
+
+    /// Over an empty box there is nothing to queue, and what is already waiting can go all the same.
+    /// A press that did nothing there would leave somebody who queued with Enter no way to hurry it.
+    #[test]
+    fn ctrl_enter_over_an_empty_box_sends_what_is_already_waiting() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "first");
+        handle_key(&mut session, key(KeyCode::Enter));
+        for c in "a".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+
+        assert_eq!(
+            handle_key_while_working(&mut session, ctrl_enter()),
+            Action::SendNow
+        );
+    }
+
+    /// With nothing waiting and nothing typed there is nothing to send, so stopping the turn would
+    /// be Escape under another name, and a person reaching for Enter who caught Ctrl too would lose
+    /// the answer for nothing.
+    #[test]
+    fn ctrl_enter_with_nothing_to_send_leaves_the_turn_running() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "first");
+        handle_key(&mut session, key(KeyCode::Enter));
+
+        assert_ne!(
+            handle_key_while_working(&mut session, ctrl_enter()),
+            Action::SendNow
+        );
+        assert_eq!(session.status, Status::Working);
+    }
+
+    /// A compaction, a goal check or a manifest is not a turn, and nothing waiting can go before one
+    /// has ended anyway. Ctrl-Enter there queues the line as Enter does and stops nothing: a
+    /// compaction stopped half way is work thrown away for no prompt sent any sooner.
+    #[test]
+    fn ctrl_enter_during_a_single_request_only_queues() {
+        let mut session = having_sent(&["first question"]);
+        session.begin_aside();
+        for c in "a".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key_while_working(&mut session, ctrl_enter()),
+            Action::Redraw
+        );
+        assert_eq!(session.queued.len(), 1, "the line was not queued");
+        assert_eq!(session.status, Status::Working);
+    }
+
+    /// The whole of what the chord promises, through the stop arm the event loop reaches: the turn
+    /// ends, and the prompts that were waiting go as one turn rather than one after another. Nothing
+    /// may reach the planner twice on the way, neither as an interjection left behind in the buffer
+    /// nor as a second turn.
+    #[test]
+    fn what_ctrl_enter_hurried_goes_as_one_turn_once_the_turn_stops() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "first");
+        handle_key(&mut session, key(KeyCode::Enter));
+        let reaching = session.interjections();
+        for c in "a".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+        for c in "b".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key_while_working(&mut session, ctrl_enter()),
+            Action::SendNow
+        );
+
+        finish_cancelled_turn(&mut session, "first", Some(0));
+
+        assert_eq!(
+            queued_next(&mut session),
+            Some(Action::Submit("a\nb".to_string()))
+        );
+        assert!(
+            session.queued.is_empty(),
+            "a hurried prompt was left waiting"
+        );
+        assert!(
+            reaching.take().is_none(),
+            "a prompt sent in the turn was left to be interjected into it as well"
+        );
+        assert_eq!(
+            session
+                .transcript
+                .iter()
+                .filter(|entry| entry.speaker == crate::state::Speaker::User)
+                .map(|entry| entry.text.as_str())
+                .collect::<Vec<_>>(),
+            ["first", "a\nb"]
         );
     }
 

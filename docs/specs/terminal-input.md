@@ -242,12 +242,17 @@ the exit. One way out, and it is the one people already reach for.
 Shift-Enter needs a terminal that reports the modifier (Ghostty, Kitty, WezTerm) or one configured
 to send a newline; Ctrl-J is the fallback that always works (INPUT-2). Command-V never reaches the
 process and can carry only text, so Ctrl-V is the key for a picture, and which key
-carries a picture is said once per session.
+carries a picture is said once per session. Ctrl-Enter (INPUT-36) needs the same kind of terminal, or
+Windows, which reports the modifier without being asked. Elsewhere it arrives as Enter and only
+queues the line, so the offer beside the queue is not drawn there, and the way to the same turn is
+Up, then Escape, then Enter.
 
 **Why.** A chord that silently does nothing reads as a broken feature.
 
 `verified-by: bravebot_tui::app::which_key_carries_a_picture_is_said_once_per_session`
 `verified-by: bravebot_tui::app::a_paste_clears_the_hint_that_prompted_it`
+`verified-by: bravebot_tui::state::the_offer_is_not_made_where_ctrl_enter_cannot_arrive`
+`verified-by: bravebot_tui::render::the_offer_to_send_now_is_not_drawn_where_the_key_cannot_arrive`
 
 
 <a id="INPUT-6"></a>
@@ -313,6 +318,7 @@ named here and nowhere else:
 |---|---|
 | Enter | sends, which is the whole of what is refused (INPUT-10), and a line that is one of the words a slash may begin waits to be carried out rather than to be sent ([commands.md](commands.md)) |
 | Escape, Ctrl-C | stop the turn in flight (INPUT-4) |
+| Ctrl-Enter | queues the line as Enter does, then stops the turn in flight so what is waiting goes now (INPUT-36) |
 | Ctrl-D | leaves, which is not something the box does |
 | Ctrl-G | hands the screen the turn is drawing on to an editor (INPUT-14) |
 | `!` | arms a mode that changes what Enter does, over whatever the box holds when the turn ends ([shell-mode.md](shell-mode.md)) |
@@ -812,6 +818,10 @@ flight, which is aimed at something else entirely and costs the answer being wri
   what is typed after it is read as the instructions those letters spell. Counts are not on this
   list, because a count is how a person says how far, and a prompt has as much room to go as a file
   has (INPUT-35).
+- **The key list names Ctrl-Enter on every terminal.** Where the terminal does not report the
+  modifier the chord arrives as Enter and only queues the line (INPUT-5). The offer beside the queue,
+  which is where somebody reaches for it, is left off there; the list is drawn from one table for
+  every terminal, as it is for Shift-Enter.
 
 <a id="INPUT-19"></a>
 ### INPUT-19: Ctrl-R searches every prompt sent, and what is chosen goes into the box
@@ -1753,6 +1763,62 @@ and a person who typed one by accident would otherwise find out from what the ne
 `verified-by: bravebot_tui::state::a_count_stops_where_the_line_does`
 `verified-by: bravebot_tui::state::a_count_makes_the_input_motions_a_row`
 `verified-by: bravebot_tui::state::a_count_claims_the_row_keys_and_leaves_the_search_key`
+
+<a id="INPUT-36"></a>
+### INPUT-36: Ctrl-Enter stops the turn and sends what is waiting, as one turn
+
+Ctrl-Enter mid-turn takes the line out of the box exactly as Enter does ([INPUT-10](#INPUT-10)), and
+then stops the turn in flight as Escape does ([INPUT-4](#INPUT-4)). What was waiting when it was
+pressed goes once the turn has ended, and the prompts among it go as **one** turn, one to a line, in
+the order they were typed. Over an empty box it does the second half alone.
+
+**A turn of its own, with what a turn gets.** Routing is precommitted from all of them together, and
+every file and picture each of them named goes with it, because this is a turn beginning rather than
+words handed to one already running (INPUT-10). It sends what Up, Escape and Enter would have sent
+([INPUT-18](#INPUT-18)), without the box in between. Nothing reaches the planner twice: none of them
+is left where the turn it begins could take it again as an interjection.
+
+**Only as far as the first line that is not a prompt.** A command or a command line waiting among
+them keeps its place. The prompts ahead of it go together, it is carried out, and the prompts behind
+it go together after it, so what was typed first still happens first. A command with no prompt ahead
+of it is carried out as soon as the turn has stopped, which is reason enough to press the key.
+
+**Only what was waiting when it was pressed.** A prompt queued afterwards, while the turn was still
+stopping, was queued with Enter and waits for a turn of its own.
+
+**Only a turn is stopped.** A compaction, a question asked aside, a goal check and a manifest run are
+not turns, so there the key queues the line as Enter does and stops nothing, and Escape is still the
+key that stops one. With nothing waiting and nothing typed it stops nothing either, since there would
+be nothing to send. Otherwise the stop is a stop like any other: a running loop
+ends with it ([LOOP-11](loop.md#LOOP-11)), and a hurried turn that is itself stopped comes back to the
+box whole, every prompt in it leaving the history as a single stopped prompt does.
+
+**The offer is drawn beside the last waiting row.** While a turn runs with something waiting, and
+only where the chord can arrive ([INPUT-5](#INPUT-5)), the mark under the last queued line says
+`ctrl-enter to stop the turn and send now`. One offer for the whole queue, since the key sends the
+whole queue, and dropped whole where the width will not hold it. The key list names it too
+([INPUT-13](#INPUT-13)).
+
+**Why.** A queued prompt waits for the answer being written, which is right while the person wants
+that answer (INPUT-10). Once they have seen enough, having the queue go now took three keys and the
+knowledge that Up takes the queue back. A stop that sent the prompts one at a time would begin a turn
+for the first that the second was written to correct, so they go as one, which is what the person
+would have typed had they known in advance.
+
+`verified-by: bravebot_tui::app::ctrl_enter_queues_the_line_and_stops_the_turn_where_enter_only_queues`
+`verified-by: bravebot_tui::app::ctrl_enter_stops_the_turn_in_flight_and_enter_does_not`
+`verified-by: bravebot_tui::app::ctrl_enter_over_an_empty_box_sends_what_is_already_waiting`
+`verified-by: bravebot_tui::app::ctrl_enter_with_nothing_to_send_leaves_the_turn_running`
+`verified-by: bravebot_tui::app::ctrl_enter_during_a_single_request_only_queues`
+`verified-by: bravebot_tui::app::what_ctrl_enter_hurried_goes_as_one_turn_once_the_turn_stops`
+`verified-by: bravebot_tui::state::hurried_prompts_go_as_one_turn_carrying_what_each_of_them_named`
+`verified-by: bravebot_tui::state::a_prompt_queued_after_the_hurry_waits_for_a_turn_of_its_own`
+`verified-by: bravebot_tui::state::a_command_between_hurried_prompts_keeps_its_place`
+`verified-by: bravebot_tui::state::there_is_nothing_to_hurry_without_a_turn_running_and_something_waiting`
+`verified-by: bravebot_tui::state::stopping_a_hurried_turn_forgets_every_prompt_in_it`
+`verified-by: bravebot_tui::render::the_offer_to_send_now_is_drawn_under_the_last_waiting_prompt`
+`verified-by: bravebot_tui::render::the_offer_to_send_now_is_dropped_whole_where_it_does_not_fit`
+`verified-by: bravebot_tui::render::the_list_names_the_chord_that_sends_what_is_queued`
 `verified-by: bravebot_tui::state::a_count_says_how_much_of_the_extent_an_operator_takes`
 `verified-by: bravebot_tui::state::a_counted_change_is_one_change_and_one_undo_step`
 `verified-by: bravebot_tui::state::a_count_in_front_of_the_repeat_key_replaces_the_recorded_one`
