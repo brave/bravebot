@@ -116,7 +116,9 @@ A write, a run, a command's output and vouching for a file nobody vouched for ar
 without being put to anybody, and the question a session opens with about trusting the working
 directory is not put either: the workspace is trusted, which is what answering it yes would have
 recorded ([trust-map.md](trust-map.md) is what that record means). A directory a settings file
-asked for is opened and vouched for without being put either.
+asked for is opened and vouched for without being put either. So are the three questions about a
+server a checkout asks for: whether to start it, whether to offer its list of tools, and whether to
+make a call to one of them ([SERVERS-13](mcp-servers.md#SERVERS-13)).
 
 The two prompts that promote one slot's bytes are answered yes unless the run also asked for
 auto-vetting ([CHECK-11](vetting.md#CHECK-11)). Where it did, the check's word is what answers in the
@@ -146,15 +148,18 @@ rather than a file at a time.
 
 A run approved this way vouches for no program. The list of commands a person said to stop asking
 about is written into the session record and outlives the mode, and a record claiming somebody
-approved programs they were never shown would be a standing permission nobody granted.
+approved programs they were never shown would be a standing permission nobody granted. The same
+holds of a server: a start, a list and a call approved this way write nothing to `mcp-approved`,
+`mcp-projects` or `mcp-tools`, and a call is approved once rather than for the rest of the session.
 
 **No check is made where nothing would read its word.** [CHECK-10](vetting.md#CHECK-10) puts a
 confined check in front of every prompt that would promote quarantined content, and this is the one
 mode where those prompts are answered without being shown to anybody. Where the run asked for no
 screening, a check would be a model call whose word nobody reads, so it is not made and the verdict
 filled in is the one that claims nothing. Where it asked for screening, the word is read on the two
-promotion prompts, so the check is made there; the vouch offer reads no word in this mode whatever
-was asked for, so no check is made before it either. This is the only exemption from that clause.
+promotion prompts, so the check is made there; the vouch offer and a server's list read no word in
+this mode whatever was asked for, so no check is made before either. This is the only exemption
+from that clause.
 
 **Why.** The mode is for a place where the blast radius is bounded by something other than these
 prompts, which in practice means a container with no network and nothing in it worth losing. It is
@@ -178,6 +183,8 @@ the wrong mode everywhere else, and it is named `--dangerously-skip-permissions`
 `verified-by: bravebot_tui::trust_prompt::bypassing_trusts_the_workspace_instead_of_asking`
 `verified-by: bravebot_tui::trust_prompt::every_other_mode_leaves_the_question_to_the_person`
 `verified-by: bravebot_tui::app::bypassing_opens_the_directories_a_file_named_without_asking`
+`verified-by: bravebot_cli::servers::skipping_permissions_starts_the_server_unasked_and_records_nothing`
+`verified-by: bravebot_agent::mcp::bypassing_answers_both_prompts_and_records_nothing`
 
 ## Choosing one
 

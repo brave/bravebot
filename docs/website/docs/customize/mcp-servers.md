@@ -10,13 +10,6 @@ A Model Context Protocol server is a program of somebody else's, or a service so
 offers tools. Before one can be used you declare it, which says what it is, and you approve it,
 which says you have read what it will run.
 
-:::note
-**This build starts an approved server and offers none of its tools.** A session starts the servers
-its checkout asks for, confined, and completes their handshakes. No tool of one is offered to the
-model yet: that waits for the question each call will be put to you with. What follows is the part
-that is built.
-:::
-
 ## Where a server is declared
 
 One file, in one place: `mcp.json` in `~/.bravebot`, the directory holding what is yours. It is
@@ -199,6 +192,149 @@ asks, and a yes there starts the server for that session and records nothing.
 `--dangerously-skip-permissions` answers the question yes without drawing it, and records nothing,
 so a later run without it asks.
 
+## Offering its tools to the model
+
+A started server's tools are not offered to the model until you have read them. At the start of the
+first turn you ask for, the session puts each server's list to you, whole:
+
+```
+╭ offer these tools to the model? ─────────────────────────────────────────────────────╮
+│  weather offers 6 tools                                                               │
+│                                                                                       │
+│  the check found no attempt to give instructions in this                              │
+│┃ The list names weather tools and says what each returns; nothing in it addresses the │
+│┃ reader.                                                                              │
+│                                                                                       │
+│  The model will read each tool's name, its arguments and what the server says about   │
+│  it, as shown here. Every call is still put to you. Say no if a description gives     │
+│  instructions.                                                                        │
+│                                                                                       │
+│  weather:check_service_status                                                         │
+│┃ Check whether the upstream weather APIs (NOAA, Open-Meteo) are reachable. Call this  │
+│┃ after any weather tool returns an error, or before a batch of requests. Returns      │
+│┃ per-service status and links to the official status pages.                           │
+│                                                                                       │
+│  weather:get_alerts                                                                   │
+│    active_only (boolean), city_name (string), detail (string, summary | standard |    │
+│    full), latitude (number), location_name (string), longitude (number)               │
+│┃ Get active weather alerts, watches, warnings, and advisories for a location.         │
+│  1 Yes, offer them    2 No, continue without them    ctrl-c stop the turn  ↑↓ 51 more │
+╰───────────────────────────────────────────────────────────────────────────────────────╯
+```
+
+Each tool is `alias:tool`, then its arguments, then every row of what the server says about it
+behind the `┃` margin, none of it cut: a yes puts exactly this text in front of the model, and
+the margin marks the words that are the server's. A [check](../security/vetting.md) reads the list
+first, as it reads anything else about to be believed, and its verdict is drawn above it. `↑↓`
+scrolls a list longer than the screen.
+
+| Answer | What happens |
+|---|---|
+| 1 | the tools are offered, and a digest of the list is written as a `tools` line in `~/.bravebot/mcp-approved` beside the server's, so a later session whose server sends the same list asks nothing |
+| 2 | none of its tools is offered in this session, nothing is recorded, and the next session asks again |
+
+A list that is not the one you said yes to says so, and asks again. Answer 2 at the server
+question answers for the server and not for its list.
+
+The model sees each tool under a name like `mcp__weather__get_current_conditions`, with a sentence
+bravebot writes, saying which server it belongs to and that every call is put to you, before the
+server's own words. No built-in tool can be shadowed by one, since no built-in's name starts with
+`mcp__`.
+
+## Each call
+
+Every call is put to you, with the arguments the model wrote:
+
+```
+  weather:get_current_conditions    (MCP)
+
+  city_name: "Toronto, Canada"
+
+┃ Get the most recent weather observation for a location. Use this for current weather
+┃ or when asking about "today's weather", "right now", or recent conditions without a
+  (e to expand)
+
+  Proceed?
+  1. Yes
+  2. Yes, and stop asking for weather:get_current_conditions in this project
+  3. No
+```
+
+| Answer | What it records |
+|---|---|
+| 1, or `y` | nothing; this call runs |
+| 2 | the server, the tool and this project in `~/.bravebot/mcp-tools`, so later calls to this tool in this project run without the question |
+| 3, `n` or Esc | nothing; the call is not sent, and the model is told you declined |
+
+Enter answers nothing, so a key pressed for the last question does not answer this one. `e` shows
+the whole description. Answer 2 names this one tool and none of the server's others, and never
+what it was called with. Where nothing can be written, as in an incognito session, it is drawn as
+not offered.
+
+What the server returns is untrusted. You see it behind the margin; the model is handed a reference
+to it and the word that it is quarantined, and none of what it says.
+
+### Asking again
+
+```sh
+bravebot mcp forget [path]
+```
+
+Drops every standing answer recorded for a project, the directory you run it in by default: each
+tool answer 2 stopped asking about, and answer 2 at the server question. It says what it dropped:
+
+```
+weather:get_current_conditions is asked about again before each call in /Users/you/work/app
+```
+
+and `nothing was recorded for /Users/you/work/app` where there was nothing. A path that no longer
+exists is taken as typed, so a deleted checkout can still be forgotten.
+
+### Rules
+
+A [permission rule](configuration.md#permissions) in the `Mcp` family decides a call before it is
+put to you. `Mcp(weather)` covers every tool of that server and `Mcp(weather:get_alerts)` one tool.
+`Mcp(weather:*)` is `Mcp(weather)`, and a name matches whole, so `Mcp(weather)` does not cover
+`weather2`.
+
+```json
+{ "permissions": { "deny": ["Mcp(weather:get_alerts)"] } }
+```
+
+A `deny` rule refuses the call before anybody is asked, and the model is told not to retry it:
+
+```
+⏺ MCP(weather:get_alerts)
+  ⎿ refused: a deny rule in the settings file covers weather:get_alerts. Do not retry
+weather:get_alerts and do not look for another route to what it does: say in your reply what you
+needed from it.
+```
+
+An `ask` rule asks whatever answer 2 said, and an `allow` rule answers yes for you. A rule matches
+the server and the tool and never the arguments.
+
+### In `--plain`
+
+Both questions are a line answered yes or no, `offer these tools to the model? [y/N]` and
+`Proceed? [y/N]`, after the same text with the same margin. A yes to a call is answer 1, so answer
+2 is given in the full-screen interface.
+
+### Where nobody can be asked
+
+A one-shot run asks neither question. A list nobody said yes to is not offered, and the reason is
+printed:
+
+```
+note: weather offers no tool in this session: its list was not approved
+```
+
+A call that would be put to you is refused, and an `allow` rule decides nothing there, as it decides
+nothing for any tool in a one-shot run. A tool you answered 2 for in this project is still called,
+since that answer was given at the question and names one tool in one project.
+
+`--dangerously-skip-permissions` answers both questions yes without drawing them, makes no check of
+the list, and records nothing: a later run without it asks each question again.
+
 ## What a server can reach
 
 A program server is started confined, and on a platform with no confinement for one, which is
@@ -223,16 +359,18 @@ a redirect off the host and port you declared is refused.
 
 ## Seeing what a session started
 
-`/status` in the full-screen interface names the servers the session started:
+`/status` in the full-screen interface names the servers the session started, and what became of
+each list:
 
 ```
   Confinement   kernel-enforced
                   this session confines the MCP servers it started, and nothing else it runs
   MCP servers   weather
-                  started; no tool of theirs is offered to the model yet
+                  weather: 6 tools offered to the model
 ```
 
-It says `none` where it started none. A requested server that was not started is not on the line;
+Before the first turn a list reads `its tools are put to you before the next turn plans`, and a list
+you said no to reads `no tool offered, as you answered`. It says `none` where it started none. A requested server that was not started is not on the line;
 why is said once, as the session opens.
 
 ## Seeing what is declared
@@ -275,8 +413,6 @@ profile directory there is no `~/.bravebot` at all: nothing is declared there, a
 
 ## Known costs
 
-- **A started server is never called yet.** No tool of one is offered to the model until each call
-  can be put to you, so a server starts, answers its handshake, and waits.
 - **The full-screen interface asks before it asks about the directory.** A server you approve can
   start for a session whose directory you then decline, and runs until bravebot exits.
 - **A runner cannot write its cache in your home directory.** Pass a cache variable with `--env` and
@@ -291,3 +427,7 @@ profile directory there is no `~/.bravebot` at all: nothing is declared there, a
 - **A checkout cannot bring its own server.** A project that needs one says so in its README, and
   each person declares it. That is the point, and it costs a step per machine.
 - **An approval does not travel.** It lives in your own directory, so a second machine asks again.
+  The same is true of a list you said yes to and a tool you stopped the asking for.
+- **`--plain` cannot stop asking for a tool.** Its call question has room for one answer.
+- **A one-shot run still checks a list it then refuses.** The check is a model call nobody reads
+  the answer to, made once per run for each server whose list you have not said yes to.

@@ -203,18 +203,24 @@ fn a_confined_server_completes_the_handshake_and_lists_tools() {
 
     server.initialize("bravebot", "0.1.0").expect("handshake");
 
-    let tools = server.list_tools().expect("tools listed");
-    assert_eq!(tools.len(), 1);
-    // The alias this server was launched under, not the word it reported.
-    assert_eq!(tools[0].name(), "fake:echo");
-    assert_eq!(tools[0].on_the_wire(), "echo");
-    assert!(tools[0].input_schema().is_some());
-    assert!(
-        !tools[0]
-            .description()
-            .expect("a description")
-            .label()
-            .is_trusted()
+    let listing = server.list_tools().expect("tools listed");
+    assert_eq!((listing.offered(), listing.refused()), (1, 0));
+    // The alias this server was launched under, not a name it reported.
+    assert_eq!(listing.alias(), "fake");
+    assert!(!listing.list().label().is_trusted());
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::none(),
+        &mut sink,
+    )
+    .expect("policy");
+    let proof = policy.authorise_display_release("test reads the list a person is shown");
+    assert_eq!(
+        listing.list().clone().declassify(&proof),
+        r#"[{"arguments":[],"description":"echoes","name":"echo"}]"#
     );
 
     let _ = std::fs::remove_file(&script);

@@ -12,23 +12,25 @@ guards:
     sites:
       - crates/agent/src/lsp.rs: 4
       - crates/agent/src/manifest.rs: 3
+      - crates/agent/src/mcp.rs: 1
       - crates/agent/src/tools.rs: 22
       - crates/agent/src/workspace.rs: 7
       - crates/agent/tests/workspace.rs: 28
       - crates/aichat/src/lib.rs: 4
       - crates/bedrock/src/lib.rs: 5
-      - crates/core/src/policy.rs: 90
+      - crates/core/src/policy.rs: 98
       - crates/core/src/slot.rs: 5
       - crates/core/src/value.rs: 7
       - crates/mcp/src/http.rs: 2
       - crates/mcp/src/lib.rs: 1
-      - crates/mcp/src/protocol.rs: 2
+      - crates/mcp/src/protocol.rs: 1
       - crates/mcp/src/stdio.rs: 2
       - crates/net/src/lib.rs: 2
   - symbol: Labelled::declassify
     sites:
       - crates/agent/src/aside.rs: 2
       - crates/agent/src/manifest.rs: 5
+      - crates/agent/src/mcp.rs: 2
       - crates/agent/src/processor.rs: 1
       - crates/agent/src/tools.rs: 30
       - crates/agent/src/turn.rs: 4
@@ -37,10 +39,10 @@ guards:
       - crates/agent/tests/workspace.rs: 41
       - crates/aichat/tests/client.rs: 2
       - crates/bedrock/src/lib.rs: 1
-      - crates/core/src/policy.rs: 51
+      - crates/core/src/policy.rs: 55
       - crates/core/src/value.rs: 1
-      - crates/mcp/tests/http.rs: 1
-      - crates/mcp/tests/stdio.rs: 3
+      - crates/mcp/tests/http.rs: 2
+      - crates/mcp/tests/stdio.rs: 4
       - crates/ui-bridge/tests/workspace.rs: 1
   - symbol: Labelled::trusted
     sites:
@@ -64,7 +66,7 @@ guards:
       - crates/core/src/value.rs: 4
   - symbol: Declassification::authorise
     sites:
-      - crates/core/src/policy.rs: 48
+      - crates/core/src/policy.rs: 52
   - symbol: SlotStore::path_of
     sites:
       - crates/core/src/policy.rs: 5
@@ -107,6 +109,7 @@ guards:
   - symbol: Policy::render_in_place
     sites:
       - crates/agent/src/manifest.rs: 7
+      - crates/agent/src/mcp.rs: 1
       - crates/agent/src/skills.rs: 2
       - crates/agent/src/tools.rs: 20
       - crates/agent/src/turn.rs: 1
@@ -120,6 +123,7 @@ guards:
       - crates/agent/src/tools.rs: 9
   - symbol: Policy::label_model_output
     sites:
+      - crates/agent/src/mcp.rs: 1
       - crates/agent/src/tools.rs: 4
       - crates/core/src/policy.rs: 16
   - symbol: Policy::adopt_model_output
@@ -133,6 +137,7 @@ guards:
       - crates/core/src/policy.rs: 4
   - symbol: Policy::read_planner_argument
     sites:
+      - crates/agent/src/mcp.rs: 1
       - crates/agent/src/tools.rs: 9
       - crates/agent/src/workspace.rs: 1
       - crates/core/src/policy.rs: 5
@@ -412,6 +417,7 @@ and the content has no say in it.
 | an answer a person typed to a question | trusted and public, because a person wrote it | `verified-by: bravebot_core::policy::a_typed_answer_is_trusted_because_a_person_wrote_it` |
 | what a processor produced | taint over the inputs it was given | `verified-by: bravebot_core::policy::an_output_is_labelled_by_taint_over_the_inputs` |
 | one slot's bytes a person read on their screen and vouched for | trusted and private, because a person read them and said so, and the slot itself keeps what it had | `verified-by: bravebot_core::policy::output_a_person_vouched_for_comes_back_trusted` `verified-by: bravebot_core::policy::vetted_content_a_person_vouched_for_comes_back_trusted` |
+| a server's tool list a person vouched for, or the mode that answers for them | trusted and public, because a person read the whole list as it is drawn and said yes, and a digest records which list that was | `verified-by: bravebot_core::policy::a_tool_list_reaches_the_planner_only_through_an_endorsement` `verified-by: bravebot_core::policy::a_recorded_tool_list_is_promoted_only_where_it_is_the_one_vouched_for` |
 | a picture pasted at the keyboard | none, because it joins the user's own message, which carries none either, so it is recorded instead | `verified-by: bravebot_core::policy::a_pasted_image_is_recorded_in_the_audit_trail` |
 | a prompt typed while a turn is running | none, for the same reason, and recorded the same way | `verified-by: bravebot_core::policy::an_interjection_is_recorded_in_the_audit_trail` |
 
@@ -560,8 +566,8 @@ arrives at all.
     written into a checkout. What it buys is bounded by everything the verdict does not decide: one
     slot, whichever one the planner named, once, at `(T,priv)` so nothing leaves the machine and
     nothing becomes routing, with no trust rule written, and only on the routes
-    [CHECK-12](vetting.md#CHECK-12) covers, so vouching for a path is still asked about. The slot is
-    still the planner's choice and not the content's.
+    [CHECK-12](vetting.md#CHECK-12) covers, so vouching for a path and a server's tool list are
+    still asked about. The slot is still the planner's choice and not the content's.
   - **Force the word `unsafe`, or reply with nothing a verdict can be read out of.** That lands on
     the prompt with the warning, which is the direction this is built to fail in.
   - **Put their words in the reason.** It reaches a person's screen and stops there. It is drawn
@@ -572,7 +578,8 @@ arrives at all.
     [issue #23](https://github.com/brave/bravebot/issues/23).
 
   What is **not** on the list: choosing which slot is checked, choosing any destination, lowering
-  confidentiality, writing a trust rule, or answering the one other prompt a check runs for, which
-  is the vouch offer and is the one that writes such a rule
+  confidentiality, writing a trust rule, or answering either of the two other prompts a check runs
+  for: the vouch offer, which is the one that writes such a rule, and a server's tool list, which
+  puts a server's words in front of the planner for every turn after
   ([CHECK-12](vetting.md#CHECK-12)). While auto-vetting is off, reaching the planner at all is not
   on it either, and a verdict is advice about bytes already on a person's screen.

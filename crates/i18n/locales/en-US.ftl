@@ -383,11 +383,12 @@ permission-rule-unreadable = '{ $rule }' { $problem }
 permission-rule-not-a-line = is not a rule; a rule is written as a line of text
 permission-rule-empty = is empty
 permission-rule-unclosed-bracket = is missing its closing bracket
-permission-rule-unknown-family = names no family of tools this agent has; use Read, Edit or Bash
+permission-rule-unknown-family = names no family of tools this agent has; use Read, Edit, Bash, WebFetch or Mcp
 permission-rule-empty-brackets = has empty brackets; drop them to mean every use
 permission-rule-unanchored = needs a home directory or a settings directory to say where it points
 permission-rule-not-a-domain-rule = needs a domain, written WebFetch(domain:example.com)
 permission-rule-no-domain-named = names no domain after 'domain:'
+permission-rule-not-a-tool-rule = needs a server, or a server and one of its tools, written Mcp(weather) or Mcp(weather:get_forecast)
 
 
 ## Importing a Leo Premium subscription
@@ -541,7 +542,7 @@ mcp-unreadable-not-an-object = it is not a JSON object
 mcp-unreadable-servers = servers is not an object
 mcp-unreadable-key = { $key } is not a key it has: it holds servers and nothing else
 mcp-not-while-incognito =
-    declaring or approving a server writes to disk, which an incognito session will not do
+    declaring, approving or forgetting writes to disk, which an incognito session will not do
 mcp-no-state-directory =
     there is no state directory, so no MCP server is declared: none of { $variables } names a
     profile directory
@@ -562,6 +563,11 @@ mcp-nobody-asked =
 mcp-nobody-to-ask =
     nobody can be asked about { $alias }: run bravebot mcp approve { $alias } at a terminal
 mcp-removed = removed { $alias }, and any approval that only it held
+# Said by `bravebot mcp forget`, once for each standing answer it dropped.
+mcp-forgot-servers = { $path } no longer starts every server it requests without asking
+mcp-forgot-tool = { $tool } is asked about again before each call in { $path }
+mcp-forgot-nothing = nothing was recorded for { $path }
+mcp-no-current-directory = the current directory could not be read: { $error }
 mcp-none-declared = no MCP server is declared in { $path }
 mcp-list-declared-in = declared in { $path }
 mcp-approved = approved
@@ -616,6 +622,53 @@ servers-no-confinement-here =
     { $alias } was not started: this platform has no confinement for a local MCP server yet
 servers-no-handshake = { $alias } was started and did not complete its handshake: { $reason }
 servers-too-slow = { $alias } did not complete its handshake within { $seconds } seconds
+
+## The tools an MCP server offers, read by the person before any of them is offered to the model
+
+mcp-tools-title = offer these tools to the model?
+mcp-tools-offered =
+    { $count ->
+        [one] { $alias } offers one tool
+       *[other] { $alias } offers { $count } tools
+    }
+mcp-tools-none = { $alias } lists no tool it can offer
+mcp-tools-changed = this is not the list you said yes to before: the tools it offers have changed
+mcp-tools-explained =
+    The model will read each tool's name, its arguments and what the server says about it, as
+    shown here. Every call is still put to you. Say no if a description gives instructions.
+mcp-tools-not-listed =
+    { $count ->
+        [one] one more tool is not listed: its name or its arguments cannot be offered
+       *[other] { $count } more tools are not listed: their names or their arguments cannot be offered
+    }
+# How one argument's kind reads in a list, as in `city_name (string, required)`. The kinds are
+# the server's JSON Schema words and stay as it wrote them.
+mcp-tools-argument-list-of = { $kind } of { $items }
+mcp-tools-argument-required = required
+mcp-tools-yes = Yes, offer them
+mcp-tools-no = No, continue without them
+mcp-tools-declined = { $alias } offers no tool in this session: its list was not approved
+mcp-tools-refused = { $alias } offers no tool in this session: { $reason }
+mcp-tools-not-recorded =
+    the tools { $alias } offers are approved for this session only, since the answer could not be
+    recorded: { $error }
+
+## One call to a tool of an MCP server
+
+mcp-call-title = call this tool?
+mcp-call-kind = (MCP)
+mcp-call-no-arguments = no arguments
+mcp-call-question = Proceed?
+mcp-call-yes = Yes
+mcp-call-stand = Yes, and stop asking for { $tool } in this project
+mcp-call-cannot-stand = not offered: nothing answered in this session can be recorded
+mcp-call-no = No
+mcp-call-expand = (e to expand)
+mcp-call-collapse = (e to collapse)
+mcp-call-not-recorded =
+    { $tool } was called, and your answer to stop asking could not be recorded, so the next call
+    asks again: { $error }
+mcp-call-path-not-one-line = the project's path cannot be written on one line
 
 ## Vouching for a directory, asked once when a session starts somewhere new
 
@@ -1051,8 +1104,15 @@ status-confinement-nothing-confined = this session confines nothing
 status-confinement-servers = this session confines the MCP servers it started, and nothing else it runs
 status-mcp-servers = MCP servers
 status-mcp-servers-none = none
-# No tool of a started server is offered to the model until each call can be put to the person.
-status-mcp-servers-no-tools = started; no tool of theirs is offered to the model yet
+# How one started server's tools stand. A list nobody has read yet is put to the person at the
+# start of the next turn, and none of its tools is offered to the model until they say yes.
+status-mcp-servers-unread = { $alias }: its tools are put to you before the next turn plans
+status-mcp-servers-tools =
+    { $count ->
+        [one] { $alias }: one tool offered to the model
+       *[other] { $alias }: { $count } tools offered to the model
+    }
+status-mcp-servers-declined = { $alias }: no tool offered, as you answered
 status-loop = Loop
 status-loop-every = every { $every }
 status-loop-self-paced = paced by each turn
@@ -1427,6 +1487,15 @@ session-vetting-in-force =
 update-available =
     bravebot { $version } is out (this is { $running }); update with: { $command }
 session-started-server = running the { $language } language server for this session ({ $program })
+# Said when a person agrees to offer a server's tools to the model. The list is recorded, so it
+# is offered again in later sessions until the server's list changes.
+session-offered-tools =
+    { $count ->
+        [one] offering { $alias }'s one tool to the model
+       *[other] offering { $alias }'s { $count } tools to the model
+    }
+# Said when a person answers that a server's tool may be called without asking, in this project.
+session-stands-for-tool = calling { $tool } without asking in this project
 session-answered-already = answered already: { $question }
 session-something-was-refused = a policy gate refused something during that turn
 # The endpoint substitutes a model it will not serve rather than refusing, so without this a
@@ -1680,6 +1749,7 @@ verb-job-output = Job
 verb-spawn-agent = Delegate
 verb-schedule-next = Schedule
 verb-watch-file = Watch
+verb-mcp-call = MCP
 verb-unknown = Tool
 
 ## Where what a call produced ended up, said at the end of the line about it

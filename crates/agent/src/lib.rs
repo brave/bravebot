@@ -25,6 +25,7 @@ pub mod home;
 pub mod hooks;
 pub mod lsp;
 pub mod manifest;
+pub mod mcp;
 pub mod mode;
 pub mod outcome;
 pub mod permission_mode;

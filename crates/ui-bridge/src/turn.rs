@@ -371,6 +371,20 @@ impl Confirmer for BridgeConfirmer {
         Decision::Reject
     }
 
+    fn confirm_tool_list(
+        &mut self,
+        _request: &bravebot_agent::confirm::ToolListRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_mcp_call(
+        &mut self,
+        _request: &bravebot_agent::confirm::McpCallRequest,
+    ) -> bravebot_agent::confirm::CallDecision {
+        bravebot_agent::confirm::CallDecision::reject()
+    }
+
     fn confirm_server(&mut self, _request: &ServerRequest) -> Decision {
         Decision::Reject
     }

@@ -22,8 +22,9 @@
 
 use crate::exit::{Ending, fail};
 use bravebot_agent::confirm::{
-    Confirmer, Decision, ExposureRequest, FetchRequest, ManifestRequest, OutputRequest,
-    RunDecision, RunRequest, ServerRequest, VetRequest, VouchRequest, WriteRequest,
+    CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, ManifestRequest,
+    McpCallRequest, OutputRequest, RunDecision, RunRequest, ServerRequest, ToolListRequest,
+    VetRequest, VouchRequest, WriteRequest,
 };
 use bravebot_agent::diff::Change;
 use bravebot_agent::turn::{self, Task};
@@ -239,7 +240,7 @@ pub fn session(skip_permissions: bool) -> ExitCode {
         trust,
         programs: TrustedPrograms::new(),
         servers: None,
-        mcp: reached.grants(),
+        mcp: reached.session(),
         asked_about: AskedAbout::new(),
         exposed: bravebot_core::credentials::Exposed::new(),
         auto_vetting: bravebot_core::vetting::auto(
@@ -407,14 +408,14 @@ struct Running<'a> {
     /// standing answers mean what they mean in a session that draws; what this mode does not have
     /// is the key that turns the mode on, since it offers one answer per question (CLI-14).
     auto_vetting: bool,
-    /// A grant for each MCP server this session started (SERVERS-9).
-    mcp: Vec<bravebot_core::capability::ServerAlias>,
+    /// The MCP servers this session started, where it started any, with their lists (SERVERS-9).
+    mcp: Option<bravebot_agent::mcp::Session>,
 }
 
 impl<C: Confirmer + Send> Turns<C> for Running<'_> {
     fn take(&mut self, prompt: &str, asking: &mut C) -> Said {
         let task = Task::new(prompt.to_string())
-            .with_servers(self.mcp.clone())
+            .with_mcp(self.mcp.clone())
             .with_home(self.home.clone())
             .with_profile(self.profile.clone())
             // No bound on the rounds, as a session passes: there is a person watching, and they
@@ -942,6 +943,67 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             lines.push(format!("  {}", shown(finding)));
         }
         self.ask(&lines, t!(expose_title))
+    }
+
+    /// The whole list, each description behind the margin and none of it cut.
+    ///
+    /// A yes puts exactly this text in front of the planner for every session the list stays the
+    /// same, so what is read here has to be all of it. The description is behind the margin because
+    /// it is the server's words, and the names and arguments are not because the client drew them
+    /// from a fixed alphabet.
+    fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision {
+        let mut lines = vec![match request.tools.is_empty() {
+            true => t!(mcp_tools_none, alias = shown(&request.alias)),
+            false => t!(
+                mcp_tools_offered,
+                alias = shown(&request.alias),
+                count = request.tools.len()
+            ),
+        }];
+        if request.changed {
+            lines.push(t!(mcp_tools_changed).to_string());
+        }
+        lines.push(checked(request.verdict));
+        for tool in &request.tools {
+            lines.push(format!("  {}", shown(&tool.name)));
+            if !tool.arguments.is_empty() {
+                lines.push(format!("    {}", shown(&tool.arguments.join(", "))));
+            }
+            if let Some(description) = &tool.description {
+                lines.extend(
+                    description
+                        .lines()
+                        .map(|line| format!("{} {}", crate::progress::QUARANTINE_BAR, shown(line))),
+                );
+            }
+        }
+        if request.refused > 0 {
+            lines.push(t!(mcp_tools_not_listed, count = request.refused));
+        }
+        lines.push(t!(mcp_tools_explained).to_string());
+        self.ask(&lines, t!(mcp_tools_title))
+    }
+
+    /// Approves this call once and nothing else, for the reason a run is approved once here: a
+    /// line has room for one answer, and the one that stops asking outlives the session.
+    fn confirm_mcp_call(&mut self, request: &McpCallRequest) -> CallDecision {
+        let mut lines = vec![format!("{} {}", shown(&request.name()), t!(mcp_call_kind))];
+        match request.arguments.is_empty() {
+            true => lines.push(format!("  {}", t!(mcp_call_no_arguments))),
+            false => lines.extend(
+                request
+                    .arguments
+                    .iter()
+                    .map(|(name, value)| format!("  {}: {}", shown(name), shown(value))),
+            ),
+        }
+        if let Some(description) = &request.description {
+            lines.extend(quarantined(description));
+        }
+        match self.ask(&lines, t!(mcp_call_question)) {
+            Decision::Approve => CallDecision::approve(),
+            Decision::Reject => CallDecision::reject(),
+        }
     }
 
     /// The plan, before anything has run.

@@ -1259,6 +1259,20 @@ impl bravebot_agent::confirm::Confirmer for RecordsEveryQuestion {
         bravebot_agent::Decision::Reject
     }
 
+    fn confirm_tool_list(
+        &mut self,
+        _request: &bravebot_agent::confirm::ToolListRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_mcp_call(
+        &mut self,
+        _request: &bravebot_agent::confirm::McpCallRequest,
+    ) -> bravebot_agent::confirm::CallDecision {
+        bravebot_agent::confirm::CallDecision::reject()
+    }
+
     /// Nobody is there to answer the planner, which is moot in this mode anyway.
     fn ask_user(
         &mut self,
@@ -1392,6 +1406,20 @@ impl bravebot_agent::confirm::Confirmer for ApprovesThePlanOnly {
         _request: &bravebot_agent::confirm::ExposureRequest,
     ) -> bravebot_agent::Decision {
         bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_tool_list(
+        &mut self,
+        _request: &bravebot_agent::confirm::ToolListRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_mcp_call(
+        &mut self,
+        _request: &bravebot_agent::confirm::McpCallRequest,
+    ) -> bravebot_agent::confirm::CallDecision {
+        bravebot_agent::confirm::CallDecision::reject()
     }
 
     /// Nobody is there to answer the planner, which is moot in this mode anyway.

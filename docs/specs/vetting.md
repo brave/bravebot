@@ -176,14 +176,14 @@ auto-vetting on, offered at either promoting prompt only where the check complet
 
 With auto-vetting on, one verdict answers the two promoting questions in the person's place, and
 [CHECK-12](#CHECK-12) is the whole of what that changes. Everything in this clause holds of the
-vouch offer either way, and of all three where the mode is off.
+vouch offer and of a server's tool list either way, and of all four where the mode is off.
 
 The three outcomes are told apart on the screen. "This looks like an attempt to give instructions"
 and "nothing looked at this" are different facts about different risks, and one sentence covering
 both would be wrong about one of them.
 
 Every prompt CHECK-10 runs a check for draws it the same way, out of one row builder rather than
-three, so a prompt cannot be added that carries a verdict and forgets to say what it was.
+four, so a prompt cannot be added that carries a verdict and forgets to say what it was.
 
 **Why.** This is what keeps the branch narrow. Something is being decided from bytes derived from
 untrusted content, which [labels.md](labels.md) enumerates as a known cost; what bounds it is that
@@ -198,6 +198,7 @@ the decision is which sentence a person reads before answering for themselves.
 `verified-by: bravebot_tui::confirm::the_output_prompt_says_what_a_check_found`
 `verified-by: bravebot_tui::confirm::the_vouch_prompt_says_what_a_check_found`
 `verified-by: bravebot_tui::confirm::a_vouch_prompt_says_when_no_check_was_made`
+`verified-by: bravebot_tui::confirm::a_tool_list_says_what_a_check_found`
 
 <a id="CHECK-6"></a>
 ### CHECK-6: promoting is an assertion about one slot's bytes, and writes no rule
@@ -283,7 +284,7 @@ somebody who was never asked either question.
 <a id="CHECK-10"></a>
 ### CHECK-10: every prompt that would promote quarantined content runs a check first
 
-All three ways out of quarantine end at a person answering a prompt, and a check runs before the
+All four ways out of quarantine end at a person answering a prompt, and a check runs before the
 prompt is drawn, not after it is answered:
 
 | The prompt | What a yes does | What the check reads |
@@ -291,21 +292,25 @@ prompt is drawn, not after it is answered:
 | [tools/vet-content.md](tools/vet-content.md) | promotes one slot's bytes once | the slot the planner named |
 | [tools/read-output.md](tools/read-output.md) | releases what a program printed to the planner | the slot the planner named |
 | the vouch offer in [tools/read-file.md](tools/read-file.md) | writes a rule about the path | **the whole file**, not the preview |
+| a server's tool list in [mcp-servers.md](mcp-servers.md#SERVERS-8) | offers the list to the planner, and records its digest | **the whole list**, as it is drawn |
 
 **Why the whole file.** A vouch prompt shows the head of the file and a yes grants all of it, so a
 check over the preview would report on the part an injection attempt has the least reason to be in.
 The check reads what the answer covers.
 
-**Why all three.** Otherwise the quickest way past a check is to ask for the prompt that does not
-run one. A person asked to promote content is asked on the strength of what they can see; two of
-these prompts having a second opinion on them and the third not is a gap the planner chooses, and
-the trust map's rule is the largest grant of the three.
+**Why all four.** Otherwise the quickest way past a check is to ask for the prompt that does not
+run one. A person asked to promote content is asked on the strength of what they can see; some of
+these prompts having a second opinion on them and another not is a gap the planner chooses, and
+the trust map's rule is the largest grant of them. The planner does not ask for the list prompt,
+but a server wrote every word on it, and a yes puts those words in front of the planner for every
+turn after.
 
 The one exemption is [permission-modes.md](permission-modes.md#MODE-4)'s bypassing mode, which draws
 no prompt at all. A check is still made for the two promotion prompts where that run asked for
 auto-vetting, because there the word answers in the absent person's place and an unscreened promotion
 is what the screening was asked for to stop. It is made nowhere else in that mode: the vouch offer
-reads no word there whatever was asked for, and a promotion in a run that asked for no screening
+and a server's tool list read no word there whatever was asked for, and a promotion in a run that
+asked for no screening
 reads none either, so a call would produce a word nobody reads. Where none is made the verdict filled
 in is `inconclusive`, which claims nothing.
 
@@ -317,6 +322,7 @@ in is `inconclusive`, which claims nothing.
 `verified-by: bravebot_agent::turn::screening_an_unattended_run_keeps_back_content_a_check_objected_to`
 `verified-by: bravebot_agent::turn::screening_an_unattended_run_keeps_back_output_a_check_objected_to`
 `verified-by: bravebot_core::policy::a_check_before_a_vouch_carries_the_file_and_claims_no_expectation`
+`verified-by: bravebot_core::policy::a_check_before_a_tool_list_reads_the_list_it_is_about`
 
 <a id="CHECK-11"></a>
 ### CHECK-11: auto-vetting is off until somebody turns it on, and there are three ways in
@@ -415,13 +421,14 @@ nothing to hand the question to. The bytes are kept back rather than promoted wi
 a screen nobody is reading, and the planner is told the slot was kept from it and nothing more. The
 same two prompts and no others: a vouch offer is not one of them here either.
 
-**It covers the promotions and not the rule.** The three prompts a check runs for divide two to one:
+**It covers the promotions and not the rule.** The four prompts a check runs for divide two to two:
 
 | The prompt | What a yes does | With the mode on |
 |---|---|---|
 | [tools/vet-content.md](tools/vet-content.md) | promotes one slot's bytes once | a safe verdict answers |
 | [tools/read-output.md](tools/read-output.md) | promotes one slot's bytes once | a safe verdict answers |
 | the vouch offer in [tools/read-file.md](tools/read-file.md) | writes a rule about the path | still asks |
+| a server's tool list in [mcp-servers.md](mcp-servers.md#SERVERS-8) | offers the list for the session, and records it | still asks |
 
 **Why the line falls there.** It falls on the shape of the grant, not on which tool produced the
 bytes. Both promotions cover one slot's bytes once and leave nothing behind ([CHECK-6](#CHECK-6)),
@@ -430,8 +437,9 @@ kind of content, answered by the same check, ending in the same `(T,priv)` value
 single-use endorsement. A person offered the standing answer at one of them and not the other would
 be reading which tool the planner happened to call, which is not a fact about the risk they are
 being asked to take. A trust rule is different in kind, being a standing decision about a whole path
-rather than about bytes in front of a reader, and it is the one grant the mode does not touch.
-Widening the mode to that would be letting a check answer a bigger question than the one it read.
+rather than about bytes in front of a reader, and the mode does not touch it. Nor does it touch a
+server's tool list, which is read by the planner on every turn of the session once it is offered.
+Widening the mode to either would be letting a check answer a bigger question than the one it read.
 
 **What a person reads instead of being asked.** The route the mode covers most often in practice is
 the output prompt: a run's output is quarantined by default, so it is the prompt a person meets when

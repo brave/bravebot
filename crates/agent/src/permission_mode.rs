@@ -342,6 +342,38 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         }
     }
 
+    /// Promotes a server's tool list only where every check is being bypassed, and asks in every
+    /// other mode. SERVERS-13.
+    ///
+    /// Screening does not reach it, for the reason it does not reach a vouch: a yes here is a
+    /// standing decision about every tool on the list, a larger question than the one a check read.
+    /// What bypassing answers it records nothing, so the next session that asks anybody asks again.
+    fn confirm_tool_list(&mut self, request: &crate::confirm::ToolListRequest) -> Decision {
+        match self.mode {
+            PermissionMode::Bypass => Decision::Approve,
+            PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
+                self.inner.confirm_tool_list(request)
+            }
+        }
+    }
+
+    /// Asked in every mode but bypass, including plan mode and accepting edits. SERVERS-13.
+    ///
+    /// Accepting edits does not accept a call: what the server does with it happens off this tree,
+    /// where no diff shows it. Bypassing approves this one call and stands nothing, since no prompt
+    /// was drawn for the answer that stops asking to be given on.
+    fn confirm_mcp_call(
+        &mut self,
+        request: &crate::confirm::McpCallRequest,
+    ) -> crate::confirm::CallDecision {
+        match self.mode {
+            PermissionMode::Bypass => crate::confirm::CallDecision::approve(),
+            PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
+                self.inner.confirm_mcp_call(request)
+            }
+        }
+    }
+
     /// Always the inner confirmer's. A question the planner posed is not a permission, and an answer
     /// invented here would be reported to the model as the user's own words.
     fn ask_user(&mut self, asking: &bravebot_core::ask::Asking) -> Vec<bravebot_core::ask::Answer> {

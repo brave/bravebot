@@ -327,14 +327,16 @@ bravebot mcp get <alias>
 bravebot mcp list
 bravebot mcp approve <alias>
 bravebot mcp remove <alias>
+bravebot mcp forget [path]
 ```
 
 Declares a server in `~/.bravebot/mcp.json`, and approves one. `add` writes the declaration and then
 asks whether to use it; `approve` asks again later. The question is put only where stdin and stdout
 are both a terminal, and only `y` approves. `approve` with nobody to ask, or answered with anything
-else, exits 4. `list` exits 3 where a declaration in the file cannot be used. `add`, `approve` and
-`remove` are refused in an incognito session. No session uses a declared server yet. See
-[MCP servers](../customize/mcp-servers.md).
+else, exits 4. `list` exits 3 where a declaration in the file cannot be used. `forget` drops the
+standing answers recorded for a project, the current directory unless a path is given, so its
+servers and tools are asked about again. `add`, `approve`, `remove` and `forget` are refused in an
+incognito session. See [MCP servers](../customize/mcp-servers.md).
 
 ## Interactive keys
 

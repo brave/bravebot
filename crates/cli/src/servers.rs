@@ -5,12 +5,14 @@
 //! resolves to, and is started confined (MCP-3) holding the variables it names and no others
 //! (MCP-9). A declared alias nothing requested is not started.
 //!
-//! What a server says is read for whether its handshake succeeded and for nothing else, and no
-//! tool of one is asked for: none is offered to the planner until a call can be put to the person
-//! (SERVERS-7). A session holds the servers it started and a grant naming each, and that is all.
+//! A server's handshake is its `initialize` and then its `tools/list`, and the list is held as the
+//! one labelled text it arrived as: nothing of it reaches the planner until a person has read it at
+//! the start of a turn and said yes, or said yes to the same list under the same declaration before
+//! (SERVERS-8). A session holds the servers it started, their lists, and a grant naming each.
 
 use crate::mcp::{self as command, Home, Person, say, shown};
-use bravebot_config::mcp::{self, Approvals, Declaration, Declarations, Projects};
+use bravebot_agent::mcp::{Connection, Session};
+use bravebot_config::mcp::{self, Approvals, Declaration, Declarations, Digest, Projects};
 use bravebot_core::capability::{Capability, CapabilitySet, ServerAlias};
 use bravebot_core::event::RecordingSink;
 use bravebot_core::policy::{Policy, ReleasePlan, Routing};
@@ -43,16 +45,10 @@ pub(crate) enum Asking {
     Bypass,
 }
 
-/// A server the session started, held for as long as it runs.
-enum Started {
-    Stdio(#[allow(dead_code)] StdioServer),
-    Http(#[allow(dead_code)] HttpServer),
-}
-
 /// What a session reached, and what it has to say about the rest.
-#[derive(Default)]
 pub(crate) struct Reached {
-    started: Vec<(String, Started)>,
+    /// The servers started, or `None` where none was.
+    session: Option<Session>,
     /// A line for each requested server that is not reached, and each answer that could not be
     /// kept, in the order they arose.
     pub(crate) notes: Vec<String>,
@@ -61,26 +57,21 @@ pub(crate) struct Reached {
 impl Reached {
     /// The aliases started, in order.
     pub(crate) fn aliases(&self) -> Vec<String> {
-        self.started
-            .iter()
-            .map(|(alias, _)| alias.clone())
-            .collect()
-    }
-
-    /// One grant for each server started, naming it and no other (SERVERS-9).
-    pub(crate) fn grants(&self) -> Vec<ServerAlias> {
-        self.started
-            .iter()
-            .map(|(alias, _)| ServerAlias::new(alias.as_str()))
-            .collect()
+        self.session
+            .as_ref()
+            .map(Session::aliases)
+            .unwrap_or_default()
     }
 
     /// Whether any process the session started is confined, which a local server is and a
     /// remote one is not.
     pub(crate) fn confined(&self) -> bool {
-        self.started
-            .iter()
-            .any(|(_, server)| matches!(server, Started::Stdio(_)))
+        self.session.as_ref().is_some_and(Session::confined)
+    }
+
+    /// The servers started, their lists and a grant naming each, for the turns to settle and call.
+    pub(crate) fn session(&self) -> Option<Session> {
+        self.session.clone()
     }
 }
 
@@ -149,7 +140,15 @@ pub(crate) fn reach<R: BufRead, W: Write>(
         &mut notes,
     );
     let started = start(plans, diagnostics, &mut notes);
-    Reached { started, notes }
+    let session = (!started.is_empty()).then(|| {
+        Session::new(
+            started,
+            project.to_path_buf(),
+            home.directory.clone(),
+            home.writable,
+        )
+    });
+    Reached { session, notes }
 }
 
 /// How a requested server is to be started, once the question about it is answered.
@@ -163,9 +162,12 @@ enum Plan {
         /// The directories the named `PATH` searches, which the program may need to read.
         searched: Vec<PathBuf>,
         directory: Option<PathBuf>,
+        /// The digest of the declaration, which a vouch for the server's list is recorded beside.
+        declared: Digest,
     },
     Http {
         url: String,
+        declared: Digest,
     },
 }
 
@@ -341,7 +343,12 @@ fn planned(
     environment: &dyn Fn(&str) -> Option<OsString>,
 ) -> Result<Plan, String> {
     let (argv, names, directory) = match declaration {
-        Declaration::Http { url } => return Ok(Plan::Http { url: url.clone() }),
+        Declaration::Http { url } => {
+            return Ok(Plan::Http {
+                url: url.clone(),
+                declared: declaration.digest(),
+            });
+        }
         Declaration::Stdio {
             argv,
             variables,
@@ -376,6 +383,7 @@ fn planned(
         variables,
         searched,
         directory: directory.as_ref().map(PathBuf::from),
+        declared: declaration.digest(),
     })
 }
 
@@ -720,11 +728,11 @@ fn start(
     plans: Vec<(String, Plan)>,
     diagnostics: Stream,
     notes: &mut Vec<String>,
-) -> Vec<(String, Started)> {
+) -> Vec<bravebot_agent::mcp::Reached> {
     if plans.is_empty() {
         return Vec::new();
     }
-    let (sender, received) = mpsc::channel::<(String, McpResult<Started>)>();
+    let (sender, received) = mpsc::channel::<(String, McpResult<bravebot_agent::mcp::Reached>)>();
     let mut waiting: Vec<String> = Vec::new();
     let sandbox = plans
         .iter()
@@ -740,6 +748,7 @@ fn start(
                 variables,
                 searched,
                 directory,
+                declared,
             } => {
                 let sandbox = match &sandbox {
                     Some(Ok(sandbox)) => sandbox,
@@ -771,7 +780,7 @@ fn start(
                     &policy,
                     diagnostics,
                 );
-                let mut server = match launched {
+                let server = match launched {
                     Ok(server) => server,
                     Err(error) => {
                         notes.push(
@@ -787,16 +796,14 @@ fn start(
                 };
                 waiting.push(alias.clone());
                 std::thread::spawn(move || {
-                    let outcome = server
-                        .initialize("bravebot", env!("CARGO_PKG_VERSION"))
-                        .map(|()| Started::Stdio(server));
+                    let outcome = handshake_local(server, declared);
                     let _ = sender.send((alias, outcome));
                 });
             }
-            Plan::Http { url } => {
+            Plan::Http { url, declared } => {
                 waiting.push(alias.clone());
                 std::thread::spawn(move || {
-                    let outcome = handshake_remote(&alias, url);
+                    let outcome = handshake_remote(&alias, url, declared);
                     let _ = sender.send((alias, outcome));
                 });
             }
@@ -814,7 +821,7 @@ fn start(
         };
         waiting.retain(|waited| *waited != alias);
         match outcome {
-            Ok(server) => started.push((alias, server)),
+            Ok(server) => started.push(server),
             Err(error) => notes.push(
                 t!(
                     servers_no_handshake,
@@ -835,15 +842,33 @@ fn start(
             .to_string(),
         );
     }
-    started.sort_by(|(one, _), (other, _)| one.cmp(other));
+    started.sort_by(|one, other| one.alias().cmp(other.alias()));
     started
+}
+
+/// A local server's handshake, and then its list.
+fn handshake_local(
+    mut server: StdioServer,
+    declared: Digest,
+) -> McpResult<bravebot_agent::mcp::Reached> {
+    server.initialize("bravebot", env!("CARGO_PKG_VERSION"))?;
+    let listing = server.list_tools()?;
+    Ok(bravebot_agent::mcp::Reached::new(
+        Connection::Stdio(server),
+        listing,
+        declared,
+    ))
 }
 
 /// A remote server's handshake, through the one egress gate every request passes.
 ///
 /// Under a policy holding the fetch capability and the grant naming this server, and no other:
 /// the handshake is a request to one declared destination, and a hop off it is refused.
-fn handshake_remote(alias: &str, url: String) -> McpResult<Started> {
+fn handshake_remote(
+    alias: &str,
+    url: String,
+    declared: Digest,
+) -> McpResult<bravebot_agent::mcp::Reached> {
     let mut sink = RecordingSink::new();
     let mut routing = Routing::new();
     routing.insert_trusted("server", alias);
@@ -860,7 +885,12 @@ fn handshake_remote(alias: &str, url: String) -> McpResult<Started> {
     let egress = bravebot_net::Egress::new();
     let mut server = HttpServer::new(alias, url);
     server.initialize(&mut policy, &egress, "bravebot", env!("CARGO_PKG_VERSION"))?;
-    Ok(Started::Http(server))
+    let listing = server.list_tools(&mut policy, &egress)?;
+    Ok(bravebot_agent::mcp::Reached::new(
+        Connection::Http(server),
+        listing,
+        declared,
+    ))
 }
 
 /// The system temporary directory with its links followed, which is how a backend matches it.

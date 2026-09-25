@@ -217,6 +217,20 @@ impl bravebot_agent::Confirmer for AskedAboutServers {
         bravebot_agent::Decision::Reject
     }
 
+    fn confirm_tool_list(
+        &mut self,
+        _request: &bravebot_agent::confirm::ToolListRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_mcp_call(
+        &mut self,
+        _request: &bravebot_agent::confirm::McpCallRequest,
+    ) -> bravebot_agent::confirm::CallDecision {
+        bravebot_agent::confirm::CallDecision::reject()
+    }
+
     fn ask_user(
         &mut self,
         _asking: &bravebot_core::ask::Asking,

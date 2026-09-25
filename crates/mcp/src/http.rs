@@ -13,7 +13,7 @@
 //! see [`bravebot_core::policy::Policy::before_server_request`] and issue #83.
 
 use crate::protocol::{
-    OfferedTool, RpcRequest, RpcResponse, ToolList, ToolResult, call_params, initialize_params,
+    Listing, RpcRequest, RpcResponse, ToolList, ToolResult, call_params, initialize_params,
 };
 use crate::{McpError, McpResult, malformed};
 use bravebot_core::capability::{Capability, ServerAlias};
@@ -149,21 +149,17 @@ impl HttpServer {
         Ok(())
     }
 
-    /// List the tools this server offers.
-    ///
-    /// Each one is named by the alias this server was declared under rather than by the word the
-    /// server picked for it, and the sentence and the schema the server sent come back labelled:
-    /// they are the same third-party content a result is, and they are the part of a server that
-    /// reaches the planner before anything has been called. SERVERS-8.
+    /// List the tools this server offers, as the one labelled text a person vouches for before any
+    /// of them is offered. SERVERS-8.
     pub fn list_tools<S: Sink>(
         &mut self,
         policy: &mut Policy<'_, S>,
         egress: &Egress,
-    ) -> McpResult<Vec<OfferedTool>> {
+    ) -> McpResult<Listing> {
         let result = self.send(policy, egress, "tools/list", None)?;
         let list: ToolList =
             serde_json::from_value(result).map_err(|e| malformed("tool list", &e))?;
-        Ok(list.offered(&self.name))
+        Ok(list.listing(&self.name))
     }
 
     /// Call a tool.

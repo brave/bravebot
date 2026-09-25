@@ -1265,6 +1265,10 @@ pub struct Tools<'a> {
     /// host that cannot confine a subprocess: LSP-5 is MCP-3 applied here, so no confinement means
     /// no process, and the tool answers by saying so.
     pub servers: Option<&'a mut LanguageServers>,
+    /// The tools of the MCP servers this session reached whose lists somebody vouched for, and
+    /// the session they are called through. `None` for a delegate and for a session that reached
+    /// no server.
+    pub mcp: Option<&'a crate::mcp::Offer>,
     /// How many delegates this turn has spawned, which is what numbers the next one.
     ///
     /// Held by the turn rather than counted here, because a delegate is numbered once for the
@@ -2187,7 +2191,19 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
 
     // Announced before the call runs, so a slow one is visible while it is slow. This is the
     // difference between a turn that looks stuck and one that is plainly working.
-    let target = target_of(policy, &name, tools.slots, &arguments);
+    // A server's tool is found by the wire name it was offered under, and only in a turn that
+    // offered it: a delegate holds no grant to call one, and a name this turn did not offer is
+    // answered as any other unknown name is.
+    let server_tool = match tools.mcp {
+        Some(offer) if !tools.delegated => offer
+            .find(&name)
+            .map(|(alias, tool)| (offer, alias.to_string(), tool.to_string())),
+        _ => None,
+    };
+    let target = match &server_tool {
+        Some((_, alias, tool)) => format!("{alias}:{tool}"),
+        None => target_of(policy, &name, tools.slots, &arguments),
+    };
     reporter.tool_started(Activity::running(verb, target.clone()).of_tool(&name));
 
     let produced = match name.as_str() {
@@ -2256,7 +2272,15 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
             tools.armed,
             &arguments,
         ),
-        other => Produced::problem(format!("error: no such tool '{other}'")),
+        other => match &server_tool {
+            Some((offer, alias, tool)) => {
+                let egress = tools.chat.egress;
+                call_server_tool(
+                    policy, offer, egress, confirmer, reporter, alias, tool, &arguments,
+                )
+            }
+            None => Produced::problem(format!("error: no such tool '{other}'")),
+        },
     };
 
     // The wait the call already measured, on the line the call already draws. The turn's totals
@@ -5442,6 +5466,44 @@ fn fetch_url<S: Sink, C: Confirmer>(
     }
 }
 
+/// A call to a tool of an MCP server whose list somebody vouched for (SERVERS-7).
+///
+/// What the server answered is content nobody vouched for, as a fetched page is, and so is what
+/// it said about a call that failed: both go to the planner quarantined and are marked on the
+/// screen. The sentences this process writes name the tool by the alias the person gave the
+/// server and the word they read on its list, and nothing the server answered.
+#[allow(clippy::too_many_arguments)]
+fn call_server_tool<S: Sink, C: Confirmer, R: Reporter>(
+    policy: &mut Policy<'_, S>,
+    offer: &crate::mcp::Offer,
+    egress: &bravebot_net::Egress,
+    confirmer: &mut C,
+    reporter: &mut R,
+    alias: &str,
+    tool: &str,
+    arguments: &Value,
+) -> Produced {
+    let name = format!("{alias}:{tool}");
+    let (text, origin, note, failed) = match crate::mcp::call(
+        policy, offer, egress, confirmer, reporter, alias, tool, arguments,
+    ) {
+        crate::mcp::Called::Answered(text) => {
+            (text, format!("what {name} returned"), "answered", false)
+        }
+        crate::mcp::Called::Failed(text) => (
+            text,
+            format!("what {name} said about its failure"),
+            "the tool reported a failure",
+            true,
+        ),
+        crate::mcp::Called::Problem(problem) => return Produced::problem(problem),
+    };
+    let mut produced = Produced::new(text, origin, note).of_content();
+    produced.untrusted = true;
+    produced.failed = failed;
+    produced
+}
+
 /// What a background pipeline has printed since it was last looked at.
 ///
 /// The job name is routing, and it is the driver's own: a name this module minted and looked up in
@@ -8090,6 +8152,20 @@ mod tests {
                 Decision::Reject
             }
 
+            fn confirm_tool_list(
+                &mut self,
+                _request: &crate::confirm::ToolListRequest,
+            ) -> crate::confirm::Decision {
+                crate::confirm::Decision::Reject
+            }
+
+            fn confirm_mcp_call(
+                &mut self,
+                _request: &crate::confirm::McpCallRequest,
+            ) -> crate::confirm::CallDecision {
+                crate::confirm::CallDecision::reject()
+            }
+
             /// Refuses. A test double is not a person agreeing to start a process.
             fn confirm_server(&mut self, _request: &crate::confirm::ServerRequest) -> Decision {
                 Decision::Reject
@@ -9795,6 +9871,7 @@ mod tests {
                 profile: None,
                 delegated: false,
                 servers: None,
+                mcp: None,
                 spawned: &mut spawned,
                 jobs: &mut jobs,
                 permission_mode: crate::PermissionMode::default(),

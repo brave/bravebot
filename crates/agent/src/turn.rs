@@ -746,6 +746,11 @@ pub struct Task {
     /// and no other, which is what SERVERS-9 asks of a grant: one per server rather than one for
     /// every server.
     pub servers: Vec<bravebot_core::capability::ServerAlias>,
+    /// The servers themselves, whose tools a turn offers once somebody vouched for their lists.
+    ///
+    /// `None` for a caller that reached none. A delegate is offered none of them whatever this
+    /// holds, since its capabilities come from its spec and no kind names a server.
+    pub mcp: Option<crate::mcp::Session>,
 }
 
 /// One tick of a loop, as the turn running it needs to know about it.
@@ -843,6 +848,7 @@ impl Task {
             attribution: bravebot_config::Attribution::default(),
             delegate: None,
             servers: Vec::new(),
+            mcp: None,
         }
     }
 
@@ -1051,6 +1057,17 @@ impl Task {
     /// delegate's grant comes from its spec, so this says nothing to one.
     pub fn with_servers(mut self, servers: Vec<bravebot_core::capability::ServerAlias>) -> Self {
         self.servers = servers;
+        self
+    }
+
+    /// Give the turn the servers this session reached, where it reached any, and a grant to call
+    /// each of them.
+    pub fn with_mcp(mut self, session: Option<crate::mcp::Session>) -> Self {
+        self.servers = session
+            .as_ref()
+            .map(crate::mcp::Session::grants)
+            .unwrap_or_default();
+        self.mcp = session;
         self
     }
 }
@@ -2579,16 +2596,50 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     };
     let mut subscription = wallet.map(crate::shared::Spending::new);
 
+    // The lists of the servers this session reached, settled at the start of a turn somebody asked
+    // for, which is where there is a person to put a list to (SERVERS-8). A delegate is offered no
+    // tool of theirs, and its capabilities name no server to call one with.
+    let mcp = match (&task.delegate, &task.mcp) {
+        (None, Some(session)) => {
+            let settled = session.settle(
+                &mut policy,
+                &mut crate::processor::Chat {
+                    config,
+                    egress,
+                    subscription: subscription
+                        .as_mut()
+                        .map(|s| s as &mut dyn bravebot_aichat::Subscription),
+                    model: task.model.as_deref(),
+                    cancel: Some(cancel),
+                },
+                &mut confirmer,
+                &mut reporter,
+                task.permission_mode,
+            );
+            notices.extend(
+                settled
+                    .notices
+                    .into_iter()
+                    .map(crate::skills::Notice::from_message),
+            );
+            Some((session.offer(), settled.usage))
+        }
+        _ => None,
+    };
+
     // The tool that says when this turn is asked again is offered to every turn except a tick the
     // person timed, and describes a different job on either side of that. Nothing else changes.
     //
     // A delegate is offered what its capabilities reach, minus the four no delegate ever gets.
     // Derived from the set rather than named per kind, so a tool cannot be offered to a run whose
     // gates would refuse it on every call.
-    let offered = match &task.delegate {
+    let mut offered = match &task.delegate {
         Some(spec) => tools::for_delegate(spec.capabilities(), spec.tools()),
         None => tools::for_planner(scheduling, task.arming, &delegates),
     };
+    if let Some((offer, _)) = &mcp {
+        offered.extend(offer.functions());
+    }
 
     let mut steps = 0;
     // Whether a write has been asked for this turn, and whether the driver has already said none
@@ -2624,6 +2675,12 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     // Summed over the turn like the total, and starting from zero with it: this says what this
     // turn's requests did, not what the session has done, and the session adds its turns up itself.
     let mut cached = Cached::default();
+    // What checking the servers' lists spent is this turn's, since this turn is what asked.
+    if let Some((_, usage)) = &mcp {
+        tokens += usage.total();
+        output_tokens += usage.completion_tokens;
+        cached.add(usage.cached);
+    }
     // Seeded from the conversation rather than starting at zero. A session is many turns, and a
     // figure that began again with each one would only notice a conversation growing inside a
     // single long turn: fifty short turns would fill the context with nothing watching.
@@ -3094,6 +3151,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                             // A delegate is offered no way to delegate, and dispatch refuses one anyway.
                             delegated: task.delegate.is_some(),
                             servers: servers.as_deref_mut(),
+                            mcp: mcp.as_ref().map(|(offer, _)| offer),
                             spawned: &mut spawned,
                             jobs: &mut jobs,
                             permission_mode: task.permission_mode,
