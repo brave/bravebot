@@ -7,6 +7,7 @@ mod json;
 mod mcp;
 mod plain;
 mod progress;
+mod servers;
 
 use crate::exit::{Ending, fail};
 use bravebot_agent::confirm::{
@@ -648,6 +649,24 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
     if let Some(text) = piped {
         task = task.with_piped_input(text);
     }
+
+    // Nobody is asked here, so a server no answer of the person's covers is absent and the reason
+    // goes to stderr beside the rest of what this run says about itself (SERVERS-4). Held until the
+    // run ends, since dropping one stops its server.
+    let reached = servers::for_this_session(
+        &settings,
+        workspace.root(),
+        match skip_permissions {
+            true => servers::Asking::Bypass,
+            false => servers::Asking::OneShot,
+        },
+        &mut servers::nobody(),
+        bravebot_sandbox::Stream::Inherited,
+    );
+    for note in &reached.notes {
+        eprintln!("{}", t!(cli_notice, notice = note));
+    }
+    task = task.with_servers(reached.grants());
 
     // A one-shot run has nobody to ask about a write, so writes are refused rather than silently
     // applied. The one exception is a plan, which is put before the first step rather than in the
@@ -1499,23 +1518,45 @@ fn interactive(start: bravebot_tui::app::Start, skip_permissions: bool) -> ExitC
         );
     }
 
-    let workspace = match current_workspace(&bravebot_config::Settings::load()) {
+    let settings = bravebot_config::Settings::load();
+    let workspace = match current_workspace(&settings) {
         Ok(w) => w,
         Err(err) => return fail(Ending::Failed, t!(cli_workspace_problem, problem = err)),
     };
 
     // What the platform offers, which is what the session reports: this confines a process running
-    // code we did not write, and a session starts none of those. Read once here because the answer
-    // cannot change while the session runs.
+    // code we did not write, which is an MCP server this session starts and nothing else it runs.
+    // Read once here because the answer cannot change while the session runs.
     let confinement = match bravebot_sandbox::for_current_platform() {
         Ok(sandbox) => named(sandbox.capabilities().level),
         Err(_) => named(bravebot_sandbox::policy::ConfinementLevel::None),
+    };
+
+    // Settled on the plain terminal before the screen takes it, so a question about a server this
+    // checkout requests is a line somebody answers rather than a dialog drawn over a session that
+    // has not begun. Held until the session ends, since dropping one stops its server.
+    let mut reached = servers::for_this_session(
+        &settings,
+        workspace.root(),
+        match skip_permissions {
+            true => servers::Asking::Bypass,
+            false => servers::Asking::Person,
+        },
+        &mut servers::at_the_terminal(),
+        // Nowhere, since the screen would draw over whatever a server writes to its stderr.
+        bravebot_sandbox::Stream::Null,
+    );
+    let started = bravebot_tui::Servers {
+        started: reached.aliases(),
+        confined: reached.confined(),
+        notes: std::mem::take(&mut reached.notes),
     };
 
     match bravebot_tui::app::run(
         &mut config,
         &workspace,
         confinement,
+        started,
         start,
         skip_permissions,
     ) {

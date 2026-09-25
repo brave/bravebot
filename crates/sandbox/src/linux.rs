@@ -259,6 +259,9 @@ impl Sandbox for LandlockSandbox {
 
         let mut command = Command::new(program);
         command.args(args);
+        if let Some(directory) = &policy.starting_in {
+            command.current_dir(directory);
+        }
 
         let readable: Vec<_> = policy.readable.clone();
         let writable: Vec<_> = policy.writable.iter().map(|row| row.path.clone()).collect();
@@ -313,7 +316,7 @@ impl Sandbox for LandlockSandbox {
             });
         }
 
-        crate::process::start(command, streams, environment)
+        crate::process::start(command, streams, &environment)
     }
 }
 
@@ -1269,6 +1272,40 @@ mod tests {
                 .any(|line| line == format!("CARGO_MANIFEST_DIR={held}")),
             "a variable this process holds did not reach the confined process: {environment}"
         );
+    }
+
+    /// A server declared with a directory runs there rather than wherever this process was
+    /// started, since a relative path it opens is meant to be one inside it.
+    #[test]
+    fn a_confined_process_starts_in_the_directory_its_policy_names() {
+        let Some(sandbox) = sandbox_or_fail() else {
+            return;
+        };
+        let dir = crate::testutil::scratch_dir("bravebot-sandbox-starting-in");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("the scratch directory is creatable");
+        let dir = dir.canonicalize().expect("the scratch directory resolves");
+        // Readable too, so a process started where this one was prints that rather than failing.
+        let here = std::env::current_dir()
+            .and_then(|here| here.canonicalize())
+            .expect("this process has a directory");
+        let policy = loadable_policy()
+            .allow_read(&dir)
+            .allow_read(&here)
+            .starting_in(&dir);
+
+        let mut child = sandbox
+            .spawn(
+                "/bin/pwd",
+                &["-P".to_owned()],
+                &policy,
+                capturing_stdout(),
+                Environment::Empty,
+            )
+            .expect("the confined process runs");
+
+        assert_eq!(printed_by(&mut child).trim_end(), dir.to_string_lossy());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The other half of that decision, and the one a caller launching third-party code

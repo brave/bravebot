@@ -97,6 +97,8 @@ pub struct Facts<'a> {
     pub theme: &'a str,
     pub config: &'a Config,
     pub confinement: &'a str,
+    /// The MCP servers the session started.
+    pub servers: &'a crate::state::Servers,
     /// How much the session is asking before it acts, as the mode key last left it.
     pub permission_mode: bravebot_agent::PermissionMode,
     /// Whether a check that finds nothing promotes a slot without the person being asked.
@@ -271,14 +273,26 @@ pub fn report(facts: &Facts<'_>) -> Report {
     );
 
     // The level is what the platform can enforce over a process running code we did not write, and
-    // a session that starts none of those is inside no such boundary. Reported with the note rather
-    // than dropped, because which of the three a machine offers is the question somebody asks this
-    // panel; reported without it, the same line reads as a guarantee over the reads, writes and
-    // programs the session does run, which have never been confined.
+    // a session is inside no such boundary. Reported with the note rather than dropped, because
+    // which of the three a machine offers is the question somebody asks this panel; reported without
+    // it, the same line reads as a guarantee over the reads, writes and programs the session runs,
+    // which have never been confined. A local MCP server is the one process it does confine.
     lines.push(
-        Line::new(t!(status_confinement), facts.confinement)
-            .with_note(t!(status_confinement_nothing_confined)),
+        Line::new(t!(status_confinement), facts.confinement).with_note(
+            match facts.servers.confined {
+                true => t!(status_confinement_servers),
+                false => t!(status_confinement_nothing_confined),
+            },
+        ),
     );
+
+    // Named rather than counted, since the question is which of them this session can reach, and
+    // said where there are none, since a checkout that asked for one is where somebody looks.
+    lines.push(match facts.servers.started.as_slice() {
+        [] => Line::new(t!(status_mcp_servers), t!(status_mcp_servers_none)),
+        started => Line::new(t!(status_mcp_servers), started.join(", "))
+            .with_note(t!(status_mcp_servers_no_tools)),
+    });
 
     // Only where the mode is not the ordinary one. A line saying "asking" on every session would
     // teach people to skim past exactly the one that matters. Beside confinement because it is the
@@ -624,6 +638,13 @@ mod tests {
     static NOTHING_VOUCHED: std::sync::LazyLock<TrustedPrograms> =
         std::sync::LazyLock::new(TrustedPrograms::new);
 
+    /// A session that started no MCP server, which is what every test but the servers' own is.
+    static NO_SERVERS: crate::state::Servers = crate::state::Servers {
+        started: Vec::new(),
+        confined: false,
+        notes: Vec::new(),
+    };
+
     fn trusting() -> TrustStore {
         let mut trust = TrustStore::new("/work");
         trust.trust(".");
@@ -652,6 +673,7 @@ mod tests {
             theme: "brave",
             config,
             confinement: "kernel-enforced",
+            servers: &NO_SERVERS,
             // Asking, which is what every session does unless somebody changed it. The tests about
             // the line set this themselves.
             permission_mode: bravebot_agent::PermissionMode::Ask,
@@ -1517,6 +1539,68 @@ mod tests {
             line.note,
             t!(status_confinement_nothing_confined),
             "the level stands alone, so the panel reads as a boundary the session is inside"
+        );
+    }
+
+    /// A session that started a local server confines that server, and the note says so rather
+    /// than that nothing is confined; the servers line names what started, and says none where
+    /// nothing did.
+    #[test]
+    fn the_servers_a_session_started_are_named_and_what_is_confined_follows_them() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let line = |report: &Report, label: &str| {
+            report
+                .lines
+                .iter()
+                .find(|line| line.label.trim() == label)
+                .map(|line| (line.value.clone(), line.note.clone()))
+                .expect("the line is on the report")
+        };
+
+        let none = report(&facts(&config, &trust));
+        assert_eq!(
+            line(&none, t!(status_mcp_servers)),
+            (t!(status_mcp_servers_none).to_string(), String::new())
+        );
+
+        let started = crate::state::Servers {
+            started: vec!["docs".to_string(), "weather".to_string()],
+            confined: true,
+            notes: Vec::new(),
+        };
+        let some = report(&Facts {
+            servers: &started,
+            ..facts(&config, &trust)
+        });
+        assert_eq!(
+            line(&some, t!(status_mcp_servers)),
+            (
+                "docs, weather".to_string(),
+                t!(status_mcp_servers_no_tools).to_string()
+            )
+        );
+        assert_eq!(
+            line(&some, t!(status_confinement)),
+            (
+                "kernel-enforced".to_string(),
+                t!(status_confinement_servers).to_string()
+            )
+        );
+
+        let remote = crate::state::Servers {
+            started: vec!["docs".to_string()],
+            confined: false,
+            notes: Vec::new(),
+        };
+        let unconfined = report(&Facts {
+            servers: &remote,
+            ..facts(&config, &trust)
+        });
+        assert_eq!(
+            line(&unconfined, t!(status_confinement)).1,
+            t!(status_confinement_nothing_confined),
+            "a remote server is no process this session confines"
         );
     }
 

@@ -270,6 +270,80 @@ fn quoted(arg: &str) -> String {
     quoted
 }
 
+/// The environment block `CreateProcessW` is handed for `environment`, or `None` for this
+/// process's own.
+///
+/// Sorted by name without regard to case, which the platform requires of a block, and
+/// written through `encode` so the rule is checked on every platform rather than on the
+/// one whose strings are UTF-16. A name or a value with a terminator inside it is refused,
+/// since the platform reads to the first one and would hand over a different variable,
+/// and so is a name holding `=`, which the platform reads as the end of the name.
+fn environment_block(
+    environment: &crate::process::Environment,
+    encode: impl Fn(&std::ffi::OsStr) -> Vec<u16>,
+) -> std::io::Result<Option<Vec<u16>>> {
+    use crate::process::Environment;
+
+    let variables = match environment {
+        Environment::Inherited => return Ok(None),
+        // Two terminators: one ends the last variable and one ends the block, so this is
+        // a block holding nothing rather than a block that was never terminated.
+        Environment::Empty => return Ok(Some(vec![0, 0])),
+        Environment::Only(variables) => variables,
+    };
+
+    let refused = |what: &str| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("a variable handed to the platform has {what}"),
+        )
+    };
+    let mut entries = Vec::new();
+    for (name, value) in variables.iter() {
+        let name = encode(name);
+        let value = encode(value);
+        if name.is_empty() || name.contains(&u16::from(b'=')) {
+            return Err(refused("a name the platform would not read back"));
+        }
+        if name.contains(&0) || value.contains(&0) {
+            return Err(refused("a terminator inside it"));
+        }
+        entries.push((name, value));
+    }
+    entries.sort_by_key(|(name, _)| upper(name));
+
+    let mut block = Vec::new();
+    for (name, value) in entries {
+        block.extend(name);
+        block.push(u16::from(b'='));
+        block.extend(value);
+        block.push(0);
+    }
+    if block.is_empty() {
+        block.push(0);
+    }
+    block.push(0);
+    Ok(Some(block))
+}
+
+/// `name` in upper case, for the order the platform sorts a block in. A unit that is not
+/// text is kept as it is, since it only decides where the variable falls.
+fn upper(name: &[u16]) -> Vec<u16> {
+    let mut upper = Vec::with_capacity(name.len());
+    for unit in char::decode_utf16(name.iter().copied()) {
+        match unit {
+            Ok(character) => {
+                for c in character.to_uppercase() {
+                    let mut buffer = [0u16; 2];
+                    upper.extend_from_slice(c.encode_utf16(&mut buffer));
+                }
+            }
+            Err(unpaired) => upper.push(unpaired.unpaired_surrogate()),
+        }
+    }
+    upper
+}
+
 #[cfg(windows)]
 pub use appcontainer::AppContainerSandbox;
 #[cfg(windows)]
@@ -528,5 +602,82 @@ mod tests {
         assert!(reported.network_denial_enforced);
         assert!(!reported.grants_paths_that_do_not_exist);
         assert!(reported.mechanisms.contains(&"appcontainer"));
+    }
+
+    fn utf16(text: &std::ffi::OsStr) -> Vec<u16> {
+        text.to_str()
+            .expect("a test variable is text")
+            .encode_utf16()
+            .collect()
+    }
+
+    fn block_text(block: &[u16]) -> String {
+        String::from_utf16(block).expect("a block written from text")
+    }
+
+    /// The block a server is handed holds the variables its declaration named and nothing
+    /// else, in the order the platform requires, so `PATH` named for a server is `PATH`
+    /// and not this process's whole environment.
+    #[test]
+    fn named_variables_are_written_as_a_sorted_block_of_those_alone() {
+        let block = environment_block(
+            &crate::process::Environment::Only(
+                crate::process::Variables::new()
+                    .with("weather_token", "a value")
+                    .with("Zed", "z")
+                    .with("PATH", r"C:\Tools")
+                    .with("apple", "a"),
+            ),
+            utf16,
+        )
+        .expect("text names and values")
+        .expect("named variables are a block");
+
+        // Ordered without regard to case, as the platform orders a block.
+        assert_eq!(
+            block_text(&block),
+            "apple=a\0PATH=C:\\Tools\0weather_token=a value\0Zed=z\0\0"
+        );
+    }
+
+    /// An empty environment is a block holding nothing, and this process's own is no
+    /// block at all, which is how the platform is asked to pass it on.
+    #[test]
+    fn an_empty_environment_is_an_empty_block_and_an_inherited_one_is_none() {
+        assert_eq!(
+            environment_block(&crate::process::Environment::Empty, utf16).expect("no text"),
+            Some(vec![0, 0])
+        );
+        assert_eq!(
+            environment_block(&crate::process::Environment::Inherited, utf16).expect("no text"),
+            None
+        );
+        assert_eq!(
+            environment_block(
+                &crate::process::Environment::Only(crate::process::Variables::new()),
+                utf16
+            )
+            .expect("no text"),
+            Some(vec![0, 0])
+        );
+    }
+
+    /// The platform reads a block to the first terminator and a name to the first `=`,
+    /// so either one inside a variable would hand the process a different variable from
+    /// the one named.
+    #[test]
+    fn a_variable_the_platform_would_misread_is_refused() {
+        for (name, value) in [("A=B", "value"), ("NAME", "one\0two"), ("", "value")] {
+            assert!(
+                environment_block(
+                    &crate::process::Environment::Only(
+                        crate::process::Variables::new().with(name, value)
+                    ),
+                    utf16,
+                )
+                .is_err(),
+                "{name:?} was written into a block"
+            );
+        }
     }
 }

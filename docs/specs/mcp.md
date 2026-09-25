@@ -125,10 +125,18 @@ parser's sentence quotes bytes the server chose, so both are a server's prose we
 process's words. A tool's account is kept, under a label, because a tool failure is the one whose
 explanation is usually a person's own server and there is a person on the screen to read it.
 
+What a stdio server writes to its standard error is neither a failure nor a reply, and it goes
+where the caller launching the server sends it: to the terminal a plain session or a one-shot run
+writes to, where the person watching reads it, and nowhere under the full-screen interface, where it
+would draw over the screen. It is never read by this process, so it reaches no message the planner
+is sent. The two streams the protocol runs over are pipes whatever the caller chose.
+
 **A known cost.** A server that fails for a reason only its own sentence gives reports a code and
 a method and nothing else, and a reply this client rejects reports which kind of malformed it was
 and not where. Carrying either under a label instead would put it behind the release a tool
-result's account is behind, where nobody is watching a handshake or a tool listing.
+result's account is behind, where nobody is watching a handshake or a tool listing. Under the
+full-screen interface a server's own diagnostics are discarded as well, so a server that fails
+there says only what its failure's code and method say.
 
 `verified-by: bravebot_mcp::lib::a_failing_tools_detail_stays_out_of_the_error_message`
 `verified-by: bravebot_mcp::lib::a_server_failure_reports_the_method_and_the_code`
@@ -139,11 +147,14 @@ result's account is behind, where nobody is watching a handshake or a tool listi
 `verified-by: bravebot_mcp::http::a_tool_level_error_is_reported_as_a_failure`
 `verified-by: bravebot_mcp::http::a_server_failure_names_the_method_and_not_the_servers_words`
 `verified-by: bravebot_mcp::http::a_rejected_reply_names_what_was_read_and_not_the_servers_words`
+`verified-by: bravebot_mcp::stdio::a_servers_diagnostics_go_where_its_caller_sent_them`
 
 <a id="MCP-9"></a>
-### MCP-9: a stdio server is started with no environment
+### MCP-9: a stdio server is started with none of this process's environment
 
-The environment this process holds is emptied before a server starts, on every platform.
+The environment this process holds is emptied before a server starts, on every platform. What the
+server receives is the variables its caller hands it and nothing else, which is none unless its
+declaration names some ([SERVERS-10](mcp-servers.md#SERVERS-10)).
 
 **Why.** A server is code we did not write, and a credential this process authenticates with sits
 in a variable rather than in a file, so confinement over paths withholds none of it. A program
@@ -153,9 +164,11 @@ is no such expectation to meet here. The launch asks for an empty environment ra
 the answer to whichever backend confines the process, so both platforms hand a server the same
 nothing.
 
-**A known cost.** A server that reads a variable to work at all is one that does not work: a
-command resolved through `PATH`, and a server wanting a token of a person's own, are both left to
-whatever names variables for a server when servers are reachable from something
-(issue #83).
+A server that reads a variable to work at all names it in its declaration, and receives that one,
+with the value this process holds for it at launch: a command resolved through `PATH` names `PATH`,
+and a server wanting a token of a person's own names the variable holding it. That is
+[SERVERS-10](mcp-servers.md#SERVERS-10), and it is why handing a server a variable is a caller's
+statement of which ones rather than a switch that restores them all.
 
 `verified-by: bravebot_mcp::stdio::a_server_does_not_receive_this_processes_environment`
+`verified-by: bravebot_mcp::stdio::a_server_receives_the_variables_it_was_handed_and_no_others`

@@ -142,10 +142,11 @@ already let it see.
 the kernel enforces the network denial, printed rather than assumed, because the guarantee differs
 by platform and kernel.
 
-The opening screen and `/status` name that same platform level, and `/status` says beside it that
-nothing in the session is confined. Confinement bounds a process started to run code Brave Bot did
-not write, so a session that starts none of those is inside no such boundary, and the level is what
-your machine offers rather than something holding the session back.
+The opening screen and `/status` name that same platform level, and `/status` says beside it what
+the session confines: the [MCP servers](../customize/mcp-servers.md) it started, or nothing.
+Confinement bounds a process started to run code Brave Bot did not write, so a session that starts
+none of those is inside no such boundary, and the level is what your machine offers rather than
+something holding the session back.
 
 Where confinement is used, it **fails closed**: if it cannot be established the process does not run,
 rather than running unconfined. A profile starts denying everything and grants accumulate onto it, and
@@ -178,6 +179,12 @@ whether it is a file or a directory, and only for a program meant to create it, 
 account with no `~/.ssh/known_hosts` would get one rather than a push that fails; what is created is
 reachable by your account and nobody else. The lists a confined process runs under today say neither,
 so nothing is created for one.
+
+**Looking at a path is not reading it.** A confined process can learn whether something is at any
+path, what kind of thing it is, its size, when it changed and where a link points. It cannot open a
+file outside its grants or list a directory outside them. Linux's Landlock bounds no look at all,
+and on macOS a profile that refused one refused the walk to a grant too, which no node program
+survives.
 
 **The environment is the caller's.** A confined process starts with the environment this process
 holds. A grant over paths can neither withhold nor hand over what sits in a variable, and a credential

@@ -42,6 +42,7 @@ pub mod windows;
 use policy::{Capabilities, ConfinementLevel, SandboxPolicy};
 pub use process::{
     ConfinedChild, ConfinedStderr, ConfinedStdin, ConfinedStdout, Environment, Stream, Streams,
+    Variables,
 };
 use std::fmt;
 

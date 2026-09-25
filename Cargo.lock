@@ -147,6 +147,7 @@ dependencies = [
  "bravebot-config",
  "bravebot-core",
  "bravebot-i18n",
+ "bravebot-mcp",
  "bravebot-net",
  "bravebot-sandbox",
  "bravebot-session",

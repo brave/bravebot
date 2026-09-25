@@ -8,8 +8,8 @@
 //! refused, and how an argument is written onto a command line.
 
 use super::{
-    Grant, capability_names, command_line, grants_for, paths_that_are_not_there, profile_name,
-    refusal_for,
+    Grant, capability_names, command_line, environment_block, grants_for, paths_that_are_not_there,
+    profile_name, refusal_for,
 };
 use crate::policy::{Capabilities, SandboxPolicy};
 use crate::process::{ConfinedChild, Environment, Stream, Streams};
@@ -217,7 +217,8 @@ impl Sandbox for AppContainerSandbox {
             program,
             args,
             streams,
-            environment,
+            &environment,
+            policy.starting_in.as_deref(),
         )
     }
 }
@@ -659,10 +660,19 @@ fn start(
     program: &str,
     args: &[String],
     streams: Streams,
-    environment: Environment,
+    environment: &Environment,
+    directory: Option<&Path>,
 ) -> std::result::Result<ConfinedChild, SandboxError> {
-    started(sid, capabilities, program, args, streams, environment)
-        .map_err(SandboxError::SpawnFailed)
+    started(
+        sid,
+        capabilities,
+        program,
+        args,
+        streams,
+        environment,
+        directory,
+    )
+    .map_err(SandboxError::SpawnFailed)
 }
 
 #[allow(unsafe_code)]
@@ -672,7 +682,8 @@ fn started(
     program: &str,
     args: &[String],
     streams: Streams,
-    environment: Environment,
+    environment: &Environment,
+    directory: Option<&Path>,
 ) -> Result<ConfinedChild> {
     let mut line = wide(OsStr::new(&command_line(program, args)))?;
 
@@ -727,16 +738,13 @@ fn started(
         lpAttributeList: attributes.as_ptr(),
     };
 
-    // Two terminators: one ends the last variable and one ends the block, so this is a
-    // block holding nothing rather than a block that was never terminated.
-    let empty_environment: [u16; 2] = [0, 0];
-    let (block, unicode) = match environment {
-        Environment::Empty => (
-            empty_environment.as_ptr().cast::<c_void>(),
-            CREATE_UNICODE_ENVIRONMENT,
-        ),
-        Environment::Inherited => (null(), 0),
+    let written = environment_block(environment, |text| text.encode_wide().collect())?;
+    let (block, unicode) = match &written {
+        Some(block) => (block.as_ptr().cast::<c_void>(), CREATE_UNICODE_ENVIRONMENT),
+        None => (null(), 0),
     };
+    let directory = directory.map(|path| wide(path.as_os_str())).transpose()?;
+    let start_in = directory.as_ref().map_or(null(), |path| path.as_ptr());
 
     let mut created = PROCESS_INFORMATION::default();
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
@@ -749,7 +757,7 @@ fn started(
             1,
             EXTENDED_STARTUPINFO_PRESENT | unicode,
             block,
-            null(),
+            start_in,
             std::ptr::from_mut(&mut startup).cast::<STARTUPINFOW>(),
             &mut created,
         )

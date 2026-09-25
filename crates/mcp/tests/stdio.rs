@@ -10,7 +10,9 @@ use bravebot_core::label::Label;
 use bravebot_core::policy::{Policy, ReleasePlan, Routing};
 use bravebot_mcp::{McpError, StdioServer};
 use bravebot_sandbox::policy::{Capabilities, ConfinementLevel, SandboxPolicy};
-use bravebot_sandbox::{ConfinedChild, Environment, Sandbox, Streams, Unavailable};
+use bravebot_sandbox::{
+    ConfinedChild, Environment, Sandbox, Stream, Streams, Unavailable, Variables,
+};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
@@ -115,6 +117,24 @@ done
 /// The variable the server above reports, and the one this process is asked for.
 const REPORTED_VARIABLE: &str = "CARGO_MANIFEST_DIR";
 
+/// Replies to a tool call with the variable a declaration named and one this process holds,
+/// so what it reports says both what arrived and what did not.
+const NAMED_VARIABLE_REPORTING_SERVER: &str = r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"fake","version":"1"}}}\n' "$id"
+      ;;
+    *'"tools/call"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"[%s|%s]"}]}}\n' "$id" "$WEATHER_TOKEN" "$CARGO_MANIFEST_DIR"
+      ;;
+    *'"notifications/initialized"'*)
+      ;;
+  esac
+done
+"#;
+
 fn routing() -> Routing {
     let mut r = Routing::new();
     r.insert_trusted("task", "use a tool");
@@ -174,8 +194,10 @@ fn a_confined_server_completes_the_handshake_and_lists_tools() {
         "fake",
         script.to_str().expect("path"),
         &[],
+        Variables::new(),
         sandbox.as_ref(),
         &sandbox_policy(),
+        Stream::Inherited,
     )
     .expect("server launches under confinement");
 
@@ -211,8 +233,10 @@ fn a_tool_result_is_labelled_untrusted() {
         "fake",
         script.to_str().expect("path"),
         &[],
+        Variables::new(),
         sandbox.as_ref(),
         &sandbox_policy(),
+        Stream::Inherited,
     )
     .expect("server launches");
     server.initialize("bravebot", "0.1.0").expect("handshake");
@@ -249,8 +273,10 @@ fn a_tool_call_without_the_capability_is_refused() {
         "fake",
         script.to_str().expect("path"),
         &[],
+        Variables::new(),
         sandbox.as_ref(),
         &sandbox_policy(),
+        Stream::Inherited,
     )
     .expect("server launches");
     server.initialize("bravebot", "0.1.0").expect("handshake");
@@ -288,8 +314,10 @@ fn a_grant_for_one_server_does_not_reach_another() {
         "payments",
         script.to_str().expect("path"),
         &[],
+        Variables::new(),
         sandbox.as_ref(),
         &sandbox_policy(),
+        Stream::Inherited,
     )
     .expect("server launches");
     payments.initialize("bravebot", "0.1.0").expect("handshake");
@@ -332,8 +360,10 @@ fn a_grant_withdrawn_stops_the_next_call() {
         "fake",
         script.to_str().expect("path"),
         &[],
+        Variables::new(),
         sandbox.as_ref(),
         &sandbox_policy(),
+        Stream::Inherited,
     )
     .expect("server launches");
     server.initialize("bravebot", "0.1.0").expect("handshake");
@@ -372,8 +402,10 @@ fn a_server_is_not_launched_without_confinement() {
         "fake",
         script.to_str().expect("path"),
         &[],
+        Variables::new(),
         &Unavailable,
         &SandboxPolicy::strict(),
+        Stream::Inherited,
     )
     .expect_err("must refuse to launch");
 
@@ -427,8 +459,10 @@ fn a_server_that_could_not_be_started_is_not_reported_as_a_confinement_failure()
         "fake",
         "/bravebot-no-such-server/never-installed",
         &[],
+        Variables::new(),
         &ProgramWouldNotStart,
         &SandboxPolicy::strict(),
+        Stream::Inherited,
     )
     .expect_err("a program that will not start does not launch");
 
@@ -436,6 +470,57 @@ fn a_server_that_could_not_be_started_is_not_reported_as_a_confinement_failure()
         matches!(error, McpError::Transport(_)),
         "a program that would not start was reported as a confinement failure: {error}"
     );
+}
+
+/// Remembers the streams it was asked for, and starts nothing.
+struct RecordsStreams(Mutex<Option<Streams>>);
+
+impl Sandbox for RecordsStreams {
+    fn capabilities(&self) -> Capabilities {
+        ProgramWouldNotStart.capabilities()
+    }
+
+    fn spawn(
+        &self,
+        _program: &str,
+        _args: &[String],
+        _policy: &SandboxPolicy,
+        streams: Streams,
+        _environment: Environment,
+    ) -> Result<ConfinedChild, bravebot_sandbox::SandboxError> {
+        *self.0.lock().expect("streams") = Some(streams);
+        Err(bravebot_sandbox::SandboxError::SpawnFailed(
+            std::io::Error::from(std::io::ErrorKind::NotFound),
+        ))
+    }
+}
+
+/// A server started under a full-screen display writes its diagnostics nowhere, where they
+/// would otherwise draw over the screen, and the two streams the protocol runs over are pipes
+/// whichever the caller chose.
+#[test]
+fn a_servers_diagnostics_go_where_its_caller_sent_them() {
+    for diagnostics in [Stream::Null, Stream::Inherited] {
+        let sandbox = RecordsStreams(Mutex::new(None));
+        let _ = StdioServer::launch(
+            "fake",
+            "/bravebot-no-such-server/never-installed",
+            &[],
+            Variables::new(),
+            &sandbox,
+            &SandboxPolicy::strict(),
+            diagnostics,
+        );
+
+        assert_eq!(
+            sandbox.0.lock().expect("streams").take(),
+            Some(Streams {
+                stdin: Stream::Piped,
+                stdout: Stream::Piped,
+                stderr: diagnostics,
+            })
+        );
+    }
 }
 
 /// A tool that reports failure of its own is a failure, and what it says about that failure is
@@ -452,8 +537,10 @@ fn a_tool_level_error_is_reported_as_a_failure() {
         "fake",
         script.to_str().expect("path"),
         &[],
+        Variables::new(),
         sandbox.as_ref(),
         &sandbox_policy(),
+        Stream::Inherited,
     )
     .expect("server launches");
     server.initialize("bravebot", "0.1.0").expect("handshake");
@@ -523,8 +610,10 @@ done
         "fake",
         script.to_str().expect("path"),
         &[],
+        Variables::new(),
         sandbox.as_ref(),
         &sandbox_policy(),
+        Stream::Inherited,
     )
     .expect("server launches");
     server.initialize("bravebot", "0.1.0").expect("handshake");
@@ -560,8 +649,10 @@ fn a_server_that_exits_early_is_an_error() {
         "fake",
         script.to_str().expect("path"),
         &[],
+        Variables::new(),
         sandbox.as_ref(),
         &sandbox_policy(),
+        Stream::Inherited,
     )
     .expect("launch succeeds even though the server exits");
 
@@ -595,8 +686,10 @@ fn a_server_does_not_receive_this_processes_environment() {
         "fake",
         script.to_str().expect("path"),
         &[],
+        Variables::new(),
         sandbox.as_ref(),
         &sandbox_policy(),
+        Stream::Inherited,
     )
     .expect("server launches");
     server.initialize("bravebot", "0.1.0").expect("handshake");
@@ -620,6 +713,53 @@ fn a_server_does_not_receive_this_processes_environment() {
         "[]",
         "the server was handed a variable this process holds"
     );
+
+    let _ = std::fs::remove_file(&script);
+}
+
+/// SERVERS-10: a variable a declaration names reaches the server holding the value this
+/// process gave it, and naming one hands over that one: a variable this process holds and
+/// nobody named stays here.
+#[test]
+fn a_server_receives_the_variables_it_was_handed_and_no_others() {
+    let _spawning = one_at_a_time();
+    let Some(sandbox) = sandbox_or_skip() else {
+        return;
+    };
+    assert!(
+        std::env::var_os(REPORTED_VARIABLE).is_some(),
+        "this test needs a variable the parent holds, and cargo sets {REPORTED_VARIABLE} \
+         for a test process"
+    );
+    let script = fake_server("named-variable", NAMED_VARIABLE_REPORTING_SERVER);
+
+    let mut server = StdioServer::launch(
+        "fake",
+        script.to_str().expect("path"),
+        &[],
+        Variables::new().with("WEATHER_TOKEN", "a value"),
+        sandbox.as_ref(),
+        &sandbox_policy(),
+        Stream::Inherited,
+    )
+    .expect("server launches");
+    server.initialize("bravebot", "0.1.0").expect("handshake");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::McpCall(ServerAlias::new("fake"))]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let reported = server
+        .call_tool(&mut policy, "echo", serde_json::json!({}))
+        .expect("tool call succeeds");
+
+    let proof = policy.authorise_display_release("test reads what the server was given");
+    assert_eq!(reported.declassify(&proof), "[a value|]");
 
     let _ = std::fs::remove_file(&script);
 }

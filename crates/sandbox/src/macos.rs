@@ -108,6 +108,14 @@ impl SeatbeltSandbox {
             ));
         }
 
+        // Looking at a path answers what it is and not what it holds: this allows stat and
+        // readlink, and neither a file's contents nor a directory's entries. Without it every path
+        // outside the grants answers "refused" where it would answer "not there", and a search of
+        // PATH stops at the first such entry rather than going on to the next, as node's does when
+        // it starts anything; and node resolves its own script through each directory above it.
+        // Landlock restricts no look at all, so this is the reach Linux already gives.
+        out.push_str("(allow file-read-metadata)\n");
+
         if policy.allow_network {
             out.push_str("(allow network-outbound)\n");
         }
@@ -144,21 +152,23 @@ fn quote(value: &str) -> String {
 fn confined_argv(
     program: &str,
     args: &[String],
-    environment: Environment,
+    environment: &Environment,
     held: &[(OsString, OsString)],
 ) -> Result<Vec<OsString>, SandboxError> {
     let mut argv = Vec::new();
 
-    // Matched rather than compared, so a third answer added to `Environment` is a compile
+    // Matched rather than compared, so a fourth answer added to `Environment` is a compile
     // error here instead of a program handed a variable by an argument that nothing in the
     // new answer knows to withhold.
-    let restore: Vec<&(OsString, OsString)> = match environment {
-        Environment::Inherited => held,
-        Environment::Empty => &[],
-    }
-    .iter()
-    .filter(|(name, _)| stripped_from_a_protected_process(name))
-    .collect();
+    let handed: Vec<&(OsString, OsString)> = match environment {
+        Environment::Inherited => held.iter().collect(),
+        Environment::Empty => Vec::new(),
+        Environment::Only(variables) => variables.iter().collect(),
+    };
+    let restore: Vec<&(OsString, OsString)> = handed
+        .into_iter()
+        .filter(|(name, _)| stripped_from_a_protected_process(name))
+        .collect();
 
     if !restore.is_empty() {
         if program.contains('=') {
@@ -215,11 +225,14 @@ impl Sandbox for SeatbeltSandbox {
         wrapped.args(confined_argv(
             program,
             args,
-            environment,
+            &environment,
             &std::env::vars_os().collect::<Vec<_>>(),
         )?);
+        if let Some(directory) = &policy.starting_in {
+            wrapped.current_dir(directory);
+        }
 
-        crate::process::start(wrapped, streams, environment)
+        crate::process::start(wrapped, streams, &environment)
     }
 }
 
@@ -258,7 +271,7 @@ mod argument_tests {
         let argv = confined_argv(
             "/opt/tool/server",
             &["--stdio".to_owned()],
-            Environment::Inherited,
+            &Environment::Inherited,
             &held(&[
                 ("DYLD_LIBRARY_PATH", "/tmp/lib"),
                 ("AWS_SECRET_ACCESS_KEY", "a credential"),
@@ -289,7 +302,7 @@ mod argument_tests {
         let argv = confined_argv(
             "/opt/tool/server",
             &["--stdio".to_owned()],
-            Environment::Inherited,
+            &Environment::Inherited,
             &held(&[("PATH", "/usr/bin"), ("HOME", "/Users/someone")]),
         )
         .expect("nothing is carried, so there is nothing to refuse over");
@@ -312,7 +325,7 @@ mod argument_tests {
         let argv = confined_argv(
             "/opt/tool/server",
             &["--stdio".to_owned()],
-            Environment::Empty,
+            &Environment::Empty,
             &held(&[
                 ("DYLD_LIBRARY_PATH", "/tmp/lib"),
                 ("DYLD_INSERT_LIBRARIES", "/tmp/hook.dylib"),
@@ -325,6 +338,35 @@ mod argument_tests {
             vec![
                 OsString::from("/opt/tool/server"),
                 OsString::from("--stdio"),
+            ]
+        );
+    }
+
+    /// A caller naming the variables a program receives names the whole of it, so a loader
+    /// variable the platform strips is carried where the caller named it and nowhere else:
+    /// one this process holds and the caller did not name stays here, and a named value
+    /// that is not a loader variable arrives by the emptied environment rather than on a
+    /// command line every user of the machine can read.
+    #[test]
+    fn a_caller_naming_its_variables_has_only_the_named_loader_variables_carried_as_arguments() {
+        let argv = confined_argv(
+            "/opt/tool/server",
+            &[],
+            &Environment::Only(
+                crate::process::Variables::new()
+                    .with("DYLD_LIBRARY_PATH", "/opt/tool/lib")
+                    .with("WEATHER_TOKEN", "a credential"),
+            ),
+            &held(&[("DYLD_INSERT_LIBRARIES", "/tmp/hook.dylib")]),
+        )
+        .expect("a program path `env` can name");
+
+        assert_eq!(
+            argv,
+            vec![
+                OsString::from(ENV),
+                OsString::from("DYLD_LIBRARY_PATH=/opt/tool/lib"),
+                OsString::from("/opt/tool/server"),
             ]
         );
     }
@@ -343,7 +385,7 @@ mod argument_tests {
         let refused = confined_argv(
             path,
             &[],
-            Environment::Inherited,
+            &Environment::Inherited,
             &held(&[("DYLD_LIBRARY_PATH", "/tmp/lib")]),
         )
         .expect_err("a path `env` cannot name is not a process to start");
@@ -362,7 +404,7 @@ mod argument_tests {
             confined_argv(
                 path,
                 &[],
-                Environment::Inherited,
+                &Environment::Inherited,
                 &held(&[("PATH", "/usr/bin")])
             )
             .expect("no wrapper reads this path, so nothing misreads it"),
@@ -625,6 +667,81 @@ int main(void) {
         assert!(caps.mechanisms.contains(&"seatbelt"));
     }
 
+    /// Node walks each directory above its script before it loads it, and a search of `PATH` stops
+    /// at an entry it is refused rather than told is missing, which a link on the way to it is: how
+    /// npx died here twice before it started a server. A look reaches past the grants, and reading
+    /// a file or listing a directory does not.
+    #[test]
+    fn a_confined_process_can_look_at_any_path_and_read_or_list_only_its_grants() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+        let scratch = crate::testutil::scratch_dir("bravebot-sandbox-looking-past-a-grant");
+        let _ = std::fs::remove_dir_all(&scratch);
+        let granted = scratch.join("installation").join("bin");
+        let beside = scratch.join("beside");
+        std::fs::create_dir_all(&granted).expect("the scratch directory is creatable");
+        std::fs::create_dir_all(&beside).expect("the scratch directory is creatable");
+        std::fs::write(beside.join("secret"), "a token").expect("the scratch file is writable");
+        let above = scratch
+            .canonicalize()
+            .expect("the scratch directory is there");
+        let granted = granted.canonicalize().expect("the grant is there");
+        let beside = beside
+            .canonicalize()
+            .expect("the scratch directory is there");
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin")
+            .allow_read(&granted);
+        let succeeds = |program: &str, arguments: &[String]| {
+            sandbox
+                .spawn(
+                    program,
+                    arguments,
+                    &policy,
+                    nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("should spawn")
+                .wait()
+                .expect("should wait")
+                .success()
+        };
+        let shown = |path: &Path| path.display().to_string();
+
+        for directory in granted.ancestors().skip(1) {
+            assert!(
+                succeeds("/usr/bin/stat", &[shown(directory)]),
+                "{} is above the grant and could not be looked at",
+                directory.display()
+            );
+        }
+        // As `/System/Cryptexes/App/usr/bin` is on a PATH here: a link outside the grants whose
+        // target is inside them.
+        let tool = granted.join("tool");
+        std::fs::write(&tool, "").expect("the scratch file is writable");
+        let linked = above.join("linked");
+        std::os::unix::fs::symlink(granted.parent().expect("a parent"), &linked)
+            .expect("the scratch link is creatable");
+        assert!(
+            succeeds("/usr/bin/stat", &[shown(&linked.join("bin").join("tool"))]),
+            "a granted file reached through a link outside the grants was refused"
+        );
+        assert!(
+            succeeds("/bin/ls", &[shown(&granted)]),
+            "the grant is listed"
+        );
+        assert!(
+            !succeeds("/bin/ls", &[shown(&above)]),
+            "a directory above the grant was listed"
+        );
+        assert!(
+            !succeeds("/bin/cat", &[shown(&beside.join("secret"))]),
+            "a file beside the grant was read"
+        );
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
     /// Confirms the sandbox actually runs a process, not just that a profile string
     /// was built.
     #[test]
@@ -865,6 +982,40 @@ int main(void) {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A server declared with a directory runs there rather than wherever this process was
+    /// started, since a relative path it opens is meant to be one inside it.
+    #[test]
+    fn a_confined_process_starts_in_the_directory_its_policy_names() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+        let dir = crate::testutil::scratch_dir("bravebot-sandbox-starting-in");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("the scratch directory is creatable");
+        let dir = dir.canonicalize().expect("the scratch directory resolves");
+        // Readable too, so a process started where this one was prints that rather than failing.
+        let here = std::env::current_dir()
+            .and_then(|here| here.canonicalize())
+            .expect("this process has a directory");
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin")
+            .allow_read(&dir)
+            .allow_read(&here)
+            .starting_in(&dir);
+
+        let mut child = sandbox
+            .spawn(
+                "/bin/pwd",
+                &["-P".to_owned()],
+                &policy,
+                capturing_stdout(),
+                Environment::Empty,
+            )
+            .expect("the confined process runs");
+
+        assert_eq!(printed_by(&mut child).trim_end(), dir.to_string_lossy());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The reason the program is reached through `env` at all, on the platform that makes
     /// it one. `sandbox-exec` is protected by System Integrity Protection, so a loader
     /// variable named in its own environment is emptied out of it before the program it
@@ -905,13 +1056,13 @@ int main(void) {
             confined_argv(
                 &program.to_string_lossy(),
                 &[],
-                Environment::Inherited,
+                &Environment::Inherited,
                 &stripped,
             )
             .expect("a program path `env` can name"),
         );
         let mut restored =
-            crate::process::start(as_arguments, capturing_stdout(), Environment::Inherited)
+            crate::process::start(as_arguments, capturing_stdout(), &Environment::Inherited)
                 .expect("the confined process runs");
 
         // Named without its value, so a failure says what arrived and not what a machine

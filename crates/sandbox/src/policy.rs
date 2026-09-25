@@ -25,6 +25,11 @@ pub struct SandboxPolicy {
     /// Whether the process may spawn children. False stops a confined process from
     /// launching an unconfined helper.
     pub allow_subprocesses: bool,
+    /// The directory the process starts in, where not this process's own.
+    ///
+    /// Not a grant: a process started in a directory it may not read is refused its first
+    /// read of it, so a caller that means the process to work there grants it too.
+    pub starting_in: Option<PathBuf>,
 }
 
 impl SandboxPolicy {
@@ -35,6 +40,7 @@ impl SandboxPolicy {
             writable: Vec::new(),
             allow_network: false,
             allow_subprocesses: false,
+            starting_in: None,
         }
     }
 
@@ -88,6 +94,11 @@ impl SandboxPolicy {
         self
     }
 
+    pub fn starting_in(mut self, directory: impl Into<PathBuf>) -> Self {
+        self.starting_in = Some(directory.into());
+        self
+    }
+
     /// The part of this policy a backend can be asked to name, and what that left out.
     ///
     /// A caller assembling a policy out of paths whose existence is not its own to decide,
@@ -125,6 +136,7 @@ impl SandboxPolicy {
                 writable,
                 allow_network: self.allow_network,
                 allow_subprocesses: self.allow_subprocesses,
+                starting_in: self.starting_in.clone(),
             },
             omitted,
         }

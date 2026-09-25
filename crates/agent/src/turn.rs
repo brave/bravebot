@@ -727,6 +727,13 @@ pub struct Task {
     /// the prompt in front of it, and its round bound. Nothing widens it, because the kernel
     /// built it before this turn existed and there is no method here that could.
     pub delegate: Option<bravebot_core::delegate::DelegateSpec>,
+    /// The MCP servers this session reached at its start, each by the alias it was declared
+    /// under.
+    ///
+    /// Empty unless a caller launched some. A turn holds a grant to call each server named here
+    /// and no other, which is what SERVERS-9 asks of a grant: one per server rather than one for
+    /// every server.
+    pub servers: Vec<bravebot_core::capability::ServerAlias>,
 }
 
 /// One tick of a loop, as the turn running it needs to know about it.
@@ -823,6 +830,7 @@ impl Task {
             // file. Empty is a value the block can carry and this is not it.
             attribution: bravebot_config::Attribution::default(),
             delegate: None,
+            servers: Vec::new(),
         }
     }
 
@@ -1023,6 +1031,42 @@ impl Task {
     pub fn with_auto_vetting(mut self, auto: bool) -> Self {
         self.auto_vetting = auto;
         self
+    }
+
+    /// Name the MCP servers this session reached, each by its alias.
+    ///
+    /// The turn holds a grant to call each one and no other (`mcp-servers.md` SERVERS-9). A
+    /// delegate's grant comes from its spec, so this says nothing to one.
+    pub fn with_servers(mut self, servers: Vec<bravebot_core::capability::ServerAlias>) -> Self {
+        self.servers = servers;
+        self
+    }
+}
+
+/// The capabilities a turn begins with.
+///
+/// FileWrite and ShellExec are granted, but granting the capability is not what permits the
+/// effect: both gates additionally require a single-use endorsement that only a user's approval
+/// creates. Without one, a write or a run is refused even though the capability is present.
+///
+/// A delegate holds what the kernel worked out before it existed, which is its kind's set
+/// narrowed by whatever the run that spawned it held. Taken from the spec rather than recomputed
+/// here, because a second computation of the same thing is a second answer waiting to disagree
+/// with the one the trail recorded. No kind names a server, so no delegate holds one.
+fn held(task: &Task) -> CapabilitySet {
+    match &task.delegate {
+        Some(spec) => spec.capabilities().clone(),
+        None => CapabilitySet::from_iter(
+            [
+                Capability::WebFetch,
+                Capability::FileRead,
+                Capability::FileWrite,
+                Capability::ShellExec,
+                Capability::LanguageServer,
+            ]
+            .into_iter()
+            .chain(task.servers.iter().cloned().map(Capability::McpCall)),
+        ),
     }
 }
 
@@ -2226,24 +2270,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         routing.insert_trusted(format!("attachment_{index}"), attachment.path.clone());
     }
 
-    // FileWrite and ShellExec are granted, but granting the capability is not what permits the
-    // effect: both gates additionally require a single-use endorsement that only a user's approval
-    // creates. Without one, a write or a run is refused even though the capability is present.
-    //
-    // A delegate holds what the kernel worked out before it existed, which is its kind's set
-    // narrowed by whatever the run that spawned it held. Taken from the spec rather than
-    // recomputed here, because a second computation of the same thing is a second answer waiting
-    // to disagree with the one the trail recorded.
-    let capabilities = match &task.delegate {
-        Some(spec) => spec.capabilities().clone(),
-        None => CapabilitySet::from_iter([
-            Capability::WebFetch,
-            Capability::FileRead,
-            Capability::FileWrite,
-            Capability::ShellExec,
-            Capability::LanguageServer,
-        ]),
-    };
+    let capabilities = held(task);
 
     // Lent rather than held, because the turn is not the only run that will want them. There is
     // one trail to record into, one screen to report to and one person to ask, however many
@@ -3873,6 +3900,43 @@ mod tests {
         assert!(
             spent.inference >= Duration::from_millis(100),
             "cancelled cleanup lost its request interval: {spent:?}"
+        );
+    }
+
+    /// A turn holds a grant for each server the session reached and for no other, and a delegate
+    /// it spawns holds none: the widest kind is a worker, and a worker names no server.
+    #[test]
+    fn a_turn_holds_a_grant_per_server_it_was_handed_and_its_delegate_holds_none() {
+        use bravebot_core::capability::ServerAlias;
+        let call = |alias: &str| Capability::McpCall(ServerAlias::new(alias));
+
+        let task = Task::new("look it up").with_servers(vec![ServerAlias::new("weather")]);
+        let held = held(&task);
+        assert!(held.contains(&call("weather")), "{held:?}");
+        assert!(!held.contains(&call("docs")), "{held:?}");
+        assert!(
+            !super::held(&Task::new("look it up")).contains(&call("weather")),
+            "a turn handed no server holds a grant for one"
+        );
+
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "look it up");
+        let mut policy = Policy::begin(routing, ReleasePlan::new(), held, &mut sink).unwrap();
+        let spec = policy
+            .before_delegate(
+                bravebot_core::delegate::DelegateId::nth(1),
+                &Labelled::trusted("worker".to_string()),
+                &Labelled::trusted("look it up".to_string()),
+            )
+            .expect("a trusted run may delegate");
+        let delegated =
+            super::held(&Task::delegated(spec).with_servers(vec![ServerAlias::new("weather")]));
+        assert!(
+            !delegated
+                .iter()
+                .any(|c| matches!(c, Capability::McpCall(_))),
+            "a delegate holds a server grant: {delegated:?}"
         );
     }
 }
