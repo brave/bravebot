@@ -439,7 +439,10 @@ fn terminal_bridge_terminal_handoff_and_both_forks_keep_current_file_decisions()
 }
 
 fn bridge_handoff(ending: &str) {
-    use bravebot_ui_bridge::{bridge::Bridge, protocol::Request};
+    use bravebot_ui_bridge::{
+        bridge::Bridge,
+        protocol::{ErrorCode, Request},
+    };
     fn call(bridge: &mut Bridge, method: &str, params: serde_json::Value) -> serde_json::Value {
         bridge
             .dispatch(
@@ -582,11 +585,22 @@ fn bridge_handoff(ending: &str) {
     }));
     trust = record.trust_map(root).unwrap();
     assert_eq!(trust.integrity_of("output.txt"), Some(Integrity::Untrusted));
-    let fork = call(
-        &mut bridge,
-        "session.fork",
-        json!({"session":handle,"prompt":1,"text":"second"}),
-    );
+    // The worker emits the turn's ending before it marks itself finished, so a fork can race it.
+    let reaped = std::time::Instant::now() + endpoint::LIMIT;
+    let params = json!({"session":handle,"prompt":1,"text":"second"});
+    let fork = loop {
+        let request = json!({"id":1,"method":"session.fork","params":params}).to_string();
+        match bridge.dispatch(&Request::parse(&request).unwrap()) {
+            Err(failure) if failure.code == ErrorCode::TurnInFlight => {
+                assert!(
+                    std::time::Instant::now() < reaped,
+                    "bridge turn never finished"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            result => break result.unwrap(),
+        }
+    };
     assert!(fork["session"].is_string());
     assert!(
         fork["trust"]["rules"]
