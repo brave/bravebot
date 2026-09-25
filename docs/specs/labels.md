@@ -328,6 +328,9 @@ an HTTP body, a human's screen, or the standard input of a program a person endo
 putting content in front of the planner, one for reshaping it for display, and one for reading
 trusted content. A declassification anywhere else is almost certainly a violation.
 
+The copy of a picture [VET-4](tools/vet-content.md#VET-4) specifies, which nothing writes yet,
+would be one more filesystem write on this list, at a gate of its own for that one file.
+
 A program's standard input is on that list for the reason the other three are, and not because a
 subprocess is trusted: the bytes are carried to a descriptor and read by something that is neither
 the driver nor the planner, and which argv reads them is routing a person approved. What happens to
@@ -421,6 +424,11 @@ and the content has no say in it.
 | a picture pasted at the keyboard | none, because it joins the user's own message, which carries none either, so it is recorded instead | `verified-by: bravebot_core::policy::a_pasted_image_is_recorded_in_the_audit_trail` |
 | a prompt typed while a turn is running | none, for the same reason, and recorded the same way | `verified-by: bravebot_core::policy::an_interjection_is_recorded_in_the_audit_trail` |
 
+[VET-4](tools/vet-content.md#VET-4), which nothing builds yet, would add a row: a picture
+`vet_content` let through, trusted and private on the endorsement that let it through, as promoted
+text is, with the slot keeping what it had. It does not join the user's own message, so it takes a
+label where a paste takes none.
+
 Where a path is known, integrity is the trust map's answer about that path rather than the
 capability's, which is what the three rows for reads say and why the first row is the label a read
 starts from. Which paths a person vouched for is in [trust-map.md](trust-map.md).
@@ -470,6 +478,10 @@ travels with it, as the label rather than as a word composed at the boundary. Ev
 content states one: a preview of quarantined bytes, and a remark accompanying a write. The boundary
 neither reads the content nor decides the label, so what arrives is what the gate released, and a
 carrier added later states one too.
+
+The copy of a picture [VET-4](tools/vet-content.md#VET-4) specifies, which nothing writes yet,
+would be the one exception: it is opened in the person's own viewer, which reads no label, and
+VET-4 states that as a cost.
 
 **Why.** A surface can only mark content it can still tell apart, and out there the label is the
 whole of what it has to tell it apart by: the bytes arrive over a pipe carrying no provenance of
@@ -549,11 +561,15 @@ arrives at all.
     promoted until a person says so, so this buys a quieter sentence above content the reader is
     still reading. On the vouch prompt the bytes drawn are the head of the file rather than all of
     it, so what the quieter sentence sits above is a preview; the answer still writes nothing on
-    its own.
+    its own. At a prompt about a picture, which [VET-4](tools/vet-content.md#VET-4) specifies and
+    nothing builds yet, the picture is a file to open rather than bytes on the screen, so the
+    quieter sentence can be all a person reads; it still buys no yes.
   - **Put the key that turns auto-vetting on in front of the person.** The standing key at a vetting
     prompt is drawn only where the check found nothing, so forcing `safe` is what offers it
     ([PROMPT-6](prompting.md#PROMPT-6)). It buys the offer and not the grant: the person has to
     press it, with the bytes on the same screen and a line beside the key saying what it turns on.
+    At a prompt about a picture, which [VET-4](tools/vet-content.md#VET-4) specifies and nothing
+    builds yet, the bytes are a path away rather than on the screen.
     It is drawn only on the two prompts that promote one slot's bytes, and the other direction is
     held shut, since a warning or a check that could not be made offers nothing. The reason the
     offer is put where the mode would have saved a keystroke rather than left out of the interface
@@ -567,7 +583,10 @@ arrives at all.
     slot, whichever one the planner named, once, at `(T,priv)` so nothing leaves the machine and
     nothing becomes routing, with no trust rule written, and only on the routes
     [CHECK-12](vetting.md#CHECK-12) covers, so vouching for a path and a server's tool list are
-    still asked about. The slot is still the planner's choice and not the content's.
+    still asked about. The slot is still the planner's choice and not the content's. A picture,
+    which [VET-4](tools/vet-content.md#VET-4) specifies and nothing builds yet, is the easier case
+    of this: no encoding stands between the words drawn in it and the checker
+    ([CHECK-15](vetting.md#CHECK-15)), and what it buys is the same one slot, once.
   - **Force the word `unsafe`, or reply with nothing a verdict can be read out of.** That lands on
     the prompt with the warning, which is the direction this is built to fail in.
   - **Put their words in the reason.** It reaches a person's screen and stops there. It is drawn
@@ -582,4 +601,6 @@ arrives at all.
   for: the vouch offer, which is the one that writes such a rule, and a server's tool list, which
   puts a server's words in front of the planner for every turn after
   ([CHECK-12](vetting.md#CHECK-12)). While auto-vetting is off, reaching the planner at all is not
-  on it either, and a verdict is advice about bytes already on a person's screen.
+  on it either, and a verdict is advice about bytes already on a person's screen. A picture, which
+  [VET-4](tools/vet-content.md#VET-4) specifies and nothing builds yet, is a path away from it
+  instead.

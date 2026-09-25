@@ -108,6 +108,10 @@ what is holding.
 The last thing in the request is the driver's, after the content rather than only before it, and
 it says both that the block was data and what an answer looks like.
 
+A check over a picture, which [CHECK-15](#CHECK-15) specifies and nothing builds yet, has no string
+to encode: the picture goes in a part of its own, and CHECK-15 says why nothing mechanical holds it
+there.
+
 `verified-by: bravebot_core::vetting::encoded_content_occupies_one_line`
 `verified-by: bravebot_core::vetting::content_that_spells_the_fence_cannot_forge_one`
 `verified-by: bravebot_core::vetting::a_quote_in_the_content_does_not_end_the_literal`
@@ -173,6 +177,9 @@ neither is an answer to the question being asked.
 The one key a verdict does decide is the one that answers no question: the standing key that turns
 auto-vetting on, offered at either promoting prompt only where the check completed and found nothing
 ([PROMPT-6](prompting.md#PROMPT-6)). It is unbound where it is not drawn.
+
+A picture, which [CHECK-15](#CHECK-15) specifies and nothing builds yet, differs in one way: what is
+put in front of the person is a file to open rather than bytes on the screen.
 
 With auto-vetting on, one verdict answers the two promoting questions in the person's place, and
 [CHECK-12](#CHECK-12) is the whole of what that changes. Everything in this clause holds of the
@@ -244,6 +251,10 @@ because a trail that credited a person who was never shown the bytes would be th
 reader cannot check, and one that credited a check nobody made would name a call that was never
 placed. Everything else about the endorsement is the same whichever it was: one slot, once, and no
 other question answered.
+
+For a picture, which [CHECK-15](#CHECK-15) specifies and nothing builds yet, only the first two
+mint one: a run bypassing permissions with no screening asked for refuses a picture rather than
+answering for it ([tools/vet-content.md](tools/vet-content.md#VET-4)).
 
 `verified-by: bravebot_core::policy::content_cannot_be_promoted_without_an_endorsement`
 `verified-by: bravebot_core::policy::an_approval_to_vet_cannot_be_replayed`
@@ -415,6 +426,9 @@ Every other verdict falls back to that prompt, carrying the banner it would have
 [CHECK-5](#CHECK-5) governs it from there. Unsafe and a check that did not complete are still told
 apart on the screen, because the reason for asking is different in the two cases.
 
+A picture, which [CHECK-15](#CHECK-15) specifies and nothing builds yet, is answered the same way,
+on the first of the routes in the table below.
+
 **Where there is nobody to fall back to, the fallback is a refusal.** A run bypassing permissions
 ([MODE-4](permission-modes.md#MODE-4)) puts no prompt to anybody, so a verdict that is not `safe` has
 nothing to hand the question to. The bytes are kept back rather than promoted with a warning drawn on
@@ -510,7 +524,9 @@ person's answer.
 A check is announced as it begins, with how many lines it was given, and announced as over however
 it ended. Neither half carries anything else: not a fragment of the content, not the verdict, not
 the sentence. The count is the shape of what was sent rather than any part of what it holds, and it
-is the one figure that predicts how long the wait will be.
+is the one figure that predicts how long the wait will be. A check over a picture, which
+[CHECK-15](#CHECK-15) specifies and nothing builds yet, is announced as a picture or as a PDF
+instead.
 
 The end is announced on every way out, the failure that becomes a verdict nobody could read
 included. A display left saying a check is running because the backend was down is the state this
@@ -541,6 +557,71 @@ ask them anything: progress announces, and a listener that has gone away is not 
 `verified-by: bravebot_ui_bridge::reporting::a_check_crosses_as_a_pair_carrying_only_its_size`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so it is pinned instead by ui/scripts/ux-state.test.mjs, which folds the pair through the window's own reducer and reads the word both places draw it from, asserting that a running check takes the word from every phase, that a count of one reads as one line and a count of zero is still a check, that the word goes back to the phase once the check is over, and that a check whose end was never heard does not outlive a consolidating or failed turn; make check-ui and the Front end CI job both run it, and the governs list above holds the file to existing)`
 
+<a id="CHECK-15"></a>
+### CHECK-15: a check over a picture or a PDF is given the file itself, and its verdict counts as one about text does
+
+Nothing builds this yet. It is the check half of the picture route
+[tools/vet-content.md](tools/vet-content.md#VET-4) specifies, and until that is built no check is
+made over a picture, because [VET-2](tools/vet-content.md#VET-2) refuses one before a check runs. A
+PDF is a picture here, as [READ-5](tools/read-file.md#READ-5) reads one, and this clause says where
+it goes differently.
+
+The check is given the picture in a part of its own, as a processor is given one, after the driver's
+block of facts about it and before the driver's words that close the request. A PDF goes in the part
+a processor's PDF goes in, which Bedrock carries as a document rather than as a picture. It is never
+given base64 text, which a model reads as characters and not as what the file shows. What it is told
+about itself says the content is a file in a part of its own rather than a string inside a block.
+
+**[CHECK-2](#CHECK-2)'s encoding has no counterpart here.** Text is contained because it cannot
+produce a line. A picture puts no text into the request at all, and the boundary between its part
+and the driver's is the whole of the enclosure. Words drawn in a picture can say anything the
+driver's own words say, and whether a model tells the one from the other is the model's to get
+right. A PDF is the sharper case: a backend may hand its model the document's text as text, which is
+then words with nothing around them at all. Nothing mechanical holds either.
+
+**Its verdict counts as one about text does.** With auto-vetting off it decides which sentence the
+prompt draws and whether the standing key is offered ([CHECK-5](#CHECK-5)). With it on, a safe
+verdict promotes the picture unasked and any other verdict asks ([CHECK-12](#CHECK-12)). Where
+nobody can be asked, it answers only where somebody said in advance that it may, as it does for
+text. A person asked about a picture reads the check's sentence before anything else, and one who
+does not open the file answers on that sentence alone, so a verdict kept to deciding the sentence
+would still decide most of what they know. What bounds a safe verdict is what bounds one about
+text: one slot, once, `(T,priv)` ([CHECK-7](#CHECK-7)), and no trust rule.
+
+**Why a check at all.** A person looking at a screenshot misses words a model reads: text too faint
+or too small to notice at the size it opens at. The check is a model, so it reads what the planner
+would read, and its sentence is where a person is told that a picture holds words addressed to
+whoever reads it next. For a PDF it can read more than the person is shown: where a backend hands
+its model a text layer the pages do not draw, the check reads that too. That is the second opinion
+[CHECK-10](#CHECK-10) puts in front of every promoting prompt.
+
+A backend that refuses the picture fails the request, and a failed request is inconclusive
+([CHECK-4](#CHECK-4)), so the prompt says nothing looked at the picture. The check is announced as a
+picture, or as a PDF, rather than with a count of lines ([CHECK-14](#CHECK-14)): a data URI is one
+line, so the count would describe nothing.
+
+**What it costs.**
+
+- **Words in a picture can argue with the check unenclosed.** A picture drawn to say it is safe
+  reaches the checker as something it reads, with no encoding between the two, so it has a better
+  chance of being called `safe` than the same words as text. Where a safe verdict answers alone,
+  with auto-vetting on or a screened run nobody is watching, that is the whole of what stands
+  between the picture and the planner. It is the attack [labels.md](labels.md) lists as forcing the
+  word `safe`, made easier.
+- **A backend that drops the picture without saying so returns a verdict about the driver's words
+  alone.** Nothing on this side can tell that from a verdict about the picture, so the prompt says
+  what a check found in a picture no check looked at, and where a safe verdict answers alone the
+  picture is promoted on it. A model the roster lists as not taking the file is refused before the
+  check ([tools/vet-content.md](tools/vet-content.md#VET-4)); one thought to take it whose backend
+  drops it anyway is what is left.
+- **What a check reads of a PDF is its backend's choice.** One backend hands its model the text
+  layer, another images of the pages, another both, and the verdict is about whatever was handed
+  over. The person is told what the check found and not which of those it looked at.
+
+What the rest of the route costs is in [tools/vet-content.md](tools/vet-content.md#VET-4).
+
+`verified-by: none`
+
 ## Known costs
 
 - **A quarantined slot's contents reach the backend, a second time.** A check is a model call, so
@@ -566,7 +647,9 @@ ask them anything: progress announces, and a listener that has gone away is not 
   reachable and can lie: nothing holds a sentence against the content it describes, and nothing
   could. What keeps it from deciding anything is that the bytes are on the same screen, so a
   person who reads them sees what they are agreeing to whatever the sentence said. The residue is
-  the same alarm fatigue as [issue #23](https://github.com/brave/bravebot/issues/23).
+  the same alarm fatigue as [issue #23](https://github.com/brave/bravebot/issues/23). A picture,
+  which [CHECK-15](#CHECK-15) specifies and nothing builds yet, is a file to open rather than bytes
+  on the screen, and [tools/vet-content.md](tools/vet-content.md#VET-4) states what that costs.
 
 - **With auto-vetting on, the bytes are on no screen at all.** [CHECK-12](#CHECK-12) is a person
   saying in advance that a check finding nothing is enough, so on the routes it covers nobody reads

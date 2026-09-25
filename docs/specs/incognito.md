@@ -193,6 +193,10 @@ more than what it leaves behind:
   one, which [INCOG-7](#INCOG-7) refuses outright, and the file itself is governed by
   [premium-credentials.md](premium-credentials.md).
 
+A built [VET-4](tools/vet-content.md#VET-4) would add a seventh, which nothing writes yet: the copy
+of a picture a person is asked to open, in a directory of its own under their cache directory and
+removed when the prompt closes.
+
 **Why.** A stated limit is worth more than an unstated one. Someone who knows the third of these
 can decide not to open an editor; someone who assumed the mode covered it has been misled by their
 own tool.
