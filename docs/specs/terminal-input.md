@@ -1242,9 +1242,9 @@ names a character a marker is spelled with, and it did exactly that before it wa
 transcript, exactly as the arrows do. `/` opens the search over the prompts already sent, which is
 what Ctrl-R opens.
 
-While a key is waiting for the character to jump to, every press is that character, so `f/` jumps to
-a slash and `fj` to a `j`. A count in front of `k` or `j` is the other exception, and it moves rows
-inside the input alone (INPUT-35).
+While a key is waiting for the one after it, every press is that key: `f/` jumps to a slash, `fj` to a
+`j`, and after an operator `j` and `k` are the rows it takes (INPUT-28). A count in front of `k` or `j`
+is the other exception, and it moves rows inside the input alone (INPUT-35).
 
 **Why.** What these reach is not the line. Answering them by moving the caret would leave the prompt
 somebody most wants unreachable from the mode they are in, and a person who pressed `k` on an empty
@@ -1268,6 +1268,7 @@ cannot see scroll away above it.
 `verified-by: bravebot_tui::app::the_row_keys_reach_the_prompt_history_at_the_ends_of_the_input`
 `verified-by: bravebot_tui::app::a_slash_opens_the_search_over_earlier_prompts`
 `verified-by: bravebot_tui::app::the_letters_that_spell_keys_are_typed_in_insert_mode`
+`verified-by: bravebot_tui::app::an_operator_takes_the_row_keys_rather_than_walking_the_ladder`
 
 <a id="INPUT-28"></a>
 ### INPUT-28: an operator and an extent, and a marker is taken whole or not at all
@@ -1278,7 +1279,8 @@ Each waits for the stretch to act on:
 
 | Keys | The stretch |
 |---|---|
-| a motion | from the caret to wherever that motion would take it |
+| any other motion | from the caret to wherever that motion would take it |
+| `j`, `k`, `G`, `gg` | every row from the caret's to the one the key reaches, whole |
 | the operator's own letter doubled | the whole line |
 | `D`, `C`, `x`, `s` | to the end of the line, and the character under the caret |
 | `Y`, `S` | the whole line |
@@ -1286,6 +1288,10 @@ Each waits for the stretch to act on:
 Whether the character the motion landed on is taken depends on the motion: `de` takes the word's last
 letter, `dw` stops before the next word's first. `cw` on a character that is not a blank leaves the
 space after it, and on a blank takes it.
+
+After an operator `j` and `k` are the row below and the row above, and where there is no such row they
+take nothing. The rows those four keys name are whole lines to every operator, as the doubled letter's
+are: `dj` closes the gap and `cj` leaves one empty row to type on.
 
 `p` and `P` put the register back after and before the caret. A stretch that was whole lines comes
 back as a line of its own. `J` makes this line and the one below into one with a single space where
@@ -1295,8 +1301,14 @@ the caret.
 A marker is taken whole by every operator, or not at all, and taking one takes the attachment off.
 
 **Why.** One operator over one set of extents is why `dw`, `cw` and `yw` are one idea rather than
-three bindings, and why `d$` and `dG` work without being listed: the letter says what happens and the
-rest says where.
+three bindings, and why `d$` works without being listed: the letter says what happens and the rest
+says where.
+
+The row keys take whole rows because a row is what they count in, which is vi's rule. Read by the
+character, `dG` would leave the last row standing with what was left of the caret's row joined onto
+it, and `dj` from the middle of a row would split two rows apart. `j` and `k` are the history ladder
+on their own (INPUT-27), and an operator waiting for its stretch claims them, since a stretch cannot
+reach into a prompt that is not in the box.
 
 The inclusive and exclusive motions are vi's distinction and not decoration. `cw` behaving as `ce` is
 vi's own special case, kept because the alternative is useless: a word replaced and run into the next
@@ -1318,11 +1330,15 @@ outcome to rule out. It holds because a stretch is measured between positions th
 at, and no such position is inside a marker.
 
 `verified-by: bravebot_tui::vim::an_operator_takes_any_motion_as_its_stretch`
+`verified-by: bravebot_tui::vim::an_operator_takes_the_row_keys_as_its_stretch`
+`verified-by: bravebot_tui::vim::a_motion_says_whether_an_operator_takes_whole_rows`
 `verified-by: bravebot_tui::vim::the_doubled_letter_is_the_whole_line_and_only_its_own`
 `verified-by: bravebot_tui::vim::an_operator_over_a_jump_waits_again_for_the_character`
 `verified-by: bravebot_tui::vim::a_motion_says_whether_an_operator_takes_the_character_it_landed_on`
 `verified-by: bravebot_tui::vim::the_yank_is_the_operator_that_only_reads`
 `verified-by: bravebot_tui::state::the_delete_operator_takes_the_stretch_a_motion_names`
+`verified-by: bravebot_tui::state::a_row_key_under_an_operator_takes_the_rows_there_are`
+`verified-by: bravebot_tui::state::every_operator_over_a_row_key_takes_the_rows`
 `verified-by: bravebot_tui::state::the_character_and_the_line_are_extents_of_their_own`
 `verified-by: bravebot_tui::state::the_change_operator_takes_the_stretch_and_starts_typing`
 `verified-by: bravebot_tui::state::changing_a_word_leaves_the_space_after_it`

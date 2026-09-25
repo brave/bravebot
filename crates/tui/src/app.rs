@@ -10131,6 +10131,35 @@ mod tests {
         );
     }
 
+    /// After an operator the row keys are the rows it takes, not the ladder. They reach the operator
+    /// only because a key waiting for the next one claims the press, and the box's own tests type
+    /// past that translation, so this one presses the keys.
+    #[test]
+    fn an_operator_takes_the_row_keys_rather_than_walking_the_ladder() {
+        let mut session = editing_vis_way();
+        type_line(&mut session, "an earlier prompt");
+        handle_key(&mut session, key(KeyCode::Enter));
+        session.complete("an answer", Vec::new(), 0);
+        for c in "one\ntwo\nthree".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key(&mut session, key(KeyCode::Esc));
+
+        for c in "ggdk".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            session.input(),
+            "one\ntwo\nthree",
+            "dk on the first row did something other than nothing"
+        );
+
+        for c in "dj".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(session.input(), "three", "dj did not take the two rows");
+    }
+
     /// A counted row key moves rows inside the input and stops at the first or the last, where the
     /// bare key walks the prompt history once the input runs out. Answering a count by pressing the
     /// key it spells that many times would replace a two-row paragraph with a prompt from three

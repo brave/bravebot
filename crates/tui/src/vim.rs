@@ -253,6 +253,10 @@ pub enum Motion {
     InputStart,
     /// `G`: the last line of the input.
     InputEnd,
+    /// `j` after an operator: the row below.
+    Down,
+    /// `k` after an operator: the row above.
+    Up,
     /// `f`, `F`, `t`, `T` once their character has arrived, and `;` and `,` repeating one.
     ToChar(Find),
     /// A text object, which in VISUAL mode is a stretch to select rather than one to act on.
@@ -282,8 +286,24 @@ impl Motion {
             | Motion::LineStart
             | Motion::FirstNonBlank
             | Motion::InputStart
-            | Motion::InputEnd => false,
+            | Motion::InputEnd
+            | Motion::Down
+            | Motion::Up => false,
         }
+    }
+
+    /// Whether an operator over this motion takes every row from the caret's to the one it lands on,
+    /// whole.
+    ///
+    /// Vi's other distinction, for the keys whose unit is a row: `dj` is two lines out and `dG` every
+    /// line from here down, not the characters between the caret and wherever the column landed. Read
+    /// by the character, `dG` would leave the last row standing and join what was above the caret onto
+    /// it.
+    pub fn line_wise(self) -> bool {
+        matches!(
+            self,
+            Motion::Down | Motion::Up | Motion::InputStart | Motion::InputEnd
+        )
     }
 }
 
@@ -328,6 +348,8 @@ pub enum Pending {
     /// An operator waiting for the stretch to act on: the motion in `dw`, or the doubled letter in
     /// `dd`.
     Operate(Operator),
+    /// An operator waiting for the second `g` of `dgg`, having already taken the first.
+    OperateG(Operator),
     /// An operator waiting for the character in `df,` or `ct)`, having already taken the `f` or `t`.
     OperateToChar {
         operator: Operator,
@@ -446,6 +468,13 @@ impl Pending {
                 None => Command::Nothing,
             },
             Pending::Operate(operator) => operated(operator, c),
+            Pending::OperateG(operator) => match c {
+                'g' => Command::Change(operator, Extent::To(Motion::InputStart)),
+                // A mark reached without the jump list, which is a stretch in vi and still has its
+                // mark to take.
+                '\'' | '`' => Command::Wait(Pending::Unclaimed),
+                _ => Command::Nothing,
+            },
             Pending::ReplaceWith => Command::Replace(c),
             Pending::SelectObject { around } => match Kind::named(c) {
                 // The selection becomes the object, which is what makes `vi(` and `ci(` reach the same
@@ -533,7 +562,12 @@ fn operated(operator: Operator, c: char) -> Command {
             forwards: false,
             short: true,
         }),
-        // Any motion at all names a stretch, so `d$` and `dG` work for the reason `dw` does rather
+        // The row keys, which are not in the table below: alone they walk the prompt history once
+        // the input runs out (INPUT-27), and only after an operator are they the row above or below.
+        'j' => Command::Change(operator, Extent::To(Motion::Down)),
+        'k' => Command::Change(operator, Extent::To(Motion::Up)),
+        'g' => Command::Wait(Pending::OperateG(operator)),
+        // Any other motion names a stretch, so `d$` and `de` work for the reason `dw` does rather
         // than because they were listed. A key that is not a motion is not a stretch, and the pair
         // means nothing.
         _ => match command(c) {
@@ -891,6 +925,64 @@ mod tests {
             Command::Change(Operator::Delete, Extent::To(Motion::LineEnd))
         );
         assert_eq!(after('K'), Command::Nothing);
+    }
+
+    /// Alone, `j` and `k` walk the prompt history and are not in the motion table, so an operator
+    /// claims them itself or `dj` means nothing. `dg` waits for its second `g` rather than reading the
+    /// first as a `g` of its own, which ends the operator and leaves `dgg` a bare `g`.
+    #[test]
+    fn an_operator_takes_the_row_keys_as_its_stretch() {
+        let after = |c: char| Pending::Operate(Operator::Delete).then(c);
+        assert_eq!(
+            after('j'),
+            Command::Change(Operator::Delete, Extent::To(Motion::Down))
+        );
+        assert_eq!(
+            after('k'),
+            Command::Change(Operator::Delete, Extent::To(Motion::Up))
+        );
+        assert_eq!(
+            after('g'),
+            Command::Wait(Pending::OperateG(Operator::Delete))
+        );
+        assert_eq!(
+            Pending::OperateG(Operator::Yank).then('g'),
+            Command::Change(Operator::Yank, Extent::To(Motion::InputStart))
+        );
+        assert_eq!(
+            Pending::OperateG(Operator::Delete).then('\''),
+            Command::Wait(Pending::Unclaimed)
+        );
+        assert_eq!(
+            Pending::OperateG(Operator::Delete).then('x'),
+            Command::Nothing
+        );
+    }
+
+    /// `dj` and `dG` take whole rows where `dw` and `d$` take the characters between, which is the
+    /// whole of the difference between a line-wise motion and one read by the character.
+    #[test]
+    fn a_motion_says_whether_an_operator_takes_whole_rows() {
+        for motion in [
+            Motion::Down,
+            Motion::Up,
+            Motion::InputStart,
+            Motion::InputEnd,
+        ] {
+            assert!(motion.line_wise(), "{motion:?}");
+        }
+        for motion in [
+            Motion::Left,
+            Motion::Right,
+            Motion::WordRight,
+            Motion::WordEnd,
+            Motion::WordLeft,
+            Motion::LineStart,
+            Motion::LineEnd,
+            Motion::FirstNonBlank,
+        ] {
+            assert!(!motion.line_wise(), "{motion:?}");
+        }
     }
 
     /// After an operator, the prefixes vi still reads a key after take it: `d'a` must not leave the
