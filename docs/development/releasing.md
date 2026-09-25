@@ -246,6 +246,10 @@ The Start menu entry carries `com.brave.bravebot` as its AppUserModelID. Windows
 under the entry with the ID the process sets, and the app sets none yet, which is part of
 [#767](https://github.com/brave/bravebot/issues/767).
 
+The arm64 installer's archive puts every file through the BCJ filter, which makes it about a
+tenth larger. Left to choose, electron-builder's 7-Zip puts each ARM64 executable through a filter
+the installer's own 7-Zip lacks, and the installer then skips all of them and reports success.
+
 Each installer carries an uninstaller that electron-builder writes during the build, so the job
 cannot sign it afterwards the way it signs the installer. electron-builder signs it in the same
 build when given a certificate there, and setting that up is
