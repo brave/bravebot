@@ -2720,9 +2720,16 @@ fn stashed_lines(session: &Session, width: u16) -> Vec<Line<'static>> {
 /// A command line waiting there carries the `!` the scrollback echoes one behind, because the two
 /// go to different places and the row is the only thing that says which: `echo pwned` under the
 /// box with nothing in front of it reads as words on their way to the model.
+///
+/// The last one's mark says how to have them all go now, where the key that does it reaches this
+/// program. Beside the mark rather than on a row of its own, so the rows under the box do not grow by
+/// one the moment anything is queued, and dropped whole where the width will not hold it.
 fn queued_lines(session: &Session, width: u16) -> Vec<Line<'static>> {
+    const BADGE: &str = " QUEUED ";
+    const SEND_NOW: &str = "  ctrl-enter to stop the turn and send now";
+
     let mut lines = Vec::new();
-    for waiting in &session.queued {
+    for (at, waiting) in session.queued.iter().enumerate() {
         let room = (width as usize).saturating_sub(4);
         let lead = match waiting.is_a_command_line() {
             true => "! ",
@@ -2735,16 +2742,22 @@ fn queued_lines(session: &Session, width: u16) -> Vec<Line<'static>> {
                 Style::default().fg(theme::brand_primary()),
             ),
         ]));
-        lines.push(Line::from(vec![
+        let mut mark = vec![
             Span::raw("  "),
             Span::styled(
-                " QUEUED ",
+                BADGE,
                 Style::default()
                     .fg(theme::on_primary())
                     .bg(theme::brand_primary())
                     .add_modifier(Modifier::BOLD),
             ),
-        ]));
+        ];
+        let last = at + 1 == session.queued.len();
+        let fits = 2 + BADGE.chars().count() + SEND_NOW.chars().count() <= width as usize;
+        if last && fits && session.offers_to_send_now() {
+            mark.push(Span::styled(SEND_NOW, dim()));
+        }
+        lines.push(Line::from(mark));
     }
     lines
 }
@@ -2894,7 +2907,7 @@ const COMPACTED_CONTEXT: &str = "context compacted";
 /// The chords a settings file can move are asked of the bindings rather than written here, so the
 /// list names the key that answers rather than the key that used to. The seven the file can move are
 /// the only rows that vary: nothing can take `?` or Enter, and a marker is not a chord at all.
-fn shortcuts(editing: crate::vim::Editing, bindings: &Keybindings) -> [(String, &'static str); 21] {
+fn shortcuts(editing: crate::vim::Editing, bindings: &Keybindings) -> [(String, &'static str); 22] {
     let escape = match editing {
         crate::vim::Editing::Ordinary => "clear the line",
         crate::vim::Editing::Vi => "take letters as commands",
@@ -2906,6 +2919,7 @@ fn shortcuts(editing: crate::vim::Editing, bindings: &Keybindings) -> [(String, 
         ("?".to_string(), "this list"),
         ("enter".to_string(), "send"),
         ("shift-enter".to_string(), "new line, or ctrl-j"),
+        ("ctrl-enter".to_string(), "stop, send what is queued"),
         ("tab".to_string(), "take what is offered"),
         ("shift-tab".to_string(), "what to ask before acting"),
         ("esc".to_string(), escape),
@@ -5262,6 +5276,61 @@ mod tests {
             assert!(output.contains("QUEUED"), "nothing said it was waiting");
         }
 
+        const SEND_NOW: &str = "ctrl-enter to stop the turn and send now";
+
+        fn waiting_behind_a_turn(lines: &[&str]) -> Session {
+            let mut session = working();
+            session.ctrl_enter_arrives = true;
+            for line in lines {
+                for c in line.chars() {
+                    session.type_char(c);
+                }
+                assert!(session.queue());
+            }
+            session
+        }
+
+        /// One offer for the whole queue, since the key sends the whole queue, and under the last
+        /// of it, where the eye ends up after reading what is waiting.
+        #[test]
+        fn the_offer_to_send_now_is_drawn_under_the_last_waiting_prompt() {
+            let session = waiting_behind_a_turn(&["do some long task", "and another one"]);
+
+            let output = rendered(&session);
+            assert_eq!(output.matches(SEND_NOW).count(), 1, "{output}");
+            let offer = output.find(SEND_NOW).expect("offered");
+            assert!(
+                offer
+                    > output
+                        .find("and another one")
+                        .expect("the last one is drawn"),
+                "the offer was drawn above the last waiting prompt: {output}"
+            );
+        }
+
+        /// Offered to a terminal that reports Ctrl-Enter as Enter, it would be advice to press a key
+        /// that does something else.
+        #[test]
+        fn the_offer_to_send_now_is_not_drawn_where_the_key_cannot_arrive() {
+            let mut session = waiting_behind_a_turn(&["do some long task"]);
+            session.ctrl_enter_arrives = false;
+
+            let output = rendered(&session);
+            assert!(output.contains("QUEUED"), "nothing said it was waiting");
+            assert!(!output.contains("ctrl-enter"), "{output}");
+        }
+
+        /// Dropped whole where the width will not hold it. Cut off, it would end part way through
+        /// telling somebody what the key does.
+        #[test]
+        fn the_offer_to_send_now_is_dropped_whole_where_it_does_not_fit() {
+            let session = waiting_behind_a_turn(&["do some long task"]);
+
+            let output = rendered_at(&session, 40, 24);
+            assert!(output.contains("QUEUED"), "nothing said it was waiting");
+            assert!(!output.contains("ctrl-enter"), "{output}");
+        }
+
         /// Nothing is waiting once the queue has been taken back, so nothing under the box may
         /// go on saying that something is. The rows are the only place a person can see what is
         /// still going to be sent, and rows left behind would say two prompts were on their way
@@ -6627,6 +6696,20 @@ mod tests {
         assert!(
             output.contains("ctrl-o"),
             "the one place the keys are written down left out ctrl-o: {output}"
+        );
+    }
+
+    /// The same for the chord that sends what is waiting, which is drawn next to the queue only
+    /// while something is queued, so the list is where somebody learns it exists before then.
+    #[test]
+    fn the_list_names_the_chord_that_sends_what_is_queued() {
+        let mut session = Session::new("none");
+        session.type_char('?');
+        let output = rendered_at(&session, 120, 40);
+
+        assert!(
+            output.contains("ctrl-enter"),
+            "the one place the keys are written down left out ctrl-enter: {output}"
         );
     }
 

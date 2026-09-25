@@ -18,6 +18,7 @@ growing further. It keeps growing while a turn runs.
 | Key | What it does |
 |---|---|
 | Enter | send |
+| Ctrl-Enter | mid-turn, stop the turn and send what is waiting as one turn |
 | Shift-Enter, Ctrl-J | start a new line without sending |
 | Ctrl-G | compose in `$VISUAL` or `$EDITOR` and take back what you saved |
 | Ctrl-V | paste what is on the clipboard, a picture included |
@@ -426,6 +427,22 @@ a file you took off the line afterwards was never part of it.
 Stopping a turn leaves the queue alone: the next waiting prompt starts as it would after any turn,
 and the rest go on waiting in order.
 
+### Sending the queue now
+
+**Ctrl-Enter** queues whatever is in the box, as Enter does, then stops the running turn so that what
+is waiting goes at once. The waiting prompts go together as one turn, one to a line, carrying the
+files and pictures each of them named, and the routing for that turn is settled from all of them. It
+reaches only as far as the first slash command or shell line, which keeps its place and runs after
+that turn as it would have anyway. A prompt you queue after pressing it waits for a turn of its own.
+
+Only a turn is stopped this way. During a compaction, a question asked aside, a goal check or a
+manifest run, Ctrl-Enter only queues the line, and Escape is still the key that stops one. A
+[`/loop`](../reference/commands.md#loop-interval-prompt) ends when its turn is stopped, so Ctrl-Enter ends it as Escape does.
+
+While something is waiting behind a turn, the last waiting row says so. It says so only where the
+terminal reports the modifier (see Shift-Enter above), because elsewhere Ctrl-Enter arrives as Enter
+and only queues the line. There, **Up**, then **Escape**, then **Enter** gets you the same turn.
+
 ### Taking the queue back
 
 **Up** puts everything waiting back into the box in one press, in the order you typed it, one to a
@@ -643,7 +660,7 @@ session asks for four things, each because something here cannot work without it
 | mouse reporting, narrowed to the buttons, the wheel, and motion while a button is held | the wheel scrolls the transcript |
 | bracketed paste | a pasted prompt does not send itself on the newline most clipboards carry |
 | focus reporting | the clipboard is worth a look the moment a picture appears on it, rather than polled forever |
-| disambiguated keys, where the terminal says it understands the request | Shift-Enter arrives at all |
+| disambiguated keys, where the terminal says it understands the request | Shift-Enter and Ctrl-Enter arrive at all |
 
 **Every one of those is given back**, when the session ends by failing as much as by being left, and
 again around each handover of the terminal to another program: the editor a prompt is written in and

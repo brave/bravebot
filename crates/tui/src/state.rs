@@ -399,6 +399,12 @@ pub struct Queued {
     /// the input box's to know and not this type's.
     waiting: Waiting,
     recall: crate::history::Ticket,
+    /// Whether Ctrl-Enter asked for this prompt to go now, with the others it asked for.
+    ///
+    /// On the line rather than the session, because what the press asked for is the lines waiting
+    /// when it was made: one typed after it was not part of that, and one taken back with Up is no
+    /// longer anywhere to be sent.
+    hurried: bool,
 }
 
 impl Queued {
@@ -1069,7 +1075,9 @@ pub struct Session {
     pub turns: usize,
     turn_history: Vec<bravebot_session::sessions::StoredTurn>,
     prompt_at: Option<usize>,
-    recall: Option<crate::history::Ticket>,
+    /// What the turn in flight put in the prompt history, for a stop to take back out. More than one
+    /// where queued prompts went together as one turn.
+    recall: Vec<crate::history::Ticket>,
     turn_places: std::collections::BTreeMap<usize, usize>,
     /// Task lists whose recorded turn has no known transcript boundary.
     unplaced_todos: std::collections::BTreeMap<usize, Vec<bravebot_core::todo::Row>>,
@@ -1233,6 +1241,16 @@ pub struct Session {
     /// and each moves into the transcript at the moment it reaches the planner, whether that is
     /// inside the running turn or as a turn of its own.
     pub queued: Vec<Queued>,
+    /// Whether the working state is a turn, rather than a summary, an aside, a plan or a goal check.
+    ///
+    /// Only a turn is stopped by Ctrl-Enter, since only a turn is what the queue is waiting behind.
+    /// The others read their keys through the same handler and have no turn to stop.
+    turn_in_flight: bool,
+    /// Whether the terminal tells Ctrl-Enter from Enter.
+    ///
+    /// Only the hint under the queue reads it. Where the terminal sends the same thing for both,
+    /// a row naming the chord would advertise a key that reaches this program as Enter.
+    pub ctrl_enter_arrives: bool,
     /// The loop repeating a prompt, where the person started one.
     ///
     /// Private, because every part of it has to move together: a tick is dispatched, the turn
@@ -1441,7 +1459,7 @@ impl Session {
             turns: 0,
             turn_history: Vec::new(),
             prompt_at: None,
-            recall: None,
+            recall: Vec::new(),
             turn_places: Default::default(),
             unplaced_todos: Default::default(),
             tokens: 0,
@@ -1468,6 +1486,8 @@ impl Session {
             checking: None,
             running: None,
             queued: Vec::new(),
+            turn_in_flight: false,
+            ctrl_enter_arrives: false,
             looping: None,
             watches: watch::Watches::new(),
             goal: None,
@@ -1939,7 +1959,7 @@ impl Session {
         self.turns = 0;
         self.turn_history.clear();
         self.prompt_at = None;
-        self.recall = None;
+        self.recall.clear();
         self.turn_places.clear();
         self.unplaced_todos.clear();
         // Counts of a transcript that is gone: kept, they would rewind a later turn to a length the
@@ -5337,7 +5357,7 @@ impl Session {
         // nowhere. Pictures settle the same way and at the same moment, since a marker rubbed out
         // means the same thing whether the thing behind it was dropped or pasted.
         let taken = self.take_line(&typed);
-        Some(self.begin_turn(prompt, taken, Some(recall)))
+        Some(self.begin_turn(prompt, taken, vec![recall]))
     }
 
     /// Take the current line as a command to carry out now.
@@ -5477,9 +5497,36 @@ impl Session {
             pasted,
             waiting,
             recall,
+            hurried: false,
         });
         self.scroll = 0;
         true
+    }
+
+    /// Ask for every prompt waiting to go now, as one turn, once the turn in flight has stopped.
+    ///
+    /// `true` where there is a turn to stop and anything waiting behind it, which is when the caller
+    /// stops it. A command or a command line waiting counts, since stopping the turn is what lets the
+    /// queue reach it, but only a prompt is marked: only a prompt is sent, and the others are carried
+    /// out one at a time as they always are.
+    pub fn hurry(&mut self) -> bool {
+        if !self.a_turn_is_running() || self.queued.is_empty() {
+            return false;
+        }
+        for line in &mut self.queued {
+            line.hurried |= line.waiting.is_sent();
+        }
+        true
+    }
+
+    /// Whether Ctrl-Enter would stop the turn in flight and send what is waiting, which is when the
+    /// row under the queue says so.
+    pub fn offers_to_send_now(&self) -> bool {
+        self.ctrl_enter_arrives && self.a_turn_is_running() && !self.queued.is_empty()
+    }
+
+    fn a_turn_is_running(&self) -> bool {
+        self.status == Status::Working && self.turn_in_flight
     }
 
     /// The buffer the running turn takes interjections from.
@@ -5543,7 +5590,12 @@ impl Session {
     /// What a prompt still waiting when the turn ended does, which is what every queued prompt used
     /// to do. It becomes a turn of its own, and as its own turn it gets what a turn gets: routing
     /// precommitted from it, and the files and pictures it named carried with it. That is why one
-    /// left over is better off here than interjected, and why nothing tries to hurry it.
+    /// left over is better off here than interjected, and why nothing but the person hurries it.
+    ///
+    /// Where they did, with Ctrl-Enter, the prompts it marked go together as one turn, one to a
+    /// line, carrying everything each of them named: what Up and Enter would have sent, without the
+    /// box in between. Only as far as the first line that is not one of them, so what was typed first
+    /// still happens first.
     ///
     /// A command or a command line at the head of the queue stops this, rather than being sent: the
     /// queue is drained in the order it was typed, and [`Session::take_queued_command`] and
@@ -5557,12 +5609,27 @@ impl Session {
         {
             return None;
         }
-        let next = self.queued.remove(0);
-        // The copy left for the running turn goes: this prompt is becoming a turn of its own, and a
-        // copy still in the buffer would reach the planner a second time, as an interjection into
-        // the very turn this line started.
-        self.pending.take();
-        Some(self.begin_turn(next.prompt, (next.attached, next.pasted), Some(next.recall)))
+        let together = self
+            .queued
+            .iter()
+            .take_while(|line| line.waiting.is_sent() && line.hurried)
+            .count()
+            .max(1);
+        let mut prompts = Vec::new();
+        let mut attached = Vec::new();
+        let mut pasted = Vec::new();
+        let mut recall = Vec::new();
+        for next in self.queued.drain(..together) {
+            // The copy left for the running turn goes: this prompt is becoming part of a turn of its
+            // own, and a copy still in the buffer would reach the planner a second time, as an
+            // interjection into the very turn this line started.
+            self.pending.take();
+            prompts.push(next.prompt);
+            attached.extend(next.attached);
+            pasted.extend(next.pasted);
+            recall.push(next.recall);
+        }
+        Some(self.begin_turn(prompts.join("\n"), (attached, pasted), recall))
     }
 
     /// Take the command waiting longest, if the session is free to carry one out.
@@ -5856,7 +5923,7 @@ impl Session {
         // The driver's own sentence with the judge's reason quoted inside it, which is why it is
         // not a message from the catalog: it goes to a model rather than to a reader.
         let prompt = bravebot_agent::goal::carry_on(&condition, &reason);
-        Some(self.begin_turn(prompt, (Vec::new(), Vec::new()), None))
+        Some(self.begin_turn(prompt, (Vec::new(), Vec::new()), Vec::new()))
     }
 
     /// Every live watch, oldest first, for the report that lists them.
@@ -5960,7 +6027,7 @@ impl Session {
         self.watches.dispatched(number);
         self.note(t!(watch_fired, number = number, path = &path));
         let prompt = watch::fired(number, &path);
-        Some(self.begin_turn(prompt, (Vec::new(), Vec::new()), None))
+        Some(self.begin_turn(prompt, (Vec::new(), Vec::new()), Vec::new()))
     }
 
     /// Whether the turn running now is a watch's fire.
@@ -6119,7 +6186,7 @@ impl Session {
         } else {
             self.note(t!(loop_tick, count = count));
         }
-        Some(self.begin_turn(prompt, (attached, pasted), None))
+        Some(self.begin_turn(prompt, (attached, pasted), Vec::new()))
     }
 
     /// Take every waiting prompt back out of the queue and into the box.
@@ -6209,7 +6276,7 @@ impl Session {
         &mut self,
         prompt: String,
         taken: (Vec<Attached>, Vec<AttachedImage>),
-        recall: Option<crate::history::Ticket>,
+        recall: Vec<crate::history::Ticket>,
     ) -> String {
         // Recorded here because this is the last moment these figures exist: the prompt goes into
         // the transcript and the count goes up below, and `/undo` rewinds to what they replaced.
@@ -6224,6 +6291,7 @@ impl Session {
             .insert(self.turns + 1, self.transcript.len());
         self.transcript.push(Entry::user(prompt.clone()));
         self.status = Status::Working;
+        self.turn_in_flight = true;
         self.back_to_the_tail();
         self.turns += 1;
         // The last turn's figures are not this one's, and a line reporting a finished turn while
@@ -6317,10 +6385,11 @@ impl Session {
     }
 
     fn forget_cancelled_prompt(&mut self) {
-        let Some(ticket) = self.recall.take() else {
-            return;
-        };
-        if self.history.withdraw(ticket) && self.persist {
+        let mut withdrawn = false;
+        for ticket in std::mem::take(&mut self.recall) {
+            withdrawn |= self.history.withdraw(ticket);
+        }
+        if withdrawn && self.persist {
             bravebot_session::store::save_history(self.history.entries());
         }
     }
@@ -6491,6 +6560,7 @@ impl Session {
     /// view's position, so putting it back to the tail here would yank the run somebody opened.
     pub fn begin_aside(&mut self) {
         self.status = Status::Working;
+        self.turn_in_flight = false;
         self.back_to_the_tail();
         self.phase = None;
         self.checking = None;
@@ -11918,6 +11988,163 @@ mod tests {
             s.pasted_named(&s.input).len(),
             1,
             "the picture did not come back with the words"
+        );
+    }
+
+    /// Queue each line in `lines` behind a turn already running.
+    fn queue_lines(s: &mut Session, lines: &[&str]) {
+        for line in lines {
+            for c in line.chars() {
+                s.type_char(c);
+            }
+            if line.starts_with('/') {
+                assert!(s.queue_command(), "{line} was not queued");
+            } else {
+                assert!(s.queue(), "{line} was not queued");
+            }
+        }
+    }
+
+    /// A stop the event loop makes, which is what Ctrl-Enter asks for once it has hurried the queue.
+    fn stop(s: &mut Session, prompt: &str) {
+        s.stopped(Some(0));
+        s.restore(prompt);
+    }
+
+    /// Hurried prompts go as a turn of their own, so they get what a turn gets: every picture each
+    /// of them named goes with it. One that went as text alone would send a marker standing over
+    /// nothing, the way an interjection has to.
+    #[test]
+    fn hurried_prompts_go_as_one_turn_carrying_what_each_of_them_named() {
+        let mut s = session();
+        s.type_char('a');
+        s.submit().expect("submitted");
+        for (words, pixels) in [("look at ", b"one"), ("and ", b"two")] {
+            for c in words.chars() {
+                s.type_char(c);
+            }
+            s.attach(picture(pixels));
+            assert!(s.queue());
+        }
+
+        assert!(s.hurry(), "there was a turn to stop and something waiting");
+        stop(&mut s, "a");
+
+        assert_eq!(
+            s.send_queued().as_deref(),
+            Some("look at [Image #1]\nand [Image #2]")
+        );
+        assert_eq!(
+            s.sent_pasted()
+                .iter()
+                .map(|picture| picture.bytes.as_slice())
+                .collect::<Vec<_>>(),
+            [b"one".as_slice(), b"two".as_slice()],
+            "a picture was left behind"
+        );
+    }
+
+    /// Ctrl-Enter answers for what was waiting when it was pressed. A prompt queued after it, while
+    /// the turn was still stopping, was queued with Enter, and Enter never hurried anything.
+    #[test]
+    fn a_prompt_queued_after_the_hurry_waits_for_a_turn_of_its_own() {
+        let mut s = session();
+        s.type_char('a');
+        s.submit().expect("submitted");
+        queue_lines(&mut s, &["one", "two"]);
+        assert!(s.hurry());
+        queue_lines(&mut s, &["three"]);
+        stop(&mut s, "a");
+
+        assert_eq!(s.send_queued().as_deref(), Some("one\ntwo"));
+        s.complete("an answer", Vec::new(), 0);
+        assert_eq!(s.send_queued().as_deref(), Some("three"));
+    }
+
+    /// The queue goes in the order it was typed, and a command in the middle of it is a place in
+    /// that order. Merging the prompts on either side of one would send the second before the
+    /// command somebody typed ahead of it.
+    #[test]
+    fn a_command_between_hurried_prompts_keeps_its_place() {
+        let mut s = session();
+        s.type_char('a');
+        s.submit().expect("submitted");
+        queue_lines(&mut s, &["one", "/clear", "two"]);
+        assert!(s.hurry());
+        stop(&mut s, "a");
+
+        assert_eq!(s.send_queued().as_deref(), Some("one"));
+        s.complete("an answer", Vec::new(), 0);
+        assert!(
+            s.send_queued().is_none(),
+            "the prompt went ahead of the command"
+        );
+        assert_eq!(
+            s.take_queued_command().map(|commanded| commanded.line),
+            Some("/clear".to_string())
+        );
+        assert_eq!(s.send_queued().as_deref(), Some("two"));
+    }
+
+    /// Nothing is hurried where there is no turn to stop: at rest Enter sends, and during a request
+    /// of its own nothing waiting could go any sooner by stopping it. Nor is the offer drawn there,
+    /// since it would promise a press that does nothing.
+    #[test]
+    fn there_is_nothing_to_hurry_without_a_turn_running_and_something_waiting() {
+        let mut s = session();
+        s.ctrl_enter_arrives = true;
+        assert!(!s.hurry(), "hurried with nothing running");
+
+        s.type_char('a');
+        s.submit().expect("submitted");
+        assert!(!s.hurry(), "hurried with nothing waiting");
+        assert!(!s.offers_to_send_now());
+        queue_lines(&mut s, &["one"]);
+        assert!(s.offers_to_send_now());
+
+        s.complete("an answer", Vec::new(), 0);
+        s.begin_aside();
+        queue_lines(&mut s, &["two"]);
+        assert!(!s.hurry(), "hurried a request that is not a turn");
+        assert!(!s.offers_to_send_now());
+    }
+
+    /// Only where the chord can arrive. Offered to a terminal that reports it as Enter, it is advice
+    /// to press a key that does something else.
+    #[test]
+    fn the_offer_is_not_made_where_ctrl_enter_cannot_arrive() {
+        let mut s = session();
+        s.type_char('a');
+        s.submit().expect("submitted");
+        queue_lines(&mut s, &["one"]);
+        assert!(!s.offers_to_send_now());
+    }
+
+    /// A hurried turn stopped in its turn goes back to the box whole, and every prompt in it leaves
+    /// the history the way a single stopped prompt does. Forgetting only one would leave the other
+    /// in the history as though it had been sent.
+    #[test]
+    fn stopping_a_hurried_turn_forgets_every_prompt_in_it() {
+        let mut s = session();
+        s.type_char('a');
+        s.submit().expect("submitted");
+        queue_lines(&mut s, &["one", "two"]);
+        assert!(s.hurry());
+        stop(&mut s, "a");
+        assert_eq!(s.send_queued().as_deref(), Some("one\ntwo"));
+
+        stop(&mut s, "one\ntwo");
+
+        assert_eq!(s.input, "one\ntwo", "the stopped turn did not come back");
+        let remembered = s
+            .history
+            .entries()
+            .iter()
+            .map(|entry| entry.prompt.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            !remembered.contains(&"one") && !remembered.contains(&"two"),
+            "{remembered:?}"
         );
     }
 
