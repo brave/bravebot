@@ -514,8 +514,9 @@ Two files in one directory resolve by file name, so which of them is live is the
 machine.
 
 **A later definition of the same name replaces the one before it and never widens it.** It has the
-last word about what the name is *for*, taking over the description, the body and the model, and
-none at all about what it may do. Both fields that decide that are met with the one it replaced:
+last word about what the name is *for*, taking over the description, the body, the model and the
+skills ([DELEGATE-23](#DELEGATE-23)), and none at all about what it may do. Both fields that decide
+that are met with the one it replaced:
 
 - It is loaded as the **narrower of the two kinds**, so a project cannot turn a `reader` a person
   wrote in their own directory into a `worker`.
@@ -563,6 +564,7 @@ each came from a source somebody vouched for, which is what separates this from 
 `verified-by: bravebot_core::delegate::a_later_definition_cannot_widen_a_tool_list_within_one_capability`
 `verified-by: bravebot_core::delegate::tool_lists_with_nothing_in_common_meet_at_nothing`
 `verified-by: bravebot_core::delegate::a_narrowing_carries_through_a_third_definition_of_the_same_name`
+`verified-by: bravebot_core::delegate::a_later_definition_takes_over_the_skills_the_one_it_replaces_named`
 
 <a id="DELEGATE-21"></a>
 ### DELEGATE-21: a definition's name may not open with `-` or carry a colon
@@ -624,6 +626,32 @@ definition could ask for one model and have every delegate it starts answered by
 `verified-by: bravebot_agent::turn::a_delegate_whose_model_needs_a_sign_in_does_not_run_and_says_so`
 `verified-by: bravebot_agent::turn::a_delegate_answered_by_a_model_other_than_its_definitions_says_so`
 
+<a id="DELEGATE-23"></a>
+### DELEGATE-23: a definition may name the skills its delegate is offered
+
+`skills:` is optional and is read as `tools:` is, on one line or as a list. A definition naming
+none offers its delegate every skill the turn found. A definition naming some offers the ones of
+those the turn found and no others: the rest are neither listed in the delegate's prompt nor
+loadable by it. An empty line names none, and its delegate is offered no skill.
+
+A name selects out of what the turn found and adds nothing to it, so a skill the turn could not
+load, whether from a directory nobody vouched for or from nowhere, is one no definition can offer.
+A name nothing found selects nothing, and the turn says so with the rest of what it says about what
+it found, naming the definition and the name.
+
+**Why a replacement takes the list over.** A skill is guidance, and loading one is gated by what a
+delegate holds whichever skills it is listed. Which of them it is told about changes what it is
+told and not what it may do, so the list goes with the body rather than with the kind and the
+tools ([DELEGATE-20](#DELEGATE-20)).
+
+**Why say a name nothing found.** It is the reason [DELEGATE-19](#DELEGATE-19) reports a tool name
+that is not a tool: without it a misspelt name reads to whoever wrote it as a skill the delegate
+has.
+
+`verified-by: bravebot_agent::agents::a_definition_reads_the_skills_it_names`
+`verified-by: bravebot_core::delegate::a_definition_may_name_skills_and_the_spec_carries_them`
+`verified-by: bravebot_agent::turn::a_definition_offers_its_delegate_only_the_skills_it_names`
+
 ## Known costs
 
 - **A definition is trusted exactly as far as a configuration file somebody pasted is.** That is
@@ -637,6 +665,13 @@ definition could ask for one model and have every delegate it starts answered by
   four, and normalising a name to find them would be a dependency for four code points. A
   character Unicode adds to that set later is one [DELEGATE-21](#DELEGATE-21) would not catch
   until the list is extended.
+
+- **A definition cannot point its delegate at an MCP server.** Holding a server is a capability and
+  no kind holds one, so a delegate holds no server's grant and is offered no server's tool
+  ([SERVERS-9](mcp-servers.md#SERVERS-9)), and a definition naming one would widen its delegate
+  past its kind, which [DELEGATE-4](#DELEGATE-4) forbids. An `mcpServers:` key is ignored like any
+  other key this does not read, so a definition written to talk to one server says nothing about
+  it here.
 
 - **A definition's model is checked by using it.** Whether the endpoint serves a name is learned
   from its reply, so a definition naming one it does not serve has its delegate run on a substitute

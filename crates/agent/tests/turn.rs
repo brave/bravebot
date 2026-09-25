@@ -17293,6 +17293,149 @@ fn a_delegate_answered_by_a_model_other_than_its_definitions_says_so() {
     );
 }
 
+/// A definition naming skills gives its delegate those and no others: the rest of what the turn
+/// found is neither listed for it nor loadable by it, where a definition naming none is offered
+/// the whole of it. A name nothing found selects nothing and is said, so a misspelt one does not
+/// read to its author as a skill the delegate has.
+#[test]
+fn a_definition_offers_its_delegate_only_the_skills_it_names() {
+    let scratch = Scratch::new("delegate-definition-skills");
+    let home = Scratch::new("delegate-definition-skills-home");
+    for (dir, body) in [
+        ("review-style", "REVIEW-STYLE-BODY"),
+        ("commit-style", "COMMIT-STYLE-BODY"),
+    ] {
+        let at = home.path.join("skills").join(dir);
+        std::fs::create_dir_all(&at).expect("create a skill directory");
+        std::fs::write(
+            at.join("SKILL.md"),
+            format!("---\nname: {dir}\ndescription: when to use {dir}\n---\n\n{body}\n"),
+        )
+        .expect("write a skill");
+    }
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("styled-reviewer.md"),
+        "---\nname: styled-reviewer\ndescription: Reviews in one style.\nkind: reader\nskills: \
+         review-style, no-such-skill\n---\n\nREVIEW\n",
+    )
+    .expect("write the definition naming skills");
+    std::fs::write(
+        home.path.join("agents").join("plain-reviewer.md"),
+        "---\nname: plain-reviewer\ndescription: Reviews.\nkind: reader\n---\n\nREVIEW\n",
+    )
+    .expect("write the definition naming none");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "DELEGATE-TWO-REVIEWERS",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"styled-reviewer","task":"REVIEW-WITH-NAMED-SKILLS"}"#,
+                ),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"plain-reviewer","task":"REVIEW-WITH-EVERY-SKILL"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("delegates finished"),
+            ],
+        ),
+        (
+            "REVIEW-WITH-NAMED-SKILLS",
+            vec![
+                tool_request("load_skill", r#"{"name":"commit-style"}"#),
+                tool_request("load_skill", r#"{"name":"review-style"}"#),
+                reply_with("reviewed"),
+            ],
+        ),
+        ("REVIEW-WITH-EVERY-SKILL", vec![reply_with("reviewed")]),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-TWO-REVIEWERS").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let delegate = |task: &str| -> Vec<&String> {
+        requests
+            .iter()
+            .filter(|body| body.contains(task) && !body.contains("DELEGATE-TWO-REVIEWERS"))
+            .collect()
+    };
+    let listed = |body: &str| -> Vec<&str> {
+        ["review-style", "commit-style", "loop"]
+            .into_iter()
+            .filter(|skill| body.contains(&format!("- {skill}: ")))
+            .collect()
+    };
+
+    let styled = delegate("REVIEW-WITH-NAMED-SKILLS");
+    let first = styled
+        .first()
+        .expect("the delegate whose definition names skills never ran");
+    assert_eq!(
+        listed(first),
+        ["review-style"],
+        "the delegate was not listed only the skills its definition named"
+    );
+    let last = styled.last().expect("asked at least once");
+    assert!(
+        last.contains("no skill named 'commit-style'"),
+        "a skill the definition did not name was not refused to its delegate"
+    );
+    assert!(
+        !last.contains("COMMIT-STYLE-BODY"),
+        "a skill the definition did not name reached its delegate"
+    );
+    assert!(
+        last.contains("REVIEW-STYLE-BODY"),
+        "the skill the definition named could not be loaded by its delegate"
+    );
+
+    let plain = delegate("REVIEW-WITH-EVERY-SKILL");
+    let plain = plain
+        .first()
+        .expect("the delegate whose definition names none never ran");
+    assert_eq!(
+        listed(plain),
+        ["review-style", "commit-style", "loop"],
+        "a definition naming no skills was not offered every skill the turn found"
+    );
+
+    let about_skills: Vec<&String> = reporter
+        .notices
+        .iter()
+        .filter(|notice| notice.contains("did not find"))
+        .collect();
+    assert_eq!(
+        about_skills.len(),
+        1,
+        "the missing skill was not said exactly once: {about_skills:?}"
+    );
+    assert!(
+        about_skills[0].contains("styled-reviewer.md")
+            && about_skills[0].ends_with(": no-such-skill"),
+        "the notice did not name the definition and the one name nothing found: {}",
+        about_skills[0]
+    );
+}
+
 /// A definition's model that needs a sign-in is not swapped for the turn's, which would spend past
 /// a boundary the definition drew: the delegate does not run and the person is told why.
 #[test]
