@@ -49,18 +49,25 @@ therefore holds in every mode, including the mode that asks about nothing.
 <a id="PERM-1"></a>
 ### PERM-1: a rule names a family of tools, and matches on routing only
 
-A rule is `Tool` or `Tool(specifier)`. Four families exist: `Read` covers every tool that reads or
-enumerates a file, `Edit` covers every tool that changes one, `Bash` covers running a program, and
-`WebFetch` covers fetching a URL. They are categories rather than tool names, and `Bash` names no
+A rule is `Tool` or `Tool(specifier)`. Five families exist: `Read` covers every tool that reads or
+enumerates a file, `Edit` covers every tool that changes one, `Bash` covers running a program,
+`WebFetch` covers fetching a URL, and `Mcp` covers calling a tool of a server a person declared
+([mcp-servers.md](mcp-servers.md)). They are categories rather than tool names, and `Bash` names no
 shell: there is none, and a specifier is matched against one stage's program and arguments.
 
-A specifier is matched against a **routing** field and nothing else: a path, a stage's argv, or a
-host. Never a file's contents, never a program's output, never anything else a turn observed.
+A specifier is matched against a **routing** field and nothing else: a path, a stage's argv, a
+host, or a server's alias and tool name. Never a file's contents, never a program's output, never a
+call's arguments, never anything else a turn observed.
 
 `WebFetch` takes `domain:` and nothing else, so `WebFetch(domain:example.com)` covers that host and
 its subdomains. A URL prefix would read as covering a path, and the boundary is a label boundary: a
 rule about `example.com` never covers `notexample.com`. What a matching rule decides for a fetch,
 and what it does not decide, is [fetch-url.md](tools/fetch-url.md).
+
+`Mcp(weather)` and `Mcp(weather:*)` cover every tool of the server declared as `weather`, and
+`Mcp(weather:get_forecast)` covers one of them. Both names are matched whole, so `Mcp(weather)` does
+not cover `weather2`. A specifier that could name nothing callable, such as one holding a space, a
+second colon, or a `*` anywhere but as the whole tool, is unreadable ([PERM-11](#PERM-11)).
 
 **Why.** Routing is trusted and public before it reaches any gate, so matching on it is the driver
 deciding from trusted input, which is what the driver is for. A rule matched against observed bytes
@@ -73,6 +80,8 @@ would be the driver branching on untrusted content, whatever the rule said.
 `verified-by: bravebot_core::permissions::a_domain_rule_ignores_case`
 `verified-by: bravebot_core::permissions::a_bare_web_fetch_rule_covers_every_host`
 `verified-by: bravebot_core::permissions::a_web_fetch_rule_decides_nothing_about_other_families`
+`verified-by: bravebot_core::permissions::an_mcp_rule_is_its_own_family`
+`verified-by: bravebot_core::permissions::an_mcp_rule_covers_the_server_or_the_tool_it_names`
 
 <a id="PERM-2"></a>
 ### PERM-2: deny, then ask, then allow, and the first match decides
@@ -263,15 +272,18 @@ into routing, which is the whole thing labels exist to prevent.
 `verified-by: bravebot_agent::turn::an_allow_rule_reaches_the_path_it_names_and_no_other`
 
 <a id="PERM-9"></a>
-### PERM-9: three prompts no rule can answer
+### PERM-9: four prompts no rule can answer
 
 A run that would put the user's private data into a program asks whatever the rules say. A write
 whose destination is known only through a reference asks whatever the rules say. A run carrying an
-environment assignment written in front of one of its programs asks whatever the rules say.
+environment assignment written in front of one of its programs asks whatever the rules say. A call
+that would put the user's private data into a server's tool asks whatever the rules say, and
+whatever a standing answer says ([SERVERS-7](mcp-servers.md#SERVERS-7)).
 
-**Why.** None of them is the question a rule answers. The first is about confidentiality: a rule
-saying which commands may run is not consent to hand one the user's data, exactly as vouching for a
-command is not. The second is structural: that prompt is the only moment such a path is shown to
+**Why.** None of them is the question a rule answers. The first and the fourth are about
+confidentiality: a rule saying which commands may run or which tools may be called is not consent
+to hand one the user's data, exactly as vouching for a command is not, and a server is further from
+the person than a local program is. The second is structural: that prompt is the only moment such a path is shown to
 anybody, and the endorsement is minted for the path the person saw, so nothing a pattern says can
 stand in for having looked. The third is about what a rule can say at all: a rule is matched against
 one string, the program's name and its arguments run together ([PERM-5](#PERM-5)), and an assignment is in
@@ -282,6 +294,10 @@ distinguishes them. An assignment decides what a program loads before its argume
 `verified-by: bravebot_core::policy::private_input_asks_even_for_a_line_a_rule_allows`
 `verified-by: bravebot_core::policy::a_reference_named_write_asks_whatever_a_rule_says`
 `verified-by: bravebot_core::policy::an_environment_assignment_asks_even_for_a_line_a_rule_allows`
+`verified-by: bravebot_core::policy::private_arguments_ask_even_for_a_tool_a_rule_allows`
+
+The fourth is decided in the policy and reached by no call yet: a planner's arguments are labelled
+public, since nothing today labels them private.
 
 <a id="PERM-10"></a>
 ### PERM-10: no rule extends reach, and `additionalDirectories` asks before it opens

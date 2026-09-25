@@ -75,6 +75,26 @@ while IFS= read -r line; do
 done
 "#;
 
+/// A server whose list comes in two pages, the second asked for with the cursor the first named.
+const PAGED_SERVER: &str = r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"fake","version":"1"}}}\n' "$id"
+      ;;
+    *'"cursor":"page-2"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"second","inputSchema":{"type":"object"}}]}}\n' "$id"
+      ;;
+    *'"tools/list"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"first","inputSchema":{"type":"object"}}],"nextCursor":"page-2"}}\n' "$id"
+      ;;
+    *'"notifications/initialized"'*)
+      ;;
+  esac
+done
+"#;
+
 /// A server whose tool reports failure of its own, with something to say about it.
 const FAILING_SERVER: &str = r#"#!/bin/sh
 while IFS= read -r line; do
@@ -203,19 +223,52 @@ fn a_confined_server_completes_the_handshake_and_lists_tools() {
 
     server.initialize("bravebot", "0.1.0").expect("handshake");
 
-    let tools = server.list_tools().expect("tools listed");
-    assert_eq!(tools.len(), 1);
-    // The alias this server was launched under, not the word it reported.
-    assert_eq!(tools[0].name(), "fake:echo");
-    assert_eq!(tools[0].on_the_wire(), "echo");
-    assert!(tools[0].input_schema().is_some());
-    assert!(
-        !tools[0]
-            .description()
-            .expect("a description")
-            .label()
-            .is_trusted()
+    let listing = server.list_tools().expect("tools listed");
+    assert_eq!((listing.offered(), listing.refused()), (1, 0));
+    // The alias this server was launched under, not a name it reported.
+    assert_eq!(listing.alias(), "fake");
+    assert!(!listing.list().label().is_trusted());
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::none(),
+        &mut sink,
+    )
+    .expect("policy");
+    let proof = policy.authorise_display_release("test reads the list a person is shown");
+    assert_eq!(
+        listing.list().clone().declassify(&proof),
+        r#"[{"arguments":[],"description":"echoes","name":"echo"}]"#
     );
+
+    let _ = std::fs::remove_file(&script);
+}
+
+/// A list the server sends in pages is offered whole, not as its first page.
+#[test]
+fn a_list_in_pages_is_offered_whole() {
+    let _spawning = one_at_a_time();
+    let Some(sandbox) = sandbox_or_skip() else {
+        return;
+    };
+    let script = fake_server("paged", PAGED_SERVER);
+
+    let mut server = StdioServer::launch(
+        "fake",
+        script.to_str().expect("path"),
+        &[],
+        Variables::new(),
+        sandbox.as_ref(),
+        &sandbox_policy(),
+        Stream::Inherited,
+    )
+    .expect("server launches under confinement");
+    server.initialize("bravebot", "0.1.0").expect("handshake");
+
+    let listing = server.list_tools().expect("tools listed");
+    assert_eq!((listing.offered(), listing.refused()), (2, 0));
 
     let _ = std::fs::remove_file(&script);
 }

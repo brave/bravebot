@@ -10,8 +10,8 @@
 //! would draw over a screen.
 
 use crate::protocol::{
-    OfferedTool, RpcNotification, RpcRequest, RpcResponse, ToolList, ToolResult, call_params,
-    initialize_params,
+    Listing, RpcNotification, RpcRequest, RpcResponse, ToolResult, call_params, initialize_params,
+    paged,
 };
 use crate::{McpError, McpResult, malformed};
 use bravebot_core::event::Sink;
@@ -201,17 +201,11 @@ impl StdioServer {
         self.notify("notifications/initialized")
     }
 
-    /// List the tools this server offers.
-    ///
-    /// Each one is named by the alias this server was launched under rather than by the word the
-    /// server picked for it, and the sentence and the schema the server sent come back labelled:
-    /// they are the same third-party content a result is, and they are the part of a server that
-    /// reaches the planner before anything has been called. SERVERS-8.
-    pub fn list_tools(&mut self) -> McpResult<Vec<OfferedTool>> {
-        let result = self.send_request("tools/list", None)?;
-        let list: ToolList =
-            serde_json::from_value(result).map_err(|e| malformed("tool list", &e))?;
-        Ok(list.offered(&self.name))
+    /// List the tools this server offers, as the one labelled text a person vouches for before any
+    /// of them is offered. SERVERS-8.
+    pub fn list_tools(&mut self) -> McpResult<Listing> {
+        let list = paged(|params| self.send_request("tools/list", params))?;
+        Ok(list.listing(&self.name))
     }
 
     /// Call a tool.

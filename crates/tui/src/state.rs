@@ -1409,6 +1409,8 @@ pub struct Servers {
     pub confined: bool,
     /// Why each requested server that is not among them is absent, said on the opening screen.
     pub notes: Vec<String>,
+    /// The servers themselves, with their lists, for each turn to settle and call.
+    pub session: Option<bravebot_agent::mcp::Session>,
 }
 
 impl Session {

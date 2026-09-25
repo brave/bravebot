@@ -1,8 +1,9 @@
-//! `bravebot mcp`: declaring an MCP server, and approving a declaration (SERVERS-3).
+//! `bravebot mcp`: declaring an MCP server, approving a declaration (SERVERS-3), and forgetting the
+//! standing answers given in a project.
 //!
-//! What this writes is the two files [`bravebot_config::mcp`] reads, and the one question it asks
-//! is whether the person approves a declaration they were just shown. Nothing here starts a server
-//! or offers one to a session.
+//! What this writes is the files [`bravebot_config::mcp`] reads, and the one question it asks is
+//! whether the person approves a declaration they were just shown. Nothing here starts a server or
+//! offers one to a session.
 //!
 //! Typing `add` is not the approval. The line a person typed says what to run; the answer to the
 //! question says they read what it resolved to, and only that answer is recorded. Where nobody can
@@ -11,7 +12,8 @@
 
 use crate::exit::{Ending, fail};
 use bravebot_config::mcp::{
-    self, Approvals, Declaration, Declarations, Entry, Field, Problem, Unreadable,
+    self, Approvals, Declaration, Declarations, Entry, Field, Problem, Projects, Standing,
+    Unreadable,
 };
 use bravebot_i18n::t;
 use std::io::{BufRead, IsTerminal, Write};
@@ -74,6 +76,11 @@ fn run<R: BufRead, W: Write>(
         },
         "approve" => approve(one_alias(command, rest)?, home, person),
         "remove" => remove(one_alias(command, rest)?, home, person),
+        "forget" => match rest {
+            [] => forget(None, home, person),
+            [path] => forget(Some(path), home, person),
+            [_, extra, ..] => Err(unexpected(command, extra)),
+        },
         other => Err(refused_with_the_forms(
             t!(mcp_unknown_command, command = shown(other)).to_string(),
         )),
@@ -92,6 +99,7 @@ fn refused_with_the_forms(message: String) -> Stopped {
         "bravebot mcp list",
         "bravebot mcp approve <alias>",
         "bravebot mcp remove <alias>",
+        "bravebot mcp forget [path]",
     ] {
         said.push_str("\n  ");
         said.push_str(form);
@@ -475,6 +483,74 @@ fn remove<R: BufRead, W: Write>(
     Ok(())
 }
 
+/// Drop the standing answers recorded for a project: answer 2 at a server's question, and each
+/// tool answer 2 at a call's question stopped asking about there.
+///
+/// The project is `path`, or the directory this runs in, as the absolute path it resolves to. A
+/// path that no longer resolves is taken as it was typed, made absolute: a checkout that was
+/// deleted is the one somebody most wants forgotten, and its answers are recorded under a path
+/// nothing exists at any more.
+fn forget<R: BufRead, W: Write>(
+    path: Option<&str>,
+    home: &Home,
+    person: &mut Person<R, W>,
+) -> Result<(), Stopped> {
+    let directory = writable(home)?;
+    let project = project(path)?;
+    let unreadable = |file: PathBuf, why: Unreadable| -> Stopped {
+        (
+            Ending::Failed,
+            t!(
+                mcp_unreadable,
+                path = shown(&file.display().to_string()),
+                reason = bravebot_agent::mcp::unreadable_record(&why)
+            )
+            .to_string(),
+        )
+    };
+    let mut projects = Projects::to_change(directory)
+        .map_err(|why| unreadable(mcp::projects_file(directory), why))?;
+    let mut standing = Standing::to_change(directory)
+        .map_err(|why| unreadable(mcp::tools_file(directory), why))?;
+    let every_server = projects.remove(&project);
+    let tools = standing.in_project(&project);
+    standing.forget(&project);
+
+    if every_server {
+        replace(&mcp::projects_file(directory), &projects.to_text())?;
+    }
+    if !tools.is_empty() {
+        replace(&mcp::tools_file(directory), &standing.to_text())?;
+    }
+
+    let named = shown(&project.display().to_string());
+    if !every_server && tools.is_empty() {
+        say(person, t!(mcp_forgot_nothing, path = &named));
+    }
+    if every_server {
+        say(person, t!(mcp_forgot_servers, path = &named));
+    }
+    for tool in &tools {
+        say(person, t!(mcp_forgot_tool, tool = tool, path = &named));
+    }
+    Ok(())
+}
+
+/// The project `forget` means: the path given, or the directory this runs in.
+fn project(path: Option<&str>) -> Result<PathBuf, Stopped> {
+    let here = std::env::current_dir().map_err(|error| {
+        (
+            Ending::Failed,
+            t!(mcp_no_current_directory, error = error.to_string()).to_string(),
+        )
+    })?;
+    let typed = match path {
+        Some(path) => here.join(path),
+        None => here,
+    };
+    Ok(typed.canonicalize().unwrap_or(typed))
+}
+
 /// What became of the question.
 enum Asked {
     /// This digest was approved before, so nothing was asked.
@@ -700,22 +776,17 @@ fn save(
 /// Write `text` over `path` through a temporary file beside it, so an interrupted write leaves the
 /// file as it was rather than half of it.
 pub(crate) fn replace(path: &Path, text: &str) -> Result<(), Stopped> {
-    let mut temporary = path.as_os_str().to_owned();
-    temporary.push(".tmp");
-    let temporary = PathBuf::from(temporary);
-    bravebot_agent::home::write_file(&temporary, text.as_bytes())
-        .and_then(|()| std::fs::rename(&temporary, path))
-        .map_err(|error| {
-            (
-                Ending::Failed,
-                t!(
-                    mcp_not_written,
-                    path = path.display().to_string(),
-                    error = error.to_string()
-                )
-                .to_string(),
+    bravebot_agent::mcp::replace(path, text).map_err(|error| {
+        (
+            Ending::Failed,
+            t!(
+                mcp_not_written,
+                path = path.display().to_string(),
+                error = error.to_string()
             )
-        })
+            .to_string(),
+        )
+    })
 }
 
 pub(crate) fn problem(found: &Problem) -> String {
@@ -905,5 +976,127 @@ mod tests {
             Declaration::stdio(words(&["npx", "-y", "weather-mcp@1.2.0"]), Vec::new(), None)
                 .unwrap();
         assert!(Approvals::read(&directory).changed("weather", &replaced.digest()));
+    }
+
+    /// Record answer 2 at a server's question for `project`, and answer 2 at a call's question for
+    /// `weather:get_forecast` there and `weather:get_alerts` somewhere else.
+    fn answered_in(directory: &Path, project: &Path, elsewhere: &Path) {
+        let mut projects = Projects::default();
+        assert!(projects.add(project));
+        std::fs::write(mcp::projects_file(directory), projects.to_text()).expect("projects");
+        let mut standing = Standing::default();
+        assert!(standing.add("weather", "get_forecast", project));
+        assert!(standing.add("weather", "get_alerts", elsewhere));
+        std::fs::write(mcp::tools_file(directory), standing.to_text()).expect("tools");
+    }
+
+    #[test]
+    fn forget_drops_a_projects_standing_answers_and_nobody_elses() {
+        let directory = scratch("cli-mcp-forget");
+        let project = directory.join("project");
+        std::fs::create_dir_all(&project).expect("project");
+        let project = project.canonicalize().expect("canonical");
+        let elsewhere = directory.join("elsewhere");
+        answered_in(&directory, &project, &elsewhere);
+
+        let (outcome, screen) = typing(
+            &directory,
+            &["forget", project.to_str().expect("utf-8")],
+            "",
+        );
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(!Projects::read(&directory).contains(&project));
+        let standing = Standing::read(&directory);
+        assert!(!standing.covers("weather", "get_forecast", &project));
+        assert!(
+            standing.covers("weather", "get_alerts", &elsewhere),
+            "another project's answer went with it"
+        );
+        let named = shown(&project.display().to_string());
+        assert!(
+            screen.contains(&t!(mcp_forgot_servers, path = &named)),
+            "{screen}"
+        );
+        assert!(
+            screen.contains(&t!(
+                mcp_forgot_tool,
+                tool = "weather:get_forecast",
+                path = &named
+            )),
+            "{screen}"
+        );
+
+        let (outcome, screen) = typing(
+            &directory,
+            &["forget", project.to_str().expect("utf-8")],
+            "",
+        );
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert_eq!(
+            screen,
+            format!("{}\n", t!(mcp_forgot_nothing, path = &named))
+        );
+    }
+
+    /// A deleted checkout is the one most worth forgetting, and nothing resolves its path.
+    #[test]
+    fn forget_takes_a_path_that_no_longer_resolves_as_typed() {
+        let directory = scratch("cli-mcp-forget-gone");
+        let gone = directory.join("deleted-checkout");
+        answered_in(&directory, &gone, &directory.join("elsewhere"));
+
+        let (outcome, _) = typing(&directory, &["forget", gone.to_str().expect("utf-8")], "");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(!Projects::read(&directory).contains(&gone));
+        assert!(!Standing::read(&directory).covers("weather", "get_forecast", &gone));
+    }
+
+    /// A record that is there and cannot be read is left as it is and said to be, rather than
+    /// written back as the one line fewer it would be once read as empty.
+    #[test]
+    fn forget_leaves_a_record_it_cannot_read_as_it_is() {
+        let directory = scratch("cli-mcp-forget-unreadable");
+        let project = directory.join("checkout");
+        answered_in(&directory, &project, &directory.join("elsewhere"));
+        let too_large = " ".repeat(64 * 1024 + 1);
+        std::fs::write(mcp::tools_file(&directory), &too_large).unwrap();
+        let projects = std::fs::read_to_string(mcp::projects_file(&directory)).unwrap();
+
+        let (outcome, _) = typing(
+            &directory,
+            &["forget", project.to_str().expect("utf-8")],
+            "",
+        );
+        let (ending, said) = outcome.expect_err("an unreadable record was forgotten from");
+        assert_eq!(ending, Ending::Failed);
+        assert!(said.contains(t!(mcp_record_too_large)), "{said}");
+        assert_eq!(
+            std::fs::read_to_string(mcp::tools_file(&directory)).unwrap(),
+            too_large
+        );
+        assert_eq!(
+            std::fs::read_to_string(mcp::projects_file(&directory)).unwrap(),
+            projects,
+            "a record was written though the other could not be read"
+        );
+    }
+
+    #[test]
+    fn forget_takes_one_path_at_most_and_writes_nothing_incognito() {
+        let directory = scratch("cli-mcp-forget-refused");
+        let (outcome, _) = typing(&directory, &["forget", "a", "b"], "");
+        assert_eq!(outcome.map_err(|(ending, _)| ending), Err(Ending::Argument));
+
+        let home = Home {
+            directory: Some(directory.clone()),
+            writable: false,
+        };
+        let mut person = Person {
+            answers: "".as_bytes(),
+            screen: Vec::new(),
+            present: true,
+        };
+        let outcome = run(&words(&["forget"]), &home, &mut person);
+        assert_eq!(outcome.map_err(|(ending, _)| ending), Err(Ending::Failed));
     }
 }

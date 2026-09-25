@@ -320,11 +320,12 @@ permission-rule-unreadable = '{ $rule }' { $problem }
 permission-rule-not-a-line = n'est pas une règle ; une règle est une ligne de texte
 permission-rule-empty = est vide
 permission-rule-unclosed-bracket = n'a pas sa parenthèse fermante
-permission-rule-unknown-family = ne nomme aucune famille d'outils de cet agent ; utilisez Read, Edit ou Bash
+permission-rule-unknown-family = ne nomme aucune famille d'outils de cet agent ; utilisez Read, Edit, Bash, WebFetch ou Mcp
 permission-rule-empty-brackets = a des parenthèses vides ; enlevez-les pour viser toute utilisation
 permission-rule-unanchored = a besoin d'un répertoire personnel ou d'un répertoire de réglages pour indiquer vers quoi elle pointe
 permission-rule-not-a-domain-rule = a besoin d'un domaine ; écrivez WebFetch(domain:example.com)
 permission-rule-no-domain-named = ne nomme aucun domaine après 'domain:'
+permission-rule-not-a-tool-rule = a besoin d'un serveur, ou d'un serveur et de l'un de ses outils ; écrivez Mcp(weather) ou Mcp(weather:get_forecast)
 
 
 ## Importer un abonnement Leo Premium
@@ -464,7 +465,7 @@ mcp-unreadable-servers = servers n'est pas un objet
 mcp-unreadable-key =
     { $key } n'est pas une clé qu'il possède : il contient servers et rien d'autre
 mcp-not-while-incognito =
-    déclarer ou approuver un serveur écrit sur le disque, ce qu'une session incognito ne fera pas
+    déclarer, approuver ou oublier écrit sur le disque, ce qu'une session incognito ne fera pas
 mcp-no-state-directory =
     il n'y a pas de répertoire d'état, aucun serveur MCP n'est donc déclaré : { $variables } ne
     nomme aucun répertoire de profil
@@ -485,6 +486,10 @@ mcp-nobody-to-ask =
     personne ne peut être interrogé au sujet de { $alias } : lancez
     bravebot mcp approve { $alias } dans un terminal
 mcp-removed = { $alias } retiré, avec toute approbation que lui seul portait
+mcp-forgot-servers = { $path } ne démarre plus sans demander chaque serveur qu'il réclame
+mcp-forgot-tool = { $tool } fait de nouveau l'objet d'une question avant chaque appel dans { $path }
+mcp-forgot-nothing = rien n'était enregistré pour { $path }
+mcp-no-current-directory = le répertoire courant n'a pas pu être lu : { $error }
 mcp-none-declared = aucun serveur MCP n'est déclaré dans { $path }
 mcp-list-declared-in = déclarations dans { $path }
 mcp-approved = approuvé
@@ -539,6 +544,54 @@ servers-no-confinement-here =
     { $alias } n'a pas été démarré : cette plateforme n'a pas encore de confinement pour un serveur MCP local
 servers-no-handshake = { $alias } a été démarré et n'a pas terminé sa poignée de main : { $reason }
 servers-too-slow = { $alias } n'a pas terminé sa poignée de main en { $seconds } secondes
+
+## The tools an MCP server offers, read by the person before any of them is offered to the model
+
+mcp-tools-title = proposer ces outils au modèle ?
+mcp-tools-offered =
+    { $count ->
+        [one] { $alias } propose un outil
+       *[other] { $alias } propose { $count } outils
+    }
+mcp-tools-none = { $alias } ne liste aucun outil qu'il puisse proposer
+mcp-tools-changed = ce n'est pas la liste que vous avez acceptée auparavant : les outils proposés ont changé
+mcp-tools-explained =
+    Le modèle lira le nom de chaque outil, ses arguments et ce qu'en dit le serveur, tels qu'ils
+    sont affichés ici. Chaque appel vous sera encore soumis. Répondez non si une description donne
+    des instructions.
+mcp-tools-not-listed =
+    { $count ->
+        [one] un autre outil n'est pas listé : son nom ou ses arguments ne peuvent pas être proposés
+       *[other] { $count } autres outils ne sont pas listés : leurs noms ou leurs arguments ne peuvent pas être proposés
+    }
+mcp-tools-argument-list-of = { $kind } de { $items }
+mcp-tools-argument-required = requis
+mcp-tools-yes = Oui, les proposer
+mcp-tools-no = Non, continuer sans eux
+mcp-tools-declined = { $alias } ne propose aucun outil dans cette session : sa liste n'a pas été approuvée
+mcp-tools-refused = { $alias } ne propose aucun outil dans cette session : { $reason }
+mcp-tools-not-recorded =
+    les outils de { $alias } sont approuvés pour cette session seulement, car la réponse n'a pas pu
+    être enregistrée : { $error }
+
+## One call to a tool of an MCP server
+
+mcp-call-title = appeler cet outil ?
+mcp-call-kind = (MCP)
+mcp-call-no-arguments = aucun argument
+mcp-call-question = Continuer ?
+mcp-call-yes = Oui
+mcp-call-stand = Oui, et ne plus demander pour { $tool } dans ce projet
+mcp-call-cannot-stand = non proposé : rien de ce qui est répondu dans cette session ne peut être enregistré
+mcp-call-no = Non
+mcp-call-expand = (e pour déplier)
+mcp-call-collapse = (e pour replier)
+mcp-call-not-recorded =
+    { $tool } a été appelé, et votre réponse de ne plus demander n'a pas pu être enregistrée : le
+    prochain appel demandera encore ({ $error })
+mcp-call-path-not-one-line = le chemin du projet ne peut pas s'écrire sur une ligne
+mcp-record-too-large = il est plus grand qu'un registre de réponses n'a de raison de l'être, il a donc été laissé tel quel
+mcp-record-not-read = il n'a pas pu être lu comme du texte, il a donc été laissé tel quel
 
 ## Approuver un répertoire, demandé une fois quand une session démarre ailleurs
 
@@ -949,7 +1002,13 @@ status-confinement-nothing-confined = cette session ne confine rien
 status-confinement-servers = cette session confine les serveurs MCP qu'elle a démarrés, et rien d'autre de ce qu'elle exécute
 status-mcp-servers = Serveurs MCP
 status-mcp-servers-none = aucun
-status-mcp-servers-no-tools = démarrés ; aucun de leurs outils n'est encore proposé au modèle
+status-mcp-servers-unread = { $alias } : ses outils vous sont présentés avant que le prochain tour ne planifie
+status-mcp-servers-tools =
+    { $count ->
+        [one] { $alias } : un outil proposé au modèle
+       *[other] { $alias } : { $count } outils proposés au modèle
+    }
+status-mcp-servers-declined = { $alias } : aucun outil proposé, selon votre réponse
 status-loop = Boucle
 status-loop-every = toutes les { $every }
 status-loop-self-paced = cadencée par chaque tour
@@ -1228,6 +1287,12 @@ update-available =
     bravebot { $version } est disponible (celle-ci est { $running }) ; pour la mettre à jour :
     { $command }
 session-started-server = serveur de langage { $language } actif pour cette session ({ $program })
+session-offered-tools =
+    { $count ->
+        [one] l'outil de { $alias } est proposé au modèle
+       *[other] les { $count } outils de { $alias } sont proposés au modèle
+    }
+session-stands-for-tool = { $tool } appelé sans demander dans ce projet
 session-answered-already = déjà répondu : { $question }
 session-something-was-refused =
     un contrôle de la politique a refusé quelque chose pendant ce tour
@@ -1470,6 +1535,7 @@ verb-job-output = Tâche
 verb-spawn-agent = Déléguer
 verb-schedule-next = Programmer
 verb-watch-file = Surveiller
+verb-mcp-call = MCP
 verb-unknown = Outil
 
 

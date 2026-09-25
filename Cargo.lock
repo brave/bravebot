@@ -106,6 +106,7 @@ dependencies = [
  "bravebot-core",
  "bravebot-i18n",
  "bravebot-lsp",
+ "bravebot-mcp",
  "bravebot-net",
  "bravebot-sandbox",
  "bravebot-skus",
@@ -185,6 +186,7 @@ dependencies = [
 name = "bravebot-mcp"
 version = "0.10.0"
 dependencies = [
+ "bravebot-config",
  "bravebot-core",
  "bravebot-net",
  "bravebot-sandbox",

@@ -15,6 +15,9 @@ governs:
   - crates/core/src/permissions.rs
   - crates/core/src/policy.rs
   - crates/agent/src/tools.rs
+  - crates/agent/src/mcp.rs
+  - crates/agent/src/permission_mode.rs
+  - crates/cli/src/plain.rs
   - crates/tui/src/confirm.rs
   - crates/tui/src/status.rs
 documented-by: docs/website/docs/customize/mcp-servers.md
@@ -29,11 +32,11 @@ surface that spec has none of.
 
 ## What exists today
 
-Declaring a server is built, and so is starting one; offering its tools is not. `bravebot mcp`
-writes `~/.bravebot/mcp.json`, asks the question that approves one, records the digest it was asked
-about, and lists what is declared ([SERVERS-1](#SERVERS-1), [SERVERS-3](#SERVERS-3),
-[SERVERS-5](#SERVERS-5), and the `list` half of [SERVERS-14](#SERVERS-14)). `doctor` names a
-settings layer that tries to declare one.
+Declaring a server is built, and so are starting one, offering its tools and calling one.
+`bravebot mcp` writes `~/.bravebot/mcp.json`, asks the question that approves one, records the digest
+it was asked about, lists what is declared, and forgets a project's standing answers
+([SERVERS-1](#SERVERS-1), [SERVERS-3](#SERVERS-3), [SERVERS-5](#SERVERS-5), and the `list` half of
+[SERVERS-14](#SERVERS-14)). `doctor` names a settings layer that tries to declare one.
 
 A session reads the aliases its checkout requests ([SERVERS-2](#SERVERS-2)), resolves each against
 those declarations, and puts the three-answer question to the person where no answer of theirs
@@ -42,25 +45,28 @@ covers it, naming a runner and an unpinned package as it does ([SERVERS-4](#SERV
 names and no others, and an HTTP one is reached through the egress gate
 ([SERVERS-10](#SERVERS-10), [SERVERS-11](#SERVERS-11)). Each server started completes its
 handshake and is held, with a grant naming it, for as long as the session runs
-([SERVERS-9](#SERVERS-9)). The session's display names what it started
-([SERVERS-14](#SERVERS-14)). `bravebot-cli` is the crate that depends on `crates/mcp/`.
+([SERVERS-9](#SERVERS-9)). The session's display names what it started, and how
+each one's tools stand ([SERVERS-14](#SERVERS-14)). `bravebot-cli` starts a server and
+`bravebot-agent` offers its tools and calls them, and both depend on `crates/mcp/`.
 
-That is where it stops. **No tool of a started server is offered to the planner**, because a call
-has to be put to the person first and that question is not built ([SERVERS-7](#SERVERS-7)). A
-started server is therefore a confined process that has said hello and is never asked anything,
-and the display says so rather than implying more. What a server says is read for whether its
-handshake succeeded and for nothing else.
+At the first turn a person asks for, each started server's list of tools is put to them as the
+client drew it, every description whole and behind the margin, and nothing of the list reaches the
+planner until they say yes ([SERVERS-8](#SERVERS-8)). A yes offers each tool under the alias and
+records a digest of the list, so the same list is offered unasked in a later session and a changed
+one is asked about again. Each call is then put to them with three answers, after any permission
+rule naming the server or the tool ([SERVERS-7](#SERVERS-7)). Bypassing answers both questions and
+records neither ([SERVERS-13](#SERVERS-13)).
 
-[SERVERS-8](#SERVERS-8)'s namespace is composed by the client rather than reported by the server,
-and the sentence and the schema a server sends about a tool arrive labelled. What is missing there
-is the other end: no tool surface is assembled from a server's list, so nothing yet draws the
-margin those labels ask for. [SERVERS-11](#SERVERS-11)'s question about a hop is unbuilt for the
-same reason: no call is made under an alias for it to ask about.
+What is not built: [SERVERS-11](#SERVERS-11)'s question about a hop, which is refused in its place;
+[SERVERS-12](#SERVERS-12); the columns of `list` and `doctor`'s half of [SERVERS-14](#SERVERS-14);
+and a server in the desktop application, which starts none.
 
 Issue #83 is where the unwired client was written down, and it names the four things wiring needs
 decided first: where a server is declared, what a name and an argv is trusted for, how the untrusted
 label [mcp.md](mcp.md) puts on a result reaches a slot, and whether servers are confined. Every
-clause below answers one of them.
+clause below answers one of them. Whether a server's description reaches the planner at all was
+settled there too: the person vouches for the tool list after the handshake, and its digest is
+recorded beside the server's approval.
 
 Where a clause is `verified-by: none` it is a requirement on work nobody has started, not a
 description of this program, and that marking is what keeps a reader from taking the present tense
@@ -85,7 +91,7 @@ is not, and [the divergence](#the-one-place-this-diverges-from-claude-code) says
 | Environment reaching the server | the whole process environment, plus `env` | the named variables and nothing else |
 | Unpinned command (`npx -y pkg@latest`) | run as written, silently | named at the prompt as code that differs per run |
 | Tool names | as the server reports them | namespaced by the local alias; a server's own words are never an identifier |
-| Tool descriptions | into the planner's context as trusted text | untrusted content, and marked |
+| Tool descriptions | into the planner's context as trusted text | untrusted until a person vouches for the list they are on, and marked |
 | Confinement of a stdio server | none | required already by [MCP-3](mcp.md#MCP-3) |
 | A remote server | fetched directly | an egress destination, and the host is approved |
 | A mode that skips the prompts | `--dangerously-skip-permissions` | [SERVERS-13](#SERVERS-13), and it skips prompts only |
@@ -160,7 +166,12 @@ for a line a planner wrote, and a server is a program a person named. `--env <na
 variable the server receives ([SERVERS-10](#SERVERS-10)) and may be given more than once; `--dir
 <path>` is the directory it runs in, written into the file as the absolute path it resolves to.
 
-`forget` is unbuilt, and so are the columns of `list` that report a capability and a request
+`forget` takes one path at most, and the current directory without one. The path is read with its
+links followed, as answer 2 recorded it, and one that no longer resolves, a deleted checkout's, is
+taken as typed and made absolute. It drops that project from `mcp-projects` and every standing
+answer about a tool in it from `mcp-tools`, says a line for each answer it dropped or that nothing
+was recorded, and leaves every other project's as it was. An incognito session writes nothing, so
+`forget` is refused there. The columns of `list` that report a capability and a request are unbuilt
 ([SERVERS-14](#SERVERS-14)).
 
 ### Coming from Claude Code
@@ -180,6 +191,7 @@ variable the server receives ([SERVERS-10](#SERVERS-10)) and may be given more t
 |---|---|---|---|
 | A declaration: alias, transport, argv or url, the variable names it needs, its directory | `~/.bravebot/mcp.json` | the person's own directory | until they change it |
 | An approval of a server, one digest and the alias it was given about per line, and a `changed` line per alias whose approved declaration changed since | `~/.bravebot/mcp-approved` | the person's own directory | until the declaration changes |
+| The list of tools a person vouched for, a `tools` line holding the declaration's digest and the list's | `~/.bravebot/mcp-approved` | the person's own directory | until another list is vouched for under that declaration, or no declaration resolves to it |
 | "use all future servers in this project", one project path per line | `~/.bravebot/mcp-projects` | the person's own directory | until `mcp forget` |
 | "stop asking for this tool here", one alias, tool and project path per line | `~/.bravebot/mcp-tools` | the person's own directory | until `mcp forget` |
 | A request for an alias, `"mcp": { "request": ["weather"] }` | `.bravebot/settings.json` beside the work | that checkout | that checkout |
@@ -306,8 +318,8 @@ path, so a later server in this checkout is reachable without this question. Ans
 nothing and the session continues with the server absent, which is not an error and is not retried.
 
 Answer 2 pre-answers this question and no other. It does not grant a capability, it does not
-pre-answer [SERVERS-7](#SERVERS-7)'s question about a call, and it does not reach a project other
-than the one it was given in.
+pre-answer [SERVERS-8](#SERVERS-8)'s question about a list or [SERVERS-7](#SERVERS-7)'s about a
+call, and it does not reach a project other than the one it was given in.
 
 Where nobody can be asked, the server is absent and the reason is said, which is
 [LAYER-1](layering.md#LAYER-1)'s constraint on the CLI crate: where nobody can be asked, effects are
@@ -361,6 +373,8 @@ that would not take the answer does not unsay it, and a line says which record w
 `verified-by: bravebot_cli::servers::an_approved_digest_starts_unasked_and_a_recorded_project_answers_only_an_unchanged_one`
 `verified-by: bravebot_cli::servers::an_incognito_yes_is_for_this_session_and_writes_nothing`
 `verified-by: bravebot_config::mcp::a_project_reads_back_as_the_path_it_was_recorded_as`
+`verified-by: bravebot_config::mcp::forgetting_a_project_drops_it_and_no_other`
+`verified-by: bravebot_cli::mcp::forget_drops_a_projects_standing_answers_and_nobody_elses`
 `verified-by: bravebot_agent::turn::a_turn_holds_a_grant_per_server_it_was_handed_and_its_delegate_holds_none`
 
 <a id="SERVERS-5"></a>
@@ -454,21 +468,21 @@ calls one, is drawn as a plain program.
 <a id="SERVERS-7"></a>
 ### SERVERS-7: every call to a server's tool is put to the person, with three answers
 
-A call is shown as the alias, the tool beneath it, and the arguments as the planner wrote them. The
-server's own description of the tool is shown as content, marked, collapsed to a line with a way to
-expand it, per [SERVERS-8](#SERVERS-8).
+A call is shown as `alias:tool`, then the arguments as the planner wrote them. The server's own
+description of the tool is shown as content, marked, cut to two rows with a way to expand it, per
+[SERVERS-8](#SERVERS-8).
 
 ```
-  weather:get_current_conditions        (MCP)
+  weather:get_current_conditions    (MCP)
 
-  city_name: "Toronto, Ontario, Canada"
-  units:     "metric"
+  city_name: "Toronto, Canada"
 
-│ Get the most recent weather observation for a location. Use this for
-│ current weather or when asking about "today's weather" ...        (expand)
+┃ Get the most recent weather observation for a location. Use this for current weather
+┃ or when asking about "today's weather", "right now", or recent conditions without a
+  (e to expand)
 
   Proceed?
-❯ 1. Yes
+  1. Yes
   2. Yes, and stop asking for weather:get_current_conditions in this project
   3. No
 ```
@@ -514,9 +528,62 @@ that it may exist and be offered. A call is an effect: it leaves this machine, o
 and it does so with arguments the planner chose from content it read. [MCP-2](mcp.md#MCP-2) already
 refuses a call without the capability; this is the question the capability does not answer.
 
-**Unbuilt, so nothing pins this.** No tool from a server reaches the planner, so no call is put to anybody.
+**How it is built.** The question is asked when the planner asks for a call, and in this order. A
+`deny` rule naming the server or the tool refuses the call before anybody is asked, and the planner
+is told not to retry it. Otherwise the call asks, unless an `allow` rule names it or answer 2 was
+given about it in this project. An `ask` rule asks whatever answer 2 said. The rules are
+[PERM-1](permissions.md#PERM-1)'s `Mcp` family. A call is refused as well, and sends nothing, where
+the context its arguments were written in has met untrusted content.
 
-`verified-by: none`
+The arguments are drawn as the planner wrote them, one per row as a JSON value. The description is
+the one on the list the person vouched for, behind the margin and cut to two rows until `e`
+expands it. `1` or `y` is answer 1. `2` is answer 2. `3`, `n` or Esc is answer 3. Enter answers
+nothing, so a key pressed for the last question does not answer this one. Answer 3 sends nothing
+and tells the planner the person declined.
+
+Answer 2 is written to `mcp-tools` as the alias, the tool and the workspace root with its links
+followed. Where the session has no state directory, or writes nothing as an incognito one does, it
+is drawn as not offered and its key does nothing. A record that will not take it still makes the
+call, and a line says the next call asks again. A record that is there and cannot be read, this one
+or `mcp-approved`, is left as it is rather than written over with the one answer.
+
+The plain interface asks the question as a line answered yes or no, and its yes is answer 1: a line
+has room for one answer, and the one that stops asking outlives the session. A one-shot run has
+nobody to ask, so a call there that would ask is refused. An `allow` rule decides nothing there, as
+it decides nothing for any tool in a one-shot run, and answer 2 still does: it was given at this
+question and names one tool in one project, where an `allow` rule is a line of a file that can name
+every server. A delegate is offered no server's tool.
+
+The private-data arm is written and not reached. The policy asks about a call whose arguments are
+labelled private whatever a rule or a standing answer says. The planner's arguments are labelled
+public today, as every tool call's are, so no call is labelled private.
+
+`verified-by: bravebot_agent::mcp::a_vouched_list_offers_its_tool_and_a_call_answers_quarantined`
+`verified-by: bravebot_agent::mcp::a_refused_call_reaches_no_server`
+`verified-by: bravebot_agent::mcp::answer_two_stops_asking_for_the_one_tool_in_the_one_project`
+`verified-by: bravebot_agent::mcp::answer_two_follows_the_session_to_another_project`
+`verified-by: bravebot_agent::mcp::a_rule_decides_a_call_before_the_prompt`
+`verified-by: bravebot_agent::mcp::a_session_that_writes_nothing_records_neither_answer`
+`verified-by: bravebot_agent::mcp::a_record_that_cannot_be_read_is_not_written_over`
+`verified-by: bravebot_core::policy::a_deny_rule_refuses_an_mcp_call_before_anybody_is_asked`
+`verified-by: bravebot_core::policy::an_mcp_call_asks_unless_a_rule_or_a_standing_answer_says_otherwise`
+`verified-by: bravebot_core::policy::private_arguments_ask_even_for_a_tool_a_rule_allows`
+`verified-by: bravebot_core::policy::an_mcp_call_needs_the_endorsement_for_its_own_tool`
+`verified-by: bravebot_core::policy::arguments_from_a_fallen_context_do_not_reach_a_server`
+`verified-by: bravebot_core::permissions::an_mcp_rule_covers_the_server_or_the_tool_it_names`
+`verified-by: bravebot_config::mcp::a_standing_answer_reaches_one_tool_of_one_server_in_one_project`
+`verified-by: bravebot_config::mcp::a_standing_answer_reads_back_with_a_space_in_its_project`
+`verified-by: bravebot_config::mcp::forgetting_a_project_drops_its_standing_answers_and_no_others`
+`verified-by: bravebot_config::mcp::a_record_that_cannot_be_read_is_not_read_to_be_written_over`
+`verified-by: bravebot_cli::mcp::forget_drops_a_projects_standing_answers_and_nobody_elses`
+`verified-by: bravebot_cli::mcp::forget_takes_a_path_that_no_longer_resolves_as_typed`
+`verified-by: bravebot_cli::mcp::forget_leaves_a_record_it_cannot_read_as_it_is`
+`verified-by: bravebot_cli::mcp::forget_takes_one_path_at_most_and_writes_nothing_incognito`
+`verified-by: bravebot_tui::confirm::a_call_prompt_draws_the_tool_its_arguments_and_three_answers`
+`verified-by: bravebot_tui::confirm::a_call_prompt_cuts_a_long_description_until_it_is_expanded`
+`verified-by: bravebot_tui::confirm::a_call_prompt_answers_by_its_rows_and_never_by_enter`
+`verified-by: bravebot_tui::confirm::a_call_answer_says_what_the_turn_is_told`
+`verified-by: bravebot_tui::remote_confirm::a_call_answer_travels_back_with_its_stand`
 
 <a id="SERVERS-8"></a>
 ### SERVERS-8: a server's own words are never an identifier
@@ -539,19 +606,75 @@ by anyone who can publish a package. Letting a server pick its own namespace is 
 earlier: a server that calls its tool `write_file` is a server asking to be mistaken for a
 primitive, and the tool surface the planner sees must be decided by names people chose.
 
-**Half built.** Listing a server's tools returns what this process may say about each one: the name
-is the alias the server was reached by with the server's word beneath it, composed by the client, and
-the server's word is kept only for the request that goes back to that server. The description and
-the input schema come back labelled, on the same footing as a result. What is not built is the far
-end: no tool surface is assembled from a server's list, so nothing marks a description as content
-inside a margin, and no planner is offered a name from here.
+**How it is built.** Listing a server's tools returns one list, labelled untrusted, that the client
+drew from the server's reply and keeps nothing else of. Per tool it holds the word, the description,
+and each argument as its name, its type, the values it may take where it names at most sixteen, and
+whether it is required. An argument's own description is dropped: nobody reads it at the list, and
+it would still reach the planner. In a description, each control character but a line break, and
+each character that reorders or hides text, is made a space, and it is cut at 1024 characters.
 
-`verified-by: bravebot_mcp::protocol::a_tool_is_named_by_the_alias_and_not_by_the_word_the_server_picked`
-`verified-by: bravebot_mcp::protocol::the_same_word_from_two_servers_is_two_tools`
-`verified-by: bravebot_mcp::protocol::the_servers_word_is_kept_for_the_request_and_is_not_the_name`
-`verified-by: bravebot_mcp::protocol::a_tools_description_and_schema_are_content`
+Some tools are refused rather than offered, and counted without being named: a word that is not a
+function name, one whose name on the wire would be longer than 64 characters, a word listed twice
+(every copy), and a tool whose arguments are not names. A list longer than 128 tools keeps the first
+128. A list sent in pages is read a page at a time, each asked for with the cursor the page before
+it named, and no more than 8 pages are read, so a server with more lists what those held. The list
+is sorted by word, so within the pages read the order a server sent it in changes nothing. A server that
+answers `tools/list` with JSON-RPC's method-not-found lists no tool, since one serving only
+resources or prompts need not have it, and any other failure of the method fails the handshake.
+
+That list is put to the person at the start of the first turn they ask for, whole. It shows each
+tool's name as `alias:tool`, its arguments, and every row of its description behind the margin with
+none of it cut, since a yes puts exactly this text in front of the planner. A check reads it first,
+as it reads anything else about to be promoted ([CHECK-10](vetting.md#CHECK-10)), and its verdict is
+drawn above the list.
+
+A yes is the person vouching for the list, and it is the one road by which the list is promoted
+([LABEL-8](labels.md#LABEL-8)). A no offers none of its tools for the rest of the session and is not
+asked again. A turn stopped at the question has not answered it, so the next turn asks again. The list's digest is recorded as a `tools` line in `mcp-approved`, beside the digest of
+the declaration it was listed under. A later session whose server sends the same list offers it with
+nobody asked. One whose list changed says so, and asks again. A project path that
+[SERVERS-4](#SERVERS-4)'s answer 2 recorded answers for a server and not for its list.
+
+Each tool is offered as a function named `mcp__{alias}__{tool}`, which is what a backend's function
+names allow. Its description is a sentence this process writes, naming the alias and saying every
+call is put to the person, followed by the server's words with the margin before each line. No
+built-in's name starts with `mcp__`, so none can be shadowed. Two servers whose alias and word
+compose one name are both left without a tool of that name, since which of them a call reached would
+be the order they were listed in. A delegate is offered none of them.
+
+`verified-by: bravebot_mcp::protocol::a_tool_list_is_content`
+`verified-by: bravebot_mcp::protocol::the_name_on_the_wire_is_the_alias_and_the_word`
+`verified-by: bravebot_mcp::protocol::a_word_that_is_not_a_function_name_is_refused_and_counted`
+`verified-by: bravebot_mcp::protocol::a_word_too_long_for_the_wire_is_refused`
+`verified-by: bravebot_mcp::protocol::a_word_listed_twice_is_refused_both_times`
+`verified-by: bravebot_mcp::protocol::a_tool_whose_arguments_are_not_names_is_refused`
+`verified-by: bravebot_mcp::protocol::a_description_is_blanked_and_cut`
+`verified-by: bravebot_mcp::protocol::a_character_nobody_sees_is_blanked`
+`verified-by: bravebot_mcp::protocol::an_argument_is_its_name_type_and_whether_it_is_required`
+`verified-by: bravebot_mcp::protocol::the_list_is_the_same_whatever_order_the_server_sent`
+`verified-by: bravebot_mcp::protocol::a_long_list_is_capped_and_the_rest_counted`
+`verified-by: bravebot_mcp::protocol::a_server_without_the_method_lists_no_tool`
+`verified-by: bravebot_mcp::protocol::a_list_in_pages_is_read_to_its_last_page_and_no_further_than_the_bound`
+`verified-by: bravebot_mcp::stdio::a_list_in_pages_is_offered_whole`
+`verified-by: bravebot_mcp::protocol::printing_a_listing_does_not_print_what_the_server_said`
 `verified-by: bravebot_mcp::stdio::a_confined_server_completes_the_handshake_and_lists_tools`
 `verified-by: bravebot_mcp::http::a_handshake_and_tool_list_round_trip`
+`verified-by: bravebot_config::mcp::a_tool_word_is_what_a_function_name_may_be`
+`verified-by: bravebot_config::mcp::a_vouched_list_reads_back_beside_the_approval_it_was_listed_by`
+`verified-by: bravebot_config::mcp::a_vouched_list_lasts_as_long_as_its_declaration_resolves`
+`verified-by: bravebot_config::mcp::a_line_that_is_not_a_vouch_is_passed_over`
+`verified-by: bravebot_core::policy::a_tool_list_reaches_the_planner_only_through_an_endorsement`
+`verified-by: bravebot_core::policy::a_recorded_tool_list_is_promoted_only_where_it_is_the_one_vouched_for`
+`verified-by: bravebot_core::policy::a_check_before_a_tool_list_reads_the_list_it_is_about`
+`verified-by: bravebot_agent::mcp::a_vouched_list_offers_its_tool_and_a_call_answers_quarantined`
+`verified-by: bravebot_agent::mcp::a_servers_tool_named_like_a_built_in_one_shadows_nothing`
+`verified-by: bravebot_agent::mcp::two_servers_composing_one_name_offer_neither_under_it`
+`verified-by: bravebot_agent::mcp::a_declined_list_offers_nothing_and_is_not_asked_again`
+`verified-by: bravebot_agent::mcp::a_turn_stopped_at_the_list_leaves_it_to_be_asked_again`
+`verified-by: bravebot_agent::mcp::a_list_vouched_for_before_asks_nothing_and_a_changed_one_asks_again`
+`verified-by: bravebot_tui::confirm::a_tool_list_draws_every_description_row_behind_the_margin`
+`verified-by: bravebot_tui::confirm::a_tool_list_answers_by_its_rows`
+`verified-by: bravebot_tui::remote_confirm::a_yes_to_a_list_and_a_yes_to_a_call_do_not_stand_in_for_each_other`
 
 <a id="SERVERS-9"></a>
 ### SERVERS-9: the capability is granted per server, not per protocol
@@ -571,9 +694,9 @@ The capability names the alias, both transports gate on the one naming the serve
 them, and a grant can be withdrawn while the run is going. A session holds one grant for each
 server it started and no other, and a delegate it hands work to holds none of them: a delegate's
 set is what its parent held, less every server, since what a delegate may call is a question no
-one was asked about. The grant has nothing to reach yet, because no tool of a server is offered
-([SERVERS-7](#SERVERS-7)); a remote server's handshake runs under a policy holding the grant naming
-that server and no other.
+one was asked about. A call to a server's tool is refused where the turn holds no grant naming that
+server, and a remote server's handshake runs under a policy holding the grant naming that server and
+no other.
 
 `verified-by: bravebot_core::capability::a_grant_for_one_server_is_not_a_grant_for_another`
 `verified-by: bravebot_core::capability::withdrawing_one_grant_leaves_the_others`
@@ -696,13 +819,12 @@ works around, and a boundary everybody works around is off.
 
 **The question is unbuilt.** A session reaches an approved remote server as it opens, and its
 handshake passes the egress gate under a policy holding the fetch capability and the grant naming
-that server, and no other. No call is made under the alias after that, since no tool is offered
-([SERVERS-7](#SERVERS-7)), so there is no call a hop could redirect and no approval to rewrite. The
-prompt is unbuilt with it: a hop is detected at the egress gate, which allows or refuses and cannot
-ask, so an approval has to be a grant minted before the call and there is no prompt to mint one.
-Until then, a hop that leaves the declared destination, the handshake's included, is refused and
-nothing is sent, which is this clause with its question unasked rather than a different rule. What
-is built reads a destination as a host and a port together, as above.
+that server, and no other. Every call after it passes the same gate. A hop is detected there, and
+the gate allows or refuses and cannot ask, so an approval has to be a grant minted before the call,
+and there is no prompt to mint one. Until there is, a hop that leaves the declared destination,
+whether a call's or the handshake's, is refused and nothing is sent. That is this clause with its
+question unasked rather than a different rule. What is built reads a destination as a host and a
+port together, as above.
 
 `verified-by: bravebot_mcp::http::mcp_traffic_passes_through_the_network_gate`
 `verified-by: bravebot_mcp::http::a_redirect_to_another_host_is_refused`
@@ -728,11 +850,12 @@ layer that can pin anything is a layer somebody uses to pin a preference.
 `verified-by: none`
 
 <a id="SERVERS-13"></a>
-### SERVERS-13: bypassing answers these two prompts and reaches nothing else here
+### SERVERS-13: bypassing answers this spec's three prompts and reaches nothing else here
 
 [MODE-4](permission-modes.md#MODE-4) already decides the first half: `--dangerously-skip-permissions`
-answers every permission question, and [SERVERS-4](#SERVERS-4) and [SERVERS-7](#SERVERS-7) are
-permission questions, so both are answered yes without being drawn. This clause does not grant that
+answers every permission question. [SERVERS-4](#SERVERS-4)'s question about a server,
+[SERVERS-8](#SERVERS-8)'s about its list and [SERVERS-7](#SERVERS-7)'s about a call are permission
+questions, so each is answered yes without being drawn. This clause does not grant that
 and could not withhold it. It says what the mode does **not** reach, which is everything else in this
 spec, and it is [MODE-7](permission-modes.md#MODE-7)'s rule applied here: no mode answers a question
 that is not a permission, and most of what protects a person from a server is not a question at all.
@@ -747,18 +870,18 @@ Each of the following holds in that mode exactly as it holds outside it:
 |---|---|
 | [MCP-3](mcp.md#MCP-3), a stdio server is not launched without confinement | A server that cannot be confined is not started, in this mode too. Confinement is not a question anybody was being asked. |
 | [MCP-9](mcp.md#MCP-9) and [SERVERS-10](#SERVERS-10), the environment is the named variables and nothing else | The prompt showed the names. Skipping the showing does not widen the set. |
-| [MCP-1](mcp.md#MCP-1) and [SERVERS-8](#SERVERS-8), a result, a description and a schema are untrusted | A label is not an approval. Nothing a person could have said would have made a server's output trusted, so there is nothing here for a skipped question to have granted. |
+| [MCP-1](mcp.md#MCP-1), a result is untrusted | A label is not an approval. Nothing a person could have said at a call would have made what it returned trusted, so there is nothing here for a skipped question to have granted. |
 | [SERVERS-1](#SERVERS-1), only the person's own directory declares a server | An undeclared server does not become declared by nobody being asked about it. A checkout's request still resolves against declarations or resolves to nothing. |
 | [SERVERS-9](#SERVERS-9), the capability | A capability is configuration, not a prompt. A server with no grant is called by nobody in this mode either. |
 | [SERVERS-12](#SERVERS-12), a managed denial | An administrator's removal is not a question being put to the person running the program. |
-| [SERVERS-11](#SERVERS-11), the egress gate and the host in the digest | The gate decides on labels. This mode answers two named questions and not every question, and a hop leaving the declared destination is neither of them, so it is refused here rather than followed. |
+| [SERVERS-11](#SERVERS-11), the egress gate and the host in the digest | The gate decides on labels. This mode answers three named questions and not every question, and a hop leaving the declared destination is neither of them, so it is refused here rather than followed. |
 
-**Nothing is recorded.** A skipped question leaves no approval, no project path and no tool entry
-behind, so a later run outside the mode asks every question as though this one had not happened. That
+**Nothing is recorded.** A skipped question leaves no approval, no vouched list, no project path and
+no tool entry behind, so a later run outside the mode asks every question as though this one had not happened. That
 is not a new rule: [MODE-4](permission-modes.md#MODE-4) already says a run approved this way vouches
 for no program, and that a record claiming somebody approved programs they were never shown would be
-a standing permission nobody granted. A digest in `mcp-approved` is exactly such a record, and an
-entry in `mcp-projects` is a broader one, since it pre-answers a question about servers that do not
+a standing permission nobody granted. A digest in `mcp-approved` is exactly such a record, whether a
+server's or a list's, and an entry in `mcp-projects` is a broader one, since it pre-answers a question about servers that do not
 exist yet.
 
 The mode is named in the session's own display for as long as it is in force, and the servers
@@ -777,14 +900,28 @@ That is the mode working as asked, and it is why the declaration file is the one
 cannot write: the mode removes the person from the loop, so the only remaining protection is that
 nothing inside the workspace could have put a server there.
 
-**Half built.** [SERVERS-4](#SERVERS-4)'s question is the one there is to skip, and in this mode a
-requested server nothing approved is started without it being drawn, and nothing is written to
-`mcp-approved` or `mcp-projects`. Confinement, the named variables and the egress gate are the same
-code in either mode. [SERVERS-7](#SERVERS-7)'s question is unbuilt, and so is its skipping. The
-display names the mode and the servers the session started; whether each started unasked because of
-the mode is not said beside it.
+**A second known cost.** [SERVERS-8](#SERVERS-8)'s question is the one that puts a server's words in
+front of the planner, so in this mode every tool's description and argument schema reaches the
+planner endorsed by the mode rather than read by anybody. It is vouching's cost in
+[MODE-4](permission-modes.md#MODE-4), reached through a server's list instead of a file. A list
+offered this way stays offered after the session cycles out of the mode, because its words are
+already in the context the planner writes from and taking the tools back would not take them out.
+Each call from then on is asked.
+
+**How it is built.** A requested server nothing approved is started without
+[SERVERS-4](#SERVERS-4)'s question being drawn, and nothing is written to `mcp-approved` or
+`mcp-projects`. A server's list is offered without [SERVERS-8](#SERVERS-8)'s question being drawn or
+a check being made, since nobody would read the check's verdict, and no `tools` line is written. A
+call is made without [SERVERS-7](#SERVERS-7)'s question being drawn, as answer 1 and never answer 2,
+so nothing is written to `mcp-tools`, and out of the mode the next call is asked whatever was
+offered in it. A `deny` rule still refuses a call
+([MODE-6](permission-modes.md#MODE-6)). Confinement, the named variables and the egress gate are the
+same code in either mode. The display names the mode and the servers the session started. It does
+not say beside each one whether it started unasked because of the mode.
 
 `verified-by: bravebot_cli::servers::skipping_permissions_starts_the_server_unasked_and_records_nothing`
+`verified-by: bravebot_agent::mcp::bypassing_answers_both_prompts_and_records_nothing`
+`verified-by: bravebot_agent::mcp::a_list_offered_in_bypass_stays_offered_and_each_later_call_asks`
 
 <a id="SERVERS-14"></a>
 ### SERVERS-14: what is reachable is visible without running anything
@@ -809,8 +946,9 @@ requesting checkout and the standing answers are unbuilt with the things they re
 
 The session's display is built in the full-screen interface, whose `/status` has a line naming the
 MCP servers the session started,
-by alias, saying that no tool of theirs is offered to the model yet, and saying `none` where it
-started none. A requested server that was not started is not on it: that is said once, as the
+by alias, each saying how its tools stand: put to the person before the next turn plans, how many
+are offered to the model, or none as the person answered. It says `none` where the session started
+no server. A requested server that was not started is not on it: that is said once, as the
 session opens, by the line giving the reason. Where a stdio server was started, the confinement
 line says the level is in force over those servers and over nothing else the session runs, which is
 the report [SANDBOX-10](sandboxing.md#SANDBOX-10) would otherwise make untrue.
@@ -818,11 +956,12 @@ the report [SANDBOX-10](sandboxing.md#SANDBOX-10) would otherwise make untrue.
 `verified-by: bravebot_cli::running::an_added_server_nobody_was_asked_about_is_declared_and_listed_unapproved`
 `verified-by: bravebot_cli::running::a_declaration_that_cannot_be_used_is_listed_with_its_problem`
 `verified-by: bravebot_tui::status::the_servers_a_session_started_are_named_and_what_is_confined_follows_them`
+`verified-by: bravebot_tui::status::each_servers_note_says_how_its_tools_stand`
 
 ## Testing this with the weather server
 
 The acceptance walk, end to end, with the server this spec was written against. Every prompt below
-is one of the two clauses above; every refusal is a clause refusing.
+is one of the clauses above; every refusal is a clause refusing.
 
 **1. Declare it.** A person types:
 
@@ -848,10 +987,13 @@ On the next session the alias resolves against the declaration and is reachable.
 to an alias nobody declared and the session reports it and installs nothing
 ([SERVERS-2](#SERVERS-2)).
 
-**4. Answer the call question.** The planner asks for Toronto's conditions.
+**4. Answer the list question, then the call question.** At the first turn,
+[SERVERS-8](#SERVERS-8)'s prompt shows every tool the server lists as `weather:<tool>`, with its
+arguments and every row of its description behind a margin. `1` offers them and records the list,
+so the next session asks nothing about it. The planner asks for Toronto's conditions.
 [SERVERS-7](#SERVERS-7)'s prompt shows `weather:get_current_conditions`, the arguments, and the
-server's own description behind a margin ([SERVERS-8](#SERVERS-8)). Answer 1 runs it once; answer 2
-records the tool for this project.
+server's own description behind a margin, cut to two rows until `e` expands it. Answer 1 runs it
+once. Answer 2 records the tool for this project, and `bravebot mcp forget` drops that record.
 
 **5. What comes back.** Three calls, run against this server on 2026-09-20 at 19:45 local, as the
 evidence that the wiring works:
@@ -861,6 +1003,11 @@ evidence that the wiring works:
 | `weather:get_current_conditions` | Toronto, 43.6535 -79.3839. Overcast, 17 C, dewpoint 10 C, humidity 61%, wind 9 km/h from 339 degrees gusting 26, pressure 1018 hPa, cloud 100%. Source says NOAA does not cover this location and Open-Meteo model data is shown instead. |
 | `weather:get_forecast`, 7 days | 20 Sep high 22 C, then 14, 17, 17, 17, 19, 24 C through 26 Sep. Precipitation chance 0 to 13% all week. Clear from the 25th. |
 | `weather:get_alerts` | No active alerts. Source is Environment and Climate Change Canada, MSC GeoMet. |
+
+The same call made by this program, from the planner through step 4's prompts, on 2026-09-25 at
+16:15 Toronto time, came back as clear sky, 67 F, a high of 72 F and a low of 46 F, dewpoint 49 F,
+with the same note that Open-Meteo data stands in for NOAA. The person sees it behind the margin.
+The planner is handed a reference to it and the word that it is quarantined, and nothing of it.
 
 Every one of those strings is untrusted content under [MCP-1](mcp.md#MCP-1): the numbers above are
 what a person reading a marked result sees, not values this program has vouched for.
@@ -873,7 +1020,11 @@ what a person reading a marked result sees, not values this program has vouched 
 | Put the argv in `.bravebot/settings.local.json` | The same. Being uncommitted changes nothing. [SERVERS-1](#SERVERS-1) |
 | Change `@latest` to a pinned version in the declaration | The server is unapproved and asks again, naming the change. [SERVERS-5](#SERVERS-5) |
 | Run a one-shot with an unapproved server | The server is absent and the reason is printed. Nothing is approved. [SERVERS-4](#SERVERS-4) |
-| Have the server report its tool as `write_file` | It is offered as `weather:write_file` and shadows nothing. [SERVERS-8](#SERVERS-8) |
+| Have the server report its tool as `write_file` | It is offered as `weather:write_file`, and a call to `write_file` is the built-in's. [SERVERS-8](#SERVERS-8) |
+| Answer 2 at the list question | None of its tools is offered in this session, a call to one is told there is no such tool, nothing is recorded, and the next session asks again. [SERVERS-8](#SERVERS-8) |
+| Run a one-shot with a list nobody vouched for | None of its tools is offered, and the reason is printed. [SERVERS-8](#SERVERS-8) |
+| Run a one-shot where a call would ask | The call is refused and the planner is told the person did not approve it. Nothing is recorded. [SERVERS-7](#SERVERS-7) |
+| Write `"permissions": { "deny": ["Mcp(weather:get_alerts)"] }` in the home settings | A call to it is refused before anybody is asked, and the others still ask. [SERVERS-7](#SERVERS-7) |
 | Declare a stdio server on a machine where confinement is unavailable | Not launched. [MCP-3](mcp.md#MCP-3), in every mode. [SERVERS-13](#SERVERS-13) |
 | Run in the skip-prompts mode, then run again without it | Every question is asked again; the first run recorded nothing. [SERVERS-13](#SERVERS-13) |
 | Give the server a variable it needs without naming it in the declaration | It does not receive it. [SERVERS-10](#SERVERS-10) |
@@ -887,12 +1038,14 @@ This spec cannot land without these. Each is named by what the clause says rathe
 | [mcp.md](mcp.md) | front matter, `documented-by: none (internal: no settings key wires up a server yet, so there is nothing a reader can configure)` | Replaced. There is now something a reader configures, so the spec names the reference page and stops describing itself as internal. **Applied** with the declaration. |
 | [mcp.md](mcp.md) | [MCP-9](mcp.md#MCP-9)'s known cost, that a server needing a variable does not work, "left to whatever names variables for a server when servers are reachable from something (issue #83)" | Discharged by [SERVERS-10](#SERVERS-10). The cost paragraph becomes a pointer rather than an open cost. **Applied** with the launch that hands the named variables over, and the clause now also says the launch hands over those and no others. |
 | [mcp.md](mcp.md) | [MCP-1](mcp.md#MCP-1), what a server returns is untrusted | Extended, not amended. A description and an input schema join a result as content from outside, which is [SERVERS-8](#SERVERS-8). The clause's reasoning already covers them; the wording says "a tool result". |
-| [layering.md](layering.md) | [LAYER-1](layering.md#LAYER-1)'s table, and `bravebot-mcp` being a crate nothing depends on | Amended. Whichever of `bravebot-agent` and `bravebot-cli` reaches the client gains the dependency, and the row's constraint gains the declaration surface. `a_rows_dependency_list_is_what_the_manifest_asks_for` fails until the table is updated, which is the check working. **Applied**: the `bravebot-cli` and `bravebot-config` constraints name the declaration surface, and `bravebot-cli` is the crate that reaches the client, so its row lists `mcp` and says it starts a server only on a person's answer, a recorded one, or the mode that answers for them. |
+| [layering.md](layering.md) | [LAYER-1](layering.md#LAYER-1)'s table, and `bravebot-mcp` being a crate nothing depends on | Amended. Whichever of `bravebot-agent` and `bravebot-cli` reaches the client gains the dependency, and the row's constraint gains the declaration surface. `a_rows_dependency_list_is_what_the_manifest_asks_for` fails until the table is updated, which is the check working. **Applied**: the `bravebot-cli` and `bravebot-config` constraints name the declaration surface, and `bravebot-cli` is the crate that reaches the client, so its row lists `mcp` and says it starts a server only on a person's answer, a recorded one, or the mode that answers for them. `bravebot-agent` reaches it too, to offer a started server's tools and call them, so its row lists `mcp` as well, and `bravebot-mcp` lists `config` for the one rule of what a tool's word may be. |
 | [backends.md](backends.md) | [BACKEND-1](backends.md#BACKEND-1), a settings file may name a destination and never a permission, and none of them names a command to run | **Unchanged and reaffirmed.** [SERVERS-1](#SERVERS-1) exists so this clause does not have to move. A reviewer should read any future proposal to put a declaration in a settings layer as a proposal to amend this. |
 | [backends.md](backends.md) | [BACKEND-24](backends.md#BACKEND-24), settings layers resolve a name at a time | Extended. `mcp.request` is a list, and joins the row where every layer's entries are kept, for that row's reason: an entry only ever names something that then has to be approved separately. **Applied** with the session that reads the key. |
-| [permissions.md](permissions.md) | [PERM-1](permissions.md#PERM-1), a rule names a family of tools and matches on routing only, and "four families exist" | Amended. A fifth family, `Mcp`, with `Mcp(weather)` covering a server and `Mcp(weather:get_current_conditions)` one tool of it. The routing field is the alias and the tool name; the arguments are payload and no specifier matches them, which is [SERVERS-7](#SERVERS-7). |
-| [permissions.md](permissions.md) | [PERM-9](permissions.md#PERM-9), three prompts no rule can answer | Extended to four. A call carrying the person's private data asks whatever the rules say, for that clause's own confidentiality reason. A server is further from the person than a local program is, not closer. |
-| [permission-modes.md](permission-modes.md) | [MODE-4](permission-modes.md#MODE-4)'s list of what bypassing answers | Extended by two prompts, and by nothing else. [SERVERS-13](#SERVERS-13) is the list of what the mode does not reach, which is [MODE-7](permission-modes.md#MODE-7) applied here. That spec's own rule, that nothing approved this way is recorded, covers the two new records by its own argument. |
+| [permissions.md](permissions.md) | [PERM-1](permissions.md#PERM-1), a rule names a family of tools and matches on routing only, and "four families exist" | Amended. A fifth family, `Mcp`, with `Mcp(weather)` covering a server and `Mcp(weather:get_current_conditions)` one tool of it. The routing field is the alias and the tool name; the arguments are payload and no specifier matches them, which is [SERVERS-7](#SERVERS-7). **Applied**: `Mcp(weather:*)` is `Mcp(weather)`, and a name is matched whole, so `Mcp(weather)` does not cover `weather2`. |
+| [permissions.md](permissions.md) | [PERM-9](permissions.md#PERM-9), three prompts no rule can answer | Extended to four. A call carrying the person's private data asks whatever the rules say, for that clause's own confidentiality reason. A server is further from the person than a local program is, not closer. **Applied** in the policy, and not reached: nothing labels a planner's arguments private yet. |
+| [permission-modes.md](permission-modes.md) | [MODE-4](permission-modes.md#MODE-4)'s list of what bypassing answers | Extended by three prompts, a server, its list and a call, and by nothing else. **Applied**. [SERVERS-13](#SERVERS-13) is the list of what the mode does not reach, which is [MODE-7](permission-modes.md#MODE-7) applied here. That spec's own rule, that nothing approved this way is recorded, covers the new records by its own argument. |
+| [vetting.md](vetting.md) | [CHECK-10](vetting.md#CHECK-10), a check before every prompt that would promote quarantined content | Extended by a fourth prompt, a server's tool list, whose check reads the whole list as it is drawn. **Applied**. |
+| [labels.md](labels.md) | [LABEL-8](labels.md#LABEL-8)'s roads in | Extended by one row: a server's tool list a person vouched for, or the mode that answers for them, is trusted and public. **Applied**. |
 | [vetting.md](vetting.md) | the table of routes: `~/.bravebot/vetting` holding one word, and `"vetting": { "auto": true }` read from the home layer only | **Unchanged**, and the precedent this spec's storage copies rather than a spec to amend. A standing answer in the person's own directory, and the key that changes behaviour readable from one layer, are both already settled there. |
 
 ## What is deliberately not adopted
@@ -924,11 +1077,6 @@ This spec cannot land without these. Each is named by what the clause says rathe
 - **Whether a tool's arguments should ever bound a standing answer.** [SERVERS-7](#SERVERS-7) says
   no, on the grounds that no two calls share arguments. A prefix, the way a permission rule matches a
   command, is the obvious middle and it needs a spelling that a tool's own schema does not fight.
-- **Whether a description should reach the planner at all.** [SERVERS-8](#SERVERS-8) marks it.
-  Withholding it entirely leaves the planner a schema and no statement of purpose, which is close to
-  unusable; marking it means untrusted text is in the context on purpose. The third road is that a
-  person writes the description when they approve the server, and the server's own is shown only to
-  them.
 - **Whether the digest should cover the resolved program rather than the name.** `npx` resolved
   through `PATH` is a different file on two machines, and [SERVERS-10](#SERVERS-10) makes `PATH` a
   thing the declaration names. Digesting the resolved path would make an approval machine-specific,
@@ -945,24 +1093,31 @@ This spec cannot land without these. Each is named by what the clause says rathe
   [MCP-3](mcp.md#MCP-3) requires and the capability [SERVERS-9](#SERVERS-9) grants, there is no audit
   of what it does once it runs. A confined process with a network capability is still a program
   reading a workspace.
-- **Two prompts is two prompts.** A server gate and a call gate are the shape asked for, and they are
-  more asking than the tool this is measured against does in aggregate, because the call gate here has
-  no per-server "never ask again". The standing answers are what pay it back, and a person who
-  answers 2 twice has the same quiet session with a record of having been asked.
+- **Three prompts is three prompts.** A server gate and a call gate are the shape asked for, and a
+  list gate is what letting a server's words reach the planner costs. Together they are more asking
+  than the tool this is measured against does, because the call gate here has no per-server "never
+  ask again". The standing answers are what pay it back. A list is asked about again only when it
+  changes, and a person who answers 2 at the other two has the same quiet session with a record of
+  having been asked.
 - **The useful case costs two steps.** A newcomer to a checkout that requests a server has to declare
   it themselves and then approve it. That is the price of a shared file that cannot hand anything
   over, and it is paid by the person who wanted the server.
 - **A marked description is still in the context.** [SERVERS-8](#SERVERS-8) keeps a server's words out
   of the instructions and inside a margin, and a planner that reads them has still read text somebody
-  else wrote. The margin is a boundary for a person looking at a screen; for a model it is a
+  else wrote, which a person read before saying yes. The margin is a boundary for a person looking at a screen; for a model it is a
   convention, and conventions are what injection attacks are made of.
 - **The standing answers do not travel.** Recording them outside the checkout means a second machine
   asks again and a wiped workspace does not forget. `mcp forget` is the deliberate road; there is no
   accidental one.
-- **A started server is a process asked nothing.** Until [SERVERS-7](#SERVERS-7)'s question exists,
-  an approved server is launched, completes its handshake, and is never called. That is the order
-  the work lands in rather than a design, and the display says it so a person is not left to infer
-  more.
+- **The plain interface cannot stop asking.** Its call question is a line answered yes or no, and
+  its yes is answer 1, so answer 2 is given in the full-screen interface or not at all.
+- **A run nobody can be asked in still checks a list.** A one-shot run makes
+  [CHECK-10](vetting.md#CHECK-10)'s check of a list nobody vouched for, then refuses the list.
+  Nothing tells the turn that its questions will be refused rather than asked, so the check is a
+  model call whose word nobody reads.
+- **A call carrying private data is not told apart yet.** The policy asks about one whatever is
+  standing, and nothing labels a planner's arguments private, so a standing answer or an `allow`
+  rule answers every call today ([SERVERS-7](#SERVERS-7)).
 - **The full-screen interface asks before it asks about the directory.** The server question is put
   on the plain terminal before that interface takes the screen, and the question about trusting the
   directory is asked inside it. A server can therefore start for a session whose directory is then

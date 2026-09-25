@@ -14,6 +14,7 @@ bravebot-config = { path = "../config" }
 bravebot-core = { path = "../core" }
 bravebot-i18n = { path = "../i18n" }
 bravebot-lsp = { path = "../lsp" }
+bravebot-mcp = { path = "../mcp" }
 bravebot-net = { path = "../net" }
 bravebot-sandbox = { path = "../sandbox" }
 bravebot-skus = { path = "../skus" }

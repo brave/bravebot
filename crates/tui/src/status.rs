@@ -287,11 +287,18 @@ pub fn report(facts: &Facts<'_>) -> Report {
     );
 
     // Named rather than counted, since the question is which of them this session can reach, and
-    // said where there are none, since a checkout that asked for one is where somebody looks.
+    // said where there are none, since a checkout that asked for one is where somebody looks. The
+    // note is how each one's tools stand, since a started server whose list nobody has read yet
+    // offers the model nothing, and that is the thing somebody wondering why it was not used needs.
     lines.push(match facts.servers.started.as_slice() {
         [] => Line::new(t!(status_mcp_servers), t!(status_mcp_servers_none)),
-        started => Line::new(t!(status_mcp_servers), started.join(", "))
-            .with_note(t!(status_mcp_servers_no_tools)),
+        started => {
+            let line = Line::new(t!(status_mcp_servers), started.join(", "));
+            match &facts.servers.session {
+                Some(session) => line.with_note(offering(&session.offering())),
+                None => line,
+            }
+        }
     });
 
     // Only where the mode is not the ordinary one. A line saying "asking" on every session would
@@ -618,6 +625,23 @@ pub(crate) fn tokens(count: u64) -> String {
     t!(count_tokens_thousands, thousands = thousands)
 }
 
+/// How each server's tools stand, one clause for each.
+fn offering(servers: &[(String, bravebot_agent::mcp::Offering)]) -> String {
+    servers
+        .iter()
+        .map(|(alias, offering)| match offering {
+            bravebot_agent::mcp::Offering::Unasked => t!(status_mcp_servers_unread, alias = alias),
+            bravebot_agent::mcp::Offering::Tools(count) => {
+                t!(status_mcp_servers_tools, alias = alias, count = *count)
+            }
+            bravebot_agent::mcp::Offering::Declined => {
+                t!(status_mcp_servers_declined, alias = alias)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -643,6 +667,7 @@ mod tests {
         started: Vec::new(),
         confined: false,
         notes: Vec::new(),
+        session: None,
     };
 
     fn trusting() -> TrustStore {
@@ -1568,18 +1593,13 @@ mod tests {
             started: vec!["docs".to_string(), "weather".to_string()],
             confined: true,
             notes: Vec::new(),
+            session: None,
         };
         let some = report(&Facts {
             servers: &started,
             ..facts(&config, &trust)
         });
-        assert_eq!(
-            line(&some, t!(status_mcp_servers)),
-            (
-                "docs, weather".to_string(),
-                t!(status_mcp_servers_no_tools).to_string()
-            )
-        );
+        assert_eq!(line(&some, t!(status_mcp_servers)).0, "docs, weather");
         assert_eq!(
             line(&some, t!(status_confinement)),
             (
@@ -1592,6 +1612,7 @@ mod tests {
             started: vec!["docs".to_string()],
             confined: false,
             notes: Vec::new(),
+            session: None,
         };
         let unconfined = report(&Facts {
             servers: &remote,
@@ -1602,6 +1623,31 @@ mod tests {
             t!(status_confinement_nothing_confined),
             "a remote server is no process this session confines"
         );
+    }
+
+    /// Each server's clause says how its tools stand, since a started server whose list nobody has
+    /// read offers the model nothing and a declined one offers nothing for the rest of the session.
+    #[test]
+    fn each_servers_note_says_how_its_tools_stand() {
+        use bravebot_agent::mcp::Offering;
+        let note = offering(&[
+            ("docs".to_string(), Offering::Unasked),
+            ("weather".to_string(), Offering::Tools(3)),
+            ("coins".to_string(), Offering::Tools(1)),
+            ("maps".to_string(), Offering::Declined),
+        ]);
+        assert_eq!(
+            note,
+            [
+                t!(status_mcp_servers_unread, alias = "docs"),
+                t!(status_mcp_servers_tools, alias = "weather", count = 3),
+                t!(status_mcp_servers_tools, alias = "coins", count = 1),
+                t!(status_mcp_servers_declined, alias = "maps"),
+            ]
+            .join("; ")
+        );
+        assert!(note.contains("weather: 3 tools"), "{note}");
+        assert!(note.contains("coins: one tool"), "{note}");
     }
 
     /// The markings a write recorded are the part nothing else reports: a poisoned file is otherwise

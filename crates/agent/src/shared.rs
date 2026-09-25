@@ -275,6 +275,20 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
         self.lent.hold().confirm_exposing_read(request)
     }
 
+    fn confirm_tool_list(
+        &mut self,
+        request: &crate::confirm::ToolListRequest,
+    ) -> crate::confirm::Decision {
+        self.lent.hold().confirm_tool_list(request)
+    }
+
+    fn confirm_mcp_call(
+        &mut self,
+        request: &crate::confirm::McpCallRequest,
+    ) -> crate::confirm::CallDecision {
+        self.lent.hold().confirm_mcp_call(request)
+    }
+
     fn confirm_server(&mut self, request: &crate::confirm::ServerRequest) -> Decision {
         self.lent.hold().confirm_server(request)
     }

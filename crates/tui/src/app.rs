@@ -3486,6 +3486,10 @@ fn change_directory(
     // here starts one for this directory with the person asked again.
     *servers = None;
     session.now_in_workspace(&moved.root);
+    // An MCP server is not a tree's, so it stays; answer 2 is about a project, so it moves.
+    if let Some(mcp) = &session.servers.session {
+        mcp.now_in_workspace(&moved.root);
+    }
     session.note(t!(
         session_directory_changed,
         directory = moved.root.display().to_string()
@@ -5266,6 +5270,17 @@ fn manifest_animated(
             crate::remote_confirm::ToMain::Ask(_) => {
                 let _ = answer_tx.send(crate::remote_confirm::Reply::Ask(Vec::new()));
             }
+            // A plan names no server tool, so a run neither settles a server's list nor calls one.
+            crate::remote_confirm::ToMain::ToolList(_) => {
+                let _ = answer_tx.send(crate::remote_confirm::Reply::ToolList(
+                    bravebot_agent::confirm::Decision::Reject,
+                ));
+            }
+            crate::remote_confirm::ToMain::McpCall(_) => {
+                let _ = answer_tx.send(crate::remote_confirm::Reply::McpCall(
+                    bravebot_agent::confirm::CallDecision::reject(),
+                ));
+            }
             // What is left announces rather than asks, so nothing waits on it. The manifest is the
             // task list, so no list changes; there is no planner to delegate or to be interjected
             // at; and a run's steps report through `Started` and `Finished` above.
@@ -5735,16 +5750,9 @@ fn run_turn_animated(
         // reading the same `.env` on turn after turn is asked about it once.
         .already_exposed(exposed.clone())
         .working_towards(working_towards)
-        // A grant naming each server the session started, and no tool of any: none is offered to
-        // the planner until each call can be put to the person.
-        .with_servers(
-            session
-                .servers
-                .started
-                .iter()
-                .map(|alias| bravebot_core::capability::ServerAlias::new(alias.as_str()))
-                .collect(),
-        );
+        // The servers the session started, with a grant naming each. Their tools are offered once
+        // a person has read the list, which the turn puts to them before it plans (SERVERS-8).
+        .with_mcp(session.servers.session.clone());
     // Every file named with `@` becomes context, which a turn treats as trusted: the user typed the
     // path and their keystroke is what vouches for it, exactly as `--file` does on the command
     // line. Read back out of the prompt rather than tracked while it is typed, so the line that was
@@ -6010,6 +6018,34 @@ fn run_turn_animated(
                 // there is no standing decision to record, and the plan itself is about to be
                 // walked in the open where the transcript will show every step of it.
                 let _ = answer_tx.send(crate::remote_confirm::Reply::Manifest(answer.decision()));
+            }
+            crate::remote_confirm::ToMain::ToolList(request) => {
+                let answer = crate::confirm::ask_tool_list(terminal, &request);
+                if answer.stops_the_turn() {
+                    stop_what_is_running(session, &cancel);
+                }
+                if answer == crate::confirm::Answer::Approve {
+                    // Said on the transcript because the planner reads these tools' descriptions
+                    // from here on, in this session and the ones after it.
+                    session.note(t!(
+                        session_offered_tools,
+                        alias = &request.alias,
+                        count = request.tools.len()
+                    ));
+                }
+                let _ = answer_tx.send(crate::remote_confirm::Reply::ToolList(answer.decision()));
+            }
+            crate::remote_confirm::ToMain::McpCall(request) => {
+                let answer = crate::confirm::ask_mcp_call(terminal, &request);
+                if answer.stops_the_turn() {
+                    stop_what_is_running(session, &cancel);
+                }
+                if answer == crate::confirm::CallAnswer::ApproveAndStand {
+                    // The one answer at this prompt that outlasts it, so the one worth being able
+                    // to find afterwards.
+                    session.note(t!(session_stands_for_tool, tool = request.name()));
+                }
+                let _ = answer_tx.send(crate::remote_confirm::Reply::McpCall(answer.decision()));
             }
             crate::remote_confirm::ToMain::Ask(asking) => {
                 // A planner that loops back over the same decision should not make the user

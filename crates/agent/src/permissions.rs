@@ -77,6 +77,7 @@ fn problem(reason: Unreadable) -> &'static str {
         Unreadable::Unanchored => t!(permission_rule_unanchored),
         Unreadable::NotADomainRule => t!(permission_rule_not_a_domain_rule),
         Unreadable::NoDomainNamed => t!(permission_rule_no_domain_named),
+        Unreadable::NotAToolRule => t!(permission_rule_not_a_tool_rule),
     }
 }
 
@@ -388,6 +389,7 @@ mod tests {
             Unreadable::Unanchored,
             Unreadable::NotADomainRule,
             Unreadable::NoDomainNamed,
+            Unreadable::NotAToolRule,
         ]
         .map(problem);
 

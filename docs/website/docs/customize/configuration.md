@@ -625,7 +625,7 @@ never trust a command's output, is on
 a `--settings` file outside your project; a project's own entries are proposed to you in a box when
 the session opens, and work once you grant them. See [how the files combine](#settingsjson) for why.
 
-A rule is `Tool` or `Tool(specifier)`, and names one of four **families**:
+A rule is `Tool` or `Tool(specifier)`, and names one of five **families**:
 
 | Family | Covers |
 |---|---|
@@ -633,6 +633,7 @@ A rule is `Tool` or `Tool(specifier)`, and names one of four **families**:
 | `Edit` | every tool that changes one |
 | `Bash` | running a program |
 | `WebFetch` | fetching a URL |
+| `Mcp` | calling a tool of an [MCP server](mcp-servers.md#rules): `Mcp(weather)` or `Mcp(weather:get_alerts)` |
 
 These are categories rather than tool names, as they are in Claude Code, so there is no rule spelled
 `Write` or `Glob`. `Bash` names no shell (there is none), and its specifier is matched against one

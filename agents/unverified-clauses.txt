@@ -30,6 +30,5 @@ docs/specs/credential-protection.md:CRED-21: accepting a finding expires
 docs/specs/credential-protection.md:CRED-22: the baseline is not writable by a turn
 docs/specs/credential-protection.md:CRED-24: a credential never travels as a command-line argument
 docs/specs/credential-protection.md:CRED-26: where a credential can be bound to its presenter, that is the form asked for
-docs/specs/mcp-servers.md:SERVERS-7: every call to a server's tool is put to the person, with three answers
 docs/specs/mcp-servers.md:SERVERS-12: the managed layer may remove a server and never add one
 docs/specs/trust-map.md:TRUST-20: a directory such a helper is pinned to is one a person opened

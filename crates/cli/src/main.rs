@@ -694,7 +694,7 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
     for note in &reached.notes {
         eprintln!("{}", t!(cli_notice, notice = note));
     }
-    task = task.with_servers(reached.grants());
+    task = task.with_mcp(reached.session());
 
     // A one-shot run has nobody to ask about a write, so writes are refused rather than silently
     // applied. The one exception is a plan, which is put before the first step rather than in the
@@ -1322,6 +1322,20 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
         self.refusing.confirm_exposing_read(request)
     }
 
+    fn confirm_tool_list(
+        &mut self,
+        request: &bravebot_agent::confirm::ToolListRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        self.refusing.confirm_tool_list(request)
+    }
+
+    fn confirm_mcp_call(
+        &mut self,
+        request: &bravebot_agent::confirm::McpCallRequest,
+    ) -> bravebot_agent::confirm::CallDecision {
+        self.refusing.confirm_mcp_call(request)
+    }
+
     /// Declined rather than answered, as everywhere nobody can be asked: a reply invented here would
     /// be reported to the planner as the person's own words.
     fn ask_user(&mut self, asking: &Asking) -> Vec<Answer> {
@@ -1568,6 +1582,7 @@ fn interactive(start: bravebot_tui::app::Start, skip_permissions: bool) -> ExitC
         started: reached.aliases(),
         confined: reached.confined(),
         notes: std::mem::take(&mut reached.notes),
+        session: reached.session(),
     };
 
     match bravebot_tui::app::run(
