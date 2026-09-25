@@ -2,22 +2,6 @@
    Light and dark both defined; the app follows the system. All colour tokens — the brave
    palette, the shadcn semantics, and the theme rules — live in `shadcn.css`. */
 
-* { box-sizing: border-box; }
-
-body {
-  margin: 0;
-  font: 13px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
-  color: var(--ink);
-  background: var(--bg);
-  -webkit-font-smoothing: antialiased;
-  overflow: hidden;
-}
-
-/* Controls inherit their family (modern.css) but not size, weight, or colour: those come from
-   the shadcn components' own utilities now, and an unlayered `color: inherit` or `font: inherit`
-   here would silently defeat every `text-*`/`font-*` class on a button. */
-button { cursor: pointer; }
-
 .app {
   display: grid;
   /* The side widths are set from JS; the transcript takes what is left. `minmax(0, 1fr)`
@@ -80,13 +64,6 @@ button { cursor: pointer; }
 .app.resizing { cursor: col-resize; user-select: none; transition: none; }
 
 /* ---------------------------------------------------------------- sessions */
-
-.sessions {
-  display: flex;
-  flex-direction: column;
-  background: var(--bg-side);
-  overflow: hidden;
-}
 
 /* A folded column must not be tabbable or read out, and a zero-width track does neither on
    its own. Hiding waits for the fold to finish so there is something to watch on the way
@@ -185,26 +162,17 @@ button { cursor: pointer; }
 /* The column narrows to 200px, which is not enough for every checkout's name. */
 .session-group-section + .session-group-section { margin-top: 8px; }
 
-.empty, .none {
+.none {
   color: var(--ink-faint);
   padding: 8px 6px;
   font-size: 12px;
 }
-.empty code { font-family: var(--mono); font-size: 11px; }
 
 /* The row's look and its open/current state are the ghost Button's own now (the Session
    component carries the column layout and the `bg-accent` state in its classes); the only
    thing a rule still has to say is the share of the row's width the button takes, with the
    ⋯ menu keeping the rest. */
 .session { flex: 1; min-width: 0; }
-
-.build {
-  padding: 8px 14px;
-  border-top: 1px solid var(--line);
-  font-family: var(--mono);
-  font-size: 10px;
-  color: var(--ink-faint);
-}
 
 /* ---------------------------------------------------------------- transcript */
 
@@ -889,12 +857,6 @@ button { cursor: pointer; }
 
 /* ---------------------------------------------------------------- context */
 
-.context {
-  background: var(--bg-side);
-  overflow-y: auto;
-  padding-top: 0;
-}
-
 /* The row of connected buttons at the top of the column, one per panel.
    Connected rather than five separate controls, because it is one choice about one column: the
    shape a segmented control has on this platform. Borders on the insides only, so the row reads
@@ -1142,7 +1104,6 @@ button { cursor: pointer; }
   overscroll-behavior: contain;
 }
 
-.context { display: flex; flex-direction: column; overflow: hidden; }
 .context-content { flex: 1; min-height: 0; overflow-y: auto; }
 .context-content[hidden] { display: none; }
 .context-files .context-content { display: flex; flex-direction: column; overflow: hidden; }
@@ -1408,7 +1369,6 @@ button { cursor: pointer; }
 .theme-aside { margin: 6px 0 0; font-size: 11px; color: var(--ink-faint); }
 .theme-aside code { font-family: var(--mono); font-size: 10px; }
 
-
 /* ------------------------------------------------------------------ bots
 
    A bot is a name, a purpose, a memory and a checkout. What a row shows is what tells two of them
@@ -1640,7 +1600,6 @@ button, input, textarea, select { font: inherit; }
 button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus-visible, a:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 3px;
 }
-.app { position: relative; }
 .app.comfortable .session { padding-top: 12px; padding-bottom: 12px; }
 .app .session-where, .app .none { font-size: 12px; }
 .app .panel-head { font-size: 12px; letter-spacing: .02em; text-transform: none; }
@@ -1715,7 +1674,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .bot-overview-title p { margin: 4px 0; font-size: 12px; color: var(--ink-dim); overflow-wrap: anywhere; }
 .bot-overview h3 { font-size: 13px; margin-top: 24px; }
 .bot-overview-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
-.bot-history-search { width: 100%; margin-bottom: 10px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--ink); }
 .bot-conversations { display: grid; gap: 6px; margin-bottom: 20px; max-height: 300px; overflow-y: auto; }
 .bot-conversations button, .bot-history-unavailable { display: grid; justify-items: start; gap: 4px; text-align: left; padding: 10px 12px; }
 .bot-conversations strong { font-size: 13px; overflow-wrap: anywhere; }
@@ -1831,13 +1789,4 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .watch-list strong { overflow-wrap: anywhere; }
 .watch-list p { margin: 6px 0; }
 .watch-list small { color: var(--ink-dim); }
-/* Keep the open width during folding, with room for both horizontal margins. The button
-   carries `transition-all` from its component, which would otherwise animate `min-width`
-   away from the column's actual width for the whole fold and let it bleed over the divider. */
-.sessions > .agent-settings-open {
-  min-width: calc(var(--col-left-open) - 32px);
-  margin: 10px 16px;
-  flex-shrink: 0;
-  transition-property: color, background-color, border-color, opacity, box-shadow, transform, filter;
-}
 @media (max-width: 640px) { .settings-body dl { grid-template-columns: 1fr; gap: 5px; } .settings-body dd { margin-bottom: 10px; } .settings-tabs { flex-wrap: wrap; } }

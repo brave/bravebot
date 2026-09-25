@@ -160,7 +160,7 @@ export function AgentSettings({ session, onClose, onChanged }: { session?: strin
     <TabsContent value="Hooks" className="settings-body">
       <>
         <p>Hooks are shared with the terminal client. Run your own programs at specific moments. These commands run with your account’s permissions in the project directory. They cannot approve or block the agent.</p>
-        {document && <p className="settings-path">{document.path}</p>}
+        {document && <p className="settings-path font-mono">{document.path}</p>}
         {document && !document.entire && <Alert variant="destructive"><AlertDescription>{document.text === null
           ? 'The agent could not read this file, so it declares no hooks. Open it yourself to see why.'
           : 'The agent did not read all of this file, so saving it from here could drop what it passed over. Edit it directly.'}</AlertDescription></Alert>}
@@ -183,15 +183,15 @@ export function AgentSettings({ session, onClose, onChanged }: { session?: strin
           <CardHeader><CardTitle><h3 id="run-override-title">Model and connection override</h3></CardTitle></CardHeader>
           <CardContent>
             <p>Choose a JSON settings file for this app run. It applies to future turns and model discovery, and is cleared when the app exits. Running turns keep their configuration. Terminal preferences and settings-file permission grants do not change this app’s approval controls.</p>
-            <p className="settings-path">{report.selected ?? 'No override selected'}</p><div className="settings-actions"><Button disabled={busy} onClick={() => void select(false)}>Choose settings file…</Button><Button variant="outline" disabled={busy || !report.selected} onClick={() => void select(true)}>Clear override</Button></div>
+            <p className="settings-path font-mono">{report.selected ?? 'No override selected'}</p><div className="settings-actions"><Button disabled={busy} onClick={() => void select(false)}>Choose settings file…</Button><Button variant="outline" disabled={busy || !report.selected} onClick={() => void select(true)}>Clear override</Button></div>
           </CardContent>
           <Separator />
           <CardHeader><CardTitle><h3>Effective configuration</h3></CardTitle></CardHeader>
           <CardContent>
             <p>Default model: <strong>{report.model ?? 'Not configured'}</strong></p>
             <p>Files merge in this order: home → project → project-local → selected override. Environment and built-in values can take precedence; administrator-pinned destinations always win.</p>
-            <h4>Loaded files, in order</h4>{report.layers.length ? <ol>{report.layers.map(path => <Item asChild size="sm" key={path}><li className="settings-path">{path}</li></Item>)}</ol> : <p>No settings files loaded.</p>}
-            <ItemGroup>{report.overrides.map(item => <Item size="sm" key={item.name} role="listitem"><ItemContent><p><code>{item.name}</code> overridden by <span className="settings-path">{item.path}</span></p></ItemContent></Item>)}</ItemGroup>
+            <h4>Loaded files, in order</h4>{report.layers.length ? <ol>{report.layers.map(path => <Item asChild size="sm" key={path}><li className="settings-path font-mono">{path}</li></Item>)}</ol> : <p>No settings files loaded.</p>}
+            <ItemGroup>{report.overrides.map(item => <Item size="sm" key={item.name} role="listitem"><ItemContent><p><code>{item.name}</code> overridden by <span className="settings-path font-mono">{item.path}</span></p></ItemContent></Item>)}</ItemGroup>
             {report.managed.keys.length > 0 && <p>Managed values: {report.managed.keys.join(', ')}. This override cannot change them.</p>}
           </CardContent>
         </Card>

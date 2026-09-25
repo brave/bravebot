@@ -104,7 +104,7 @@ export function Sidebar({
   const show = useCallback((next: Tab) => setTab(next), [])
 
   return (
-    <aside className="sessions" id="sessions-column">
+    <aside className="sessions flex flex-col overflow-hidden bg-sidebar text-sidebar-foreground" id="sessions-column">
       <Tabs value={tab} onValueChange={(value) => show(value as Tab)} className="min-h-0 flex-1 gap-0">
         {/* `aria-pressed` remains as a compatibility hook while Tabs adds standard tab semantics. */}
         <TabsList className="sidebar-tabs" aria-label="What the column shows">
@@ -151,9 +151,9 @@ export function Sidebar({
         </SidebarContent>
       </Tabs>
 
-      <Button variant="ghost" className="agent-settings-open" onClick={onSettings}>Agent settings</Button>
+      <Button variant="ghost" className="agent-settings-open mx-3 my-2 min-w-[calc(var(--col-left-open)-24px)] shrink-0 justify-start text-ink-dim hover:text-foreground" onClick={onSettings}>Agent settings</Button>
       {build && (
-        <footer className="build" title="The agent build these sessions are stamped with">
+        <footer className="build px-3.5 pt-[7px] pb-2.5 font-mono text-[10px] leading-[1.4] text-ink-faint" title="The agent build these sessions are stamped with">
           {build}
         </footer>
       )}

@@ -429,7 +429,7 @@ export function Transcript({
                   half it drops is the end of the path — which is the half that says which
                   checkout of a project this is. */}
               <span
-                className="where"
+                className="where font-mono"
                 title={`${live.summary.directory}${live.summary.branch ? ` · ${live.summary.branch}` : ''}`}
               >
                 {bot && `${live.summary.title} · `}

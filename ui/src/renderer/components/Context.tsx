@@ -1,3 +1,4 @@
+import { cn } from 'cn'
 import { useState } from 'react'
 import { FileTree } from './FileTree'
 import { type PanelName } from '../../shared/state'
@@ -51,7 +52,7 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
     if (entry) document.dispatchEvent(new CustomEvent('bravebot:reveal-entry', { detail: entry.id }))
   }
 
-  if (!live) return <aside className={`context ${tab === 'files' ? 'context-files' : ''}`} id="context-column" />
+  if (!live) return <aside className={cn('context flex flex-col overflow-hidden bg-sidebar text-sidebar-foreground', tab === 'files' && 'context-files')} id="context-column" />
 
   const files = touched(live.entries)
   const writes = written(live.entries)
@@ -76,7 +77,7 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
   }
 
   return (
-    <aside className={`context ${tab === 'files' ? 'context-files' : ''}`} id="context-column">
+    <aside className={cn('context flex flex-col overflow-hidden bg-sidebar text-sidebar-foreground', tab === 'files' && 'context-files')} id="context-column">
       <Tabs value={tab} onValueChange={(value) => setTab(value as typeof tab)} className="context-content gap-0" hidden={!!audit}>
       {/* One connected row, because these five are one choice about one column rather than five
           unrelated switches — the shape a segmented control has on this platform.

@@ -1182,7 +1182,7 @@ export function App(): React.JSX.Element {
   return (
     <div
       className={[
-        'app',
+        'app relative isolate min-h-[420px] min-w-0 bg-background',
         !live ? 'no-session' : '',
         preferences.density,
         dragging ? 'resizing' : '',

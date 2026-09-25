@@ -142,7 +142,7 @@ export function Sessions({
 
       <div className="session-list">
         {sessions.length === 0 && (
-          <Empty className="empty"><EmptyDescription>
+          <Empty className="empty p-4 md:p-6"><EmptyDescription>
             No sessions yet. Open a project to begin — or start one in a terminal with{' '}
             <code>bravebot</code> and it will appear here.
           </EmptyDescription></Empty>
@@ -150,7 +150,7 @@ export function Sessions({
         {/* Said separately, because the message above is a fact about the machine and would
             be a lie about a list that is merely filtered down to nothing. */}
         {sessions.length > 0 && shown.length === 0 && (
-          <Empty className="empty"><EmptyDescription>{query.trim() ? `No conversation matches “${query}”.` : archive ? 'No archived conversations.' : 'No active conversations. Start a new session or restore one from Archived.'}</EmptyDescription></Empty>
+          <Empty className="empty p-4 md:p-6"><EmptyDescription>{query.trim() ? `No conversation matches “${query}”.` : archive ? 'No archived conversations.' : 'No active conversations. Start a new session or restore one from Archived.'}</EmptyDescription></Empty>
         )}
         {!grouped &&
           shown.map((session) => (

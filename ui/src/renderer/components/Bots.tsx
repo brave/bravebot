@@ -103,7 +103,7 @@ export function Bots({
 
       <div className="session-list">
         {inUse.length === 0 && editing !== 'new' && (
-          <Empty className="empty">
+          <Empty className="empty p-4 md:p-6">
             <EmptyDescription>{query.trim() ? <>No bots match this search.</> : away.length === 0 ? (
               <>
                 No bots yet. A bot is a name, a purpose and a memory, working in one checkout — and
@@ -140,7 +140,7 @@ export function Bots({
           </Card>
           <h3>Conversation history ({history.length})</h3>
           <p className="bot-note">All conversations for this bot, including archived conversations and drafts. Starting a new conversation keeps the earlier ones here.</p>
-          {history.length > 0 && <Input className="bot-history-search" type="search" aria-label="Search bot conversations" placeholder="Search conversations…" value={historyQuery} onChange={event => setHistoryQuery(event.target.value)} />}
+          {history.length > 0 && <Input className="bot-history-search mb-2.5" type="search" aria-label="Search bot conversations" placeholder="Search conversations…" value={historyQuery} onChange={event => setHistoryQuery(event.target.value)} />}
           <ItemGroup className="bot-conversations" aria-label="Bot conversation history">
             {filteredHistory.map(({ id, session, archived }) => session ?
               <Item asChild key={id}><Button type="button" variant="ghost" className="h-auto w-full items-start justify-start text-left" onClick={() => { onConversation(overview, session); setOverview(null) }}>
