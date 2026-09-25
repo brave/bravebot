@@ -737,18 +737,25 @@ pub struct Addressed {
     kind: Kind,
     model: Option<String>,
     prompt: String,
+    held: CapabilitySet,
     tools: Vec<String>,
 }
 
 impl Addressed {
-    pub(crate) fn new(definition: &Definition, tools: Vec<String>) -> Self {
+    pub(crate) fn new(definition: &Definition, held: CapabilitySet, tools: Vec<String>) -> Self {
         Self {
             name: definition.name().to_string(),
             kind: definition.kind(),
             model: definition.model().map(str::to_string),
             prompt: definition.prompt().to_string(),
+            held,
             tools,
         }
+    }
+
+    /// What this turn holds once the definition has narrowed it.
+    pub fn capabilities(&self) -> &CapabilitySet {
+        &self.held
     }
 
     /// The name the kernel matched, which is what the reply is drawn under (ADDRESS-12).

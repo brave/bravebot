@@ -1501,7 +1501,13 @@ fn address(
         ));
         return Action::Redraw;
     }
-    Action::Submit(session.address(name, task, pasted, attached))
+    let addressed = crate::state::Addressed {
+        name: name.to_string(),
+        model: definition
+            .model()
+            .map(|written| config.model_named(written)),
+    };
+    Action::Submit(session.address(addressed, task, pasted, attached))
 }
 
 /// The keys that mean the same thing whether or not a turn is running.
@@ -5782,10 +5788,22 @@ fn run_turn_animated(
     // until this the line somebody typed is nowhere on their screen.
     redraw(terminal, session)?;
 
+    // Taken, so only the turn a person's `/agent` line started carries a name. Kept past the turn
+    // as well, because a stop puts the line back as it was typed, name and all.
+    let addressed = session.take_addressing();
+
     // Before the worker starts, because a sign-in needs the terminal and this is the thread that
     // has it. Left to the worker, the URL and code the AWS CLI prints would land in a frame this
     // loop redraws over.
-    sign_in_if_needed(terminal, session, config)?;
+    //
+    // Not for a turn whose definition named its own model: nothing in it asks the session's, and
+    // `/agent` has already refused a definition whose model needs a sign-in.
+    if addressed
+        .as_ref()
+        .is_none_or(|addressed| addressed.model.is_none())
+    {
+        sign_in_if_needed(terminal, session, config)?;
+    }
 
     // One channel for everything the worker sends, because the main thread waits on exactly one
     // thing and `mpsc` cannot select across two. Only a write expects a reply.
@@ -5833,8 +5851,7 @@ fn run_turn_animated(
         // outlives the session. A one-shot run says nothing here and reads no record.
         .remembering(Some(session_id.to_string()))
         .with_model(session.model().map(str::to_string))
-        // Taken, so only the turn a person's `/agent` line started carries a name.
-        .addressing(session.take_addressing())
+        .addressing(addressed.as_ref().map(|addressed| addressed.name.clone()))
         .with_effort(session.effort_in_force())
         .with_permissions(permissions.clone())
         .with_permission_mode(permission_mode)
@@ -6249,6 +6266,7 @@ fn run_turn_animated(
         Line {
             text: prompt,
             wrote,
+            addressed: addressed.as_ref(),
         },
         finished,
         retained,
@@ -6287,15 +6305,15 @@ fn finish_turn(
     note_a_refused_level(session, refused);
 
     let carried = if let Err(turn::TurnError::Cancelled { attempts }) = &outcome {
-        finish_cancelled_turn(session, line.text, *attempts);
+        finish_cancelled_turn(session, &line.as_typed(), *attempts);
         carried
     } else {
         // The backend decides how to compare the requested and reported model names.
-        let chosen = session.model().unwrap_or(&config.default_model);
+        let chosen = line.model(session, config);
         let asked = Asked {
-            name: bravebot_agent::backend::Backend::name_as_asked(config, chosen),
+            name: bravebot_agent::backend::Backend::name_as_asked(config, &chosen),
             comparable: bravebot_agent::backend::Backend::reports_the_model_it_was_asked_for(
-                config, chosen,
+                config, &chosen,
             ),
         };
         fold_outcome(
@@ -6535,6 +6553,28 @@ struct Occupied {
 struct Line<'a> {
     text: &'a str,
     wrote: Wrote,
+    // The definition a person's `/agent` line addressed, which `text` does not carry.
+    addressed: Option<&'a crate::state::Addressed>,
+}
+
+impl Line<'_> {
+    /// The line as the person typed it. Only the task went to the planner, but a stopped turn
+    /// returning only the task would have Enter send it to the session's planner instead.
+    fn as_typed(&self) -> String {
+        match self.addressed {
+            Some(addressed) => format!("{AGENT_COMMAND} {} {}", addressed.name, self.text),
+            None => self.text.to_string(),
+        }
+    }
+
+    /// The model the turn asked for: an addressed definition's where it named one (ADDRESS-11).
+    fn model(&self, session: &Session, config: &Config) -> String {
+        self.addressed
+            .and_then(|addressed| addressed.model.as_deref())
+            .or(session.model())
+            .unwrap_or(&config.default_model)
+            .to_string()
+    }
 }
 
 /// What a turn hands to the next one: paths the person vouched for, programs they allowed, and the
@@ -12331,13 +12371,112 @@ mod tests {
             Action::Submit("review the diff".to_string())
         );
         assert_eq!(
-            session.take_addressing().as_deref(),
-            Some("rule-reviewer"),
+            session.take_addressing().map(|addressed| addressed.name),
+            Some("rule-reviewer".to_string()),
             "the turn was not told which definition it runs under"
         );
         assert!(
             session.take_addressing().is_none(),
             "the next turn was addressed too"
+        );
+    }
+
+    /// A stop hands the line back to be changed rather than retyped, and the line a person typed
+    /// named a definition. Handed back as its task alone, Enter would send that task to the
+    /// session's own planner, holding everything the definition was there to take away.
+    #[test]
+    fn a_stopped_addressed_turn_puts_the_whole_agent_line_back_in_the_box() {
+        let mut session = Session::new("none");
+        assert_eq!(
+            addressing(&mut session, "rule-reviewer review the diff", None),
+            Action::Submit("review the diff".to_string())
+        );
+        let addressed = session.take_addressing();
+
+        finish_turn(
+            &mut session,
+            &a_config_needing_no_sign_in(),
+            &workspace_for_test(),
+            Line {
+                text: "review the diff",
+                wrote: Wrote::ThePerson,
+                addressed: addressed.as_ref(),
+            },
+            FinishedTurn {
+                outcome: Err(turn::TurnError::Cancelled { attempts: Some(0) }),
+                conversation: Conversation::new(),
+                sink: Trail::new(),
+                servers: None,
+            },
+            RetainedTurn {
+                files: bravebot_core::file_authority::FileAuthority::new(TrustStore::new("/work")),
+                programs: TrustedPrograms::new(),
+                asked: AskedAbout::new(),
+                exposed: bravebot_core::credentials::Exposed::new(),
+            },
+        );
+
+        assert_eq!(session.input(), "/agent rule-reviewer review the diff");
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Address(
+                "rule-reviewer review the diff".to_string(),
+                Vec::new(),
+                Vec::new()
+            ),
+            "the line that came back no longer addressed the definition"
+        );
+    }
+
+    /// ADDRESS-11 as the interface reads it. An addressed turn asks for its definition's model,
+    /// so that is the name its reply is held against: held against the session's, every answer
+    /// from the definition's model would be reported as the session's substituted.
+    #[test]
+    fn an_addressed_turn_is_held_against_the_model_its_definition_named() {
+        let config = a_config_needing_no_sign_in();
+        let mut session = Session::new("none");
+        session.choose_model("the-sessions-model");
+        let named = crate::state::Addressed {
+            name: "rule-reviewer".to_string(),
+            model: Some("the-definitions-model".to_string()),
+        };
+        let unnamed = crate::state::Addressed {
+            name: "plain-reader".to_string(),
+            model: None,
+        };
+        let line = |addressed| Line {
+            text: "review the diff",
+            wrote: Wrote::ThePerson,
+            addressed,
+        };
+
+        assert_eq!(
+            line(Some(&named)).model(&session, &config),
+            "the-definitions-model"
+        );
+        assert_eq!(
+            line(Some(&unnamed)).model(&session, &config),
+            "the-sessions-model",
+            "a definition naming no model did not run on the session's"
+        );
+        assert_eq!(line(None).model(&session, &config), "the-sessions-model");
+    }
+
+    /// `/agent` settles the model with the name, resolved as the driver resolves it, so what the
+    /// interface asks about the turn is about the model the turn will run on.
+    #[test]
+    fn addressing_a_definition_that_names_a_model_carries_that_model() {
+        let config = a_config_needing_no_sign_in();
+        let mut session = Session::new("none");
+
+        addressing(&mut session, "rule-reviewer review the diff", Some("haiku"));
+
+        assert_eq!(
+            session.take_addressing(),
+            Some(crate::state::Addressed {
+                name: "rule-reviewer".to_string(),
+                model: Some(config.model_named("haiku")),
+            })
         );
     }
 
@@ -12563,6 +12702,7 @@ mod tests {
             Line {
                 text: "",
                 wrote: Wrote::TheDriver,
+                addressed: None,
             },
             &workspace_for_test(),
         );
@@ -16889,6 +17029,7 @@ mod tests {
             Line {
                 text: "",
                 wrote: Wrote::ThePerson,
+                addressed: None,
             },
             &workspace_for_test(),
         );
@@ -17092,6 +17233,7 @@ mod tests {
             Line {
                 text: "",
                 wrote: Wrote::ThePerson,
+                addressed: None,
             },
             &workspace_for_test(),
         );
@@ -17144,6 +17286,7 @@ mod tests {
             Line {
                 text: "",
                 wrote: Wrote::ThePerson,
+                addressed: None,
             },
             &workspace_for_test(),
         );
@@ -17184,6 +17327,7 @@ mod tests {
             Line {
                 text: "",
                 wrote: Wrote::ThePerson,
+                addressed: None,
             },
             &workspace_for_test(),
         );
@@ -17230,6 +17374,7 @@ mod tests {
             Line {
                 text: "read a file",
                 wrote: Wrote::ThePerson,
+                addressed: None,
             },
             &workspace_for_test(),
         );
@@ -17387,6 +17532,7 @@ mod tests {
                     Line {
                         text: "second",
                         wrote: Wrote::ThePerson,
+                        addressed: None,
                     },
                     &workspace_for_test(),
                 );
@@ -17444,6 +17590,7 @@ mod tests {
             Line {
                 text: "work",
                 wrote: Wrote::ThePerson,
+                addressed: None,
             },
             &workspace_for_test(),
         );

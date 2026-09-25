@@ -1129,3 +1129,79 @@ fn a_rule_decides_a_call_before_the_prompt() {
         }
     }
 }
+
+/// A turn the person addressed to one of their definitions holds what the session and the kind both
+/// hold, and no kind holds a server (`addressing-a-definition.md` ADDRESS-7). So the list is not put
+/// to the person, the server's tool is not offered, and the server hears nothing past its handshake.
+/// The addressed turn goes first, because the control's yes would answer the list for it: the same
+/// session with nobody addressed is then put the list and offered the tool.
+#[test]
+fn an_addressed_turn_is_offered_no_servers_tool_and_asks_about_no_list() {
+    let scratch = Scratch::new("addressed");
+    let home = Scratch::new("addressed-home");
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("forecaster.md"),
+        "---\nname: forecaster\ndescription: Reads the weather.\nkind: reader\n---\n\nFORECAST-BY-DEFINITION\n",
+    )
+    .expect("write the definition");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+    let (endpoint, chat) = serve_chat(vec![reply_with("looked"), reply_with("looked too")]);
+
+    let mut asked = Answering::new(Decision::Approve, CallDecision::approve());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is the forecast")
+            .with_home(Some(home.path.clone()))
+            .addressing(Some("forecaster".to_string()))
+            .with_mcp(Some(session.clone())),
+        &mut asked,
+    );
+    let addressed = rounds(&chat);
+    let [addressed] = addressed.as_slice() else {
+        panic!("the addressed turn made {} rounds", addressed.len());
+    };
+    assert!(
+        addressed.contains("FORECAST-BY-DEFINITION"),
+        "the turn did not run under the definition, so this says nothing: {addressed}"
+    );
+    assert!(
+        asked.lists.is_empty(),
+        "a list was put to the person for an addressed turn: {:?}",
+        asked.lists
+    );
+    assert!(
+        !addressed.contains(FORECAST),
+        "an addressed turn was offered a server's tool: {addressed}"
+    );
+    assert!(
+        methods(&server).is_empty(),
+        "the server was sent something for an addressed turn"
+    );
+
+    let mut control = Answering::new(Decision::Approve, CallDecision::approve());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is the forecast")
+            .with_home(Some(home.path.clone()))
+            .with_mcp(Some(session)),
+        &mut control,
+    );
+    let open = rounds(&chat);
+    let [open] = open.as_slice() else {
+        panic!("the control turn made {} rounds", open.len());
+    };
+    assert_eq!(
+        control.lists.len(),
+        1,
+        "the control was not put the list, so this says nothing"
+    );
+    assert!(
+        open.contains(FORECAST),
+        "the control was not offered the tool, so this says nothing: {open}"
+    );
+}

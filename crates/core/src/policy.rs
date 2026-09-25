@@ -2959,7 +2959,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 }
             ),
         );
-        Ok(Some(crate::delegate::Addressed::new(&selected, kept)))
+        Ok(Some(crate::delegate::Addressed::new(
+            &selected,
+            self.capabilities.clone(),
+            kept,
+        )))
     }
 
     /// Lend the audit trail to a nested run.
@@ -12343,7 +12347,7 @@ five
 
         /// What a planner's own words look like by the time a tool hands them over: the tool layer
         /// labels every argument pessimistically, because it cannot know where one came from.
-        fn argument(text: &str) -> Labelled<String> {
+        pub(super) fn argument(text: &str) -> Labelled<String> {
             Labelled::new(text.to_string(), Label::untrusted_public())
         }
 
@@ -12948,6 +12952,34 @@ five
             );
         }
 
+        /// ADDRESS-7 one level down. A delegate is cut from what the turn holds, so a worker an
+        /// addressed reader spawns holds the reader's reach and none of what the session held
+        /// beyond it.
+        #[test]
+        fn a_delegate_an_addressed_turn_spawns_holds_no_more_than_the_turn() {
+            let mut sink = RecordingSink::new();
+            let mut policy = addressing("rule-reviewer", all_capabilities(), &mut sink);
+            policy
+                .address(&OFFERED)
+                .expect("a resolved name is addressed")
+                .expect("the line named a definition");
+
+            let spec = policy
+                .before_delegate(
+                    crate::delegate::DelegateId::nth(1),
+                    &super::delegates::argument("worker"),
+                    &super::delegates::argument("fix it"),
+                )
+                .expect("an addressed turn may delegate");
+            for refused in [Capability::FileWrite, Capability::ShellExec] {
+                assert!(
+                    !spec.capabilities().contains(&refused),
+                    "a worker spawned by an addressed reader holds {refused}"
+                );
+            }
+            assert!(spec.capabilities().contains(&Capability::FileRead));
+        }
+
         /// ADDRESS-4. The name and the task are both the person's line, so nothing a context
         /// has met reaches either. Refusing here would make a person's own definitions less
         /// reachable the longer their session went on, for a reason about who composes a task.
@@ -12992,8 +13024,9 @@ five
         }
 
         /// ADDRESS-8. Each of the six is kept from a delegate for a reason naming the thing this
-        /// turn is not: nobody watching, no turn to outlive, a depth nobody chose. An addressed
-        /// turn is the person's own, so a definition naming them gets them.
+        /// turn is not: nobody watching, no turn to outlive, a depth nobody chose. So the kernel
+        /// withholds none of them by name. Whether a later look is offered at all is the
+        /// driver's, since only it knows whether anything will ask again.
         #[test]
         fn the_tools_no_delegate_is_offered_are_offered_to_an_addressed_turn() {
             let mut sink = RecordingSink::new();

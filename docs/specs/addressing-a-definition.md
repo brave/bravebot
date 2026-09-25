@@ -109,8 +109,13 @@ would make one prefix mean two things at the moment a person is typing fastest. 
 is the shape every other command here already has, and the whole word is the command, so
 `/agents are useful` stays a prompt.
 
+A turn stopped before it did anything puts the whole line back in the box, name and all, as a
+stopped prompt is put back. The task alone would be a prompt for the session's own planner, and
+Enter on it would run the work under everything the definition was there to take away.
+
 `verified-by: bravebot_tui::app::a_session_can_address_a_definition`
 `verified-by: bravebot_tui::app::a_longer_word_starting_with_agent_is_a_prompt`
+`verified-by: bravebot_tui::app::a_stopped_addressed_turn_puts_the_whole_agent_line_back_in_the_box`
 
 <a id="ADDRESS-3"></a>
 ### ADDRESS-3: only a line a person typed into the box
@@ -195,7 +200,12 @@ list is for, and the bare word gives it on demand instead.
 The run holds the session's own capabilities, intersected with the kind the definition names and
 with the tools it names. A definition of a wider kind than the session gets a run with the
 session's reach. A definition naming a tool the session is not offered gets a run without it, and
-the trail says what was dropped.
+the trail says what was dropped. The run is told what it holds in the words a delegate is told
+them, less the sentence about an agent that asked it, because the planner's own guidance around
+them is written for a turn that can edit and run.
+
+No kind holds an MCP server, so no addressed run does: it is offered none of the tools of the
+servers this session reached, and no server's list is put to the person for it.
 
 **Why.** Addressing a definition is a person choosing which of their own capabilities to work
 under, so it can only take away. This is the same direction a delegate's capabilities are computed
@@ -205,23 +215,33 @@ authority, which is the one thing a definition is not.
 
 `verified-by: bravebot_core::policy::an_addressed_turn_holds_only_what_the_session_and_the_kind_both_hold`
 `verified-by: bravebot_core::policy::a_definition_wider_than_the_session_gets_the_sessions_reach`
+`verified-by: bravebot_core::policy::a_delegate_an_addressed_turn_spawns_holds_no_more_than_the_turn`
 `verified-by: bravebot_core::policy::an_addressed_turn_is_offered_only_the_tools_its_definition_named`
 `verified-by: bravebot_agent::turn::a_tool_an_addressed_definition_left_out_is_refused_when_the_model_calls_it`
+`verified-by: bravebot_agent::turn::an_addressed_turn_is_told_what_its_definition_left_it`
+`verified-by: bravebot_agent::mcp::an_addressed_turn_is_offered_no_servers_tool_and_asks_about_no_list`
 
 <a id="ADDRESS-8"></a>
-### ADDRESS-8: the tools withheld from every delegate are not withheld here
+### ADDRESS-8: the tools withheld from every delegate are not withheld here, except what arms a later turn
 
-Asking a person, writing the task list, scheduling a next turn, fetching a URL, asking for a second
-opinion on quarantined content and spawning a delegate are offered to an addressed run wherever the
-session holds them, subject to [ADDRESS-7](#ADDRESS-7) like anything else.
+Asking a person, writing the task list, fetching a URL, asking for a second opinion on quarantined
+content and spawning a delegate are offered to an addressed run wherever the session holds them,
+subject to [ADDRESS-7](#ADDRESS-7) like anything else. Scheduling a next turn and watching a file
+are not offered, and nothing else the run is offered tells it to use them.
 
 **Why.** Each is kept from a delegate for a reason that names the thing this run is not. A question
 and a task list need somebody watching, and somebody is. Fetching a URL and vetting content both
-end at a prompt, and this run can raise one. Scheduling a next turn needs a run that outlives this
-one, and a session has one. Spawning a delegate is refused inside a delegate because the bound on a
-tree of them is a product nobody chose and because a person approving a write three levels down
-cannot see which task it belongs to; an addressed run is the session's own turn, at the depth every
-other turn starts from.
+end at a prompt, and this run can raise one. Spawning a delegate is refused inside a delegate
+because the bound on a tree of them is a product nobody chose and because a person approving a
+write three levels down cannot see which task it belongs to; an addressed run is the session's own
+turn, at the depth every other turn starts from.
+
+**The two that are withheld are withheld for a reason of this clause's own.** What a next turn or a
+watch's fire starts is a turn of the session's planner ([ADDRESS-10](#ADDRESS-10)), holding
+everything the session holds. A reader addressed so that nothing is written could otherwise arm a
+turn that writes, with nobody typing anything. Carrying the name onto that later turn would keep
+the narrowing, and would make a turn nobody typed an addressed one, which is the question
+[ADDRESS-3](#ADDRESS-3) answers no to for now.
 
 **The cost of this clause is that one file reads two ways.** A definition naming `ask_user` under
 `tools:` is a definition loaded without it when a planner spawns it, and with it when a person
@@ -230,6 +250,7 @@ does not apply to them.
 
 `verified-by: bravebot_core::policy::the_tools_no_delegate_is_offered_are_offered_to_an_addressed_turn`
 `verified-by: bravebot_agent::turn::an_addressed_turn_runs_under_its_definitions_prompt_model_and_kind`
+`verified-by: bravebot_agent::turn::an_addressed_turn_arranges_no_later_look_and_arms_no_watch`
 
 ## How long it lasts
 
@@ -271,7 +292,9 @@ and the line they typed is where they named it. Addressing it twice costs one wo
 Where the definition names a model that needs a sign-in this machine has not made, nothing runs and
 the person is told which definition asked for which model. The session's own model is not
 substituted. Where the endpoint answers with a model other than the one asked for, that is said
-too, naming the definition and the model it named.
+too, naming the definition and the model it named, and a reply from the model the definition named
+is not reported as the session's model substituted. A delegate the run spawns whose own definition
+names no model inherits the addressed definition's, not the session's.
 
 **Why.** A definition naming a cheap model is often a cost boundary, and running it on the
 session's model would spend past that boundary without anybody choosing to. The person is at the
@@ -283,6 +306,9 @@ time.
 `verified-by: bravebot_agent::turn::an_addressed_definition_whose_model_needs_a_sign_in_sends_nothing_and_says_so`
 `verified-by: bravebot_tui::app::a_definition_whose_model_needs_a_sign_in_runs_nothing_and_says_so`
 `verified-by: bravebot_agent::turn::an_addressed_definition_answered_by_another_model_says_so`
+`verified-by: bravebot_agent::turn::a_delegate_an_addressed_turn_spawns_inherits_the_definitions_model`
+`verified-by: bravebot_tui::app::addressing_a_definition_that_names_a_model_carries_that_model`
+`verified-by: bravebot_tui::app::an_addressed_turn_is_held_against_the_model_its_definition_named`
 
 <a id="ADDRESS-12"></a>
 ### ADDRESS-12: the driver says which definition answered
@@ -324,7 +350,7 @@ the one that matched the name.
   called, which is the right place for it to fall.
 
 - **One definition file means two slightly different things.** Which tools it ends up with depends
-  on whether a planner spawned it or a person addressed it, because six of them are withheld from
+  on whether a planner spawned it or a person addressed it, because five of them are withheld from
   one and not the other. A person reading a definition cannot tell what it will hold without
   knowing how it is reached.
 
@@ -332,6 +358,11 @@ the one that matched the name.
   lands in the session, so addressing a definition for a job that reads a large tree costs what
   doing the job in the session costs. A person who wanted the reading kept out of their context
   wanted a delegate, and the two are reached differently on purpose.
+
+- **An addressed run cannot ask to be asked again, or be told when a file changes.** A person who
+  wants a definition to look again addresses it again. That is the price of
+  [ADDRESS-8](#ADDRESS-8)'s exception, and a person who wanted the session to keep looking can ask
+  the session rather than the definition.
 
 - **The name is drawn only in the session that addressed it.** The session record does not keep
   which definition answered, so a resumed session and an exported transcript show the reply as the

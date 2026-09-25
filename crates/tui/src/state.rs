@@ -907,6 +907,18 @@ pub struct TurnStart {
     pub transcript_len: usize,
 }
 
+/// The definition a person's `/agent` line named, and the model its turn will ask for.
+///
+/// The model travels with the name because the session's is the wrong one for everything asked
+/// about the turn before and after it: a sign-in for a model nothing will use, and a reply from the
+/// definition's model read as the session's substituted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Addressed {
+    pub name: String,
+    /// Resolved as the driver resolves it, or `None` where the definition names no model.
+    pub model: Option<String>,
+}
+
 /// What the rewind points are holding in memory, which is what the budget is spent on.
 fn held_bytes(points: &[RewindPoint]) -> usize {
     points
@@ -1297,7 +1309,7 @@ pub struct Session {
     /// Taken by the one turn it was set for, so the next line is the session's own planner again
     /// with no mode to leave (ADDRESS-10). Private, because only [`Session::address`] may set it:
     /// that is what keeps a loop's tick, a goal or a watch from ever carrying one (ADDRESS-3).
-    addressing: Option<String>,
+    addressing: Option<Addressed>,
     /// The standing watches this session holds, where a turn armed any.
     ///
     /// Private for the reason the loop and the goal are: a watch is looked at, fires, and has the
@@ -5817,17 +5829,17 @@ impl Session {
     /// (ADDRESS-9). Only the name is held apart, for the one turn that takes it.
     pub fn address(
         &mut self,
-        name: &str,
+        addressed: Addressed,
         task: &str,
         pasted: Vec<AttachedImage>,
         attached: Vec<Attached>,
     ) -> String {
-        self.addressing = Some(name.to_string());
+        self.addressing = Some(addressed);
         self.begin_turn(task.to_string(), (attached, pasted), Vec::new())
     }
 
     /// The definition the turn starting now was addressed to, taken so no later turn inherits it.
-    pub fn take_addressing(&mut self) -> Option<String> {
+    pub fn take_addressing(&mut self) -> Option<Addressed> {
         self.addressing.take()
     }
 

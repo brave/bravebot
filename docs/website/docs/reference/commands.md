@@ -407,15 +407,19 @@ describing the work and hoping the planner picks it.
 instruction in its body, its `model`, and its narrowing (its `kind` and its `tools` line). Nothing
 else changes. The run can still ask you a question, keep a task list and ask before every write, and
 what it reads and answers stays in the conversation, exactly as any turn of yours does. The line
-after it goes to the session's own planner again. There is no mode to leave.
+after it goes to the session's own planner again. There is no mode to leave. Stopping the turn
+before it did anything puts the whole `/agent` line back in the box, so Enter addresses the same
+definition again.
 
 **It can only take away.** The turn holds what the session holds, cut down to the definition's kind
 and its `tools` line. A `reader` addressed from a session that may write is a turn that may not. A
 `worker` addressed from a session that may only read gets no write, and a tool the definition names
 that the session is not offered is dropped and said in the trail. A tool the definition left out is
-refused if the model calls it anyway. The six tools a delegate never gets (asking you, the task
-list, scheduling a next turn, fetching a URL, vetting content and spawning a delegate) are offered
-here, because each is withheld from a delegate for a reason about nobody watching it.
+refused if the model calls it anyway. Five tools a delegate never gets (asking you, the task list,
+fetching a URL, vetting content and spawning a delegate) are offered here, because each is withheld
+from a delegate for a reason about nobody watching it. Scheduling a next turn and watching a file are
+not: the turn either one starts is the session's planner's, holding everything the definition took
+away. To have a definition look again, address it again.
 
 **The name is compared against what this session resolved**, from `~/.bravebot/agents` and from a
 project you vouched for. The bare word lists those names, and so does a name that matches nothing:

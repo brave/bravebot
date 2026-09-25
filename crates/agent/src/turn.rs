@@ -2361,11 +2361,20 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     // one-shot run and the desktop bridge each take one turn and exit, and a session running a
     // line this program wrote keeps no loop over it. A wait asked for there is discarded, so the
     // turn is offered no way to ask for one rather than told a watch it cannot have now exists.
+    //
+    // A turn addressed to a definition arranges nothing later either, and arms no watch: what
+    // either starts is a turn of the session's planner, holding what the definition took away
+    // (ADDRESS-8).
     let scheduling = match task.tick {
+        _ if task.addressing.is_some() => tools::Scheduling::NoLaterLook,
         Some(tick) if tick.self_paced => tools::Scheduling::PacingALoop,
         Some(_) => tools::Scheduling::TheirInterval,
         None if task.looking_again => tools::Scheduling::ArrangingALook,
         None => tools::Scheduling::NoLaterLook,
+    };
+    let arming = match task.addressing {
+        Some(_) => crate::watch::Arming::Unavailable,
+        None => task.arming,
     };
 
     // Found once per turn and reused for every round. Per turn rather than per session so a
@@ -2438,7 +2447,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     let (addressed, mut offered) = match &task.delegate {
         Some(spec) => (None, tools::for_delegate(spec.capabilities(), spec.tools())),
         None => {
-            let mut offered = tools::for_planner(scheduling, task.arming, &delegates);
+            let mut offered = tools::for_planner(scheduling, arming, &delegates);
             let names: Vec<&str> = offered
                 .iter()
                 .map(|tool| tool.function.name.as_str())
@@ -3225,7 +3234,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                             },
                             cancel,
                             scheduling,
-                            arming: task.arming,
+                            arming,
                             armed: &mut armed,
                             home: task.home.as_deref(),
                             profile: task.profile.as_deref(),
@@ -3275,6 +3284,8 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     // Started here rather than inside the call. A delegate outlives the call that asked
                     // for one: that call has already answered, and what is still here when the work
                     // finishes is the turn.
+                    // The turn's, not the session's: an addressed turn runs on its definition's.
+                    let spawning_model = turn_model.as_deref();
                     for (id, seeded) in std::mem::take(&mut output.delegate) {
                         let vouched = seeded.vouched.clone();
                         let handle = scope.spawn(move || {
@@ -3288,7 +3299,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 workspace,
                                 task.home.as_deref(),
                                 task.profile.as_deref(),
-                                task.model.as_deref(),
+                                spawning_model,
                                 task.permission_mode,
                                 task.auto_vetting,
                                 &task.attribution,
