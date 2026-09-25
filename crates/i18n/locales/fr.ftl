@@ -1004,6 +1004,7 @@ scroller-key-full-page = page entière   (aussi ctrl-f / ctrl-b)
 scroller-key-ends = début / fin   (aussi home / end)
 scroller-key-prompts = invite précédente / suivante
 scroller-key-search = rechercher, correspondance suivante/précédente
+scroller-key-count = un nombre d'abord va autant de fois plus loin
 scroller-key-search-run = lancer / supprimer, puis abandonner
 scroller-key-editor = ouvrir la transcription dans $EDITOR
 scroller-key-this-list = cette liste

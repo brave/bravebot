@@ -36,7 +36,8 @@ the top of the view is held across that: what is gained appears below what is al
 what is given back when the scroller closes is covered by the box coming home.
 
 `q`, Escape and Ctrl-O each close it, and the view stays where the scroller left it. Escape
-clears a standing search first, since that is nearer.
+abandons a count still waiting for its key first (SCROLL-3) and clears a standing search after
+that, since each is nearer.
 
 Ctrl-C closes it as well, and does nothing else. The scroller is the nearest thing there is to
 stop, so a turn in flight goes on running and the press that reaches it is the next one. Each
@@ -57,6 +58,7 @@ one.
 `verified-by: bravebot_tui::app::the_scroller_answers_the_stop_keys_before_the_turn_does`
 `verified-by: bravebot_tui::app::a_turn_goes_on_running_while_the_scroller_is_open`
 `verified-by: bravebot_tui::app::the_chords_that_close_the_scroller_close_it_while_a_search_is_typed`
+`verified-by: bravebot_tui::app::escape_abandons_a_count_before_it_clears_a_search_or_closes_the_scroller`
 
 
 <a id="SCROLL-2"></a>
@@ -102,9 +104,26 @@ or the last, so a held key comes to rest somewhere the next press can move away 
 `{` and `}` land on the row a turn begins at, which is a prompt the person typed. Where they land
 is settled by what the person wrote and by nothing read out of the workspace.
 
+A count typed first goes that many times as far, on every key in the first three rows of the table
+and on `{`, `}`, `n` and `N`: `5j` is five lines, `3` Ctrl-D three half screens, `3}` three
+prompts on and `3n` three matches on, wrapping as `n` does (SCROLL-4). It is read as the box reads
+one ([INPUT-35](terminal-input.md#INPUT-35)): 1 to 9 begin it, 0 continues it, and it stops at a
+thousand. It stops where the key does as well: the view goes no further than the first row or the
+last, and the prompt keys stop at the first press that moves nothing. It is drawn at the start of
+the footer until the key it is for arrives, where the row has room for it beside the way out
+(SCROLL-7). Any other key drops it and does what it does alone, the wheel included, and Escape
+abandons it and does nothing else.
+
 **Why.** Two dialects, because the people who reach for a pager have `less` or `vi` in their hands
 already and neither group should have to learn the other's. A key that does nothing on arrival
 reads as a broken feature, and the cost of answering both is a row in this table.
+
+A count is how both dialects say how far, so a `5j` that moves one line is a key that did not
+listen. The box's reader is the one used, cap and all, so a count means one thing in both modes,
+and a thousand is further than anybody counts lines: `G` and `gg` reach the rest, and a thousand
+screens is past the end of any transcript. A count waiting for its key changes what that key does,
+so it is on the screen, as the box draws one beside its mode word. `3n` is `n` pressed three times, and takes no decision from untrusted bytes
+that the Known costs below do not already admit.
 
 `verified-by: bravebot_tui::app::the_line_keys_move_the_view_by_a_line`
 `verified-by: bravebot_tui::app::the_half_page_keys_move_the_view_by_half_a_screen`
@@ -114,6 +133,13 @@ reads as a broken feature, and the cost of answering both is a row in this table
 `verified-by: bravebot_tui::app::the_view_stops_at_the_first_row_rather_than_scrolling_past_it`
 `verified-by: bravebot_tui::app::the_view_stops_at_the_last_row_rather_than_scrolling_past_it`
 `verified-by: bravebot_tui::app::the_wheel_scrolls_the_scroller_as_it_scrolls_the_transcript`
+`verified-by: bravebot_tui::app::a_count_moves_the_view_that_many_times_as_far`
+`verified-by: bravebot_tui::app::a_count_stops_at_the_ends_of_the_transcript`
+`verified-by: bravebot_tui::app::a_count_on_the_prompt_keys_walks_that_many_prompts_and_stops_at_the_ends`
+`verified-by: bravebot_tui::app::a_count_on_n_walks_that_many_matches_and_wraps`
+`verified-by: bravebot_tui::app::a_key_that_takes_no_count_drops_it`
+`verified-by: bravebot_tui::app::escape_abandons_a_count_before_it_clears_a_search_or_closes_the_scroller`
+`verified-by: bravebot_tui::render::the_footer_draws_a_count_waiting_for_its_key`
 
 
 <a id="SCROLL-4"></a>
@@ -214,6 +240,8 @@ side, keeping a copy, or grepping the lot, is a text editor's job, and the user 
 A footer stands while the scroller is open, saying so and naming a key that closes it. `?` lists
 every key in this file, and the list renders on a terminal too short for it rather than pushing the
 way out off the screen: what a short terminal loses is rows from the middle, never the last one.
+A count waiting for its key (SCROLL-3) is drawn on the footer only where the row still holds the
+way out beside it.
 
 The list is read instead of the transcript rather than alongside it, so any key at all puts it
 away and that press is spent doing so. The list says as much, because a key that quietly did two
@@ -232,6 +260,7 @@ that must never be the line that did not fit.
 `verified-by: bravebot_tui::render::the_search_footer_names_the_way_out_with_a_turn_running_underneath`
 `verified-by: bravebot_tui::render::a_long_needle_keeps_the_way_out_and_gives_up_what_the_turn_says`
 `verified-by: bravebot_tui::render::a_long_needle_being_typed_keeps_the_way_out_of_the_search`
+`verified-by: bravebot_tui::render::a_count_too_long_for_the_row_leaves_the_way_out_on_it`
 
 
 <a id="SCROLL-8"></a>

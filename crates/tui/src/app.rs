@@ -625,6 +625,18 @@ fn scroller_key(session: &mut Session, key: KeyEvent) -> Action {
         };
     }
 
+    // A count is read as the box reads one (INPUT-35), and the key after it takes it whatever that
+    // key is: the ones that move the view go that many times as far, and the rest drop it.
+    if types_a_character(key)
+        && let KeyCode::Char(c) = key.code
+        && session.count_in_the_scroller(c)
+    {
+        return Action::Redraw;
+    }
+    let counted = session.take_the_scroller_count();
+    let times = counted.unwrap_or(1);
+    let by = |step: u16| step.saturating_mul(u16::try_from(times).unwrap_or(u16::MAX));
+
     match key.code {
         // Four keys close it. Ctrl-C is one of them and does nothing else here: the scroller is
         // the nearest thing there is to stop, so a turn in flight goes on running and the press
@@ -634,10 +646,10 @@ fn scroller_key(session: &mut Session, key: KeyEvent) -> Action {
             Action::Redraw
         }
         // The same ladder every other stop key here walks: the nearest thing there is to stop.
-        // A standing search is nearer than the mode holding it, so the highlights come off first
-        // and the press after that is the one that closes the scroller.
+        // A count waiting for its key is nearer than a standing search, and that is nearer than
+        // the mode holding it, so each press takes off one and the last closes the scroller.
         KeyCode::Esc => {
-            if !session.clear_search() {
+            if counted.is_none() && !session.clear_search() {
                 session.close_scroller();
             }
             Action::Redraw
@@ -653,36 +665,36 @@ fn scroller_key(session: &mut Session, key: KeyEvent) -> Action {
 
         // A line at a time.
         KeyCode::Up | KeyCode::Char('k') => {
-            session.scroller_back(1);
+            session.scroller_back(by(1));
             Action::Redraw
         }
         KeyCode::Down | KeyCode::Char('j') => {
-            session.scroller_on(1);
+            session.scroller_on(by(1));
             Action::Redraw
         }
 
         // Half a screen, which is the one movement that keeps context on both sides of itself.
         KeyCode::Char('u') if ctrl => {
-            session.scroller_back(session.half_screen());
+            session.scroller_back(by(session.half_screen()));
             Action::Redraw
         }
         KeyCode::Char('d') if ctrl => {
-            session.scroller_on(session.half_screen());
+            session.scroller_on(by(session.half_screen()));
             Action::Redraw
         }
 
         // A whole screen, in both dialects. `b` is the same key with or without Ctrl, because
         // somebody who knows one spelling should not find the other typing a letter.
         KeyCode::Char(' ') | KeyCode::PageDown => {
-            session.scroller_on(session.whole_screen());
+            session.scroller_on(by(session.whole_screen()));
             Action::Redraw
         }
         KeyCode::Char('f') if ctrl => {
-            session.scroller_on(session.whole_screen());
+            session.scroller_on(by(session.whole_screen()));
             Action::Redraw
         }
         KeyCode::Char('b') | KeyCode::PageUp => {
-            session.scroller_back(session.whole_screen());
+            session.scroller_back(by(session.whole_screen()));
             Action::Redraw
         }
 
@@ -707,11 +719,11 @@ fn scroller_key(session: &mut Session, key: KeyEvent) -> Action {
         // Turn by turn. Where these land is settled by what the person typed, since a prompt is
         // the one thing in a transcript they wrote themselves.
         KeyCode::Char('{') => {
-            session.to_previous_prompt();
+            session.to_previous_prompt(times);
             Action::Redraw
         }
         KeyCode::Char('}') => {
-            session.to_next_prompt();
+            session.to_next_prompt(times);
             Action::Redraw
         }
 
@@ -720,11 +732,11 @@ fn scroller_key(session: &mut Session, key: KeyEvent) -> Action {
             Action::Redraw
         }
         KeyCode::Char('n') => {
-            walk_the_matches(session, true);
+            walk_the_matches(session, true, times);
             Action::Redraw
         }
         KeyCode::Char('N') => {
-            walk_the_matches(session, false);
+            walk_the_matches(session, false, times);
             Action::Redraw
         }
 
@@ -748,14 +760,17 @@ fn land_on_a_match(session: &mut Session) {
     session.land_on_a_match(&laid.matches);
 }
 
-/// Walk to the next match, or the previous one.
+/// Walk `times` matches on, or back, wrapping at either end as a single step does.
 ///
 /// The rows are the ones the last frame found, which is the frame the person is looking at while
 /// they press the key. Nothing has changed about what is being looked for since it was drawn, so
-/// there is nothing to lay out again.
-fn walk_the_matches(session: &mut Session, forwards: bool) {
+/// there is nothing to lay out again. A count stops at a thousand, so the walk is a thousand steps
+/// at most whatever was typed.
+fn walk_the_matches(session: &mut Session, forwards: bool, times: u32) {
     let found = session.laid.matches.clone();
-    session.to_a_match(&found, forwards);
+    for _ in 0..times {
+        session.to_a_match(&found, forwards);
+    }
 }
 
 /// Interpret one key press while the prompt history is being searched.
@@ -1857,12 +1872,15 @@ fn in_megabytes(bytes: usize) -> String {
 pub fn handle_mouse(session: &mut Session, mouse: MouseEvent) -> Action {
     match mouse.kind {
         // While the scroller is open the wheel is one of its keys, so it stops at the first row
-        // and the last the way every other movement in that mode does.
+        // and the last the way every other movement in that mode does. It takes no count, so it
+        // drops one, as any other key would.
         MouseEventKind::ScrollUp if session.scrolling() => {
+            session.take_the_scroller_count();
             session.scroller_back(3);
             Action::Redraw
         }
         MouseEventKind::ScrollDown if session.scrolling() => {
+            session.take_the_scroller_count();
             session.scroller_on(3);
             Action::Redraw
         }
@@ -8095,6 +8113,245 @@ mod tests {
             assert_eq!(session.scroll, 0);
             handle_key(&mut session, key(KeyCode::Char('k')));
             assert_eq!(session.scroll, 1, "the view had counted past the last row");
+        }
+
+        fn type_keys(session: &mut Session, keys: &str) {
+            for c in keys.chars() {
+                handle_key(session, key(KeyCode::Char(c)));
+            }
+        }
+
+        /// Both dialects say how far with a number typed first, so a count is that many of the
+        /// key it is for, on every spelling of the key: a count the arrows ignored would have the
+        /// same press meaning two things.
+        #[test]
+        fn a_count_moves_the_view_that_many_times_as_far() {
+            for (count, pressed, scroll) in [
+                ("5", key(KeyCode::Char('k')), 5),
+                ("5", key(KeyCode::Up), 5),
+                ("12", key(KeyCode::Char('k')), 12),
+                ("10", key(KeyCode::Char('k')), 10),
+                ("2", ctrl('u'), 10),
+                ("3", key(KeyCode::Char('b')), 30),
+                ("3", ctrl('b'), 30),
+                ("3", key(KeyCode::PageUp), 30),
+            ] {
+                let mut session = opened();
+                type_keys(&mut session, count);
+                handle_key(&mut session, pressed);
+                assert_eq!(session.scroll, scroll, "{count} then {pressed:?}");
+            }
+
+            let mut session = opened();
+            session.scroller_to_first_row();
+            for (count, pressed, scroll) in [
+                ("5", key(KeyCode::Char('j')), 85),
+                ("5", key(KeyCode::Down), 80),
+                ("2", ctrl('d'), 70),
+                ("2", key(KeyCode::Char(' ')), 50),
+                ("2", ctrl('f'), 30),
+                ("2", key(KeyCode::PageDown), 10),
+            ] {
+                type_keys(&mut session, count);
+                handle_key(&mut session, pressed);
+                assert_eq!(session.scroll, scroll, "{count} then {pressed:?}");
+            }
+        }
+
+        /// The transcript bounds a count and the number typed does not. One too large for the
+        /// offset is the end rather than a number that wrapped round to something small, and the
+        /// press after it moves away from the end rather than back through what was counted.
+        #[test]
+        fn a_count_stops_at_the_ends_of_the_transcript() {
+            let mut session = opened();
+            for count in ["65536", "999999999", "99999999999999999999999"] {
+                session.scroller_to_last_row();
+                type_keys(&mut session, count);
+                handle_key(&mut session, key(KeyCode::Char('k')));
+                assert_eq!(session.top_row(), 0, "{count}k did not reach the first row");
+
+                type_keys(&mut session, count);
+                handle_key(&mut session, key(KeyCode::Char('j')));
+                assert_eq!(session.scroll, 0, "{count}j did not reach the last row");
+            }
+
+            handle_key(&mut session, key(KeyCode::Char('k')));
+            assert_eq!(session.scroll, 1, "the view had counted past the last row");
+
+            // A thousand screens of a terminal a hundred rows tall is past the largest offset
+            // there is, so the step is the end rather than a sum that overflowed.
+            let mut session = Session::new("kernel-enforced");
+            session.note_layout(Laid {
+                width: 80,
+                height: 100,
+                rows: 300,
+                prompts: Vec::new(),
+                matches: Vec::new(),
+            });
+            session.open_scroller();
+            type_keys(&mut session, "1000b");
+            assert_eq!(session.top_row(), 0, "1000b did not reach the first row");
+            type_keys(&mut session, "1000 ");
+            assert_eq!(session.scroll, 0, "1000 did not reach the last row");
+        }
+
+        /// The prompts are walked a turn at a time, and the walk ends where a single press would
+        /// have nowhere further to go. A count past the last prompt is the end of the transcript,
+        /// which is where pressing the key that many times would have left the view, and the
+        /// longest count is the thousand a count stops at. The earliest prompt is not the first
+        /// row here, so a walk that stopped on it cannot pass for one that went on to the start.
+        #[test]
+        fn a_count_on_the_prompt_keys_walks_that_many_prompts_and_stops_at_the_ends() {
+            let mut session = Session::new("kernel-enforced");
+            session.note_layout(Laid {
+                width: 80,
+                height: 10,
+                rows: 100,
+                prompts: vec![10, 40, 70],
+                matches: Vec::new(),
+            });
+            session.open_scroller();
+
+            for (keys, top) in [
+                ("2{", 40),
+                ("2}", 90),
+                ("3{", 10),
+                ("}", 40),
+                ("4{", 0),
+                ("99999999999999999999999}", 90),
+                ("99999999999999999999999{", 0),
+            ] {
+                type_keys(&mut session, keys);
+                assert_eq!(session.top_row(), top, "{keys}");
+            }
+        }
+
+        /// `3n` is `n` pressed three times and wraps as they would. A count past the number of
+        /// matches goes round the list and lands where that many presses would, rather than
+        /// stopping after one lap. Eleven nines are the thousand a count stops at, which lands
+        /// one match on from where the nines themselves would.
+        #[test]
+        fn a_count_on_n_walks_that_many_matches_and_wraps() {
+            let mut session = Session::new("kernel-enforced");
+            session.note_layout(Laid {
+                width: 80,
+                height: 10,
+                rows: 100,
+                prompts: Vec::new(),
+                matches: vec![20, 50, 80],
+            });
+            session.open_scroller();
+            session.scroller_to_first_row();
+
+            for (keys, top) in [
+                ("2n", 50),
+                ("3n", 50),
+                ("2N", 80),
+                ("1000n", 20),
+                ("99999999999n", 50),
+            ] {
+                type_keys(&mut session, keys);
+                assert_eq!(session.top_row(), top, "{keys}");
+            }
+        }
+
+        /// A count is for the key typed after it. One that key has no use for goes with it rather
+        /// than waiting for the next, since a `k` moving three lines long after a `3G` would be a
+        /// count the person had stopped seeing. A digit typed into a search is part of the needle.
+        #[test]
+        fn a_key_that_takes_no_count_drops_it() {
+            for dropping in [
+                key(KeyCode::Char('G')),
+                key(KeyCode::Char('g')),
+                key(KeyCode::End),
+                key(KeyCode::Char('z')),
+                key(KeyCode::Tab),
+                ctrl('w'),
+            ] {
+                let mut session = opened();
+                handle_key(&mut session, key(KeyCode::Char('3')));
+                handle_key(&mut session, dropping);
+                session.scroller_to_last_row();
+                session.scroller_back(20);
+                handle_key(&mut session, key(KeyCode::Char('k')));
+                assert_eq!(
+                    session.scroll, 21,
+                    "the count before {dropping:?} moved the k after it"
+                );
+            }
+
+            // The wheel is one of the scroller's keys, and it takes no count either.
+            for wheel in [MouseEventKind::ScrollUp, MouseEventKind::ScrollDown] {
+                let mut session = opened();
+                handle_key(&mut session, key(KeyCode::Char('3')));
+                handle_mouse(&mut session, drag(wheel, 0, 0));
+                session.scroller_to_last_row();
+                session.scroller_back(20);
+                handle_key(&mut session, key(KeyCode::Char('k')));
+                assert_eq!(
+                    session.scroll, 21,
+                    "the count before the wheel {wheel:?} moved the k after it"
+                );
+            }
+
+            let mut session = opened();
+            type_keys(&mut session, "3?x");
+            assert!(!session.scroller().is_some_and(|scroller| scroller.help));
+            type_keys(&mut session, "k");
+            assert_eq!(session.scroll, 1, "the count before ? moved the k after it");
+
+            let mut session = opened();
+            type_keys(&mut session, "3/3");
+            assert_eq!(
+                session.scroller().and_then(|s| s.typing.as_deref()),
+                Some("3"),
+                "a digit typed into a search was not part of the needle"
+            );
+            handle_key(&mut session, key(KeyCode::Esc));
+            type_keys(&mut session, "k");
+            assert_eq!(session.scroll, 1, "the count before / moved the k after it");
+
+            // A count begins at 1, and 0 alone is a key the scroller does not take.
+            let mut session = opened();
+            type_keys(&mut session, "0k");
+            assert_eq!(session.scroll, 1, "0 began a count");
+        }
+
+        /// The ladder the stop keys walk: a count waiting for its key is the nearest thing there
+        /// is to stop, so Escape takes it off and does nothing else. Closing the mode to be rid
+        /// of a mistyped digit would lose the place somebody had scrolled to.
+        #[test]
+        fn escape_abandons_a_count_before_it_clears_a_search_or_closes_the_scroller() {
+            let mut session = opened();
+            type_keys(&mut session, "5");
+            handle_key(&mut session, key(KeyCode::Esc));
+            assert!(
+                session.scrolling(),
+                "abandoning the count closed the scroller"
+            );
+            type_keys(&mut session, "k");
+            assert_eq!(session.scroll, 1, "Escape left the count standing");
+
+            type_keys(&mut session, "/notes");
+            handle_key(&mut session, key(KeyCode::Enter));
+            type_keys(&mut session, "5");
+            handle_key(&mut session, key(KeyCode::Esc));
+            assert_eq!(
+                session.needle(),
+                "notes",
+                "abandoning the count cleared the search"
+            );
+
+            handle_key(&mut session, key(KeyCode::Esc));
+            assert_eq!(session.needle(), "", "the search was not cleared");
+            type_keys(&mut session, "5");
+            handle_key(&mut session, key(KeyCode::Esc));
+            assert!(
+                session.scrolling(),
+                "abandoning the count closed the scroller"
+            );
+            handle_key(&mut session, key(KeyCode::Esc));
+            assert!(!session.scrolling(), "the last press did not close it");
         }
 
         #[test]

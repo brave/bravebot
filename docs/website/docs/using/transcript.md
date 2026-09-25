@@ -209,6 +209,13 @@ going, so a held key comes to rest somewhere the next press can move away from.
 
 `{` and `}` land on the row a turn begins at, which is a prompt you typed.
 
+A count typed first goes that many times as far: `5j` moves five lines, `3` Ctrl-D three half
+screens, `2b` two screens back, `3}` three prompts on and `3n` three matches on. It works on every
+key in the first three rows of the table and on `{`, `}`, `n` and `N`, it stops at the ends as a
+single press does, and it goes no higher than a thousand, as a count in the box does. The count is
+drawn at the start of the footer until the key it is for arrives. Any other key drops it, the wheel
+included, and Escape abandons it without closing anything.
+
 ### Searching
 
 `/` searches what is drawn. The needle is typed at the foot of the screen, Enter runs it, and it is
@@ -225,9 +232,9 @@ never quotes what it matched.
 
 ### Leaving
 
-`q`, Escape and Ctrl-O each close the scroller, and the view stays where it left it. Escape clears a
-standing search first, since that is the nearer thing to stop; the press after that closes. The other
-ways out close it even while a needle is half typed.
+`q`, Escape and Ctrl-O each close the scroller, and the view stays where it left it. Escape abandons
+a count waiting for its key first, then clears a standing search, since each is the nearer thing to
+stop; the press after that closes. The other ways out close it even while a needle is half typed.
 
 Ctrl-C closes the scroller and does nothing else. A turn in flight goes on running, and the press
 that reaches it is the next one. Each press answers the nearest thing there is to stop, and the
