@@ -1,4 +1,3 @@
-import { cn } from 'cn'
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ModelCatalogue, ModelOption } from '../../shared/protocol'
 import { setExperience, useExperience } from '../experience'
@@ -120,7 +119,8 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
           <CommandGroup>
           {options.map((row) => <CommandItem key={row.id} value={row.id} role="option"
           data-current={row.id === model}
-          className="model-option gap-2 rounded-md px-2 py-2 data-[selected=true]:bg-primary/10 data-[selected=true]:text-foreground"
+          aria-current={row.id === model ? 'true' : undefined}
+          className="model-option gap-2 rounded-md px-2 py-2 data-[selected=true]:bg-primary/10 data-[selected=true]:text-foreground data-[current=true]:bg-accent data-[current=true]:text-accent-foreground"
           onSelect={() => choose(row)}>
           <span className="model-check w-3.5 shrink-0 text-primary" aria-hidden="true">{row.id === model ? '✓' : ''}</span>
           <span className="model-description flex min-w-0 flex-1 flex-col gap-0.5"><span className="model-name truncate text-[12.5px] font-medium">{row.name}</span>

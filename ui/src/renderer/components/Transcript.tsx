@@ -162,7 +162,7 @@ function ColumnToggle({
         <Button
           variant="ghost"
           size="icon-sm"
-          className={`fold-toggle ${side}`}
+          className={cn('fold-toggle', side)}
           aria-expanded={!collapsed}
           aria-controls={side === 'left' ? 'sessions-column' : 'context-column'}
           aria-label={side === 'left' ? 'Session list' : 'Context panel'}
@@ -170,7 +170,7 @@ function ColumnToggle({
         >
           {/* Pointing outward when folded — the way the column will come back — and inward
               when open. Decorative: the button is already named and its state announced. */}
-          <span className={`fold-chevron ${collapsed ? '' : 'open'}`} aria-hidden="true">
+          <span className={cn('fold-chevron', !collapsed && 'open')} aria-hidden="true">
             {side === 'left' ? '›' : '‹'}
           </span>
         </Button>

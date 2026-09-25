@@ -6,20 +6,21 @@ import { join } from 'node:path'
 import { _electron as electron } from 'playwright-core'
 
 const profile = mkdtempSync(join(tmpdir(), 'bravebot-model-picker-'))
+const project = mkdtempSync(join(tmpdir(), 'bravebot-model-picker-project-'))
 const app = await electron.launch({ args: ['.', `--user-data-dir=${profile}`], cwd: process.cwd(), timeout: 40000 })
 try {
   const page = await app.firstWindow()
   page.setDefaultTimeout(15000)
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
-  await app.evaluate(({ ipcMain, BrowserWindow }) => {
+  await app.evaluate(({ ipcMain, BrowserWindow, dialog }, directory) => {
     const defaultModel = 'openrouter/anthropic/claude-haiku-4.5'
-    const directory = '/tmp/bravebot-model-picker-project'
     const rows = ['A', 'B'].map((id) => ({ id, directory, title: `Conversation ${id}`,
       project: 'model-picker-project', branch: null, updated: 1, bytes: 1 }))
     globalThis.modelTest = { sent: [], fail: false, loading: false }
-    ipcMain.removeHandler('bravebot:choose-directory')
-    ipcMain.handle('bravebot:choose-directory', () => directory)
+    // The native sheet would hang the run. Stubbed at the dialog so the main process still
+    // records the folder as one somebody chose, which is what bot saving checks.
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [directory] })
     ipcMain.removeHandler('bravebot:request')
     ipcMain.handle('bravebot:request', async (_, method, params) => {
       if (method === 'models.list') {
@@ -47,7 +48,7 @@ try {
     globalThis.finishModelTurn = () => BrowserWindow.getAllWindows()[0].webContents.send('bravebot:event', {
       event: 'turn.done', session: 's-new', data: { id: 'A', turn: 1, reply: 'Done', archived: 0 },
     })
-  })
+  }, project)
   await page.reload()
   await page.getByRole('button', { name: /^\+ New session$/ }).click()
   await page.getByRole('button', { name: "Don't trust", exact: true }).click()
@@ -79,8 +80,8 @@ try {
   await search.fill('sonnet')
   assert.equal(await page.getByRole('option').count(), 1)
   await search.press('Enter')
-  assert.equal(await page.locator('.model-popover').count(), 0)
-  assert.equal(await trigger.evaluate((element) => element === document.activeElement), true)
+  await page.locator('.model-popover').waitFor({ state: 'detached', timeout: 2000 })
+  await page.waitForFunction(() => document.activeElement?.classList.contains('model-trigger'), null, { timeout: 2000 })
   assert.match(await trigger.getAttribute('aria-label'), /Sonnet|sonnet/)
   assert.equal(await page.locator('.model-current').innerText(), 'Claude Sonnet 4.5')
   await page.screenshot({ path: '/tmp/bravebot-model-label.png' })
@@ -101,7 +102,7 @@ try {
   assert.equal(sent[0].prompt, 'Use this conversation’s selected model\nOn a second line')
   await app.evaluate(() => globalThis.finishModelTurn())
   await page.waitForFunction(() => !document.querySelector('.model-trigger').disabled)
-  await page.waitForFunction(() => localStorage.getItem('bravebot.conversation-model:["/tmp/bravebot-model-picker-project","A"]')?.includes('sonnet'))
+  await page.waitForFunction((directory) => localStorage.getItem(`bravebot.conversation-model:${JSON.stringify([directory, 'A'])}`)?.includes('sonnet'), project)
 
   await page.locator('.session').filter({ hasText: 'Conversation B' }).click()
   await page.waitForFunction(() => document.querySelector('.model-trigger')?.getAttribute('aria-label')?.includes('haiku'))
@@ -118,7 +119,7 @@ try {
   await search.fill('no-such-model')
   await page.getByText('No models match your search.').waitFor()
   await search.press('Escape')
-  assert.equal(await trigger.evaluate((element) => element === document.activeElement), true)
+  await page.waitForFunction(() => document.activeElement?.classList.contains('model-trigger'), null, { timeout: 2000 })
   await app.evaluate(() => { globalThis.modelTest.fail = true })
   await trigger.click()
   await page.getByRole('alert').waitFor()
@@ -195,4 +196,5 @@ try {
 } finally {
   await app.close()
   rmSync(profile, { recursive: true, force: true })
+  rmSync(project, { recursive: true, force: true })
 }

@@ -14,9 +14,9 @@ export function TurnNotices({ details, onDisclosure }: {
   if (!details?.notices.length) return null
   return <Collapsible className="turn-notices" open={details.noticesOpen}
     onOpenChange={(open) => { if (open !== details.noticesOpen) onDisclosure(details.turn, 'noticesOpen', open) }}>
-    <CollapsibleTrigger asChild><Button variant="ghost" className="h-auto w-full justify-start px-0 py-1 text-xs"><span className={`chevron ${details.noticesOpen ? 'open' : ''}`} aria-hidden="true">›</span>Turn notices · <Badge variant="secondary">{details.notices.length}</Badge></Button></CollapsibleTrigger>
+    <CollapsibleTrigger asChild><Button variant="ghost" className="h-auto w-full justify-start px-0 py-1 text-xs"><span className={cn('chevron', details.noticesOpen && 'open')} aria-hidden="true">›</span>Turn notices · <Badge variant="secondary">{details.notices.length}</Badge></Button></CollapsibleTrigger>
     <CollapsibleContent forceMount>
-      <ul>{details.notices.map((notice, index) => <Item asChild size="sm" key={index}><li className="block rounded-none">{notice}</li></Item>)}</ul>
+      <ul className="m-0 flex list-none flex-col gap-px p-0">{details.notices.map((notice, index) => <Item asChild size="sm" key={index}><li className="block border-0 px-0 py-1.5 text-xs">{notice}</li></Item>)}</ul>
     </CollapsibleContent>
   </Collapsible>
 }
@@ -32,7 +32,7 @@ export function TurnFooter({ details, onDisclosure, onAudit }: {
   return <div className="turn-footer">
     {details?.status === 'complete' ? <Collapsible className="turn-statistics" open={details.statsOpen}
       onOpenChange={(open) => { if (open !== details.statsOpen) onDisclosure(details.turn, 'statsOpen', open) }}>
-      <CollapsibleTrigger asChild><Button variant="ghost" className="h-auto max-w-full justify-start px-0 py-1 text-left text-xs whitespace-normal"><span className={`chevron ${details.statsOpen ? 'open' : ''}`} aria-hidden="true">›</span>{details.model ?? 'Model unavailable'} · {details.tokens === undefined ? 'Usage unavailable' : `${compact.format(details.tokens)} tokens`}</Button></CollapsibleTrigger>
+      <CollapsibleTrigger asChild><Button variant="ghost" className="h-auto max-w-full justify-start px-0 py-1 text-left text-xs whitespace-normal"><span className={cn('chevron', details.statsOpen && 'open')} aria-hidden="true">›</span>{details.model ?? 'Model unavailable'} · {details.tokens === undefined ? 'Usage unavailable' : `${compact.format(details.tokens)} tokens`}</Button></CollapsibleTrigger>
       <CollapsibleContent forceMount><div className="turn-statistics-body"><strong>Turn {details.turn}</strong><dl>
           <dt>Model used</dt><dd>{details.model ?? 'Unavailable'}</dd>
           <dt>Total tokens</dt><dd>{exact(details.tokens)}</dd>
