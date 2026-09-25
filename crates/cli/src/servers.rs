@@ -649,7 +649,6 @@ impl Ecosystem {
                 "--index",
                 "--index-url",
                 "-i",
-                "--extra-index-url",
             ],
         }
     }
