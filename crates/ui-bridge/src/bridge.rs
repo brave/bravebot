@@ -1315,7 +1315,7 @@ fn work(work: Work) {
         state.first_prompt = Some(prompt.clone());
     }
 
-    match outcome {
+    let event = match outcome {
         Ok(outcome) => {
             if let Ok(mut watches) = watches.lock() {
                 for path in &outcome.watches {
@@ -1354,7 +1354,7 @@ fn work(work: Work) {
 
             let rules = rules_json(&state.trust);
 
-            emitter.send(Event::new(
+            Event::new(
                 "turn.done",
                 &session,
                 json!({
@@ -1390,7 +1390,7 @@ fn work(work: Work) {
                     // guess a place for.
                     "prompt": prompt_ordinal(&state.conversation, &prompt),
                 }),
-            ));
+            )
         }
         Err(error) => {
             let _ = save(&project, &mut state, turn, sink.trail());
@@ -1427,7 +1427,7 @@ fn work(work: Work) {
                 // should not stay quiet about the `attempt` this drops.
                 TurnError::Manifest { .. } => "manifest",
             };
-            emitter.send(Event::new(
+            Event::new(
                 "turn.error",
                 &session,
                 json!({ "turn": turn, "kind": kind, "message": category.unwrap_or("cancelled"), "category": category, "attempts": attempts, "status": diagnosis.and_then(|d| d.status),
@@ -1440,16 +1440,17 @@ fn work(work: Work) {
                     // prompt is in the conversation and is still a place a fork can be cut at.
                     "prompt": prompt_ordinal(&state.conversation, &prompt),
                     "id": state.handle.as_ref().map(|handle| handle.id()) }),
-            ));
+            )
         }
-    }
+    };
 
-    // Last, and after the record is on disk, so a front-end that reloads on being told
-    // the turn ended reads the same thing this wrote.
+    // Finish bookkeeping and release the session before inviting the next request.
     if let Ok(mut watches) = watches.lock() {
         watches.turn_ended(std::time::Instant::now());
     }
+    drop(state);
     finished.store(true, std::sync::atomic::Ordering::Release);
+    emitter.send(event);
 }
 
 /// Write the session down, in the agent's own format.
@@ -1694,3 +1695,7 @@ mod watch_tests {
         assert_eq!(events.lock().unwrap()[0].data["reason"], "expired");
     }
 }
+
+#[cfg(test)]
+#[path = "completion_tests.rs"]
+mod completion_tests;
