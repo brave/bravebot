@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Modal } from './Modal'
+import { DialogClose, Modal } from './Modal'
 import type { AgentSettings as Report, Hook, HooksDocument } from '../../shared/agent-settings'
 import { composeHooks } from '../../shared/agent-settings'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from './ui/accordion'
@@ -15,9 +15,11 @@ import {
   AlertDialogTitle,
 } from './ui/alert-dialog'
 import { Button } from './ui/button'
+import { ButtonGroup } from './ui/button-group'
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card'
 import { Field, FieldLabel, FieldLegend, FieldSet } from './ui/field'
 import { Input } from './ui/input'
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from './ui/input-group'
 import { Item, ItemContent, ItemGroup } from './ui/item'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from './ui/select'
 import { Separator } from './ui/separator'
@@ -108,7 +110,7 @@ export function AgentSettings({ session, onClose, onChanged }: { session?: strin
   // entries it did read would drop the rest.
   const editable = !!document && document.entire
   return <Modal title="Agent settings" onClose={busy ? undefined : close} className="agent-settings w-[min(720px,calc(100vw-40px))]">
-    <div className="settings-heading flex items-start justify-between gap-3"><div><h2>Agent settings</h2><p>Configuration and automation for this app.</p></div><Button variant="ghost" size="icon-sm" onClick={close} disabled={busy} aria-label="Close agent settings">×</Button></div>
+    <div className="settings-heading flex items-start justify-between gap-3"><div><h2>Agent settings</h2><p>Configuration and automation for this app.</p></div><DialogClose asChild><Button variant="ghost" size="icon-sm" onClick={close} disabled={busy} aria-label="Close agent settings">×</Button></DialogClose></div>
     <Tabs value={tab} onValueChange={(name) => { setTab(name); setProblem(''); setStatus('') }}>
     <TabsList className="settings-tabs" variant="line" aria-label="Agent settings sections">
       {tabs.map((name) => <TabsTrigger key={name} value={name}>{name}{name === 'Hooks' && dirty ? ' •' : ''}</TabsTrigger>)}
@@ -170,11 +172,11 @@ export function AgentSettings({ session, onClose, onChanged }: { session?: strin
           {(hook.on === 'tool-finished' || hook.tool !== null) && <Field><FieldLabel htmlFor={`hook-${index}-tool`}>Tool filter (optional)</FieldLabel><Input id={`hook-${index}-tool`} value={hook.tool ?? ''} placeholder="All tools" onChange={e => change(index, { ...hook, tool: e.target.value.trim() || null })} /></Field>}
           {!dirty && document?.hooks[index]?.firesForNothing && <Alert variant="destructive"><AlertDescription>This hook fires for nothing: only a finished tool call carries a tool name. Clear the filter, or choose Tool finishes.</AlertDescription></Alert>}
           <Field><FieldLabel htmlFor={`hook-${index}-program`}>Program</FieldLabel><Input id={`hook-${index}-program`} value={hook.run[0]} placeholder="/path/to/program" onChange={e => change(index, { ...hook, run: [e.target.value, ...hook.run.slice(1)] })} /></Field>
-          {hook.run.slice(1).map((argument, i) => <div key={i} className="hook-argument flex items-end gap-2"><Field><FieldLabel htmlFor={`hook-${index}-argument-${i}`}>Argument {i + 1}</FieldLabel><Input id={`hook-${index}-argument-${i}`} value={argument} onChange={e => change(index, { ...hook, run: hook.run.map((word, j) => j === i + 1 ? e.target.value : word) })} /></Field><Button variant="outline" onClick={() => change(index, { ...hook, run: hook.run.filter((_, j) => j !== i + 1) })} aria-label={`Remove argument ${i + 1} from hook ${index + 1}`}>Remove</Button></div>)}
-          <div className="settings-actions flex flex-wrap gap-2"><Button variant="outline" onClick={() => change(index, { ...hook, run: [...hook.run, ''] })}>Add argument</Button><Button variant="destructive" onClick={() => { setHooks(rows => rows.filter((_, i) => i !== index)); setDirty(true) }}>Remove hook</Button></div>
+          {hook.run.slice(1).map((argument, i) => <Field key={i} className="hook-argument"><FieldLabel htmlFor={`hook-${index}-argument-${i}`}>Argument {i + 1}</FieldLabel><InputGroup><InputGroupInput id={`hook-${index}-argument-${i}`} value={argument} onChange={e => change(index, { ...hook, run: hook.run.map((word, j) => j === i + 1 ? e.target.value : word) })} /><InputGroupAddon align="inline-end"><InputGroupButton variant="outline" onClick={() => change(index, { ...hook, run: hook.run.filter((_, j) => j !== i + 1) })} aria-label={`Remove argument ${i + 1} from hook ${index + 1}`}>Remove</InputGroupButton></InputGroupAddon></InputGroup></Field>)}
+          <ButtonGroup className="settings-actions"><Button variant="outline" onClick={() => change(index, { ...hook, run: [...hook.run, ''] })}>Add argument</Button><Button variant="destructive" onClick={() => { setHooks(rows => rows.filter((_, i) => i !== index)); setDirty(true) }}>Remove hook</Button></ButtonGroup>
         </FieldSet>)}
         <p>Arguments are passed exactly as entered; shell syntax is not interpreted. Failed hooks appear in the turn’s notices.</p>
-        <div className="settings-actions flex flex-wrap gap-2"><Button variant="outline" disabled={!editable || busy} onClick={() => { setHooks(rows => [...rows, { on: 'turn-finished', tool: null, run: [''], firesForNothing: false }]); setDirty(true) }}>Add hook</Button><Button variant="outline" disabled={busy} onClick={reloadHooks}>Reload hooks</Button><Button disabled={!dirty || busy || !editable} onClick={() => void save()}>Save hooks</Button></div>
+        <ButtonGroup className="settings-actions"><Button variant="outline" disabled={!editable || busy} onClick={() => { setHooks(rows => [...rows, { on: 'turn-finished', tool: null, run: [''], firesForNothing: false }]); setDirty(true) }}>Add hook</Button><Button variant="outline" disabled={busy} onClick={reloadHooks}>Reload hooks</Button><Button disabled={!dirty || busy || !editable} onClick={() => void save()}>Save hooks</Button></ButtonGroup>
       </>
     </TabsContent>
     <TabsContent value="Run settings" className="settings-body">
@@ -183,7 +185,7 @@ export function AgentSettings({ session, onClose, onChanged }: { session?: strin
           <CardHeader><CardTitle><h3 id="run-override-title">Model and connection override</h3></CardTitle></CardHeader>
           <CardContent>
             <p>Choose a JSON settings file for this app run. It applies to future turns and model discovery, and is cleared when the app exits. Running turns keep their configuration. Terminal preferences and settings-file permission grants do not change this app’s approval controls.</p>
-            <p className="settings-path font-mono">{report.selected ?? 'No override selected'}</p><div className="settings-actions flex flex-wrap gap-2"><Button disabled={busy} onClick={() => void select(false)}>Choose settings file…</Button><Button variant="outline" disabled={busy || !report.selected} onClick={() => void select(true)}>Clear override</Button></div>
+            <p className="settings-path font-mono">{report.selected ?? 'No override selected'}</p><ButtonGroup className="settings-actions"><Button disabled={busy} onClick={() => void select(false)}>Choose settings file…</Button><Button variant="outline" disabled={busy || !report.selected} onClick={() => void select(true)}>Clear override</Button></ButtonGroup>
           </CardContent>
           <Separator />
           <CardHeader><CardTitle><h3>Effective configuration</h3></CardTitle></CardHeader>

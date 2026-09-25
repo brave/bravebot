@@ -291,7 +291,7 @@ function Session({
   const current = session.id === openId
   const stateKey = info?.state?.toLowerCase().replaceAll(' ', '-')
   return <div className={`session-row group relative ${current ? 'current' : ''}`}>
-    <Button variant="ghost" className={`session h-auto w-full flex-col items-start justify-start gap-1.5 px-3 py-2 text-left ${current ? 'current group-[.current]:bg-accent text-accent-foreground' : ''}`} onClick={() => onOpen(session)} onContextMenu={contextMenu('session', session.id)}>
+    <Button variant="ghost" data-active={current || undefined} className={`session h-auto w-full flex-col items-start justify-start gap-1.5 px-3 py-2 text-left ${current ? 'current data-[active=true]:bg-accent data-[active=true]:text-accent-foreground' : ''}`} onClick={() => onOpen(session)} onContextMenu={contextMenu('session', session.id)}>
       <span className="session-title min-w-0 w-full truncate pr-10" title={session.title}>
         {preferences?.pinned && <svg className="session-pin" width="13" height="15" viewBox="0 0 16 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" role="img" aria-label="Pinned" focusable="false">
           <path d="M5 2h6M6 2v6l-3 4h10l-3-4V2M8 12v4" />
@@ -340,7 +340,7 @@ function NewSession({ onNew }: { onNew: (directory?: string) => void }): React.J
 
   return (
     <ButtonGroup className="new-split w-full">
-      <Button className="new flex-1" onClick={() => onNew()} title="Open a project">
+      <Button className="new flex-1" variant="default" onClick={() => onNew()} title="Open a project">
         <span className="plus">+</span> New session
       </Button>
       <PopMenu

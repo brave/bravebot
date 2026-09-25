@@ -415,7 +415,7 @@ export async function launch(opts) {
     }
     for (const side of ['left', 'right']) {
       const toggle = page.locator(`.fold-toggle.${side}`)
-      if ((await toggle.getAttribute('aria-expanded')) === 'false') {
+      if ((await toggle.getAttribute('aria-pressed')) === 'false') {
         await toggle.click()
         await page.waitForTimeout(300)
       }
@@ -424,7 +424,7 @@ export async function launch(opts) {
     // one a session list that is present and invisible. Put back with the columns, for the same
     // reason they are: a scene begins where a first-time viewer would find the window.
     const sessionsTab = page.locator('.sidebar-tab').first()
-    if ((await sessionsTab.count()) && (await sessionsTab.getAttribute('aria-pressed')) !== 'true') {
+    if ((await sessionsTab.count()) && (await sessionsTab.getAttribute('aria-selected')) !== 'true') {
       await sessionsTab.click()
       await page.waitForTimeout(250)
     }

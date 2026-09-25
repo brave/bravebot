@@ -68,17 +68,12 @@ for (let i = 0; i < sessions; i++) {
 await page.locator('.session').nth(withRun).click()
 await page.waitForTimeout(1800)
 
-// Which panels are in the column is a choice somebody makes from the bar, and it is remembered
-// between launches and shared with every other driver. So the run starts by putting them all back
-// — without this, a panel left off by a previous run has no box to measure and the assertions
-// below fail on a window that is behaving perfectly. The same courtesy `drive-columns.mjs` pays
-// the columns.
-for (let index = 0; index < (await page.locator('.panel-pick').count()); index++) {
-  const pick = page.locator('.panel-pick').nth(index)
-  if ((await pick.getAttribute('aria-pressed')) === 'false') {
-    await pick.click()
-    await page.waitForTimeout(200)
-  }
+// Overview panels fold individually; the Files tree is a sibling tab. Ensure Overview is
+// selected so the panel heads below exist to measure.
+const overviewTab = page.locator('.inspector-tabs [role="tab"]').filter({ hasText: /^Overview$/ })
+if ((await overviewTab.count()) && (await overviewTab.getAttribute('aria-selected')) !== 'true') {
+  await overviewTab.click()
+  await page.waitForTimeout(200)
 }
 
 const fold = page.locator('.panel .fold').first()

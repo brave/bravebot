@@ -1355,7 +1355,7 @@ export function App(): React.JSX.Element {
         <Sheet open={!collapsed.right} onOpenChange={(open) => { if (open === collapsed.right) toggle('right') }}>
           <SheetContent side="right" showCloseButton={false} className="w-[min(340px,calc(100vw-56px))] p-0 sm:max-w-none" aria-describedby={undefined}>
             <SheetTitle className="sr-only">Project context</SheetTitle>
-            <Context live={live} onClose={() => toggle('right')} audit={selectedAudit ?
+            <Context drawer live={live} onClose={() => toggle('right')} audit={selectedAudit ?
               <AuditInspector key={`${selectedAudit.handle}:${selectedAudit.turn}`} details={selectedAudit.turn === null ? undefined : live?.turns[selectedAudit.turn]} onClose={closeAudit} /> : null} />
           </SheetContent>
         </Sheet>
@@ -1366,7 +1366,7 @@ export function App(): React.JSX.Element {
             const outstanding = t.outstanding(item.entries)
             const status = outstanding ? outstanding.kind === 'ask' ? 'Answer needed' : 'Approval needed' : 'Working'
             return (
-              <Item key={item.handle} role="listitem" size="sm" className="p-0">
+              <Item asChild size="sm" key={item.handle} role="listitem">
                 <Button
                   variant="outline"
                   className="w-full min-w-0 justify-start"

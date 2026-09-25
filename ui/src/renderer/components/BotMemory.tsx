@@ -5,6 +5,7 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from './
 import { Alert, AlertDescription } from './ui/alert'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from './ui/alert-dialog'
 import { Button } from './ui/button'
+import { ButtonGroup } from './ui/button-group'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from './ui/card'
 import { Empty, EmptyDescription } from './ui/empty'
 import { Field, FieldLabel } from './ui/field'
@@ -58,7 +59,7 @@ export function BotMemory({ slug }: { slug: string }): React.JSX.Element {
         {editing ? <Field>
           <FieldLabel htmlFor="bot-memory-editor" className="sr-only">Edit persistent memory</FieldLabel>
           <Textarea id="bot-memory-editor" autoFocus aria-label="Edit persistent memory" rows={8} value={draft} onChange={(event) => setDraft(event.target.value)} />
-          <div className="memory-actions mt-2 flex flex-wrap gap-2"><Button type="button" disabled={busy} onClick={() => void save(draft)}>Save memory</Button><Button variant="outline" type="button" onClick={() => setEditing(false)}>Cancel edit</Button></div>
+          <div className="memory-actions mt-2"><ButtonGroup><Button type="button" disabled={busy} onClick={() => void save(draft)}>Save memory</Button><Button variant="outline" type="button" onClick={() => setEditing(false)}>Cancel edit</Button></ButtonGroup></div>
         </Field> : <>
           <TabsContent value="readable"><div className="memory-readable rounded-lg border border-border p-3"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ children }) => <span>{children}</span>, img: ({ alt }) => <span>{alt}</span> }}>{text || 'Nothing remembered yet.'}</ReactMarkdown></div></TabsContent>
           <TabsContent value="raw"><pre className="bot-memory">{text || 'Nothing remembered yet.'}</pre></TabsContent>
@@ -83,6 +84,6 @@ export function BotMemory({ slug }: { slug: string }): React.JSX.Element {
         </AlertDialogContent>
       </AlertDialog>
     </CardContent>
-    {!editing && <CardFooter className="memory-actions flex flex-wrap gap-2"><Button type="button" disabled={busy} onClick={() => { setDraft(text ?? ''); setEditing(true) }}>Edit memory</Button><Button variant="outline" type="button" disabled={busy || !text} onClick={() => setConfirmReset(true)}>Reset memory…</Button></CardFooter>}
+    {!editing && <CardFooter className="memory-actions"><ButtonGroup><Button type="button" disabled={busy} onClick={() => { setDraft(text ?? ''); setEditing(true) }}>Edit memory</Button><Button variant="outline" type="button" disabled={busy || !text} onClick={() => setConfirmReset(true)}>Reset memory…</Button></ButtonGroup></CardFooter>}
   </Card>
 }

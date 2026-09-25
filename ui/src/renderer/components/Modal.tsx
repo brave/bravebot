@@ -1,5 +1,7 @@
-import { Dialog, DialogContent, DialogTitle } from './ui/dialog'
+import { Dialog, DialogClose, DialogContent, DialogTitle } from './ui/dialog'
 import { useEffect, useRef } from 'react'
+
+export { DialogClose }
 
 /** One focus boundary for every modal. Background content cannot receive input. */
 export function Modal({ title, onClose, children, className = '' }: {

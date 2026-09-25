@@ -130,7 +130,7 @@ await page.waitForTimeout(2500)
 const tabs = page.locator('.sidebar-tab')
 check((await tabs.count()) === 2, 'the column offers two lists')
 check(
-  (await tabs.nth(0).getAttribute('aria-pressed')) === 'true',
+  (await tabs.nth(0).getAttribute('aria-selected')) === 'true',
   'and opens on the sessions, which is what every launch before this showed',
 )
 
@@ -146,7 +146,7 @@ if ((await sessionsSearch.getAttribute('aria-expanded')) !== 'true') {
 
 await tabs.nth(1).click()
 await page.waitForTimeout(300)
-check((await tabs.nth(1).getAttribute('aria-pressed')) === 'true', 'pressing Bots shows the bots')
+check((await tabs.nth(1).getAttribute('aria-selected')) === 'true', 'pressing Bots shows the bots')
 // Only where the list is genuinely empty. This driver no longer clears somebody's bots to make it
 // so — that key is not a preference, it is their bots — so on a machine that has some, the empty
 // state is not a thing that can be shown and saying it was would be a false ok.
@@ -268,7 +268,7 @@ const backRow = (name) =>
 const backMine = backRow('Release Notes (weekly)')
 
 check(
-  (await back.locator('.sidebar-tab').nth(1).getAttribute('aria-pressed')) === 'true',
+  (await back.locator('.sidebar-tab').nth(1).getAttribute('aria-selected')) === 'true',
   'the column comes back on the tab it was left on',
 )
 check(

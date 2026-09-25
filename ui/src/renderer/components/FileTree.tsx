@@ -6,12 +6,15 @@ import { type FileRow, type Listing, isSubpath, under } from '../../shared/files
 import { Alert, AlertDescription } from './ui/alert'
 import { Badge } from './ui/badge'
 import { Button } from './ui/button'
+import { ButtonGroup } from './ui/button-group'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
 import { Empty, EmptyDescription } from './ui/empty'
 import { InputGroup, InputGroupButton, InputGroupInput } from './ui/input-group'
 import { Item, ItemGroup } from './ui/item'
 import { Spinner } from './ui/spinner'
+import { Toggle } from './ui/toggle'
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
+import { RefreshCwIcon, SearchIcon } from 'lucide-react'
 
 /**
  * The folder the session is working in.
@@ -163,27 +166,31 @@ export function FileTree({
         <code className="tree-root" title={root}>
           {root}
         </code>
-        <Tooltip><TooltipTrigger asChild><CollapsibleTrigger asChild>
-          <Button variant="ghost" size="icon-sm" ref={searchButton} className={`tree-tool ${searchOpen ? 'on' : ''}`}
-            aria-label="Search files">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 5 5" /></svg>
-          </Button>
-        </CollapsibleTrigger></TooltipTrigger><TooltipContent>Search files</TooltipContent></Tooltip>
-        {/* Labelled with the thing it is about rather than with an eye or a dot: `.*` is what a
-            dotfile looks like, and it is legible at 10px where a pictogram is not. */}
-        <Tooltip><TooltipTrigger asChild><Button
-            variant="ghost"
-            size="icon-sm"
-            className={`tree-tool dotfiles ${hidden ? 'on' : ''}`}
-            aria-label={hidden ? 'Hide dotfiles' : 'Show dotfiles'}
-            aria-pressed={hidden}
-            onClick={() => setHidden(!hidden)}
-          >
-            .*
-          </Button></TooltipTrigger><TooltipContent>{hidden ? 'Hide dotfiles' : 'Show dotfiles'}</TooltipContent></Tooltip>
-        <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon-sm" className="tree-tool" aria-label="Read the folder again" onClick={() => void refresh()}>
-            ↻
-          </Button></TooltipTrigger><TooltipContent>Read the folder again</TooltipContent></Tooltip>
+        <ButtonGroup aria-label="File tree tools">
+          <Tooltip><TooltipTrigger asChild><CollapsibleTrigger asChild>
+            <Button variant="ghost" size="icon-sm" ref={searchButton} className={`tree-tool ${searchOpen ? 'on' : ''}`}
+              aria-label="Search files">
+              <SearchIcon data-icon="inline-start" />
+            </Button>
+          </CollapsibleTrigger></TooltipTrigger><TooltipContent>Search files</TooltipContent></Tooltip>
+          {/* Labelled with the thing it is about rather than with an eye or a dot: `.*` is what a
+              dotfile looks like, and it is legible at 10px where a pictogram is not. */}
+          <Tooltip><TooltipTrigger asChild><span className="inline-flex">
+            <Toggle
+              variant="default"
+              size="sm"
+              pressed={hidden}
+              className="tree-tool dotfiles size-8 min-w-8 p-0"
+              aria-label={hidden ? 'Hide dotfiles' : 'Show dotfiles'}
+              onPressedChange={setHidden}
+            >
+              .*
+            </Toggle>
+          </span></TooltipTrigger><TooltipContent>{hidden ? 'Hide dotfiles' : 'Show dotfiles'}</TooltipContent></Tooltip>
+          <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon-sm" className="tree-tool" aria-label="Read the folder again" onClick={() => void refresh()}>
+              <RefreshCwIcon data-icon="inline-start" />
+            </Button></TooltipTrigger><TooltipContent>Read the folder again</TooltipContent></Tooltip>
+        </ButtonGroup>
       </div>
 
       <CollapsibleContent className="tree-search">

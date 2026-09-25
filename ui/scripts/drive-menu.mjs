@@ -239,7 +239,7 @@ await click('view.fold-left')
 await page.waitForTimeout(400)
 check((await widthOf('.sessions')) < 1, `View → Hide Session List folds it (was ${Math.round(before)})`)
 check(
-  (await page.locator('.fold-toggle.left').getAttribute('aria-expanded')) === 'false',
+  (await page.locator('.fold-toggle.left').getAttribute('aria-pressed')) === 'false',
   'and the transcript header agrees the column is folded',
 )
 let folded = await readMenu()

@@ -159,21 +159,24 @@ function ColumnToggle({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className={cn('fold-toggle', side)}
-          aria-expanded={!collapsed}
-          aria-controls={side === 'left' ? 'sessions-column' : 'context-column'}
-          aria-label={side === 'left' ? 'Session list' : 'Context panel'}
-          onClick={() => onToggle(side)}
-        >
-          {/* Pointing outward when folded — the way the column will come back — and inward
-              when open. Decorative: the button is already named and its state announced. */}
-          <span className={cn('fold-chevron', !collapsed && 'open')} aria-hidden="true">
-            {side === 'left' ? '›' : '‹'}
-          </span>
-        </Button>
+        {/* Wrapper keeps Tooltip's data-state off the Toggle, which needs data-state for pressed. */}
+        <span className="inline-flex">
+          <Toggle
+            variant="outline"
+            size="sm"
+            pressed={!collapsed}
+            className={cn('fold-toggle size-8 min-w-8 p-0', side)}
+            aria-controls={side === 'left' ? 'sessions-column' : 'context-column'}
+            aria-label={side === 'left' ? 'Session list' : 'Context panel'}
+            onPressedChange={() => onToggle(side)}
+          >
+            {/* Pointing outward when folded — the way the column will come back — and inward
+                when open. Decorative: the button is already named and its state announced. */}
+            <span className={cn('fold-chevron', !collapsed && 'open')} aria-hidden="true">
+              {side === 'left' ? '›' : '‹'}
+            </span>
+          </Toggle>
+        </span>
       </TooltipTrigger>
       <TooltipContent>{collapsed ? 'Show' : 'Hide'} {what}</TooltipContent>
     </Tooltip>
@@ -463,7 +466,11 @@ export function Transcript({
         <AlertTitle><strong>Backend setup needed</strong></AlertTitle>
         <AlertDescription>
           <span>You can browse conversations and prepare drafts.</span>
-          <div><Button variant="outline" size="sm" onClick={onSetup}>Setup help</Button><Button variant="outline" size="sm" onClick={onCheckBackend}>Check again</Button><Button variant="outline" size="sm" onClick={onDiagnostics}>Diagnostics</Button></div>
+          <ButtonGroup className="mt-1.5">
+            <Button variant="outline" size="sm" onClick={onSetup}>Setup help</Button>
+            <Button variant="outline" size="sm" onClick={onCheckBackend}>Check again</Button>
+            <Button variant="outline" size="sm" onClick={onDiagnostics}>Diagnostics</Button>
+          </ButtonGroup>
         </AlertDescription>
       </Alert>}
       {live && <div className="context-status px-5 py-1.5 text-[11px] text-muted-foreground" title="The model’s last request size, not accumulated token usage. New messages may change the next request.">
@@ -499,7 +506,7 @@ export function Transcript({
               <EmptyDescription>Work with an agent in your project. Track changes and review approval requests as you work.</EmptyDescription>
             </EmptyHeader>
             <EmptyContent>
-              <Button className="primary" onClick={() => onNew()}>Open project</Button>
+              <Button onClick={() => onNew()}>Open project</Button>
               {!!recents.length && <div className="welcome-recents mt-2 flex w-full flex-col items-start gap-2 text-left"><h2 className="text-xs font-semibold text-foreground">Recent projects</h2>{recents.slice(0, 5).map((directory) =>
                 <Button variant="outline" className="h-auto w-full flex-col items-start justify-start text-left" key={directory} onClick={() => onNew(directory)}><strong>{directory.split('/').pop()}</strong><span>{directory}</span></Button>)}</div>}
               <p className="welcome-hint text-sm leading-relaxed text-muted-foreground">Choose a conversation to resume work, or create a bot with a purpose and persistent memory.</p>
@@ -645,10 +652,14 @@ export function Transcript({
             <ModelPicker session={live.handle} scope={bot ? 'bot' : 'conversation'} key={live.handle} model={live.model} disabled={live.running} onChoose={onModel} />
             <Button variant="outline" className="attach-files" onClick={onAttach} disabled={attachments.length >= 5} title="Choose project files to share as trusted context">Attach files</Button>
             <span className="composer-hint"><Kbd>Enter</Kbd> to send · <Kbd>Shift+Enter</Kbd> for newline</span>
-            {live.running && <Button variant="destructive" className="stop" onClick={onCancel}>Stop</Button>}
-            <Button className="send" onClick={() => { latest(); live.running ? onQueue() : onSubmit() }} disabled={!draft.trim() || !!live.askingTrust || backendReady === false}>
-              {live.running ? 'Queue message' : 'Send'}
-            </Button>
+            {live.running ? <ButtonGroup>
+              <Button variant="destructive" className="stop" onClick={onCancel}>Stop</Button>
+              <Button className="send" onClick={() => { latest(); onQueue() }} disabled={!draft.trim() || !!live.askingTrust || backendReady === false}>
+                Queue message
+              </Button>
+            </ButtonGroup> : <Button className="send" onClick={() => { latest(); onSubmit() }} disabled={!draft.trim() || !!live.askingTrust || backendReady === false}>
+              Send
+            </Button>}
           </InputGroupAddon>
         </InputGroup>
       </footer>
@@ -720,26 +731,24 @@ function ExportMenu({
   ]
 
   return (
-    <ButtonGroup className="export-split">
-      <PopMenu
-        open={open}
-        trigger={<Button
-          variant="outline"
-          className="export-open"
-          disabled={!canExport}
-          title={canExport ? 'Export this conversation' : 'Nothing has been said yet'}
-        >
-          Export
-          <span className="export-chevron" aria-hidden="true">
-            ⌄
-          </span>
-        </Button>}
-        items={items}
-        label="Export the conversation as"
-        onChoose={(id) => (id === TOOLS ? onToggleTools() : onExport(id as ExportFormat))}
-        onOpenChange={setOpen}
-      />
-    </ButtonGroup>
+    <PopMenu
+      open={open}
+      trigger={<Button
+        variant="outline"
+        className="export-open"
+        disabled={!canExport}
+        title={canExport ? 'Export this conversation' : 'Nothing has been said yet'}
+      >
+        Export
+        <span className="export-chevron" aria-hidden="true">
+          ⌄
+        </span>
+      </Button>}
+      items={items}
+      label="Export the conversation as"
+      onChoose={(id) => (id === TOOLS ? onToggleTools() : onExport(id as ExportFormat))}
+      onOpenChange={setOpen}
+    />
   )
 }
 
@@ -970,18 +979,20 @@ function Questions({
       <ApprovalActions>
         {/* Declining every question is a real answer and the turn continues, so it is a
             button here rather than something a person has to leave blank and guess at. */}
-        <Button variant="outline" className="reject" onClick={() => onAnswer(request.request.request, prompts.map(() => ({})))}>
-          Decline
-        </Button>
-        <Button className="approve" onClick={() => onAnswer(request.request.request, collected())}>
-          Answer
-          {/* Leaving a question blank declines it, which is legitimate but should not be a
-              surprise — with several questions on screen it is easy to answer two of three
-              and not notice. Said on the button rather than after the fact. */}
-          {blank > 0 && prompts.length > 1 && (
-            <span className="aside"> · {blank} declined</span>
-          )}
-        </Button>
+        <ButtonGroup>
+          <Button variant="outline" className="reject" onClick={() => onAnswer(request.request.request, prompts.map(() => ({})))}>
+            Decline
+          </Button>
+          <Button className="approve" onClick={() => onAnswer(request.request.request, collected())}>
+            Answer
+            {/* Leaving a question blank declines it, which is legitimate but should not be a
+                surprise — with several questions on screen it is easy to answer two of three
+                and not notice. Said on the button rather than after the fact. */}
+            {blank > 0 && prompts.length > 1 && (
+              <span className="aside"> · {blank} declined</span>
+            )}
+          </Button>
+        </ButtonGroup>
       </ApprovalActions>
     </ApprovalCard>
   )
@@ -1000,7 +1011,7 @@ function QuestionChoices({
 }): React.JSX.Element {
   const choices = rows.map((row) => (
     <ToggleGroupItem
-      className={`choice ${selected.includes(row.index) ? 'picked' : ''}`}
+      className="choice h-auto w-full flex-col items-start justify-start whitespace-normal"
       key={row.index}
       value={String(row.index)}
     >
@@ -1357,12 +1368,14 @@ function EntryCard({
             <ApprovalActions><Unanswered /></ApprovalActions>
           ) : decision === null ? (
             <ApprovalActions>
-              <Button variant="outline" className="reject" onClick={() => onDecide('confirm', request.request, false)}>
-                Don’t write
-              </Button>
-              <Button className="approve" onClick={() => onDecide('confirm', request.request, true)}>
-                {request.existing ? 'Apply this change' : 'Create this file'}
-              </Button>
+              <ButtonGroup>
+                <Button variant="outline" className="reject" onClick={() => onDecide('confirm', request.request, false)}>
+                  Don’t write
+                </Button>
+                <Button className="approve" onClick={() => onDecide('confirm', request.request, true)}>
+                  {request.existing ? 'Apply this change' : 'Create this file'}
+                </Button>
+              </ButtonGroup>
             </ApprovalActions>
           ) : (
             <ApprovalActions>
@@ -1433,12 +1446,14 @@ function EntryCard({
             <ApprovalActions><Unanswered /></ApprovalActions>
           ) : decision === null ? (
             <ApprovalActions>
-              <Button variant="outline" className="reject" onClick={() => onDecide('run', request.request, false)}>
-                Don’t run
-              </Button>
-              <Button className="approve" onClick={() => onDecide('run', request.request, true)}>
-                Run once
-              </Button>
+              <ButtonGroup>
+                <Button variant="outline" className="reject" onClick={() => onDecide('run', request.request, false)}>
+                  Don’t run
+                </Button>
+                <Button className="approve" onClick={() => onDecide('run', request.request, true)}>
+                  Run once
+                </Button>
+              </ButtonGroup>
               {/* Separate from "Run once" rather than a checkbox beside it: remembering
                   answers every later question about these programs, so it should take its
                   own deliberate press. The title says exactly what it would cover. */}
@@ -1497,19 +1512,21 @@ function EntryCard({
             <ApprovalActions><Unanswered /></ApprovalActions>
           ) : decision === null ? (
             <ApprovalActions>
-              <Button
-                variant="outline"
-                className="reject"
-                onClick={() => onDecide('output', request.request, false)}
-              >
-                Keep it out
-              </Button>
-              <Button
-                className="approve"
-                onClick={() => onDecide('output', request.request, true)}
-              >
-                Let the planner read it
-              </Button>
+              <ButtonGroup>
+                <Button
+                  variant="outline"
+                  className="reject"
+                  onClick={() => onDecide('output', request.request, false)}
+                >
+                  Keep it out
+                </Button>
+                <Button
+                  className="approve"
+                  onClick={() => onDecide('output', request.request, true)}
+                >
+                  Let the planner read it
+                </Button>
+              </ButtonGroup>
             </ApprovalActions>
           ) : (
             <ApprovalActions>
@@ -1542,8 +1559,10 @@ function EntryCard({
             <pre className="preview">{request.content}</pre>
           </CardContent>
           {!answerable ? <ApprovalActions><Unanswered /></ApprovalActions> : decision === null ? <ApprovalActions>
-            <Button variant="outline" className="reject" onClick={() => onDecide('vet', request.request, false)}>Keep it out</Button>
-            <Button className="approve" onClick={() => onDecide('vet', request.request, true)}>Let the planner read once</Button>
+            <ButtonGroup>
+              <Button variant="outline" className="reject" onClick={() => onDecide('vet', request.request, false)}>Keep it out</Button>
+              <Button className="approve" onClick={() => onDecide('vet', request.request, true)}>Let the planner read once</Button>
+            </ButtonGroup>
           </ApprovalActions> : <ApprovalActions><div className={`decided ${decision}`}>{decision === 'approve' ? 'You allowed this content once' : 'You kept this content out'}</div></ApprovalActions>}
         </ApprovalCard>
       )
@@ -1581,19 +1600,21 @@ function EntryCard({
             <ApprovalActions><Unanswered /></ApprovalActions>
           ) : decision === null ? (
             <ApprovalActions>
-              <Button
-                variant="outline"
-                className="reject"
-                onClick={() => onDecide('vouch', request.request, false)}
-              >
-                Leave it confined
-              </Button>
-              <Button
-                className="approve"
-                onClick={() => onDecide('vouch', request.request, true)}
-              >
-                Vouch for this path
-              </Button>
+              <ButtonGroup>
+                <Button
+                  variant="outline"
+                  className="reject"
+                  onClick={() => onDecide('vouch', request.request, false)}
+                >
+                  Leave it confined
+                </Button>
+                <Button
+                  className="approve"
+                  onClick={() => onDecide('vouch', request.request, true)}
+                >
+                  Vouch for this path
+                </Button>
+              </ButtonGroup>
             </ApprovalActions>
           ) : (
             <ApprovalActions>

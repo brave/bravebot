@@ -23,7 +23,7 @@ const launch = () => electron.launch({ args: ['.'], cwd: process.cwd(), timeout:
 async function unfoldAll(page) {
   for (const side of ['left', 'right']) {
     const toggle = page.locator(`.fold-toggle.${side}`)
-    if ((await toggle.getAttribute('aria-expanded')) === 'false') {
+    if ((await toggle.getAttribute('aria-pressed')) === 'false') {
       await toggle.click()
       await page.waitForTimeout(300)
     }
@@ -86,8 +86,8 @@ const userData = await app.evaluate(({ app }) => app.getPath('userData'))
 // --- the controls --------------------------------------------------------------------
 check((await page.locator('.fold-toggle').count()) === 2, 'both fold toggles are present')
 check(
-  (await page.locator('.fold-toggle.left').getAttribute('aria-expanded')) === 'true' &&
-    (await page.locator('.fold-toggle.right').getAttribute('aria-expanded')) === 'true',
+  (await page.locator('.fold-toggle.left').getAttribute('aria-pressed')) === 'true' &&
+    (await page.locator('.fold-toggle.right').getAttribute('aria-pressed')) === 'true',
   'both columns start expanded',
 )
 
@@ -112,7 +112,7 @@ check(
 )
 check(closing[closing.length - 1] < 1, 'the fold ends at nothing')
 check(
-  (await page.locator('.fold-toggle.left').getAttribute('aria-expanded')) === 'false',
+  (await page.locator('.fold-toggle.left').getAttribute('aria-pressed')) === 'false',
   'the toggle reports the column collapsed',
 )
 check(
@@ -200,7 +200,7 @@ app = await launch()
 page = await ready(app)
 check((await width(page, '.sessions')) < 1, 'a folded column is still folded after a relaunch')
 check(
-  (await page.locator('.fold-toggle.left').getAttribute('aria-expanded')) === 'false',
+  (await page.locator('.fold-toggle.left').getAttribute('aria-pressed')) === 'false',
   'and the toggle says so',
 )
 await page.locator('.fold-toggle.left').click()

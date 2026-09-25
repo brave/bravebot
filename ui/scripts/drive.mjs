@@ -47,7 +47,7 @@ if (sessions > 0) {
   // state, so this also makes sure the column is on the sessions list first — the previous
   // run may have left the bots list up, with the sessions panel hidden rather than unmounted.
   const sessionTab = page.locator('.sidebar-tab').nth(0)
-  if ((await sessionTab.getAttribute('aria-pressed')) !== 'true') {
+  if ((await sessionTab.getAttribute('aria-selected')) !== 'true') {
     await sessionTab.click()
     await page.waitForTimeout(300)
   }

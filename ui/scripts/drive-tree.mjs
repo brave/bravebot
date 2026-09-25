@@ -57,7 +57,7 @@ await page.waitForTimeout(2200)
 // right column would make every locator below invisible.
 for (const side of ['left', 'right']) {
   const toggle = page.locator(`.fold-toggle.${side}`)
-  if ((await toggle.getAttribute('aria-expanded')) === 'false') {
+  if ((await toggle.getAttribute('aria-pressed')) === 'false') {
     await toggle.click()
     await page.waitForTimeout(300)
   }
@@ -71,13 +71,11 @@ if ((await page.locator('.session').count()) === 0) {
 await page.locator('.session').first().click()
 await page.waitForTimeout(1600)
 
-// The file tree can be turned off from the bar at the top of the column, and that choice is
-// remembered between launches — so a run puts it back rather than assuming it inherited a column
-// with a tree in it. The same courtesy the columns get above. After the session is opened, because
-// the bar belongs to a column with something in it and there is no bar before then.
-const filesPick = page.locator('.panel-pick').last()
-if ((await filesPick.getAttribute('aria-pressed')) === 'false') {
-  await filesPick.click()
+// The file tree lives under the Files tab of the context column. Select it rather than
+// assuming a previous run left that tab on.
+const filesTab = page.locator('.inspector-tabs [role="tab"]').filter({ hasText: /^Files$/ })
+if ((await filesTab.getAttribute('aria-selected')) !== 'true') {
+  await filesTab.click()
   await page.waitForTimeout(400)
 }
 
@@ -98,7 +96,7 @@ check(first > 0, `the root of the folder is listed (${first} rows)`)
 // --- dotfiles are behind the toggle ----------------------------------------------------
 const dotty = (list) => list.filter((name) => name.trim().startsWith('.')).length
 check(dotty(await names()) === 0, 'no dot-prefixed entry is listed until asked for')
-await page.locator('.tree-tool').first().click()
+await page.locator('.tree-tool.dotfiles').click()
 await page.waitForTimeout(500)
 const shown = await names()
 check(shown.length >= first, `showing hidden entries never lists fewer (${first} → ${shown.length})`)
@@ -107,7 +105,7 @@ if (dotty(shown) > 0) {
 } else {
   console.log('  --   this project has no dotfiles in its root; nothing for the toggle to add')
 }
-await page.locator('.tree-tool').first().click()
+await page.locator('.tree-tool.dotfiles').click()
 await page.waitForTimeout(400)
 
 // --- a directory expands ---------------------------------------------------------------
@@ -223,7 +221,7 @@ const link = root ? join(root, 'bravebot-tree-probe-link') : null
 try {
   if (link) {
     symlinkSync('/etc', link)
-    await page.locator('.tree-tool').nth(1).click()
+    await page.locator('.tree-tool').nth(2).click()
     await page.waitForTimeout(900)
     const probe = page
       .locator('.tree-list[role="tree"] > li')

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Modal } from './Modal'
+import { DialogClose, Modal } from './Modal'
 import { Alert, AlertDescription } from './ui/alert'
 import { Button } from './ui/button'
 import { DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog'
@@ -43,6 +43,6 @@ export function Permissions({ session, onClose }: { session: string; onClose: ()
     <p className="bot-note">Each grant covers the resolved program and its exact arguments, including trust in its output.</p>
     {grants?.commands.map((command) => <Item className="permission-row" key={JSON.stringify(command)}><ItemContent><code>{command.display}</code></ItemContent><ItemActions><Button variant="outline" size="sm" disabled={busy} onClick={() => void request('permissions.revoke', { kind: 'command', command: { program: command.program, args: command.args } })}>Revoke</Button></ItemActions></Item>)}
     {grants?.commands.length === 0 && <Empty className="p-0 text-left md:p-0"><EmptyHeader className="items-start text-left"><EmptyDescription>No remembered command grants.</EmptyDescription></EmptyHeader></Empty>}
-    <DialogFooter><Button onClick={onClose}>Done</Button></DialogFooter>
+    <DialogFooter><DialogClose asChild><Button onClick={onClose}>Done</Button></DialogClose></DialogFooter>
   </Modal>
 }

@@ -731,19 +731,8 @@
   flex: none;
   place-items: center;
   padding: 0;
-  border: 1px solid transparent;
-  border-radius: var(--radius);
-  background: transparent;
-  color: var(--ink-faint);
-  font-size: 15px;
   line-height: 1;
 }
-.fold-toggle:hover {
-  border-color: var(--line);
-  background: var(--bg-side);
-  color: var(--ink);
-}
-.fold-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* Same duration and easing as the panels' chevrons, so both kinds of fold in this window
    read as one idea. A separate class from `.chevron`, though: sharing one would tie the
    two together and a change meant for either would land on both. */
@@ -881,13 +870,12 @@
 }
 .bubble.assistant th { background: var(--bg-side); }
 
-.bubble.assistant a,
-.bubble.assistant .local-file-link {
+.bubble.assistant a {
   color: var(--accent-text);
   text-decoration-color: color-mix(in srgb, currentColor 50%, transparent);
   text-underline-offset: 2px;
 }
-.local-file-link { display: inline; text-decoration: underline; }
+.local-file-link { display: inline; }
 /* A link that will not open is drawn as the text it wraps, marked but not clickable. */
 .md-dead-link { text-decoration: underline dotted var(--ink-faint); }
 .md-image {
@@ -1120,16 +1108,7 @@
   display: block;
   width: 100%;
   padding: 7px 9px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--bg);
   text-align: left;
-}
-.choice:hover { border-color: var(--ink-faint); background: var(--bg-side); }
-.choice.picked {
-  border-color: color-mix(in srgb, var(--accent) 52%, var(--line));
-  background: color-mix(in srgb, var(--accent) 9%, var(--bg));
-  box-shadow: inset 2px 0 var(--accent);
 }
 .choice .label { display: block; font-size: 12px; }
 .choice .detail { display: block; color: var(--ink-faint); font-size: 11px; }
@@ -1158,13 +1137,6 @@
 .asked-answer .given::before { content: '→ '; color: var(--ink-faint); }
 
 .confirm-actions .approve .aside { opacity: 0.75; font-size: 11px; }
-/* Remembering answers every later question about these programs is the weightier approval,
-   not the easier one. */
-.confirm-actions .approve.always {
-  border: 1px solid var(--accent);
-  background: transparent;
-  color: var(--accent-text);
-}
 
 .warn {
   margin: 0;
@@ -1590,11 +1562,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .file-search-results { padding: 6px; }
 .file-search-results > button { display: block; width: 100%; border: 0; background: transparent; text-align: left; padding: 8px; overflow-wrap: anywhere; font: 12px var(--mono); }
 .file-search-results > button:hover { background: var(--bubble-agent); }
-.local-file-link { background: transparent; border: 0; padding: 0; color: var(--accent-quiet); text-decoration: underline; display: inline; }
 
 .bot-editor { scroll-padding-block: 28px 90px; }
-.bot-editor button, .bot-overview button { min-height: 32px; border: 1px solid var(--line); border-radius: 7px; padding: 6px 12px; background: var(--bg); }
-.bot-overview .primary { background: var(--accent); }
 .bot-overview-title { display: flex; gap: 16px; align-items: center; }
 .bot-overview-title h2 { margin: 0; }
 .bot-overview-title p { margin: 4px 0; font-size: 12px; color: var(--ink-dim); overflow-wrap: anywhere; }
@@ -1661,18 +1630,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 
 .bot-conversations {
   gap: 2px;
-}
-
-.bot-conversations button,
-.bot-history-unavailable {
-  border-color: transparent;
-  border-radius: var(--bb-radius-md);
-  background: transparent;
-}
-
-.bot-conversations button:hover {
-  border-color: transparent;
-  background: var(--bb-hover);
 }
 
 .bot-history-unavailable {
@@ -1842,10 +1799,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 
 .diff-review {
   border-radius: 16px;
-}
-
-.bot-conversations button {
-  border-radius: 10px;
 }
 
 .background-tasks button {
@@ -2040,7 +1993,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 
 @media (forced-colors: active) {
   .session-row.current,
-.choice.picked {
+  .choice[data-state=on] {
     border: 2px solid Highlight;
     box-shadow: none;
   }

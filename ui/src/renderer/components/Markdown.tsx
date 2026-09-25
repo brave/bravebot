@@ -4,6 +4,7 @@ import remarkBreaks from 'remark-breaks'
 import remarkGfm from 'remark-gfm'
 import { isSubpath } from '../../shared/files'
 import { Button } from './ui/button'
+import { ButtonGroup } from './ui/button-group'
 import { Alert, AlertDescription } from './ui/alert'
 import { Card, CardContent, CardHeader } from './ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table'
@@ -76,7 +77,7 @@ const COMPONENTS: Components = {
   a({ href, children }) {
     const url = safeUrl(href)
     const local = href?.replace(/^\.\//, '').replace(/(?::\d+|#L\d+)$/, '')
-    if (!url && local && isSubpath(local) && !local.includes(':')) return <Button variant="link" className="local-file-link h-auto p-0" onClick={() => {
+    if (!url && local && isSubpath(local) && !local.includes(':')) return <Button variant="link" className="local-file-link h-auto p-0 font-inherit" onClick={() => {
       document.dispatchEvent(new CustomEvent('bravebot:preview-file', { detail: local }))
     }}>{children}</Button>
     // `target="_blank"` is load-bearing, not decoration. The main process refuses
@@ -87,9 +88,11 @@ const COMPONENTS: Components = {
       // window: the text of this link was written by the model, and nothing obliges it to
       // describe where the link goes. A browser gives you the URL in a status bar before
       // you commit to it; there is no status bar here, so this is it.
-      <a href={url} target="_blank" rel="noopener noreferrer nofollow" title={url}>
-        {children}
-      </a>
+      <Button asChild variant="link" className="h-auto p-0 font-inherit">
+        <a href={url} target="_blank" rel="noopener noreferrer nofollow" title={url}>
+          {children}
+        </a>
+      </Button>
     ) : (
       // Drawn as text, because an anchor that cannot be followed is a lie about what
       // clicking it will do.
@@ -144,9 +147,11 @@ function CodeBlock({ children }: { children: ReactNode }): React.JSX.Element {
   const language = isValidElement<{ className?: string }>(children) ? children.props.className?.replace('language-', '') : undefined
   return <Card className="code-block my-3 gap-0 overflow-hidden py-0">
     <CardHeader className="code-toolbar flex-row items-center gap-2 border-b px-2.5 py-1.5 [.border-b]:pb-1.5">
-      <span className="min-w-0 flex-1 text-[11px] font-medium text-ink-dim">{language || 'Code'}</span>
-      <Toggle pressed={wrap} onPressedChange={setWrap}>Wrap</Toggle>
-      <Button variant="outline" size="sm" onClick={() => { void navigator.clipboard.writeText(plain(children)).then(() => { setCopied(true); setError(false) }).catch(() => setError(true)) }}>{copied ? 'Copied' : 'Copy code'}</Button>
+      <span className="min-w-0 flex-1 text-[11px] font-medium text-muted-foreground">{language || 'Code'}</span>
+      <ButtonGroup>
+        <Toggle pressed={wrap} onPressedChange={setWrap}>Wrap</Toggle>
+        <Button variant="outline" size="sm" onClick={() => { void navigator.clipboard.writeText(plain(children)).then(() => { setCopied(true); setError(false) }).catch(() => setError(true)) }}>{copied ? 'Copied' : 'Copy code'}</Button>
+      </ButtonGroup>
     </CardHeader>
     {error && <Alert variant="destructive"><AlertDescription>Could not copy. Select the code and copy it manually.</AlertDescription></Alert>}
     <CardContent className="p-0"><pre className={wrap ? 'code-wrapped m-0 whitespace-pre-wrap break-anywhere' : 'm-0'}>{children}</pre></CardContent>

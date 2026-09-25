@@ -59,7 +59,7 @@ export function AuditInspector({ details, onClose }: { details?: TurnDetails; on
           details.clean === true ? <AuditEmpty>No policy refusals recorded for this turn.</AuditEmpty> :
             <AuditEmpty>{details.status === 'running' ? 'Waiting for policy decisions. No refusals captured so far.' : 'No refusal summary is available for this turn.'}</AuditEmpty>)}
         <Collapsible className="audit-all" open={allOpen} onOpenChange={setAllOpen}>
-          <CollapsibleTrigger asChild><Button variant="ghost" className="h-auto w-full justify-start px-0 py-1 text-xs"><span className={`chevron ${allOpen ? 'open' : ''}`} aria-hidden="true">›</span>All captured events · {details.audit.length.toLocaleString()}</Button></CollapsibleTrigger>
+          <CollapsibleTrigger className="flex h-auto w-full items-center justify-start gap-1 px-0 py-1 text-xs"><span className={`chevron ${allOpen ? 'open' : ''}`} aria-hidden="true">›</span>All captured events · {details.audit.length.toLocaleString()}</CollapsibleTrigger>
           <CollapsibleContent>
             {allOpen && <ItemGroup>{details.audit.map((record) => <Evidence key={record.sequence} record={record} />)}</ItemGroup>}
             {!details.audit.length && <AuditEmpty>No events available.</AuditEmpty>}

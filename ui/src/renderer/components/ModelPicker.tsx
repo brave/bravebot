@@ -106,7 +106,7 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
       onOpenAutoFocus={(event) => { event.preventDefault(); search.current?.focus() }}>
       <Command shouldFilter={false} className="model-command">
         <div className="model-heading mb-2 flex items-center justify-between gap-2 px-px"><strong className="text-xs font-semibold">{heading}</strong>
-          <Button variant="ghost" size="sm" type="button" className="model-refresh text-primary" disabled={loading} onClick={() => setRevision((n) => n + 1)}>Refresh</Button>
+          <Button variant="ghost" size="sm" type="button" className="model-refresh" disabled={loading} onClick={() => setRevision((n) => n + 1)}>Refresh</Button>
         </div>
         <CommandInput ref={search} className="model-search bg-muted" placeholder="Search models…" value={query}
           role="combobox" aria-label="Search models" onValueChange={setQuery}

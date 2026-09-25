@@ -8,7 +8,8 @@ import { Badge } from './ui/badge'
 import { Button } from './ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
 import { Empty, EmptyDescription } from './ui/empty'
-import { Item } from './ui/item'
+import { Item, ItemContent, ItemTitle } from './ui/item'
+import { SheetClose } from './ui/sheet'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs'
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
 
@@ -43,7 +44,7 @@ interface Live {
  * the disk, because the question it answers — what else is in there, and what does this file look
  * like in a real editor — is not one the transcript can be asked.
  */
-export function Context({ live, onClose, audit }: { live: Live | null; onClose: () => void; audit?: React.ReactNode }): React.JSX.Element {
+export function Context({ live, onClose, audit, drawer }: { live: Live | null; onClose: () => void; audit?: React.ReactNode; drawer?: boolean }): React.JSX.Element {
   const [tab, setTab] = useState<'overview' | 'files'>('overview')
   const off = new Set<PanelName>(tab === 'overview' ? ['files'] : ['plan', 'read', 'writes', 'confined'])
   const reveal = (path: string) => {
@@ -91,7 +92,7 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
            column will come back at when it unfolds — which a full-width row of buttons plus its
            own margins overflows. The wrapper takes that width and the bar sits inside it. */}
       <div className="context-head shrink-0 px-3.5 pb-2">
-        <div className="inspector-title flex items-center justify-between gap-2"><strong>Project context</strong><Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon-sm" className="drawer-close" onClick={onClose} aria-label="Close context panel">×</Button></TooltipTrigger><TooltipContent>Close context panel</TooltipContent></Tooltip></div>
+        <div className="inspector-title flex items-center justify-between gap-2"><strong>Project context</strong><Tooltip><TooltipTrigger asChild>{drawer ? <SheetClose asChild><Button variant="ghost" size="icon-sm" className="drawer-close" onClick={onClose} aria-label="Close context panel">×</Button></SheetClose> : <Button variant="ghost" size="icon-sm" className="drawer-close" onClick={onClose} aria-label="Close context panel">×</Button>}</TooltipTrigger><TooltipContent>Close context panel</TooltipContent></Tooltip></div>
         <TabsList className="inspector-tabs" variant="line" aria-label="Project context">
           {(['overview', 'files'] as const).map((name) => <TabsTrigger key={name} value={name}>{name === 'overview' ? 'Overview' : 'Files'}</TabsTrigger>)}
         </TabsList>
@@ -154,10 +155,16 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
         ) : (
           <ul className="files">
             {files.map((file) => (
-              <Item asChild size="sm" key={file.target}><li className={`${file.confined ? 'confined ' : ''}flex-nowrap rounded-none`}>
-                <Button variant="link" className="context-link h-auto min-w-0 truncate p-0 text-left font-mono text-[11px]" onClick={() => reveal(file.target)} title={file.target}>{file.target}</Button>
-                {file.confined && <Badge variant="outline" className="tag">confined</Badge>}
-              </li></Item>
+              <li key={file.target} className={`${file.confined ? 'confined ' : ''}flex`}>
+                <Item asChild size="sm">
+                  <Button variant="ghost" className="context-link h-auto min-w-0 flex-1 justify-start rounded-none px-0 py-1.5 text-left" onClick={() => reveal(file.target)} title={file.target}>
+                    <ItemContent className="min-w-0 gap-0">
+                      <ItemTitle className="font-mono truncate text-[11px] font-normal">{file.target}</ItemTitle>
+                    </ItemContent>
+                    {file.confined && <Badge variant="outline" className="tag">confined</Badge>}
+                  </Button>
+                </Item>
+              </li>
             ))}
           </ul>
         )}
@@ -173,10 +180,16 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
         ) : (
           <ul className="files">
             {writes.map((write) => (
-              <Item asChild size="sm" key={write.target}><li className={`${write.state} flex-nowrap rounded-none`}>
-                <Button variant="link" className="context-link h-auto min-w-0 truncate p-0 text-left font-mono text-[11px]" onClick={() => reveal(write.target)} title={write.target}>{write.target}</Button>
-                <Badge variant="outline" className="tag">{write.state}</Badge>
-              </li></Item>
+              <li key={write.target} className={`${write.state} flex`}>
+                <Item asChild size="sm">
+                  <Button variant="ghost" className="context-link h-auto min-w-0 flex-1 justify-start rounded-none px-0 py-1.5 text-left" onClick={() => reveal(write.target)} title={write.target}>
+                    <ItemContent className="min-w-0 gap-0">
+                      <ItemTitle className="font-mono truncate text-[11px] font-normal">{write.target}</ItemTitle>
+                    </ItemContent>
+                    <Badge variant="outline" className="tag">{write.state}</Badge>
+                  </Button>
+                </Item>
+              </li>
             ))}
           </ul>
         )}
@@ -264,9 +277,8 @@ function Section({
   return (
     <Collapsible open={open} onOpenChange={setOpen} asChild>
       <section className={`panel ${off ? 'off' : ''}`} id={`panel-${id}`}>
-        <CollapsibleTrigger asChild><Button
-          variant="ghost"
-          className="panel-head h-auto w-full justify-start px-3.5 py-1.5 text-[11px] font-medium tracking-wide uppercase"
+        <CollapsibleTrigger
+          className="panel-head flex w-full items-center gap-1.5 px-3.5 py-1.5 text-left text-[11px] font-medium tracking-wide uppercase"
           title={`${open ? 'Hide' : 'Show'} ${title.toLowerCase()}`}
         >
           <span className={`chevron ${open ? 'open' : ''}`} aria-hidden="true">
@@ -274,7 +286,7 @@ function Section({
           </span>
           {title}
           {count !== undefined && count > 0 && <Badge variant="secondary" className="count ml-auto">{count}</Badge>}
-        </Button></CollapsibleTrigger>
+        </CollapsibleTrigger>
         <CollapsibleContent forceMount className="panel-inner px-3.5">
           {children}
         </CollapsibleContent>

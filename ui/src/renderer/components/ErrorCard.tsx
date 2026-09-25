@@ -2,6 +2,7 @@ import { cn } from 'cn'
 import { failureSummary } from '../failure'
 import { Alert, AlertDescription, AlertTitle } from './ui/alert'
 import { Button } from './ui/button'
+import { ButtonGroup } from './ui/button-group'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
 
 /**
@@ -21,10 +22,13 @@ export function ErrorCard({ detail, onRetry, onModel, category, attempts, status
     <Alert variant="destructive" className={cn('error-card mx-5 mt-2.5 border-l-[3px] border-l-destructive bg-destructive/10 text-foreground', className)}>
       <AlertTitle><strong>{classified.title}</strong></AlertTitle>
       <AlertDescription><p>{classified.description}</p></AlertDescription>
-      <div className="error-actions mt-2.5 flex flex-wrap gap-2">
+      {(onRetry || onModel) && (onRetry && onModel ? <ButtonGroup className="error-actions mt-2.5">
+        <Button variant="outline" size="sm" onClick={onRetry}>Draft continuation</Button>
+        <Button variant="outline" size="sm" onClick={onModel}>Choose another model</Button>
+      </ButtonGroup> : <div className="error-actions mt-2.5">
         {onRetry && <Button variant="outline" size="sm" onClick={onRetry}>Draft continuation</Button>}
         {onModel && <Button variant="outline" size="sm" onClick={onModel}>Choose another model</Button>}
-      </div>
+      </div>)}
       <Collapsible className="error-details mt-2.5">
         <CollapsibleTrigger asChild><Button variant="ghost" size="sm">Technical details</Button></CollapsibleTrigger>
         <CollapsibleContent forceMount><pre className="max-h-[200px] overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-muted p-2.5 font-mono text-xs">{detail}{attempts != null ? `\nRequests attempted: ${attempts}` : ''}{status != null ? `\nHTTP status: ${status}` : ''}</pre></CollapsibleContent>

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { BotAvatar } from './BotAvatar'
-import { Modal } from './Modal'
+import { DialogClose, Modal } from './Modal'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from './ui/accordion'
 import { Badge } from './ui/badge'
 import { Button } from './ui/button'
@@ -47,9 +47,11 @@ export function About({ info, onClose }: { info: AboutInfo; onClose: () => void 
   }
 
   return <Modal title="About Brave Bot" onClose={onClose} className="about w-[min(440px,calc(100vw-32px))]">
-    <Button variant="ghost" size="icon-sm" className="about-close" aria-label="Close About Brave Bot" onClick={onClose}>
-      <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
-    </Button>
+    <DialogClose asChild>
+      <Button variant="ghost" size="icon-sm" className="about-close" aria-label="Close About Brave Bot" onClick={onClose}>
+        <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
+      </Button>
+    </DialogClose>
     <DialogHeader className="about-hero items-center text-center">
       <div className="about-stage">
         <Button variant="ghost" className="about-mascot" aria-label="Make Brave Bot wink"

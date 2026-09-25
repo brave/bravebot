@@ -28,15 +28,18 @@ import { newAvatarSeed } from '../../shared/avatar'
 import { BotAvatar, type Doing } from './BotAvatar'
 import { ModelPicker } from './ModelPicker'
 import { Button } from './ui/button'
+import { ButtonGroup } from './ui/button-group'
 import { Card, CardContent, CardFooter, CardHeader } from './ui/card'
-import { DialogFooter } from './ui/dialog'
+import { DialogClose, DialogFooter } from './ui/dialog'
 import { Empty, EmptyDescription } from './ui/empty'
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from './ui/field'
 import { Input } from './ui/input'
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from './ui/input-group'
 import { Item, ItemContent, ItemDescription, ItemGroup, ItemTitle } from './ui/item'
 import { Textarea } from './ui/textarea'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from './ui/alert-dialog'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
+import { FolderOpenIcon, PencilIcon, RefreshCwIcon } from 'lucide-react'
 
 interface Props {
   bots: Bot[]
@@ -93,7 +96,7 @@ export function Bots({
       <header className="sessions-head">
         {/* The same control the session list's own opens with, so the two tabs begin the same
             way. No split beside it: a bot's folder is asked for once, in the form. */}
-        <SidebarTools query={query} onQuery={setQuery} label="Search bots" action={<Button className="new w-full" onClick={() => setEditing('new')}>
+        <SidebarTools query={query} onQuery={setQuery} label="Search bots" action={<Button className="new w-full" variant="default" onClick={() => setEditing('new')}>
           <span className="plus" aria-hidden="true">
             +
           </span>
@@ -134,8 +137,10 @@ export function Bots({
               <p className="bot-note">This bot carries its purpose and saved memory into each conversation. Conversation history belongs to individual tasks.</p>
             </CardContent>
             <CardFooter className="bot-overview-actions">
-              <Button type="button" className="primary" onClick={() => { onNewConversation(overview); setOverview(null) }}>New conversation</Button>
-              <Button type="button" variant="outline" onClick={() => { setEditing(overview.slug); setOverview(null) }}>Edit bot and memory</Button>
+              <ButtonGroup>
+                <Button type="button" onClick={() => { onNewConversation(overview); setOverview(null) }}>New conversation</Button>
+                <Button type="button" variant="outline" onClick={() => { setEditing(overview.slug); setOverview(null) }}>Edit bot and memory</Button>
+              </ButtonGroup>
             </CardFooter>
           </Card>
           <h3>Conversation history ({history.length})</h3>
@@ -149,7 +154,7 @@ export function Bots({
             {history.length === 0 && <Empty className="bot-history-empty"><EmptyDescription>No conversations yet.</EmptyDescription></Empty>}
             {history.length > 0 && filteredHistory.length === 0 && <Empty className="bot-history-empty"><EmptyDescription>No conversations match “{historyQuery}”.</EmptyDescription></Empty>}
           </ItemGroup>
-          <DialogFooter><Button type="button" onClick={() => setOverview(null)}>Done</Button></DialogFooter>
+          <DialogFooter><DialogClose asChild><Button type="button" onClick={() => setOverview(null)}>Done</Button></DialogClose></DialogFooter>
         </Modal>}
       </div>
 
@@ -235,7 +240,7 @@ function BotRow({
   const where = bot.directory.split('/').pop() ?? bot.directory
   return (
     <div className={`bot group relative ${open ? 'bot-open' : ''}`}>
-      <Button variant="ghost" className={`bot-open-button h-auto w-full justify-start gap-1.5 px-3 py-2 text-left ${open ? 'group-[.bot-open]:bg-accent text-accent-foreground' : ''}`} onClick={() => onOpen(bot)}>
+      <Button variant="ghost" data-active={open || undefined} className={`bot-open-button h-auto w-full justify-start gap-1.5 px-3 py-2 text-left ${open ? 'data-[active=true]:bg-accent data-[active=true]:text-accent-foreground' : ''}`} onClick={() => onOpen(bot)}>
         <BotAvatar seed={bot.avatar} doing={doing} />
         <span className="bot-said pr-10">
           <span className="bot-name">{bot.name}</span>
@@ -255,7 +260,7 @@ function BotRow({
         title={`Edit ${bot.name}`}
         onClick={onEdit}
       >
-        <span aria-hidden="true">⋯</span>
+        <PencilIcon data-icon="inline-start" />
       </Button>
     </div>
   )
@@ -307,8 +312,10 @@ function ArchivedRow({
         <span className="bot-name">{bot.name}</span>
         <span className="bot-where truncate text-xs text-muted-foreground" title={bot.directory}>{where}</span>
       </span>
-      <Button variant="outline" size="sm" type="button" className="bot-restore" title={`Bring ${bot.name} back, with its session, its memory and its face.`} onClick={onRestore}>Restore</Button>
-      <Button variant="destructive" size="sm" type="button" className="bot-delete" title={`Delete ${bot.name} for good. Local memory history is deleted. Project files and conversations are kept.`} onClick={onAsk}>Delete</Button>
+      <ButtonGroup>
+        <Button variant="outline" size="sm" type="button" className="bot-restore" title={`Bring ${bot.name} back, with its session, its memory and its face.`} onClick={onRestore}>Restore</Button>
+        <Button variant="destructive" size="sm" type="button" className="bot-delete" title={`Delete ${bot.name} for good. Local memory history is deleted. Project files and conversations are kept.`} onClick={onAsk}>Delete</Button>
+      </ButtonGroup>
       <AlertDialog open={asking} onOpenChange={(open) => { if (!open) onCancel() }}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -395,10 +402,7 @@ function BotForm({
                 title="Try a new avatar appearance"
                 onClick={() => setAvatar(newAvatarSeed(crypto.randomUUID()))}
               >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M20 7v5h-5M4 17v-5h5" />
-                  <path d="M6.1 7a7 7 0 0 1 11.6-1L20 12M4 12l2.3 6A7 7 0 0 0 17.9 17" />
-                </svg>
+                <RefreshCwIcon data-icon="inline-start" />
               </Button>
             </div>
           )}
@@ -441,9 +445,15 @@ function BotForm({
             <Button variant="outline" type="button" onClick={() => { void window.bravebot.chooseDirectory().then((folder) => { if (folder) void save({ name: `${name} copy`, purpose, model, directory: folder }) }) }}>Duplicate into another project</Button></div>
           ) : (
             <>
-              <Button variant="outline" type="button" className="bot-choose" onClick={() => void choose()}>
-                {directory || 'Choose a folder…'}
-              </Button>
+              <InputGroup className="bot-choose">
+                <InputGroupInput readOnly value={directory} placeholder="Choose a folder…" aria-label="Project folder" />
+                <InputGroupAddon align="inline-end">
+                  <InputGroupButton type="button" variant="outline" aria-label="Choose a folder…" onClick={() => void choose()}>
+                    <FolderOpenIcon data-icon="inline-start" />
+                    Choose a folder…
+                  </InputGroupButton>
+                </InputGroupAddon>
+              </InputGroup>
               {/* Said before the folder is picked rather than after, because it is the one consequence of
                   making a bot that touches something the person owns. */}
               <FieldDescription className="bot-note">
@@ -477,12 +487,14 @@ function BotForm({
           </Button>
         )}
         <span className="bot-spacer flex-1" />
-        <Button variant="outline" type="button" onClick={onCancel}>
-          Cancel
-        </Button>
-        <Button type="submit" className="bot-save" disabled={!ready || saving}>
-          {saving ? 'Saving…' : bot ? 'Save' : 'Create'}
-        </Button>
+        <ButtonGroup>
+          <Button variant="outline" type="button" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button type="submit" className="bot-save" disabled={!ready || saving}>
+            {saving ? 'Saving…' : bot ? 'Save' : 'Create'}
+          </Button>
+        </ButtonGroup>
       </DialogFooter>
     </form>
   )

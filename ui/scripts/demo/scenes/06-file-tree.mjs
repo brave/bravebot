@@ -15,10 +15,10 @@ export default {
     const { page } = s
     await openNewest(s, { hold: 1.2 })
 
-    // The tree is the last of the five panels and may be switched off from a previous run.
-    const pick = page.locator('.panel-pick[aria-controls="panel-files"]')
-    if ((await pick.count()) && (await pick.getAttribute('aria-pressed')) === 'false') {
-      await s.click(pick)
+    // The tree lives under the Files tab of the context column.
+    const filesTab = page.locator('.inspector-tabs [role="tab"]').filter({ hasText: /^Files$/ })
+    if ((await filesTab.count()) && (await filesTab.getAttribute('aria-selected')) !== 'true') {
+      await s.click(filesTab)
     }
     const tree = page.locator('.tree')
     if (!(await tree.count())) s.skip('this session has no folder to list')
@@ -56,9 +56,9 @@ export default {
     }
 
     await s.say('Dotfiles', 'Hidden entries sit behind a toggle.')
-    await s.click(page.locator('.tree-tool').first())
+    await s.click(page.locator('.tree-tool.dotfiles'))
     await s.beat(1.2)
-    await s.click(page.locator('.tree-tool').first())
+    await s.click(page.locator('.tree-tool.dotfiles'))
     await s.beat(0.8)
 
     // The filter, typed against something actually on screen — a made-up query narrowing to

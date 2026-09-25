@@ -51,3 +51,46 @@ test('overlays declare an accessible title', () => {
     assert.ok(readFileSync(path, 'utf8').includes(needle), `${path} is missing ${needle}`)
   }
 })
+
+test('stateful generic buttons are not used', () => {
+  const files = walk('src/renderer/components', (name, path) =>
+    name.endsWith('.tsx') && !path.includes('/ui/'))
+  const pressedOnButton = /<Button\b[^>]*\baria-pressed=/
+  for (const path of files) {
+    const source = readFileSync(path, 'utf8')
+    assert.ok(!pressedOnButton.test(source), `${path} puts aria-pressed on Button; use Toggle/Tabs`)
+  }
+})
+
+test('ButtonGroup is not used for a single child', () => {
+  const files = walk('src/renderer/components', (name, path) =>
+    name.endsWith('.tsx') && !path.includes('/ui/'))
+  for (const path of files) {
+    const source = readFileSync(path, 'utf8')
+    for (const block of source.matchAll(/<ButtonGroup\b[\s\S]*?<\/ButtonGroup>/g)) {
+      let inner = block[0].replace(/^<ButtonGroup\b[^>]*>/, '').replace(/<\/ButtonGroup>$/, '')
+      inner = inner.replace(/<ButtonGroup\b[\s\S]*?<\/ButtonGroup>/g, ' ')
+      inner = inner.replace(/<DialogClose\b[\s\S]*?<\/DialogClose>/g, '<Control />')
+      inner = inner.replace(/<PopMenu\b[\s\S]*?<\/PopMenu>/g, '<Control />')
+      inner = inner.replace(/<CollapsibleTrigger\b[\s\S]*?<\/CollapsibleTrigger>/g, '<Control />')
+      const kids = inner.match(/<(Button|Toggle|Control|InputGroupButton)\b/g) || []
+      assert.ok(kids.length >= 2, `${path} has a single-child ButtonGroup`)
+    }
+  }
+})
+
+test('retired visual button hook classes are not painted in CSS', () => {
+  const css = readFileSync('src/renderer/shadcn.css', 'utf8')
+  const retired = [
+    /\.fold-toggle:hover\b/,
+    /\.choice\.picked\b/,
+    /\.choice:hover\b/,
+    /\.approve\.always\s*\{[^}]*background/,
+    /\.bot-overview\s+\.primary\b/,
+    /\.bot-editor\s+button\s*,/,
+    /\.local-file-link\s*\{[^}]*color\s*:/,
+  ]
+  for (const pattern of retired) {
+    assert.ok(!pattern.test(css), `shadcn.css still paints retired rule ${pattern}`)
+  }
+})
