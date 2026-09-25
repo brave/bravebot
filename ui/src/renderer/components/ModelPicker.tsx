@@ -1,3 +1,4 @@
+import { cn } from 'cn'
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ModelCatalogue, ModelOption } from '../../shared/protocol'
 import { setExperience, useExperience } from '../experience'
@@ -92,54 +93,54 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
     setOpen(next)
     if (!next) requestAnimationFrame(() => trigger.current?.focus())
   }}>
-    <div className="model-picker">
-    <PopoverTrigger asChild><Button ref={trigger} variant="outline" className="model-trigger" type="button" disabled={disabled}
+    <div className="model-picker min-w-[78px] max-w-[220px]">
+    <PopoverTrigger asChild><Button ref={trigger} variant="outline" size="sm" className="model-trigger w-full justify-start" type="button" disabled={disabled}
       title={`Choose model · ${model ?? label}`} aria-label={`Choose model: ${label}`}
       aria-controls={open ? id : undefined}>
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
         <path d="m12 3 9 5-9 5-9-5 9-5Z M3 12l9 5 9-5 M3 16l9 5 9-5" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
-      <span className="model-current" aria-hidden="true">{compactLabel}</span>
+      <span className="model-current min-w-0 flex-1 truncate text-left text-[10.5px]">{compactLabel}</span>
     </Button></PopoverTrigger>
     </div>
-    <PopoverContent id={id} className="model-popover p-0" aria-label={heading} side="top" align="end"
+    <PopoverContent id={id} className="model-popover w-[min(380px,66vw)] p-0" aria-label={heading} side="top" align="end"
       onOpenAutoFocus={(event) => { event.preventDefault(); search.current?.focus() }}>
       <Command shouldFilter={false} className="model-command">
-        <div className="model-heading"><strong>{heading}</strong>
-          <Button variant="ghost" size="sm" type="button" className="model-refresh" disabled={loading} onClick={() => setRevision((n) => n + 1)}>Refresh</Button>
+        <div className="model-heading mb-2 flex items-center justify-between gap-2 px-px"><strong className="text-xs font-semibold">{heading}</strong>
+          <Button variant="ghost" size="sm" type="button" className="model-refresh text-primary" disabled={loading} onClick={() => setRevision((n) => n + 1)}>Refresh</Button>
         </div>
-        <CommandInput ref={search} className="model-search" placeholder="Search models…" value={query}
-          aria-label="Search models" onValueChange={setQuery}
+        <CommandInput ref={search} className="model-search bg-muted" placeholder="Search models…" value={query}
+          role="combobox" aria-label="Search models" onValueChange={setQuery}
           onKeyDown={(event) => { if (event.key === 'Enter' && options.length === 0) event.preventDefault() }} />
-        {loading && <div className="model-status" role="status"><Spinner data-icon="inline-start" /> Loading available models…</div>}
-        {problem && <Alert variant="destructive" className="model-status"><AlertDescription>{problem}</AlertDescription></Alert>}
-        {catalogue?.warnings.map((warning) => <Alert className="model-status" key={warning}><AlertDescription>{warning}</AlertDescription></Alert>)}
-        <CommandList id={`${id}-list`} className="model-options" aria-label="Models">
-          <CommandEmpty className="model-status">{query ? 'No models match your search.' : 'No models available. Check your backend settings.'}</CommandEmpty>
+        {loading && <div className="model-status mt-2 text-[11px] text-muted-foreground" role="status"><Spinner data-icon="inline-start" /> Loading available models…</div>}
+        {problem && <Alert variant="destructive" className="model-status mt-2"><AlertDescription>{problem}</AlertDescription></Alert>}
+        {catalogue?.warnings.map((warning) => <Alert className="model-status mt-2" key={warning}><AlertDescription>{warning}</AlertDescription></Alert>)}
+        <CommandList id={`${id}-list`} className="model-options mt-2" aria-label="Models">
+          <CommandEmpty className="model-status mt-2 text-[11px] text-muted-foreground">{query ? 'No models match your search.' : 'No models available. Check your backend settings.'}</CommandEmpty>
           <CommandGroup>
-          {options.map((row) => <CommandItem key={row.id} value={row.id}
+          {options.map((row) => <CommandItem key={row.id} value={row.id} role="option"
           data-current={row.id === model}
-          className="model-option"
+          className="model-option gap-2 rounded-md px-2 py-2 data-[selected=true]:bg-primary/10 data-[selected=true]:text-foreground"
           onSelect={() => choose(row)}>
-          <span className="model-check" aria-hidden="true">{row.id === model ? '✓' : ''}</span>
-          <span className="model-description"><span className="model-name">{row.name}</span>
-            <span className="model-detail">{row.provider}{row.premium ? ' · Premium' : ''}{row.contextWindow ? ` · ${row.contextWindow.toLocaleString()} context tokens` : ''}{preferences.recentModels.includes(row.id) ? ' · Recent' : ''}</span>
-            {!!row.capabilities?.length && <span className="model-capabilities" aria-label="Provider-reported capabilities">
+          <span className="model-check w-3.5 shrink-0 text-primary" aria-hidden="true">{row.id === model ? '✓' : ''}</span>
+          <span className="model-description flex min-w-0 flex-1 flex-col gap-0.5"><span className="model-name truncate text-[12.5px] font-medium">{row.name}</span>
+            <span className="model-detail text-[10.5px] text-muted-foreground">{row.provider}{row.premium ? ' · Premium' : ''}{row.contextWindow ? ` · ${row.contextWindow.toLocaleString()} context tokens` : ''}{preferences.recentModels.includes(row.id) ? ' · Recent' : ''}</span>
+            {!!row.capabilities?.length && <span className="model-capabilities mt-1 flex flex-wrap gap-1" aria-label="Provider-reported capabilities">
               {row.capabilities.filter((key) => ['text', 'tools'].includes(key)).map((key) => {
                 const badge = CAPABILITIES[key]
-                return badge ? <Badge variant="outline" className="model-capability" key={key} title={`${badge[1]} · Supported by this app and reported by the provider`}>
+                return badge ? <Badge variant="outline" className="model-capability rounded-[4px] border-border bg-card px-1 py-0 text-[9px] leading-[14px] text-muted-foreground" key={key} title={`${badge[1]} · Supported by this app and reported by the provider`}>
                   {badge[0]}
                 </Badge> : null
               })}
             </span>}
           </span>
-          {row.id === catalogue?.defaultModel && <Badge variant="secondary" className="model-default">Default</Badge>}
+          {row.id === catalogue?.defaultModel && <Badge variant="secondary" className="model-default rounded-[4px] border-border bg-card px-1.5 py-0.5 text-[10px] text-muted-foreground">Default</Badge>}
         </CommandItem>)}
           </CommandGroup>
         </CommandList>
         <Separator />
-        <div className="model-footnote">{scope === 'bot' ? 'Saved with this bot. Applies to its next message.' : 'Applies to the next message in this conversation.'}</div>
-        <p className="model-footnote">Brave Bot uses text and tools. Other provider capabilities, such as image or audio generation, are not available here. Pricing is not supplied by this catalogue.</p>
+        <div className="model-footnote mt-2 border-t border-border pt-2 text-[10px] text-muted-foreground">{scope === 'bot' ? 'Saved with this bot. Applies to its next message.' : 'Applies to the next message in this conversation.'}</div>
+        <p className="model-footnote mt-2 border-t border-border pt-2 text-[10px] text-muted-foreground">Brave Bot uses text and tools. Other provider capabilities, such as image or audio generation, are not available here. Pricing is not supplied by this catalogue.</p>
       </Command>
     </PopoverContent>
   </Popover>

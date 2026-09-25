@@ -1,3 +1,4 @@
+import { cn } from 'cn'
 import type { TurnDetails as Details, TurnDisclosure } from '../turn-details'
 import { Badge } from './ui/badge'
 import { Button } from './ui/button'
@@ -39,7 +40,7 @@ export function TurnFooter({ details, onDisclosure, onAudit }: {
           <dt>Tool-calling rounds</dt><dd>{exact(details.steps)}</dd>
         </dl><p>Usage is summed across requests in this turn.</p></div></CollapsibleContent>
     </Collapsible> : details ? <Badge variant="outline">Final usage unavailable</Badge> : null}
-    <Button variant="link" className={`turn-audit-link${details?.clean === false ? ' has-refusal' : ''}`}
+    <Button variant="link" className={cn('turn-audit-link h-auto min-h-0 px-0 py-1 text-left text-xs text-muted-foreground hover:text-foreground', details?.clean === false && 'has-refusal text-warn')}
       data-audit-turn={details?.turn ?? 'saved'}
       aria-controls="turn-audit-inspector" onClick={(event) => onAudit(details?.turn ?? null, event.currentTarget)}>
       {details?.clean === false ? 'Policy blocked an action' : details ? 'Audit' : 'Audit unavailable'} <span aria-hidden="true">↗</span>

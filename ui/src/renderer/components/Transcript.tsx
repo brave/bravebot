@@ -261,11 +261,6 @@ export function Transcript({
   const latest = () => { following.current = true; setUnseen(false); jump(bottom.current) }
   useEffect(() => { void window.bravebot.readRecents().then(setRecents).catch(() => {}) }, [live?.handle])
   useLayoutEffect(() => {
-    if (!input.current) return
-    input.current.style.height = 'auto'
-    input.current.style.height = `${Math.min(210, Math.max(70, input.current.scrollHeight))}px`
-  }, [draft])
-  useLayoutEffect(() => {
     const element = scroller.current
     if (!element) return
     const stored = conversationPreferences(storageKey).scroll
@@ -446,11 +441,11 @@ export function Transcript({
         </div>
         <ColumnToggle side="right" collapsed={collapsed.right} onToggle={onToggle} />
       </div>
-      {live && <div className="conversation-toolbar">
-        <Toggle pressed={searching} onPressedChange={setSearching} aria-expanded={searching}>Find</Toggle>
-        <Button variant="ghost" onClick={() => setPermissions(true)}>Permissions</Button>
-        <Button variant="ghost" onClick={() => setWatches(true)}>Watches</Button>
-        <Toggle pressed={focusedLayout !== null} onPressedChange={() => {
+      {live && <div className="conversation-toolbar flex flex-wrap items-center gap-0.5 px-[38px] pt-1.5 pb-0.5">
+        <Toggle size="sm" pressed={searching} onPressedChange={setSearching} aria-expanded={searching}>Find</Toggle>
+        <Button variant="ghost" size="sm" onClick={() => setPermissions(true)}>Permissions</Button>
+        <Button variant="ghost" size="sm" onClick={() => setWatches(true)}>Watches</Button>
+        <Toggle size="sm" pressed={focusedLayout !== null} onPressedChange={() => {
           if (focusedLayout) {
             for (const side of ['left', 'right'] as const) if (collapsed[side] !== focusedLayout[side]) onToggle(side)
             setFocusedLayout(null)
@@ -459,28 +454,28 @@ export function Transcript({
             for (const side of ['left', 'right'] as const) if (!collapsed[side]) onToggle(side)
           }
         }}>{focusedLayout ? 'Exit focus' : 'Focus'}</Toggle>
-        <Toggle pressed={preferences.density === 'compact'} onPressedChange={() => setExperience('density', preferences.density === 'compact' ? 'comfortable' : 'compact')}>
+        <Toggle size="sm" pressed={preferences.density === 'compact'} onPressedChange={() => setExperience('density', preferences.density === 'compact' ? 'comfortable' : 'compact')}>
           {preferences.density === 'compact' ? 'Comfortable view' : 'Compact view'}
         </Toggle>
         <ExportMenu canExport={canExport} includeTools={includeTools} onToggleTools={onToggleTools} onExport={onExport} />
       </div>}
-      {backendReady === false && <Alert className="backend-status" role="status">
+      {backendReady === false && <Alert className="backend-status flex flex-col gap-1.5 border-y border-warn/20 bg-warn/10 px-[58px] py-2.5 text-foreground" role="status">
         <AlertTitle><strong>Backend setup needed</strong></AlertTitle>
         <AlertDescription>
           <span>You can browse conversations and prepare drafts.</span>
           <div><Button variant="outline" size="sm" onClick={onSetup}>Setup help</Button><Button variant="outline" size="sm" onClick={onCheckBackend}>Check again</Button><Button variant="outline" size="sm" onClick={onDiagnostics}>Diagnostics</Button></div>
         </AlertDescription>
       </Alert>}
-      {live && <div className="context-status" title="The model’s last request size, not accumulated token usage. New messages may change the next request.">
+      {live && <div className="context-status px-5 py-1.5 text-[11px] text-muted-foreground" title="The model’s last request size, not accumulated token usage. New messages may change the next request.">
         {live.phase === 'compacting' ? 'Summarising context…' : live.contextTokens === undefined ? 'Context measurement unavailable' : live.contextTokens === 0 ? 'Context not yet measured' : `${live.contextTokens.toLocaleString()} context tokens at last request`}
         {!!live.archived && <span> · Earlier context summarised</span>}
       </div>}
       {problem && <ErrorCard detail={problem} />}
-      {searching && <InputGroup className="conversation-search">
-        <InputGroupInput autoFocus type="search" aria-label="Find in conversation" placeholder="Find in conversation…" value={query}
+      {searching && <InputGroup className="conversation-search gap-1.25 rounded-none border-0 border-t border-border bg-muted px-5 py-2">
+        <InputGroupInput className="min-h-8 rounded-md border border-border bg-card px-2 py-1.5" autoFocus type="search" aria-label="Find in conversation" placeholder="Find in conversation…" value={query}
           onChange={(event) => { setQuery(event.target.value); setMatch(0) }}
           onKeyDown={(event) => { if (event.key === 'Escape') setSearching(false); if (event.key === 'Enter') setMatch((n) => n + (event.shiftKey ? -1 + matches.length : 1)) }} />
-        <InputGroupAddon align="inline-end">
+        <InputGroupAddon className="gap-1 text-xs" align="inline-end">
           <span role="status">{matches.length ? `${match % matches.length + 1} of ${matches.length}` : query ? 'No matches' : ''}</span>
           <InputGroupButton size="icon-sm" disabled={!matches.length} onClick={() => setMatch((n) => n + matches.length - 1)} aria-label="Previous match">↑</InputGroupButton>
           <InputGroupButton size="icon-sm" disabled={!matches.length} onClick={() => setMatch((n) => n + 1)} aria-label="Next match">↓</InputGroupButton>
@@ -496,18 +491,18 @@ export function Transcript({
     return (
       <main className="transcript empty-state">
         {head}
-        <div className="empty-body">
-          <Empty className="border-0">
+        <div className="empty-body flex flex-1 place-items-center overflow-y-auto text-left text-muted-foreground">
+          <Empty className="w-full max-w-[570px] border-0 p-0">
             <EmptyHeader className="max-w-none">
-              <EmptyMedia className="welcome-mark">B</EmptyMedia>
-              <EmptyTitle><h1>What would you like to build?</h1></EmptyTitle>
+              <EmptyMedia className="welcome-mark size-[38px] rounded-[10px] bg-primary text-[18px] font-semibold text-primary-foreground">B</EmptyMedia>
+              <EmptyTitle><h1 className="text-lg font-medium tracking-tight">What would you like to build?</h1></EmptyTitle>
               <EmptyDescription>Work with an agent in your project. Track changes and review approval requests as you work.</EmptyDescription>
             </EmptyHeader>
             <EmptyContent>
               <Button className="primary" onClick={() => onNew()}>Open project</Button>
-              {!!recents.length && <div className="welcome-recents"><h2>Recent projects</h2>{recents.slice(0, 5).map((directory) =>
-                <Button variant="outline" className="h-auto flex-col items-start justify-start text-left" key={directory} onClick={() => onNew(directory)}><strong>{directory.split('/').pop()}</strong><span>{directory}</span></Button>)}</div>}
-              <p className="welcome-hint">Choose a conversation to resume work, or create a bot with a purpose and persistent memory.</p>
+              {!!recents.length && <div className="welcome-recents mt-2 flex w-full flex-col items-start gap-2 text-left"><h2 className="text-xs font-semibold text-foreground">Recent projects</h2>{recents.slice(0, 5).map((directory) =>
+                <Button variant="outline" className="h-auto w-full flex-col items-start justify-start text-left" key={directory} onClick={() => onNew(directory)}><strong>{directory.split('/').pop()}</strong><span>{directory}</span></Button>)}</div>}
+              <p className="welcome-hint text-sm leading-relaxed text-muted-foreground">Choose a conversation to resume work, or create a bot with a purpose and persistent memory.</p>
             </EmptyContent>
           </Empty>
         </div>
