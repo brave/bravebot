@@ -348,6 +348,8 @@ the refusals and the names the first release fixes, and builds a real installer 
 bundle on macOS and Windows, checking the bundle comes out byte for byte as it went in. On macOS
 it also checks that each architecture's archive uses only coders the installer's own 7-Zip decodes,
 since the 7-Zip electron-builder fetches for Windows cannot open an installer to look.
+`scripts/check-windows-install.mjs` installs, starts, upgrades and uninstalls the real one, in the
+account running it, so it is CI's on a runner of each architecture rather than a local check.
 
 Every macOS bundle carries the bundle id `com.brave.bravebot` and the icon `build/icon.icns`. macOS
 keys privacy grants and keychain items on the bundle id, so it does not change between releases.

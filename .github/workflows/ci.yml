@@ -373,6 +373,28 @@ jobs:
       - name: Verify the artifact is the expected format
         run: file "dist/bravebot-${{ matrix.name }}${{ matrix.ext }}"
 
+      # The desktop app's two executables, which the Windows installers job below packages,
+      # stripped as a release strips them before it does.
+      - name: Keep the desktop helpers
+        if: startsWith(matrix.name, 'windows-')
+        run: |
+          docker create --name helpers bravebot-${{ matrix.name }} /dev/null
+          for helper in bravebot-rpc bravebot-ui-files; do
+            docker cp "helpers:/$helper" "dist/$helper-${{ matrix.name }}.exe"
+          done
+          docker rm helpers
+          make strip
+
+      - if: startsWith(matrix.name, 'windows-')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-helpers-${{ matrix.name }}
+          path: |
+            dist/bravebot-rpc-${{ matrix.name }}.exe
+            dist/bravebot-ui-files-${{ matrix.name }}.exe
+          if-no-files-found: error
+          retention-days: 1
+
   # The front end under ui/: its TypeScript, its Node tests, and one real Electron
   # walkthrough under Xvfb.
   #
@@ -492,8 +514,8 @@ jobs:
       - name: Test the file helper on NTFS
         run: cargo test -p bravebot-ui-files --locked
 
-      # Not `make check-ui-build`: scripts/*.test.mjs assume a POSIX host for packaging, which is
-      # the installer's work (#769), and the Front end job runs them.
+      # Not `make check-ui-build`: scripts/*.test.mjs assume a POSIX host for packaging, and the
+      # Front end job runs them.
       - name: Build the desktop UI
         run: |
           ui/scripts/ci-install.sh "$HOME/.cache/bravebot-leo"
@@ -502,3 +524,94 @@ jobs:
       - name: Walkthrough regression
         timeout-minutes: 10
         run: make check-ui-walkthrough
+
+  # The installers a release ships, built as a release builds them from the cross-built helpers,
+  # and each installed on a runner of its own architecture by the job after this one. Beside each
+  # goes an installer of the same bundle under a lower version, for that job to upgrade from, since
+  # no release carries an installer yet.
+  windows-installers:
+    name: Windows installers
+    runs-on: windows-latest
+    needs: cross-build
+    defaults:
+      run:
+        shell: bash
+    env:
+      npm_config_script_shell: C:\Program Files\Git\bin\bash.exe
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: desktop-helpers-*
+          merge-multiple: true
+          path: dist
+
+      - name: Build the installers
+        run: make app-release-windows
+
+      - name: Build an older installer of each
+        run: |
+          npm --prefix ui pkg set version=0.0.1
+          for pair in amd64:x64 arm64:arm64; do
+            node ui/scripts/windows-installer.mjs --bundle="ui/dist/Brave Bot-win32-${pair#*:}" \
+              --arch="${pair%%:*}" --out=dist/previous
+          done
+          git checkout -- ui/package.json
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-installer-amd64
+          path: |
+            dist/bravebot-desktop-windows-amd64-setup.exe
+            dist/previous/bravebot-desktop-windows-amd64-setup.exe
+            ui/dist/Brave Bot-win32-x64/
+          if-no-files-found: error
+          retention-days: 1
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-installer-arm64
+          path: |
+            dist/bravebot-desktop-windows-arm64-setup.exe
+            dist/previous/bravebot-desktop-windows-arm64-setup.exe
+            ui/dist/Brave Bot-win32-arm64/
+          if-no-files-found: error
+          retention-days: 1
+
+  # ui/scripts/check-windows-install.mjs says what is checked. The arm64 installer on an arm64
+  # runner, because on an x64 one it would not start at all, and an x64 app on an arm64 one runs
+  # under emulation.
+  windows-install:
+    name: Install on Windows (${{ matrix.arch }})
+    needs: windows-installers
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: windows-latest
+          - arch: arm64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "24"
+
+      # Into the checkout, so each file lands at the path the installers job built it at.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-installer-${{ matrix.arch }}
+
+      - name: Install, start, upgrade and uninstall
+        timeout-minutes: 30
+        run: node ui/scripts/check-windows-install.mjs --arch=${{ matrix.arch }}
