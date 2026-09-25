@@ -22,13 +22,15 @@ There are no content arguments. The result is the matching lines, or a reference
 <a id="SEARCH-1"></a>
 ### SEARCH-1: the pattern is a regular expression, matched without backtracking
 
-Supported: literals, `.`, `*`, `+`, `?`, `|`, `(...)`, `[...]` with ranges and negation, `\d`,
-`\w`, `\s` and their negations, `^`, `$`, `\b`, `\B`, and a backslash before a metacharacter to
-match it literally.
+Supported: literals, `.`, `*`, `+`, `?`, `|`, `(...)`, `(?:...)`, `[...]` with ranges and
+negation, `\d`, `\w`, `\s` and their negations, `^`, `$`, `\b`, `\B`, the case flags `(?i)` and
+`(?-i)` described in [SEARCH-6](#SEARCH-6), and a backslash before a metacharacter to match it
+literally.
 
 Counted repetition (`a{2,9}`) is absent and `{` is an ordinary character. Backreferences are
-absent. Captures are not extracted: a search reports the line, so whether the pattern matched is
-the whole question.
+absent, and so are lookaround, named groups and every flag but `i`. Captures are not extracted: a
+search reports the line, so whether the pattern matched is the whole question, and `(?:...)` is
+therefore the same group as `(...)`.
 
 `pattern` may be a list, and a line matching any of them matches. That is one more expression to
 try per line, so the work is the sum of the patterns rather than a power of anything.
@@ -55,6 +57,7 @@ power of it, and an expansion past the cap falls back to matching the pattern li
 `verified-by: bravebot_agent::regex::a_pattern_nested_past_the_depth_cap_is_refused`
 `verified-by: bravebot_agent::regex::a_brace_is_an_ordinary_character`
 `verified-by: bravebot_agent::regex::a_folded_pattern_keeps_a_negated_shorthand_negated`
+`verified-by: bravebot_agent::regex::a_non_capturing_group_is_an_ordinary_group`
 `verified-by: bravebot_agent::turn::a_search_for_a_regular_expression_finds_what_it_describes`
 `verified-by: bravebot_agent::glob::a_brace_group_matches_each_alternative`
 `verified-by: bravebot_agent::glob::an_oversized_expansion_falls_back_to_the_literal`
@@ -105,7 +108,9 @@ through it.
 <a id="SEARCH-4"></a>
 ### SEARCH-4: a pattern that will not compile is reported as such, never as an empty result
 
-The pattern is compiled before any file is opened, and a failure names what is wrong with it.
+The pattern is compiled before any file is opened, and a failure names what is wrong with it. A
+`(?` opening a construct the engine lacks is named as that, not reported as the repeat with
+nothing before it that its `?` would otherwise be.
 
 **Why.** The two answers mean opposite things. Reported as nothing found, a syntax error reads as
 proof the tree holds no match, and a planner that believes that stops looking: whole rounds went
@@ -121,6 +126,7 @@ planner proposed, so saying why it will not compile discloses nothing about the 
 `verified-by: bravebot_agent::regex::a_repeat_with_nothing_before_it_is_reported`
 `verified-by: bravebot_agent::regex::a_dangling_escape_is_reported`
 `verified-by: bravebot_agent::regex::a_backwards_range_is_reported`
+`verified-by: bravebot_agent::regex::a_group_form_the_engine_lacks_is_named_rather_than_blamed_on_a_repeat`
 
 <a id="SEARCH-5"></a>
 ### SEARCH-5: an empty result says whether anything was searched
@@ -159,8 +165,12 @@ result decides only whether there was anything to advise about.
 <a id="SEARCH-6"></a>
 ### SEARCH-6: case sensitivity is asked for, never inferred
 
-A search matches case exactly unless `case_sensitive` is false. Nothing about the pattern widens
-it, and a line is reported as it is written rather than as it was folded to match.
+A search matches case exactly unless `case_sensitive` is false or the pattern says `(?i)`. The
+flag is the same request written in the pattern: `(?i)` folds case from where it is written to the
+end of the group it is in, `(?-i)` stops folding the same way, and `(?i:...)` and `(?-i:...)`
+apply to only what they enclose. A search with `case_sensitive` false starts folded, so `(?-i)`
+narrows it. Nothing else about the pattern widens it, whatever letters it holds, and a line is
+reported as it is written rather than as it was folded to match.
 
 **Why.** A search that quietly widened itself would report matches whose reason the caller cannot
 see. The alternative to offering the flag is worse than either: a planner that cannot ask for it
@@ -168,9 +178,20 @@ mangles the pattern instead, and a real turn searched for `olicy` to get around 
 finds the word it wanted and every other word ending in those letters, with nothing in the result
 to say so.
 
+**Why the pattern may ask too.** `(?i)` is how almost every other engine spells the request, and a
+planner writes it by habit. Refused, it cost a round each time it was written, and one real turn
+did not retry and answered without the search. The flag is an explicit request, which is all this
+clause asks of one; what it rules out is a search deciding for itself.
+
 `verified-by: bravebot_agent::workspace::a_search_can_ignore_case`
+`verified-by: bravebot_agent::workspace::a_search_pattern_may_ask_to_ignore_case_itself`
 `verified-by: bravebot_agent::regex::a_folded_pattern_matches_either_case`
 `verified-by: bravebot_agent::regex::folding_a_negated_class_widens_what_it_excludes`
+`verified-by: bravebot_agent::regex::an_inline_flag_ignores_case_for_the_rest_of_the_pattern`
+`verified-by: bravebot_agent::regex::a_flag_ends_with_the_group_it_is_in`
+`verified-by: bravebot_agent::regex::a_flag_carries_into_the_later_branches_of_its_group`
+`verified-by: bravebot_agent::regex::a_flag_can_turn_folding_off`
+`verified-by: bravebot_agent::regex::an_inline_flag_on_a_negated_class_widens_what_it_excludes`
 
 <a id="SEARCH-7"></a>
 ### SEARCH-7: vendored and generated directories are not walked

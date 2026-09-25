@@ -136,15 +136,17 @@ Finds lines matching a **regular expression** in workspace files.
 | `directory` | workspace-relative, defaults to `.` |
 | `include` | optional glob limiting which files are searched: `*`, `?`, `**` and brace groups like `**/*.{cc,h,mm}` |
 | `offset` | which match to resume from, to read past the match cap ([below](#a-capped-search-can-be-asked-past-its-cap)) |
-| `case_sensitive` | defaults to true |
+| `case_sensitive` | defaults to true. `(?i)` in the pattern asks for the same thing |
 
-Supported: literals, `.`, `*`, `+`, `?`, `|`, `(...)`, `[...]` with ranges and negation, `\d`, `\w`,
-`\s` and their negations, `^`, `$`, `\b`, `\B`, and a backslash before a metacharacter to match it
-literally.
+Supported: literals, `.`, `*`, `+`, `?`, `|`, `(...)`, `(?:...)`, `[...]` with ranges and negation,
+`\d`, `\w`, `\s` and their negations, `^`, `$`, `\b`, `\B`, and a backslash before a metacharacter to
+match it literally. `(?i)` ignores case from where it is written to the end of its group and `(?-i)`
+stops ignoring it, while `(?i:...)` and `(?-i:...)` apply to only what they enclose.
 
 Two things are absent. **Counted repetition** (`a{2,9}`) is not supported and `{` is an ordinary
 character. **Backreferences** are not supported. Captures are never extracted, since a search reports
-the whole line.
+the whole line. Lookaround, named groups and flags other than `i` are not supported either, and a
+pattern using one is refused with a message saying so.
 
 The engine does not backtrack, so a pattern like `(a+)+$` that is exponential elsewhere costs nothing
 unusual here: matching is the line's length times the pattern's size, whatever the pattern. That bound
