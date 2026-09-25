@@ -2597,8 +2597,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     let mut subscription = wallet.map(crate::shared::Spending::new);
 
     // The lists of the servers this session reached, settled at the start of a turn somebody asked
-    // for, which is where there is a person to put a list to (SERVERS-8). A delegate is offered no
-    // tool of theirs, and its capabilities name no server to call one with.
+    // for, a tick of their loop included, which is where there is a person to put a list to
+    // (SERVERS-8). A delegate is offered no tool of theirs, and its capabilities name no server to
+    // call one with.
     let mcp = match (&task.delegate, &task.mcp) {
         (None, Some(session)) => {
             let settled = session.settle(
