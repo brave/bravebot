@@ -282,6 +282,10 @@ profile directory there is no `~/.bravebot` at all: nothing is declared there, a
   home directory, as `nvm` installs one, does not start confined.
 - **The full-screen interface does not show a server's own error output.** `--plain` and a one-shot
   run pass it through to stderr.
+- **No local server starts on Windows yet.** There is no confinement for one there, so the session
+  says so and goes on without it.
+- **The desktop application starts no server yet.** Only the terminal client acts on a checkout's
+  request.
 - **A checkout cannot bring its own server.** A project that needs one says so in its README, and
   each person declares it. That is the point, and it costs a step per machine.
 - **An approval does not travel.** It lives in your own directory, so a second machine asks again.

@@ -972,3 +972,6 @@ This spec cannot land without these. Each is named by what the clause says rathe
 - **No stdio server starts on Windows.** The sandbox there has no base rows to build a server's
   policy on, so the line says the platform has no confinement for one yet, which is
   [MCP-3](mcp.md#MCP-3) holding rather than failing.
+- **The desktop application starts no server.** The terminal client's three sessions settle a
+  request; a desktop session reads the same settings file, starts nothing for it, and says nothing
+  about it.

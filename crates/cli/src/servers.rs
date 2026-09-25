@@ -794,6 +794,9 @@ fn handshake_remote(alias: &str, url: String) -> McpResult<Started> {
 
 /// The system temporary directory with its links followed, which is how a backend matches it.
 fn temporary_directory() -> PathBuf {
+    // Nothing is created here: the path becomes the base's temporary row, which the spec's base
+    // table grants, and a server makes its own files there under its own names.
+    // nosemgrep: rust.lang.security.temp-dir.temp-dir
     let temporary = std::env::temp_dir();
     temporary.canonicalize().unwrap_or(temporary)
 }
