@@ -1171,6 +1171,7 @@ scroller-key-full-page = full page   (also ctrl-f / ctrl-b)
 scroller-key-ends = top / bottom   (also home / end)
 scroller-key-prompts = previous / next prompt
 scroller-key-search = search, next/previous match
+scroller-key-count = a count first goes that many times as far
 scroller-key-search-run = run it / delete, then abandon
 scroller-key-editor = open the transcript in $EDITOR
 scroller-key-this-list = this list

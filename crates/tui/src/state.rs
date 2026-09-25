@@ -749,6 +749,8 @@ pub struct Scroller {
     /// Clamped where it is read. A list laid out afresh can be shorter than the one this indexed,
     /// because a turn goes on writing underneath.
     pub at: usize,
+    /// A count typed and waiting for the key it is for.
+    pub count: Option<u32>,
 }
 
 /// Where `needle` occurs in `text`, as character ranges, left to right and never overlapping.
@@ -6905,30 +6907,42 @@ impl Session {
         self.scroll = self.furthest().saturating_sub(row);
     }
 
-    /// Move to the prompt before the one the view is on, or to the first row past the earliest.
+    /// Move `times` prompts back, or to the first row past the earliest.
     ///
     /// Where these land is settled by what the person typed and by nothing read out of the
-    /// workspace: a prompt is the one thing in a transcript they wrote themselves.
-    pub fn to_previous_prompt(&mut self) {
-        let top = self.top_row();
-        match self.laid.prompts.iter().rev().find(|row| **row < top) {
-            Some(row) => {
-                let row = *row;
-                self.scroller_to_row(row)
+    /// workspace: a prompt is the one thing in a transcript they wrote themselves. Every step that
+    /// moves reaches another prompt or the end, so stopping at the first that moves nothing bounds a
+    /// count by how many prompts there are.
+    pub fn to_previous_prompt(&mut self, times: u32) {
+        for _ in 0..times {
+            let top = self.top_row();
+            match self.laid.prompts.iter().rev().find(|row| **row < top) {
+                Some(row) => {
+                    let row = *row;
+                    self.scroller_to_row(row)
+                }
+                None => self.scroller_to_first_row(),
             }
-            None => self.scroller_to_first_row(),
+            if self.top_row() == top {
+                break;
+            }
         }
     }
 
-    /// Move to the prompt after the one the view is on, or to the last row past the latest.
-    pub fn to_next_prompt(&mut self) {
-        let top = self.top_row();
-        match self.laid.prompts.iter().find(|row| **row > top) {
-            Some(row) => {
-                let row = *row;
-                self.scroller_to_row(row)
+    /// Move `times` prompts on, or to the last row past the latest.
+    pub fn to_next_prompt(&mut self, times: u32) {
+        for _ in 0..times {
+            let top = self.top_row();
+            match self.laid.prompts.iter().find(|row| **row > top) {
+                Some(row) => {
+                    let row = *row;
+                    self.scroller_to_row(row)
+                }
+                None => self.scroller_to_last_row(),
             }
-            None => self.scroller_to_last_row(),
+            if self.top_row() == top {
+                break;
+            }
         }
     }
 
@@ -7072,6 +7086,27 @@ impl Session {
         if let Some(scroller) = &mut self.scroller {
             scroller.help = !scroller.help;
         }
+    }
+
+    /// Take a key as the next digit of a count, or `false` where it is not one.
+    pub fn count_in_the_scroller(&mut self, c: char) -> bool {
+        let Some(scroller) = self.scroller.as_mut() else {
+            return false;
+        };
+        match crate::vim::counted(scroller.count, c) {
+            Some(count) => {
+                scroller.count = Some(count);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Take the count waiting for this key, so that the key after it starts with none.
+    pub fn take_the_scroller_count(&mut self) -> Option<u32> {
+        self.scroller
+            .as_mut()
+            .and_then(|scroller| scroller.count.take())
     }
 
     /// How many rows of transcript sit below the view, which is what has yet to be read.

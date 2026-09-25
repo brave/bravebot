@@ -1378,7 +1378,7 @@ fn draw_scroller(frame: &mut Frame, session: &Session) -> Laid {
 ///
 /// The way out is last and is never the row that did not fit: a list that scrolled its own exit
 /// off the screen would be a mode nobody could leave.
-fn scroller_keys() -> [(&'static str, &'static str); 10] {
+fn scroller_keys() -> [(&'static str, &'static str); 11] {
     [
         ("up/down, j/k", t!(scroller_key_line)),
         ("ctrl-u / ctrl-d", t!(scroller_key_half_page)),
@@ -1386,6 +1386,7 @@ fn scroller_keys() -> [(&'static str, &'static str); 10] {
         ("g / G", t!(scroller_key_ends)),
         ("{ / }", t!(scroller_key_prompts)),
         ("/ then n/N", t!(scroller_key_search)),
+        ("5j, 3}, 2n", t!(scroller_key_count)),
         // The keys the search itself answers get a row of their own rather than a parenthesis on
         // the row above: the second spellings carried that way are the same key by another name,
         // and these two are neither, so a list that folded them in would be naming keys it had
@@ -1548,6 +1549,24 @@ fn draw_scroller_hint(frame: &mut Frame, area: Rect, session: &Session, found: u
         return;
     }
 
+    // A count decides how far the next key goes, so it is drawn until that key takes it, and first
+    // on the row: after a needle it would read as part of what is being looked for. Drawn first,
+    // a long one would push the way out off a narrow row, so it is drawn only where the `kept`
+    // columns after it still fit.
+    let counted = |kept: usize| {
+        scroller
+            .count
+            .map(|count| {
+                Span::styled(
+                    format!("  {count}"),
+                    Style::default()
+                        .fg(theme::brand_primary())
+                        .add_modifier(Modifier::BOLD),
+                )
+            })
+            .filter(|counted| counted.width() + kept <= area.width as usize)
+    };
+
     if !scroller.needle.is_empty() {
         // Never the matched text. The footer is the one row of the screen the interface speaks in
         // its own voice, and a quotation there is untrusted content drawn outside a marked block.
@@ -1560,7 +1579,7 @@ fn draw_scroller_hint(frame: &mut Frame, area: Rect, session: &Session, found: u
                 total = found
             )
         };
-        let mut spans = vec![
+        let looking = [
             Span::styled(
                 format!("  /{}", scroller.needle),
                 Style::default().fg(theme::brand_primary()),
@@ -1574,6 +1593,9 @@ fn draw_scroller_hint(frame: &mut Frame, area: Rect, session: &Session, found: u
         // the row costs the longer list first and then what the turn is saying.
         let walking = Span::styled(format!("  ·  {}", t!(scroller_search_keys)), dim());
         let closing = Span::styled(format!("  ·  {}", t!(scroller_footer_keys)), dim());
+        let kept = looking.iter().map(Span::width).sum::<usize>() + closing.width();
+        let mut spans: Vec<Span> = counted(kept).into_iter().collect();
+        spans.extend(looking);
         let left =
             say_the_turn_if_it_fits(&mut spans, area.width, closing.width(), [running, arrived]);
         spans.push(if walking.width() <= closing.width() + left {
@@ -1589,13 +1611,17 @@ fn draw_scroller_hint(frame: &mut Frame, area: Rect, session: &Session, found: u
     // Four things and no more, because every key is behind `?` and a row long enough to be cut in
     // half advertises whatever happened to be at the near end of it. `/` is here because it is
     // the one key nobody guesses, and everything else on the row is a way to find out the rest.
-    let mut spans = vec![
+    let way_out = [
         Span::styled(
             format!("  {}", t!(scroller_footer)),
             Style::default().fg(theme::brand_primary()),
         ),
         Span::styled(format!("  ·  {}", t!(scroller_footer_keys)), dim()),
     ];
+    let mut spans: Vec<Span> = counted(way_out.iter().map(Span::width).sum())
+        .into_iter()
+        .collect();
+    spans.extend(way_out);
     spans.extend(running);
     spans.extend(arrived);
     spans.push(Span::styled(
@@ -4432,6 +4458,81 @@ mod tests {
             );
         }
 
+        /// A count decides how far the next key goes, and a state deciding what a key does has
+        /// to be on the screen, as the box draws one beside its mode word. It goes first on the
+        /// row, because after a needle it would read as part of what is being looked for.
+        #[test]
+        fn the_footer_draws_a_count_waiting_for_its_key() {
+            let footer = |session: &Session| -> String {
+                let (drawn, _) = screen(session);
+                drawn.chars().skip(90 * 23).collect()
+            };
+
+            let mut session = reading();
+            assert!(session.count_in_the_scroller('1'));
+            assert!(session.count_in_the_scroller('2'));
+            assert!(
+                footer(&session).starts_with("  12  scroller"),
+                "the count is not drawn: {:?}",
+                footer(&session)
+            );
+            session.take_the_scroller_count();
+            assert!(
+                footer(&session).starts_with("  scroller"),
+                "the count outlived the key that took it: {:?}",
+                footer(&session)
+            );
+
+            let mut session = searching("needle");
+            assert!(session.count_in_the_scroller('3'));
+            assert!(
+                footer(&session).starts_with("  3  /needle"),
+                "the count is not drawn beside a standing search: {:?}",
+                footer(&session)
+            );
+        }
+
+        /// The count goes first on the row, so a long one on a narrow terminal would push the key
+        /// that closes the mode off the end. It gives way to the way out rather than the other way
+        /// round, and a count with the room is still drawn.
+        #[test]
+        fn a_count_too_long_for_the_row_leaves_the_way_out_on_it() {
+            let footer = |session: &Session, width: u16| -> String {
+                let mut terminal = Terminal::new(TestBackend::new(width, 24)).expect("terminal");
+                terminal
+                    .draw(|frame| {
+                        draw(frame, session);
+                    })
+                    .expect("draw succeeds");
+                let buffer = terminal.backend().buffer();
+                (0..width)
+                    .map(|column| buffer[(column, 23)].symbol())
+                    .collect()
+            };
+            let counting = |mut session: Session, digits: &str| {
+                for c in digits.chars() {
+                    assert!(session.count_in_the_scroller(c));
+                }
+                session
+            };
+            // The longest count there is, which is the thousand a count stops at. The widths are
+            // a column short of drawing it beside the way out, and exactly enough.
+            let long = "99999999999999999999999";
+
+            for (width, session, begins) in [
+                (39, counting(reading(), "12"), "  12  scroller"),
+                (39, counting(reading(), long), "  scroller"),
+                (40, counting(reading(), long), "  1000  scroller"),
+                (49, counting(searching("needle"), "3"), "  3  /needle"),
+                (49, counting(searching("needle"), long), "  /needle"),
+                (50, counting(searching("needle"), long), "  1000  /needle"),
+            ] {
+                let drawn = footer(&session, width);
+                assert!(drawn.starts_with(begins), "{width}: {drawn:?}");
+                assert!(drawn.contains("q closes"), "the way out went: {drawn:?}");
+            }
+        }
+
         /// The transcript at rest keeps its own line, since the bindings the scroller advertises
         /// are the ones it has taken.
         #[test]
@@ -4950,6 +5051,7 @@ mod tests {
                 "g / G",
                 "{ / }",
                 "/ then n/N",
+                "5j, 3}, 2n",
                 "enter / backspace",
                 "v",
                 "?",
