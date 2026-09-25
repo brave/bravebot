@@ -19,6 +19,7 @@ use bravebot_core::capability::Capability;
 use bravebot_core::event::{Role, Sink};
 use bravebot_core::label::Label;
 use bravebot_core::policy::{Denial, Policy};
+use bravebot_core::spelling::to_key;
 use bravebot_core::trust::is_absolute_key;
 use bravebot_core::value::Labelled;
 use std::ffi::OsString;
@@ -307,10 +308,15 @@ fn overlaps(one: &Path, other: &Path) -> bool {
 /// working directory a map reads its relative names under is replaced by the destination, so one
 /// the map cannot key would read every one of them under a name inside the project instead.
 ///
-/// The name is rendered the way a caller renders it to build the key, so the two cannot disagree
-/// about whether the directory has one.
-fn refuse_unkeyable(canonical: &Path, named: &str) -> Result<(), WorkspaceError> {
-    match is_absolute_key(&canonical.to_string_lossy()) {
+/// The name is spelled the way [`key_of`] spells it for the caller building the key, so the two
+/// cannot disagree about whether the directory has one. A drive letter has one and a share does
+/// not ([`bravebot_core::spelling::to_key`]).
+fn refuse_unkeyable(
+    canonical: &Path,
+    named: &str,
+    backslash_separates: bool,
+) -> Result<(), WorkspaceError> {
+    match is_absolute_key(&to_key(&canonical.to_string_lossy(), backslash_separates)) {
         true => Ok(()),
         false => Err(WorkspaceError::Invalid {
             path: named.to_string(),
@@ -493,8 +499,8 @@ impl Workspace {
     /// already, and admitting it would give one file two spellings, one governed by the project's
     /// trust rules and one by its own.
     ///
-    /// So is one whose resolved name the trust map cannot key a rule under, which is what a platform
-    /// that spells its paths from a drive letter or a share hands back: `refuse_unkeyable` says why.
+    /// So is one whose resolved name the trust map cannot key a rule under, which is what a share
+    /// resolves to on Windows: `refuse_unkeyable` says why.
     ///
     /// And so is the session's own directory, for the reason a directory inside the root is: it is
     /// reachable already, and adding it would put a rule the user wrote over a directory whose whole
@@ -534,7 +540,7 @@ impl Workspace {
             });
         }
 
-        refuse_unkeyable(&canonical, directory)?;
+        refuse_unkeyable(&canonical, directory, BACKSLASH_SEPARATES)?;
 
         Ok(canonical)
     }
@@ -620,7 +626,7 @@ impl Workspace {
             });
         }
 
-        refuse_unkeyable(&canonical, directory)?;
+        refuse_unkeyable(&canonical, directory, BACKSLASH_SEPARATES)?;
 
         // The old root among them: it is a directory that was open, and after this it is not.
         let mut closed = vec![std::mem::replace(&mut self.root, canonical.clone())];
@@ -2352,7 +2358,9 @@ impl Workspace {
     /// primary root, which is how it arrives at the same key either way.
     ///
     /// Spelled from `/` whatever the host separates with, since that is the one spelling the trust
-    /// map holds a key under and the one a rule is matched against.
+    /// map holds a key under and the one a rule is matched against. A name on a drive letter keeps
+    /// the root the host gave it, which is the name a person reads and types, and a turn's policy
+    /// keys it as it asks the map ([`bravebot_core::policy::Policy::with_backslash_separates`]).
     pub(crate) fn relative_display(&self, path: &Path) -> String {
         self.displayed(path, BACKSLASH_SEPARATES)
     }
@@ -2396,7 +2404,9 @@ impl Workspace {
     /// file it named.
     ///
     /// Whatever the reduction leaves is spelled from `/`, which is how a key arrives spelled
-    /// (TRUST-18) on a host that separates with something else.
+    /// (TRUST-18) on a host that separates with something else, a drive letter included: a name
+    /// landing in no open directory keeps a root of its own rather than being read under the
+    /// project's ([`bravebot_core::spelling::to_key`]).
     pub(crate) fn trust_key(&self, named: &str) -> String {
         self.keyed(named, BACKSLASH_SEPARATES)
     }
@@ -2413,7 +2423,7 @@ impl Workspace {
                 .recorded_name(candidate)
                 .unwrap_or_else(|| named.to_string()),
         };
-        bravebot_core::spelling::to_slash(&reduced, backslash_separates).into_owned()
+        to_key(&reduced, backslash_separates).into_owned()
     }
 
     /// `named` spelled under the open directory it lands in, or `None` where it has no such
@@ -2468,7 +2478,8 @@ impl Workspace {
 /// The one place the question is asked. The kernel takes the answer as data rather than asking for
 /// itself, since it has no filesystem, so this is what [`crate::permissions::from_settings`] hands
 /// it for the rules, what [`Workspace::trust_key`] and [`Workspace::relative_display`] hand it for
-/// the map's keys, and what a resumed session's record is replayed under.
+/// the map's keys, what a turn's policy spells every name it asks the map about under, and what a
+/// resumed session's record is replayed under.
 ///
 /// Every key the map holds is `/`-spelled (TRUST-18) and the host hands a path back separated its
 /// own way, so without the respelling a name below the workspace root is one opaque segment
@@ -2476,6 +2487,19 @@ impl Workspace {
 /// it, the rule a write recorded about a path is invisible to the next read of that path, and the
 /// broader answer given about the project at startup decides both.
 pub const BACKSLASH_SEPARATES: bool = cfg!(windows);
+
+/// The key the trust map holds a rule about `resolved` under, for a name the workspace resolved:
+/// the primary root, a directory opened by name, or a file below either.
+///
+/// What a front end hands [`bravebot_core::TrustStore::new`] as the working directory and trusts a
+/// directory added by name under, so the root's key is spelled as every key below it is and a rule
+/// about a directory above the project reaches the project as it does where paths begin with `/`.
+///
+/// A name with no `/`-spelling, a share or a device path, is not one the workspace opens a
+/// directory under ([`refuse_unkeyable`]), which is the direction that trusts nothing.
+pub fn key_of(resolved: &Path) -> String {
+    to_key(&resolved.to_string_lossy(), BACKSLASH_SEPARATES).into_owned()
+}
 
 /// The part of `named` written below `opened`, for a name that reaches it through an ancestor.
 ///
@@ -2751,19 +2775,97 @@ mod tests {
     /// about the resolved name directly, because canonicalising on a platform that spells its paths
     /// from `/` always hands back a name that is a key, so neither door can reach its own refusal
     /// where the tests run.
+    ///
+    /// A share or a device path has no `/`-spelling on a host where a backslash separates, and
+    /// neither has a drive letter on one where it does not, since there `C:\other` is a file name.
     #[test]
     fn a_directory_the_trust_map_cannot_key_is_refused() {
-        assert!(refuse_unkeyable(Path::new("/other"), "/other").is_ok());
+        assert!(refuse_unkeyable(Path::new("/other"), "/other", false).is_ok());
 
-        let refused = refuse_unkeyable(Path::new("C:\\other"), "C:\\other")
+        let refused = refuse_unkeyable(Path::new("C:\\other"), "C:\\other", false)
             .expect_err("a directory whose rule could not be keyed was opened");
         assert_eq!(
             refused.to_string(),
             "'C:\\other' is not usable: is not spelled from '/', so no trust rule can be keyed under it"
         );
-        // No drive letter in this one, and the same refusal: what is asked is how the name is
-        // spelled, not what spells it that way.
-        assert!(refuse_unkeyable(Path::new(r"\\server\share"), r"\\server\share").is_err());
+        for unkeyable in [r"\\server\share", r"\\?\UNC\server\share", r"\\.\C:\other"] {
+            assert!(
+                refuse_unkeyable(Path::new(unkeyable), unkeyable, true).is_err(),
+                "{unkeyable} was opened with no key to hold its rule under"
+            );
+        }
+        assert!(
+            refuse_unkeyable(Path::new("C:other"), "C:other", true).is_err(),
+            "a name relative to wherever the process last was on a drive was opened"
+        );
+    }
+
+    /// Windows hands back a directory it canonicalised as `\\?\C:\...`, and a planner names one as
+    /// `C:\...`, so both have to reach the one key a rule about the directory is held under, and
+    /// that key has to read as a root rather than as a name under the project. The same name is a
+    /// file in the project where a backslash is a filename byte, and keeps its spelling there.
+    #[test]
+    fn a_directory_on_a_drive_letter_is_opened_under_a_key_spelled_from_slash() {
+        let root = crate::testutil::scratch_dir("bravebot-drive-letter-key");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create scratch");
+        let workspace = Workspace::new(&root).unwrap();
+
+        assert!(
+            refuse_unkeyable(Path::new(r"\\?\C:\other"), r"C:\other", true).is_ok(),
+            "a directory on a drive letter was refused"
+        );
+        assert_eq!(
+            workspace.keyed(r"C:\elsewhere\secret.txt", true),
+            "/C:/elsewhere/secret.txt",
+            "a drive-letter name outside every open directory was keyed under the project"
+        );
+
+        assert_eq!(
+            workspace.keyed(r"C:\notes", false),
+            r"C:\notes",
+            "a file whose name holds a backslash was keyed as a drive"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// What the drive-letter key is for: the project's own answer decides the project and nothing
+    /// else on the disk, and a rule about a directory opened by name decides the files in it,
+    /// including the project where that directory holds it (TRUST-18). Each would be decided by the
+    /// project's rule, or by none, if a drive-letter name were read under the working directory.
+    #[test]
+    fn a_rule_keyed_on_a_drive_letter_decides_that_directory_and_nothing_else() {
+        use bravebot_core::TrustStore;
+        use bravebot_core::label::Integrity;
+
+        let key = |name: &str| to_key(name, true).into_owned();
+        let mut trust = TrustStore::new(key(r"\\?\C:\work\project"));
+        trust.trust(".");
+        trust.distrust(&key(r"\\?\C:\fetched"));
+
+        assert_eq!(
+            trust.integrity_of(&key(r"C:\work\project\src\main.rs")),
+            Some(Integrity::Trusted),
+            "the answer about the project did not reach a file in it"
+        );
+        assert_ne!(
+            trust.integrity_of(&key(r"C:\elsewhere\secret.txt")),
+            Some(Integrity::Trusted),
+            "the answer about the project decided a file outside it"
+        );
+        assert_eq!(
+            trust.integrity_of(&key(r"C:\fetched\page.html")),
+            Some(Integrity::Untrusted),
+            "a rule about an opened directory did not reach a file in it"
+        );
+
+        let mut above = TrustStore::new(key(r"\\?\C:\work\project"));
+        above.distrust(&key(r"\\?\C:\work"));
+        assert_eq!(
+            above.integrity_of("src/main.rs"),
+            Some(Integrity::Untrusted),
+            "a rule about a directory holding the project did not reach the project"
+        );
     }
 
     /// The name the workspace hands back and the key it asks the map about are both spelled from

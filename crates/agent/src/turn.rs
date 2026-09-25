@@ -1254,7 +1254,7 @@ pub fn run<S: Sink + Send, C: Confirmer + Send>(
         task,
         confirmer,
         sink,
-        TrustStore::new(workspace.root()),
+        TrustStore::new(crate::workspace::key_of(workspace.root())),
     )
 }
 
@@ -2303,6 +2303,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         .with_trust(trust)
         .with_root(workspace.root())
         .with_scratch(workspace.scratch())
+        .with_backslash_separates(crate::workspace::BACKSLASH_SEPARATES)
         .with_programs(programs)
         .with_asked(task.asked_about.clone())
         .with_exposed(task.exposed.clone())

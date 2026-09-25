@@ -685,15 +685,24 @@ describes.
 letter is not a root here and a backslash is not a separator: a key arrives spelled from `/`, and a
 backslash is a legal filename byte where paths are, so a file called `C:\notes` is a file in the
 project and its name has to reach the project's rules. Resolving a platform's path into a key
-therefore belongs to the workspace and not to the map, and every door that opens a directory by
-name, `/cd` as much as `/add-dir`, refuses a resolved name it cannot spell that way rather than
-handing over one that would be read as a path inside the project.
+therefore takes the host's answer about what separates, which the map does not ask. Where a
+backslash separates, a name rooted at a drive letter is keyed from `/`, with the drive as its first
+segment: `C:\work`, and `\\?\C:\work` as the platform resolves it, are both `/C:/work`. The working
+directory is keyed that way, and so are a directory opened by name and a path landing in no open
+directory, so the answer given about the project covers the project and nothing else on the drive.
+Every other name the map is asked about is keyed the same way: a listing's entries, a command
+line's operands, the session's own directory, a file an undo puts back and a rule replayed from a
+saved session. A share and a
+device path have no such spelling, and every door that opens a directory by name, `/cd` as much as
+`/add-dir`, refuses a resolved name it cannot spell from `/` rather than handing over one that
+would be read as a path inside the project.
 
 The workspace separates a key with `/` whatever the host separates with, which is the same
 respelling a rule written in advance is matched with ([permissions.md](permissions.md)), and the
 question is put to the host rather than to the name: a backslash separates where the host makes it
-one and is a filename byte everywhere else. A name carrying a root there is no `/`-spelling for is
-left whole, since respelling decides a name's spelling and not which namespace it is keyed in.
+one and is a filename byte everywhere else. A name carrying a root of its own is not respelled with
+the rest, since respelling decides a name's spelling and not which namespace it is keyed in: a
+drive letter is keyed as the paragraph above says, and any other root is left whole.
 Without the respelling every name below the root is one opaque segment on such a host, so a rule
 about a directory does not reach the files under it, the rule a write records about a path is
 invisible to the next read of that path, and the broader answer given about the project at startup
@@ -741,12 +750,23 @@ by nothing, so a file the user vouched for is quarantined under half its names; 
 the ordinary case rather than a corner, since `/tmp` and `$TMPDIR` are both links. And the refusal
 is the fail-closed half of the first paragraph: a rule keyed under a name with no leading slash
 would be read as a path inside the project, where the answer given about the project at startup
-covers it.
+covers it. The drive-letter key is the half that lets a directory be opened at all where every
+path starts at a drive, and it closes the same hole for a name no door opened: left as the platform
+spells it, a path on the drive outside every open directory is read under the project too, and a
+run whose output lands there is labelled by the answer about the project.
 
 `verified-by: bravebot_core::trust::a_name_that_is_a_root_on_another_platform_is_read_under_the_working_directory`
 `verified-by: bravebot_agent::workspace::a_trust_rule_covers_the_file_below_it_wherever_a_backslash_separates`
 `verified-by: bravebot_agent::workspace::a_name_and_its_key_are_spelled_the_way_the_host_separates`
 `verified-by: bravebot_agent::workspace::a_directory_the_trust_map_cannot_key_is_refused`
+`verified-by: bravebot_agent::workspace::a_directory_on_a_drive_letter_is_opened_under_a_key_spelled_from_slash`
+`verified-by: bravebot_agent::workspace::a_rule_keyed_on_a_drive_letter_decides_that_directory_and_nothing_else`
+`verified-by: bravebot_core::spelling::a_name_rooted_at_a_drive_letter_is_keyed_from_slash_where_a_backslash_separates`
+`verified-by: bravebot_core::spelling::a_name_with_no_slash_spelling_is_not_keyed_as_a_full_path`
+`verified-by: bravebot_core::spelling::a_name_shaped_like_a_drive_is_a_file_where_a_slash_is_the_only_separator`
+`verified-by: bravebot_core::policy::a_listing_of_a_distrusted_directory_on_a_drive_letter_is_untrusted`
+`verified-by: bravebot_core::policy::a_line_reading_a_distrusted_file_on_a_drive_letter_is_untrusted`
+`verified-by: bravebot_core::policy::the_sessions_own_directory_on_a_drive_letter_is_answered_as_the_workspace`
 `verified-by: bravebot_agent::workspace::a_project_file_named_absolutely_is_read_under_its_relative_rule`
 `verified-by: bravebot_core::policy::a_project_file_named_absolutely_is_answered_by_the_project_rule`
 `verified-by: bravebot_agent::workspace::a_file_reached_through_a_link_out_of_the_project_keeps_its_own_rule`
@@ -934,14 +954,12 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   read back as trusted under the other, which is the round trip TRUST-4 exists to close. Keying the
   record on the destination instead is what closes it, and that is a change to every rule the map
   holds rather than to confinement.
-- **A platform that spells its paths from a drive letter cannot open a directory by name.** Every
-  rule is keyed under a `/`-spelled name (TRUST-18), so `/add-dir` and `/cd` both refuse a resolved
-  path that is not one, which on Windows is every path there is: the separator a name below the root
-  carries is respelled, and a root that is a prefix rather than a slash is not. Windows is a platform
-  this project supports and publishes binaries for, so that is a gap to close rather than a caveat to
-  keep, and what closes it is one canonical key spelling for a path whose root is a prefix
-  ([issue #842](https://github.com/brave/bravebot/issues/842)).
-  Refusing is the closed direction of the two: admitting such a directory would key its rule under
-  a name read as a path inside the project, where the answer given about the project at startup
-  covers every file in it. The primary root has no refusal to fall back on, since the refusal is
-  reached from the door that opens a directory by name and the root is not opened through one.
+- **A share has no key, so a directory on one cannot be opened by name.** Every rule is keyed
+  under a `/`-spelled name (TRUST-18). A drive letter has one and a share and a device path do not,
+  so `/add-dir` and `/cd` refuse a resolved path on either: admitting one would key its rule under a
+  name read as a path inside the project, where the answer given about the project at startup
+  covers every file in it. Two names that refusal does not reach are read that way anyway. A
+  working directory on a share is not opened through a door, so nothing refuses it, and its rules
+  reach only each other. And a path on a share that no open directory holds, such as one a `run`
+  line writes to, is asked about under the project, so the answer about the project decides a
+  file it does not decide on a drive letter. Giving a share a key is what closes both.

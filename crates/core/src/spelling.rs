@@ -22,9 +22,9 @@ use std::borrow::Cow;
 /// ([`crate::trust::is_absolute_key`]), a drive letter is not one, and a name respelled into
 /// several segments while still reading as relative would be matched against the rules written
 /// about the workspace, so a pattern anchored at the project would reach a file outside it. Leaving
-/// it whole keeps that name exactly as opaque as it was, which is the Windows gap
-/// [issue #842](https://github.com/brave/bravebot/issues/842) is about and not this function's to
-/// close.
+/// it whole keeps that name exactly as opaque as it was. A permission pattern keeps a drive letter
+/// as a namespace of its own that way (PERM-3), and a trust key is spelled by [`to_key`] instead,
+/// which gives it the root the map reads it under (TRUST-18).
 ///
 /// Borrowed where there is nothing to change, which is every call on a host that separates with a
 /// slash alone and most calls on one that does not.
@@ -35,7 +35,35 @@ pub fn to_slash(path: &str, backslash_separates: bool) -> Cow<'_, str> {
     }
 }
 
-/// Whether `path` begins with a root there is no `/`-spelling for: a drive letter, a share, or the
+/// `path` spelled the way the trust map holds a key, for a name that may carry a root.
+///
+/// Where a backslash separates, a name rooted at a drive letter is spelled from `/` with the drive
+/// as its first segment, so `C:\work` and `\\?\C:\work`, the form the platform canonicalises it
+/// to, are both `/C:/work`. The map reads a name without a leading `/` under the working directory
+/// ([`crate::trust::is_absolute_key`]), so a drive-letter name left as it arrived is decided by the
+/// rule the answer about the project wrote, wherever on the disk it points (TRUST-18).
+///
+/// Every other name is spelled as [`to_slash`] spells it, which leaves a share, a device path and a
+/// name starting at `\` whole, since none of those has a `/`-spelling. `C:work` is not rooted
+/// either: it names wherever the process last was on that drive. A key comes back as it went in.
+pub fn to_key(path: &str, backslash_separates: bool) -> Cow<'_, str> {
+    match drive_rooted(path).filter(|_| backslash_separates) {
+        Some(from_the_drive) => Cow::Owned(format!("/{}", from_the_drive.replace('\\', "/"))),
+        None => to_slash(path, backslash_separates),
+    }
+}
+
+/// `path` from its drive letter on, for a name rooted at one, without the `\\?\` a canonical name
+/// carries in front of it.
+fn drive_rooted(path: &str) -> Option<&str> {
+    let bare = path.strip_prefix(r"\\?\").unwrap_or(path);
+    match bare.as_bytes() {
+        [letter, b':', b'\\' | b'/', ..] if letter.is_ascii_alphabetic() => Some(bare),
+        _ => None,
+    }
+}
+
+/// Whether `path` begins with a root this does not respell: a drive letter, a share, or the
 /// root of whichever drive the process is on.
 ///
 /// Asked only of a host that separates with a backslash, so on every other one a name shaped like
@@ -87,5 +115,48 @@ mod tests {
                 "'{named}' was cut into segments and left reading as a relative name"
             );
         }
+    }
+
+    /// A drive letter is a root on the host that has one, so a key about a file on it has to read
+    /// as a full path, or the rule the answer about the project wrote decides a file anywhere on
+    /// the disk. The canonical spelling and the one a person types are one key.
+    #[test]
+    fn a_name_rooted_at_a_drive_letter_is_keyed_from_slash_where_a_backslash_separates() {
+        assert_eq!(to_key(r"\\?\C:\other", true), "/C:/other");
+        assert_eq!(to_key(r"C:\other\notes.md", true), "/C:/other/notes.md");
+        assert_eq!(to_key("C:/other", true), "/C:/other");
+        assert_eq!(
+            to_key("/C:/other", true),
+            "/C:/other",
+            "a key was respelled again"
+        );
+        assert_eq!(to_key(r"src\main.rs", true), "src/main.rs");
+    }
+
+    /// A share, a device path, a name from the current drive's root and one relative to wherever
+    /// the process last was on a drive have no `/`-spelling, so none is given one: the workspace
+    /// refuses to open a directory named that way rather than key it inside the project.
+    #[test]
+    fn a_name_with_no_slash_spelling_is_not_keyed_as_a_full_path() {
+        for named in [
+            r"\\server\share\x",
+            r"\\?\UNC\server\share\x",
+            r"\\.\C:\other",
+            r"\other",
+            r"C:other",
+        ] {
+            assert!(
+                !to_key(named, true).starts_with('/'),
+                "'{named}' was keyed as a full path"
+            );
+        }
+    }
+
+    /// Where a slash is the only separator `C:\notes` is a file at the top of the project, and
+    /// keying it as a drive would take it out from under the project's rules.
+    #[test]
+    fn a_name_shaped_like_a_drive_is_a_file_where_a_slash_is_the_only_separator() {
+        assert_eq!(to_key(r"C:\other", false), r"C:\other");
+        assert_eq!(to_key(r"\\?\C:\other", false), r"\\?\C:\other");
     }
 }

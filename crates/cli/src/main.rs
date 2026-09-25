@@ -756,7 +756,7 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
             &mut confirmer,
             &mut reporter,
             &mut sink,
-            TrustStore::new(workspace.root()),
+            TrustStore::new(bravebot_agent::workspace::key_of(workspace.root())),
             &Cancel::new(),
         ),
         Mode::Manifest => bravebot_agent::manifest::run(
@@ -767,7 +767,7 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
             &mut confirmer,
             &mut reporter,
             &mut sink,
-            TrustStore::new(workspace.root()),
+            TrustStore::new(bravebot_agent::workspace::key_of(workspace.root())),
             &Cancel::new(),
         ),
     };

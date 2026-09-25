@@ -1025,7 +1025,9 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
         sink,
     )
     .map_err(|d| TurnError::Precommit(d.to_string()))?;
-    let mut policy = policy.with_trust(trust);
+    let mut policy = policy
+        .with_trust(trust)
+        .with_backslash_separates(crate::workspace::BACKSLASH_SEPARATES);
 
     // Shown before the first step, which is the last moment at which the whole of what is about
     // to happen is still a proposal.

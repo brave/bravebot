@@ -26,6 +26,7 @@
 
 use bravebot_agent::PermissionMode;
 use bravebot_agent::granted::Proposed;
+use bravebot_agent::workspace::key_of;
 use bravebot_core::trust::TrustStore;
 use bravebot_i18n::t;
 use ratatui::Terminal;
@@ -189,7 +190,7 @@ pub fn trust_for(answer: Answer, directory: &Path) -> Option<TrustStore> {
     match answer {
         Answer::Leave => None,
         Answer::Trust => Some(trusting_the_workspace(directory)),
-        Answer::Decline => Some(TrustStore::new(directory)),
+        Answer::Decline => Some(TrustStore::new(key_of(directory))),
     }
 }
 
@@ -197,7 +198,7 @@ pub fn trust_for(answer: Answer, directory: &Path) -> Option<TrustStore> {
 ///
 /// One place, so the map reached without the question is the map a yes would have written.
 fn trusting_the_workspace(directory: &Path) -> TrustStore {
-    let mut trust = TrustStore::new(directory);
+    let mut trust = TrustStore::new(key_of(directory));
     trust.trust(".");
     trust
 }
