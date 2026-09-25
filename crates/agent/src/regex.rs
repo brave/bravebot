@@ -12,7 +12,9 @@
 //! - literal characters
 //! - `.`, any character except a newline
 //! - `*`, `+`, `?`
-//! - `|`, and `(...)` to group
+//! - `|`, and `(...)` to group, or `(?:...)`, which is the same group since nothing is captured
+//! - `(?i)` and `(?-i)`, folding case or not for the rest of the group they are in, and
+//!   `(?i:...)` and `(?-i:...)` for only what they enclose
 //! - `[abc]`, `[a-z]`, `[^abc]`
 //! - `\d`, `\w`, `\s` and their negations `\D`, `\W`, `\S`
 //! - `^` and `$`, anchoring to the ends of a line
@@ -24,6 +26,8 @@
 //! turns a short pattern into an enormous program, and no bound on the pattern's length would
 //! bound the work. Backreferences are absent because they are not regular: no automaton
 //! recognises them, and matching one needs the backtracking this engine exists to avoid.
+//! Lookaround, named groups and every flag but `i` are absent too, and a `(?` introducing one is
+//! refused as that rather than read as a group whose first thing is a `?` with nothing to repeat.
 //!
 //! Captures are not extracted. `search` reports the line a match was found on, so whether a
 //! pattern matched is the whole question, and a boolean is all any of this has to answer.
@@ -58,6 +62,10 @@ pub enum PatternError {
     },
     /// A backslash at the end of the pattern, promising an escape that never arrived.
     DanglingEscape,
+    /// A `(?` opening something other than `(?:` or the case flag, such as lookaround.
+    UnsupportedGroup {
+        at: usize,
+    },
     /// A range whose end sorts before its start, like `[z-a]`.
     ReversedRange {
         start: char,
@@ -82,6 +90,11 @@ impl fmt::Display for PatternError {
                 "the repeat at character {at} has nothing before it to repeat"
             ),
             Self::DanglingEscape => write!(f, "the pattern ends with a '\\' and nothing to escape"),
+            Self::UnsupportedGroup { at } => write!(
+                f,
+                "the '(?' at character {at} is not supported: '(?:...)' and the case flags \
+                 '(?i)' and '(?-i)' are, but lookaround, named groups and other flags are not"
+            ),
             Self::ReversedRange { start, end } => {
                 write!(f, "the range '{start}-{end}' runs backwards")
             }
@@ -130,25 +143,23 @@ impl Member {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Class {
     negated: bool,
+    /// Whether case is ignored, decided where the class was written.
+    folded: bool,
     members: Vec<Member>,
 }
 
 impl Class {
-    fn holds(&self, c: char) -> bool {
-        self.members.iter().any(|m| m.holds(c)) != self.negated
-    }
-
-    /// Whether the class matches `c` with case ignored.
+    /// Whether the class matches `c`.
     ///
-    /// The fold applies to the membership test and the negation is applied to the result, which is
-    /// the whole subtlety: trying both cases against `holds` would make `[^a-z]` match `A`,
-    /// because the lowercase of `A` is outside the negated set. Widening a set has to widen what
-    /// it excludes too.
-    fn holds_folded(&self, c: char) -> bool {
+    /// Where case is ignored, the fold applies to the membership test and the negation is applied
+    /// to the result, which is the whole subtlety: trying both cases against the finished decision
+    /// would make `[^a-z]` match `A`, because the lowercase of `A` is outside the negated set.
+    /// Widening a set has to widen what it excludes too.
+    fn holds(&self, c: char) -> bool {
         let member = self
             .members
             .iter()
-            .any(|m| m.holds(c) || m.holds(lower(c)) || m.holds(upper(c)));
+            .any(|m| m.holds(c) || (self.folded && (m.holds(lower(c)) || m.holds(upper(c)))));
         member != self.negated
     }
 }
@@ -157,7 +168,10 @@ impl Class {
 enum Node {
     /// Matches without consuming anything, which is what an empty alternative branch is.
     Empty,
-    Char(char),
+    Char {
+        want: char,
+        folded: bool,
+    },
     Any,
     Class(Class),
     Concat(Vec<Node>),
@@ -174,7 +188,10 @@ enum Node {
 /// One step of the compiled program.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Inst {
-    Char(char),
+    Char {
+        want: char,
+        folded: bool,
+    },
     Any,
     Class(Class),
     /// Continue as both threads. The whole reason the running time is bounded: a split is two
@@ -191,12 +208,6 @@ enum Inst {
 #[derive(Debug, Clone)]
 pub struct Regex {
     program: Vec<Inst>,
-    /// Fold both the pattern and the subject before comparing.
-    ///
-    /// Handled here rather than by lowercasing the pattern string, which would rewrite `\D`, `\W`
-    /// and `\S` into the classes they are the negations of and quietly inverting what the search
-    /// asked for.
-    folded: bool,
 }
 
 impl Regex {
@@ -222,6 +233,7 @@ impl Regex {
             chars: &chars,
             at: 0,
             depth: 0,
+            fold: folded,
         };
         let node = parser.alternation()?;
         if parser.at < chars.len() {
@@ -232,7 +244,7 @@ impl Regex {
         let mut program = Vec::new();
         emit(&node, &mut program);
         program.push(Inst::Match);
-        Ok(Self { program, folded })
+        Ok(Self { program })
     }
 
     /// Whether `text` holds a match anywhere in it.
@@ -265,17 +277,13 @@ impl Regex {
             on_next.iter_mut().for_each(|seen| *seen = false);
             for &pc in &current {
                 let consumes = match &self.program[pc] {
-                    Inst::Char(want) => self.same(*want, c),
+                    Inst::Char { want, folded } => {
+                        *want == c || (*folded && lower(*want) == lower(c))
+                    }
                     // A line never holds its own terminator, but a search may be handed text
                     // that does, and `.` is not supposed to cross one.
                     Inst::Any => c != '\n',
-                    Inst::Class(class) => {
-                        if self.folded {
-                            class.holds_folded(c)
-                        } else {
-                            class.holds(c)
-                        }
-                    }
+                    Inst::Class(class) => class.holds(c),
                     _ => continue,
                 };
                 if consumes {
@@ -288,11 +296,6 @@ impl Regex {
         }
 
         false
-    }
-
-    /// Whether the pattern's `want` matches the subject's `c`, folding if the search asked for it.
-    fn same(&self, want: char, c: char) -> bool {
-        want == c || (self.folded && lower(want) == lower(c))
     }
 
     /// Add `pc` and everything reachable from it without consuming a character.
@@ -338,7 +341,7 @@ impl Regex {
                     }
                 }
                 // Consumes a character, so it stays in the set for the step to deal with.
-                Inst::Char(_) | Inst::Any | Inst::Class(_) | Inst::Match => list.push(pc),
+                Inst::Char { .. } | Inst::Any | Inst::Class(_) | Inst::Match => list.push(pc),
             }
         }
     }
@@ -348,7 +351,10 @@ impl Regex {
 fn emit(node: &Node, program: &mut Vec<Inst>) {
     match node {
         Node::Empty => {}
-        Node::Char(c) => program.push(Inst::Char(*c)),
+        Node::Char { want, folded } => program.push(Inst::Char {
+            want: *want,
+            folded: *folded,
+        }),
         Node::Any => program.push(Inst::Any),
         Node::Class(class) => program.push(Inst::Class(class.clone())),
         Node::LineStart => program.push(Inst::LineStart),
@@ -412,11 +418,33 @@ struct Parser<'p> {
     chars: &'p [char],
     at: usize,
     depth: usize,
+    /// Whether what is parsed from here on ignores case.
+    ///
+    /// Recorded on each character and class rather than applied by lowercasing the pattern string,
+    /// which would rewrite `\D`, `\W` and `\S` into the classes they negate and invert what the
+    /// search asked for. A folded compile starts it true, and `(?i)` and `(?-i)` switch it until
+    /// the group they are in closes.
+    fold: bool,
 }
 
 impl Parser<'_> {
     fn peek(&self) -> Option<char> {
         self.chars.get(self.at).copied()
+    }
+
+    fn char(&self, want: char) -> Node {
+        Node::Char {
+            want,
+            folded: self.fold,
+        }
+    }
+
+    fn named(&self, shorthand: Shorthand, negated: bool) -> Node {
+        Node::Class(Class {
+            negated: false,
+            folded: self.fold,
+            members: vec![Member::Named(shorthand, negated)],
+        })
     }
 
     /// `a|b|c`, the loosest-binding construct and so the outermost.
@@ -485,7 +513,16 @@ impl Parser<'_> {
         };
         match c {
             '(' => {
+                let open = self.at;
                 self.at += 1;
+                let outer = self.fold;
+                if self.peek() == Some('?') {
+                    self.at += 1;
+                    if !self.group_flags(open)? {
+                        // `(?i)` encloses nothing, so there is nothing for a repeat to repeat.
+                        return Ok((Node::Empty, false));
+                    }
+                }
                 self.depth += 1;
                 if self.depth > MAX_DEPTH {
                     return Err(PatternError::TooDeep);
@@ -496,6 +533,8 @@ impl Parser<'_> {
                 }
                 self.at += 1;
                 self.depth -= 1;
+                // A flag inside the group ends with it.
+                self.fold = outer;
                 Ok((inner, true))
             }
             '[' => Ok((self.class()?, true)),
@@ -520,8 +559,41 @@ impl Parser<'_> {
             }
             _ => {
                 self.at += 1;
-                Ok((Node::Char(c), true))
+                Ok((self.char(c), true))
             }
+        }
+    }
+
+    /// What follows a `(?`, through the `:` or `)` that ends it, the `(` being at `open`.
+    ///
+    /// Returns whether a group follows: `(?:` and `(?i:` open one, and `(?i)` does not. A flag
+    /// takes effect where it is read, so `(?i:` folds the group it opens and `(?i)` folds the rest
+    /// of the group around it, including the branches of it after a `|`, as every other engine
+    /// does.
+    fn group_flags(&mut self, open: usize) -> Result<bool, PatternError> {
+        let mut negated = false;
+        let mut flagged = false;
+        loop {
+            match self.peek() {
+                None => return Err(PatternError::UnclosedGroup),
+                Some(':') => {
+                    self.at += 1;
+                    return Ok(true);
+                }
+                Some(')') if flagged => {
+                    self.at += 1;
+                    return Ok(false);
+                }
+                Some('-') if !negated && self.chars.get(self.at + 1) == Some(&'i') => {
+                    negated = true;
+                }
+                Some('i') => {
+                    self.fold = !negated;
+                    flagged = true;
+                }
+                Some(_) => return Err(PatternError::UnsupportedGroup { at: open }),
+            }
+            self.at += 1;
         }
     }
 
@@ -532,19 +604,19 @@ impl Parser<'_> {
         };
         self.at += 1;
         Ok(match c {
-            'd' => named(Shorthand::Digit, false),
-            'D' => named(Shorthand::Digit, true),
-            'w' => named(Shorthand::Word, false),
-            'W' => named(Shorthand::Word, true),
-            's' => named(Shorthand::Space, false),
-            'S' => named(Shorthand::Space, true),
+            'd' => self.named(Shorthand::Digit, false),
+            'D' => self.named(Shorthand::Digit, true),
+            'w' => self.named(Shorthand::Word, false),
+            'W' => self.named(Shorthand::Word, true),
+            's' => self.named(Shorthand::Space, false),
+            'S' => self.named(Shorthand::Space, true),
             'b' => Node::Boundary(false),
             'B' => Node::Boundary(true),
-            'n' => Node::Char('\n'),
-            't' => Node::Char('\t'),
-            'r' => Node::Char('\r'),
+            'n' => self.char('\n'),
+            't' => self.char('\t'),
+            'r' => self.char('\r'),
             // Anything else stands for itself, which is what `\.` and `\\` are for.
-            other => Node::Char(other),
+            other => self.char(other),
         })
     }
 
@@ -620,7 +692,11 @@ impl Parser<'_> {
         if members.is_empty() {
             return Err(PatternError::EmptyClass);
         }
-        Ok(Node::Class(Class { negated, members }))
+        Ok(Node::Class(Class {
+            negated,
+            folded: self.fold,
+            members,
+        }))
     }
 
     /// An escape inside a class: either a named set, or a character standing for itself.
@@ -665,13 +741,6 @@ fn upper(c: char) -> char {
         (Some(single), None) => single,
         _ => c,
     }
-}
-
-fn named(shorthand: Shorthand, negated: bool) -> Node {
-    Node::Class(Class {
-        negated: false,
-        members: vec![Member::Named(shorthand, negated)],
-    })
 }
 
 #[cfg(test)]
@@ -866,6 +935,101 @@ mod tests {
             !Regex::compile("fn Main")
                 .expect("compiles")
                 .matches("FN MAIN")
+        );
+    }
+
+    /// The pattern a real turn sent, which was refused as a repeat with nothing before it.
+    #[test]
+    fn an_inline_flag_ignores_case_for_the_rest_of_the_pattern() {
+        let pattern = r"(?i)(personal access token|\bPAT\b|policy|policies)";
+        assert!(matches(pattern, "Create a Personal Access Token"));
+        assert!(matches(pattern, "a pat for CI"));
+        assert!(matches(pattern, "See the POLICY page"));
+        assert!(!matches(pattern, "the path to it"));
+        assert!(matches("(?i)[a-z]+[0-9]", "ABC1"));
+        assert!(matches(r"(?i)\bmain\b", "fn MAIN()"));
+    }
+
+    #[test]
+    fn a_flag_ends_with_the_group_it_is_in() {
+        assert!(matches("a((?i)b)c", "aBc"));
+        assert!(!matches("a((?i)b)c", "aBC"));
+        assert!(!matches("a((?i)b)c", "ABc"));
+        assert!(matches("a(?i:b)c", "aBc"));
+        assert!(!matches("a(?i:b)c", "aBC"));
+        // Nothing before the flag is folded by it.
+        assert!(!matches("a(?i)b", "Ab"));
+    }
+
+    #[test]
+    fn a_flag_carries_into_the_later_branches_of_its_group() {
+        assert!(matches("x(?i)a|b", "B"));
+        assert!(!matches("(x(?i)a|b)|c", "C"));
+    }
+
+    #[test]
+    fn a_flag_can_turn_folding_off() {
+        let folded = Regex::compile_folded("a(?-i)B").expect("compiles");
+        assert!(folded.matches("AB"));
+        assert!(!folded.matches("Ab"));
+
+        let scoped = Regex::compile_folded("(?-i:M)ain").expect("compiles");
+        assert!(scoped.matches("MAIN"));
+        assert!(!scoped.matches("main"));
+
+        assert!(matches("(?i)a(?-i)B", "AB"));
+        assert!(!matches("(?i)a(?-i)B", "Ab"));
+    }
+
+    /// The flag is recorded on each class, so it has to keep the rule the folded compile keeps:
+    /// widening what a negated class matches means widening what it excludes.
+    #[test]
+    fn an_inline_flag_on_a_negated_class_widens_what_it_excludes() {
+        assert!(!matches("(?i)[^a-z]", "A"));
+        assert!(matches("(?i)[^a-z]", "9"));
+        assert!(matches(r"(?i)\D", "a"));
+        assert!(!matches(r"(?i)\D", "5"));
+    }
+
+    #[test]
+    fn a_non_capturing_group_is_an_ordinary_group() {
+        assert!(matches("(?:ab)+c", "ababc"));
+        assert!(!matches("(?:ab)+c", "abac"));
+        assert!(matches("gr(?:a|e)y", "grey"));
+        assert!(!matches("gr(?:a|e)y", "Grey"));
+    }
+
+    #[test]
+    fn a_flag_alone_cannot_be_repeated() {
+        assert_eq!(
+            Regex::compile("(?i)*a").unwrap_err(),
+            PatternError::NothingToRepeat { at: 0 }
+        );
+    }
+
+    /// Before the flag was read, `(?` fell through to a group whose first thing was a `?`, and the
+    /// report blamed a repeat. Lookaround and the rest are still absent, so they are named instead.
+    #[test]
+    fn a_group_form_the_engine_lacks_is_named_rather_than_blamed_on_a_repeat() {
+        for pattern in [
+            "(?=a)", "(?!a)", "(?<=a)", "(?<!a)", "(?P<n>a)", "(?<n>a)", "(?m)^a", "(?s).",
+            "(?x)a", "(?)", "(?-)", "(?-:a)", "(?i-)", "(?im)a",
+        ] {
+            let error = Regex::compile(pattern).unwrap_err();
+            assert_eq!(error, PatternError::UnsupportedGroup { at: 0 }, "{pattern}");
+            assert!(!error.to_string().contains("repeat"), "{pattern}: {error}");
+        }
+        assert_eq!(
+            Regex::compile("ab(?=c)").unwrap_err(),
+            PatternError::UnsupportedGroup { at: 2 }
+        );
+        assert_eq!(
+            Regex::compile("(?i").unwrap_err(),
+            PatternError::UnclosedGroup
+        );
+        assert_eq!(
+            Regex::compile("(?:a").unwrap_err(),
+            PatternError::UnclosedGroup
         );
     }
 

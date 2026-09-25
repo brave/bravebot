@@ -3576,6 +3576,29 @@ fn a_search_can_ignore_case() {
     assert_eq!(found.matches[0].text, "EmailAliasesEnabled");
 }
 
+/// `(?i)` is how every other engine spells the same request, and planners write it by habit. A
+/// real turn sent this pattern with `case_sensitive` left at true and was told the pattern was not
+/// usable, then gave up on the search.
+#[test]
+fn a_search_pattern_may_ask_to_ignore_case_itself() {
+    let scratch = Scratch::new("grep-inline-case");
+    std::fs::write(
+        scratch.path.join("a.md"),
+        "Personal Access Tokens\nour Policies\nnothing here\n",
+    )
+    .unwrap();
+
+    let found = search_in(
+        &scratch.path,
+        &[r"(?i)(personal access token|\bPAT\b|policy|policies)"],
+        None,
+        true,
+        1,
+    );
+    let lines: Vec<&str> = found.matches.iter().map(|m| m.text.as_str()).collect();
+    assert_eq!(lines, ["Personal Access Tokens", "our Policies"]);
+}
+
 /// Vendored dependencies are where a search's budget used to go. A tree that mirrors its
 /// dependencies holds far more of them than of its own code, so a walk that counts them
 /// reaches the cap without ever reaching the project.

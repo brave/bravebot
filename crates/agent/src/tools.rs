@@ -359,8 +359,9 @@ pub fn available(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<To
                 "properties": {
                     "pattern": {
                         "description": "Regular expression to find. Supports ., *, +, ?, |, \
-                                        (), [], \\d, \\w, \\s, ^, $ and \\b. Counted \
-                                        repetition such as a{2,3} is not supported and { is \
+                                        (), (?:), [], \\d, \\w, \\s, ^, $, \\b, and (?i) to \
+                                        ignore case. Counted repetition such as a{2,3}, \
+                                        lookaround and other flags are not supported, and { is \
                                         an ordinary character. Escape a metacharacter with a \
                                         backslash to match it literally. May be a list, in \
                                         which case a line matches if it matches any of them: \
