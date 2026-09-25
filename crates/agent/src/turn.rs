@@ -463,9 +463,14 @@ fn preview_for<S: Sink>(
     tool: &str,
     content: &Labelled<String>,
 ) -> Preview {
-    let (preview, lines) = released_lines(policy, tool, content, PREVIEW_LINES, PREVIEW_WIDTH);
+    let (preview, lines) =
+        released_lines(policy, tool, content, PREVIEW_LINES, PREVIEW_WIDTH, false);
     Preview { preview, lines }
 }
+
+/// How much of a result the planner read goes under the call, where a quarantined preview has
+/// more because the person is the only one who will ever read it.
+const GLIMPSE_LINES: usize = 5;
 
 /// How many lines of a command's output are kept for the view a person can open over it.
 ///
@@ -480,7 +485,7 @@ const KEPT_LINES: usize = 2000;
 /// row.
 const KEPT_WIDTH: usize = 400;
 
-/// The first `cap` lines of `content`, each cut to `width`, released for a screen.
+/// The first `cap` lines of `content`, or the last, each cut to `width`, released for a screen.
 ///
 /// One release for the whole shaping, so the trail records that content was released once rather
 /// than leaving it implicit in a loop.
@@ -490,11 +495,18 @@ fn released_lines<S: Sink>(
     content: &Labelled<String>,
     cap: usize,
     width: usize,
+    from_the_end: bool,
 ) -> (Vec<String>, usize) {
     let shaped = policy.render_in_place(tool, content, |text| {
         let lines = text.lines().count();
+        let skip = if from_the_end {
+            lines.saturating_sub(cap)
+        } else {
+            0
+        };
         let kept: Vec<String> = text
             .lines()
+            .skip(skip)
             .take(cap)
             .map(|line| {
                 let mut line = line.to_string();
@@ -508,7 +520,7 @@ fn released_lines<S: Sink>(
         (kept, lines)
     });
 
-    let proof = policy.authorise_display_release("quarantined content, for the person watching");
+    let proof = policy.authorise_display_release("a tool result, for the person watching");
     shaped.declassify(&proof)
 }
 
@@ -1904,7 +1916,9 @@ fn collect_jobs<S: Sink, R: Reporter>(
         // in it is entitled to read what it printed and to be told how it ended. "12 lines,
         // quarantined" says neither.
         let (lines, total) = match &ended.printed {
-            Some(printed) => released_lines(policy, "job_output", printed, KEPT_LINES, KEPT_WIDTH),
+            Some(printed) => {
+                released_lines(policy, "job_output", printed, KEPT_LINES, KEPT_WIDTH, false)
+            }
             None => (Vec::new(), 0),
         };
 
@@ -3368,6 +3382,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 &output.text,
                                 KEPT_LINES,
                                 KEPT_WIDTH,
+                                false,
                             );
                             reporter.printed(crate::report::Printed {
                                 command: command.line.clone(),
@@ -3401,6 +3416,24 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                     ),
                                     None => String::new(),
                                 };
+                                // Workspace content only, as with the landing above: the driver's
+                                // own sentence about a call is already its note.
+                                if output.content {
+                                    let from_the_end = output.printed_by.is_some();
+                                    let (lines, total) = released_lines(
+                                        &mut policy,
+                                        &output.tool,
+                                        output.glimpsed.as_ref().unwrap_or(&output.text),
+                                        GLIMPSE_LINES,
+                                        PREVIEW_WIDTH,
+                                        from_the_end,
+                                    );
+                                    reporter.returned(crate::report::Returned {
+                                        lines,
+                                        total,
+                                        from_the_end,
+                                    });
+                                }
                                 format!(
                                     "{TOOL_RESULT_PREFIX}{}:\n\n{ended}{text}{rest}",
                                     output.tool

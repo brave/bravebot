@@ -578,3 +578,46 @@ a model was slow exactly as it draws a slow program.
 `verified-by: bravebot_ui_bridge::reporting::what_a_call_spent_at_a_model_reaches_a_front_end`
 `verified-by: bravebot_agent::turn::what_a_check_cost_reaches_the_row_the_call_drew`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so it is pinned instead by ui/scripts/ux-state.test.mjs, which renders the real transcript row through react-dom and asserts that the figure reaches the markup, written past a minute as the terminal writes it, that a call which asked no model draws none, and that a wait under a second is left off; make check-ui and the Front end CI job both run it, and the governs list above holds the file to existing)`
+
+
+<a id="VIEW-24"></a>
+### VIEW-24: a call the planner read shows a few lines of what it found
+
+Under a call whose result the planner read, the transcript draws up to five lines of that result.
+For a command it draws the last five, because a build or a test run says how it went at the end.
+For anything else it draws the first five. When lines are left out, one line says how many and on
+which side. A read is glimpsed and counted without the paging note and change token the driver adds
+after it for the planner, so the count is the file's own and a short file does not show the
+driver's words as its last lines.
+
+The glimpse is drawn plainly, behind a margin with no bar, because the planner read exactly this and
+the bar of VIEW-3 marks only what it did not. It is released through the same display gate as a
+quarantined preview all the same, and every control character in it is replaced with a visible
+glyph, because a file the planner may read can still contain an escape. Each line is cut to one row
+rather than wrapped, so the glimpse stays the size it says it is.
+
+A result that was quarantined gets no plain glimpse. Its marked block of VIEW-3 is what the person
+sees of it. A sentence the driver wrote about a call, such as a count of matches or a refusal, gets
+no glimpse either, since that sentence is already the call's note.
+
+The glimpse goes under the call it came from. A glimpse from a delegate's call stays with that call
+and never goes under one of the turn's, though the delegate's block, which draws each of its latest
+calls as one row, does not draw it. A glimpse with no call of the running turn to go under is
+dropped, because lines drawn under an earlier turn's call would claim that call found them.
+
+**Why.** A one-line summary per call says that the agent read a file or ran a command, and nothing
+about what came back. The person watching could not tell whether the build passed or the file held
+what the planner was about to rely on without opening the file or the command's output themselves.
+
+`verified-by: bravebot_agent::turn::a_result_the_planner_read_is_glimpsed_under_its_call`
+`verified-by: bravebot_agent::turn::a_command_the_planner_read_is_glimpsed_from_its_end`
+`verified-by: bravebot_agent::turn::a_sentence_the_driver_wrote_about_a_call_is_not_glimpsed`
+`verified-by: bravebot_tui::render::what_the_planner_read_is_drawn_under_its_call`
+`verified-by: bravebot_tui::render::what_the_planner_read_is_not_drawn_as_quarantined`
+`verified-by: bravebot_tui::render::a_glimpse_from_the_end_says_what_came_before_it`
+`verified-by: bravebot_tui::render::a_glimpse_line_is_cut_to_one_row`
+`verified-by: bravebot_tui::render::a_line_of_escapes_is_cut_to_one_row_all_the_same`
+`verified-by: bravebot_tui::render::a_glimpse_cannot_draw_its_own_escapes`
+`verified-by: bravebot_tui::state::a_glimpse_goes_under_the_call_it_came_from`
+`verified-by: bravebot_tui::state::a_glimpse_does_not_bleed_into_an_earlier_turns_tool`
+`verified-by: bravebot_tui::state::a_delegates_glimpse_goes_under_the_delegates_call`

@@ -10,7 +10,7 @@
 //! place the cursor needs locating.
 
 use bravebot_agent::diff::Change;
-use bravebot_agent::report::{Activity, Landing, Reported, Shown};
+use bravebot_agent::report::{Activity, Landing, Reported, Returned, Shown};
 use bravebot_i18n::t;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
@@ -478,6 +478,50 @@ pub(crate) fn quarantined_rows(
     }
 
     lines
+}
+
+/// A few lines of what a call handed the planner, under the call.
+///
+/// Behind a plain margin rather than the bar, because the planner read exactly this, and through
+/// [`marked_rows`] all the same, because a file the planner may read can still hold an escape.
+/// One row a line, cut rather than wrapped, so a glimpse stays the size it says it is.
+fn returned_lines(returned: &Returned, width: usize) -> Vec<Line<'static>> {
+    let margin = Span::raw("    ");
+    let room = width.saturating_sub(margin.width()).max(1);
+    let mut rows: Vec<Line<'static>> = returned
+        .lines
+        .iter()
+        .flat_map(|line| {
+            // Measured as drawn: an escape is no column wide until it is made visible.
+            let line = printable(&line.replace('\t', "    "));
+            let cut = if wrap::display_width(&line) <= room {
+                line
+            } else {
+                format!(
+                    "{}…",
+                    split_at_width(&line, room.saturating_sub(1).max(1)).0
+                )
+            };
+            marked_rows(&margin, &[Span::styled(cut, dim())], width)
+        })
+        .collect();
+
+    // Said rather than silently dropped, and at the end the glimpse was taken from the other side of.
+    let left_out = returned.total.saturating_sub(returned.lines.len());
+    if left_out > 0 {
+        let count = if returned.from_the_end {
+            t!(transcript_earlier_lines, count = left_out)
+        } else {
+            t!(transcript_more_lines, count = left_out)
+        };
+        let said = marked_rows(&margin, &[Span::styled(count, dim())], width);
+        if returned.from_the_end {
+            rows.splice(0..0, said);
+        } else {
+            rows.extend(said);
+        }
+    }
+    rows
 }
 
 /// The hunks of a write, trimmed to what fits without burying the rest of the transcript.
@@ -1771,6 +1815,10 @@ fn with_prompts(session: &Session, width: u16, height: u16) -> (Vec<Line<'static
                     Span::styled(entry.text.clone(), dim()),
                 ])),
             },
+        }
+
+        if let Some(returned) = &entry.returned {
+            lines.extend(returned_lines(returned, width as usize));
         }
 
         // What the model was not allowed to read, for the person who is.
@@ -5409,6 +5457,136 @@ mod tests {
             assert!(
                 all.contains("38 more lines"),
                 "what was left out was not said"
+            );
+        }
+
+        fn glimpse(lines: &[&str], total: usize, from_the_end: bool) -> Returned {
+            Returned {
+                lines: lines.iter().map(|line| line.to_string()).collect(),
+                total,
+                from_the_end,
+            }
+        }
+
+        fn drawn_rows(lines: &[Line<'static>]) -> Vec<String> {
+            lines.iter().map(|line| line.to_string()).collect()
+        }
+
+        /// VIEW-24: "Read(notes.md) 12 lines" says a file was read and not what is in it, which
+        /// is the thing a person watching wants to check.
+        #[test]
+        fn what_the_planner_read_is_drawn_under_its_call() {
+            let mut session = working();
+            session.finish_activity(Activity::running("Read", "notes.md").done("12 lines"));
+            session.landed(Landing::Context);
+            session.returned(glimpse(&["first note", "second note"], 12, false));
+
+            let rows: Vec<String> = transcript_lines(&session, 90, 24)
+                .iter()
+                .map(|line| line.to_string())
+                .collect();
+            let call = rows
+                .iter()
+                .position(|row| row.contains("Read(notes.md)"))
+                .expect("the call is drawn");
+            let first = rows
+                .iter()
+                .position(|row| row.contains("first note"))
+                .expect("what the planner read is not drawn");
+            assert!(first > call, "the glimpse is not under its call: {rows:#?}");
+            assert!(
+                rows[first + 1].contains("second note"),
+                "the glimpse is out of order: {rows:#?}"
+            );
+            assert!(
+                rows[first + 2].contains("10 more lines"),
+                "what the glimpse left out was not said: {rows:#?}"
+            );
+        }
+
+        /// VIEW-24: the planner read exactly this, so drawing it in the marked block would say the
+        /// opposite of what is true.
+        #[test]
+        fn what_the_planner_read_is_not_drawn_as_quarantined() {
+            let rows = drawn_rows(&returned_lines(&glimpse(&["plain"], 3, false), 80));
+            assert_eq!(rows.len(), 2, "a line, and what was left out: {rows:#?}");
+            for row in &rows {
+                assert!(
+                    !row.contains(QUARANTINE_BAR),
+                    "a result the planner read was drawn as quarantined: {row}"
+                );
+            }
+        }
+
+        /// VIEW-24: how a command went is at the end of what it printed, so its glimpse is the last
+        /// lines, and what it left out is said above them.
+        #[test]
+        fn a_glimpse_from_the_end_says_what_came_before_it() {
+            let rows = drawn_rows(&returned_lines(
+                &glimpse(&["step 8", "step 9"], 9, true),
+                80,
+            ));
+            assert!(
+                rows[0].contains("7 earlier lines"),
+                "what came before is not said first: {rows:#?}"
+            );
+            assert!(rows[1].contains("step 8") && rows[2].contains("step 9"));
+            assert_eq!(rows.len(), 3, "{rows:#?}");
+        }
+
+        /// VIEW-24: a glimpse is the size it says it is. A minified file is one line, and wrapped
+        /// it would fill the screen the glimpse was meant to leave room on.
+        #[test]
+        fn a_glimpse_line_is_cut_to_one_row() {
+            let long = "x".repeat(200);
+            let rows = drawn_rows(&returned_lines(&glimpse(&[&long], 1, false), 40));
+            assert_eq!(rows.len(), 1, "a long line took more than a row: {rows:#?}");
+            assert!(
+                wrap::display_width(&rows[0]) <= 40,
+                "the row is wider than the terminal: {}",
+                rows[0]
+            );
+            assert!(
+                rows[0].ends_with('…'),
+                "nothing says it was cut: {}",
+                rows[0]
+            );
+        }
+
+        /// VIEW-24: an escape takes no column until it is made visible, and one once it is, so a
+        /// line of them is measured as drawn or it slips past the cut and wraps.
+        #[test]
+        fn a_line_of_escapes_is_cut_to_one_row_all_the_same() {
+            let escapes = "\u{1b}".repeat(200);
+            let rows = drawn_rows(&returned_lines(&glimpse(&[&escapes], 1, false), 40));
+            assert_eq!(
+                rows.len(),
+                1,
+                "a line of escapes took more than a row: {rows:#?}"
+            );
+            assert!(
+                rows[0].ends_with('…'),
+                "nothing says it was cut: {}",
+                rows[0]
+            );
+        }
+
+        /// VIEW-24: a file the planner may read can still hold an escape, and a glimpse of it is
+        /// drawn by this module and not by the file.
+        #[test]
+        fn a_glimpse_cannot_draw_its_own_escapes() {
+            let rows = drawn_rows(&returned_lines(
+                &glimpse(&["\u{1b}[2Jcleared\u{7}"], 1, false),
+                80,
+            ));
+            let row = &rows[0];
+            assert!(
+                !row.chars().any(|c| c.is_control()),
+                "a control character reached the screen: {row:?}"
+            );
+            assert!(
+                row.contains('\u{241b}') && row.contains("cleared"),
+                "the escape was dropped rather than shown: {row}"
             );
         }
 

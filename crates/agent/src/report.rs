@@ -387,6 +387,20 @@ pub struct Printed {
     pub outcome: Outcome,
 }
 
+/// A few lines of a result the planner read, for the person watching to see beside the call.
+///
+/// The counterpart of [`Shown`] for content the planner may read, and released the same way. The
+/// planner's reading is not what makes a screen safe to draw on; the display gate is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Returned {
+    /// The lines, each already trimmed to a sensible width.
+    pub lines: Vec<String>,
+    /// How many lines there were altogether, so the glimpse can say what it left out.
+    pub total: usize,
+    /// The last lines rather than the first, because how a command went is at the end of it.
+    pub from_the_end: bool,
+}
+
 /// The command a result came from, and how it ended.
 ///
 /// The two travel together because a run is reported by both: the person watching is shown the
@@ -548,6 +562,10 @@ pub trait Reporter {
     /// not the planner read it.
     fn printed(&mut self, _output: Printed) {}
 
+    /// A glimpse of a result the planner read, so a person sees what the call found and not only
+    /// that it ran.
+    fn returned(&mut self, _returned: Returned) {}
+
     /// Where the result of the call just finished ended up.
     ///
     /// Sent after the kernel has decided, which is why it is not part of the finished call: what
@@ -666,6 +684,8 @@ pub struct RecordingReporter {
     pub shown: Vec<Shown>,
     /// What each command printed, in the order they ran.
     pub printed: Vec<Printed>,
+    /// A glimpse of each result the planner read, in order.
+    pub returned: Vec<Returned>,
     /// Where each result went.
     pub landed: Vec<Landing>,
     /// Everything the person said mid-turn, in the order it reached the planner.
@@ -735,6 +755,10 @@ impl Reporter for RecordingReporter {
 
     fn printed(&mut self, output: Printed) {
         self.printed.push(output);
+    }
+
+    fn returned(&mut self, returned: Returned) {
+        self.returned.push(returned);
     }
 
     fn landed(&mut self, landing: Landing) {
