@@ -33,6 +33,8 @@ tests are [ui/docs/development.md](../../ui/docs/development.md).
 | [agent-configuration.md](agent-configuration.md) | `agents/` as the one source, and the links `make init` creates |
 | [localization.md](localization.md) | the catalogs, adding a message or a language, and who a string is for |
 | [testing-the-interface.md](testing-the-interface.md) | driving a real terminal for the wiring `cargo test` cannot reach |
+| [delegate-file-authority.md](delegate-file-authority.md) | testing file trust during overlapping parent and delegate writes |
+| [undo-coverage.md](undo-coverage.md) | testing undo across file writes, trust decisions and session records |
 | [labelling-issues.md](labelling-issues.md) | what a title carries, and the kind, the area, the severity and the three axes every open issue does |
 | [version-stamp.md](version-stamp.md) | which build produced a session, and reading a transcript against it |
 | [releasing.md](releasing.md) | cross-builds, naming a version, and the two manual publishes |

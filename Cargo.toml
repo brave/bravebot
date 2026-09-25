@@ -38,12 +38,8 @@ ratatui = { version = "0.30", features = [
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-# A dev-dependency of the two front-end crates, and of nothing that ships. The rest of the
-# workspace puts scratch state under `target/test-scratch` at a fixed name, which is enough
-# where a test needs somewhere to write. These two need more: they pin what a file helper
-# does about a symlink leaving a directory it was handed, so the fixture has to create the
-# tree at a stated mode and remove it however the test exits. A directory left behind at the
-# wrong mode is the fixture answering the question under test.
+# Test fixtures use private directories that are removed even when a test fails.
+# This includes file-helper permission tests and isolated terminal session profiles.
 tempfile = "3"
 unicode-width = "0.2"
 # The Win32 calls that keep the imported subscription file readable by one account, which is what

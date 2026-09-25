@@ -774,11 +774,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Only where nothing covers the path. A rule reconciliation wrote about a file there answers
     /// for that file, which is what keeps untrusted output from being read back as trusted.
     fn integrity_in_force(&self, path: &str) -> Option<Integrity> {
-        match self.trust.integrity_of(path) {
-            Some(integrity) => Some(integrity),
-            None if self.is_scratch(path) => self.trust.integrity_of(""),
-            None => None,
-        }
+        let assumed = if self.is_scratch(path) {
+            self.trust.integrity_of("")
+        } else {
+            None
+        };
+        self.trust.integrity_of_or(path, assumed)
     }
 
     /// [`Policy::integrity_in_force`] for a whole subtree, which is what a command line's read set
@@ -10128,6 +10129,40 @@ five
 
         assert!(policy.write_needs_approval("a.rs", Label::trusted_public(), Destination::Named));
         assert!(policy.write_needs_approval("a.rs", Label::untrusted_public(), Destination::Named));
+    }
+
+    /// Undo must not replace the write prompt for an undecided child with its parent's refusal.
+    #[test]
+    fn an_undecided_child_after_undo_still_requires_write_approval() {
+        let mut current = TrustStore::new("/work");
+        current.distrust("vendor");
+        current.trust("vendor/ours");
+        let trust = current.meet(&TrustStore::new("/work"));
+        let mut sink = RecordingSink::new();
+        let mut policy = policy_trusting(&mut sink, &[]).with_trust(trust);
+        for label in [Label::trusted_public(), Label::untrusted_public()] {
+            assert!(policy.write_needs_approval("vendor/ours/file", label, Destination::Named));
+            assert!(!policy.write_needs_approval("vendor/other", label, Destination::Named));
+        }
+    }
+
+    #[test]
+    fn an_undecided_scratch_path_does_not_inherit_workspace_trust() {
+        let mut trust = TrustStore::new("/work");
+        trust.trust(".");
+        trust.undecide("/tmp/bravebot-scratch-1/pending");
+        let mut sink = RecordingSink::new();
+        let mut policy = policy_trusting(&mut sink, &[])
+            .with_trust(trust)
+            .with_scratch(Some(std::path::Path::new("/tmp/bravebot-scratch-1")));
+        let path = "/tmp/bravebot-scratch-1/pending/file";
+        assert!(policy.read_is_quarantined(path));
+        assert!(policy.write_needs_approval(path, Label::trusted_public(), Destination::Named));
+        assert!(!policy.read_is_quarantined("/tmp/bravebot-scratch-1/other"));
+        assert_eq!(
+            policy.integrity_beneath_in_force("/tmp/bravebot-scratch-1"),
+            Some(Integrity::Untrusted)
+        );
     }
 
     /// The session's own directory is reachable with no rule written about it, so the answer given

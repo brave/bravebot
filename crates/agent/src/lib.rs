@@ -36,6 +36,7 @@ pub mod regex;
 pub mod remembered;
 pub mod replace;
 pub mod report;
+pub mod rewind;
 pub mod scratch;
 pub mod scrub;
 pub mod shared;

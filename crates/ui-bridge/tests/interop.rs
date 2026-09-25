@@ -223,6 +223,7 @@ fn resuming_a_session_writes_back_to_it_rather_than_forking() {
         Standing {
             history: None,
             rewind: &[bravebot_session::sessions::RewindPoint {
+                coverage: Default::default(),
                 snapshot: bravebot_session::sessions::TurnSnapshot {
                     conversation: bravebot_agent::Conversation::new().snapshot(),
                     turns: 0,

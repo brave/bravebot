@@ -11,6 +11,7 @@ governs:
   - crates/session/src/sessions.rs
   - crates/tui/src/dropped.rs
   - crates/agent/src/workspace.rs
+  - crates/agent/src/rewind.rs
   - crates/agent/src/scratch.rs
   - crates/cli/src/main.rs
   - crates/tui/src/app.rs
@@ -61,6 +62,9 @@ the answer decorative.
 Rules are keyed by path prefix and matched by whole segments. Both polarities are expressible, so
 a trusted tree may hold an untrusted subtree, which may hold a trusted path again. Equivalent
 spellings of a path are one rule, and a later decision replaces an earlier one.
+Undo may also record an undecided boundary, overriding a broader rule without granting trust or
+recording a refusal. Reads there stay quarantined and writes still require a decision. This boundary
+also overrides scratch-directory fallback trust.
 
 **Every key is a full path, and there is one namespace of them.** A caller may name a path
 relatively, which is how a file in the project is named, and the map reads that under the working
@@ -86,6 +90,10 @@ empty prefix covering every absolute path there is, and a rule on `/` covering e
 Full paths make both unreachable rather than guarded against, and a file that has a name of each
 kind then has one rule instead of two that could disagree.
 
+`verified-by: bravebot_core::trust::meeting_maps_keeps_an_undecided_child_beneath_a_refusal`
+`verified-by: bravebot_core::policy::an_undecided_child_after_undo_still_requires_write_approval`
+`verified-by: bravebot_core::policy::an_undecided_scratch_path_does_not_inherit_workspace_trust`
+`verified-by: bravebot_core::trust::ancestor_lookups_match_whole_segment_rule_selection`
 `verified-by: bravebot_core::trust::the_deepest_rule_wins_at_any_depth`
 `verified-by: bravebot_core::trust::an_untrusted_subpath_overrides_a_trusted_parent`
 `verified-by: bravebot_core::trust::a_trusted_subpath_overrides_an_untrusted_parent`
@@ -141,7 +149,9 @@ remain available. A later complete trusted replacement can trust the path again.
 Byte capture and label lookup share a boundary with effect entry and successful publication.
 No reader can capture replacement bytes under an earlier grant. This covers context files,
 attachments, deferred references and searches as well as direct reads. Collection never merges
-a delegate's stale file snapshot. No coordination lock spans a prompt, model call or child join.
+a delegate's stale file snapshot. No coordination lock spans a prompt, model call or child join. Session callers retain this
+same authority after turn-owned children finish, including on failure or cancellation, and save
+its current file decisions rather than substituting the map from before the turn.
 
 Approvals based on a preview are checked against the path's revision before effect entry or
 vouching. A changed path cannot spend the old approval. Changes to another path do not invalidate
@@ -750,31 +760,14 @@ covers it.
 <a id="TRUST-19"></a>
 ### TRUST-19: what a turn writes in the session's own directory is not rewound
 
-A write through a file tool into the session's own directory keeps nothing to put back. Undoing the
-turn neither restores such a file nor removes one the turn created, does not name it among the paths
-it could not put back, and leaves the bytes it would have kept to the files the turn wrote in the
-project.
+A write through a file tool into the session's own directory keeps no backup and records a scratch
+coverage gap. Undo stays available. Scratch bytes remain outside the backup budget, and their file
+rules meet the current and selected snapshot's effective decisions under
+[SESSION-19](sessions.md#SESSION-19). Directories opened by the person remain inside the backup domain.
 
-**Why.** What one turn keeps so that it can be undone is bounded, and the bound is shared by every
-file that turn wrote ([sessions.md](sessions.md)). An intermediate file is the size of thing that
-bound is set to stay clear of, so keeping one spends what a source file's own copy needed and leaves
-that file unable to go back: the file somebody wants undone loses to the file nobody does.
-
-There is nothing there anybody has open either. The directory holds what a turn wrote for its own
-use, it is empty when the session begins, and it goes when the session ends, so a file in it is
-nobody's work in progress. What the undone turn wrote there stays until the session ends, and a
-later turn in the same session can read it.
-
-Removing what the turn created there, which costs none of the budget, is the alternative and is
-refused for what it makes the report say. What a turn overwrote there cannot go back, since those
-bytes are the ones this declines to keep, so a path in the directory would have to be named on the
-line reporting the rewind, and that line would carry intermediate files for as long as the list of
-them ran. A stale intermediate file in a directory whose whole purpose is intermediate files is the
-smaller cost of the two.
-
-This is what being outside the project buys rather than a carve-out inside it. The rule is that what
-an undo keeps is what is in the project, and a directory the user opened by name is in the project
-for this purpose: those are files somebody has open, which is the whole reason the bytes are kept.
+**Why.** Intermediate files need not consume the project-file backup budget. Keeping their current
+bytes cannot justify restoring an earlier grant over them, so undo retains the lower decision
+without blocking restoration of other files.
 
 `verified-by: bravebot_agent::workspace::a_write_in_the_sessions_own_directory_is_not_kept_for_an_undo`
 `verified-by: bravebot_agent::workspace::a_write_in_the_sessions_own_directory_leaves_the_budget_for_the_project`
@@ -915,12 +908,9 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   second paragraph covers less of the traffic than it does elsewhere. No rule about that would
   help, since the same writes to the same effect are available one directory up: it is the standing
   statement about the place, met more often.
-- **An undone turn's intermediate files stay until the session ends.** Nothing written in the
-  session's own directory goes back (TRUST-19), so a turn that wrote one there and was undone has
-  left a file a later turn in the same session can read. The directory is removed when the session
-  is, and what is in it is the workings of a turn rather than anybody's work in progress, which is
-  what makes this smaller than the two things keeping it would cost: the budget the file in the
-  project needs, and a rewind naming every intermediate file it could not put back.
+- **Intermediate files stay until the session ends.** Scratch writes record incomplete undo
+  coverage (TRUST-19); later turns can read those files under the current file decisions. Keeping their
+  bytes for undo would spend the budget intended for project files.
 - **Confinement does not keep a program out of the session's directory.** A program that cannot
   open a temporary file fails outright, so the base of a `run` profile names the system temporary
   directory for reading and writing ([sandboxing.md](sandboxing.md)), and TRUST-14 puts this

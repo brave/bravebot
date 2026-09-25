@@ -959,6 +959,17 @@ impl Task {
         self
     }
 
+    /// Retain live file decisions after success, failure or cancellation.
+    /// The caller seeds this from its current map and reads it after the turn has joined
+    /// its children. This authority replaces the file map passed to the run.
+    pub fn with_file_authority(
+        mut self,
+        authority: bravebot_core::file_authority::FileAuthority,
+    ) -> Self {
+        self.file_authority = Some(authority);
+        self
+    }
+
     /// Apply the rules a person wrote in advance about what to ask them about.
     pub fn with_permissions(mut self, permissions: Permissions) -> Self {
         self.permissions = permissions;
@@ -2023,6 +2034,10 @@ fn fire_hooks<R: Reporter + ?Sized>(
     workspace: &Workspace,
     reporter: &mut R,
 ) -> Vec<String> {
+    // Hook programs can write files outside the backup journal, regardless of their outcome.
+    if hooks.firing(moment, tool).next().is_some() {
+        workspace.mark_rewind_gap(crate::rewind::CoverageGap::Hook);
+    }
     let mut said = Vec::new();
     for fired in crate::hooks::fire(hooks, moment, tool, workspace.root()) {
         let Some(trouble) = fired.trouble else {

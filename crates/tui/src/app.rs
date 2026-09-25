@@ -2361,6 +2361,7 @@ fn list_rewind_points(session: &mut Session) {
 /// Says what happened either way. A rewind that reported nothing would leave somebody who asked
 /// for three turns back and had two believing the tree in front of them is three turns older
 /// than it is.
+#[allow(clippy::too_many_arguments)]
 fn rewind(
     session: &mut Session,
     conversation: &mut Conversation,
@@ -2368,9 +2369,11 @@ fn rewind(
     programs: &mut TrustedPrograms,
     stored: &mut bravebot_session::sessions::Handle,
     workspace: &Workspace,
+    servers: &mut Option<LanguageServers>,
     steps: usize,
 ) {
-    let Some((snapshot, backups)) = session.take_rewind(steps) else {
+    session.bind_rewind_coverage(workspace);
+    let Some(point) = session.take_rewind(steps) else {
         // Saying how far back it does go rather than refusing in the abstract, since the next
         // thing the person types is that number.
         match session.rewind_points().len() {
@@ -2379,7 +2382,13 @@ fn rewind(
         }
         return;
     };
-    let refused = workspace.restore_backups(backups);
+    stored.retain_rewind_coverage(&point.coverage);
+    let gaps = point.coverage.gaps();
+    let snapshot = point.snapshot;
+    let refused = bravebot_agent::rewind::restore(point.backups, trust, &snapshot.trust, servers);
+    if !refused.is_empty() {
+        session.record_rewind_gap(bravebot_agent::rewind::CoverageGap::BackupUnavailable);
+    }
 
     *conversation = bravebot_agent::Conversation::restored(snapshot.conversation);
     session.turns = snapshot.turns;
@@ -2391,14 +2400,18 @@ fn rewind(
     session.restore_cache(snapshot.cached);
     session.written = 0;
     session.finished = None;
-    *trust = snapshot.trust;
     *programs = snapshot.programs;
 
     session.transcript.truncate(snapshot.transcript_len);
     session.rewind_history();
     stored.truncate_audit(session.turns + 1);
 
-    if snapshot.turns == 0 && !snapshot.was_wrote {
+    if snapshot.turns == 0
+        && !snapshot.was_wrote
+        && refused.is_empty()
+        && gaps.is_empty()
+        && *trust == snapshot.trust
+    {
         stored.discard_unwritten(&snapshot.title);
     } else {
         stored.save(
@@ -2435,6 +2448,23 @@ fn rewind(
             .collect::<Vec<_>>()
             .join(", ");
         session.note(t!(session_rewound_partly, turn = turn, paths = paths));
+    }
+    if !gaps.is_empty() {
+        use bravebot_agent::rewind::CoverageGap;
+        let causes = gaps
+            .iter()
+            .map(|gap| match gap {
+                CoverageGap::Command => t!(session_rewind_cause_command),
+                CoverageGap::Hook => t!(session_rewind_cause_hook),
+                CoverageGap::Scratch => t!(session_rewind_cause_scratch),
+                CoverageGap::LanguageServer => t!(session_rewind_cause_server),
+                CoverageGap::Desktop => t!(session_rewind_cause_desktop),
+                CoverageGap::BackupUnavailable => t!(session_rewind_cause_backup),
+                CoverageGap::Unknown => t!(session_rewind_cause_unknown),
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        session.note(t!(session_rewind_uncovered, causes = causes));
     }
 }
 
@@ -2555,7 +2585,7 @@ fn event_loop(
             // After the transcript rather than before it, because each point's place in that
             // transcript is worked out from it: a point is a turn number in the record and an
             // index in the session, and the list it indexes has to exist first.
-            session.restore_rewind_points(record.rewind_points(workspace.root()), &conversation);
+            session.restore_rewind(&record, &workspace, &conversation);
             (conversation, handle, vouched)
         }
     };
@@ -2764,6 +2794,7 @@ fn event_loop(
                     &mut programs,
                     &mut stored,
                     &workspace,
+                    &mut servers,
                     1,
                 );
                 needs_draw = true;
@@ -2780,6 +2811,7 @@ fn event_loop(
                             &mut programs,
                             &mut stored,
                             &workspace,
+                            &mut servers,
                             steps,
                         ),
                         _ => session.note(t!(session_rewind_needs_a_number)),
@@ -3144,8 +3176,9 @@ fn event_loop(
                 while let Some((prompt, wrote)) = sending {
                     let history_start = conversation.recounted().len();
                     let point = rewind_point(&session, &conversation, &trust, &programs, &stored);
-                    session.open_rewind_point(point, prompt.clone());
                     let _ = workspace.take_backups();
+                    session.open_rewind_point(point, prompt.clone());
+                    session.bind_rewind_coverage(&workspace);
 
                     // Everything the session holds is lent for the turn and taken back: a turn that
                     // writes untrusted data into a trusted path records that, and the next turn must
@@ -3231,8 +3264,9 @@ fn event_loop(
                 }
             }
             Action::Run(line) => {
-                // The command is in the conversation, and the workspace never saw what it wrote.
-                session.close_rewind_window();
+                // Shell effects have no file-tool journal, but older edits can still be undone.
+                session.bind_rewind_coverage(&workspace);
+                workspace.mark_rewind_gap(bravebot_agent::rewind::CoverageGap::Command);
                 let events =
                     run_command(terminal, &mut session, &workspace, &line, &mut conversation)?;
                 // Saved like a turn, and for the same reason: the command is in the conversation
@@ -5493,6 +5527,22 @@ struct Continued {
     events: Vec<Stamped>,
 }
 
+/// What the joined worker returns, including an ordinary error or cancellation.
+struct FinishedTurn {
+    outcome: Result<turn::Outcome, turn::TurnError>,
+    conversation: Conversation,
+    sink: Trail,
+    servers: Option<LanguageServers>,
+}
+
+/// Decisions retained outside the worker when it cannot return an outcome.
+struct RetainedTurn {
+    files: bravebot_core::file_authority::FileAuthority,
+    programs: TrustedPrograms,
+    asked: AskedAbout,
+    exposed: bravebot_core::credentials::Exposed,
+}
+
 /// Run a turn on a worker thread, redrawing while it works.
 ///
 /// The turn itself blocks on network requests, so running it here would freeze the indicator on
@@ -5628,13 +5678,15 @@ fn run_turn_animated(
             bytes: image.bytes.clone(),
         });
     }
-    let task = task;
-    // Kept so a failed turn does not lose the user's decisions. Both of them: a run approved
-    // "always" in a turn that then failed is still an answer the user gave.
-    let fallback = trust.clone();
-    let fallback_programs = programs.clone();
-    let fallback_asked = asked_about.clone();
-    let fallback_exposed = exposed.clone();
+    // The worker shares file decisions so errors cannot return the pre-write map.
+    let file_authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
+    let task = task.with_file_authority(file_authority.clone());
+    let retained = RetainedTurn {
+        files: file_authority,
+        programs: programs.clone(),
+        asked: asked_about.clone(),
+        exposed: exposed.clone(),
+    };
 
     let worker = thread::spawn(move || {
         let mut sink = Trail::new();
@@ -5683,7 +5735,12 @@ fn run_turn_animated(
             Some(&mut servers),
             &worker_cancel,
         );
-        (outcome, conversation, sink, Some(servers))
+        FinishedTurn {
+            outcome,
+            conversation,
+            sink,
+            servers: Some(servers),
+        }
     });
 
     // Redraw until the turn finishes, answering approvals and watching for a cancel on the way.
@@ -5942,79 +5999,93 @@ fn run_turn_animated(
         }
     }
 
-    let (outcome, conversation, sink, servers) = worker.join().unwrap_or_else(|_| {
+    let finished = worker.join().unwrap_or_else(|_| {
         // A panicked turn is reported rather than propagated: the session survives. The
         // conversation does not, since the thread that held it is gone, and neither do the
         // servers: they went down with the thread that owned them, so the next turn starts and
         // is asked about a fresh one.
-        (
-            Err(turn::TurnError::Precommit(
+        FinishedTurn {
+            outcome: Err(turn::TurnError::Precommit(
                 t!(turn_ended_unexpectedly).to_string(),
             )),
-            Conversation::new(),
-            Trail::new(),
-            None,
-        )
+            conversation: Conversation::new(),
+            sink: Trail::new(),
+            servers: None,
+        }
     });
 
+    Ok(finish_turn(
+        session,
+        config,
+        workspace,
+        Line {
+            text: prompt,
+            wrote,
+        },
+        finished,
+        retained,
+    ))
+}
+
+/// Adopt decisions before classifying the joined result or handing state back for saving.
+fn finish_turn(
+    session: &mut Session,
+    config: &Config,
+    workspace: &Workspace,
+    line: Line<'_>,
+    finished: FinishedTurn,
+    retained: RetainedTurn,
+) -> Continued {
+    let FinishedTurn {
+        outcome,
+        conversation,
+        sink,
+        servers,
+    } = finished;
+    let carried = Carried {
+        trust: retained.files.snapshot(),
+        programs: retained.programs,
+        asked: retained.asked,
+        exposed: retained.exposed,
+    };
     // Record cancellation separately from failure, then restore the prompt when possible.
     let events = sink.events().to_vec();
 
-    // Before the cancellation below, because a stopped turn can have learned this too: the level
-    // goes out on the first request and the person may stop the turn several rounds later.
+    // A stopped turn may already have learned that this model refuses the chosen level.
     let refused = bravebot_agent::backend::refused_a_level(
         config,
         session.model().unwrap_or(&config.default_model),
     );
     note_a_refused_level(session, refused);
 
-    if let Err(turn::TurnError::Cancelled { attempts }) = &outcome {
-        finish_cancelled_turn(session, prompt, *attempts);
-        return Ok(Continued {
-            conversation,
-            trust: fallback,
-            programs: fallback_programs,
-            servers,
-            asked_about: fallback_asked,
-            exposed: fallback_exposed,
-            events,
-        });
-    }
-
-    // Whether a difference between the model asked for and the one reported means anything is the
-    // backend's question, and so is which name the service was actually asked for: a gateway is
-    // asked for the part of a qualified name that it knows the model by. Answered here, where the
-    // configuration is in hand.
-    let chosen = session.model().unwrap_or(&config.default_model);
-    let asked = Asked {
-        name: bravebot_agent::backend::Backend::name_as_asked(config, chosen),
-        comparable: bravebot_agent::backend::Backend::reports_the_model_it_was_asked_for(
-            config, chosen,
-        ),
+    let carried = if let Err(turn::TurnError::Cancelled { attempts }) = &outcome {
+        finish_cancelled_turn(session, line.text, *attempts);
+        carried
+    } else {
+        // The backend decides how to compare the requested and reported model names.
+        let chosen = session.model().unwrap_or(&config.default_model);
+        let asked = Asked {
+            name: bravebot_agent::backend::Backend::name_as_asked(config, chosen),
+            comparable: bravebot_agent::backend::Backend::reports_the_model_it_was_asked_for(
+                config, chosen,
+            ),
+        };
+        fold_outcome(
+            session,
+            outcome,
+            sink,
+            carried,
+            Occupied {
+                budget: config.context_budget,
+                guessed: config.budget_is_guessed(),
+                last_request_tokens: conversation.last_request_tokens(),
+            },
+            asked,
+            line,
+            workspace,
+        )
     };
-    let carried = fold_outcome(
-        session,
-        outcome,
-        sink,
-        Carried {
-            trust: fallback,
-            programs: fallback_programs,
-            asked: fallback_asked,
-            exposed: fallback_exposed,
-        },
-        Occupied {
-            budget: config.context_budget,
-            guessed: config.budget_is_guessed(),
-            last_request_tokens: conversation.last_request_tokens(),
-        },
-        asked,
-        Line {
-            text: prompt,
-            wrote,
-        },
-        workspace,
-    );
-    Ok(Continued {
+    Continued {
         conversation,
         trust: carried.trust,
         programs: carried.programs,
@@ -6022,7 +6093,7 @@ fn run_turn_animated(
         asked_about: carried.asked,
         exposed: carried.exposed,
         events,
-    })
+    }
 }
 
 /// Hand the worker's messages to `handle`: the one this frame waited for, and then everything
@@ -14939,6 +15010,7 @@ mod tests {
             &mut programs,
             &mut stored,
             &workspace,
+            &mut None,
             1,
         );
         assert_eq!(
@@ -14975,6 +15047,7 @@ mod tests {
             &mut programs,
             &mut stored,
             &workspace,
+            &mut None,
             1,
         );
 
@@ -15082,6 +15155,7 @@ mod tests {
             &mut programs,
             &mut stored,
             &workspace,
+            &mut None,
             1,
         );
 
@@ -16614,6 +16688,7 @@ mod tests {
             &mut programs,
             &mut stored,
             &workspace,
+            &mut None,
             2,
         );
         let record = sessions::load(&root, stored.id()).unwrap();
@@ -16658,3 +16733,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "undo_tests.rs"]
+mod undo_tests;

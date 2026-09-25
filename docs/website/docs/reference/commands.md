@@ -451,16 +451,18 @@ another**. Every path in the project a rewound turn wrote through a file tool go
 held first, and a file one created is removed; where two rewound turns wrote the same path, it goes
 back to what it held before the first of them.
 
-The conversation returns to the snapshot taken before the earliest rewound turn, and the turn count,
-the spend, the timing, the trust map, the commands you vouched for and the transcript go back with it.
-Those turns' audit lines are dropped, since they decided about turns that are no longer in the
-conversation. A standing permission goes back with the turn that granted it, so a path or a command
-vouched for during a rewound turn is vouched for no longer, and one vouched for before them is
-untouched. Rewinding past a session's first turn removes its record rather than leaving one with
-nothing in it, and a name you gave the session before that turn stays with it.
+The conversation, turn count, spend, timing, remembered commands and transcript return to the
+snapshot before the earliest rewound turn. Those turns' audit lines are dropped too.
 
-Disk and conversation move together because either alone leaves the transcript describing a tree that
-is not there.
+File trust follows the bytes that remain. A restored file gets the lower of its trust when backed
+up and its trust before the turn. A file left untouched gets the lower of its current trust and its
+trust before the turn. Grants made during undone turns are withdrawn; distrust on an untouched
+file stays in place until you grant trust again. A failed restoration leaves that path untrusted,
+but does not withdraw unrelated grants.
+
+Rewinding past the first turn removes the record only when restoration is complete, there are no
+coverage warnings, and file trust matches the original snapshot. Otherwise the resulting state
+stays saved. A name you gave the session before that turn stays with it.
 
 **Five turns back is as far as it goes.** The turn that just ended is the one least likely to need
 rewinding, because it is the one still on the screen; what people notice late is a mistake made two or
@@ -478,11 +480,15 @@ would not go back rather than as a file that was never there.
 **The points survive closing the program.** They are written into the session record with the
 conversation, so `/undo` and `/rewind` after a `--resume` reach the same turns they reached before.
 
-**Anything that changes the session outside a turn gives up every point at once**: `/clear`,
-`/compact`, `/btw`, `/rename`, `/add-dir`, `/cd`, and a shell-mode command, whose writes the workspace
-never saw. Every point goes rather than the most recent alone, since such a change lands after the
-most recent point and so before none of them. After that `/undo` says there is nothing left to undo
+**These changes outside a turn give up every point at once**: `/clear`, `/compact`, `/btw`,
+`/rename`, `/add-dir`, and `/cd`. Every point goes rather than the most recent alone, since such a
+change lands after the most recent point and so before none of them. After that `/undo` says there is nothing left to undo
 rather than rewinding to a point describing a different session.
+
+**Running a command keeps undo available.** Commands, hooks, scratch writes, language servers and
+desktop turns can make changes outside file-tool backups. Undo names the recorded causes in a
+warning that some changes may remain. It still restores available backups, which can also overwrite
+later command changes to those same paths. Failed restorations are reported separately by path.
 
 ## `/rewind [turns]`
 

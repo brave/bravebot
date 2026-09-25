@@ -1735,11 +1735,34 @@ impl Session {
     /// Open a point for the turn about to begin.
     pub fn open_rewind_point(&mut self, snapshot: TurnSnapshot, prompt: String) {
         self.rewind_points.push(RewindPoint {
+            coverage: Default::default(),
             snapshot,
             backups: Vec::new(),
             prompt,
         });
         self.hold_rewind_points();
+    }
+
+    /// Bind resumed and newly opened points to the workspace before the next turn.
+    pub fn bind_rewind_coverage(&mut self, workspace: &bravebot_agent::Workspace) {
+        // Resuming cannot prove a previous server's untracked descendants have stopped.
+        if self.rewind_points.iter().any(|point| {
+            point
+                .coverage
+                .gaps()
+                .contains(&bravebot_agent::rewind::CoverageGap::LanguageServer)
+        }) {
+            workspace.mark_rewind_gap(bravebot_agent::rewind::CoverageGap::LanguageServer);
+        }
+        for point in &mut self.rewind_points {
+            point.coverage.rebind(workspace.rewind_coverage());
+        }
+    }
+
+    pub fn record_rewind_gap(&mut self, gap: bravebot_agent::rewind::CoverageGap) {
+        for point in &mut self.rewind_points {
+            point.coverage.record([gap]);
+        }
     }
 
     /// Keep what the turn that just ended wrote over, against the point it opened.
@@ -1758,6 +1781,19 @@ impl Session {
     /// The points this session can be put back to, oldest first.
     pub fn rewind_points(&self) -> &[RewindPoint] {
         &self.rewind_points
+    }
+
+    /// Restore checkpoint history and warnings that remain after every checkpoint is consumed.
+    pub fn restore_rewind(
+        &mut self,
+        record: &bravebot_session::sessions::Record,
+        workspace: &bravebot_agent::Workspace,
+        conversation: &bravebot_agent::Conversation,
+    ) {
+        if record.server_children_may_run() {
+            workspace.mark_rewind_gap(bravebot_agent::rewind::CoverageGap::LanguageServer);
+        }
+        self.restore_rewind_points(record.rewind_points(workspace.root()), conversation);
     }
 
     /// Put back the points a record was holding, oldest first, into the transcript `conversation`
@@ -1824,16 +1860,20 @@ impl Session {
     /// in two of the undone turns goes back to what it held before the first of them, and
     /// carrying the later copy as well would write the middle state over the answer, or report a
     /// path as refused when the copy that mattered did go back.
-    pub fn take_rewind(
-        &mut self,
-        steps: usize,
-    ) -> Option<(TurnSnapshot, Vec<bravebot_agent::workspace::Backup>)> {
+    pub fn take_rewind(&mut self, steps: usize) -> Option<RewindPoint> {
         if steps == 0 || steps > self.rewind_points.len() {
             return None;
         }
         let mut undone = self
             .rewind_points
             .split_off(self.rewind_points.len() - steps);
+        let gaps: std::collections::BTreeSet<_> = undone
+            .iter()
+            .flat_map(|point| point.coverage.gaps())
+            .collect();
+        for point in &mut self.rewind_points {
+            point.coverage.record(gaps.iter().copied());
+        }
         let mut seen = std::collections::HashSet::new();
         let mut backups = Vec::new();
         for point in &mut undone {
@@ -1843,10 +1883,11 @@ impl Session {
                 }
             }
         }
-        undone
-            .into_iter()
-            .next()
-            .map(|point| (point.snapshot, backups))
+        undone.into_iter().next().map(|mut point| {
+            point.backups = backups;
+            point.coverage = bravebot_agent::rewind::RewindCoverage::restored(gaps);
+            point
+        })
     }
 
     /// Hold the points to what a session may keep: the depth, and the bytes.
@@ -10683,6 +10724,26 @@ mod tests {
         assert!(s.rewind_points().is_empty());
     }
 
+    /// Loaded server warnings cover new turns too; a new workspace cannot prove children ended.
+    #[test]
+    fn resumed_server_coverage_reaches_new_points_and_repeated_undo() {
+        use bravebot_agent::rewind::CoverageGap;
+        let root = crate::testutil::scratch_dir("undo-resumed-coverage");
+        std::fs::create_dir_all(&root).unwrap();
+        let workspace = bravebot_agent::Workspace::new(&root).unwrap();
+        let mut s = session();
+        s.open_rewind_point(snapshot_before(0), "earlier".into());
+        s.record_rewind_gap(CoverageGap::LanguageServer);
+        s.open_rewind_point(snapshot_before(1), "later".into());
+        s.bind_rewind_coverage(&workspace);
+        for _ in 0..2 {
+            let point = s.take_rewind(1).unwrap();
+            assert_eq!(point.coverage.gaps(), [CoverageGap::LanguageServer].into());
+        }
+        assert!(!workspace.rewind_coverage().is_complete());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     /// The state before some turn, for a test that only needs a point to exist.
     fn snapshot_before(turns: usize) -> TurnSnapshot {
         TurnSnapshot {
@@ -10722,7 +10783,9 @@ mod tests {
         s.open_rewind_point(snapshot_before(1), "the second thing".into());
         s.keep_backups(vec![held("/work/two", Before::Nothing)]);
 
-        let (snapshot, backups) = s.take_rewind(2).expect("two turns to go back");
+        let RewindPoint {
+            snapshot, backups, ..
+        } = s.take_rewind(2).expect("two turns to go back");
 
         assert_eq!(snapshot.turns, 0, "two turns back is not before the first");
         assert_eq!(backups.len(), 2, "one of the two turns' writes was dropped");
@@ -10763,7 +10826,7 @@ mod tests {
             Before::Bytes(b"after the first turn".to_vec()),
         )]);
 
-        let (_, backups) = s.take_rewind(2).expect("two turns to go back");
+        let RewindPoint { backups, .. } = s.take_rewind(2).expect("two turns to go back");
 
         assert_eq!(backups.len(), 1, "the same path is put back twice");
         assert_eq!(
@@ -10842,6 +10905,7 @@ mod tests {
         // Recorded against a transcript that opened with the prompt, where the second turn
         // began at entry two. This one opens with the resumed line, so it begins at entry three.
         let mut point = RewindPoint {
+            coverage: Default::default(),
             snapshot: snapshot_before(1),
             backups: Vec::new(),
             prompt: "add a second line".into(),
@@ -10895,6 +10959,7 @@ mod tests {
         );
 
         let mut point = RewindPoint {
+            coverage: Default::default(),
             snapshot: snapshot_before(1),
             backups: Vec::new(),
             prompt: "add a second line".into(),

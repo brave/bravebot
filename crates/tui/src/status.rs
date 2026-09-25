@@ -416,7 +416,7 @@ pub fn report(facts: &Facts<'_>) -> Report {
 
     // Last because it is the part that grows. What a write recorded is the thing nothing else
     // reports: a file an earlier turn marked untrusted is invisible until it refuses to be read.
-    let rules: Vec<(&str, Integrity)> = facts.trust.rules().collect();
+    let rules: Vec<(&str, Option<Integrity>)> = facts.trust.rules().collect();
     if rules.is_empty() {
         lines.push(Line::new(t!(status_trust), t!(status_nothing_vouched_for)));
     } else {
@@ -427,8 +427,9 @@ pub fn report(facts: &Facts<'_>) -> Report {
         for (path, integrity) in rules.iter() {
             let shown = if path.is_empty() { "." } else { path };
             lines.push(match integrity {
-                Integrity::Trusted => Line::new("", shown).with_note(t!(status_trusted)),
-                Integrity::Untrusted => Line::new("", shown).with_note(t!(status_untrusted)),
+                Some(Integrity::Trusted) => Line::new("", shown).with_note(t!(status_trusted)),
+                Some(Integrity::Untrusted) => Line::new("", shown).with_note(t!(status_untrusted)),
+                None => Line::new("", shown).with_note(t!(status_undecided)),
             });
         }
     }

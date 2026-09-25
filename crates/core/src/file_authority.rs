@@ -76,6 +76,7 @@ impl FileAuthority {
             let paths: Vec<String> = state
                 .trust
                 .keyed()
+                .filter(|(_, integrity)| integrity.is_some())
                 .map(|(path, _)| path.to_string())
                 .collect();
             for path in paths {
@@ -109,6 +110,10 @@ impl FileAuthority {
     /// for what the answer means.
     pub fn integrity_of(&self, path: &str) -> Option<Integrity> {
         self.state().trust.integrity_of(path)
+    }
+
+    pub fn integrity_of_or(&self, path: &str, assumed: Option<Integrity>) -> Option<Integrity> {
+        self.state().trust.integrity_of_or(path, assumed)
     }
 
     pub fn integrity_beneath(&self, path: &str) -> Option<Integrity> {
@@ -294,7 +299,7 @@ mod tests {
             let trust = authority.snapshot();
             assert_eq!(
                 trust.keyed().collect::<Vec<_>>(),
-                vec![("/work", tree), ("/work/src/a.rs", written)],
+                vec![("/work", Some(tree)), ("/work/src/a.rs", Some(written))],
                 "the write recorded a path other than the file it wrote: {tree:?} tree, {written:?} write"
             );
             // What that record means to a later read: neither the directory the file is in nor a

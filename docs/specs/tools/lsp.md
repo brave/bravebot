@@ -247,6 +247,10 @@ outside the tree.
 Starting one is put to the user, and what they approve is a process that runs for the session with
 the access their own shell would give it. Not confined, and the record of what was approved belongs
 to the session in the way [RUN-9](run.md#RUN-9) describes.
+Before an approved launch, record a language-server coverage gap under
+[SESSION-19](../sessions.md#SESSION-19). Undo remains available and stops tracked servers before
+restoring files. Coverage warnings persist because server children may outlive shutdown.
+A declined launch leaves undo coverage unchanged.
 
 **Why not confined, when a stdio MCP server is.** [sandboxing.md](../sandboxing.md) says what
 confinement is for: code nobody vouched for. It says in the same breath that "a program the user

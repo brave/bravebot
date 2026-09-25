@@ -145,6 +145,7 @@ fn starts(at: &Path) -> usize {
 /// Answers every question with a yes, and counts the times it was asked about a server.
 struct AskedAboutServers {
     asked: usize,
+    reject: bool,
 }
 
 impl bravebot_agent::Confirmer for AskedAboutServers {
@@ -153,7 +154,11 @@ impl bravebot_agent::Confirmer for AskedAboutServers {
         _request: &bravebot_agent::confirm::ServerRequest,
     ) -> bravebot_agent::Decision {
         self.asked += 1;
-        bravebot_agent::Decision::Approve
+        if self.reject {
+            bravebot_agent::Decision::Reject
+        } else {
+            bravebot_agent::Decision::Approve
+        }
     }
 
     fn confirm_write(
@@ -253,10 +258,19 @@ fn a_server_approved_in_one_turn_answers_the_next() {
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
-    let mut asking = AskedAboutServers { asked: 0 };
+    let mut asking = AskedAboutServers {
+        asked: 0,
+        reject: false,
+    };
 
     // The session owns the set, which is the whole of the fix: the turns borrow it.
+    // A final server write during shutdown must happen before restoration, not after it.
+    let program = scratch.path.join("bin/rust-analyzer");
+    let script = FAKE_SERVER.replace("*'\"shutdown\"'*)", "*'\"shutdown\"'*)\n      printf 'server final write' > \"$DEFINED_AT\"\n      touch \"$DEFINED_AT.stopped\"");
+    std::fs::write(program, script).unwrap();
     let mut servers = LanguageServers::new(workspace.root().to_path_buf(), None);
+    let points = [workspace.rewind_coverage(), workspace.rewind_coverage()];
+    assert!(points.iter().all(|point| point.is_complete()));
     let mut conversation = Conversation::new();
     for prompt in ["where is Held declared", "and again"] {
         turn::resume(
@@ -274,7 +288,38 @@ fn a_server_approved_in_one_turn_answers_the_next() {
             &Cancel::new(),
         )
         .expect("the turn runs");
+        assert!(points.iter().all(|point| !point.is_complete()));
+        assert!(
+            !workspace.clone().rewind_coverage().is_complete(),
+            "later turns cannot capture coverage while server effects remain untracked"
+        );
     }
+
+    let mut servers = Some(servers);
+    let mut trust = trusting_the_workspace(&workspace);
+    let target = trust.clone();
+    let refused = bravebot_agent::rewind::restore(
+        vec![bravebot_agent::workspace::Backup {
+            path: workspace.root().join("src/a.rs"),
+            was: bravebot_agent::workspace::Before::Bytes(b"restored original".to_vec()),
+            captured_trust: bravebot_core::label::Integrity::Trusted,
+        }],
+        &mut trust,
+        &target,
+        &mut servers,
+    );
+    assert!(refused.is_empty());
+    assert!(servers.is_none());
+    assert!(workspace.root().join("src/a.rs.stopped").exists());
+    assert_eq!(
+        std::fs::read(workspace.root().join("src/a.rs")).unwrap(),
+        b"restored original"
+    );
+    assert!(trust.is_trusted("src/a.rs"));
+    assert!(
+        !workspace.rewind_coverage().is_complete(),
+        "server shutdown does not prove its build-tool children stopped"
+    );
 
     assert_eq!(
         asking.asked, 1,
@@ -318,8 +363,13 @@ fn a_turn_that_is_handed_no_set_starts_a_server_of_its_own() {
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
-    let mut asking = AskedAboutServers { asked: 0 };
+    let mut asking = AskedAboutServers {
+        asked: 0,
+        reject: false,
+    };
 
+    let points = [workspace.rewind_coverage(), workspace.rewind_coverage()];
+    assert!(points.iter().all(|point| point.is_complete()));
     let mut conversation = Conversation::new();
     for prompt in ["where is Held declared", "and again"] {
         turn::resume(
@@ -337,6 +387,11 @@ fn a_turn_that_is_handed_no_set_starts_a_server_of_its_own() {
             &Cancel::new(),
         )
         .expect("the turn runs");
+        assert!(points.iter().all(|point| !point.is_complete()));
+        assert!(
+            !workspace.clone().rewind_coverage().is_complete(),
+            "later turns cannot capture coverage while server effects remain untracked"
+        );
     }
 
     assert_eq!(
@@ -516,7 +571,10 @@ fn a_name_the_server_reported_cannot_forge_a_line_in_the_planners_context() {
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
-    let mut asking = AskedAboutServers { asked: 0 };
+    let mut asking = AskedAboutServers {
+        asked: 0,
+        reject: false,
+    };
 
     let mut conversation = Conversation::new();
     turn::resume(
@@ -579,4 +637,40 @@ fn tool_result_in(request: &str) -> String {
         .find(|content| content.starts_with("Result of lsp"))
         .unwrap_or_else(|| panic!("no lsp result in {request}"))
         .to_string()
+}
+
+/// A declined server launch has no untracked effect and must leave undo available.
+#[test]
+fn a_declined_language_server_preserves_rewind_coverage() {
+    let _path = PATH_LOCK.lock().unwrap_or_else(|held| held.into_inner());
+    let scratch = Scratch::new("agent-lsp-declined-undo");
+    let (workspace, recorded) = a_workspace_with_a_server(&scratch);
+    let (endpoint, _received) = serve_sequence(vec![
+        a_question_about_a_symbol(),
+        reply_with("server declined"),
+    ]);
+    let mut asking = AskedAboutServers {
+        asked: 0,
+        reject: true,
+    };
+    let point = workspace.rewind_coverage();
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("where is Held declared"),
+        &mut Conversation::new(),
+        &mut asking,
+        &mut bravebot_agent::IgnoreReports,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(&workspace),
+        TrustedPrograms::new(),
+        None,
+        &Cancel::new(),
+    )
+    .expect("the refusal still lets the turn answer");
+    assert_eq!(asking.asked, 1);
+    assert_eq!(starts(&recorded), 0);
+    assert!(point.is_complete());
+    assert!(workspace.rewind_coverage().is_complete());
 }

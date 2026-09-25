@@ -58,11 +58,11 @@ pub struct TrustStore {
     /// consistently, and a rule about a directory opened by name does not reach them: wrong in
     /// the direction that trusts nothing.
     root: String,
-    /// Full path → whether that subtree is trusted.
+    /// Full path → decision for that subtree. `None` overrides broader decisions.
     ///
     /// A `BTreeMap` rather than a hash map so iteration order is deterministic, which keeps
     /// the audit trail reproducible.
-    rules: BTreeMap<String, Integrity>,
+    rules: BTreeMap<String, Option<Integrity>>,
 }
 
 impl TrustStore {
@@ -123,7 +123,7 @@ impl TrustStore {
     /// Record that `path` and everything beneath it is trusted.
     pub fn trust(&mut self, path: &str) {
         let key = self.key(path);
-        self.rules.insert(key, Integrity::Trusted);
+        self.rules.insert(key, Some(Integrity::Trusted));
     }
 
     /// Record that `path` and everything beneath it is untrusted.
@@ -132,21 +132,84 @@ impl TrustStore {
     /// when untrusted bytes are written somewhere.
     pub fn distrust(&mut self, path: &str) {
         let key = self.key(path);
-        self.rules.insert(key, Integrity::Untrusted);
+        self.rules.insert(key, Some(Integrity::Untrusted));
+    }
+
+    /// Leave this subtree undecided, overriding any broader decision.
+    pub fn undecide(&mut self, path: &str) {
+        let key = self.key(path);
+        self.rules.insert(key, None);
+    }
+
+    /// The lower effective decision at every path. Explicit distrust survives either map;
+    /// an absent decision stays absent unless the other map explicitly distrusts it.
+    /// Evaluate inherited rules at every boundary, including nested exceptions.
+    /// Each boundary needs at most one ordered-map lookup per path ancestor in each map.
+    pub fn meet(&self, other: &Self) -> Self {
+        let rules = self
+            .rules
+            .keys()
+            .chain(other.rules.keys())
+            .map(|path| {
+                let integrity = match (self.integrity_at_key(path), other.integrity_at_key(path)) {
+                    (Some(Integrity::Untrusted), _) | (_, Some(Integrity::Untrusted)) => {
+                        Some(Integrity::Untrusted)
+                    }
+                    (Some(Integrity::Trusted), Some(Integrity::Trusted)) => {
+                        Some(Integrity::Trusted)
+                    }
+                    _ => None,
+                };
+                (path.clone(), integrity)
+            })
+            .collect();
+        Self {
+            root: self.root.clone(),
+            rules,
+        }
     }
 
     /// The integrity of `path`, by the longest matching rule.
     ///
-    /// `None` when no rule covers it, which the caller should treat as untrusted. This
+    /// `None` when the path is undecided, which the caller should treat as untrusted. This
     /// returns an option rather than defaulting so a caller cannot silently confuse "the
     /// user vouched for this" with "nobody has said".
     pub fn integrity_of(&self, path: &str) -> Option<Integrity> {
         let path = self.key(path);
+        self.integrity_at_key(&path)
+    }
+
+    fn integrity_at_key(&self, path: &str) -> Option<Integrity> {
+        self.decision_at_key(path).flatten()
+    }
+
+    /// Use `assumed` only where no rule exists, never over an undecided boundary.
+    pub fn integrity_of_or(&self, path: &str, assumed: Option<Integrity>) -> Option<Integrity> {
+        self.decision_at_key(&self.key(path)).unwrap_or(assumed)
+    }
+
+    fn decision_at_key(&self, path: &str) -> Option<Option<Integrity>> {
+        // Probe only whole-segment ancestors, from the most specific to the least.
+        // Each lookup costs O(log rules), independent of unrelated paths.
+        let mut prefix = path;
+        while !prefix.is_empty() && prefix != "/" {
+            if let Some(decision) = self.rules.get(prefix) {
+                return Some(*decision);
+            }
+            prefix = prefix.rsplit_once('/').map_or("", |(parent, _)| parent);
+        }
+        // As in covers(), "/" covers even relative keys in a store with no root.
+        // It wins the equal-specificity tie with the empty key.
         self.rules
-            .iter()
-            .filter(|(prefix, _)| covers(prefix, &path))
-            .max_by_key(|(prefix, _)| specificity(prefix))
-            .map(|(_, integrity)| *integrity)
+            .get("/")
+            .or_else(|| {
+                if is_absolute_key(path) {
+                    None
+                } else {
+                    self.rules.get("")
+                }
+            })
+            .copied()
     }
 
     /// The integrity of everything at or beneath `path`, by the meet of every rule that bears on
@@ -171,11 +234,13 @@ impl TrustStore {
     /// weaken the answer, so a file a write marked untrusted is not laundered by a read of the tree
     /// around it.
     pub fn integrity_beneath_or(&self, path: &str, assumed: Integrity) -> Integrity {
-        let mut answer = self.integrity_of(path).unwrap_or(assumed);
+        let mut answer = self
+            .integrity_of_or(path, Some(assumed))
+            .unwrap_or(Integrity::Untrusted);
         let path = self.key(path);
         for (prefix, integrity) in self.keyed() {
             if covers(&path, prefix) {
-                answer = answer.meet(integrity);
+                answer = answer.meet(integrity.unwrap_or(Integrity::Untrusted));
             }
         }
         answer
@@ -195,12 +260,13 @@ impl TrustStore {
     }
 
     /// The rules, most general first, for display and for the audit trail.
+    /// `None` is an undecided boundary, not a rule that may be omitted.
     ///
     /// Each spelled the way a caller names that path: relative to the working directory for a
     /// rule inside it, and the full path for one outside. That is the name a person would type
     /// and the name a session record keeps, which is what lets a record survive the project
     /// being moved or renamed.
-    pub fn rules(&self) -> impl Iterator<Item = (&str, Integrity)> {
+    pub fn rules(&self) -> impl Iterator<Item = (&str, Option<Integrity>)> {
         self.rules
             .iter()
             .map(|(key, integrity)| (self.named(key), *integrity))
@@ -212,7 +278,7 @@ impl TrustStore {
     /// thing to copy a rule between two maps with: a relative name re-read under a different
     /// working directory is a rule about a different file. A key means the same file everywhere,
     /// and [`TrustStore::trust`] takes one as readily as a relative name.
-    pub fn keyed(&self) -> impl Iterator<Item = (&str, Integrity)> {
+    pub fn keyed(&self) -> impl Iterator<Item = (&str, Option<Integrity>)> {
         self.rules
             .iter()
             .map(|(key, integrity)| (key.as_str(), *integrity))
@@ -302,18 +368,116 @@ pub(crate) fn covers(prefix: &str, path: &str) -> bool {
         .is_some_and(|rest| rest.starts_with('/'))
 }
 
-/// How specific a rule is. Deeper rules win; the filesystem root is least specific.
-fn specificity(prefix: &str) -> usize {
-    if prefix == "/" || prefix.is_empty() {
-        0
-    } else {
-        prefix.trim_start_matches('/').split('/').count()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Ancestor lookups must preserve root handling and explicit undecided boundaries.
+    #[test]
+    fn ancestor_lookups_match_whole_segment_rule_selection() {
+        let keys = ["", "/", "src", "src/nested", "/src"];
+        for mut choices in 0..4usize.pow(keys.len() as u32) {
+            let mut store = TrustStore::new("");
+            for key in keys {
+                let decision = match choices % 4 {
+                    0 => None,
+                    1 => Some(None),
+                    2 => Some(Some(Integrity::Trusted)),
+                    _ => Some(Some(Integrity::Untrusted)),
+                };
+                choices /= 4;
+                if let Some(decision) = decision {
+                    store.rules.insert(key.into(), decision);
+                }
+            }
+            for path in [
+                "",
+                "/",
+                "src",
+                "src/file",
+                "src/nested",
+                "src/nested/file",
+                "src/nested-other/file",
+                "src-other/file",
+                "/src",
+                "/src/file",
+                "/src-other/file",
+                "other",
+                "/other",
+            ] {
+                let expected = store
+                    .rules
+                    .iter()
+                    .filter(|(prefix, _)| covers(prefix, path))
+                    .max_by_key(|(prefix, _)| {
+                        if prefix.is_empty() || *prefix == "/" {
+                            0
+                        } else {
+                            prefix.trim_start_matches('/').split('/').count()
+                        }
+                    })
+                    .map(|(_, decision)| *decision);
+                assert_eq!(
+                    store.decision_at_key(path),
+                    expected,
+                    "{path:?}: {:?}",
+                    store.rules
+                );
+            }
+        }
+    }
+
+    /// Withdrawing a nested grant must not turn an undecided path into inherited distrust.
+    #[test]
+    fn meeting_maps_keeps_an_undecided_child_beneath_a_refusal() {
+        let mut current = TrustStore::new("/work");
+        current.distrust("vendor");
+        current.trust("vendor/ours");
+        let target = TrustStore::new("/work");
+        for met in [current.meet(&target), target.meet(&current)] {
+            assert_eq!(met.integrity_of("vendor/ours/file"), None);
+            assert_eq!(met.integrity_of("vendor/other"), Some(Integrity::Untrusted));
+        }
+    }
+
+    /// An undo meets inherited decisions, including independent nested exceptions and added roots.
+    #[test]
+    fn meeting_maps_preserves_effective_refusals_and_absent_decisions() {
+        let mut current = TrustStore::new("/work");
+        current.trust(".");
+        current.distrust("src");
+        current.trust("src/ours");
+        current.trust("/added");
+        current.distrust("/added/refused");
+        current.trust("/new-grant");
+        let mut target = TrustStore::new("/work");
+        target.trust(".");
+        target.distrust("src/ours/secret");
+        target.distrust("only-before");
+        target.trust("/added/file");
+        target.distrust("/never-granted");
+        let met = current.meet(&target);
+        for (path, expected) in [
+            ("sibling", Some(Integrity::Trusted)),
+            ("./src/other", Some(Integrity::Untrusted)),
+            ("/work/src/ours/file", Some(Integrity::Trusted)),
+            ("src/ours/secret/file", Some(Integrity::Untrusted)),
+            ("only-before", Some(Integrity::Untrusted)),
+            ("/added/file", Some(Integrity::Trusted)),
+            ("/added/sibling", None),
+            ("/added/refused", Some(Integrity::Untrusted)),
+            ("/new-grant", None),
+            ("/never-granted", Some(Integrity::Untrusted)),
+            ("/unknown", None),
+        ] {
+            assert_eq!(met.integrity_of(path), expected, "{path}");
+            assert_eq!(
+                target.meet(&current).integrity_of(path),
+                expected,
+                "reverse {path}"
+            );
+        }
+    }
 
     #[test]
     fn an_empty_store_trusts_nothing() {

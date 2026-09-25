@@ -263,10 +263,12 @@ dependencies = [
  "bravebot-sandbox",
  "bravebot-session",
  "bravebot-stamp",
+ "bravebot-ui-bridge",
  "ratatui",
  "rustix",
  "serde",
  "serde_json",
+ "tempfile",
  "unicode-width",
 ]
 

@@ -33,3 +33,7 @@ unicode-width = { workspace = true }
 # stall startup on a terminal that does not answer. rustix rather than libc so the
 # same syscalls do not need unsafe at this crate.
 rustix = { workspace = true, features = ["event"] }
+
+[dev-dependencies]
+bravebot-ui-bridge = { path = "../ui-bridge" }
+tempfile = { workspace = true }

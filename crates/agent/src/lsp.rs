@@ -111,7 +111,11 @@ impl LanguageServers {
         policy: &mut Policy<'_, S>,
         confirmer: &mut C,
         question: &bravebot_lsp::Question<'_>,
+        workspace: &crate::Workspace,
     ) -> LspResult<Answer> {
+        if self.servers.running() != 0 {
+            workspace.mark_rewind_gap(crate::rewind::CoverageGap::LanguageServer);
+        }
         self.servers.ask(policy, question, &mut |starting| {
             let request = ServerRequest {
                 language: starting.language.as_str(),
@@ -119,7 +123,12 @@ impl LanguageServers {
                 workspace: starting.workspace.display().to_string(),
                 runs_build_tooling: starting.runs_build_tooling,
             };
-            confirmer.confirm_server(&request) == Decision::Approve
+            if confirmer.confirm_server(&request) != Decision::Approve {
+                return false;
+            }
+            // Servers and their build-tool children can write beyond this turn's lifetime.
+            workspace.mark_rewind_gap(crate::rewind::CoverageGap::LanguageServer);
+            true
         })
     }
 }

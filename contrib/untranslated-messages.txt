@@ -6,3 +6,13 @@
 # translation is useful from its first line, and what it still lacks is visible in a diff.
 # No count is kept here. Two branches that each translate a message both edit the count, so it
 # conflicts where the lists themselves merge cleanly, and a count nothing reads is wrong quietly.
+
+fr:session-rewind-cause-backup
+fr:session-rewind-cause-command
+fr:session-rewind-cause-desktop
+fr:session-rewind-cause-hook
+fr:session-rewind-cause-scratch
+fr:session-rewind-cause-server
+fr:session-rewind-cause-unknown
+fr:session-rewind-uncovered
+fr:status-undecided

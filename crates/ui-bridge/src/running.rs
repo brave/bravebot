@@ -75,7 +75,7 @@ pub struct State {
     pub todos: BTreeMap<usize, Vec<Row>>,
     /// Preserve terminal side conversations when continuing a session in the UI.
     pub asides: Vec<bravebot_session::sessions::Aside>,
-    /// Keep terminal rewind checkpoints intact when the UI saves a resumed session.
+    /// Imported terminal checkpoints stay available with a desktop coverage warning after execution.
     pub rewind: Vec<bravebot_session::sessions::RewindPoint>,
     /// The first thing the user asked, which is what a list calls the session.
     pub first_prompt: Option<String>,
