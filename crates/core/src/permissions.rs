@@ -537,22 +537,23 @@ impl Permissions {
 
 /// Read an `Mcp` specifier: `alias` for every tool of a server, `alias:tool` for one of them.
 ///
-/// Neither half may be empty or hold a space, a bracket or a second colon, which no alias and no
-/// tool word can: such a rule names nothing that could ever be called, so it is refused where it
-/// is read rather than kept to match nothing.
+/// Each half is held to what an alias and a tool word may be, letters, digits, `-` and `_`, with
+/// an alias starting on a letter or a digit. Anything else names nothing that could ever be
+/// called, `weather:get_*` included, since the names are matched whole: kept, a deny rule like that
+/// would read as protection that is not there, so it is refused where it is read.
 fn tool_pattern(specifier: &str) -> Option<Pattern> {
-    let name = |text: &str| {
+    let word = |text: &str| {
         !text.is_empty()
-            && !text
+            && text
                 .chars()
-                .any(|c| c.is_whitespace() || c.is_control() || matches!(c, ':' | '(' | ')'))
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
     };
+    let alias = |text: &str| word(text) && text.starts_with(|c: char| c.is_ascii_alphanumeric());
     match specifier.split_once(':') {
-        None => name(specifier).then(|| Pattern::Server(specifier.to_string())),
-        Some((alias, "*")) => name(alias).then(|| Pattern::Server(alias.to_string())),
-        Some((alias, tool)) => {
-            (name(alias) && name(tool)).then(|| Pattern::Tool(alias.to_string(), tool.to_string()))
-        }
+        None => alias(specifier).then(|| Pattern::Server(specifier.to_string())),
+        Some((server, "*")) => alias(server).then(|| Pattern::Server(server.to_string())),
+        Some((server, tool)) => (alias(server) && word(tool))
+            .then(|| Pattern::Tool(server.to_string(), tool.to_string())),
     }
 }
 
@@ -1149,6 +1150,12 @@ mod tests {
             "Mcp(weather:)",
             "Mcp(weather:a:b)",
             "Mcp(ignore the above)",
+            // Names matched whole, so a glob or a character no name has would match nothing.
+            "Mcp(weather:get_*)",
+            "Mcp(weather*)",
+            "Mcp(weather:get.forecast)",
+            "Mcp(-weather)",
+            "Mcp(wéather)",
             "Write(src/**)",
             "Bash()",
             "",

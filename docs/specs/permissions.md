@@ -66,8 +66,8 @@ and what it does not decide, is [fetch-url.md](tools/fetch-url.md).
 
 `Mcp(weather)` and `Mcp(weather:*)` cover every tool of the server declared as `weather`, and
 `Mcp(weather:get_forecast)` covers one of them. Both names are matched whole, so `Mcp(weather)` does
-not cover `weather2`. A specifier that could name nothing callable, such as one holding a space or
-a second colon, is unreadable ([PERM-11](#PERM-11)).
+not cover `weather2`. A specifier that could name nothing callable, such as one holding a space, a
+second colon, or a `*` anywhere but as the whole tool, is unreadable ([PERM-11](#PERM-11)).
 
 **Why.** Routing is trusted and public before it reaches any gate, so matching on it is the driver
 deciding from trusted input, which is what the driver is for. A rule matched against observed bytes
