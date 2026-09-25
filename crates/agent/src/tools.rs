@@ -1121,6 +1121,9 @@ pub struct Output {
     pub answers_for: Option<Option<SlotId>>,
     /// What an isolated processor said about what it did. For the person watching only.
     pub said: Option<Labelled<String>>,
+    /// The content alone, where `text` has the driver's own notes after it, so that a glimpse of
+    /// a file is of the file and counts the file's lines.
+    pub glimpsed: Option<Labelled<String>>,
     /// Whether the text is workspace content rather than the driver's own words about the call.
     pub content: bool,
     /// Whether this call left a file on disk different from how it found it.
@@ -1581,6 +1584,8 @@ struct Produced {
     /// Never part of `text`, which is what the planner is told about: this half of a processor's
     /// answer reaches a screen and stops there.
     said: Option<Labelled<String>>,
+    /// The content alone, where `text` has the driver's own notes after it.
+    glimpsed: Option<Labelled<String>>,
     /// Whether `text` is workspace content rather than the driver's own words about the call.
     ///
     /// What the kernel does with a result is worth reporting only where the result is content:
@@ -1641,6 +1646,7 @@ impl Produced {
             ran_a_program: false,
             answers_for: None,
             said: None,
+            glimpsed: None,
             content: false,
             usage: Usage::default(),
             inference_interval: None,
@@ -1676,6 +1682,7 @@ impl Produced {
             ran_a_program: false,
             answers_for: None,
             said: None,
+            glimpsed: None,
             wakeup: None,
             watch: None,
             content: false,
@@ -2161,6 +2168,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
                 whole: produced.whole,
                 answers_for: produced.answers_for,
                 said: produced.said,
+                glimpsed: produced.glimpsed,
                 content: produced.content,
                 changed_a_file: produced.changed_a_file,
                 ran_a_program: produced.ran_a_program,
@@ -2281,6 +2289,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         whole: produced.whole,
         answers_for: produced.answers_for,
         said: produced.said,
+        glimpsed: produced.glimpsed,
         content: produced.content,
         changed_a_file: produced.changed_a_file,
         ran_a_program: produced.ran_a_program,
@@ -2797,7 +2806,13 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     });
     let rendered =
         policy.render_in_place("read_file", &page, |p| render_page(&p, ChangeToken::Shown));
-    priced(Produced::new(rendered, shown_path, exposed_note(note, &found)).of_content())
+    // Without the paging and change token after it, which are the driver's words: a glimpse that
+    // counted them would say a file had two more lines than it has, and draw them for a short one.
+    let glimpsed = policy.render_in_place("read_file", &page, |p| p.lines.join("\n"));
+    priced(Produced {
+        glimpsed: Some(glimpsed),
+        ..Produced::new(rendered, shown_path, exposed_note(note, &found)).of_content()
+    })
 }
 
 /// The findings in a file, each said the one way a finding may be said.

@@ -7585,6 +7585,178 @@ fn each_result_says_whether_the_model_can_read_it() {
     );
 }
 
+/// VIEW-24: the person watching sees the first lines of what a read handed the planner, and
+/// nothing of a read the planner was kept from, which is drawn marked or not at all.
+#[test]
+fn a_result_the_planner_read_is_glimpsed_under_its_call() {
+    let scratch = Scratch::new("glimpsed-read");
+    let notes: String = (1..=8).map(|n| format!("note {n}\n")).collect();
+    std::fs::write(scratch.path.join("vouched.md"), notes).unwrap();
+    std::fs::write(scratch.path.join("fetched.md"), "untrusted notes\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
+    trust.trust(".");
+    trust.distrust("fetched.md");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"vouched.md"}"#),
+        tool_request("read_file", r#"{"path":"fetched.md"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read both"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trust,
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let [glimpse] = reporter.returned.as_slice() else {
+        panic!(
+            "expected one glimpse, for the read the planner may see: {:?}",
+            reporter.returned
+        );
+    };
+    assert_eq!(
+        glimpse.lines,
+        ["note 1", "note 2", "note 3", "note 4", "note 5"],
+        "the glimpse is not the first lines of what the planner read"
+    );
+    assert!(!glimpse.from_the_end, "a file was glimpsed from its end");
+    assert_eq!(
+        glimpse.total, 8,
+        "the glimpse does not count the file's own lines: {glimpse:?}"
+    );
+}
+
+/// VIEW-24: what the driver said about a call, a refusal or the change token after a read, is not
+/// glimpsed as if a file had said it.
+#[test]
+fn a_sentence_the_driver_wrote_about_a_call_is_not_glimpsed() {
+    let scratch = Scratch::new("glimpsed-refusal");
+    std::fs::write(scratch.path.join("there.md"), "a real line\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"missing.md"}"#),
+        tool_request("read_file", r#"{"path":"there.md"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read them"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let [glimpse] = reporter.returned.as_slice() else {
+        panic!(
+            "expected one glimpse, for the file that was there: {:?}",
+            reporter.returned
+        );
+    };
+    assert_eq!(
+        (glimpse.lines.as_slice(), glimpse.total),
+        (["a real line".to_string()].as_slice(), 1),
+        "the glimpse of a one-line file is not that one line"
+    );
+}
+
+/// VIEW-24: a command the planner may read is glimpsed from its end, where how it went is, and one
+/// whose output was kept from the planner is shown in the marked block and not also plainly.
+#[test]
+fn a_command_the_planner_read_is_glimpsed_from_its_end() {
+    let scratch = Scratch::new("glimpsed-run");
+    let log: String = (1..=9).map(|n| format!("step {n}\n")).collect();
+    std::fs::write(scratch.path.join("build.log"), log).unwrap();
+    std::fs::write(scratch.path.join("other.log"), "SENTINEL-XYZZY\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let cat = bravebot_agent::programs::resolve("cat", &scratch.path).expect("cat is installed");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cat build.log"}"#),
+        tool_request("run", r#"{"command":"cat other.log"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("run them"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::from_iter([vouched_in(
+            &cat,
+            &["build.log"],
+            &scratch.path,
+        )]),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    let [glimpse] = reporter.returned.as_slice() else {
+        panic!(
+            "expected one glimpse, for the vouched command: {:?}",
+            reporter.returned
+        );
+    };
+    assert_eq!(
+        glimpse.lines,
+        ["step 5", "step 6", "step 7", "step 8", "step 9"],
+        "the glimpse is not the last lines the command printed"
+    );
+    assert!(
+        glimpse.from_the_end,
+        "a command was glimpsed from its start"
+    );
+    assert_eq!(
+        glimpse.total, 9,
+        "the glimpse cannot say how much it left out"
+    );
+    assert!(
+        reporter
+            .shown
+            .iter()
+            .any(|shown| shown.preview.iter().any(|line| line == "SENTINEL-XYZZY")),
+        "the output kept from the planner was not shown in the marked block: {:?}",
+        reporter.shown
+    );
+}
+
 /// A processor has always wanted to say something about what it did, and with nowhere to put it
 /// it put it in the file: two sessions ended with a paragraph of reasoning at the top of a Python
 /// script. It has somewhere to put it now, and that somewhere reaches the person and nothing else.

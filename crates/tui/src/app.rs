@@ -5180,6 +5180,7 @@ fn manifest_animated(
             crate::remote_confirm::ToMain::CheckStarted(lines) => session.checking(lines),
             crate::remote_confirm::ToMain::CheckFinished => session.checked(),
             crate::remote_confirm::ToMain::Quarantined(shown) => session.show(shown),
+            crate::remote_confirm::ToMain::Returned(returned) => session.returned(returned),
             crate::remote_confirm::ToMain::Landed(landing) => session.landed(landing),
             // The questions a turn asks that this mode cannot. There is no shell and no `run` in
             // the schema (MANIFEST-5), so no pipeline is proposed and no output is read back;
@@ -6010,6 +6011,7 @@ fn run_turn_animated(
             crate::remote_confirm::ToMain::CheckFinished => session.checked(),
             crate::remote_confirm::ToMain::Quarantined(shown) => session.show(shown),
             crate::remote_confirm::ToMain::Printed(output) => session.command_printed(output),
+            crate::remote_confirm::ToMain::Returned(returned) => session.returned(returned),
             crate::remote_confirm::ToMain::Landed(landing) => session.landed(landing),
             // The turn has taken the oldest waiting prompt, so it stops being something waiting
             // above the box and becomes something said. Which prompt is not named: the turn takes

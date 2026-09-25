@@ -24,7 +24,7 @@ use bravebot_agent::confirm::{
     RunDecision, RunRequest, ServerRequest, VetRequest, VouchRequest, WriteRequest,
 };
 use bravebot_agent::report::{
-    Activity, DelegateId, Delegation, Landing, Phase, Printed, Reported, Reporter, Shown,
+    Activity, DelegateId, Delegation, Landing, Phase, Printed, Reported, Reporter, Returned, Shown,
 };
 use bravebot_core::ask::{Answer, Asking};
 use bravebot_core::todo::Row;
@@ -131,6 +131,8 @@ pub enum ToMain {
     Quarantined(Shown),
     /// What a command printed, for the view a person can open over it. No reply.
     Printed(Printed),
+    /// A few lines of what the last call handed the planner. No reply.
+    Returned(Returned),
     /// Where the result of the last call ended up. No reply.
     Landed(Landing),
     /// A prompt the person typed mid-turn has reached the planner. No reply.
@@ -360,6 +362,10 @@ impl Reporter for RemoteReporter {
 
     fn printed(&mut self, output: Printed) {
         let _ = self.outbound.send(ToMain::Printed(output));
+    }
+
+    fn returned(&mut self, returned: Returned) {
+        let _ = self.outbound.send(ToMain::Returned(returned));
     }
 
     fn landed(&mut self, landing: Landing) {
@@ -846,6 +852,7 @@ mod tests {
                     ToMain::CheckFinished => seen.push("check finished"),
                     ToMain::Quarantined(_) => seen.push("quarantined"),
                     ToMain::Printed(_) => seen.push("printed"),
+                    ToMain::Returned(_) => seen.push("returned"),
                     ToMain::Landed(_) => seen.push("landed"),
                     ToMain::Interjected(_) => seen.push("interjected"),
                     ToMain::DelegateStarted(_) => seen.push("delegate started"),
