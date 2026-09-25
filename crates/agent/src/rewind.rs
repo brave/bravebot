@@ -124,7 +124,9 @@ fn restore_with(
             refused.push(backup.path);
             continue;
         }
-        let path = backup.path.to_string_lossy();
+        // The key the file's rules are held under, which on a drive letter is not the name the
+        // host resolved it to.
+        let path = crate::workspace::key_of(&backup.path);
         current.distrust(&path);
         if write(&backup.path, &backup.was).is_err() {
             refused.push(backup.path);

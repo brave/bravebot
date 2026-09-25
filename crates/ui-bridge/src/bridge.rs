@@ -19,7 +19,7 @@ use crate::turn::{BridgeConfirmer, BridgeReporter, BridgeSink, Reply};
 use crate::{store, wire};
 use bravebot_agent::Workspace;
 use bravebot_agent::turn::{self as agent_turn, Task, TurnError};
-use bravebot_agent::workspace::WorkspaceError;
+use bravebot_agent::workspace::{WorkspaceError, key_of};
 use bravebot_config::{Config, Settings};
 use bravebot_core::cancel::Cancel;
 use bravebot_core::trust::TrustStore;
@@ -219,7 +219,7 @@ impl Bridge {
         let state = State::resumed(
             &directory,
             &record,
-            inherited.unwrap_or_else(|| TrustStore::new(&directory)),
+            inherited.unwrap_or_else(|| TrustStore::new(key_of(&directory))),
         );
 
         let auto_vetting = self.auto_vetting(&directory);
@@ -338,7 +338,9 @@ impl Bridge {
             project: directory.clone(),
             // An empty map until the user answers. Nothing runs before then, so this is
             // never the map a turn uses.
-            state: Arc::new(Mutex::new(State::fresh(TrustStore::new(&directory)))),
+            state: Arc::new(Mutex::new(State::fresh(TrustStore::new(key_of(
+                &directory,
+            ))))),
             answered_trust: false,
             running: None,
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
@@ -822,7 +824,7 @@ impl Bridge {
         // Trusting records the workspace root, which covers everything beneath it.
         // Declining records nothing, leaving a map in which no path is trusted. The same
         // two outcomes the terminal offers, so an answer means the same in both.
-        let mut trust = TrustStore::new(&open.project);
+        let mut trust = TrustStore::new(key_of(&open.project));
         if trusted {
             trust.trust(".");
         }

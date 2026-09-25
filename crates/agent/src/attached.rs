@@ -115,7 +115,8 @@ pub fn read<S: Sink>(
     .map_err(|d| TurnError::Precommit(d.to_string()))?
     .with_trust(trust.clone())
     .with_root(workspace.root())
-    .with_scratch(workspace.scratch());
+    .with_scratch(workspace.scratch())
+    .with_backslash_separates(crate::workspace::BACKSLASH_SEPARATES);
 
     // The quarantine of a request nothing resumes. A conversation keeps one so a later round can
     // resolve a reference; there is no later round here and no tool to resolve one with, so what a

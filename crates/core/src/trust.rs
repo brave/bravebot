@@ -68,8 +68,9 @@ pub struct TrustStore {
 impl TrustStore {
     /// A map with no rules, whose relative names mean paths under `root`.
     ///
-    /// `root` is the working directory, absolute: the one `Workspace::new` resolves. It is not a
-    /// rule and grants nothing, which is what keeps an empty map an empty map.
+    /// `root` is the working directory, absolute: the one `Workspace::new` resolves, keyed the way
+    /// the workspace keys every other name. It is not a rule and grants nothing, which is what keeps
+    /// an empty map an empty map.
     pub fn new(root: impl AsRef<Path>) -> Self {
         Self {
             root: normalise(&root.as_ref().to_string_lossy()),
@@ -308,9 +309,11 @@ impl TrustStore {
 /// letter is not a root here and a backslash is not a separator: a key arrives spelled from `/`,
 /// and a backslash is a legal filename byte where paths are, so a file called `C:\notes` is a file
 /// in the project and reading its name as a root would take it out of the project's rules.
-/// Resolving a platform's path into a key therefore belongs outside this crate, which does no
-/// filesystem work, and the workspace refuses to open a directory whose name is not one rather
-/// than handing over a name that would be read under the working directory (TRUST-18).
+/// Resolving a platform's path into a key therefore takes the host's answer about what separates,
+/// which this map does not ask: given it, [`crate::spelling::to_key`] keys a name rooted at a drive
+/// letter from `/`, `C:\work` as `/C:/work`, and the workspace refuses to open a directory whose
+/// name has no such spelling rather than handing over a name that would be read under the working
+/// directory (TRUST-18).
 ///
 /// Permission patterns keep the two apart as namespaces of their own, which is a rule about what
 /// a person wrote rather than about what this map holds (PERM-3).

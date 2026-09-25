@@ -3403,9 +3403,11 @@ fn add_directory(
 
     match workspace.add_directory(&expanded) {
         Ok(added) => {
-            let shown = added.display().to_string();
-            trust.trust(&shown);
-            session.note(t!(session_directory_added, directory = shown));
+            trust.trust(&bravebot_agent::workspace::key_of(&added));
+            session.note(t!(
+                session_directory_added,
+                directory = added.display().to_string()
+            ));
         }
         Err(error) => session.note(t!(
             session_directory_not_added,
@@ -3468,7 +3470,9 @@ fn change_directory(
         }
     };
 
-    *trust = trust.rebased(&moved.root);
+    *trust = trust.rebased(std::path::Path::new(&bravebot_agent::workspace::key_of(
+        &moved.root,
+    )));
     trust.trust(".");
     // The servers go, and LSP-5 is why: what a person approved was a server reading *that* tree,
     // and a set indexes the root it was built with. Kept across the move it would answer questions

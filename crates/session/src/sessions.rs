@@ -578,7 +578,11 @@ impl StoredRewind {
                         Before::Nothing => (NOTHING, None),
                         Before::Bytes(held)
                             if backup.captured_trust == Integrity::Trusted
-                                && vouched_for(&snapshot.trust, relative) =>
+                                && vouched_for(
+                                    &snapshot.trust,
+                                    relative,
+                                    bravebot_agent::workspace::BACKSLASH_SEPARATES,
+                                ) =>
                         {
                             (
                                 BYTES,
@@ -685,7 +689,7 @@ impl StoredRewind {
     }
 }
 
-/// Whether `trust` vouches for `path`, asked of both spellings a rewind's path can arrive in.
+/// Whether `trust` vouches for `path`, asked of every spelling a rewind's path can arrive in.
 ///
 /// A path inside the project is relative, which is the spelling a rule about it is written in. One
 /// outside arrives whole, and a `/`-joined name built from its components is not always the
@@ -694,26 +698,36 @@ impl StoredRewind {
 /// name joins with is dropped on the way to a key. On Windows they do not, where a rule written in
 /// one spelling is invisible to a question asked in the other, and what such a question falls back
 /// to is the rule about the directory above the file: after somebody vouches for their project,
-/// that answer is "trusted".
+/// that answer is "trusted". Neither is the key a rule about a file on a drive letter is held
+/// under, which is spelled from `/` (TRUST-18), so that key is asked as well: without it a file in
+/// a directory opened by name is decided by the answer about the project.
 ///
-/// So the weaker of the two answers is the one taken. A rule marking this path untrusted keeps its
+/// So the weakest of the answers is the one taken. A rule marking this path untrusted keeps its
 /// bytes out of the record whichever spelling recorded it, and a path no rule covers at all is not
 /// vouched for either, since nobody has said anything about it. What that costs on Windows is a
-/// path somebody did vouch for under the other spelling: its bytes stay out of the record, so the
+/// path somebody did vouch for under another spelling: its bytes stay out of the record, so the
 /// session holding them can still put them back and a resumed one cannot, which is the direction
 /// that keeps untrusted bytes out rather than the one that hands them to a planner.
-fn vouched_for(trust: &TrustStore, path: &Path) -> bool {
+///
+/// The host's answer is supplied, so the Windows one can be asked for where the tests run.
+fn vouched_for(trust: &TrustStore, path: &Path, backslash_separates: bool) -> bool {
     let joined = path
         .components()
         .map(|part| part.as_os_str().to_string_lossy())
         .collect::<Vec<_>>()
         .join("/");
-    trust.is_trusted(&joined) && trust.is_trusted(&path.to_string_lossy())
+    let whole = path.to_string_lossy();
+    trust.is_trusted(&joined)
+        && trust.is_trusted(&whole)
+        && trust.is_trusted(&bravebot_core::spelling::to_key(
+            &whole,
+            backslash_separates,
+        ))
 }
 
 /// Load weaker decisions last so equivalent path spellings cannot hide them.
 fn restored_rules(root: &Path, rules: &[StoredRule]) -> TrustStore {
-    let mut trust = TrustStore::new(root);
+    let mut trust = TrustStore::new(bravebot_agent::workspace::key_of(root));
     for rule in rules.iter().filter(|rule| rule.integrity == TRUSTED) {
         trust.trust(&replayed(&rule.path));
     }
@@ -895,10 +909,13 @@ pub fn record_manifest_run(
         ),
         Err(bravebot_agent::TurnError::Manifest { attempt, cause }) => (
             Some(StoredManifest::of(attempt, Some(cause.to_string()))),
-            TrustStore::new(project),
+            TrustStore::new(bravebot_agent::workspace::key_of(project)),
         ),
         // Cancelled, or a failure with nothing to show. Nothing worth a record.
-        Err(_) => (None, TrustStore::new(project)),
+        Err(_) => (
+            None,
+            TrustStore::new(bravebot_agent::workspace::key_of(project)),
+        ),
     };
 
     let stored = stored?;
@@ -955,11 +972,12 @@ pub struct StoredRule {
 /// A recorded rule's path, spelled the way the map is asked about that path today.
 ///
 /// A record keeps the key a write wrote, and a record written before a key was spelled from `/`
-/// keeps whatever the host separated with. Replaying it verbatim leaves the rule keyed under a
-/// name nothing asks about, so a file somebody recorded as untrusted comes back decided by the
-/// answer given about the project, which is the direction that fails open (TRUST-18).
+/// keeps whatever the host separated with, a drive letter included. Replaying it verbatim leaves
+/// the rule keyed under a name nothing asks about, so a file somebody recorded as untrusted comes
+/// back decided by the answer given about the project, which is the direction that fails open
+/// (TRUST-18).
 fn replayed(path: &str) -> String {
-    bravebot_core::spelling::to_slash(path, bravebot_agent::workspace::BACKSLASH_SEPARATES)
+    bravebot_core::spelling::to_key(path, bravebot_agent::workspace::BACKSLASH_SEPARATES)
         .into_owned()
 }
 
@@ -2588,6 +2606,28 @@ mod tests {
         assert!(
             !map.is_trusted("src/fetched.json"),
             "a resume upgraded a file the session had marked untrusted"
+        );
+    }
+
+    /// A rewind keeps bytes in the record only where the map vouches for the file they came out of,
+    /// and the rule about a directory opened by name on a drive letter is held under a key spelled
+    /// from `/` (TRUST-18). Asked only in the host's own spellings, such a file is read under the
+    /// project, where the answer about the project vouches for it, and bytes the planner was never
+    /// allowed to see go into a record a resumed session puts back.
+    #[test]
+    fn a_file_in_a_distrusted_directory_on_a_drive_letter_is_not_vouched_for() {
+        let key = |name: &str| bravebot_core::spelling::to_key(name, true).into_owned();
+        let mut trust = TrustStore::new(key(r"\\?\C:\work"));
+        trust.trust(".");
+        trust.distrust(&key(r"\\?\C:\fetched"));
+
+        assert!(
+            !vouched_for(&trust, Path::new(r"C:\fetched\page.html"), true),
+            "the answer about the project vouched for a file in a directory nobody vouched for"
+        );
+        assert!(
+            vouched_for(&trust, Path::new("src/main.rs"), true),
+            "the answer about the project did not vouch for a file in it"
         );
     }
 

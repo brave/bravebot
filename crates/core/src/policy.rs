@@ -265,6 +265,11 @@ pub struct Policy<'sink, S: Sink> {
     /// the workspace does. [`Policy::integrity_in_force`] is where that happens, and it is the only
     /// thing this field is for.
     scratch: Option<std::path::PathBuf>,
+    /// Whether the host separates one segment of a path from the next with a backslash as well as
+    /// with a slash, which decides how a name is spelled before the map is asked about it
+    /// ([`crate::spelling::to_key`]). Supplied by the caller, since this crate asks the host
+    /// nothing.
+    backslash_separates: bool,
     /// Which programs the user has stopped being asked about, by resolved path.
     programs: crate::programs::TrustedPrograms,
     /// Which command lines this session has already put to the user at a run prompt.
@@ -409,6 +414,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             trust: crate::file_authority::FileAuthority::new(TrustStore::new("/")),
             root: None,
             scratch: None,
+            backslash_separates: false,
             programs: crate::programs::TrustedPrograms::new(),
             asked: crate::programs::AskedAbout::new(),
             remembered: crate::remembered::Remembered::new(),
@@ -762,6 +768,24 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self
     }
 
+    /// Say whether the host separates with a backslash, so a name the map is asked about is spelled
+    /// the way the map holds keys whatever road it arrived by.
+    ///
+    /// A listing labels what it found by the name it shows, and a command line names a file the
+    /// way whoever wrote the line did, so on a host that separates with a backslash either can hand
+    /// over `C:\fetched\page.html` for a file whose rule is keyed `/C:/fetched/page.html`. Asked
+    /// under the name it arrived as, the map reads that name under the working directory and the
+    /// answer about the project decides a file outside it (TRUST-18).
+    pub fn with_backslash_separates(mut self, backslash_separates: bool) -> Self {
+        self.backslash_separates = backslash_separates;
+        self
+    }
+
+    /// `path` spelled the way the map holds keys.
+    fn keyed<'p>(&self, path: &'p str) -> std::borrow::Cow<'p, str> {
+        crate::spelling::to_key(path, self.backslash_separates)
+    }
+
     /// What the map says about `path`, with the session's own directory answered by the workspace.
     ///
     /// Every gate asks this rather than the store, because a directory made reachable without a
@@ -773,7 +797,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// Only where nothing covers the path. A rule reconciliation wrote about a file there answers
     /// for that file, which is what keeps untrusted output from being read back as trusted.
+    ///
+    /// Asked under `path` spelled as a key, for the reason [`Policy::with_backslash_separates`]
+    /// gives.
     fn integrity_in_force(&self, path: &str) -> Option<Integrity> {
+        let path = &*self.keyed(path);
         let assumed = if self.is_scratch(path) {
             self.trust.integrity_of("")
         } else {
@@ -785,6 +813,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// [`Policy::integrity_in_force`] for a whole subtree, which is what a command line's read set
     /// is asked about.
     fn integrity_beneath_in_force(&self, path: &str) -> Option<Integrity> {
+        let path = &*self.keyed(path);
         match (self.is_scratch(path), self.trust.integrity_of("")) {
             // Only where the workspace has an answer to lend. A session that vouched for nothing has
             // none, and then the rules written inside the directory are the whole of what is known
@@ -794,12 +823,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         }
     }
 
-    /// Whether `path` lands in the session's own directory outside the project.
+    /// Whether the key `path` lands in the session's own directory outside the project.
     ///
     /// A key holding `..` is not, whatever it is spelled under. A trust key keeps such a component
     /// as it was written, and matching by component would take a name that climbs out of the
     /// directory for one inside it, which is the workspace's answer being lent to a path the session
     /// was never given.
+    ///
+    /// The directory is spelled as a key too, since it arrives as the host resolved it and a key
+    /// under it on a drive letter begins `/C:/` where the directory begins `C:\`.
     fn is_scratch(&self, path: &str) -> bool {
         let path = std::path::Path::new(path);
         if path
@@ -808,9 +840,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         {
             return false;
         }
-        self.scratch
-            .as_deref()
-            .is_some_and(|directory| path.starts_with(directory))
+        self.scratch.as_deref().is_some_and(|directory| {
+            path.starts_with(std::path::Path::new(
+                &*self.keyed(&directory.to_string_lossy()),
+            ))
+        })
     }
 
     /// Begin with the programs an earlier turn of this session was told to stop asking about.
@@ -10295,6 +10329,82 @@ five
             )
             .is_trusted(),
             "a rule inside the directory was skipped because the workspace had no answer to lend"
+        );
+    }
+
+    /// A policy on a host where a backslash separates, in a project on a drive letter the user
+    /// vouched for, with a directory elsewhere on that drive marked untrusted. The map is keyed the
+    /// way the workspace keys it, and every other name arrives as the host resolved it.
+    fn on_a_drive_letter(sink: &mut RecordingSink) -> Policy<'_, RecordingSink> {
+        let mut store = TrustStore::new("/C:/work/project");
+        store.trust(".");
+        store.distrust("/C:/fetched");
+        open_policy(sink)
+            .with_trust(store)
+            .with_root(std::path::Path::new(r"\\?\C:\work\project"))
+            .with_scratch(Some(std::path::Path::new(r"\\?\C:\Users\someone\scratch")))
+            .with_backslash_separates(true)
+    }
+
+    /// A listing labels what it found by the name it shows, which for a file outside the project
+    /// is the name the host resolved rather than the key its rule is held under. Asked under that
+    /// name, the map reads it under the project, and the answer about the project vouches for a
+    /// file in a directory marked untrusted (TRUST-18).
+    #[test]
+    fn a_listing_of_a_distrusted_directory_on_a_drive_letter_is_untrusted() {
+        let mut sink = RecordingSink::new();
+        let mut policy = on_a_drive_letter(&mut sink);
+
+        let listed = policy
+            .observe_paths(Capability::FileRead, [r"\\?\C:\fetched\page.html"])
+            .expect("a listing is labelled");
+        assert!(
+            !listed.is_trusted(),
+            "a file in a directory marked untrusted was listed as trusted"
+        );
+        let listed = policy
+            .observe_paths(Capability::FileRead, [r"src\main.rs"])
+            .expect("a listing is labelled");
+        assert!(
+            listed.is_trusted(),
+            "a file in the project was listed as untrusted"
+        );
+    }
+
+    /// A command line names a file the way whoever wrote the line did, so a line reading a file out
+    /// of a directory marked untrusted would come back vouched for by the answer about the project
+    /// if the operand were asked about as it was written.
+    #[test]
+    fn a_line_reading_a_distrusted_file_on_a_drive_letter_is_untrusted() {
+        let mut sink = RecordingSink::new();
+        let mut policy = on_a_drive_letter(&mut sink);
+        let project = r"\\?\C:\work\project";
+
+        assert!(
+            !label_of(&mut policy, &reading_in(project, r"C:\fetched\out.txt")).is_trusted(),
+            "a line reading a file marked untrusted came back trusted"
+        );
+        assert!(
+            label_of(
+                &mut policy,
+                &reading_in(project, r"C:\work\project\src\main.rs")
+            )
+            .is_trusted(),
+            "a line reading a file in the project came back untrusted"
+        );
+    }
+
+    /// The session's own directory arrives as the host resolved it and a key below it on a drive
+    /// letter is spelled from `/`, so unless the two are compared in one spelling no file there is
+    /// lent the answer about the workspace, and a turn cannot read back its own workings.
+    #[test]
+    fn the_sessions_own_directory_on_a_drive_letter_is_answered_as_the_workspace() {
+        let mut sink = RecordingSink::new();
+        let policy = on_a_drive_letter(&mut sink);
+
+        assert!(
+            !policy.read_is_quarantined("/C:/Users/someone/scratch/workings.txt"),
+            "a turn could not read back what it wrote in its own directory"
         );
     }
 

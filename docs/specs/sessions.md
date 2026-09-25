@@ -70,6 +70,7 @@ design exists to close.
 `verified-by: bravebot_tui::sessions::what_a_file_nobody_vouched_for_held_is_not_written_down`
 `verified-by: bravebot_tui::sessions::a_path_vouched_for_inside_the_turn_keeps_what_it_held_out_of_the_record`
 `verified-by: bravebot_tui::sessions::an_answer_the_planner_could_not_have_held_is_not_written_down`
+`verified-by: bravebot_session::sessions::a_file_in_a_distrusted_directory_on_a_drive_letter_is_not_vouched_for`
 `verified-by: bravebot_agent::turn::the_trail_records_the_slot_and_the_path_rather_than_the_content`
 
 <a id="SESSION-3"></a>
