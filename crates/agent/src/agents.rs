@@ -40,6 +40,7 @@ use bravebot_core::delegate::{Admitted, Definition, Definitions, Kind, Narrowing
 use bravebot_core::event::Sink;
 use bravebot_core::policy::Policy;
 use bravebot_core::value::Labelled;
+use bravebot_i18n::t;
 use std::path::Path;
 
 /// The directory holding definitions, inside the user's own directory and inside a project.
@@ -398,16 +399,14 @@ pub fn skills_not_found(definitions: &Definitions, skills: &Catalogue) -> Vec<No
                 .filter(|name| skills.get(name).is_none())
                 .map(String::as_str)
                 .collect();
-            let (what, them) = match missing.len() {
-                0 => return None,
-                1 => ("a skill", "it"),
-                _ => ("skills", "them"),
-            };
-            Some(Notice::from_message(format!(
-                "{} names {what} this session did not find, so its delegate is offered without \
-                 {them}: {}",
-                definition.origin(),
-                missing.join(", ")
+            if missing.is_empty() {
+                return None;
+            }
+            Some(Notice::from_message(t!(
+                delegate_skills_not_found,
+                definition = definition.origin(),
+                count = missing.len(),
+                skills = missing.join(", ")
             )))
         })
         .collect()

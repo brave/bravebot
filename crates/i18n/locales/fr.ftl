@@ -1565,6 +1565,11 @@ delegate-more-calls = { $count } appels jusqu'ici
 delegate-model-needs-sign-in =
     { $definition } a demandé { $model }, qui exige d'abord une connexion : il n'a pas été lancé
 delegate-model-substituted = { $definition } a demandé { $model } et un autre modèle a répondu
+delegate-skills-not-found =
+    { $count ->
+        [one] { $definition } nomme une compétence que cette session n'a pas trouvée, si bien qu'elle n'est pas proposée à son délégué : { $skills }
+       *[other] { $definition } nomme des compétences que cette session n'a pas trouvées, si bien qu'elles ne sont pas proposées à son délégué : { $skills }
+    }
 
 ## Regarder ce que fait un delegue
 
