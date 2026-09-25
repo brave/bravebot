@@ -883,13 +883,16 @@ mod tests {
         )
         .unwrap();
         assert_eq!(weather().changes(&pinned), vec![Field::Argv]);
-        let reordered = Declaration::stdio(
-            words(&["npx", "-y", "@dangahagan/weather-mcp@latest"]),
-            words(&["PATH", "PATH"]),
-            None,
-        )
-        .unwrap();
-        assert_eq!(weather().changes(&reordered), Vec::new());
+        let naming =
+            |names: &[&str]| Declaration::stdio(words(&["server"]), words(names), None).unwrap();
+        assert_eq!(
+            naming(&["PATH", "HOME"]).changes(&naming(&["HOME", "PATH"])),
+            Vec::new()
+        );
+        assert_eq!(
+            naming(&["PATH"]).changes(&naming(&["PATH", "HOME"])),
+            vec![Field::Variables]
+        );
         let remote = Declaration::http("https://weather.example.com".into()).unwrap();
         assert_eq!(weather().changes(&remote), vec![Field::Transport]);
     }
