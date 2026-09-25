@@ -9,7 +9,7 @@ import { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { ExportView } from './components/ExportView'
 import type { ExportDocument } from '../shared/export'
-import './styles.css'
+import './shadcn.css'
 import './export.css'
 
 function Page(): React.JSX.Element | null {

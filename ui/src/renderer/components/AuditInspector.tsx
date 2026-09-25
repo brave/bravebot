@@ -14,7 +14,7 @@ const Evidence = memo(function Evidence({ record }: { record: AuditRecord }): Re
   const blocked = isRefusal(record.event)
   const label = record.event.label as { integrity?: unknown; confidentiality?: unknown } | null
   return <Item asChild variant="outline">
-    <article className={`audit-event block${blocked ? ' audit-refusal' : ''}`}>
+    <article className={`audit-event block p-3${blocked ? ' audit-refusal' : ''}`}>
       <div className="audit-sequence"><Badge variant={blocked ? 'destructive' : 'outline'}>Event {record.sequence}{blocked ? ' · Blocked' : ''}</Badge></div>
       <strong>{title}</strong>
       {detail && <p>{detail}</p>}
@@ -44,9 +44,9 @@ export function AuditInspector({ details, onClose }: { details?: TurnDetails; on
   useEffect(() => { close.current?.focus({ preventScroll: true }) }, [])
   const refusals = details?.audit.filter((record) => isRefusal(record.event)) ?? []
   const incomplete = details?.status === 'interrupted' || (details && !details.started)
-  return <section className="audit-inspector" id="turn-audit-inspector" aria-label="Turn audit"
+  return <section className="audit-inspector flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-3.5 pb-4" id="turn-audit-inspector" aria-label="Turn audit"
       onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); onClose() } }}>
-      <div className="inspector-title"><strong>Audit · {details ? `Turn ${details.turn}` : 'Saved reply'}</strong>
+      <div className="inspector-title flex items-center justify-between gap-2"><strong>Audit · {details ? `Turn ${details.turn}` : 'Saved reply'}</strong>
         <Tooltip><TooltipTrigger asChild>
           <Button variant="ghost" size="icon-sm" ref={close} className="audit-close" onClick={onClose} aria-label="Close audit inspector">×</Button>
         </TooltipTrigger><TooltipContent>Close audit inspector</TooltipContent></Tooltip></div>

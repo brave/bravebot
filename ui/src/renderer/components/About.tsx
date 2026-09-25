@@ -46,11 +46,11 @@ export function About({ info, onClose }: { info: AboutInfo; onClose: () => void 
     }
   }
 
-  return <Modal title="About Brave Bot" onClose={onClose} className="about">
+  return <Modal title="About Brave Bot" onClose={onClose} className="about w-[min(440px,calc(100vw-32px))]">
     <Button variant="ghost" size="icon-sm" className="about-close" aria-label="Close About Brave Bot" onClick={onClose}>
       <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
     </Button>
-    <DialogHeader className="about-hero">
+    <DialogHeader className="about-hero items-center text-center">
       <div className="about-stage">
         <Button variant="ghost" className="about-mascot" aria-label="Make Brave Bot wink"
           onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
@@ -64,7 +64,7 @@ export function About({ info, onClose }: { info: AboutInfo; onClose: () => void 
       <DialogTitle>Brave Bot</DialogTitle>
       <Badge variant="outline" className="about-version self-center">Version {agentVersion}</Badge>
     </DialogHeader>
-    <nav className="about-links" aria-label="Project resources">
+    <nav className="about-links flex justify-center gap-3" aria-label="Project resources">
       <Button asChild variant="link"><a href={project} target="_blank" rel="noreferrer">GitHub <span aria-hidden="true">↗</span></a></Button>
       <Button asChild variant="link"><a href={`${project}/releases`} target="_blank" rel="noreferrer">Release notes <span aria-hidden="true">↗</span></a></Button>
     </nav>

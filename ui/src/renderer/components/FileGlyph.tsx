@@ -1,3 +1,5 @@
+import { Badge } from './ui/badge'
+
 /**
  * What kind of thing a filename is, in the width of two characters.
  *
@@ -67,11 +69,23 @@ export function glyphOf(name: string): { label: string; family: string } {
  * extension, which is already in the name being read out, and a screen reader announcing
  * "TS index dot ts" would be the tree saying it twice.
  */
+const FAMILY: Record<string, string> = {
+  code: 'text-primary',
+  data: 'text-warn',
+  markup: 'text-confine',
+  doc: 'text-ink-dim',
+  image: 'text-added',
+  media: 'text-removed',
+  archive: 'text-primary',
+  folder: 'text-muted-foreground',
+  plain: 'text-muted-foreground',
+}
+
 export function FileGlyph({ name }: { name: string }): React.JSX.Element {
   const { label, family } = glyphOf(name)
   return (
-    <span className={`tree-glyph ${family}`} aria-hidden="true">
+    <Badge variant="outline" className={`tree-glyph ${family} size-5 justify-center rounded-sm p-0 font-mono text-[9px] leading-none ${FAMILY[family] ?? ''}`} aria-hidden="true">
       {label}
-    </span>
+    </Badge>
   )
 }

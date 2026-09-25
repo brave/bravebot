@@ -373,7 +373,7 @@ function BotForm({
 
   return (
     <form
-      className="bot-form"
+      className="bot-form flex flex-col gap-3 rounded-xl border border-border bg-card p-3"
       onSubmit={(event) => {
         event.preventDefault()
         if (ready) {
@@ -382,9 +382,9 @@ function BotForm({
       }}
     >
       <FieldGroup>
-        <div className={bot ? undefined : "bot-form-identity"}>
+        <div className={bot ? undefined : 'bot-form-identity flex gap-3'}>
           {!bot && (
-            <div className="bot-form-avatar">
+            <div className="bot-form-avatar relative shrink-0">
               <BotAvatar seed={avatar} size={76} doing="waiting" />
               <Button
                 variant="ghost"
@@ -458,7 +458,7 @@ function BotForm({
       {bot && <BotMemory slug={bot.slug} />}
 
       <FieldError>{saveError}</FieldError>
-      <DialogFooter className="bot-actions">
+      <DialogFooter className="bot-actions flex-row gap-2">
         {onArchive && (
           <Button
             variant="outline"
@@ -476,7 +476,7 @@ function BotForm({
             Archive
           </Button>
         )}
-        <span className="bot-spacer" />
+        <span className="bot-spacer flex-1" />
         <Button variant="outline" type="button" onClick={onCancel}>
           Cancel
         </Button>

@@ -3,6 +3,7 @@ import { numberedDiffLines } from '../transcript'
 import { useState } from 'react'
 import { Modal } from './Modal'
 import { Button } from './ui/button'
+import { Card, CardContent, CardHeader } from './ui/card'
 import { Toggle } from './ui/toggle'
 
 /**
@@ -28,12 +29,20 @@ export function Diff({ changes }: { changes: Change[] }): React.JSX.Element {
       ))}
     </pre>
   )
-  return <div className="diff-review">
-    <div className="code-toolbar"><span>Proposed changes</span><Toggle variant="outline" pressed={wrap} onPressedChange={setWrap}>Wrap lines</Toggle><Button variant="outline" size="sm" onClick={() => setExpanded(true)}>Expand diff</Button></div>
-    {body}
-    {expanded && <Modal title="Review proposed changes" onClose={() => setExpanded(false)} className="expanded-diff">
-      <div className="code-toolbar"><h2>Review proposed changes</h2><Toggle variant="outline" pressed={wrap} onPressedChange={setWrap}>Wrap lines</Toggle><Button variant="outline" size="sm" onClick={() => setExpanded(false)}>Done</Button></div>
+  return <Card className="diff-review gap-0 overflow-hidden py-0">
+    <CardHeader className="code-toolbar flex-row items-center gap-2 border-b px-2.5 py-1.5 [.border-b]:pb-1.5">
+      <span className="min-w-0 flex-1 text-[11px] font-medium text-ink-dim">Proposed changes</span>
+      <Toggle variant="outline" pressed={wrap} onPressedChange={setWrap}>Wrap lines</Toggle>
+      <Button variant="outline" size="sm" onClick={() => setExpanded(true)}>Expand diff</Button>
+    </CardHeader>
+    <CardContent className="p-0">{body}</CardContent>
+    {expanded && <Modal title="Review proposed changes" onClose={() => setExpanded(false)} className="expanded-diff w-[min(1080px,calc(100vw-48px))]">
+      <div className="code-toolbar mb-3 flex items-center gap-2">
+        <h2 className="m-0 min-w-0 flex-1 text-lg font-semibold">Review proposed changes</h2>
+        <Toggle variant="outline" pressed={wrap} onPressedChange={setWrap}>Wrap lines</Toggle>
+        <Button variant="outline" size="sm" onClick={() => setExpanded(false)}>Done</Button>
+      </div>
       <p>Review the supplied changes here, then return to the approval card to decide.</p>{body}
     </Modal>}
-  </div>
+  </Card>
 }

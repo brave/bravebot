@@ -16,7 +16,7 @@ import { SessionInfo } from './components/Sessions'
 import { Transcript } from './components/Transcript'
 import { Context } from './components/Context'
 import { Gutter, useColumns } from './components/Gutter'
-import { shown } from './columns'
+import { shown, SIDES } from './columns'
 import { TrustPrompt } from './components/TrustPrompt'
 import { Unconfigured } from './components/Unconfigured'
 import { Notice } from './components/Notice'
@@ -39,6 +39,8 @@ import { Badge } from './components/ui/badge'
 import { Button } from './components/ui/button'
 import { Item, ItemGroup } from './components/ui/item'
 import { Spinner } from './components/ui/spinner'
+import { ResizablePanel, ResizablePanelGroup, usePanelRef } from './components/ui/resizable'
+import { Sheet, SheetContent, SheetTitle } from './components/ui/sheet'
 
 /** What the app is doing, which decides most of what the interface offers. */
 interface Live {
@@ -726,7 +728,35 @@ export function App(): React.JSX.Element {
     [live],
   )
 
-  const { widths, collapsed, dragging, folding, start, reset, nudge, toggle } = useColumns()
+  const { widths, collapsed, dragging, folding, reset, nudge, toggle, setWidth, setDragging } = useColumns()
+  const leftPanel = usePanelRef()
+  const rightPanel = usePanelRef()
+  const [viewport, setViewport] = useState(() => window.innerWidth)
+  useEffect(() => {
+    const onResize = (): void => setViewport(window.innerWidth)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+  const drawer = viewport <= 1120
+  useEffect(() => {
+    const panel = leftPanel.current
+    if (!panel) return
+    if (collapsed.left) panel.collapse()
+    else if (panel.isCollapsed()) {
+      panel.expand()
+      panel.resize(widths.left)
+    }
+  }, [collapsed.left, leftPanel, widths.left])
+  useEffect(() => {
+    if (drawer) return
+    const panel = rightPanel.current
+    if (!panel) return
+    if (collapsed.right) panel.collapse()
+    else if (panel.isCollapsed()) {
+      panel.expand()
+      panel.resize(widths.right)
+    }
+  }, [collapsed.right, drawer, rightPanel, widths.right])
   const [audit, setAudit] = useState<{ handle: string; turn: number | null; trigger: HTMLButtonElement; wasFolded: boolean } | null>(null)
   useEffect(() => { setAudit(null) }, [live?.handle])
   const selectedAudit = audit?.handle === live?.handle ? audit : null
@@ -1182,7 +1212,7 @@ export function App(): React.JSX.Element {
   return (
     <div
       className={[
-        'app relative isolate min-h-[420px] min-w-0 bg-background',
+        'app relative isolate flex h-screen min-h-[420px] min-w-0 bg-background',
         !live ? 'no-session' : '',
         preferences.density,
         dragging ? 'resizing' : '',
@@ -1205,6 +1235,19 @@ export function App(): React.JSX.Element {
         } as React.CSSProperties
       }
     >
+      <ResizablePanelGroup orientation="horizontal" className="min-h-0 min-w-0 flex-1">
+      <ResizablePanel
+        id="sessions"
+        panelRef={leftPanel}
+        collapsible
+        collapsedSize={0}
+        minSize={SIDES.left.min}
+        maxSize={SIDES.left.max}
+        defaultSize={widths.left}
+        groupResizeBehavior="preserve-pixel-size"
+        className="min-h-0 overflow-hidden"
+        onResize={(size) => { if (size.inPixels >= SIDES.left.min) setWidth('left', size.inPixels) }}
+      >
       <SessionInfo.Provider value={sessionInfo}><Sidebar
         sessions={ownSessions}
         onNewBotConversation={(bot) => { void create(bot.directory, { slug: bot.slug, model: bot.model }) }}
@@ -1222,15 +1265,16 @@ export function App(): React.JSX.Element {
         build={build}
         onSettings={() => setAgentSettings(true)}
       /></SessionInfo.Provider>
+      </ResizablePanel>
       <Gutter
         side="left"
-        width={shown({ widths, collapsed }, 'left')}
         dragging={dragging === 'left'}
         collapsed={collapsed.left}
-        onStart={start}
-        onReset={reset}
-        onNudge={nudge}
+        onDrag={setDragging}
+        onReset={(side) => { reset(side); leftPanel.current?.resize(SIDES.left.initial) }}
+        onNudge={(side, by) => { nudge(side, by); leftPanel.current?.resize(shown({ widths, collapsed }, 'left') + by) }}
       />
+      <ResizablePanel id="transcript" minSize={480} className="min-h-0 min-w-0 overflow-hidden">
       <Transcript
         onAudit={openAudit}
         onTurnDisclosure={discloseTurn}
@@ -1280,17 +1324,42 @@ export function App(): React.JSX.Element {
         onDecide={answer}
         onAnswer={answerQuestions}
       />
+      </ResizablePanel>
+      {!drawer && <>
       <Gutter
         side="right"
-        width={shown({ widths, collapsed }, 'right')}
         dragging={dragging === 'right'}
         collapsed={collapsed.right}
-        onStart={start}
-        onReset={reset}
-        onNudge={nudge}
+        onDrag={setDragging}
+        onReset={(side) => { reset(side); rightPanel.current?.resize(SIDES.right.initial) }}
+        onNudge={(side, by) => { nudge(side, by); rightPanel.current?.resize(shown({ widths, collapsed }, 'right') + by) }}
       />
+      <ResizablePanel
+        id="context"
+        panelRef={rightPanel}
+        collapsible
+        collapsedSize={0}
+        minSize={SIDES.right.min}
+        maxSize={SIDES.right.max}
+        defaultSize={widths.right}
+        groupResizeBehavior="preserve-pixel-size"
+        className="min-h-0 overflow-hidden"
+        onResize={(size) => { if (size.inPixels >= SIDES.right.min) setWidth('right', size.inPixels) }}
+      >
       <Context live={live} onClose={() => toggle('right')} audit={selectedAudit ?
         <AuditInspector key={`${selectedAudit.handle}:${selectedAudit.turn}`} details={selectedAudit.turn === null ? undefined : live?.turns[selectedAudit.turn]} onClose={closeAudit} /> : null} />
+      </ResizablePanel>
+      </>}
+      </ResizablePanelGroup>
+      {drawer && (
+        <Sheet open={!collapsed.right} onOpenChange={(open) => { if (open === collapsed.right) toggle('right') }}>
+          <SheetContent side="right" showCloseButton={false} className="w-[min(340px,calc(100vw-56px))] p-0 sm:max-w-none" aria-describedby={undefined}>
+            <SheetTitle className="sr-only">Project context</SheetTitle>
+            <Context live={live} onClose={() => toggle('right')} audit={selectedAudit ?
+              <AuditInspector key={`${selectedAudit.handle}:${selectedAudit.turn}`} details={selectedAudit.turn === null ? undefined : live?.turns[selectedAudit.turn]} onClose={closeAudit} /> : null} />
+          </SheetContent>
+        </Sheet>
+      )}
       {[...openedLives.current.values()].some((item) => item.handle !== live?.handle && item.running) && (
         <ItemGroup className="background-tasks" aria-label="Background tasks">
           {[...openedLives.current.values()].filter((item) => item.handle !== live?.handle && item.running).map((item) => {

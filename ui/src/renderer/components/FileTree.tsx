@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { FileGlyph } from './FileGlyph'
 import { type FileRow, type Listing, isSubpath, under } from '../../shared/files'
 import { Alert, AlertDescription } from './ui/alert'
+import { Badge } from './ui/badge'
 import { Button } from './ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
 import { Empty, EmptyDescription } from './ui/empty'
@@ -372,9 +373,9 @@ function Rows({
               earns its place by holding the column the file badges stand in: without it the
               names either side of a folder would not line up. */}
           {row.kind === 'directory' ? (
-            <span className="tree-glyph folder" aria-hidden="true">
+            <Badge variant="outline" className="tree-glyph folder size-5 justify-center rounded-sm p-0 font-mono text-[9px] font-normal leading-none text-muted-foreground" aria-hidden="true">
               /
-            </span>
+            </Badge>
           ) : (
             <FileGlyph name={row.name} />
           )}

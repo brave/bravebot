@@ -104,16 +104,16 @@ export function ThemePicker(props: Props): React.JSX.Element {
                     key={theme.name}
                     id={`theme-${at}`}
                     value={theme.name}
-                    className={`theme-row${theme.name === selected ? ' active' : ''}`}
+                    className={`theme-row flex items-center gap-2${theme.name === selected ? ' active' : ''}`}
                     onDoubleClick={keep}
                   >
                     <span className="theme-name">{theme.name}</span>
                     {theme.name === opened.current?.name ? (
                       <Badge variant="secondary" className="theme-current">in use</Badge>
                     ) : null}
-                    <span className="theme-swatches" aria-hidden="true">
+                    <span className="theme-swatches ml-auto flex gap-1" aria-hidden="true">
                       {SWATCHES.map((role) => (
-                        <i key={role} style={{ background: inks[`--role-${role}`] }} />
+                        <i key={role} className="inline-block size-2.5 rounded-full" style={{ background: inks[`--role-${role}`] }} />
                       ))}
                     </span>
                   </CommandItem>
@@ -122,10 +122,10 @@ export function ThemePicker(props: Props): React.JSX.Element {
             </CommandGroup>
           </CommandList>
         </Command>
-        <p className="theme-hint">
+        <p className="theme-hint text-xs text-muted-foreground">
           <KbdGroup><Kbd>↑</Kbd><Kbd>↓</Kbd></KbdGroup> preview · <Kbd>⏎</Kbd> keep · <Kbd>esc</Kbd> cancel
         </p>
-        <p className="theme-aside">
+        <p className="theme-aside text-xs text-muted-foreground">
           Add your own as JSON in <code>{directory}</code>.
         </p>
       <DialogFooter className="theme-actions"><Button variant="outline" onClick={cancel}>Cancel</Button><Button onClick={keep}>Use theme</Button></DialogFooter>

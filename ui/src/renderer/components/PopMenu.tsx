@@ -44,12 +44,12 @@ export function PopMenu({
 
   return <DropdownMenu open={open} onOpenChange={onOpenChange}>
     <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
-    <DropdownMenuContent ref={content} className={`popmenu ${checkable ? 'checkable' : ''}`} align="start" aria-label={label}>
+    <DropdownMenuContent ref={content} className={`popmenu ${checkable ? 'checkable' : ''} min-w-48`} align="start" aria-label={label}>
       <DropdownMenuGroup>
         {items.map((entry) => {
           const content = <>
             <span className="popitem-label">{entry.label}</span>
-            {entry.detail && <span className="popitem-detail">{entry.detail}</span>}
+            {entry.detail && <span className="popitem-detail text-xs text-muted-foreground">{entry.detail}</span>}
           </>
           return <Fragment key={entry.id}>
             {entry.separated && <DropdownMenuSeparator />}

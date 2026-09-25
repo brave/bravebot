@@ -4,13 +4,13 @@ import {
   INITIAL,
   INITIAL_LAYOUT,
   type Layout,
-  SIDES,
   type Side,
   type Widths,
   fit,
   remember,
   remembered,
 } from '../columns'
+import { ResizableHandle } from './ui/resizable'
 
 /**
  * The draggable divider between two columns, and the state behind it.
@@ -42,6 +42,8 @@ export function useColumns(): {
   reset: (side: Side) => void
   nudge: (side: Side, by: number) => void
   toggle: (side: Side) => void
+  setWidth: (side: Side, px: number) => void
+  setDragging: (side: Side | null) => void
 } {
   const [layout, setLayout] = useState<Layout>(() => ({ ...INITIAL_LAYOUT, collapsed: { left: false, right: window.innerWidth <= 1120 } }))
   const [dragging, setDragging] = useState<Side | null>(null)
@@ -157,6 +159,13 @@ export function useColumns(): {
     }))
   }, [])
 
+  const setWidth = useCallback((side: Side, px: number): void => {
+    setLayout((old) => ({
+      ...old,
+      widths: fit({ ...old.widths, [side]: px }, window.innerWidth, old.collapsed),
+    }))
+  }, [])
+
   const toggle = useCallback((side: Side): void => {
     setLayout((old) => {
       const collapsed = { ...old.collapsed, [side]: !old.collapsed[side] }
@@ -177,7 +186,7 @@ export function useColumns(): {
     return () => clearTimeout(timer)
   }, [folding, layout.collapsed])
 
-  return { widths, collapsed, dragging, folding, start, reset, nudge, toggle }
+  return { widths, collapsed, dragging, folding, start, reset, nudge, toggle, setWidth, setDragging }
 }
 
 /**
@@ -191,23 +200,20 @@ export function useColumns(): {
  */
 export function Gutter({
   side,
-  width,
   dragging,
   collapsed,
-  onStart,
+  onDrag,
   onReset,
   onNudge,
 }: {
   side: Side
-  width: number
   dragging: boolean
   collapsed: boolean
-  onStart: (side: Side, event: React.PointerEvent<HTMLDivElement>) => void
+  onDrag: (side: Side | null) => void
   onReset: (side: Side) => void
   onNudge: (side: Side, by: number) => void
 }): React.JSX.Element {
   const keys = (event: React.KeyboardEvent<HTMLDivElement>): void => {
-    // A divider that can only be dragged is a divider some people cannot move at all.
     const step = event.shiftKey ? 32 : 8
     if (event.key === 'ArrowLeft') onNudge(side, -step)
     else if (event.key === 'ArrowRight') onNudge(side, step)
@@ -217,26 +223,14 @@ export function Gutter({
   }
 
   return (
-    <div
+    <ResizableHandle
       className={`gutter ${side} ${dragging ? 'dragging' : ''} ${collapsed ? 'inert' : ''}`}
-      // Kept as a separator, and kept named, even when it does nothing: announcing it as
-      // unavailable says more than having it disappear from under the reader.
-      role="separator"
-      aria-orientation="vertical"
+      disabled={collapsed}
+      disableDoubleClick
       aria-label={side === 'left' ? 'Resize the session list' : 'Resize the context panel'}
-      // The one place in the window where a tooltip is the *only* way to learn what a
-      // control does. A 1px seam has no room for a label, and the double-click that puts
-      // the column back where it shipped is invisible until somebody does it by accident.
-      // Dropped while the column is folded, along with every handler below: a seam that
-      // promised a gesture it would ignore would be worse than a silent one.
       title={collapsed ? undefined : 'Drag to resize · double-click to reset'}
-      aria-disabled={collapsed || undefined}
-      aria-valuenow={width}
-      aria-valuemin={SIDES[side].min}
-      aria-valuemax={SIDES[side].max}
-      tabIndex={collapsed ? -1 : 0}
-      onPointerDown={collapsed ? undefined : (event) => onStart(side, event)}
-      // The way back to the layout the app shipped with, without hunting for the pixel.
+      onPointerDown={collapsed ? undefined : () => onDrag(side)}
+      onPointerUp={collapsed ? undefined : () => onDrag(null)}
       onDoubleClick={collapsed ? undefined : () => onReset(side)}
       onKeyDown={collapsed ? undefined : keys}
     />

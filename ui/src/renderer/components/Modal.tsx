@@ -14,7 +14,7 @@ export function Modal({ title, onClose, children, className = '' }: {
 
   return <Dialog open onOpenChange={(open) => { if (!open) onClose?.() }}>
     <DialogContent
-      className={`modal ${className}`}
+      className={`modal max-h-[calc(100dvh-40px)] w-[min(680px,calc(100vw-40px))] overflow-y-auto ${className}`}
       overlayClassName="scrim"
       showCloseButton={false}
       aria-describedby={undefined}

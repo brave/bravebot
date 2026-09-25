@@ -75,7 +75,7 @@ export function BotAvatar({ seed, size = 38, doing = 'idle', expression = 'neutr
   const hasStatus = doing === 'working' || doing === 'failed'
   return (
     <span
-      className="bot-avatar-frame"
+      className="bot-avatar-frame overflow-hidden rounded-full bg-muted"
       style={{ width: size, height: size }}
       role={hasStatus ? 'img' : undefined}
       aria-label={hasStatus ? (doing === 'failed' ? 'Bot needs attention' : 'Bot working') : undefined}

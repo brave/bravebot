@@ -122,7 +122,7 @@ const COMPONENTS: Components = {
   },
 
   table({ children }) {
-    return <Table className="md-table-wrap">{children}</Table>
+    return <div className="md-table-wrap my-[0.9em] max-w-full overflow-x-auto rounded-lg border border-border"><Table>{children}</Table></div>
   },
   thead({ children }) { return <TableHeader>{children}</TableHeader> },
   tbody({ children }) { return <TableBody>{children}</TableBody> },
@@ -142,13 +142,14 @@ function CodeBlock({ children }: { children: ReactNode }): React.JSX.Element {
   const [copied, setCopied] = useState(false)
   const [error, setError] = useState(false)
   const language = isValidElement<{ className?: string }>(children) ? children.props.className?.replace('language-', '') : undefined
-  return <Card className="code-block gap-0 py-0">
-    <CardHeader className="code-toolbar flex-row"><span>{language || 'Code'}</span>
+  return <Card className="code-block my-3 gap-0 overflow-hidden py-0">
+    <CardHeader className="code-toolbar flex-row items-center gap-2 border-b px-2.5 py-1.5 [.border-b]:pb-1.5">
+      <span className="min-w-0 flex-1 text-[11px] font-medium text-ink-dim">{language || 'Code'}</span>
       <Toggle pressed={wrap} onPressedChange={setWrap}>Wrap</Toggle>
       <Button variant="outline" size="sm" onClick={() => { void navigator.clipboard.writeText(plain(children)).then(() => { setCopied(true); setError(false) }).catch(() => setError(true)) }}>{copied ? 'Copied' : 'Copy code'}</Button>
     </CardHeader>
     {error && <Alert variant="destructive"><AlertDescription>Could not copy. Select the code and copy it manually.</AlertDescription></Alert>}
-    <CardContent className="p-0"><pre className={wrap ? 'code-wrapped' : ''}>{children}</pre></CardContent>
+    <CardContent className="p-0"><pre className={wrap ? 'code-wrapped m-0 whitespace-pre-wrap break-anywhere' : 'm-0'}>{children}</pre></CardContent>
   </Card>
 }
 

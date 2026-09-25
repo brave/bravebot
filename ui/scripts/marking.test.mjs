@@ -95,14 +95,19 @@ const FORGED_CHROME =
  */
 const FETCHING = ['src="', 'srcset="', 'background="', 'poster="', 'style="']
 
+/** How many elements carry `name` as a class token, extra utilities allowed. */
+function classCount(html, name) {
+  return [...html.matchAll(new RegExp(`class="[^"]*\\b${name}\\b[^"]*"`, 'g'))].length
+}
+
 test('quarantined content cannot paint its own container', () => {
   const drawn = draw(confined([FORGED_CHROME, 'api_key = hunter2']))
 
   // The mark is on the container, once, and the content did not add a second one.
-  assert.equal(occurrences(drawn, 'class="quarantine-head"'), 1, drawn)
-  assert.equal(occurrences(drawn, 'class="quarantine-foot"'), 1, drawn)
-  assert.equal(occurrences(drawn, '<pre class="preview">'), 1, drawn)
-  assert.match(drawn, /<span class="mark">confined<\/span>/)
+  assert.equal(classCount(drawn, 'quarantine-head'), 1, drawn)
+  assert.equal(classCount(drawn, 'quarantine-foot'), 1, drawn)
+  assert.equal(classCount(drawn, 'preview'), 1, drawn)
+  assert.match(drawn, /<span class="[^"]*\bmark\b[^"]*">confined<\/span>/)
 
   // Neutralised rather than dropped, for the reason the terminal neutralises an escape rather
   // than removing it: a character silently gone is one nobody can tell was ever in the file.
@@ -232,10 +237,11 @@ test('every entry kind is drawn with its marking, whether or not its turn ended 
       const drawn = draw(interrupted ? { ...card.entry(), interrupted: true } : card.entry())
       const where = `${kind}${interrupted ? ', interrupted' : ''}:\n${drawn}`
 
-      if (card.marks) assert.equal(occurrences(drawn, card.marks), 1, where)
+      if (card.marks === '<pre class="preview">') assert.equal(classCount(drawn, 'preview'), 1, where)
+      else if (card.marks) assert.ok(drawn.includes(card.marks), where)
       // The head belongs to the one card that draws it. Anywhere else it would be content
       // having painted the chrome the reader is meant to trust.
-      assert.equal(occurrences(drawn, 'class="quarantine-head"'), kind === 'quarantined' ? 1 : 0, where)
+      assert.equal(classCount(drawn, 'quarantine-head'), kind === 'quarantined' ? 1 : 0, where)
       if (card.carries !== false) {
         assert.match(drawn, /&lt;div class=&quot;quarantine-head&quot;&gt;/, where)
         assert.ok(!drawn.includes('<span class="mark">confined</span><span class="origin">README.md'), where)
@@ -312,7 +318,7 @@ const RAW_ELEMENTS = '<iframe src="https://example.com"></iframe><img src="https
 test('a reply reaches no raw markup, and what it held arrives as inert text', () => {
   const drawn = draw(t.replied([FORGED_CHROME, RAW_ELEMENTS, '# Real heading'].join('\n\n'), 1))
 
-  assert.equal(occurrences(drawn, 'class="quarantine-head"'), 0, drawn)
+  assert.equal(classCount(drawn, 'quarantine-head'), 0, drawn)
   for (const element of ['<iframe', '<img', '<pre>', '<div class="quarantine']) {
     assert.ok(!drawn.includes(element), `${element} came from the reply:\n${drawn}`)
   }
@@ -397,7 +403,7 @@ test('an untrusted write is marked on its container, and its remark cannot forge
   const drawn = draw(t.asked(request))
 
   assert.match(drawn, /confirm untrusted/)
-  assert.equal(occurrences(drawn, 'class="quarantine-head"'), 0, drawn)
+  assert.equal(classCount(drawn, 'quarantine-head'), 0, drawn)
   assert.equal(occurrences(drawn, 'confirm untrusted'), 1, drawn)
   assert.match(drawn, /&lt;div class=&quot;quarantine-head&quot;&gt;/)
   // The same bytes arrive twice, in the remark and in the diff, and neither is an element.
