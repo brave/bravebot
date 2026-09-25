@@ -28,6 +28,10 @@ block copied out of another tool names its models and names no default, so the m
 still the one the build came with. That case gets one line naming the [`model`](#model) key rather
 than the three routes.
 
+**If Claude Code or opencode already reaches a service on this machine,** the first run offers to copy
+that setup instead, showing everything it would write before it asks. See
+[Importing from Claude Code or opencode](#importing-from-claude-code-or-opencode).
+
 Once a service is configured, the rest of this page is what else you can set. What will actually be
 used is reported by:
 
@@ -815,6 +819,65 @@ The authority here is the filesystem's rather than this program's. Nothing check
 what its permissions are: somebody who can write that path can replace the binary. It fails softly like
 any other layer, so a file that is missing, over 64 KB or unparseable pins nothing, and a blank or
 non-string value pins nothing under that name.
+
+## Importing from Claude Code or opencode
+
+A first run with nothing configured, in a terminal, reads what Claude Code and opencode set up in your
+home directory before it names the three routes. Where either reaches a service bravebot can use, it
+shows what it would add to `~/.bravebot/settings.json` and asks:
+
+```
+Claude Code configures a model service bravebot can use, in /home/you/.claude/settings.json.
+Importing it adds these to /home/you/.bravebot/settings.json:
+  env.BRAVEBOT_USE_BEDROCK: "1"
+  env.AWS_REGION: "us-west-2"
+  env.ANTHROPIC_DEFAULT_SONNET_MODEL: "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+  model: "sonnet"
+Import this from Claude Code? [y/N]
+```
+
+Only a yes writes. Anything else, or the end of input, declines, and the start is refused as before. A
+decline is not remembered, so the next start asks again. After a write the settings are read back from
+disk, and the session opens on them. Where the model the session would use reads its key from a
+variable you have not exported, the start names the variable and stops; an unset variable on any other
+imported gateway is named and the session opens anyway. A settings file that changed while you were
+answering is not written over.
+
+**What is read.** Claude Code's `settings.json` in `$CLAUDE_CONFIG_DIR` (by default `~/.claude`), and
+`CLAUDE_CODE_USE_BEDROCK` if you export it. opencode's `opencode.json` and `opencode.jsonc` in
+`$XDG_CONFIG_HOME/opencode` (by default `~/.config/opencode`), the file `OPENCODE_CONFIG` names, and
+its `auth.json` in `$XDG_DATA_HOME/opencode`. A checkout's `.claude/`, `opencode.json` and
+`.opencode/` are never opened: they hold whatever the repository's author wrote, and would otherwise
+decide where your key is sent.
+
+**What can be imported.** A Claude Code Bedrock setup, under bravebot's own names, when a region is
+named. An opencode `provider` entry reached through an OpenAI-compatible SDK, with only the fields
+bravebot reads, and an `auth.json` API key for a gateway whose endpoint bravebot knows. opencode's
+`disabled_providers` and `enabled_providers` are honoured, and a name already set in your settings file,
+or pinned by an administrator, is left as it is. A model opencode's `amazon-bedrock` entry lists that
+one of your Bedrock tiers already names, such as the Claude Code import's
+`ANTHROPIC_DEFAULT_OPUS_MODEL`, is not added to the entry again.
+
+**Keys.** A source that names a variable has only the name written, and opencode's `{env:VAR}` becomes
+`"env": ["VAR"]`. A key the source holds itself is asked about on its own question, which names the host
+it would be sent to and says it is kept in plain text; the key is never shown. Declining writes the
+entry reading the variable opencode reads for it, such as `OPENROUTER_API_KEY`, and says to export it.
+A `{file:path}` key is not followed, and neither is a substitution inside a longer value, such as
+`Bearer {env:TOKEN}`: that entry is named as left.
+
+**What is never imported**: commands, permissions, hooks and MCP servers. What was found and cannot be
+used, such as an Anthropic API key or a Vertex AI setup, is named with the reason before the routes,
+and its value is never shown.
+
+A run that cannot ask (`-p`, `--json`, a pipe or a redirect, `doctor`) imports nothing, and its
+refusal names the command that asks:
+
+```sh
+bravebot import-providers
+```
+
+That command asks the same questions at any time, whether or not a service is configured. It refuses
+without a terminal and in an incognito session.
 
 ## Reaching a model through AWS Bedrock
 

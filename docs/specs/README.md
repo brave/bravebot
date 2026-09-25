@@ -45,6 +45,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [hooks.md](hooks.md) | `HOOK` | 8 | a command a person asked to have run when something happens |
 | [network-egress.md](network-egress.md) | `NET` | 9 | every request that leaves this process, and what comes back |
 | [backends.md](backends.md) | `BACKEND` | 42 | which service answers a request, and what a person may choose between |
+| [import.md](import.md) | `IMPORT` | 9 | a first start with nothing configured: what Claude Code and opencode set up, and what of it may be copied here |
 | [compaction.md](compaction.md) | `COMPACT` | 12 | shortening a long conversation into a summary of itself, in the request only |
 | [loop.md](loop.md) | `LOOP` | 15 | sending one prompt again and again until somebody stops it |
 | [goal.md](goal.md) | `GOAL` | 17 | one condition a person set, judged after every turn, until it holds |
