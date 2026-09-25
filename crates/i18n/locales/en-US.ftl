@@ -31,6 +31,7 @@ cli-usage-continue = Pick up the most recent session in this directory
 cli-usage-fork = Fork a session and start exploring a different path
 cli-usage-doctor = Check configuration and confinement
 cli-usage-import = Import a Leo Premium subscription
+cli-usage-mcp = Declare, list and approve MCP servers
 
 cli-keys-heading = Interactive keys:
 cli-key-send = Send
@@ -296,6 +297,11 @@ doctor-settings-allow-ignored =
 doctor-settings-granted = granted
 doctor-settings-allow-granted =
     the allow rule { $rule } in { $path } is granted for this directory
+# A settings layer that tried to declare an MCP server. Named by key and file only, since the entry
+# may hold an argv and the values of variables.
+doctor-settings-mcp-declared =
+    { $key } in { $path } declares an MCP server, which only ~/.bravebot/mcp.json may: nothing in it
+    is started
 # The machine-level layer, above everything a person can set. The names rather than the values, for
 # the reason the settings lines give, and the path because a pin somebody wants lifted is lifted by
 # whoever can write that file.
@@ -414,6 +420,90 @@ hook-failed = the { $moment } hook `{ $program }` did not end well ({ $status })
 hook-stopped =
     the { $moment } hook `{ $program }` was still running after { $seconds } seconds and was
     stopped
+
+
+## Declaring an MCP server, and approving one
+
+# Printed under a refusal that named no command, or one this does not have.
+mcp-forms-heading = bravebot mcp takes one of:
+mcp-needs-a-command = bravebot mcp needs a command
+mcp-unknown-command = bravebot mcp has no command { $command }
+mcp-needs-an-alias = { $command } needs the alias of a server
+mcp-unexpected-argument = { $command } does not take { $argument }
+mcp-not-an-alias =
+    { $alias } cannot name a server: an alias is letters, digits, - and _, starts with a letter or
+    a digit, and is at most 64 characters
+mcp-needs-a-transport = add needs --stdio -- <program> [args...] or --http <url>
+mcp-two-transports = add takes --stdio or --http, not both
+mcp-stdio-needs-a-program =
+    --stdio takes the program and its arguments after a bare --, as in --stdio -- npx -y weather-mcp
+mcp-http-needs-a-url = --http needs a url
+mcp-env-needs-a-name = --env needs the name of a variable
+mcp-dir-needs-a-path = --dir needs a directory
+mcp-dir-not-a-directory = { $path } is not a directory
+mcp-dir-not-text = { $path } cannot be written into mcp.json, which holds text
+mcp-not-added = { $alias } was not declared: { $problem }
+mcp-not-declared = no MCP server is declared as { $alias }
+# What is wrong with a declaration, from a flag or from mcp.json. None of these repeats a value: the
+# one that names something names the variable, never what it was set to.
+mcp-problem-alias = the alias is not one: letters, digits, - and _, starting with a letter or a digit
+mcp-problem-not-an-object = the entry is not an object
+mcp-problem-transport = transport is missing, or is neither stdio nor http
+mcp-problem-key = { $key } is not a key a declaration has
+mcp-problem-values =
+    it holds values: a declaration lists the names of variables, and their values are read from
+    your environment
+mcp-problem-program = argv is missing or empty, or holds something that is not a string
+mcp-problem-name = a variable is not a name: a letter or _, then letters, digits and _
+mcp-problem-assignment =
+    { $name } is given a value: a declaration names the variable, and its value is read from your
+    environment
+mcp-problem-directory = the directory is not an absolute path
+mcp-problem-url = the url is not http or https with a host
+mcp-problem-credentials =
+    the url carries a user or a password, which would keep a credential in plain text
+mcp-problem-remote = a remote server takes no { $key }
+mcp-unreadable = { $path } cannot be read: { $reason }
+mcp-unreadable-too-large = it is larger than a declarations file has any reason to be
+mcp-unreadable-not-read = it could not be read as text
+mcp-unreadable-not-json = it is not JSON
+mcp-unreadable-not-an-object = it is not a JSON object
+mcp-unreadable-servers = servers is not an object
+mcp-unreadable-key = { $key } is not a key it has: it holds servers and nothing else
+mcp-not-while-incognito =
+    declaring or approving a server writes to disk, which an incognito session will not do
+mcp-no-state-directory =
+    there is no state directory, so no MCP server is declared: none of { $variables } names a
+    profile directory
+mcp-not-written = { $path } could not be written ({ $error })
+mcp-declared = declared { $alias } in { $path }
+mcp-variables = variables: { $names }
+mcp-directory = directory: { $path }
+mcp-digest = digest: { $digest }
+# Where a declaration replaced one that was approved, which of its fields differ.
+mcp-changed = changed: { $fields }
+mcp-question = Use this MCP server?
+mcp-already-approved = { $alias } is approved, against digest { $digest }
+mcp-recorded = approved { $alias }, against digest { $digest }
+mcp-left-unapproved = { $alias } is declared and not approved
+mcp-nobody-asked =
+    nobody could be asked about { $alias }, so it is declared and not approved: run
+    bravebot mcp approve { $alias } at a terminal
+mcp-nobody-to-ask =
+    nobody can be asked about { $alias }: run bravebot mcp approve { $alias } at a terminal
+mcp-removed = removed { $alias }, and any approval that only it held
+mcp-none-declared = no MCP server is declared in { $path }
+mcp-list-declared-in = declared in { $path }
+mcp-approved = approved
+mcp-unapproved = unapproved
+mcp-unapproved-run-approve = unapproved: run bravebot mcp approve { $alias }
+mcp-cannot-be-used = cannot be used: { $problem }
+mcp-unusable = { $alias } cannot be used: { $problem }
+mcp-list-unusable =
+    { $count ->
+        [one] one declaration in { $path } cannot be used
+       *[other] { $count } declarations in { $path } cannot be used
+    }
 
 
 ## Vouching for a directory, asked once when a session starts somewhere new

@@ -177,6 +177,13 @@ pub struct Settings {
     /// into a checkout and is still asked has to be told it was dropped rather than conclude the
     /// rule is in force and the prompt is a separate fault.
     allow_ignored: Vec<(PathBuf, String)>,
+    /// The keys a layer declared an MCP server under, with the file each came from, for `doctor`.
+    ///
+    /// Recorded rather than read: a declaration lives in the person's own directory and nowhere
+    /// else (SERVERS-1), so what a settings file says about a server is never obeyed. Kept because
+    /// somebody who wrote one believes it works, and a line that looks like a server and starts
+    /// nothing has to be named as a mistake rather than left to look like a server that failed.
+    mcp_declared: Vec<(PathBuf, String)>,
     keybindings: BTreeMap<String, String>,
     attribution: Attribution,
     search: SearchCaps,
@@ -345,6 +352,7 @@ impl Settings {
         // the person wrote in their own file. See [`Settings::allow_ignored`].
         let mut allow = Vec::new();
         let mut allow_ignored = Vec::new();
+        let mut mcp_declared = Vec::new();
         for path in paths.into_iter().flatten() {
             // A file already read as a layer above is not read again. Naming one of the three
             // explicitly is an ordinary thing to do, and reading it twice would report every name
@@ -361,6 +369,11 @@ impl Settings {
                     true => vetting = auto_vetting(&root),
                     false => vetting_ignored.push(path.clone()),
                 }
+            }
+            // Every layer, the person's own among them: what a settings file names about a server
+            // is never a declaration, so which file said it decides only what the report names.
+            for key in server_keys(&root) {
+                mcp_declared.push((path.clone(), key));
             }
             let granting = grants(&path, home_layer.as_deref(), named, cwd, started);
             for rule in permission_lists(&root).allow {
@@ -397,6 +410,7 @@ impl Settings {
         // to the entries a layer entitled to grant wrote.
         settings.permissions.allow = allow;
         settings.allow_ignored = allow_ignored;
+        settings.mcp_declared = mcp_declared;
         // `merged` goes here, and clears what every layer stated as it does: the settings hold what
         // they keep of it by now, so the rest is a spare copy of a gateway token.
         settings
@@ -455,6 +469,8 @@ impl Settings {
             // not say which file it was read out of, and that is the whole of what decides whether
             // an `allow` entry in it grants anything.
             allow_ignored: Vec::new(),
+            // Filled by [`Settings::layered`], which knows which file each key was written in.
+            mcp_declared: Vec::new(),
             keybindings: keybindings_block(root),
             attribution: attribution_block(root),
             search: search_caps(root),
@@ -527,6 +543,17 @@ impl Settings {
             .map(|(path, rule)| (path.as_path(), rule.as_str()))
     }
 
+    /// The keys a settings layer declared an MCP server under, and the file each was written in.
+    ///
+    /// None of them declares anything: a server is declared in `~/.bravebot/mcp.json` and nowhere
+    /// else, because a stdio declaration is a command to run and two of these layers sit in a
+    /// checkout the agent can write to. `doctor` reports each one as a parse error.
+    pub fn mcp_declared(&self) -> impl Iterator<Item = (&Path, &str)> {
+        self.mcp_declared
+            .iter()
+            .map(|(path, key)| (path.as_path(), key.as_str()))
+    }
+
     /// What the settings in force say a commit message and a pull request may carry.
     ///
     /// A name the block set is an answer even when it is empty, empty being how a file says to
@@ -574,6 +601,8 @@ impl Settings {
             // the same reason: `doctor` names that file, so reporting it as no settings at all
             // would contradict the line under it.
             && self.allow_ignored.is_empty()
+            // And a file that only tried to declare a server, which `doctor` names too.
+            && self.mcp_declared.is_empty()
     }
 
     /// The rule text and added directories the `permissions` block carried.
@@ -862,6 +891,31 @@ fn inside(cwd: Option<&Path>, path: &Path) -> bool {
         (Ok(cwd), Ok(path)) => path.starts_with(cwd),
         _ => true,
     }
+}
+
+/// The keys one layer names a server under, as `doctor` should spell them back.
+///
+/// `mcpServers` is Claude Code's key, and a block copied from `.mcp.json` arrives under it. The `mcp`
+/// block is where a checkout will request an alias (SERVERS-2), so `request` there names nothing to
+/// run, and neither does `deny`, which only ever removes one (SERVERS-12). Every other key in the
+/// block is a server, which is opencode's shape for the same declaration. A block that is not an
+/// object at all is itself the key, since whatever it holds is not a request.
+fn server_keys(root: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
+    let mut keys = Vec::new();
+    if root.contains_key("mcpServers") {
+        keys.push("mcpServers".to_string());
+    }
+    match root.get("mcp") {
+        Some(serde_json::Value::Object(block)) => keys.extend(
+            block
+                .keys()
+                .filter(|key| !matches!(key.as_str(), "request" | "deny"))
+                .map(|key| format!("mcp.{key}")),
+        ),
+        Some(_) => keys.push("mcp".to_string()),
+        None => {}
+    }
+    keys
 }
 
 /// The variables one layer's `env` block sets, for working out which layer won a name.
@@ -2437,6 +2491,47 @@ mod tests {
             Settings::parse(r#"{"vetting": {"auto": false}}"#).auto_vetting(),
             Some(false)
         );
+    }
+
+    /// SERVERS-1: no settings layer declares a server, the person's own included, and every one
+    /// that tries is recorded with the key it used, so `doctor` can name the file and the key.
+    #[test]
+    fn every_layer_that_names_a_server_is_recorded_and_none_declares_one() {
+        let server = r#"{"command": "npx", "args": ["-y", "weather-mcp"]}"#;
+        let layers = Layers::new("mcp-declared")
+            .global(&format!(r#"{{"mcpServers": {{"weather": {server}}}}}"#))
+            .project(&format!(r#"{{"mcp": {{"weather": {server}}}}}"#))
+            .local(&format!(r#"{{"mcpServers": {{"weather": {server}}}}}"#))
+            .named(r#"{"mcp": ["npx", "-y", "weather-mcp"]}"#);
+        let expected = [
+            (layers.home.join(SETTINGS_FILE), "mcpServers"),
+            (
+                layers.cwd.join(PROJECT_DIR).join(SETTINGS_FILE),
+                "mcp.weather",
+            ),
+            (
+                layers.cwd.join(PROJECT_DIR).join(LOCAL_SETTINGS_FILE),
+                "mcpServers",
+            ),
+            (layers.named.clone().expect("a named layer"), "mcp"),
+        ];
+        let settings = layers.read();
+        let declared: Vec<(PathBuf, &str)> = settings
+            .mcp_declared()
+            .map(|(path, key)| (path.to_path_buf(), key))
+            .collect();
+        assert_eq!(declared, expected);
+        assert!(!settings.is_empty());
+    }
+
+    /// A request names an alias and grants nothing (SERVERS-2), and a denial only removes one, so
+    /// neither is reported as a server somebody tried to declare.
+    #[test]
+    fn a_request_or_a_denial_in_the_mcp_block_is_not_a_declaration() {
+        let settings = Layers::new("mcp-requested")
+            .project(r#"{"mcp": {"request": ["weather"], "deny": ["docs"]}}"#)
+            .read();
+        assert_eq!(settings.mcp_declared().count(), 0);
     }
 
     /// The home layer may write an allow rule, which is the whole point of the list: a person

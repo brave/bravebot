@@ -41,6 +41,7 @@ cli-usage-continue = Reprendre la session la plus récente de ce répertoire
 cli-usage-fork = Dupliquer une session pour explorer une autre voie
 cli-usage-doctor = Vérifier la configuration et le confinement
 cli-usage-import = Importer un abonnement Leo Premium
+cli-usage-mcp = Déclarer, lister et approuver des serveurs MCP
 
 cli-keys-heading = Touches interactives :
 cli-key-send = Envoyer
@@ -258,6 +259,9 @@ doctor-settings-allow-ignored =
 doctor-settings-granted = accordée
 doctor-settings-allow-granted =
     la règle allow { $rule } dans { $path } est accordée pour ce répertoire
+doctor-settings-mcp-declared =
+    { $key } dans { $path } déclare un serveur MCP, ce que seul ~/.bravebot/mcp.json peut faire :
+    rien de ce qu'il contient n'est démarré
 doctor-managed = géré
 doctor-managed-pinned = { $names } depuis { $path }
 doctor-managed-nothing = { $path }, n'épinglant rien
@@ -348,6 +352,92 @@ hook-failed = le hook { $moment } `{ $program }` s'est mal terminé ({ $status }
 hook-stopped =
     le hook { $moment } `{ $program }` tournait encore après { $seconds } secondes et a été
     arrêté
+
+
+## Déclarer un serveur MCP, et l'approuver
+
+mcp-forms-heading = bravebot mcp prend l'une de ces formes :
+mcp-needs-a-command = bravebot mcp a besoin d'une commande
+mcp-unknown-command = bravebot mcp n'a pas de commande { $command }
+mcp-needs-an-alias = { $command } a besoin de l'alias d'un serveur
+mcp-unexpected-argument = { $command } ne prend pas { $argument }
+mcp-not-an-alias =
+    { $alias } ne peut pas nommer un serveur : un alias est fait de lettres, de chiffres, de - et
+    de _, commence par une lettre ou un chiffre, et fait au plus 64 caractères
+mcp-needs-a-transport = add a besoin de --stdio -- <programme> [arguments...] ou de --http <url>
+mcp-two-transports = add prend --stdio ou --http, pas les deux
+mcp-stdio-needs-a-program =
+    --stdio prend le programme et ses arguments après un -- seul, comme dans
+    --stdio -- npx -y weather-mcp
+mcp-http-needs-a-url = --http a besoin d'une url
+mcp-env-needs-a-name = --env a besoin du nom d'une variable
+mcp-dir-needs-a-path = --dir a besoin d'un répertoire
+mcp-dir-not-a-directory = { $path } n'est pas un répertoire
+mcp-dir-not-text = { $path } ne peut pas être écrit dans mcp.json, qui contient du texte
+mcp-not-added = { $alias } n'a pas été déclaré : { $problem }
+mcp-not-declared = aucun serveur MCP n'est déclaré sous le nom { $alias }
+mcp-problem-alias =
+    l'alias n'en est pas un : des lettres, des chiffres, - et _, en commençant par une lettre ou
+    un chiffre
+mcp-problem-not-an-object = l'entrée n'est pas un objet
+mcp-problem-transport = transport manque, ou n'est ni stdio ni http
+mcp-problem-key = { $key } n'est pas une clé qu'une déclaration possède
+mcp-problem-values =
+    elle contient des valeurs : une déclaration donne les noms des variables, et leurs valeurs
+    sont lues dans votre environnement
+mcp-problem-program = argv manque, est vide, ou contient autre chose qu'une chaîne
+mcp-problem-name =
+    une variable n'est pas un nom : une lettre ou _, puis des lettres, des chiffres et des _
+mcp-problem-assignment =
+    { $name } reçoit une valeur : une déclaration nomme la variable, et sa valeur est lue dans
+    votre environnement
+mcp-problem-directory = le répertoire n'est pas un chemin absolu
+mcp-problem-url = l'url n'est pas en http ou en https avec un hôte
+mcp-problem-credentials =
+    l'url porte un utilisateur ou un mot de passe, ce qui garderait un identifiant en clair
+mcp-problem-remote = un serveur distant ne prend pas de { $key }
+mcp-unreadable = { $path } ne peut pas être lu : { $reason }
+mcp-unreadable-too-large = il est plus gros qu'un fichier de déclarations n'a de raison de l'être
+mcp-unreadable-not-read = il n'a pas pu être lu comme du texte
+mcp-unreadable-not-json = ce n'est pas du JSON
+mcp-unreadable-not-an-object = ce n'est pas un objet JSON
+mcp-unreadable-servers = servers n'est pas un objet
+mcp-unreadable-key =
+    { $key } n'est pas une clé qu'il possède : il contient servers et rien d'autre
+mcp-not-while-incognito =
+    déclarer ou approuver un serveur écrit sur le disque, ce qu'une session incognito ne fera pas
+mcp-no-state-directory =
+    il n'y a pas de répertoire d'état, aucun serveur MCP n'est donc déclaré : aucune de
+    { $variables } ne nomme un répertoire de profil
+mcp-not-written = { $path } n'a pas pu être écrit ({ $error })
+mcp-declared = { $alias } déclaré dans { $path }
+mcp-variables = variables : { $names }
+mcp-directory = répertoire : { $path }
+mcp-digest = empreinte : { $digest }
+mcp-changed = modifié : { $fields }
+mcp-question = utiliser ce serveur MCP ?
+mcp-already-approved = { $alias } est approuvé, pour l'empreinte { $digest }
+mcp-recorded = { $alias } approuvé, pour l'empreinte { $digest }
+mcp-left-unapproved = { $alias } est déclaré et n'est pas approuvé
+mcp-nobody-asked =
+    personne n'a pu être interrogé au sujet de { $alias }, il est donc déclaré et n'est pas
+    approuvé : lancez bravebot mcp approve { $alias } dans un terminal
+mcp-nobody-to-ask =
+    personne ne peut être interrogé au sujet de { $alias } : lancez
+    bravebot mcp approve { $alias } dans un terminal
+mcp-removed = { $alias } retiré, avec toute approbation que lui seul portait
+mcp-none-declared = aucun serveur MCP n'est déclaré dans { $path }
+mcp-list-declared-in = déclarés dans { $path }
+mcp-approved = approuvé
+mcp-unapproved = non approuvé
+mcp-unapproved-run-approve = non approuvé : lancez bravebot mcp approve { $alias }
+mcp-cannot-be-used = inutilisable : { $problem }
+mcp-unusable = { $alias } est inutilisable : { $problem }
+mcp-list-unusable =
+    { $count ->
+        [one] une déclaration dans { $path } est inutilisable
+       *[other] { $count } déclarations dans { $path } sont inutilisables
+    }
 
 
 ## Approuver un répertoire, demandé une fois quand une session démarre ailleurs
