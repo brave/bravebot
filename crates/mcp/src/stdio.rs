@@ -10,8 +10,8 @@
 //! would draw over a screen.
 
 use crate::protocol::{
-    Listing, RpcNotification, RpcRequest, RpcResponse, ToolList, ToolResult, call_params,
-    initialize_params,
+    Listing, RpcNotification, RpcRequest, RpcResponse, ToolResult, call_params, initialize_params,
+    paged,
 };
 use crate::{McpError, McpResult, malformed};
 use bravebot_core::event::Sink;
@@ -204,9 +204,7 @@ impl StdioServer {
     /// List the tools this server offers, as the one labelled text a person vouches for before any
     /// of them is offered. SERVERS-8.
     pub fn list_tools(&mut self) -> McpResult<Listing> {
-        let result = self.send_request("tools/list", None)?;
-        let list: ToolList =
-            serde_json::from_value(result).map_err(|e| malformed("tool list", &e))?;
+        let list = paged(|params| self.send_request("tools/list", params))?;
         Ok(list.listing(&self.name))
     }
 

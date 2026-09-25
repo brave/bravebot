@@ -22,7 +22,7 @@ pub mod protocol;
 pub mod stdio;
 
 pub use http::HttpServer;
-pub use protocol::{Listing, MAX_WIRE, ToolResult, wire_name};
+pub use protocol::{Listing, MAX_WIRE, ToolResult, listed_or_none, wire_name};
 pub use stdio::StdioServer;
 
 use bravebot_core::label::Label;

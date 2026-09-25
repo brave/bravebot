@@ -13,7 +13,7 @@
 //! see [`bravebot_core::policy::Policy::before_server_request`] and issue #83.
 
 use crate::protocol::{
-    Listing, RpcRequest, RpcResponse, ToolList, ToolResult, call_params, initialize_params,
+    Listing, RpcRequest, RpcResponse, ToolResult, call_params, initialize_params, paged,
 };
 use crate::{McpError, McpResult, malformed};
 use bravebot_core::capability::{Capability, ServerAlias};
@@ -156,9 +156,7 @@ impl HttpServer {
         policy: &mut Policy<'_, S>,
         egress: &Egress,
     ) -> McpResult<Listing> {
-        let result = self.send(policy, egress, "tools/list", None)?;
-        let list: ToolList =
-            serde_json::from_value(result).map_err(|e| malformed("tool list", &e))?;
+        let list = paged(|params| self.send(policy, egress, "tools/list", params))?;
         Ok(list.listing(&self.name))
     }
 

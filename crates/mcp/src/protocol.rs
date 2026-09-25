@@ -93,14 +93,57 @@ pub(crate) struct ToolDescriptor {
 
 /// A `tools/list` result, one entry at a time: an entry that is not a tool is refused on its own
 /// rather than failing the list it arrived in.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub(crate) struct ToolList {
     #[serde(default)]
     pub(crate) tools: Vec<Value>,
+    #[serde(default, rename = "nextCursor")]
+    next_cursor: Option<String>,
 }
 
 /// The most tools one server's list offers. The rest are refused and counted.
 const MAX_TOOLS: usize = 128;
+
+/// The most pages of one server's list that are read. A server with more lists what these held.
+const MAX_PAGES: usize = 8;
+
+/// A server's whole list, asked for a page at a time for as long as a page names the next one.
+///
+/// The cursor is the server's own token handed back to it unread, so it decides nothing here but
+/// whether there is another page.
+pub(crate) fn paged(
+    mut ask: impl FnMut(Option<Value>) -> crate::McpResult<Value>,
+) -> crate::McpResult<ToolList> {
+    let mut list = ToolList::default();
+    let mut params = None;
+    for _ in 0..MAX_PAGES {
+        let page: ToolList =
+            serde_json::from_value(ask(params)?).map_err(|e| crate::malformed("tool list", &e))?;
+        list.tools.extend(page.tools);
+        let Some(cursor) = page.next_cursor else {
+            break;
+        };
+        params = Some(serde_json::json!({ "cursor": cursor }));
+    }
+    Ok(list)
+}
+
+/// JSON-RPC's code for a method the server does not have.
+const METHOD_NOT_FOUND: i64 = -32601;
+
+/// A handshake's list, where a server without `tools/list` is one that lists no tool.
+///
+/// A server serving only resources or prompts is entitled not to have the method, and it is
+/// started with nothing to offer rather than refused. Any other failure is the handshake's.
+pub fn listed_or_none(alias: &str, listed: crate::McpResult<Listing>) -> crate::McpResult<Listing> {
+    match listed {
+        Err(crate::McpError::Server {
+            code: METHOD_NOT_FOUND,
+            ..
+        }) => Ok(ToolList::default().listing(alias)),
+        other => other,
+    }
+}
 
 /// The most arguments a tool may take and still be offered.
 const MAX_ARGUMENTS: usize = 64;
@@ -233,16 +276,30 @@ fn described(text: &str) -> String {
     }
 }
 
-/// Whether a character changes how the text around it reads without being seen: the bidirectional
-/// controls and the zero-width characters.
+/// Whether a character changes how the text around it reads without being seen: Unicode's default
+/// ignorable characters, which hold the bidirectional controls, the zero-width characters, the
+/// variation selectors and the tags a model reads as letters, and the separators and annotation
+/// marks that break or cover a line without a newline.
 fn hides(c: char) -> bool {
     matches!(
         c,
-        '\u{061C}'
+        '\u{00AD}'
+            | '\u{034F}'
+            | '\u{061C}'
+            | '\u{115F}'..='\u{1160}'
+            | '\u{17B4}'..='\u{17B5}'
+            | '\u{180B}'..='\u{180F}'
             | '\u{200B}'..='\u{200F}'
-            | '\u{202A}'..='\u{202E}'
-            | '\u{2060}'..='\u{2069}'
+            | '\u{2028}'..='\u{202E}'
+            | '\u{2060}'..='\u{206F}'
+            | '\u{3164}'
+            | '\u{FE00}'..='\u{FE0F}'
             | '\u{FEFF}'
+            | '\u{FFA0}'
+            | '\u{FFF0}'..='\u{FFFB}'
+            | '\u{1BCA0}'..='\u{1BCA3}'
+            | '\u{1D173}'..='\u{1D17A}'
+            | '\u{E0000}'..='\u{E0FFF}'
     )
 }
 
@@ -575,6 +632,70 @@ mod tests {
         assert!(!text.contains("lookup"), "{text}");
     }
 
+    /// A server without `tools/list` lists no tool, and every other failure of the method is still
+    /// the handshake's.
+    #[test]
+    fn a_server_without_the_method_lists_no_tool() {
+        let none = listed_or_none(
+            "files",
+            Err(crate::McpError::Server {
+                code: METHOD_NOT_FOUND,
+                method: "tools/list".into(),
+            }),
+        )
+        .expect("a server without the method lists nothing");
+        assert_eq!((none.offered(), none.refused()), (0, 0));
+
+        for failed in [
+            crate::McpError::Server {
+                code: -32603,
+                method: "tools/list".into(),
+            },
+            crate::McpError::Transport("the server went away".into()),
+        ] {
+            assert!(listed_or_none("files", Err(failed)).is_err());
+        }
+    }
+
+    /// A list sent in pages is read to its last page, each asked for with the cursor the page before
+    /// it named, and one that always names another page is read no further than the bound.
+    #[test]
+    fn a_list_in_pages_is_read_to_its_last_page_and_no_further_than_the_bound() {
+        let mut asked = Vec::new();
+        let list = paged(|params| {
+            asked.push(params.clone());
+            Ok(match params {
+                None => serde_json::json!({"tools": [{"name": "a"}], "nextCursor": "second"}),
+                Some(_) => serde_json::json!({"tools": [{"name": "b"}]}),
+            })
+        })
+        .expect("both pages read");
+        assert_eq!(list.tools.len(), 2);
+        assert_eq!(asked, [None, Some(serde_json::json!({"cursor": "second"}))]);
+
+        let mut pages = 0;
+        let endless = paged(|_| {
+            pages += 1;
+            if pages > 2 * MAX_PAGES {
+                return Err(crate::McpError::Transport("asked past the bound".into()));
+            }
+            Ok(serde_json::json!({"tools": [{"name": format!("t{pages}")}], "nextCursor": "more"}))
+        })
+        .expect("read up to the bound");
+        assert_eq!((pages, endless.tools.len()), (MAX_PAGES, MAX_PAGES));
+
+        let broken = paged(|params| {
+            Ok(match params {
+                None => serde_json::json!({"tools": [{"name": "a"}], "nextCursor": "second"}),
+                Some(_) => serde_json::json!({"tools": "none"}),
+            })
+        });
+        assert!(
+            broken.is_err(),
+            "a page of the wrong shape was read as the end of the list"
+        );
+    }
+
     /// A description is drawn for a person, so what could reorder or hide text on their screen is
     /// blanked, and a long one is cut rather than scrolled past.
     #[test]
@@ -595,6 +716,53 @@ mod tests {
         assert_eq!(cut.chars().count(), MAX_DESCRIPTION + 4);
         // Nothing left is nothing said, rather than an empty sentence.
         assert!(tools[2]["description"].is_null());
+    }
+
+    /// A character a terminal draws as nothing is a sentence the person cannot read and the planner
+    /// can: tags spell letters to a model, and a line separator starts a row no margin is drawn on.
+    #[test]
+    fn a_character_nobody_sees_is_blanked() {
+        let hidden = [
+            '\u{00AD}',
+            '\u{034F}',
+            '\u{115F}',
+            '\u{180E}',
+            '\u{2028}',
+            '\u{2029}',
+            '\u{2064}',
+            '\u{3164}',
+            '\u{FE0F}',
+            '\u{FFA0}',
+            '\u{FFF9}',
+            '\u{1D173}',
+            '\u{E0001}',
+            '\u{E0041}',
+            '\u{E007F}',
+            '\u{E0100}',
+        ];
+        for c in hidden {
+            let raw = serde_json::json!({"tools": [{
+                "name": "a",
+                "description": format!("safe{c}evil"),
+                "inputSchema": {"properties": {"unit": {"type": "string", "enum": [format!("c{c}")]}}},
+            }]})
+            .to_string();
+            let tools = tools(&raw);
+            assert_eq!(
+                tools[0]["description"], "safe evil",
+                "U+{:04X} reached the description",
+                c as u32
+            );
+            assert!(
+                tools[0]["arguments"][0].get("enum").is_none(),
+                "U+{:04X} reached a choice",
+                c as u32
+            );
+        }
+        // A character that is drawn stays as the server wrote it.
+        let raw =
+            serde_json::json!({"tools": [{"name": "a", "description": "é ☀ 雨"}]}).to_string();
+        assert_eq!(tools(&raw)[0]["description"], "é ☀ 雨");
     }
 
     /// An argument is drawn as its name, its type and whether it is required. What its schema says

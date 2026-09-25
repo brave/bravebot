@@ -852,7 +852,8 @@ fn handshake_local(
     declared: Digest,
 ) -> McpResult<bravebot_agent::mcp::Reached> {
     server.initialize("bravebot", env!("CARGO_PKG_VERSION"))?;
-    let listing = server.list_tools()?;
+    let alias = server.name().to_string();
+    let listing = bravebot_mcp::listed_or_none(&alias, server.list_tools())?;
     Ok(bravebot_agent::mcp::Reached::new(
         Connection::Stdio(server),
         listing,
@@ -885,7 +886,7 @@ fn handshake_remote(
     let egress = bravebot_net::Egress::new();
     let mut server = HttpServer::new(alias, url);
     server.initialize(&mut policy, &egress, "bravebot", env!("CARGO_PKG_VERSION"))?;
-    let listing = server.list_tools(&mut policy, &egress)?;
+    let listing = bravebot_mcp::listed_or_none(alias, server.list_tools(&mut policy, &egress))?;
     Ok(bravebot_agent::mcp::Reached::new(
         Connection::Http(server),
         listing,

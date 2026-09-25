@@ -611,7 +611,11 @@ each character that reorders or hides text, is made a space, and it is cut at 10
 Some tools are refused rather than offered, and counted without being named: a word that is not a
 function name, one whose name on the wire would be longer than 64 characters, a word listed twice
 (every copy), and a tool whose arguments are not names. A list longer than 128 tools keeps the first
-128. The list is sorted by word, so the order a server sent it in changes nothing.
+128. A list sent in pages is read a page at a time, each asked for with the cursor the page before
+it named, and no more than 8 pages are read, so a server with more lists what those held. The list
+is sorted by word, so within the pages read the order a server sent it in changes nothing. A server that
+answers `tools/list` with JSON-RPC's method-not-found lists no tool, since one serving only
+resources or prompts need not have it, and any other failure of the method fails the handshake.
 
 That list is put to the person at the start of the first turn they ask for, whole. It shows each
 tool's name as `alias:tool`, its arguments, and every row of its description behind the margin with
@@ -640,9 +644,13 @@ be the order they were listed in. A delegate is offered none of them.
 `verified-by: bravebot_mcp::protocol::a_word_listed_twice_is_refused_both_times`
 `verified-by: bravebot_mcp::protocol::a_tool_whose_arguments_are_not_names_is_refused`
 `verified-by: bravebot_mcp::protocol::a_description_is_blanked_and_cut`
+`verified-by: bravebot_mcp::protocol::a_character_nobody_sees_is_blanked`
 `verified-by: bravebot_mcp::protocol::an_argument_is_its_name_type_and_whether_it_is_required`
 `verified-by: bravebot_mcp::protocol::the_list_is_the_same_whatever_order_the_server_sent`
 `verified-by: bravebot_mcp::protocol::a_long_list_is_capped_and_the_rest_counted`
+`verified-by: bravebot_mcp::protocol::a_server_without_the_method_lists_no_tool`
+`verified-by: bravebot_mcp::protocol::a_list_in_pages_is_read_to_its_last_page_and_no_further_than_the_bound`
+`verified-by: bravebot_mcp::stdio::a_list_in_pages_is_offered_whole`
 `verified-by: bravebot_mcp::protocol::printing_a_listing_does_not_print_what_the_server_said`
 `verified-by: bravebot_mcp::stdio::a_confined_server_completes_the_handshake_and_lists_tools`
 `verified-by: bravebot_mcp::http::a_handshake_and_tool_list_round_trip`
