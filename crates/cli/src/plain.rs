@@ -188,6 +188,13 @@ pub fn session(skip_permissions: bool) -> ExitCode {
         .unwrap_or_else(|| config.default_model.clone());
     let reads_effort = bravebot_tui::app::adopt_listing_for_model(&mut config, &named);
 
+    // The level the turns below ask for: the recorded pick, and otherwise the one the settings
+    // layers named (BACKEND-43). Resolved once, here, beside the other answers this session reads
+    // out of a file, because a file edited mid-session describes the next one and this mode has no
+    // command that changes the level.
+    let effort =
+        bravebot_session::store::effort(bravebot_session::store::load_effort(), settings.effort());
+
     // Said where a level was chosen and the model in force reads none, because a level charged for
     // and discarded at the far end answers exactly like one that was honoured, so silence would
     // leave somebody believing every turn of the session thought harder than it did. Said once,
@@ -196,7 +203,7 @@ pub fn session(skip_permissions: bool) -> ExitCode {
     // Nothing is said where no level was chosen: nothing was withheld from somebody who asked for
     // none. What is recorded stays recorded either way, so the choice applies again the moment a
     // model that reads one is in force (BACKEND-22).
-    if !reads_effort && bravebot_session::store::load_effort().is_some() {
+    if !reads_effort && effort.is_some() {
         asking.say(&t!(cli_notice, notice = t!(session_effort_not_read)));
     }
 
@@ -224,6 +231,7 @@ pub fn session(skip_permissions: bool) -> ExitCode {
         model,
         in_force: named,
         reads_effort,
+        effort,
         complained: None,
         home,
         profile,
@@ -358,6 +366,12 @@ struct Running<'a> {
     /// the rest of its life after the requests carrying one had stopped. A turn carries the
     /// recorded level only where this is true (BACKEND-22).
     reads_effort: bool,
+    /// How hard the turns of this session ask the model to think, where anything asked.
+    ///
+    /// The pick `/effort` recorded, and otherwise the level a settings file named (BACKEND-43).
+    /// Resolved once where the session is assembled, for the reason the attribution is: a file
+    /// edited mid-session describes the next one, and this mode has no command that changes it.
+    effort: Option<bravebot_session::store::Effort>,
     /// The last substitution said, so the same complaint is not repeated every turn.
     ///
     /// A session asks the same model over and over, so a substitution said once per turn is one
@@ -411,7 +425,7 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
             // Only where the roster describing the model in force says it is read. The choice
             // itself is left on disk, so it applies again under a model that reads one
             // (BACKEND-22).
-            .with_effort(bravebot_session::store::load_effort().filter(|_| self.reads_effort))
+            .with_effort(self.effort.filter(|_| self.reads_effort))
             .with_permissions(self.permissions.clone())
             .with_permission_mode(self.mode)
             .with_attribution(self.attribution.clone())
@@ -502,8 +516,8 @@ impl Running<'_> {
     /// Said once, on the turn that learned it, for the reason the same sentence is said once at
     /// startup: the condition holds for the rest of the session and repeating it between every
     /// prompt and its reply would bury the work. Nothing is said where no level was chosen, nothing
-    /// having been withheld from somebody who asked for none, and the choice stays on disk either
-    /// way so it applies again under a model that reads one (BACKEND-22).
+    /// having been withheld from somebody who asked for none, and the choice is kept either way so
+    /// it applies again under a model that reads one (BACKEND-22).
     fn a_level_refused_this_turn(&mut self) -> Option<String> {
         if !self.reads_effort
             || !bravebot_agent::backend::refused_a_level(self.config, &self.in_force)
@@ -511,7 +525,7 @@ impl Running<'_> {
             return None;
         }
         self.reads_effort = false;
-        bravebot_session::store::load_effort().map(|_| t!(session_effort_not_read).to_string())
+        self.effort.map(|_| t!(session_effort_not_read).to_string())
     }
 
     /// What to say where the endpoint answered with a model other than the one in force, and

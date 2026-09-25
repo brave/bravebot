@@ -1993,6 +1993,40 @@ fn a_run_sends_a_level_the_roster_says_the_model_reads() {
     );
 }
 
+/// A level named in a settings file and recorded nowhere reaches the request (BACKEND-43).
+///
+/// The whole point of the key: this run's home has never picked a level, which is the state of a
+/// machine where nobody ever opens the interactive interface, and without the key such a run has no
+/// route to one at all. A property of the process, for the reason the two above are: the run reads
+/// the layers, resolves the level against what is on disk and builds the request, and only what went
+/// out on the wire says whether those were joined up.
+#[test]
+fn a_run_sends_the_level_a_settings_file_named_where_nothing_is_recorded() {
+    let gateway = a_gateway_listing(r#"["tools", "reasoning", "reasoning_effort"]"#);
+    let settings = settings_for(&gateway).replace(
+        r#""model": "openrouter/reasons-only""#,
+        r#""model": "openrouter/reasons-only", "effort": "high""#,
+    );
+    let scratch = Scratch::new("cli-running-effort-configured").with_settings(&settings);
+
+    bravebot(&scratch.path, AT_A_GATEWAY, &["-p", "say something"]);
+
+    let asked = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the run reached the gateway");
+    assert!(
+        asked.contains(r#""reasoning_effort":"high""#),
+        "the level the settings named never reached the request: {asked}"
+    );
+    // Nothing is recorded for it: a level a file named is not a pick, and a run that wrote one down
+    // would make reading the file once enough to outlive the file.
+    assert!(
+        !scratch.path.join(".bravebot").join("effort").exists(),
+        "the run recorded a level nobody picked"
+    );
+}
+
 /// A one-shot run takes one turn and exits, so nothing is left holding the line to send it again:
 /// a tool for arranging a later look is not offered here (SCHED-6).
 ///

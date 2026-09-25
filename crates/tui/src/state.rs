@@ -1574,11 +1574,14 @@ impl Session {
     /// What comes back is not trusted: the file can be edited, so a recalled prompt goes into the
     /// input box for the user to read and submit. That keystroke is what makes it trusted, exactly
     /// as typing it would have been.
+    ///
+    /// Not the effort level, which a settings file may also name and which is therefore settled by
+    /// [`Session::adopt_effort`], the way the style of editing is: reading the record here as well
+    /// would put the rule that ranks the two in two places.
     pub fn with_stored_history(mut self) -> Self {
         self.history =
             crate::history::History::from_entries(bravebot_session::store::load_history());
         self.model = bravebot_session::store::load_model();
-        self.effort = bravebot_session::store::load_effort();
         self.persist = true;
         self
     }
@@ -2741,6 +2744,28 @@ impl Session {
             .and_then(crate::vim::Editing::named)
             .or_else(|| configured.and_then(crate::vim::Editing::named))
             .unwrap_or_default();
+    }
+
+    /// Settle how hard this session asks the model to think, given what a settings file said.
+    ///
+    /// The rule is [`bravebot_session::store::effort`] and the whole of it is there, so the terminal,
+    /// a session in lines and a one-shot run cannot come to disagree about which of the two answers
+    /// (BACKEND-43). What that decides is the level the picker opens on and the level a turn sends;
+    /// a level the model in force reads none of is still not sent, by
+    /// [`Session::effort_in_force`], and is still not forgotten.
+    ///
+    /// Nothing is written: a level a file named is not a pick, and recording one would make reading
+    /// a settings file once enough to outlive it.
+    ///
+    /// The recorded pick is read only for a session that persists, the rule
+    /// [`Session::adopt_editing`] follows: a test must not be handed the developer's own choice, or
+    /// what it asks for would depend on the machine it ran on.
+    pub fn adopt_effort(&mut self, configured: Option<&str>) {
+        let recorded = self
+            .persist
+            .then(bravebot_session::store::load_effort)
+            .flatten();
+        self.effort = bravebot_session::store::effort(recorded, configured);
     }
 
     /// Settle whether a check that finds nothing may promote a slot without anybody being asked.

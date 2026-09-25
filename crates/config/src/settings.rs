@@ -28,6 +28,9 @@
 //!   deployment.
 //! - `model`, for the same reason: it is where both Claude Code and opencode put that choice, and a
 //!   key those tools honour that this one silently dropped is worse than one nobody writes.
+//! - `effort`, this program's own name, beside `model` because it answers the same kind of question
+//!   about the same request: how hard the model is asked to think. Nothing else reads it, so there
+//!   was no spelling to borrow.
 //! - `permissions`, whose rules Claude Code spells the same way.
 //! - `provider`, in opencode's shape, read by [`crate::provider`].
 //! - `attribution`, Claude Code's name for what a commit message or a pull request may carry, so
@@ -149,6 +152,14 @@ pub struct Settings {
     /// Separate from `env` because it is not a variable: nothing exports `model`, and folding it
     /// into that map would make it collide with a name someone's shell already uses.
     model: Option<String>,
+    /// What the top-level `effort` key named, if it named anything.
+    ///
+    /// The word as the file spelled it, for the reason `editor_mode` below keeps one: which words
+    /// name a level is a question for the protocol that carries the field, and this crate
+    /// configures a backend. A word this program does not define is dropped where the level is
+    /// settled rather than here, so one spelling rule answers for a hand-edited settings file and a
+    /// hand-edited record alike.
+    effort: Option<String>,
     /// What the top-level `editorMode` key named, if it named anything.
     ///
     /// The word as the file spelled it, not a mode. Which words name an editing style is a question
@@ -472,6 +483,7 @@ impl Settings {
             scrub: scrub_list(root),
             permissions: permission_lists(root),
             model: word(root, "model"),
+            effort: word(root, "effort"),
             editor_mode: word(root, "editorMode"),
             // Read here so one file's worth can be parsed on its own, and overwritten by
             // [`Settings::layered`], which is the only caller that knows which layer this came
@@ -513,6 +525,17 @@ impl Settings {
     /// it, and that choice wins. This is what answers for somebody who has never made one.
     pub fn model(&self) -> Option<&str> {
         self.model.as_deref()
+    }
+
+    /// How hard the settings in force asked the model to think, if they asked for anything.
+    ///
+    /// The word the file spelled, unrecognised words and all, for the reason
+    /// [`Settings::editor_mode`] answers with one. A default rather than the level in force: the
+    /// interface records a choice that outlives the session making it, and that choice wins. This is
+    /// what answers for somebody who has never made one, which on a machine where nobody ever opens
+    /// the interface is everybody.
+    pub fn effort(&self) -> Option<&str> {
+        self.effort.as_deref()
     }
 
     /// The editing style the settings in force asked for, if they asked for one.
@@ -611,6 +634,7 @@ impl Settings {
             && self.scrub.is_empty()
             && self.permissions.is_empty()
             && self.model.is_none()
+            && self.effort.is_none()
             && self.editor_mode.is_none()
             && self.vetting.is_none()
             && self.keybindings.is_empty()
@@ -679,6 +703,7 @@ impl Settings {
             .is_some()
             .then_some("model")
             .into_iter()
+            .chain(self.effort.is_some().then_some("effort"))
             .chain(self.editor_mode.is_some().then_some("editorMode"))
             .chain(self.vetting.is_some().then_some("vetting.auto"))
             .chain((!self.keybindings.is_empty()).then_some("keybindings"))
@@ -1619,6 +1644,50 @@ mod tests {
         let settings = Settings::parse(r#"{"model": "opus"}"#);
         assert!(!settings.is_empty());
         assert_eq!(settings.names().collect::<Vec<_>>(), ["model"]);
+    }
+
+    /// The whole point of the key (BACKEND-43): a machine where nobody ever opens the interface has
+    /// no other route to a level, and two checkouts cannot ask for different ones through a record
+    /// stored once per person.
+    #[test]
+    fn a_top_level_effort_key_is_read() {
+        let settings = Settings::parse(r#"{"effort": "high"}"#);
+        assert_eq!(settings.effort(), Some("high"));
+        assert!(!settings.is_empty());
+        assert_eq!(settings.names().collect::<Vec<_>>(), ["effort"]);
+    }
+
+    /// The word as written, because which words name a level is not this crate's question: a name it
+    /// does not recognise has to reach the place the level is settled to be dropped by the one rule
+    /// that drops an unrecognised recorded word too.
+    #[test]
+    fn an_effort_word_is_read_as_the_file_spelled_it() {
+        assert_eq!(
+            Settings::parse(r#"{"effort": "HIGHEST"}"#).effort(),
+            Some("HIGHEST")
+        );
+    }
+
+    /// A blank is how a line is commented out everywhere else here, and surrounding space is the
+    /// shape a hand-edited file has. Every other shape is absence on the footing the `model` key's
+    /// is, which leaves whatever was recorded in force rather than stopping a session.
+    #[test]
+    fn an_effort_that_is_blank_or_not_a_string_names_nothing() {
+        for text in [
+            r#"{"effort": ""}"#,
+            r#"{"effort": "   "}"#,
+            r#"{"effort": 1}"#,
+            r#"{"effort": true}"#,
+            r#"{"effort": null}"#,
+            r#"{"effort": ["high"]}"#,
+            r#"{"effort": {"level": "high"}}"#,
+        ] {
+            assert_eq!(Settings::parse(text).effort(), None, "{text} named a level");
+        }
+        assert_eq!(
+            Settings::parse("{\"effort\": \" high\\n\"}").effort(),
+            Some("high")
+        );
     }
 
     /// A variable is a string. Coercing a number or a boolean would invent a spelling the writer
@@ -2901,6 +2970,24 @@ mod tests {
             .project(r#"{"model": "this-checkout"}"#)
             .read();
         assert_eq!(settings.model(), Some("this-checkout"));
+    }
+
+    /// The argument CLI-9 makes for `--model`, for a level: two checkouts in one account cannot ask
+    /// for different ones through a record stored once per person, so the nearer layer has to win,
+    /// and a layer that says nothing has to leave the level a weaker one named.
+    #[test]
+    fn the_closest_layer_that_named_an_effort_wins() {
+        let settings = Layers::new("effort-override")
+            .global(r#"{"effort": "low"}"#)
+            .project(r#"{"effort": "max"}"#)
+            .read();
+        assert_eq!(settings.effort(), Some("max"));
+
+        let only_global = Layers::new("effort-survives")
+            .global(r#"{"effort": "low"}"#)
+            .project(r#"{"model": "this-checkout"}"#)
+            .read();
+        assert_eq!(only_global.effort(), Some("low"));
     }
 
     /// A layer that says nothing about the model leaves the one a weaker layer named, on the same

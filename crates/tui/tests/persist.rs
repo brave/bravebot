@@ -311,6 +311,46 @@ fn adopted(configured: Option<&str>) -> bravebot_tui::vim::Editing {
     session.editing()
 }
 
+/// BACKEND-43: the pick outranks the file, because somebody who picked a level during a session
+/// picked it knowing what their settings said; and with nothing recorded the file is what the
+/// session opens on, which is the whole reason the key exists. A word neither file defines is no
+/// level at all, which `bravebot_session::store::a_settings_file_naming_no_level_asks_for_none` pins
+/// for both.
+#[test]
+fn a_recorded_level_is_read_back_and_a_settings_file_answers_where_none_is() {
+    with_temp_home("effort-adopted", || {
+        assert_eq!(
+            level(Some("high")),
+            Some(bravebot_aichat::protocol::Effort::High),
+            "a settings file answered for nobody"
+        );
+
+        store::save_effort(Some(bravebot_aichat::protocol::Effort::Low));
+        assert_eq!(level(None), Some(bravebot_aichat::protocol::Effort::Low));
+        assert_eq!(
+            level(Some("max")),
+            Some(bravebot_aichat::protocol::Effort::Low),
+            "a settings file outranked the choice somebody made"
+        );
+
+        // Asking for no level removes the record (SESSION-15), which puts somebody back where they
+        // were before they ever chose: with a file naming one, that is the file answering again.
+        store::save_effort(None);
+        assert_eq!(level(None), None);
+        assert_eq!(
+            level(Some("max")),
+            Some(bravebot_aichat::protocol::Effort::Max)
+        );
+    });
+}
+
+/// What a session that persists asks for, given what a settings file said.
+fn level(configured: Option<&str>) -> Option<bravebot_aichat::protocol::Effort> {
+    let mut session = bravebot_tui::state::Session::new("test").with_stored_history();
+    session.adopt_effort(configured);
+    session.effort()
+}
+
 /// The effort choice outlives the session that made it, the same way the model choice does.
 #[test]
 fn a_chosen_effort_is_read_back_next_session() {
