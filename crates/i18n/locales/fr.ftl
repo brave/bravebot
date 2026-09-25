@@ -407,15 +407,15 @@ mcp-unreadable-key =
 mcp-not-while-incognito =
     déclarer ou approuver un serveur écrit sur le disque, ce qu'une session incognito ne fera pas
 mcp-no-state-directory =
-    il n'y a pas de répertoire d'état, aucun serveur MCP n'est donc déclaré : aucune de
-    { $variables } ne nomme un répertoire de profil
+    il n'y a pas de répertoire d'état, aucun serveur MCP n'est donc déclaré : { $variables } ne
+    nomme aucun répertoire de profil
 mcp-not-written = { $path } n'a pas pu être écrit ({ $error })
 mcp-declared = { $alias } déclaré dans { $path }
 mcp-variables = variables : { $names }
 mcp-directory = répertoire : { $path }
 mcp-digest = empreinte : { $digest }
-mcp-changed = modifié : { $fields }
-mcp-question = utiliser ce serveur MCP ?
+mcp-changed = champs modifiés : { $fields }
+mcp-question = Utiliser ce serveur MCP ?
 mcp-already-approved = { $alias } est approuvé, pour l'empreinte { $digest }
 mcp-recorded = { $alias } approuvé, pour l'empreinte { $digest }
 mcp-left-unapproved = { $alias } est déclaré et n'est pas approuvé
@@ -427,7 +427,7 @@ mcp-nobody-to-ask =
     bravebot mcp approve { $alias } dans un terminal
 mcp-removed = { $alias } retiré, avec toute approbation que lui seul portait
 mcp-none-declared = aucun serveur MCP n'est déclaré dans { $path }
-mcp-list-declared-in = déclarés dans { $path }
+mcp-list-declared-in = déclarations dans { $path }
 mcp-approved = approuvé
 mcp-unapproved = non approuvé
 mcp-unapproved-run-approve = non approuvé : lancez bravebot mcp approve { $alias }
