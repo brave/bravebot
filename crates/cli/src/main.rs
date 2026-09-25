@@ -4,6 +4,7 @@
 
 mod exit;
 mod json;
+mod mcp;
 mod plain;
 mod progress;
 
@@ -51,6 +52,13 @@ fn main() -> ExitCode {
     // nosemgrep: rust.lang.security.args.args
     let mut args: Vec<String> = std::env::args().skip(1).collect();
 
+    // A bare `--` ends bravebot's own flags: what follows is another program's argv, as after
+    // `mcp add --stdio --`, where a server's own `--settings` must stay the server's.
+    let foreign = match args.iter().position(|arg| arg == "--") {
+        Some(at) => args.split_off(at),
+        None => Vec::new(),
+    };
+
     // Engaged here rather than deeper in because it must be true before the first thing that could
     // write is reached, and this is the last moment that is certain to be before all of them.
     if take_incognito(&mut args) {
@@ -95,6 +103,7 @@ fn main() -> ExitCode {
             return stopped_before_the_turn(as_json, Ending::Argument, complaint);
         }
     }
+    args.extend(foreign);
 
     match args.first().map(String::as_str) {
         Some("--version" | "-V") => {
@@ -140,6 +149,7 @@ fn main() -> ExitCode {
             "-p" | "--print" | "--mode" | "--model" | "--file" | "--add-dir" | "--trace" | "--json",
         ) => run_task(&args, skip_permissions),
         Some("doctor") => doctor(),
+        Some("mcp") => mcp::command(&args[1..]),
         Some("import-leo-creds") => import_leo_creds(&args[1..]),
         Some(flag) if flag.starts_with('-') => {
             refused_with_the_usage(as_json, t!(cli_unknown_option, flag = flag))
@@ -229,6 +239,7 @@ fn print_help() {
         ("bravebot --fork <id>", t!(cli_usage_fork)),
         ("bravebot doctor", t!(cli_usage_doctor)),
         ("bravebot import-leo-creds [channel]", t!(cli_usage_import)),
+        ("bravebot mcp <command>", t!(cli_usage_mcp)),
     ] {
         println!("  {form:<FORM$}{description}");
     }
@@ -1758,6 +1769,25 @@ fn doctor_found(ending: &mut Ending, found: Ending, problem: impl std::fmt::Disp
     *ending = ends_on(*ending, found);
 }
 
+/// Every settings layer that tried to declare an MCP server (SERVERS-1).
+///
+/// A failure rather than a note: whoever wrote the entry believes a server is configured, and
+/// nothing reads it, since the one file that declares a server is `~/.bravebot/mcp.json`. Named by
+/// key and file only, because the entry may hold an argv and the values of variables.
+fn report_mcp_declared(settings: &bravebot_config::Settings, ending: &mut Ending) {
+    for (path, key) in settings.mcp_declared() {
+        *ending = ends_on(*ending, Ending::Failed);
+        fact(
+            t!(doctor_settings_ignored),
+            t!(
+                doctor_settings_mcp_declared,
+                key = mcp::shown(key),
+                path = path.display().to_string()
+            ),
+        );
+    }
+}
+
 /// Report whether configuration is usable, without revealing the signing key.
 fn doctor() -> ExitCode {
     // What the report ends on, rather than whether it passed: CLI-6 gives a configuration this
@@ -1875,6 +1905,7 @@ fn doctor() -> ExitCode {
                     ),
                 }
             }
+            report_mcp_declared(&settings, &mut ending);
 
             // After the layers a person owns, because it is what answers for a name none of them
             // explains: a value they set and cannot see taking effect is pinned above all of them.
@@ -1995,6 +2026,9 @@ fn doctor() -> ExitCode {
                 Ending::Configuration,
                 t!(cli_configuration_problem, problem = err),
             );
+            // Said here too, since a layer that tried to declare a server is wrong whatever else
+            // the configuration is, and its author is not told anywhere else.
+            report_mcp_declared(&settings, &mut ending);
             // The one line from the section above that still has to be printed. A pin is the case
             // where the person reading this can do nothing about the error, so the file that holds
             // it is the only actionable thing in the report.

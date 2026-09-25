@@ -2124,3 +2124,335 @@ fn a_service_that_refuses_the_level_it_advertised_is_reported_as_reading_none() 
          reply: {said_to_the_person}"
     );
 }
+
+/// The declaration a test writes for the weather server, and the entry `mcp.json` holds for it.
+fn weather() -> (bravebot_config::mcp::Declaration, &'static str) {
+    let declaration = bravebot_config::mcp::Declaration::stdio(
+        vec!["npx".into(), "-y".into(), "weather-mcp".into()],
+        vec!["PATH".into()],
+        None,
+    )
+    .expect("a declaration");
+    let entry =
+        r#"{"transport": "stdio", "argv": ["npx", "-y", "weather-mcp"], "variables": ["PATH"]}"#;
+    (declaration, entry)
+}
+
+/// What `mcp-approved` under this home holds, or nothing where there is no such file.
+fn approvals(scratch: &Scratch) -> String {
+    std::fs::read_to_string(scratch.path.join(".bravebot").join("mcp-approved")).unwrap_or_default()
+}
+
+/// SERVERS-3: typing `mcp add` writes the declaration and is not the approval. With nobody at a
+/// terminal to put the question to, the server is declared, left unapproved, and listed as that
+/// rather than left out (SERVERS-14).
+#[test]
+fn an_added_server_nobody_was_asked_about_is_declared_and_listed_unapproved() {
+    let scratch = Scratch::new("cli-running-mcp-add");
+    let added = bravebot(
+        &scratch.path,
+        &[],
+        &[
+            "mcp",
+            "add",
+            "weather",
+            "--env",
+            "PATH",
+            "--stdio",
+            "--",
+            "npx",
+            "-y",
+            "weather-mcp",
+        ],
+    );
+    let (stdout, stderr) = said(&added);
+    assert!(added.status.success(), "{stderr}");
+    assert!(
+        stdout.contains("bravebot mcp approve weather"),
+        "nothing said how to approve it: {stdout}"
+    );
+
+    let (declaration, _) = weather();
+    let written = std::fs::read_to_string(scratch.path.join(".bravebot").join("mcp.json"))
+        .expect("the declaration was written");
+    let read = bravebot_config::mcp::Declarations::parse(&written).expect("it reads back");
+    assert_eq!(
+        read.get("weather").map(|entry| entry.declaration),
+        Some(Ok(declaration.clone()))
+    );
+    assert!(
+        !approvals(&scratch).contains(&declaration.digest().to_string()),
+        "typing the command approved the server"
+    );
+
+    let listed = bravebot(&scratch.path, &[], &["mcp", "list"]);
+    let (stdout, stderr) = said(&listed);
+    assert!(listed.status.success(), "{stderr}");
+    let line = stdout
+        .lines()
+        .find(|line| line.contains("weather"))
+        .unwrap_or_else(|| panic!("the declaration was left out: {stdout}"));
+    assert!(line.contains("stdio"), "{line}");
+    assert!(line.contains("unapproved"), "{line}");
+    assert!(line.contains(&declaration.digest().short()), "{line}");
+}
+
+/// SERVERS-10: a declaration names a variable and never holds its value, so `--env NAME=value` is
+/// refused, the refusal names the variable, and the value is printed nowhere and written nowhere.
+#[test]
+fn a_value_given_to_a_variable_is_refused_and_never_repeated() {
+    let scratch = Scratch::new("cli-running-mcp-value");
+    let output = bravebot(
+        &scratch.path,
+        &[],
+        &[
+            "mcp",
+            "add",
+            "weather",
+            "--env",
+            "WEATHER_TOKEN=hunter2-token",
+            "--stdio",
+            "--",
+            "npx",
+            "weather-mcp",
+        ],
+    );
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("WEATHER_TOKEN"), "{stderr}");
+    assert!(
+        !stdout.contains("hunter2") && !stderr.contains("hunter2"),
+        "the value was repeated: {stdout}{stderr}"
+    );
+    assert!(
+        !scratch.path.join(".bravebot").join("mcp.json").exists(),
+        "a refused declaration was written"
+    );
+}
+
+/// SERVERS-10: a value written where `add` expects none, as a stray word or joined to a flag, is
+/// refused without being repeated either.
+#[test]
+fn a_value_in_a_stray_word_or_a_joined_flag_is_never_repeated() {
+    let scratch = Scratch::new("cli-running-mcp-stray");
+    let program = ["--stdio", "--", "npx", "weather-mcp"];
+    for flags in [
+        vec!["--env=WEATHER_TOKEN=hunter2-token"],
+        vec!["--env", "PATH", "WEATHER_TOKEN=hunter2-token"],
+        vec!["--env", "WEATHER_TOKEN", "hunter2-token"],
+        vec!["--http=https://user:hunter2-token@mcp.example.com/mcp"],
+    ] {
+        let mut args = vec!["mcp", "add", "weather"];
+        args.extend(&flags);
+        args.extend(program);
+        let output = bravebot(&scratch.path, &[], &args);
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(2), "{flags:?}: {stderr}");
+        assert!(
+            !stdout.contains("hunter2") && !stderr.contains("hunter2"),
+            "{flags:?} repeated the value: {stdout}{stderr}"
+        );
+    }
+    assert!(
+        !scratch.path.join(".bravebot").join("mcp.json").exists(),
+        "a refused declaration was written"
+    );
+}
+
+/// SERVERS-3: everything after `--stdio --` is the server's argv, bravebot's own flags included.
+#[test]
+fn a_flag_of_bravebots_after_the_bare_dashes_is_the_servers_argument() {
+    let scratch = Scratch::new("cli-running-mcp-foreign");
+    let argv = [
+        "srv",
+        "--settings",
+        "/nowhere/srv.json",
+        "--incognito",
+        "--vet",
+        "--dangerously-skip-permissions",
+    ];
+    let mut args = vec!["mcp", "add", "srv", "--stdio", "--"];
+    args.extend(argv);
+    let output = bravebot(&scratch.path, &[], &args);
+    let (_, stderr) = said(&output);
+    assert!(output.status.success(), "{stderr}");
+    let written = std::fs::read_to_string(scratch.path.join(".bravebot").join("mcp.json"))
+        .expect("the declaration was written");
+    let read = bravebot_config::mcp::Declarations::parse(&written).expect("it reads back");
+    let declared = bravebot_config::mcp::Declaration::stdio(
+        argv.iter().map(|word| word.to_string()).collect(),
+        Vec::new(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        read.get("srv").map(|entry| entry.declaration),
+        Some(Ok(declared))
+    );
+}
+
+/// SERVERS-5: `remove` takes the approval out with the declaration, since an approval outliving
+/// its declaration is a digest nothing resolves, and one that would answer for the same argv
+/// written back later without anybody seeing it. An approval another alias still resolves to is
+/// that alias's, and stays.
+#[test]
+fn removing_a_server_drops_its_approval_and_no_other() {
+    let (declaration, entry) = weather();
+    let docs = bravebot_config::mcp::Declaration::http("https://docs.example.com/mcp".into())
+        .expect("a declaration");
+    let scratch = Scratch::new("cli-running-mcp-remove")
+        .with_state(
+            "mcp.json",
+            &format!(
+                r#"{{"servers": {{"weather": {entry}, "docs": {{"transport": "http", "url": "https://docs.example.com/mcp"}}}}}}"#
+            ),
+        )
+        .with_state(
+            "mcp-approved",
+            &format!("{}\n{}\n", declaration.digest(), docs.digest()),
+        );
+
+    let output = bravebot(&scratch.path, &[], &["mcp", "remove", "weather"]);
+    let (_, stderr) = said(&output);
+    assert!(output.status.success(), "{stderr}");
+    let approved = approvals(&scratch);
+    assert!(
+        !approved.contains(&declaration.digest().to_string()),
+        "the approval outlived its declaration: {approved}"
+    );
+    assert!(
+        approved.contains(&docs.digest().to_string()),
+        "another server's approval went with it: {approved}"
+    );
+}
+
+/// SERVERS-3's question where nobody can answer it: `approve` records nothing and ends on the
+/// status for an effect that was refused, so a script that ran it can tell it did not happen.
+#[test]
+fn approving_with_nobody_to_ask_is_refused_and_records_nothing() {
+    let (declaration, entry) = weather();
+    let scratch = Scratch::new("cli-running-mcp-approve").with_state(
+        "mcp.json",
+        &format!(r#"{{"servers": {{"weather": {entry}}}}}"#),
+    );
+
+    let output = bravebot(&scratch.path, &[], &["mcp", "approve", "weather"]);
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(4), "{stderr}");
+    assert!(!approvals(&scratch).contains(&declaration.digest().to_string()));
+}
+
+/// SERVERS-5: `get` prints the whole digest, which is what an approval is recorded against.
+#[test]
+fn get_shows_the_digest_an_approval_binds_to() {
+    let (declaration, entry) = weather();
+    let scratch = Scratch::new("cli-running-mcp-get").with_state(
+        "mcp.json",
+        &format!(r#"{{"servers": {{"weather": {entry}}}}}"#),
+    );
+
+    let output = bravebot(&scratch.path, &[], &["mcp", "get", "weather"]);
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        stdout.contains(&declaration.digest().to_string()),
+        "{stdout}"
+    );
+    assert!(stdout.contains("npx -y weather-mcp"), "{stdout}");
+    assert!(stdout.contains("PATH"), "{stdout}");
+}
+
+/// SERVERS-14: an entry that cannot be used is listed with what is wrong with it, beside the ones
+/// that can, and the list ends on the configuration status rather than looking like a clean one.
+#[test]
+fn a_declaration_that_cannot_be_used_is_listed_with_its_problem() {
+    let (_, entry) = weather();
+    let scratch = Scratch::new("cli-running-mcp-broken").with_state(
+        "mcp.json",
+        &format!(
+            r#"{{"servers": {{"weather": {entry}, "leaky": {{"transport": "stdio", "argv": ["x"], "env": {{"TOKEN": "hunter2"}}}}}}}}"#
+        ),
+    );
+
+    let output = bravebot(&scratch.path, &[], &["mcp", "list"]);
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    let line = stdout
+        .lines()
+        .find(|line| line.contains("leaky"))
+        .unwrap_or_else(|| panic!("the broken entry was left out: {stdout}"));
+    assert!(line.contains("values"), "{line}");
+    assert!(
+        stdout.lines().any(|line| line.contains("weather")),
+        "the usable entry was dropped with it: {stdout}"
+    );
+    assert!(!stdout.contains("hunter2") && !stderr.contains("hunter2"));
+}
+
+/// An incognito session writes neither file, so declaring a server there is refused and nothing
+/// is written, as an import is refused under INCOG-7.
+#[test]
+fn a_server_is_not_declared_in_an_incognito_session() {
+    let scratch = Scratch::new("cli-running-mcp-incognito");
+    let output = bravebot(
+        &scratch.path,
+        &[],
+        &[
+            "--incognito",
+            "mcp",
+            "add",
+            "weather",
+            "--stdio",
+            "--",
+            "npx",
+            "weather-mcp",
+        ],
+    );
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("incognito"), "{stderr}");
+    assert!(!scratch.path.join(".bravebot").join("mcp.json").exists());
+}
+
+/// SERVERS-1: a server declared in a checkout's settings file is a parse error `doctor` reports,
+/// naming the key and the file, rather than a declaration quietly ignored. The entry's own words,
+/// its argv and its values, are not printed.
+#[test]
+fn doctor_reports_a_server_declared_in_a_checkouts_settings() {
+    let scratch = Scratch::new("cli-running-mcp-doctor");
+    let cwd = scratch.path.join("checkout");
+    let project = cwd.join(".bravebot");
+    std::fs::create_dir_all(&project).expect("create the project directory");
+    std::fs::write(
+        project.join("settings.json"),
+        r#"{"mcpServers": {"weather": {"command": "npx", "args": ["-y", "weather-mcp"], "env": {"TOKEN": "hunter2"}}}}"#,
+    )
+    .expect("write the project layer");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        // A configuration with nothing else wrong with it, so the failure is this one.
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+    let line = stdout
+        .lines()
+        .find(|line| line.contains("mcpServers"))
+        .unwrap_or_else(|| panic!("the declaration was not reported: {stdout}"));
+    assert!(
+        line.contains(&project.join("settings.json").display().to_string()),
+        "{line}"
+    );
+    assert!(
+        !stdout.contains("weather-mcp") && !stdout.contains("hunter2"),
+        "the entry's contents were printed: {stdout}"
+    );
+}

@@ -7,13 +7,15 @@ governs:
   - crates/mcp/src/protocol.rs
   - crates/mcp/src/stdio.rs
   - crates/mcp/src/http.rs
+  - crates/config/src/mcp.rs
   - crates/config/src/settings.rs
+  - crates/cli/src/mcp.rs
   - crates/core/src/capability.rs
   - crates/core/src/permissions.rs
   - crates/core/src/policy.rs
   - crates/agent/src/tools.rs
   - crates/tui/src/confirm.rs
-documented-by: none (unbuilt: a reader can configure nothing until a crate reads a declaration, so there is no page to write yet. The reference page lands with the work, and this line is what says it is missing)
+documented-by: docs/website/docs/customize/mcp-servers.md
 ---
 
 ## Scope
@@ -25,32 +27,39 @@ surface that spec has none of.
 
 ## What exists today
 
-Almost nothing in this spec is built, and what there is amounts to half of three clauses.
-[SERVERS-9](#SERVERS-9)'s capability names the server it is about, so the gate `crates/mcp/`
-already runs on every call asks about one declared server rather than about the protocol, and a
-grant can be withdrawn while the run is going. What would *put* a grant there is still missing, so
-a caller writing the set out itself is the only thing that grants a call today.
-[SERVERS-11](#SERVERS-11)'s gate holds a request to a remote server to the destination it was
-addressed to, and refuses a hop that leaves it. The question that hop is meant to raise is missing
-for the same reason, since there is no declaration to ask about or to write an answer into.
+Declaring a server is built, and nothing that uses a declaration is. `bravebot mcp` writes
+`~/.bravebot/mcp.json`, asks the question that approves one, records the digest it was asked about,
+and lists what is declared ([SERVERS-1](#SERVERS-1), [SERVERS-3](#SERVERS-3),
+[SERVERS-5](#SERVERS-5), [SERVERS-10](#SERVERS-10), and the `list` half of
+[SERVERS-14](#SERVERS-14)). `doctor` names a settings layer that tries to declare one. Nothing is
+launched and nothing reaches a session: no crate depends on `crates/mcp/` yet, so an approved
+server is a line in a file and no more.
+
+The rest amounts to half of three clauses. [SERVERS-9](#SERVERS-9)'s capability names the server
+it is about, so the gate `crates/mcp/` already runs on every call asks about one declared server
+rather than about the protocol, and a grant can be withdrawn while the run is going. What would
+*put* a grant there is still missing, so a caller writing the set out itself is the only thing that
+grants a call today. [SERVERS-11](#SERVERS-11)'s gate holds a request to a remote server to the
+destination it was addressed to, and refuses a hop that leaves it. The question that hop is meant to
+raise is missing for the same reason, since no session reads a declaration to ask about or to write
+an answer into.
 [SERVERS-8](#SERVERS-8)'s namespace is composed by the client rather than reported by the server,
 and the sentence and the schema a server sends about a tool arrive labelled. What is missing there
 is the other end: no tool surface is assembled from a server's list, so nothing yet draws the
 margin those labels ask for.
 
-`crates/mcp/` is a finished client under nine normative clauses, and no crate depends on it: `mcp.md` records the gap in its own front matter, `documented-by: none
-(internal: no settings key wires up a server yet, so there is nothing a reader can configure)`.
+`crates/mcp/` is a finished client under nine normative clauses, and no crate depends on it.
 Issue #83 is where that was written down, and it names the four things wiring needs decided first:
 where a server is declared, what a name and an argv is trusted for, how the untrusted label
 [mcp.md](mcp.md) puts on a result reaches a slot, and whether servers are confined. Every clause
 below answers one of them.
 
-Read every clause here as a requirement on work nobody has started, not as a description of this
-program. The `verified-by: none` on each one but [SERVERS-8](#SERVERS-8),
-[SERVERS-9](#SERVERS-9) and [SERVERS-11](#SERVERS-11) is the honest form of that, and is what keeps
-a reader from taking the present tense as a claim about the current build. Those three are the
-exceptions because the half each pins is about what the client does rather than about a
-declaration, and the client exists: what it does is pinned, and nothing calls it.
+Read every other clause here as a requirement on work nobody has started, not as a description of
+this program. The `verified-by: none` on each of them is the honest form of that, and is what keeps
+a reader from taking the present tense as a claim about the current build. [SERVERS-8](#SERVERS-8),
+[SERVERS-9](#SERVERS-9) and [SERVERS-11](#SERVERS-11) pin a half that is about what the client does
+rather than about a declaration, and the client exists: what it does is pinned, and nothing calls
+it. Where a built clause has an unbuilt half, the clause says which.
 
 ## The parity target
 
@@ -123,7 +132,7 @@ machine asks again, and a deliberate `rm -rf` of the workspace no longer forgets
 ## The command line
 
 ```
-bravebot mcp add <alias> --stdio -- <program> [args...]
+bravebot mcp add <alias> [--env <name>]... [--dir <path>] --stdio -- <program> [args...]
 bravebot mcp add <alias> --http <url>
 bravebot mcp get <alias>
 bravebot mcp list
@@ -142,7 +151,12 @@ recorded for a project, defaulting to this one.
 
 `--stdio -- ...` takes the program and its arguments after a bare `--`, as argv and never as a line.
 Nothing here compiles shell syntax: that is [tools/command-line.md](tools/command-line.md)'s road,
-for a line a planner wrote, and a server is a program a person named.
+for a line a planner wrote, and a server is a program a person named. `--env <name>` names one
+variable the server receives ([SERVERS-10](#SERVERS-10)) and may be given more than once; `--dir
+<path>` is the directory it runs in, written into the file as the absolute path it resolves to.
+
+`forget` is unbuilt, and so are the columns of `list` that report a capability and a request
+([SERVERS-14](#SERVERS-14)).
 
 ### Coming from Claude Code
 
@@ -195,9 +209,17 @@ and the agent's own write gate covers the workspace, so any in-checkout file tha
 turns a tool call into execution nobody approved. Keeping the declaration outside every layer also
 keeps `doctor`'s answer about settings free of a question it cannot settle.
 
-**Unbuilt, so nothing pins this.** No crate reads a declaration, so there is nothing yet to hold to this.
+What a settings layer is taken to be declaring is `mcpServers`, the key another tool declares with,
+any key under `mcp` other than the two this spec gives a layer, `request` and `deny`, and an `mcp`
+that is not an object at all. Each one is
+a `doctor` line naming the key and the file, and the report fails on it. The line names nothing
+inside the entry, since the entry may hold an argv and the values of variables, and the rest of the
+file is read as it would have been.
 
-`verified-by: none`
+`verified-by: bravebot_config::settings::every_layer_that_names_a_server_is_recorded_and_none_declares_one`
+`verified-by: bravebot_config::settings::a_request_or_a_denial_in_the_mcp_block_is_not_a_declaration`
+`verified-by: bravebot_config::mcp::the_files_are_read_from_the_state_directory`
+`verified-by: bravebot_cli::running::doctor_reports_a_server_declared_in_a_checkouts_settings`
 
 <a id="SERVERS-2"></a>
 ### SERVERS-2: a checkout requests an alias and grants nothing
@@ -230,9 +252,21 @@ still not an endorsement of what the line will do on the tenth run. Splitting th
 record of what was approved is a record of a thing somebody read, and it is what makes the
 re-approval in [SERVERS-5](#SERVERS-5) meaningful rather than a formality.
 
-**Unbuilt, so nothing pins this.** There is no mcp subcommand.
+The question `add` and `approve` ask draws what [SERVERS-4](#SERVERS-4) shows, less the checkout
+that requested it, and is answered in a line with `y` or `n`: that clause's answers 1 and 3. Answer 2
+records a project path, so it is built with the request a checkout makes. Only the yes records
+anything, and a blank line, any other word, or the end of the input is
+the no. The question is put only where stdin and stdout are both a terminal; with either one piped
+nobody is asked, `add` still writes the declaration and says how to approve it, and `approve` is
+refused. An incognito session writes nothing to the state directory, so each of `add`, `approve`
+and `remove` is refused there and leaves the files as they were.
 
-`verified-by: none`
+`verified-by: bravebot_cli::mcp::a_yes_at_the_question_records_the_digest_and_nothing_else_does`
+`verified-by: bravebot_cli::mcp::approve_records_only_on_a_yes_and_a_no_ends_refused`
+`verified-by: bravebot_cli::mcp::the_question_shows_every_argument_as_the_word_it_is`
+`verified-by: bravebot_cli::running::an_added_server_nobody_was_asked_about_is_declared_and_listed_unapproved`
+`verified-by: bravebot_cli::running::approving_with_nobody_to_ask_is_refused_and_records_nothing`
+`verified-by: bravebot_cli::running::a_server_is_not_declared_in_an_incognito_session`
 
 <a id="SERVERS-4"></a>
 ### SERVERS-4: a server reachable for the first time is put to the person, with three answers
@@ -293,9 +327,24 @@ compiled plan rather than the line: the thing a person read has to be the thing 
 approval keyed on an alias would let an edit to the argv inherit the answer given about a different
 program. An alias is a label a person chose; it is not what the label points at.
 
-**Unbuilt, so nothing pins this.** Nothing computes a declaration digest and no approval record exists.
+The digest is SHA-256 over the declaration written as one JSON array, with the alias left out. Each
+argument is its own quoted string there, so two arguments never digest as one holding the same
+characters, and the variable names are a sorted set, since their order changes nothing a server
+receives. `mcp-approved` holds one
+digest per line in hex. `add` replacing a declaration names the fields that changed, and a digest no
+declaration resolves to any longer is dropped whenever `add`, `approve` or `remove` rewrites the
+file.
+Where the change is noticed at a session's start is unbuilt with that session's question.
 
-`verified-by: none`
+`verified-by: bravebot_config::mcp::a_digest_covers_the_program_every_argument_the_names_and_the_directory`
+`verified-by: bravebot_config::mcp::two_arguments_digest_apart_from_one_holding_the_same_characters`
+`verified-by: bravebot_config::mcp::a_digest_is_the_same_whatever_the_alias_or_the_order_of_the_names`
+`verified-by: bravebot_config::mcp::what_changed_is_named_by_field`
+`verified-by: bravebot_config::mcp::a_digest_reads_back_from_the_line_it_is_written_as`
+`verified-by: bravebot_config::mcp::an_approval_nothing_resolves_to_is_dropped`
+`verified-by: bravebot_cli::mcp::replacing_a_declaration_names_what_changed_and_asks_again`
+`verified-by: bravebot_cli::running::get_shows_the_digest_an_approval_binds_to`
+`verified-by: bravebot_cli::running::removing_a_server_drops_its_approval_and_no_other`
 
 <a id="SERVERS-6"></a>
 ### SERVERS-6: a command that fetches its own code is named as one at the prompt
@@ -436,9 +485,9 @@ server should mean.
 
 **Half built.** The capability names the alias, both transports gate on the one naming the server
 in front of them, and a grant can be withdrawn while the run is going. What is not built is
-anything that would put a grant there: no declaration exists for an alias to resolve against
-([SERVERS-1](#SERVERS-1)) and nobody is asked ([SERVERS-4](#SERVERS-4)), so a caller writing the
-set out itself is the only thing that grants a call today.
+anything that would put a grant there: a declaration exists ([SERVERS-1](#SERVERS-1)) and no
+session resolves an alias against it, and nobody is asked ([SERVERS-4](#SERVERS-4)), so a caller
+writing the set out itself is the only thing that grants a call today.
 
 `verified-by: bravebot_core::capability::a_grant_for_one_server_is_not_a_grant_for_another`
 `verified-by: bravebot_core::capability::withdrawing_one_grant_leaves_the_others`
@@ -467,10 +516,15 @@ file naming a destination grants nothing while a file holding a token is a token
 named ones keeps [MCP-9](mcp.md#MCP-9)'s property where it matters: this process's own credentials
 are in variables, and a server is code we did not write.
 
-**Unbuilt, so nothing pins this.** A declaration cannot name a variable, so the cost
-[mcp.md](mcp.md) records against its empty-environment clause stands unpaid.
+The declaration half is built: `--env <name>` adds a name, a name given a value (`--env
+TOKEN=...`, or an `env` block in the file) is refused, and the refusal names the variable and never
+repeats what it was set to. The launch half is unbuilt, since nothing launches a server, so the cost
+[mcp.md](mcp.md) records against its empty-environment clause stands unpaid until one does.
 
-`verified-by: none`
+`verified-by: bravebot_config::mcp::a_value_written_in_place_of_a_name_is_refused_without_repeating_it`
+`verified-by: bravebot_config::mcp::an_env_block_or_an_object_of_variables_is_values_and_is_refused`
+`verified-by: bravebot_config::mcp::a_name_that_is_not_one_is_refused`
+`verified-by: bravebot_cli::running::a_value_given_to_a_variable_is_refused_and_never_repeated`
 
 <a id="SERVERS-11"></a>
 ### SERVERS-11: a remote server is an egress destination, and its host is approved as one
@@ -517,14 +571,14 @@ a prompt rather than a rule.
 relocation is doing the ordinary thing. A boundary that has no answer but no is one a deployment
 works around, and a boundary everybody works around is off.
 
-**The declaration is unbuilt, so the question cannot be asked.** No settings key declares a server,
-so there is nothing to digest, no alias an edit could repoint, and nothing to rewrite an approval
-into. The prompt is unbuilt with it: a hop is detected at the egress gate, which allows or refuses
-and cannot ask, so an approval has to be a grant minted before the call and there is no prompt to
-mint one. Until issue #83 declares a server, a hop that leaves the declared destination is refused
-and nothing is sent, which is this clause with its question unasked rather than a different rule.
-What is built reads a destination as a host and a port together, as above. Nothing calls it, since
-no crate depends on the client.
+**The question is unbuilt.** A remote server can be declared and its digest covers the url, but no
+session reads a declaration, so there is no alias a call is made under and nothing to rewrite an
+approval into. The prompt is unbuilt with it: a hop is detected at the egress gate, which allows or
+refuses and cannot ask, so an approval has to be a grant minted before the call and there is no
+prompt to mint one. Until a session calls a declared server, a hop that leaves the declared
+destination is refused and nothing is sent, which is this clause with its question unasked rather
+than a different rule. What is built reads a destination as a host and a port together, as above.
+Nothing calls it, since no crate depends on the client.
 
 `verified-by: bravebot_mcp::http::mcp_traffic_passes_through_the_network_gate`
 `verified-by: bravebot_mcp::http::a_redirect_to_another_host_is_refused`
@@ -618,9 +672,14 @@ none are.
 interface reports a property that is not in force. A list that quietly omitted the unapproved would
 make a declaration somebody wrote and never answered for look like a file that was never read.
 
-**Unbuilt, so nothing pins this.** There is nothing to list.
+`bravebot mcp list` is built for what a declaration alone can answer: per alias, the transport,
+whether it is approved, and the digest, under the path of the file that declared it. A declaration
+that cannot be used is listed with its problem, and the list then fails. The capability, the
+requesting checkout and the standing answers are unbuilt with the things they report, and so are
+`doctor`'s half and the session's display.
 
-`verified-by: none`
+`verified-by: bravebot_cli::running::an_added_server_nobody_was_asked_about_is_declared_and_listed_unapproved`
+`verified-by: bravebot_cli::running::a_declaration_that_cannot_be_used_is_listed_with_its_problem`
 
 ## Testing this with the weather server
 
@@ -686,10 +745,10 @@ This spec cannot land without these. Each is named by what the clause says rathe
 
 | Spec | The clause | Change |
 |---|---|---|
-| [mcp.md](mcp.md) | front matter, `documented-by: none (internal: no settings key wires up a server yet, so there is nothing a reader can configure)` | Replaced. There is now something a reader configures, so the spec names the reference page and stops describing itself as internal. |
-| [mcp.md](mcp.md) | [MCP-9](mcp.md#MCP-9)'s known cost, that a server needing a variable does not work, "left to whatever names variables for a server when servers are reachable from something (issue #83)" | Discharged by [SERVERS-10](#SERVERS-10). The cost paragraph becomes a pointer rather than an open cost. |
+| [mcp.md](mcp.md) | front matter, `documented-by: none (internal: no settings key wires up a server yet, so there is nothing a reader can configure)` | Replaced. There is now something a reader configures, so the spec names the reference page and stops describing itself as internal. **Applied** with the declaration. |
+| [mcp.md](mcp.md) | [MCP-9](mcp.md#MCP-9)'s known cost, that a server needing a variable does not work, "left to whatever names variables for a server when servers are reachable from something (issue #83)" | Discharged by [SERVERS-10](#SERVERS-10). The cost paragraph becomes a pointer rather than an open cost. **Not yet applied**: a declaration names its variables, and the cost is paid when a launch hands them over, which is the work that launches a server. |
 | [mcp.md](mcp.md) | [MCP-1](mcp.md#MCP-1), what a server returns is untrusted | Extended, not amended. A description and an input schema join a result as content from outside, which is [SERVERS-8](#SERVERS-8). The clause's reasoning already covers them; the wording says "a tool result". |
-| [layering.md](layering.md) | [LAYER-1](layering.md#LAYER-1)'s table, and `bravebot-mcp` being a crate nothing depends on | Amended. Whichever of `bravebot-agent` and `bravebot-cli` reaches the client gains the dependency, and the row's constraint gains the declaration surface. `a_rows_dependency_list_is_what_the_manifest_asks_for` fails until the table is updated, which is the check working. |
+| [layering.md](layering.md) | [LAYER-1](layering.md#LAYER-1)'s table, and `bravebot-mcp` being a crate nothing depends on | Amended. Whichever of `bravebot-agent` and `bravebot-cli` reaches the client gains the dependency, and the row's constraint gains the declaration surface. `a_rows_dependency_list_is_what_the_manifest_asks_for` fails until the table is updated, which is the check working. **Applied in part**: the `bravebot-cli` and `bravebot-config` constraints name the declaration surface, and the dependency lands with the crate that reaches the client. |
 | [backends.md](backends.md) | [BACKEND-1](backends.md#BACKEND-1), a settings file may name a destination and never a permission, and none of them names a command to run | **Unchanged and reaffirmed.** [SERVERS-1](#SERVERS-1) exists so this clause does not have to move. A reviewer should read any future proposal to put a declaration in a settings layer as a proposal to amend this. |
 | [backends.md](backends.md) | [BACKEND-24](backends.md#BACKEND-24), settings layers resolve a name at a time | Extended. `mcp.request` is a list, and joins the row where every layer's entries are kept, for that row's reason: an entry only ever names something that then has to be approved separately. |
 | [permissions.md](permissions.md) | [PERM-1](permissions.md#PERM-1), a rule names a family of tools and matches on routing only, and "four families exist" | Amended. A fifth family, `Mcp`, with `Mcp(weather)` covering a server and `Mcp(weather:get_current_conditions)` one tool of it. The routing field is the alias and the tool name; the arguments are payload and no specifier matches them, which is [SERVERS-7](#SERVERS-7). |

@@ -19,6 +19,7 @@ pub mod env_var {
 
 pub mod hooks;
 mod managed;
+pub mod mcp;
 mod obfuscate;
 pub mod scrub;
 mod settings;

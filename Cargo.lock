@@ -160,6 +160,7 @@ name = "bravebot-config"
 version = "0.10.0"
 dependencies = [
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

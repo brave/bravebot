@@ -19,6 +19,7 @@ Usage:
   bravebot --fork <id>                   Fork a session and start exploring a different path
   bravebot doctor                        Check configuration and confinement
   bravebot import-leo-creds [channel]    Import a Leo Premium subscription
+  bravebot mcp <command>                 Declare, list and approve MCP servers
 ```
 
 ## Commands
@@ -34,6 +35,7 @@ Usage:
 | `bravebot --fork <id>`, `-f` | copy a session into one of its own and open that, to try a second approach |
 | `bravebot doctor` | report configuration and confinement, changing nothing |
 | `bravebot import-leo-creds [channel]` | import a Leo Premium subscription |
+| `bravebot mcp <command>` | declare, list, approve and remove MCP servers ([below](#mcp)) |
 | `bravebot --version`, `-V` | print the build |
 | `bravebot --help`, `-h` | print this |
 
@@ -259,6 +261,8 @@ Answers "what will this actually use", and changes nothing. It reports:
 
 - every backend this build can reach and what identifies it, which names the settings set;
 - which settings files are in force, and which of them won a name more than one set;
+- any settings file that tries to declare an [MCP server](../customize/mcp-servers.md), which fails
+  the report, since only `~/.bravebot/mcp.json` declares one;
 - which names a machine-level file pinned, and where that file is;
 - how to configure a model service where nothing configured will serve a turn;
 - the model in force, and whether it was chosen or defaulted;
@@ -300,6 +304,24 @@ bravebot import-leo-creds [stable|beta|nightly|development] [--forget]
 
 Without a channel, `stable` is what importing means. `--forget` removes what was imported. See
 [Leo Premium](../customize/premium.md).
+
+## `mcp`
+
+```sh
+bravebot mcp add <alias> [--env <name>]... [--dir <path>] --stdio -- <program> [args...]
+bravebot mcp add <alias> --http <url>
+bravebot mcp get <alias>
+bravebot mcp list
+bravebot mcp approve <alias>
+bravebot mcp remove <alias>
+```
+
+Declares a server in `~/.bravebot/mcp.json`, and approves one. `add` writes the declaration and then
+asks whether to use it; `approve` asks again later. The question is put only where stdin and stdout
+are both a terminal, and only `y` approves. `approve` with nobody to ask, or answered with anything
+else, exits 4. `list` exits 3 where a declaration in the file cannot be used. `add`, `approve` and
+`remove` are refused in an incognito session. No session uses a declared server yet. See
+[MCP servers](../customize/mcp-servers.md).
 
 ## Interactive keys
 
