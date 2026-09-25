@@ -90,18 +90,11 @@ pub fn session(skip_permissions: bool) -> ExitCode {
     // Asked of the model this session will request, which is the recorded one or the configured
     // default: no model can be named on the command line here, since the flag composes with
     // everything except this one.
-    if let bravebot_agent::backend::Serving::NothingConfigured {
-        subscription,
-        a_service_is_configured,
-    } = bravebot_agent::backend::serving(
-        &config,
-        &bravebot_net::Egress::new(),
-        &crate::model_for_this_run(None, &config),
-    ) {
-        return fail(
-            Ending::Configuration,
-            crate::how_to_configure_a_model(subscription.as_deref(), a_service_is_configured),
-        );
+    //
+    // Where nothing is configured at all, what Claude Code or opencode configured is offered first,
+    // in lines, the way this session asks everything (IMPORT-1).
+    if let Some(ended) = crate::import::before_the_session(&mut config) {
+        return ended;
     }
 
     let settings = bravebot_config::Settings::load();
@@ -600,13 +593,13 @@ pub struct Prompting<R: BufRead, W: Write> {
 }
 
 impl<R: BufRead, W: Write> Prompting<R, W> {
-    fn new(input: R, output: W) -> Self {
+    pub(crate) fn new(input: R, output: W) -> Self {
         Self { input, output }
     }
 
     /// Say something beside the work. A failed write is dropped: stderr closed means nobody is
     /// reading, not that the session should end holding what it was going to say.
-    fn say(&mut self, line: &str) {
+    pub(crate) fn say(&mut self, line: &str) {
         let _ = writeln!(self.output, "{line}");
         let _ = self.output.flush();
     }
@@ -663,7 +656,7 @@ impl<R: BufRead, W: Write> Prompting<R, W> {
     }
 
     /// Ask, and read the end of the input as a refusal.
-    fn ask(&mut self, lines: &[String], question: &str) -> Decision {
+    pub(crate) fn ask(&mut self, lines: &[String], question: &str) -> Decision {
         self.put(lines, question).unwrap_or(Decision::Reject)
     }
 }

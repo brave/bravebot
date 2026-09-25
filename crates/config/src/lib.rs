@@ -33,6 +33,7 @@ pub use settings::{
 };
 
 pub mod bedrock;
+pub mod import;
 pub mod provider;
 
 include!(concat!(env!("OUT_DIR"), "/baked.rs"));

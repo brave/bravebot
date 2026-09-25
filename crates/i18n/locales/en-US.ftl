@@ -31,6 +31,7 @@ cli-usage-continue = Pick up the most recent session in this directory
 cli-usage-fork = Fork a session and start exploring a different path
 cli-usage-doctor = Check configuration and confinement
 cli-usage-import = Import a Leo Premium subscription
+cli-usage-import-providers = Import a model service Claude Code or opencode configured
 cli-usage-mcp = Declare, list and approve MCP servers
 
 cli-keys-heading = Interactive keys:
@@ -124,6 +125,12 @@ onboarding-no-model = no model service is configured yet
 # Said beside it where a subscription is stored and could not be read, because somebody in that
 # case is one import away rather than a whole configuration away.
 onboarding-subscription-unusable = the subscription that is stored could not be used: { $problem }
+# Said before the routes where Claude Code or opencode configures a service bravebot can use and
+# nobody was there to be asked about it: a one-shot run, --json, a pipe, or doctor.
+onboarding-import-one =
+    { $source } configures a model service bravebot can use: run `bravebot import-providers` in a terminal to import it.
+onboarding-import-both =
+    { $first } and { $second } configure model services bravebot can use: run `bravebot import-providers` in a terminal to import them.
 # Said instead, where a service is configured and only the model in force is Brave's own. A
 # settings block copied out of another tool names its models and names no default, so this is
 # where somebody following that route lands, and what they have to do is name one of their own.
@@ -420,6 +427,63 @@ hook-failed = the { $moment } hook `{ $program }` did not end well ({ $status })
 hook-stopped =
     the { $moment } hook `{ $program }` was still running after { $seconds } seconds and was
     stopped
+
+
+## Importing a model service Claude Code or opencode configured
+
+# Said above everything an import would write, naming the files it was read from. Every name and
+# value follows before the question, because what is written is what the person approves.
+import-found = { $source } configures a model service bravebot can use, in { $files }.
+# Where no file was read: the setup is exported rather than written down.
+import-found-exported =
+    { $source } configures a model service bravebot can use, in this process's environment.
+import-adds = Importing it adds these to { $file }:
+# One gateway, with the host its requests go to: that host is where a credential is sent, so it is
+# the part of the entry the question is really about.
+import-adds-gateway = provider.{ $id }, reached at { $endpoint }: { $entry }
+import-key-held = provider.{ $id }: a key is held for it, which is asked about on its own
+import-key-file =
+    provider.{ $id }: its key is read from { $path }, which is not followed, so no key is written
+import-kept = Left as they are, since { $file } already sets them:
+import-pinned = Not offered, since { $file } sets them for every user of this machine:
+# Found and not imported, one line each, by name and reason and never by value.
+import-left-heading = Found in { $source } and not imported:
+import-left-anthropic-api = Anthropic's own API, whose wire format no service here speaks
+import-left-vertex = Google Vertex AI, which no service here reaches
+import-left-bearer-token =
+    a Bedrock API key; bravebot signs Bedrock requests through the AWS credential chain instead
+import-left-no-region = Bedrock with no region to sign for
+import-left-sign-in = a sign-in that belongs to opencode
+import-left-another-sdk = an entry reached through an SDK other than an OpenAI-compatible one
+import-left-no-endpoint = no reachable endpoint is stated or known for it
+import-left-substitution =
+    its key is built from an opencode substitution inside a longer value, which bravebot does not make
+import-question = Import this from { $source }?
+# Asked on its own, after the import is approved, and never showing the key.
+import-key-question =
+    Write the key for provider.{ $id } into { $file }, where it is kept in plain text, to be sent to { $endpoint }?
+import-key-export =
+    provider.{ $id } reads its key from { $variables }: export it before starting bravebot.
+import-key-none = provider.{ $id } is written with no credential.
+import-imported = imported what { $source } configured into { $file }
+import-unset-variable =
+    provider.{ $id } in { $file } reads its key from { $variables }, which is not set here: export it, then run bravebot again
+# Said where the session opens anyway, because the model it runs on is served by another entry.
+import-unset-variable-later =
+    provider.{ $id } in { $file } reads its key from { $variables }, which is not set here: its models answer once it is exported
+import-not-written = { $file } was not written: { $problem }
+import-not-a-document =
+    { $file } does not hold a settings document, so nothing can be imported into it without losing what it says
+import-too-large =
+    { $file } is past what bravebot reads, or would be with the import in it, so it was not written
+import-changed =
+    { $file } changed while the import was asking, so it was not written: run bravebot import-providers to ask again
+import-needs-a-terminal = import-providers asks before it writes anything, so it needs a terminal to ask on
+import-not-while-incognito = an import writes settings to disk, which an incognito session will not do
+import-no-home = there is no home directory to write settings in
+import-nothing-found = neither Claude Code nor opencode configures a model service bravebot can use
+import-nothing-new = nothing is left to import: every name found is already set, or pinned
+import-takes-nothing-else = import-providers takes no arguments
 
 
 ## Declaring an MCP server, and approving one

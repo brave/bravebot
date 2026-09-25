@@ -19,6 +19,7 @@ Usage:
   bravebot --fork <id>                   Fork a session and start exploring a different path
   bravebot doctor                        Check configuration and confinement
   bravebot import-leo-creds [channel]    Import a Leo Premium subscription
+  bravebot import-providers              Import a model service Claude Code or opencode configured
   bravebot mcp <command>                 Declare, list and approve MCP servers
 ```
 
@@ -35,6 +36,7 @@ Usage:
 | `bravebot --fork <id>`, `-f` | copy a session into one of its own and open that, to try a second approach |
 | `bravebot doctor` | report configuration and confinement, changing nothing |
 | `bravebot import-leo-creds [channel]` | import a Leo Premium subscription |
+| `bravebot import-providers` | import a model service Claude Code or opencode configured, asking first |
 | `bravebot mcp <command>` | declare, list, approve and remove MCP servers ([below](#mcp)) |
 | `bravebot --version`, `-V` | print the build |
 | `bravebot --help`, `-h` | print this |
@@ -304,6 +306,17 @@ bravebot import-leo-creds [stable|beta|nightly|development] [--forget]
 
 Without a channel, `stable` is what importing means. `--forget` removes what was imported. See
 [Leo Premium](../customize/premium.md).
+
+## `import-providers`
+
+```sh
+bravebot import-providers
+```
+
+Reads what Claude Code and opencode configured in your home directory, shows what it would add to
+`~/.bravebot/settings.json`, and asks once for each. It takes no arguments, needs a terminal to ask on,
+and refuses in an incognito session. See
+[Importing from Claude Code or opencode](../customize/configuration.md#importing-from-claude-code-or-opencode).
 
 ## `mcp`
 

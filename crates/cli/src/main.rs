@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 mod exit;
+mod import;
 mod json;
 mod mcp;
 mod plain;
@@ -152,6 +153,7 @@ fn main() -> ExitCode {
         Some("doctor") => doctor(),
         Some("mcp") => mcp::command(&args[1..]),
         Some("import-leo-creds") => import_leo_creds(&args[1..]),
+        Some("import-providers") => import::providers(&args[1..]),
         Some(flag) if flag.starts_with('-') => {
             refused_with_the_usage(as_json, t!(cli_unknown_option, flag = flag))
         }
@@ -240,6 +242,7 @@ fn print_help() {
         ("bravebot --fork <id>", t!(cli_usage_fork)),
         ("bravebot doctor", t!(cli_usage_doctor)),
         ("bravebot import-leo-creds [channel]", t!(cli_usage_import)),
+        ("bravebot import-providers", t!(cli_usage_import_providers)),
         ("bravebot mcp <command>", t!(cli_usage_mcp)),
     ] {
         println!("  {form:<FORM$}{description}");
@@ -320,12 +323,28 @@ fn print_help() {
 /// Nothing here names `doctor` itself, for that reason. A line telling somebody to run the
 /// command they are reading the output of is a line that has to be edited out of one of the two
 /// places it appears, which is how the two come to say different things.
-fn how_to_configure_a_model(refused: Option<&str>, a_service_is_configured: bool) -> String {
+///
+/// `looked` is what Claude Code and opencode hold, where nobody was asked about it: what was left
+/// behind comes before the routes, so a person whose setup was looked at is told so (IMPORT-4), and
+/// a source holding something importable names the command that asks (IMPORT-8).
+fn how_to_configure_a_model(
+    refused: Option<&str>,
+    a_service_is_configured: bool,
+    looked: &import::Looked,
+) -> String {
     let mut lines = vec![t!(onboarding_no_model).to_string()];
     if let Some(problem) = refused {
         lines.push(t!(onboarding_subscription_unusable, problem = problem));
     }
     lines.push(String::new());
+    if !looked.left().is_empty() {
+        lines.extend(looked.left().iter().cloned());
+        lines.push(String::new());
+    }
+    if let Some(command) = looked.command() {
+        lines.push(command);
+        lines.push(String::new());
+    }
 
     // One line or three routes, never both. Somebody who has a service set up and only the wrong
     // model in force is one settings key away, and three ways to set up a service is three things
@@ -553,7 +572,11 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
         return stopped_before_the_turn(
             as_json,
             Ending::Configuration,
-            how_to_configure_a_model(subscription.as_deref(), a_service_is_configured),
+            how_to_configure_a_model(
+                subscription.as_deref(),
+                a_service_is_configured,
+                &import::looked(a_service_is_configured),
+            ),
         );
     }
 
@@ -1504,18 +1527,8 @@ fn interactive(start: bravebot_tui::app::Start, skip_permissions: bool) -> ExitC
     // Before the session opens, for the reason a one-shot run is stopped before the turn: a
     // transcript that began with nothing configured would read as the agent rather than as the
     // configuration, and this is the one moment somebody is looking for what to do next.
-    if let bravebot_agent::backend::Serving::NothingConfigured {
-        subscription,
-        a_service_is_configured,
-    } = bravebot_agent::backend::serving(
-        &config,
-        &bravebot_net::Egress::new(),
-        &model_for_this_run(None, &config),
-    ) {
-        return fail(
-            Ending::Configuration,
-            how_to_configure_a_model(subscription.as_deref(), a_service_is_configured),
-        );
+    if let Some(ended) = import::before_the_session(&mut config) {
+        return ended;
     }
 
     let settings = bravebot_config::Settings::load();
@@ -2057,7 +2070,11 @@ fn doctor() -> ExitCode {
                 println!();
                 println!(
                     "{}",
-                    how_to_configure_a_model(subscription.as_deref(), a_service_is_configured)
+                    how_to_configure_a_model(
+                        subscription.as_deref(),
+                        a_service_is_configured,
+                        &import::looked(a_service_is_configured),
+                    )
                 );
             }
         }

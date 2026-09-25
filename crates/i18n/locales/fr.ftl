@@ -41,6 +41,7 @@ cli-usage-continue = Reprendre la session la plus récente de ce répertoire
 cli-usage-fork = Dupliquer une session pour explorer une autre voie
 cli-usage-doctor = Vérifier la configuration et le confinement
 cli-usage-import = Importer un abonnement Leo Premium
+cli-usage-import-providers = Importer un service de modèle configuré par Claude Code ou opencode
 cli-usage-mcp = Déclarer, lister et approuver des serveurs MCP
 
 cli-keys-heading = Touches interactives :
@@ -126,6 +127,10 @@ cli-piped-input-too-large =
 
 onboarding-no-model = aucun service de modèle n'est encore configuré
 onboarding-subscription-unusable = l'abonnement enregistré n'a pas pu être utilisé : { $problem }
+onboarding-import-one =
+    { $source } configure un service de modèle que bravebot peut utiliser : lancez `bravebot import-providers` dans un terminal pour l'importer.
+onboarding-import-both =
+    { $first } et { $second } configurent des services de modèle que bravebot peut utiliser : lancez `bravebot import-providers` dans un terminal pour les importer.
 onboarding-name-a-configured-model =
     Un service est configuré, mais le modèle en vigueur est l'un de ceux de Brave : indiquez l'un des vôtres avec la clé `model` dans ~/.bravebot/settings.json, ou avec --model pour une exécution unique. `bravebot doctor` indique ce que propose chaque service configuré.
 onboarding-pick-one = Configurez l'une de ces options, puis relancez bravebot :
@@ -352,6 +357,55 @@ hook-failed = le hook { $moment } `{ $program }` s'est mal terminé ({ $status }
 hook-stopped =
     le hook { $moment } `{ $program }` tournait encore après { $seconds } secondes et a été
     arrêté
+
+
+## Importer un service de modèle configuré par Claude Code ou opencode
+
+import-found = { $source } configure un service de modèle que bravebot peut utiliser, dans { $files }.
+import-found-exported =
+    { $source } configure un service de modèle que bravebot peut utiliser, dans l'environnement de ce processus.
+import-adds = L'import ajoute ceci à { $file } :
+import-adds-gateway = provider.{ $id }, joignable à { $endpoint } : { $entry }
+import-key-held = provider.{ $id } : une clé est détenue pour cette entrée ; elle fait l'objet d'une question à part
+import-key-file =
+    provider.{ $id } : sa clé est lue dans { $path }, un chemin qui n'est pas suivi, donc aucune clé n'est écrite
+import-kept = Laissés tels quels, puisque { $file } les définit déjà :
+import-pinned = Non proposés, puisque { $file } les définit pour tous les utilisateurs de cette machine :
+import-left-heading = Trouvés dans { $source } et non importés :
+import-left-anthropic-api = l'API native d'Anthropic, dont aucun service ici ne parle le format d'échange
+import-left-vertex = Google Vertex AI, qu'aucun service ici ne joint
+import-left-bearer-token =
+    une clé d'API Bedrock ; bravebot signe plutôt les requêtes Bedrock avec la chaîne d'identifiants AWS
+import-left-no-region = Bedrock sans région pour laquelle signer
+import-left-sign-in = une connexion qui appartient à opencode
+import-left-another-sdk = une entrée qui passe par un SDK autre qu'un SDK compatible OpenAI
+import-left-no-endpoint = aucune adresse joignable n'est indiquée ni connue pour cette entrée
+import-left-substitution =
+    sa clé est construite à partir d'une substitution opencode au milieu d'une valeur plus longue, que bravebot ne fait pas
+import-question = Importer ceci depuis { $source } ?
+import-key-question =
+    Écrire la clé de provider.{ $id } dans { $file }, où elle est gardée en clair, pour l'envoyer à { $endpoint } ?
+import-key-export =
+    provider.{ $id } lit sa clé dans { $variables } : exportez-la avant de lancer bravebot.
+import-key-none = provider.{ $id } est écrit sans identifiant.
+import-imported = ce que { $source } configure a été importé dans { $file }
+import-unset-variable =
+    provider.{ $id } dans { $file } lit sa clé dans { $variables }, qui n'est pas définie ici : exportez-la, puis relancez bravebot
+import-unset-variable-later =
+    provider.{ $id } dans { $file } lit sa clé dans { $variables }, qui n'est pas définie ici : ses modèles répondront une fois qu'elle sera exportée
+import-not-written = { $file } n'a pas été écrit : { $problem }
+import-not-a-document =
+    { $file } ne contient pas de document de réglages, donc rien ne peut y être importé sans perdre ce qu'il contient
+import-too-large =
+    { $file } dépasse ce que bravebot lit, ou le dépasserait une fois l'import ajouté ; il n'a donc pas été écrit
+import-changed =
+    { $file } a changé pendant que l'import posait ses questions, il n'a donc pas été écrit : lancez bravebot import-providers pour les reposer
+import-needs-a-terminal = import-providers demande confirmation avant d'écrire quoi que ce soit, il lui faut donc un terminal pour poser la question
+import-not-while-incognito = un import enregistre des réglages sur le disque, ce qu'une session incognito ne fera pas
+import-no-home = il n'y a pas de répertoire personnel où écrire les réglages
+import-nothing-found = ni Claude Code ni opencode ne configure de service de modèle que bravebot puisse utiliser
+import-nothing-new = il ne reste rien à importer : chaque nom trouvé est déjà défini, ou épinglé
+import-takes-nothing-else = import-providers ne prend aucun argument
 
 
 ## Déclarer un serveur MCP, et l'approuver

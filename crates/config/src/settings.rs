@@ -96,7 +96,7 @@ const VETTING_BLOCK: &str = "vetting";
 ///
 /// A settings file is a handful of short strings. Bounded so a file that grew by accident, or was
 /// replaced by something else entirely, is refused rather than parsed.
-const MAX_BYTES: u64 = 64 * 1024;
+pub(crate) const MAX_BYTES: u64 = 64 * 1024;
 
 /// The file the command line named, for the layer that sits above the three that are found.
 ///
@@ -848,7 +848,7 @@ impl Drop for Document {
 /// Strings only, on the footing everything else here reads them: a number or a boolean where a word
 /// belongs would have to be given a spelling nobody chose. Blank is absence rather than a choice of
 /// nothing, since a key set to `""` is how somebody comments one out without deleting the line.
-fn word(root: &serde_json::Map<String, serde_json::Value>, key: &str) -> Option<String> {
+pub(crate) fn word(root: &serde_json::Map<String, serde_json::Value>, key: &str) -> Option<String> {
     match root.get(key) {
         Some(serde_json::Value::String(word)) => Some(word.trim())
             .filter(|word| !word.is_empty())
@@ -1271,9 +1271,9 @@ fn strings(block: &serde_json::Map<String, serde_json::Value>, name: &str) -> Ve
 /// has been told where the profile is. `USERPROFILE` is the one stock Windows sets, and is read there
 /// only, since on Unix it is not a name the platform states anything in.
 #[cfg(windows)]
-const PROFILE_VARIABLES: &[&str] = &["HOME", "USERPROFILE"];
+pub(crate) const PROFILE_VARIABLES: &[&str] = &["HOME", "USERPROFILE"];
 #[cfg(not(windows))]
-const PROFILE_VARIABLES: &[&str] = &["HOME"];
+pub(crate) const PROFILE_VARIABLES: &[&str] = &["HOME"];
 
 /// The global state directory, or `None` when the platform names no profile directory to look in.
 ///
