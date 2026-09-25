@@ -870,7 +870,7 @@ Each of the following holds in that mode exactly as it holds outside it:
 |---|---|
 | [MCP-3](mcp.md#MCP-3), a stdio server is not launched without confinement | A server that cannot be confined is not started, in this mode too. Confinement is not a question anybody was being asked. |
 | [MCP-9](mcp.md#MCP-9) and [SERVERS-10](#SERVERS-10), the environment is the named variables and nothing else | The prompt showed the names. Skipping the showing does not widen the set. |
-| [MCP-1](mcp.md#MCP-1) and [SERVERS-8](#SERVERS-8), a result, a description and a schema are untrusted | A label is not an approval. Nothing a person could have said would have made a server's output trusted, so there is nothing here for a skipped question to have granted. |
+| [MCP-1](mcp.md#MCP-1), a result is untrusted | A label is not an approval. Nothing a person could have said at a call would have made what it returned trusted, so there is nothing here for a skipped question to have granted. |
 | [SERVERS-1](#SERVERS-1), only the person's own directory declares a server | An undeclared server does not become declared by nobody being asked about it. A checkout's request still resolves against declarations or resolves to nothing. |
 | [SERVERS-9](#SERVERS-9), the capability | A capability is configuration, not a prompt. A server with no grant is called by nobody in this mode either. |
 | [SERVERS-12](#SERVERS-12), a managed denial | An administrator's removal is not a question being put to the person running the program. |
@@ -900,18 +900,28 @@ That is the mode working as asked, and it is why the declaration file is the one
 cannot write: the mode removes the person from the loop, so the only remaining protection is that
 nothing inside the workspace could have put a server there.
 
+**A second known cost.** [SERVERS-8](#SERVERS-8)'s question is the one that puts a server's words in
+front of the planner, so in this mode every tool's description and argument schema reaches the
+planner endorsed by the mode rather than read by anybody. It is vouching's cost in
+[MODE-4](permission-modes.md#MODE-4), reached through a server's list instead of a file. A list
+offered this way stays offered after the session cycles out of the mode, because its words are
+already in the context the planner writes from and taking the tools back would not take them out.
+Each call from then on is asked.
+
 **How it is built.** A requested server nothing approved is started without
 [SERVERS-4](#SERVERS-4)'s question being drawn, and nothing is written to `mcp-approved` or
 `mcp-projects`. A server's list is offered without [SERVERS-8](#SERVERS-8)'s question being drawn or
 a check being made, since nobody would read the check's verdict, and no `tools` line is written. A
 call is made without [SERVERS-7](#SERVERS-7)'s question being drawn, as answer 1 and never answer 2,
-so nothing is written to `mcp-tools`. A `deny` rule still refuses one
+so nothing is written to `mcp-tools`, and out of the mode the next call is asked whatever was
+offered in it. A `deny` rule still refuses a call
 ([MODE-6](permission-modes.md#MODE-6)). Confinement, the named variables and the egress gate are the
 same code in either mode. The display names the mode and the servers the session started. It does
 not say beside each one whether it started unasked because of the mode.
 
 `verified-by: bravebot_cli::servers::skipping_permissions_starts_the_server_unasked_and_records_nothing`
 `verified-by: bravebot_agent::mcp::bypassing_answers_both_prompts_and_records_nothing`
+`verified-by: bravebot_agent::mcp::a_list_offered_in_bypass_stays_offered_and_each_later_call_asks`
 
 <a id="SERVERS-14"></a>
 ### SERVERS-14: what is reachable is visible without running anything

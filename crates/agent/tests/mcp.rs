@@ -990,6 +990,52 @@ fn bypassing_answers_both_prompts_and_records_nothing() {
     );
 }
 
+/// A list offered in bypass stays offered once the session cycles out of the mode, since its words
+/// are already in the context the planner writes from, and from then on each call is asked.
+#[test]
+fn a_list_offered_in_bypass_stays_offered_and_each_later_call_asks() {
+    let scratch = Scratch::new("stepped-down");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+        tool_request(FORECAST, r#"{"city":"Lyon"}"#),
+        reply_with("done again"),
+    ]);
+    let mut unasked = Answering::new(Decision::Reject, CallDecision::approve_and_stand());
+    let mut bypassing = bravebot_agent::Confining::new(&mut unasked, PermissionMode::Bypass, false);
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast for Paris")
+            .with_mcp(Some(session.clone()))
+            .with_permission_mode(PermissionMode::Bypass),
+        &mut bypassing,
+    );
+    assert_eq!(
+        methods(&server),
+        ["tools/call"],
+        "bypassing did not make the call"
+    );
+
+    let mut asked = Answering::new(Decision::Reject, CallDecision::reject());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast for Lyon").with_mcp(Some(session)),
+        &mut asked,
+    );
+    assert!(asked.lists.is_empty(), "the list was asked about again");
+    assert_eq!(asked.calls.len(), 1, "a call out of bypass was not asked");
+    assert!(
+        methods(&server).is_empty(),
+        "a call nobody approved was made"
+    );
+}
+
 /// A session that may write nothing still asks both questions, records neither answer, and says
 /// on the call prompt that answer 2 cannot be kept.
 #[test]
