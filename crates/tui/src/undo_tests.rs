@@ -427,6 +427,139 @@ fn complete_and_failed_restores_keep_files_trust_programs_and_history_aligned() 
     }
 }
 
+/// `/undo` is confined the way a write is, live and after a resume. A pull between the turn and
+/// the rewind turns a directory the turn wrote into into a link out of the workspace; following
+/// it would put the checkout's bytes over a file outside the tree and delete another. Both paths
+/// are refused and named, stay distrusted, and the file that still resolves inside goes back.
+#[cfg(unix)]
+#[test]
+fn undo_refuses_the_paths_a_directory_since_linked_out_of_the_workspace_would_carry_outside() {
+    if !in_isolated_profile() {
+        return;
+    }
+    use bravebot_agent::workspace::{Backup, Before};
+    use bravebot_aichat::protocol::Message;
+    for resumed in [false, true] {
+        let root = scratch_dir(&format!("undo-relinked-{resumed}"));
+        let outside = scratch_dir(&format!("undo-relinked-outside-{resumed}"));
+        std::fs::create_dir_all(root.join("redirect")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("controlled.txt"), "a file outside").unwrap();
+        std::fs::write(outside.join("fresh.txt"), "another file outside").unwrap();
+        let workspace = Workspace::new(&root).unwrap();
+        let root = workspace.root();
+        let mut trust = TrustStore::new(root);
+        trust.trust(".");
+        let mut programs = TrustedPrograms::new();
+        let mut conversation = Conversation::new();
+        let mut session = Session::new("test");
+        let mut stored =
+            sessions::Handle::begin(root, sessions::Front::Terminal, bravebot_stamp::BUILD);
+        let start = conversation.recounted().len();
+        session.paste("edit the checkout");
+        session.submit().unwrap();
+        session.open_rewind_point(
+            rewind_point(&session, &conversation, &trust, &programs, &stored),
+            "edit the checkout".to_string(),
+        );
+        conversation.push(Message::user("edit the checkout"));
+        conversation.push(Message::assistant("done"));
+        session.complete("done", vec![], 11);
+        session.record_turn(start, &conversation);
+        session.keep_backups(vec![
+            Backup {
+                path: root.join("redirect/controlled.txt"),
+                was: Before::Bytes(b"what the checkout held".to_vec()),
+                captured_trust: Integrity::Trusted,
+            },
+            Backup {
+                path: root.join("redirect/fresh.txt"),
+                was: Before::Nothing,
+                captured_trust: Integrity::Trusted,
+            },
+            Backup {
+                path: root.join("restorable"),
+                was: Before::Bytes(b"original".to_vec()),
+                captured_trust: Integrity::Trusted,
+            },
+        ]);
+        std::fs::write(root.join("redirect/controlled.txt"), "the turn's edit").unwrap();
+        std::fs::write(root.join("redirect/fresh.txt"), "the turn's file").unwrap();
+        std::fs::write(root.join("restorable"), "latest").unwrap();
+        save(&mut stored, &session, &conversation, &trust, &programs);
+        std::fs::remove_dir_all(root.join("redirect")).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("redirect")).unwrap();
+        if resumed {
+            let record = sessions::load(root, stored.id()).unwrap();
+            trust = record.trust_map(root).unwrap();
+            programs = record.trusted_programs(root);
+            conversation = Conversation::restored(record.conversation.clone());
+            let mut reopened = Session::new("test");
+            reopened.replay(
+                &conversation,
+                &record.title,
+                &sessions::recall(root, &record),
+            );
+            reopened.restore_spend(record.tokens, record.spend.clone());
+            reopened.restore_rewind_points(record.rewind_points(root), &conversation);
+            session = reopened;
+        }
+        assert!(
+            session.rewind_points().last().is_some_and(|point| {
+                point.backups.iter().any(|backup| {
+                    backup.path.ends_with("redirect/controlled.txt")
+                        && matches!(backup.was, Before::Bytes(_))
+                })
+            }),
+            "the point did not keep the bytes, so nothing here asks where they go (resumed: {resumed})"
+        );
+        rewind(
+            &mut session,
+            &mut conversation,
+            &mut trust,
+            &mut programs,
+            &mut stored,
+            &workspace,
+            &mut None,
+            1,
+        );
+        assert_eq!(
+            std::fs::read_to_string(outside.join("controlled.txt")).unwrap(),
+            "a file outside",
+            "the rewind wrote outside the workspace (resumed: {resumed})"
+        );
+        assert_eq!(
+            std::fs::read_to_string(outside.join("fresh.txt")).ok(),
+            Some("another file outside".to_string()),
+            "the rewind deleted a file outside the workspace (resumed: {resumed})"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("restorable")).unwrap(),
+            "original"
+        );
+        assert!(trust.is_trusted("restorable"));
+        let told = session
+            .transcript
+            .iter()
+            .map(|entry| entry.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        for refused in ["redirect/controlled.txt", "redirect/fresh.txt"] {
+            assert_eq!(
+                trust.integrity_of(refused),
+                Some(Integrity::Untrusted),
+                "{refused} kept its snapshot trust (resumed: {resumed})"
+            );
+            assert!(
+                told.contains(&root.join(refused).display().to_string()),
+                "the rewind did not name {refused} (resumed: {resumed}): {told}"
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(&outside).unwrap();
+    }
+}
+
 /// Desktop effects keep imported checkpoints and current file decisions, including on interruption.
 #[test]
 fn terminal_bridge_terminal_handoff_and_both_forks_keep_current_file_decisions() {

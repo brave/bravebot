@@ -2445,7 +2445,8 @@ fn rewind(
     stored.retain_rewind_coverage(&point.coverage);
     let gaps = point.coverage.gaps();
     let snapshot = point.snapshot;
-    let refused = bravebot_agent::rewind::restore(point.backups, trust, &snapshot.trust, servers);
+    let refused =
+        bravebot_agent::rewind::restore(workspace, point.backups, trust, &snapshot.trust, servers);
     if !refused.is_empty() {
         session.record_rewind_gap(bravebot_agent::rewind::CoverageGap::BackupUnavailable);
     }

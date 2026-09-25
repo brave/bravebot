@@ -1436,6 +1436,47 @@ impl Workspace {
         };
         std::mem::take(&mut *guard)
     }
+
+    /// Put one path back as it stood, or say it could not be.
+    ///
+    /// Confined the way the write it undoes was, and asked now: a file of a directory opened beside
+    /// the project has to land in one, any other has to land in the project, and a directory on
+    /// its path may since have become a link somewhere else. A removal unlinks the name rather than
+    /// what it points at, so for one it is the directory holding the name that is asked.
+    ///
+    /// A path whose file did not exist is removed again, and one already gone counts as removed:
+    /// the state asked for is the state that is there. A path whose contents were not kept is
+    /// refused without being touched, since what it held is not here to write.
+    pub(crate) fn put_back(&self, path: &Path, was: &Before) -> Result<(), WorkspaceError> {
+        let escapes = || WorkspaceError::Escapes {
+            path: path.display().to_string(),
+        };
+        let reached = match was {
+            Before::Nothing => path.parent(),
+            Before::Bytes(_) | Before::NotKept => Some(path),
+        };
+        let lands = reached.and_then(destination).ok_or_else(escapes)?;
+        let confined = if self.is_opened(path) && !path.starts_with(&self.root) {
+            self.is_opened(&lands)
+        } else {
+            lands.starts_with(&self.root)
+        };
+        if !confined {
+            return Err(escapes());
+        }
+        let failed = |detail: String| WorkspaceError::Io {
+            path: path.display().to_string(),
+            detail,
+        };
+        match was {
+            Before::Bytes(bytes) => std::fs::write(path, bytes).map_err(|e| failed(e.to_string())),
+            Before::Nothing => match std::fs::remove_file(path) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                other => other.map_err(|e| failed(e.to_string())),
+            },
+            Before::NotKept => Err(failed("what it held was not kept".to_string())),
+        }
+    }
 }
 
 /// What a path holds before something is about to write over it, up to `room` bytes.
@@ -1457,22 +1498,6 @@ pub(crate) fn kept(resolved: &Path, room: usize) -> Before {
             Ok(bytes) if bytes.len() <= room => Before::Bytes(bytes),
             _ => Before::NotKept,
         },
-    }
-}
-
-/// Put one path back as it stood, or say it could not be.
-///
-/// A path whose file did not exist is removed again, and one already gone counts as removed: the
-/// state asked for is the state that is there. A path whose contents were not kept is refused
-/// without being touched, since what it held is not here to write.
-pub(crate) fn put_back(path: &Path, was: &Before) -> std::io::Result<()> {
-    match was {
-        Before::Bytes(bytes) => std::fs::write(path, bytes),
-        Before::Nothing => match std::fs::remove_file(path) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            other => other,
-        },
-        Before::NotKept => Err(std::io::Error::other("what it held was not kept")),
     }
 }
 

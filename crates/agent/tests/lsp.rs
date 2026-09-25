@@ -299,6 +299,7 @@ fn a_server_approved_in_one_turn_answers_the_next() {
     let mut trust = trusting_the_workspace(&workspace);
     let target = trust.clone();
     let refused = bravebot_agent::rewind::restore(
+        &workspace,
         vec![bravebot_agent::workspace::Backup {
             path: workspace.root().join("src/a.rs"),
             was: bravebot_agent::workspace::Before::Bytes(b"restored original".to_vec()),
