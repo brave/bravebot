@@ -93,7 +93,7 @@ export function Bots({
       <header className="sessions-head">
         {/* The same control the session list's own opens with, so the two tabs begin the same
             way. No split beside it: a bot's folder is asked for once, in the form. */}
-        <SidebarTools query={query} onQuery={setQuery} label="Search bots" action={<Button className="new" onClick={() => setEditing('new')}>
+        <SidebarTools query={query} onQuery={setQuery} label="Search bots" action={<Button className="new w-full" onClick={() => setEditing('new')}>
           <span className="plus" aria-hidden="true">
             +
           </span>
@@ -168,13 +168,13 @@ export function Bots({
           <div className="session-group-head">
             <CollapsibleTrigger asChild><Button
               variant="ghost"
-              className="session-group-fold"
+              className="session-group-fold min-w-0 flex-1 justify-start gap-1.5 px-3 text-left"
             >
-              <span className={`chevron ${showing ? 'open' : ''}`} aria-hidden="true">
+              <span className={`chevron ${showing ? 'open' : ''} shrink-0 text-muted-foreground`} aria-hidden="true">
                 ›
               </span>
-              <span className="session-group-name">Archived</span>
-              <span className="count">{away.length}</span>
+              <span className="session-group-name min-w-0 flex-1 truncate">Archived</span>
+              <span className="count ml-auto shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs tabular-nums">{away.length}</span>
             </Button></CollapsibleTrigger>
           </div>
           {/* The rows scroll on their own once there are enough of them. A fold pinned to the
@@ -209,6 +209,12 @@ export function Bots({
 /**
  * One bot.
  *
+ * Drawn the same way a conversation row is: the open button fills the card, and the actions
+ * control (⋯) sits inside that same card at top-right, revealed on hover, focus, or when the
+ * bot's conversation is the one on screen — so a list of bots reads as a list of bots rather
+ * than a row of ellipses. The open/current state is the same `bg-accent` the session list
+ * gives its current row.
+ *
  * Two buttons rather than a row with a control inside it, for the reason the session group heading
  * gives about its own plus: a button cannot be nested in a button, and the bigger of the two —
  * opening the bot — is the one that gets the whole row.
@@ -228,14 +234,14 @@ function BotRow({
 }): React.JSX.Element {
   const where = bot.directory.split('/').pop() ?? bot.directory
   return (
-    <Item className={`bot${open ? ' bot-open' : ''}`}>
-      <Button variant="ghost" className="bot-open-button h-auto w-full justify-start text-left" onClick={() => onOpen(bot)}>
+    <div className={`bot group relative ${open ? 'bot-open' : ''}`}>
+      <Button variant="ghost" className={`bot-open-button h-auto w-full justify-start gap-1.5 px-3 py-2 text-left ${open ? 'group-[.bot-open]:bg-accent text-accent-foreground' : ''}`} onClick={() => onOpen(bot)}>
         <BotAvatar seed={bot.avatar} doing={doing} />
-        <span className="bot-said">
+        <span className="bot-said pr-10">
           <span className="bot-name">{bot.name}</span>
           {/* The whole path in the tooltip, because the column clips it — the one case the
               tooltip rule here allows, which is text the layout took away. */}
-          <span className="bot-where" title={bot.directory}>
+          <span className={`bot-where truncate text-xs ${open ? 'text-accent-foreground/80' : 'text-muted-foreground'}`} title={bot.directory}>
             {where}
             {bot.session === null && ' · not spoken to yet'}
           </span>
@@ -244,14 +250,14 @@ function BotRow({
       <Button
         variant="ghost"
         size="icon-sm"
-        className="bot-edit"
+        className="bot-edit absolute top-1.5 right-1.5 rounded-full opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 group-[.bot-open]:opacity-100"
         aria-label={`Edit ${bot.name}`}
         title={`Edit ${bot.name}`}
         onClick={onEdit}
       >
         <span aria-hidden="true">⋯</span>
       </Button>
-    </Item>
+    </div>
   )
 }
 
@@ -296,13 +302,13 @@ function ArchivedRow({
 }): React.JSX.Element {
   const where = bot.directory.split('/').pop() ?? bot.directory
   return (
-    <Item size="sm" className={`bot-archived${asking ? ' bot-asking' : ''}`}>
+    <div className={`bot-archived rounded-md transition-colors px-3 py-2 ${asking ? 'bot-asking bg-removed/10' : 'hover:bg-accent'}`}>
       <span className="bot-said">
         <span className="bot-name">{bot.name}</span>
-        <span className="bot-where" title={bot.directory}>{where}</span>
+        <span className="bot-where truncate text-xs text-muted-foreground" title={bot.directory}>{where}</span>
       </span>
-      <Button variant="outline" type="button" className="bot-restore" title={`Bring ${bot.name} back, with its session, its memory and its face.`} onClick={onRestore}>Restore</Button>
-      <Button variant="destructive" type="button" className="bot-delete" title={`Delete ${bot.name} for good. Local memory history is deleted. Project files and conversations are kept.`} onClick={onAsk}>Delete</Button>
+      <Button variant="outline" size="sm" type="button" className="bot-restore" title={`Bring ${bot.name} back, with its session, its memory and its face.`} onClick={onRestore}>Restore</Button>
+      <Button variant="destructive" size="sm" type="button" className="bot-delete" title={`Delete ${bot.name} for good. Local memory history is deleted. Project files and conversations are kept.`} onClick={onAsk}>Delete</Button>
       <AlertDialog open={asking} onOpenChange={(open) => { if (!open) onCancel() }}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -315,7 +321,7 @@ function ArchivedRow({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </Item>
+    </div>
   )
 }
 

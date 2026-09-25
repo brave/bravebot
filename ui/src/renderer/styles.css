@@ -1474,57 +1474,19 @@ button { cursor: pointer; }
    A bot is a name, a purpose, a memory and a checkout. What a row shows is what tells two of them
    apart at a glance: the face, the name, and where it works. */
 
-.bot { display: flex; align-items: center; gap: 2px; }
+.bot { margin: 1px 0; }
 
-.bot-open-button {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  /* Tighter than it looks: the figure is drawn with air around it inside its own square, so a gap
-     matched to the text would leave the name floating away from the face. */
-  gap: 6px;
-  padding: 5px 8px;
-  border: none;
-  border-radius: 7px;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-}
-.bot-open-button:hover { background: rgba(127, 127, 127, 0.08); }
-.bot-open-button:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
-/* The same mark an open session gets, so "this is the one on screen" reads the same in both
-   tabs. */
-.bot-open .bot-open-button { background: var(--accent-quiet); color: var(--accent-ink); }
-.bot-open .bot-where { color: var(--accent-ink); opacity: 0.75; }
-
+/* The open/current state and the row's shape live in the component's classes (ghost Button +
+   `bg-accent` when open); what is left here is the text column the face stands beside, and the
+   reserved strip on its right that keeps a long name from running under the ⋯ control that
+   floats over the card's top-right (the same bargain `.session-title` makes). */
 .bot-said { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
 .bot-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bot-where {
-  font-size: 11px;
-  color: var(--ink-faint);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
-.bot-edit {
-  flex: none;
-  width: 24px;
-  padding: 0;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--ink-faint);
-  font: inherit;
-  /* Shown on hover or focus only. A row of eight bots with eight always-visible controls on the
-     right is a column of furniture; the name is what the list is for. */
-  opacity: 0;
-}
-.bot:hover .bot-edit, .bot-edit:focus-visible { opacity: 1; }
-.bot-edit:hover { color: var(--ink); background: rgba(127, 127, 127, 0.12); }
-.bot-edit:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
 
 /* The avatar: a small figure turning slowly, drawn by the shared renderer in `avatar/stage.ts`.
    Nothing here paints the figure — its colours are its own, from a fixed set, and deliberately do
@@ -1706,62 +1668,16 @@ button { cursor: pointer; }
   padding: 0 8px 4px;
 }
 .bot-archive .session-group-head { position: static; background: none; }
-.bot-archive .session-group-head:hover { background: rgba(127, 127, 127, 0.08); }
-.bot-archive .session-group-fold { color: var(--ink-faint); font-weight: 500; }
-.bot-archive .session-group-head:hover .session-group-fold { color: var(--ink-dim); }
-.bot-archive .session-group-fold .count {
-  background: rgba(127, 127, 127, 0.1);
-  color: var(--ink-faint);
-}
 
 /* Scrolls on its own past a few. The column below the list is not somewhere a fold can grow into,
    and an archive that pushed the bots still in use off the top would have taken the tab over. */
 .bot-archive-rows { max-height: 40vh; overflow-y: auto; }
 
-/* A row with no face. Padded to line up with `.bot-open-button` above it so the two lists share
-   a left edge, and dimmer, which is the whole of what "put away" has to say here. */
-.bot-archived {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 8px;
-  border-radius: 7px;
-  color: var(--ink-dim);
-}
-.bot-archived:hover { background: rgba(127, 127, 127, 0.08); }
+/* A row with no face. The row's shape and state live in the component's classes (padded, rounded,
+   `bg-removed/10` while the delete is being asked about); what is left here is the flex split
+   between the text column and the two buttons. */
+.bot-archived { display: flex; align-items: center; gap: 6px; }
 .bot-archived .bot-said { flex: 1; }
-
-/* Text rather than bordered buttons, unlike the form's. Those sit in a row of their own at the
-   end of a form and are the point of it; these sit beside a name in a list, and two boxes per
-   row down a fold of them would make the archive louder than the bots still in use. */
-.bot-archived button {
-  flex: none;
-  padding: 3px 6px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--ink-faint);
-  font: inherit;
-  font-size: 11px;
-}
-.bot-archived button:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
-.bot-restore:hover { color: var(--accent-text); }
-
-/* The one act in this window that cannot be taken back.
-
-   So it is the one control that carries its colour without being hovered first. Everything else
-   in this column earns its colour on the way past — the archive heading, the Restore beside this,
-   the rows themselves — because they are all reversible and a column of coloured words would be
-   shouting about nothing. This one is not reversible, and a person deciding which of two buttons
-   to press should not have to hover one to find that out. */
-.bot-archived .bot-delete { color: var(--removed); }
-.bot-delete:hover { background: var(--removed-bg); }
-
-/* Asked, not yet done. The row picks up the ground so the question reads as belonging to one bot
-   rather than floating in the fold, and the second Delete is filled in rather than outlined: the
-   two presses should not look alike, or the second is just the first again. */
-.bot-asking { background: var(--removed-bg); }
-.bot-asking .bot-name { color: var(--ink); }
 .bot-warning {
   white-space: normal;
   overflow-wrap: anywhere;
@@ -1894,7 +1810,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
    (ghost + `bg-accent` when current); the width split is no more. The badges row
    keeps wrapping — the column narrows to 200px, and a badge must not push a title
    off the line the badges cannot have. */
-.session-row { display: flex; align-items: center; }
+.session-row { display: flex; align-items: center; margin: 1px 0; }
 .session-row .session { flex: 1; min-width: 0; }
 .session-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 4px; }
 
@@ -1931,7 +1847,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .bot-conversations strong { font-size: 13px; overflow-wrap: anywhere; }
 .bot-conversations span, .bot-conversations code { color: var(--ink-dim); font-size: 12px; }
 .bot-history-unavailable { border: 1px dashed var(--line); border-radius: 7px; }
-.bot-edit { opacity: 1; }
 
 .bot-memory-panel { margin-top: 24px; border-top: 1px solid var(--line); padding-top: 16px; }
 .bot-memory-panel h3 { margin: 0 0 8px; font-size: 14px; }
@@ -2013,8 +1928,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .interrupted-request details { margin-top: 8px; }
 .interrupted-request details > .confirm, .interrupted-request details > .quarantine { margin-top: 8px; }
 
-.bot-open .bot-open-button { background: var(--bubble-user); color: var(--bubble-user-ink); }
-.bot-open .bot-where { color: var(--bubble-user-ink); opacity: 1; }
 .memory-readable { white-space: normal; }
 .memory-readable p { margin: 0 0 12px; }
 .memory-readable pre { white-space: pre-wrap; overflow-wrap: anywhere; }

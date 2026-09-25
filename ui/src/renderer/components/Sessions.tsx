@@ -290,9 +290,9 @@ function Session({
   const [menu, setMenu] = useState(false)
   const current = session.id === openId
   const stateKey = info?.state?.toLowerCase().replaceAll(' ', '-')
-  return <div className={`session-row ${current ? 'current' : ''}`}>
-    <Button variant="ghost" className={`session h-auto w-full flex-col items-start justify-start gap-1.5 px-3 py-2 text-left ${current ? 'current bg-accent text-accent-foreground' : ''}`} onClick={() => onOpen(session)} onContextMenu={contextMenu('session', session.id)}>
-      <span className="session-title min-w-0 w-full truncate" title={session.title}>
+  return <div className={`session-row group relative ${current ? 'current' : ''}`}>
+    <Button variant="ghost" className={`session h-auto w-full flex-col items-start justify-start gap-1.5 px-3 py-2 text-left ${current ? 'current group-[.current]:bg-accent text-accent-foreground' : ''}`} onClick={() => onOpen(session)} onContextMenu={contextMenu('session', session.id)}>
+      <span className="session-title min-w-0 w-full truncate pr-10" title={session.title}>
         {preferences?.pinned && <svg className="session-pin" width="13" height="15" viewBox="0 0 16 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" role="img" aria-label="Pinned" focusable="false">
           <path d="M5 2h6M6 2v6l-3 4h10l-3-4V2M8 12v4" />
         </svg>}
@@ -301,7 +301,7 @@ function Session({
       <span className={`session-where ${current ? 'text-accent-foreground/80' : 'text-muted-foreground'}`}>{session.project}{session.branch && <span className="branch"> · {session.branch}</span>} · {ago(session.updated)}</span>
       {(info?.bot || info?.state) && <span className="session-badges">{info.bot && <Badge variant="secondary">{info.bot}</Badge>}{info.state && <Badge variant="outline" className={`session-state ${stateKey} ${STATE_TONE[stateKey ?? ''] ?? ''}`}>{info.state}</Badge>}</span>}
     </Button>
-    <PopMenu open={menu} trigger={<Button variant="ghost" size="icon-sm" className="session-more" aria-label={`Actions for ${session.title}`}>⋯</Button>} label="Conversation actions" onOpenChange={setMenu}
+    <PopMenu open={menu} trigger={<Button variant="ghost" size="icon-sm" className="session-more absolute top-1.5 right-1.5 rounded-full opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 group-[.current]:opacity-100 data-[state=open]:opacity-100 aria-expanded:opacity-100" aria-label={`Actions for ${session.title}`}>⋯</Button>} label="Conversation actions" onOpenChange={setMenu}
       items={[{ id: 'pin', label: preferences?.pinned ? 'Unpin conversation' : 'Pin conversation' }, { id: 'archive', label: preferences?.archived ? 'Restore conversation' : 'Archive conversation' }]}
       onChoose={(id) => setConversation(key, id === 'pin' ? { pinned: !preferences?.pinned } : { archived: !preferences?.archived })} />
   </div>

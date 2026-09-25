@@ -208,55 +208,6 @@ kbd,
   font-variant-numeric: tabular-nums;
 }
 
-/* One conversation, drawn as a card. The open button fills the card, and the actions
-   menu (⋯) sits inside that same card, anchored to its top-right — a menu belongs on
-   the surface it acts on, not in a second control standing beside it. The card's
-   radius matches the bot rows in the tab next door, so both lists read alike.
-
-   The menu is hidden until its row is hovered, is the current conversation, has the
-   menu open, or has the button in focus — the same hover bargain the bot list makes
-   with its own ⋯, so a long list reads as a list of conversations rather than a row
-   of ellipses. */
-.session-row {
-  position: relative;
-  margin: 1px 0;
-}
-
-.session-row .session {
-  border-radius: var(--bb-radius-md);
-}
-
-/* The title is the line that runs long, and the menu floats against that line from
-   the top-right: the title gives up the width the button needs to sit in, so a long
-   name ellipsises under the button instead of through it. */
-.session-title {
-  padding-right: 34px;
-}
-
-.session-more {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  z-index: 1;
-  width: 27px;
-  height: 27px;
-  color: var(--ink-faint);
-  opacity: 0;
-  transition: opacity var(--bb-fast) ease-out;
-}
-
-.session-more:hover {
-  color: var(--ink);
-  background: var(--bb-hover);
-}
-
-.session-row:hover .session-more,
-.session-row.current .session-more,
-.session-more:focus-visible,
-.session-more[aria-expanded='true'] {
-  opacity: 1;
-}
-
 .agent-settings-open {
   flex-shrink: 0;
   min-width: calc(var(--col-left-open) - 24px);
@@ -292,55 +243,6 @@ kbd,
 /* --------------------------------------------------------------------------
    Bots
    -------------------------------------------------------------------------- */
-
-.bot {
-  gap: 3px;
-  margin: 1px 0;
-  border-radius: var(--bb-radius-md);
-}
-
-.bot-open-button {
-  justify-content: flex-start;
-  gap: 7px;
-  padding: 7px 8px;
-  border-radius: var(--bb-radius-md);
-}
-
-.bot-open-button:hover,
-.bot-archived:hover {
-  background: var(--bb-hover);
-}
-
-.bot-open .bot-open-button {
-  color: var(--ink);
-  background: var(--bb-selected);
-  box-shadow: inset 2px 0 var(--accent);
-}
-
-.bot-open .bot-where {
-  color: var(--ink-dim);
-  opacity: 1;
-}
-
-.bot-name {
-  font-size: 12.5px;
-  font-weight: 570;
-}
-
-.bot-where {
-  font-size: 11px;
-}
-
-.bot-edit {
-  width: 27px;
-  height: 27px;
-  color: var(--ink-faint);
-}
-
-.bot-edit:hover {
-  color: var(--ink);
-  background: var(--bb-hover);
-}
 
 .bot-avatar {
   background: var(--bb-control);
@@ -405,36 +307,6 @@ kbd,
   border: 1px solid var(--bb-border);
   border-radius: var(--bb-radius-md);
   background: var(--code-bg);
-}
-
-.bot-archive {
-  padding: 3px 8px 6px;
-  border-top-color: var(--bb-border);
-  background: var(--bb-sidebar);
-}
-
-.bot-archive .session-group-head,
-.bot-archive .session-group-head:hover {
-  background: transparent;
-}
-
-.bot-archive .session-group-head:hover {
-  color: var(--ink);
-}
-
-.bot-archived {
-  padding: 7px 8px;
-  border-radius: var(--bb-radius-md);
-}
-
-.bot-asking {
-  background: var(--bb-danger-soft);
-  box-shadow: inset 2px 0 var(--removed);
-}
-
-.bot-archived .bot-delete-armed {
-  background: var(--removed);
-  color: var(--bg);
 }
 
 .bot-overview-title {
@@ -2335,28 +2207,11 @@ kbd,
     box-shadow 150ms var(--bb-ease);
 }
 
-.bot-edit,
 .tree-tool,
 .fold-toggle,
 .drawer-close,
-.audit-close,
-.session-more {
+.audit-close {
   border-radius: 999px;
-}
-
-.bot,
-.bot-open-button {
-  border-radius: 12px;
-}
-
-.bot-open .bot-open-button {
-  border-color: transparent;
-  background: var(--default);
-  box-shadow: none;
-}
-
-.bot-open .bot-open-button:hover {
-  background: var(--default-hover);
 }
 
 .session-badges > span,
@@ -2723,16 +2578,9 @@ kbd,
 }
 
 @media (pointer: coarse) {
-  .bot-open-button,
   .tree-row,
   .popitem {
     min-height: 44px;
-  }
-
-  .bot-edit {
-    width: 40px;
-    height: 40px;
-    opacity: 1;
   }
 }
 
@@ -2759,7 +2607,6 @@ kbd,
 
 @media (forced-colors: active) {
   .session-row.current,
-  .bot-open .bot-open-button,
   .choice.picked,
   .theme-row.active {
     border: 2px solid Highlight;
