@@ -28,7 +28,7 @@ use crate::confirm::{
     WriteRequest,
 };
 use crate::report::{
-    Activity, DelegateId, Delegation, Landing, Phase, Printed, Reported, Reporter, Shown,
+    Activity, DelegateId, Delegation, Landing, Phase, Printed, Reported, Reporter, Returned, Shown,
 };
 use bravebot_aichat::{Subscription, SubscriptionCredential};
 use bravebot_core::ask::{Answer, Asking};
@@ -204,6 +204,7 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
         fn notice(&mut self, text: String);
         fn quarantined(&mut self, shown: Shown);
         fn printed(&mut self, output: Printed);
+        fn returned(&mut self, returned: Returned);
         fn landed(&mut self, landing: Landing);
         fn tool_started(&mut self, activity: Activity);
         fn tool_finished(&mut self, activity: Activity);

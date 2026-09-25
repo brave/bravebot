@@ -1104,6 +1104,10 @@ transcript-more-lines = { $count ->
     [one] … { $count } more line
    *[other] … { $count } more lines
     }
+transcript-earlier-lines = { $count ->
+    [one] … { $count } earlier line
+   *[other] … { $count } earlier lines
+    }
 transcript-unchanged = { $count ->
     [one] … { $count } unchanged line
    *[other] … { $count } unchanged lines

@@ -4,7 +4,7 @@
 //! display; it does **not** hold a policy. Each turn constructs its own, which is what
 //! stops routing from one turn leaking into the next as untrusted content accumulates.
 
-use bravebot_agent::report::{Activity, Landing, Phase, Printed, Reported, Shown};
+use bravebot_agent::report::{Activity, Landing, Phase, Printed, Reported, Returned, Shown};
 use bravebot_agent::watch;
 use bravebot_aichat::protocol::Effort;
 use bravebot_i18n::t;
@@ -221,6 +221,8 @@ pub struct Entry {
     /// model was not allowed to read, and it is marked as such by the renderer rather than by
     /// anything in the bytes, which could say whatever they liked.
     pub shown: Option<Shown>,
+    /// A few lines of what this call handed the planner, drawn plainly because the planner read them.
+    pub returned: Option<Returned>,
     /// The delegate this entry stands for, for a [`Speaker::Delegate`] entry.
     ///
     /// Its own lines live here rather than in the transcript around it. Several delegates work at
@@ -238,6 +240,7 @@ impl Entry {
             todos: Vec::new(),
             landing: None,
             shown: None,
+            returned: None,
             activity: None,
             delegate: None,
         }
@@ -251,6 +254,7 @@ impl Entry {
             todos: Vec::new(),
             landing: None,
             shown: None,
+            returned: None,
             activity: None,
             delegate: None,
         }
@@ -279,6 +283,7 @@ impl Entry {
             todos: Vec::new(),
             landing: None,
             shown: None,
+            returned: None,
             activity: None,
             delegate: None,
         }
@@ -293,6 +298,7 @@ impl Entry {
             todos: Vec::new(),
             landing: None,
             shown: None,
+            returned: None,
             activity: None,
             delegate: None,
         }
@@ -307,6 +313,7 @@ impl Entry {
             todos: Vec::new(),
             landing: None,
             shown: None,
+            returned: None,
             activity: None,
             delegate: None,
         }
@@ -324,6 +331,7 @@ impl Entry {
             todos: Vec::new(),
             landing: None,
             shown: None,
+            returned: None,
             activity: Some(activity),
             delegate: None,
         }
@@ -343,6 +351,7 @@ impl Entry {
             todos: Vec::new(),
             landing: None,
             shown: None,
+            returned: None,
             activity: None,
             delegate: None,
         }
@@ -2508,6 +2517,24 @@ impl Session {
             .find(|entry| entry.speaker == Speaker::Tool)
         {
             entry.landing = Some(landing);
+        }
+    }
+
+    /// Put a glimpse of what the last call handed the planner under that call.
+    ///
+    /// Dropped where there is no call to put it under, since a few lines of a file without the
+    /// line saying which file read as something the session said.
+    pub fn returned(&mut self, returned: Returned) {
+        if let Some(entry) = self
+            .working_lines()
+            .iter_mut()
+            .rev()
+            .take_while(|entry| {
+                entry.speaker == Speaker::Delegate || entry.speaker == Speaker::Tool
+            })
+            .find(|entry| entry.speaker == Speaker::Tool)
+        {
+            entry.returned = Some(returned);
         }
     }
 
@@ -8257,6 +8284,34 @@ mod tests {
             );
         }
 
+        /// VIEW-24: a delegate's glimpse goes under the delegate's own call. The turn's last call
+        /// is a different file, and delegates report while the turn is still working.
+        #[test]
+        fn a_delegates_glimpse_goes_under_the_delegates_call() {
+            let mut session = Session::new("none");
+            session.start_activity(Activity::running("Read", "turn.rs"));
+            session.finish_activity(Activity::running("Read", "turn.rs").done("1 line"));
+            spawn(&mut session, "reader", "read the notes");
+            let call = Activity::running("Read", "notes.md");
+            session.start_activity(call.clone());
+            session.finish_activity(call.done("1 line"));
+            let glimpse = Returned {
+                lines: vec!["a note".to_string()],
+                total: 1,
+                from_the_end: false,
+            };
+            session.returned(glimpse.clone());
+
+            assert!(
+                session.transcript.iter().all(|e| e.returned.is_none()),
+                "a delegate's glimpse went under the turn's call"
+            );
+            assert_eq!(
+                session.delegates()[0].lines.last().unwrap().returned,
+                Some(glimpse)
+            );
+        }
+
         /// Quarantined content as the driver reports it, for the tests about where a preview of
         /// it lands.
         fn quarantined(origin: &str) -> Shown {
@@ -12325,6 +12380,56 @@ mod tests {
             // The quarantined content was held as its own system entry at the tail.
             assert_eq!(s.transcript.last().unwrap().speaker, Speaker::System);
             assert!(s.transcript.last().unwrap().shown.is_some());
+        }
+
+        fn glimpse(line: &str) -> Returned {
+            Returned {
+                lines: vec![line.to_string()],
+                total: 1,
+                from_the_end: false,
+            }
+        }
+
+        /// VIEW-24: a glimpse is of the call that just finished, so it goes under that call and
+        /// not under the one before it.
+        #[test]
+        fn a_glimpse_goes_under_the_call_it_came_from() {
+            let mut s = working();
+            for path in ["a.rs", "b.rs"] {
+                s.start_activity(Activity::running("Read", path));
+                s.finish_activity(Activity::running("Read", path).done("1 line"));
+            }
+            s.returned(glimpse("fn b() {}"));
+
+            let calls: Vec<&Entry> = s
+                .transcript
+                .iter()
+                .filter(|e| e.speaker == Speaker::Tool)
+                .collect();
+            assert!(calls[0].returned.is_none(), "it went under the wrong call");
+            assert_eq!(calls[1].returned, Some(glimpse("fn b() {}")));
+        }
+
+        /// VIEW-24: with no call of this turn to put it under, a glimpse is dropped. Put under an
+        /// earlier turn's call it would claim a file said something it did not.
+        #[test]
+        fn a_glimpse_does_not_bleed_into_an_earlier_turns_tool() {
+            let mut s = working();
+            s.start_activity(Activity::running("Read", "old.rs"));
+            s.finish_activity(Activity::running("Read", "old.rs").done("10 lines"));
+            s.transcript.push(Entry::user("next turn question"));
+            s.transcript
+                .push(Entry::assistant("assistant reply", Vec::new()));
+            let before = s.transcript.len();
+
+            s.returned(glimpse("new"));
+
+            assert!(s.transcript.iter().all(|e| e.returned.is_none()));
+            assert_eq!(
+                s.transcript.len(),
+                before,
+                "a glimpse became a line of its own"
+            );
         }
 
         /// Several calls in a row each keep their own line.
