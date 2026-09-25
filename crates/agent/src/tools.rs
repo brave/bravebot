@@ -5205,7 +5205,11 @@ fn run<S: Sink, C: Confirmer>(
         .record(tools.workspace.root(), &left.scanned.all());
     let mut stuck: Vec<String> = Vec::new();
     for destination in &left.refused_at {
-        if crate::workspace::put_back(&destination.resolved, &destination.held).is_err() {
+        if tools
+            .workspace
+            .put_back(&destination.resolved, &destination.held)
+            .is_err()
+        {
             stuck.push(destination.shown.clone());
         }
     }

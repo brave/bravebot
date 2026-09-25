@@ -387,9 +387,18 @@ Confinement is decided by where an operation lands and not by how its path is sp
 for a file that does not exist yet: a write creates what it names, and a symlink out of the tree is
 refused whether or not there is anything at the other end of it.
 
+Putting a file back is a write, and where it lands is decided when it is put back rather than when
+it was written. That holds for a rewind and for a file a command line wrote being put back as it was.
+A file of a directory opened beside the working directory has to land in one, and any other file in
+the working directory, so a directory on the path that has since become a link elsewhere gets the
+path refused and named, whether putting it back would write the file or remove it. Removing a file
+takes away its name and not what the name points at, so a link since left at that name goes and the
+file at its other end stays.
+
 **Why.** A directory symlink is an ordinary entry in a repository, so confinement that tested only
 existing paths would let a checkout choose where a write lands. A person approved a path and the
-prompt showed that path, so the bytes go there.
+prompt showed that path, so the bytes go there. A path kept to put back later means whatever the
+tree makes of it then, and a pull in between can turn a directory on it into a link out.
 
 `verified-by: bravebot_agent::workspace::an_absolute_path_outside_every_added_directory_is_still_refused`
 `verified-by: bravebot_agent::workspace::a_parent_component_cannot_climb_out_of_an_added_directory`
@@ -401,6 +410,14 @@ prompt showed that path, so the bytes go there.
 `verified-by: bravebot_agent::workspace::creating_a_file_through_a_symlink_inside_the_workspace_returns_where_it_landed`
 `verified-by: bravebot_agent::workspace::writing_to_a_dangling_symlink_inside_the_workspace_lands_at_its_target`
 `verified-by: bravebot_agent::workspace::a_destination_reached_through_a_dangling_symlink_out_of_the_workspace_is_refused`
+`verified-by: bravebot_agent::workspace::a_rewind_does_not_write_through_a_directory_since_linked_out_of_the_workspace`
+`verified-by: bravebot_agent::workspace::a_rewind_does_not_delete_through_a_directory_since_linked_out_of_the_workspace`
+`verified-by: bravebot_agent::workspace::a_rewind_does_not_write_through_a_file_since_replaced_by_a_link_out_of_the_workspace`
+`verified-by: bravebot_agent::workspace::a_rewind_with_one_path_linked_out_still_puts_the_others_back`
+`verified-by: bravebot_agent::workspace::a_rewind_does_not_put_a_project_file_back_through_a_link_into_an_opened_directory`
+`verified-by: bravebot_agent::workspace::a_rewind_removes_a_created_file_since_replaced_by_a_link_without_following_it`
+`verified-by: bravebot_tui::undo_tests::undo_refuses_the_paths_a_directory_since_linked_out_of_the_workspace_would_carry_outside`
+`verified-by: bravebot_agent::turn::a_refused_line_is_not_put_back_through_a_directory_it_linked_out_of_the_workspace`
 
 <a id="TRUST-11"></a>
 ### TRUST-11: the map does not govern `~/.bravebot`

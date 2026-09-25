@@ -19,7 +19,7 @@ fn restore_for_test(
     let mut current = TrustStore::new(workspace.root());
     current.trust(".");
     let target = current.clone();
-    bravebot_agent::rewind::restore(backups, &mut current, &target, &mut None)
+    bravebot_agent::rewind::restore(workspace, backups, &mut current, &target, &mut None)
 }
 
 /// A scratch directory that removes itself, so tests do not leave state behind.
@@ -4365,6 +4365,299 @@ fn a_file_past_the_rewind_budget_is_remembered_but_not_kept() {
         std::fs::read_to_string(&heavy).unwrap(),
         "small",
         "a file whose contents were never kept is left alone, not deleted"
+    );
+}
+
+/// The backups a turn leaves after writing each of `files` as trusted content.
+#[cfg(unix)]
+fn backups_of_a_turn_writing(
+    workspace: &Workspace,
+    files: &[(&str, &str)],
+) -> Vec<bravebot_agent::workspace::Backup> {
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+    for (path, body) in files {
+        workspace
+            .write(
+                &mut policy,
+                &Labelled::trusted(path.to_string()),
+                &Labelled::trusted(body.to_string()),
+            )
+            .expect("write succeeds");
+    }
+    workspace.take_backups()
+}
+
+/// A rewind is confined the way a write is. The path a rewind point keeps is a string whose
+/// meaning the tree decides when the rewind runs, and a pull between the turn and the rewind can
+/// turn a directory on it into a link out of the workspace. Following it would put the old bytes
+/// over a file outside the tree that the list shown before the rewind never named.
+#[cfg(unix)]
+#[test]
+fn a_rewind_does_not_write_through_a_directory_since_linked_out_of_the_workspace() {
+    use bravebot_agent::workspace::Before;
+
+    let scratch = Scratch::new("rewind-relinked");
+    let target = outside("rewind-relinked");
+    std::fs::create_dir(scratch.path.join("redirect")).unwrap();
+    std::fs::write(
+        scratch.path.join("redirect/controlled.txt"),
+        "what the checkout held",
+    )
+    .unwrap();
+    std::fs::write(target.path.join("controlled.txt"), "a file outside").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let backups = backups_of_a_turn_writing(
+        &workspace,
+        &[("redirect/controlled.txt", "the turn's edit")],
+    );
+    assert!(
+        matches!(&backups[..], [backup] if backup.was == Before::Bytes(b"what the checkout held".to_vec())),
+        "the point did not keep the bytes, so nothing here asks where they go: {backups:?}"
+    );
+    let named = backups[0].path.clone();
+
+    std::fs::remove_dir_all(scratch.path.join("redirect")).unwrap();
+    std::os::unix::fs::symlink(&target.path, scratch.path.join("redirect")).unwrap();
+
+    let refused = restore_for_test(&workspace, backups);
+
+    assert_eq!(
+        std::fs::read_to_string(target.path.join("controlled.txt")).unwrap(),
+        "a file outside",
+        "the rewind wrote outside the workspace"
+    );
+    assert_eq!(refused, vec![named], "the escaping path was not named");
+}
+
+/// The deletion half of the same case. A turn that created a file is rewound by removing it, and
+/// through a directory since linked out of the workspace that removes a file of the same name
+/// outside the tree.
+#[cfg(unix)]
+#[test]
+fn a_rewind_does_not_delete_through_a_directory_since_linked_out_of_the_workspace() {
+    use bravebot_agent::workspace::Before;
+
+    let scratch = Scratch::new("rewind-relinked-created");
+    let target = outside("rewind-relinked-created");
+    std::fs::create_dir(scratch.path.join("redirect")).unwrap();
+    std::fs::write(target.path.join("fresh.txt"), "a file outside").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let backups =
+        backups_of_a_turn_writing(&workspace, &[("redirect/fresh.txt", "the turn's file")]);
+    assert!(
+        matches!(&backups[..], [backup] if backup.was == Before::Nothing),
+        "the point does not record a created file: {backups:?}"
+    );
+    let named = backups[0].path.clone();
+
+    std::fs::remove_dir_all(scratch.path.join("redirect")).unwrap();
+    std::os::unix::fs::symlink(&target.path, scratch.path.join("redirect")).unwrap();
+
+    let refused = restore_for_test(&workspace, backups);
+
+    assert_eq!(
+        std::fs::read_to_string(target.path.join("fresh.txt")).ok(),
+        Some("a file outside".to_string()),
+        "the rewind deleted a file outside the workspace"
+    );
+    assert_eq!(refused, vec![named], "the escaping path was not named");
+}
+
+/// A directory opened beside the project is not part of it. A file of the project goes back into
+/// the project, so a directory of the project since linked into the opened one is refused like any
+/// other link out, whichever way the rewind would put the file back.
+#[cfg(unix)]
+#[test]
+fn a_rewind_does_not_put_a_project_file_back_through_a_link_into_an_opened_directory() {
+    use bravebot_agent::workspace::Before;
+
+    let scratch = Scratch::new("rewind-relinked-opened");
+    let opened = outside("rewind-relinked-opened");
+    std::fs::create_dir(scratch.path.join("redirect")).unwrap();
+    std::fs::write(
+        scratch.path.join("redirect/controlled.txt"),
+        "what the checkout held",
+    )
+    .unwrap();
+    std::fs::write(opened.path.join("controlled.txt"), "a file beside").unwrap();
+    std::fs::write(opened.path.join("fresh.txt"), "a file beside").unwrap();
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    workspace
+        .add_directory(opened.path.to_str().expect("utf-8 path"))
+        .expect("the directory opens");
+
+    let backups = backups_of_a_turn_writing(
+        &workspace,
+        &[
+            ("redirect/controlled.txt", "the turn's edit"),
+            ("redirect/fresh.txt", "the turn's file"),
+        ],
+    );
+    assert!(
+        matches!(
+            &backups[..],
+            [kept, created] if matches!(kept.was, Before::Bytes(_)) && created.was == Before::Nothing
+        ),
+        "the point did not keep one file and record the other as created: {backups:?}"
+    );
+    let named: Vec<PathBuf> = backups.iter().map(|backup| backup.path.clone()).collect();
+
+    std::fs::remove_dir_all(scratch.path.join("redirect")).unwrap();
+    std::os::unix::fs::symlink(&opened.path, scratch.path.join("redirect")).unwrap();
+
+    let refused = restore_for_test(&workspace, backups);
+
+    assert_eq!(
+        std::fs::read_to_string(opened.path.join("controlled.txt")).unwrap(),
+        "a file beside",
+        "the rewind wrote a project file into the opened directory"
+    );
+    assert_eq!(
+        std::fs::read_to_string(opened.path.join("fresh.txt")).ok(),
+        Some("a file beside".to_string()),
+        "the rewind deleted a file of the opened directory"
+    );
+    assert_eq!(
+        refused, named,
+        "the paths that left the project were not named"
+    );
+}
+
+/// Removing a file the turn created unlinks the name and nothing it points at. A link since left
+/// at that name goes, the file at its far end stays, and nothing is refused, since the name is
+/// gone as it was before the turn.
+#[cfg(unix)]
+#[test]
+fn a_rewind_removes_a_created_file_since_replaced_by_a_link_without_following_it() {
+    use bravebot_agent::workspace::Before;
+
+    let scratch = Scratch::new("rewind-relinked-created-file");
+    let target = outside("rewind-relinked-created-file");
+    std::fs::write(target.path.join("fresh.txt"), "a file outside").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let backups = backups_of_a_turn_writing(&workspace, &[("fresh.txt", "the turn's file")]);
+    assert!(
+        matches!(&backups[..], [backup] if backup.was == Before::Nothing),
+        "the point does not record a created file: {backups:?}"
+    );
+
+    std::fs::remove_file(scratch.path.join("fresh.txt")).unwrap();
+    std::os::unix::fs::symlink(
+        target.path.join("fresh.txt"),
+        scratch.path.join("fresh.txt"),
+    )
+    .unwrap();
+
+    let refused = restore_for_test(&workspace, backups);
+
+    assert_eq!(
+        refused,
+        Vec::<PathBuf>::new(),
+        "a removal that leaves nothing behind was refused"
+    );
+    assert!(
+        std::fs::symlink_metadata(scratch.path.join("fresh.txt")).is_err(),
+        "the link the turn's file became is still there"
+    );
+    assert_eq!(
+        std::fs::read_to_string(target.path.join("fresh.txt")).unwrap(),
+        "a file outside",
+        "the removal followed the link"
+    );
+}
+
+/// The link can be the file itself rather than a directory above it.
+#[cfg(unix)]
+#[test]
+fn a_rewind_does_not_write_through_a_file_since_replaced_by_a_link_out_of_the_workspace() {
+    use bravebot_agent::workspace::Before;
+
+    let scratch = Scratch::new("rewind-relinked-file");
+    let target = outside("rewind-relinked-file");
+    std::fs::write(scratch.path.join("notes.txt"), "what the checkout held").unwrap();
+    std::fs::write(target.path.join("notes.txt"), "a file outside").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let backups = backups_of_a_turn_writing(&workspace, &[("notes.txt", "the turn's edit")]);
+    assert!(
+        matches!(&backups[..], [backup] if matches!(backup.was, Before::Bytes(_))),
+        "the point did not keep the bytes, so nothing here asks where they go: {backups:?}"
+    );
+    let named = backups[0].path.clone();
+
+    std::fs::remove_file(scratch.path.join("notes.txt")).unwrap();
+    std::os::unix::fs::symlink(
+        target.path.join("notes.txt"),
+        scratch.path.join("notes.txt"),
+    )
+    .unwrap();
+
+    let refused = restore_for_test(&workspace, backups);
+
+    assert_eq!(
+        std::fs::read_to_string(target.path.join("notes.txt")).unwrap(),
+        "a file outside",
+        "the rewind wrote outside the workspace"
+    );
+    assert_eq!(refused, vec![named]);
+}
+
+/// Refusing one path is not refusing the rewind. The files that still resolve inside the
+/// workspace go back, and the one that does not is the only one named.
+#[cfg(unix)]
+#[test]
+fn a_rewind_with_one_path_linked_out_still_puts_the_others_back() {
+    let scratch = Scratch::new("rewind-relinked-some");
+    let target = outside("rewind-relinked-some");
+    std::fs::create_dir(scratch.path.join("redirect")).unwrap();
+    std::fs::write(
+        scratch.path.join("redirect/controlled.txt"),
+        "what the checkout held",
+    )
+    .unwrap();
+    std::fs::write(scratch.path.join("notes.md"), "first").unwrap();
+    std::fs::write(target.path.join("controlled.txt"), "a file outside").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let backups = backups_of_a_turn_writing(
+        &workspace,
+        &[
+            ("notes.md", "second"),
+            ("redirect/controlled.txt", "the turn's edit"),
+            ("created.txt", "the turn's file"),
+        ],
+    );
+    let escaping = backups
+        .iter()
+        .find(|backup| backup.path.ends_with("redirect/controlled.txt"))
+        .expect("the turn's write under the directory was backed up")
+        .path
+        .clone();
+
+    std::fs::remove_dir_all(scratch.path.join("redirect")).unwrap();
+    std::os::unix::fs::symlink(&target.path, scratch.path.join("redirect")).unwrap();
+
+    let refused = restore_for_test(&workspace, backups);
+
+    assert_eq!(refused, vec![escaping]);
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("notes.md")).unwrap(),
+        "first"
+    );
+    assert!(!scratch.path.join("created.txt").exists());
+    assert_eq!(
+        std::fs::read_to_string(target.path.join("controlled.txt")).unwrap(),
+        "a file outside"
     );
 }
 

@@ -25241,6 +25241,54 @@ fn a_credential_a_run_line_redirects_into_the_tree_does_not_stay_there() {
     );
 }
 
+/// Putting a destination back is confined the way a write is. The line runs between the moment
+/// its destination is noted and the moment what it held goes back, and a line that turns the
+/// directory above the destination into a link out of the workspace would have the put-back
+/// follow it: here, deleting the credentials file a person keeps outside the tree.
+///
+/// So the destination is named as one that could not be put back, and the file outside is left
+/// as it was.
+#[cfg(unix)]
+#[test]
+fn a_refused_line_is_not_put_back_through_a_directory_it_linked_out_of_the_workspace() {
+    let scratch = Scratch::new("credential-run-relinked");
+    let elsewhere = Scratch::new("credential-run-relinked-elsewhere");
+    let env = format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n");
+    std::fs::write(scratch.path.join(".env"), &env).unwrap();
+    std::fs::create_dir(scratch.path.join("d")).unwrap();
+    std::fs::write(elsewhere.path.join("credentials"), &env).unwrap();
+    let away = elsewhere.path.to_str().expect("a UTF-8 scratch path");
+    let program = |name: &str| {
+        bravebot_agent::programs::resolve(name, &scratch.path).expect("the program exists")
+    };
+    let programs = bravebot_core::programs::TrustedPrograms::from_iter([
+        vouched_in(&program("cat"), &[".env"], &scratch.path),
+        vouched_in(&program("rm"), &["-r", "d"], &scratch.path),
+        vouched_in(&program("ln"), &["-s", away, "d"], &scratch.path),
+    ]);
+
+    let (_home, _reporter, answered) = a_run_turn_scanning(
+        &scratch,
+        &format!("cat .env > d/credentials && rm -r d && ln -s {away} d"),
+        programs,
+    );
+
+    assert!(
+        scratch.path.join("d").is_symlink(),
+        "the line did not leave its destination behind a link, so nothing here asks where the \
+         put-back goes: {answered}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(elsewhere.path.join("credentials")).ok(),
+        Some(env),
+        "putting the destination back deleted a file outside the workspace"
+    );
+    assert!(
+        answered.contains("d/credentials could not be put back"),
+        "the planner was not told the destination did not go back: {answered}"
+    );
+}
+
 /// The other half of the same question, and the one a scan with no pre-image gets wrong. A line
 /// appending to a file that already holds a secret carries that secret into the destination
 /// without having written it, exactly as a write tool's whole-file body does.
