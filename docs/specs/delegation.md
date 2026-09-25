@@ -649,6 +649,7 @@ that is not a tool: without it a misspelt name reads to whoever wrote it as a sk
 has.
 
 `verified-by: bravebot_agent::agents::a_definition_reads_the_skills_it_names`
+`verified-by: bravebot_agent::agents::a_skill_named_twice_and_found_nowhere_is_said_once`
 `verified-by: bravebot_core::delegate::a_definition_may_name_skills_and_the_spec_carries_them`
 `verified-by: bravebot_agent::turn::a_definition_offers_its_delegate_only_the_skills_it_names`
 
@@ -672,6 +673,12 @@ has.
   past its kind, which [DELEGATE-4](#DELEGATE-4) forbids. An `mcpServers:` key is ignored like any
   other key this does not read, so a definition written to talk to one server says nothing about
   it here.
+
+- **A `skills:` line is split the way a `tools:` line is.** Commas and spaces separate names and a
+  list's bullets are dropped, so a skill whose name holds a space cannot be named, and a YAML flow
+  list (`[a, b]`) or a quoted entry arrives as names no skill goes by. Each is said as a name
+  nothing found ([DELEGATE-23](#DELEGATE-23)), so what it costs is a line to rewrite rather than a
+  delegate quietly told the wrong things. A name spelt like `commit-style` splits cleanly.
 
 - **A definition's model is checked by using it.** Whether the endpoint serves a name is learned
   from its reply, so a definition naming one it does not serve has its delegate run on a substitute

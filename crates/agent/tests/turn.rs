@@ -17295,8 +17295,8 @@ fn a_delegate_answered_by_a_model_other_than_its_definitions_says_so() {
 
 /// A definition naming skills gives its delegate those and no others: the rest of what the turn
 /// found is neither listed for it nor loadable by it, where a definition naming none is offered
-/// the whole of it. A name nothing found selects nothing and is said, so a misspelt one does not
-/// read to its author as a skill the delegate has.
+/// the whole of it and one whose line is empty is offered nothing. A name nothing found selects
+/// nothing and is said, so a misspelt one does not read to its author as a skill the delegate has.
 #[test]
 fn a_definition_offers_its_delegate_only_the_skills_it_names() {
     let scratch = Scratch::new("delegate-definition-skills");
@@ -17325,11 +17325,17 @@ fn a_definition_offers_its_delegate_only_the_skills_it_names() {
         "---\nname: plain-reviewer\ndescription: Reviews.\nkind: reader\n---\n\nREVIEW\n",
     )
     .expect("write the definition naming none");
+    std::fs::write(
+        home.path.join("agents").join("bare-reviewer.md"),
+        "---\nname: bare-reviewer\ndescription: Reviews unguided.\nkind: reader\nskills:\n---\n\n\
+         REVIEW\n",
+    )
+    .expect("write the definition with an empty skills line");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
     let (endpoint, received) = serve_by_marker(vec![
         (
-            "DELEGATE-TWO-REVIEWERS",
+            "DELEGATE-THREE-REVIEWERS",
             vec![
                 tool_request(
                     "spawn_agent",
@@ -17338,6 +17344,10 @@ fn a_definition_offers_its_delegate_only_the_skills_it_names() {
                 tool_request(
                     "spawn_agent",
                     r#"{"kind":"plain-reviewer","task":"REVIEW-WITH-EVERY-SKILL"}"#,
+                ),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"bare-reviewer","task":"REVIEW-WITH-NO-SKILLS"}"#,
                 ),
                 reply_with("waiting"),
                 reply_with("delegates finished"),
@@ -17352,6 +17362,7 @@ fn a_definition_offers_its_delegate_only_the_skills_it_names() {
             ],
         ),
         ("REVIEW-WITH-EVERY-SKILL", vec![reply_with("reviewed")]),
+        ("REVIEW-WITH-NO-SKILLS", vec![reply_with("reviewed")]),
     ]);
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
@@ -17362,7 +17373,7 @@ fn a_definition_offers_its_delegate_only_the_skills_it_names() {
         &config,
         &egress,
         &workspace,
-        &Task::new("DELEGATE-TWO-REVIEWERS").with_home(Some(home.path.clone())),
+        &Task::new("DELEGATE-THREE-REVIEWERS").with_home(Some(home.path.clone())),
         &mut bravebot_agent::confirm::ApproveWrites,
         &mut reporter,
         &mut sink,
@@ -17375,7 +17386,7 @@ fn a_definition_offers_its_delegate_only_the_skills_it_names() {
     let delegate = |task: &str| -> Vec<&String> {
         requests
             .iter()
-            .filter(|body| body.contains(task) && !body.contains("DELEGATE-TWO-REVIEWERS"))
+            .filter(|body| body.contains(task) && !body.contains("DELEGATE-THREE-REVIEWERS"))
             .collect()
     };
     let listed = |body: &str| -> Vec<&str> {
@@ -17416,6 +17427,16 @@ fn a_definition_offers_its_delegate_only_the_skills_it_names() {
         listed(plain),
         ["review-style", "commit-style", "loop"],
         "a definition naming no skills was not offered every skill the turn found"
+    );
+
+    let bare = delegate("REVIEW-WITH-NO-SKILLS");
+    let bare = bare
+        .first()
+        .expect("the delegate whose definition has an empty skills line never ran");
+    assert_eq!(
+        listed(bare),
+        Vec::<&str>::new(),
+        "a definition with an empty skills line was offered skills"
     );
 
     let about_skills: Vec<&String> = reporter

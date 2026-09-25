@@ -155,9 +155,9 @@ const FOLDS_TO_A_COLON: [char; 5] = [
 /// match nothing.
 ///
 /// `*` is not special. It is a widening spelling, and a definition may not widen anything, so it
-/// is a name matching no tool like any other.
+/// is a name matching nothing like any other.
 fn names_in(value: &str) -> Vec<String> {
-    let mut tools = Vec::new();
+    let mut names = Vec::new();
     let mut current = String::new();
     let mut depth = 0usize;
 
@@ -173,21 +173,21 @@ fn names_in(value: &str) -> Vec<String> {
             }
             ',' | ' ' | '\t' | '\n' if depth == 0 => {
                 if !current.is_empty() {
-                    tools.push(std::mem::take(&mut current));
+                    names.push(std::mem::take(&mut current));
                 }
             }
             _ => current.push(c),
         }
     }
     if !current.is_empty() {
-        tools.push(current);
+        names.push(current);
     }
 
     // The bullet of a YAML sequence, which the one dialect joins into the value along with the
     // entry it introduces. Dropped here rather than in the parser, where a `-` opening a line is
     // not always a bullet.
-    tools.retain(|tool| tool != "-");
-    tools
+    names.retain(|name| name != "-");
+    names
 }
 
 /// Find the kinds of delegate available to this turn.
@@ -393,12 +393,12 @@ pub fn skills_not_found(definitions: &Definitions, skills: &Catalogue) -> Vec<No
     definitions
         .iter()
         .filter_map(|definition| {
-            let missing: Vec<&str> = definition
-                .skills()?
-                .iter()
-                .filter(|name| skills.get(name).is_none())
-                .map(String::as_str)
-                .collect();
+            let mut missing: Vec<&str> = Vec::new();
+            for name in definition.skills()? {
+                if skills.get(name).is_none() && !missing.contains(&name.as_str()) {
+                    missing.push(name);
+                }
+            }
             if missing.is_empty() {
                 return None;
             }
@@ -677,6 +677,30 @@ mod tests {
         );
         assert_eq!(skills_of("skills:\n"), Some(Vec::new()));
         assert_eq!(skills_of(""), None);
+    }
+
+    /// One misspelt name written twice is one name nothing found, so it is said once and in the
+    /// singular rather than as two skills.
+    #[test]
+    fn a_skill_named_twice_and_found_nowhere_is_said_once() {
+        let mut definitions = Definitions::default();
+        definitions.insert(definition_of(
+            "---\nname: reviewer\ndescription: reviews\nkind: reader\nskills: rule-reveiw, \
+             rule-reveiw\n---\n\nbody\n",
+        ));
+
+        let said: Vec<String> = skills_not_found(&definitions, &Catalogue::default())
+            .into_iter()
+            .map(|notice| notice.message)
+            .collect();
+
+        assert_eq!(
+            said,
+            [
+                "test names a skill this session did not find, so its delegate is offered without \
+              it: rule-reveiw"
+            ]
+        );
     }
 
     #[test]
