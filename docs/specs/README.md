@@ -58,6 +58,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [layering.md](layering.md) | `LAYER` | 6 | which crate is allowed to do what |
 | [releases.md](releases.md) | `RELEASE` | 13 | what names a version, what starts a release, and what an installer trusts about what it fetched |
 | [updates.md](updates.md) | `UPDATE` | 10 | learning that a newer version is out, and the line that installs it |
+| [speech.md](speech.md) | `SPEECH` | 5 | microphone capture, Vosk transcription into the input box, and speech synthesis |
 
 ## The tools
 
