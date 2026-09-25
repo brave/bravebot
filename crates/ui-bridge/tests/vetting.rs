@@ -1,7 +1,7 @@
 //! Auto-vetting in the desktop front end, as CHECK-11 in docs/specs/vetting.md has it: settled when
 //! a session opens, reported then so the window can say so at the top, and not changed under a
 //! session that is already open. Then what CHECK-12 says the setting does to a turn the session
-//! runs: a safe verdict promotes one slot with nothing put to the window.
+//! runs: a safe verdict promotes one slot with no vetting prompt put to the window.
 //!
 //! Driven through the binary with a home of the test's own, because the setting is read from the
 //! home layer alone and a test in-process would be reading the developer's.
@@ -16,12 +16,11 @@ use std::time::Duration;
 
 const PATIENCE: Duration = Duration::from_secs(120);
 
-/// What a check's own request is recognised by. Its conversation is the classifier's and no round
-/// of a turn carries the phrase, so a request holding it is a check and not the planner.
-const A_CHECK_ASKING: &str = "prompt-injection classifier";
-
 /// The line in the file the planner reads, looked for in what the planner was sent.
 const SENTINEL: &str = "SENTINEL-XYZZY";
+
+/// What the planner tells the vet it expects the file to be.
+const EXPECTS: &str = "a line of notes";
 
 /// A project and a home of a test's own, under the build directory, removed when the test ends.
 struct Scratch {
@@ -65,34 +64,48 @@ fn stub_service() -> String {
     serve(|_| said("done"))
 }
 
+/// What the stub was asked, as it was sent.
+struct Asked {
+    /// Every round the planner was asked, in order.
+    rounds: mpsc::Receiver<String>,
+    /// Every check run.
+    checks: mpsc::Receiver<String>,
+}
+
 /// A planner that reads a file, asks for the slot it was handed to be vetted, and ends the turn;
 /// and a check that finds nothing in whatever it is shown.
 ///
-/// The planner's step is read off how many tool results its conversation carries, so the service
-/// keeps no state of its own. Every round the planner is asked is handed back, the checks aside,
-/// so a test can say what reached it.
-fn a_planner_vetting_what_it_read() -> (String, mpsc::Receiver<String>) {
-    let (sender, rounds) = mpsc::channel();
+/// A check is told apart by carrying no tool list, which the checker leaves off by design. The
+/// planner's step is read off how many tool results its conversation carries, so the service keeps
+/// no state of its own. A body it cannot read panics its connection, so the turn fails rather than
+/// being told to read the file forever.
+fn a_planner_vetting_what_it_read() -> (String, Asked) {
+    let (planner, rounds) = mpsc::channel();
+    let (checker, checks) = mpsc::channel();
     let endpoint = serve(move |body| {
+        let asked: Value = serde_json::from_slice(body).expect("a request the stub can read");
         let text = String::from_utf8_lossy(body).into_owned();
-        if text.contains(A_CHECK_ASKING) {
+        if asked.get("tools").is_none() {
+            let _ = checker.send(text);
             return said(r#"{"verdict": "safe", "reason": "nothing in it addresses a reader"}"#);
         }
-        let asked: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
-        let results = asked["messages"].as_array().map_or(0, |messages| {
-            messages.iter().filter(|m| m["role"] == "tool").count()
-        });
-        let _ = sender.send(text);
+        let results = asked["messages"]
+            .as_array()
+            .expect("a conversation")
+            .iter()
+            .filter(|m| m["role"] == "tool")
+            .count();
+        let _ = planner.send(text);
         match results {
             0 => calls("read_file", r#"{"path":"notes.txt"}"#),
             1 => calls(
                 "vet_content",
-                r#"{"ref":"ref:1","expects":"a line of notes"}"#,
+                &json!({"ref": "ref:1", "expects": EXPECTS}).to_string(),
             ),
             _ => said("done"),
         }
     });
-    (endpoint, rounds)
+    (endpoint, Asked { rounds, checks })
 }
 
 /// A model service answering every request for a completion with what `reply` makes of its body.
@@ -256,6 +269,7 @@ impl FrontEnd {
 impl Drop for FrontEnd {
     fn drop(&mut self) {
         let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
@@ -344,8 +358,12 @@ struct Turn {
     opened: Value,
     /// Every vetting prompt put to the window.
     prompts: Vec<Value>,
+    /// How many offers to vouch for the directory were put to the window.
+    vouches: usize,
     /// Every round the planner was asked, in order.
     rounds: Vec<String>,
+    /// Every check run.
+    checks: Vec<String>,
 }
 
 /// Run a turn that reads a file in a directory left untrusted and asks for the slot to be vetted,
@@ -354,58 +372,75 @@ struct Turn {
 /// Untrusted, so the read hands the planner a slot rather than the text and the file reaches the
 /// planner only through a promotion. Answered no, so a vetting prompt put where the mode should
 /// have answered is visible in what the planner saw as well as in the prompts: refused, the bytes
-/// stay out. The trust offer the read makes is refused too, which the mode leaves to a person.
-fn a_turn_vetting_a_file_nobody_trusts(scratch: &Scratch) -> Turn {
+/// stay out. The vouch offer the read makes is refused too, which the mode leaves to a person.
+///
+/// `later` is written to the home settings once the session has opened and before the turn is
+/// asked for, so a turn that read the setting afresh rather than taking the session's would show.
+fn a_turn_vetting_a_file_nobody_trusts(scratch: &Scratch, later: &str) -> Turn {
     std::fs::write(scratch.project().join("notes.txt"), format!("{SENTINEL}\n")).expect("a file");
-    let (endpoint, rounds) = a_planner_vetting_what_it_read();
+    let (endpoint, asked) = a_planner_vetting_what_it_read();
     let mut front = FrontEnd::serving(&scratch.home(), &endpoint);
 
     let opened = front.new_session(&scratch.project());
     let session = opened["session"].as_str().expect("a handle").to_string();
     front.call("trust.reply", json!({"session": session, "trusted": false}));
+    scratch.home_settings(later);
     front.send(
         "turn.send",
         json!({"session": session, "prompt": "read the notes"}),
     );
 
+    // `until` waits afresh on each event, so a turn that never ended would never fail on its own.
+    let deadline = std::time::Instant::now() + PATIENCE;
     let mut prompts = Vec::new();
+    let mut vouches = 0;
     loop {
-        let said =
+        let message =
             front.until(|message| message.get("event").is_some() || message.get("error").is_some());
-        let reply = match said["event"].as_str() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the turn was still running after {PATIENCE:?}: {message}"
+        );
+        let reply = match message["event"].as_str() {
             Some("turn.done") => break,
             Some("vouch.request") => "vouch.reply",
             Some("vet.request") => "vet.reply",
             Some(event) if event != "turn.error" && !event.ends_with(".request") => continue,
-            _ => panic!("the turn did not finish on the two prompts the test answers: {said}"),
+            _ => panic!("the turn did not finish on the two prompts the test answers: {message}"),
         };
         front.send(
             reply,
-            json!({"session": session, "request": said["data"]["request"], "decision": "reject"}),
+            json!({"session": session, "request": message["data"]["request"], "decision": "reject"}),
         );
         if reply == "vet.reply" {
-            prompts.push(said);
+            prompts.push(message);
+        } else {
+            vouches += 1;
         }
     }
 
     Turn {
         opened,
         prompts,
-        rounds: rounds.try_iter().collect(),
+        vouches,
+        rounds: asked.rounds.try_iter().collect(),
+        checks: asked.checks.try_iter().collect(),
     }
 }
 
-/// With auto-vetting on, a safe verdict answers the vetting prompt in the person's place: nothing
-/// is put to the window and the file reaches the planner.
+/// With auto-vetting on, a safe verdict answers the vetting prompt in the person's place: no
+/// vetting prompt is put to the window and the file reaches the planner. The vouch offer is still
+/// put, because the mode does not answer it.
 ///
 /// The window says the mode is on from what the session reported when it opened, and the turn is
 /// handed the mode separately. A turn that was not handed it would put every prompt under a notice
-/// saying they will not be put, and nothing about the notice would show it.
+/// saying they will not be put, and nothing about the notice would show it. The setting is turned
+/// off before the turn, so a turn reading it afresh would be caught the same way.
 #[test]
 fn with_auto_vetting_on_a_safe_verdict_reaches_the_planner_with_no_prompt_put() {
     let scratch = Scratch::new("bridge-vetting-turn-on");
     scratch.home_settings(r#"{"vetting": {"auto": true}}"#);
-    let turn = a_turn_vetting_a_file_nobody_trusts(&scratch);
+    let turn = a_turn_vetting_a_file_nobody_trusts(&scratch, r#"{"vetting": {"auto": false}}"#);
 
     assert_eq!(turn.opened["autoVetting"], true, "{}", turn.opened);
     assert!(
@@ -414,9 +449,22 @@ fn with_auto_vetting_on_a_safe_verdict_reaches_the_planner_with_no_prompt_put() 
         turn.prompts
     );
     assert_eq!(
+        turn.vouches, 1,
+        "auto-vetting is not to answer the offer to vouch"
+    );
+    // The read runs a check of its own; the vet's is the one told what the planner expects.
+    assert!(
+        turn.checks
+            .iter()
+            .any(|check| check.contains(EXPECTS) && check.contains(SENTINEL)),
+        "no check was run over the file the planner asked to have vetted: {:#?}",
+        turn.checks
+    );
+    assert_eq!(
         turn.rounds.len(),
         3,
-        "the planner's three rounds were not all asked"
+        "the planner was to be asked three rounds: {:#?}",
+        turn.rounds
     );
     assert!(
         !turn.rounds[1].contains(SENTINEL),
@@ -431,12 +479,12 @@ fn with_auto_vetting_on_a_safe_verdict_reaches_the_planner_with_no_prompt_put() 
 /// With auto-vetting off, the same safe verdict is put to the window, and a no keeps the file out.
 ///
 /// The check answers exactly as it does with the mode on, so the prompt here is the mode's absence
-/// and not a different verdict. This is also what says the turn above reaches the vetting prompt
-/// at all: a fixture that never asked would pass it for the wrong reason.
+/// and not a different verdict. The setting is turned on before the turn, which the turn is not to
+/// see: the session opened with it off.
 #[test]
 fn with_auto_vetting_off_a_safe_verdict_is_still_put_to_the_window() {
     let scratch = Scratch::new("bridge-vetting-turn-off");
-    let turn = a_turn_vetting_a_file_nobody_trusts(&scratch);
+    let turn = a_turn_vetting_a_file_nobody_trusts(&scratch, r#"{"vetting": {"auto": true}}"#);
 
     assert_eq!(turn.opened["autoVetting"], false, "{}", turn.opened);
     let [prompt] = turn.prompts.as_slice() else {
@@ -446,6 +494,12 @@ fn with_auto_vetting_off_a_safe_verdict_is_still_put_to_the_window() {
         );
     };
     assert_eq!(prompt["data"]["vetting"]["verdict"], "safe", "{prompt}");
+    assert_eq!(
+        turn.rounds.len(),
+        3,
+        "the planner was to be asked a round after the refusal: {:#?}",
+        turn.rounds
+    );
     assert!(
         turn.rounds.iter().all(|round| !round.contains(SENTINEL)),
         "a refused vetting prompt let the file reach the planner"
