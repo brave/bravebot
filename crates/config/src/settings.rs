@@ -184,6 +184,12 @@ pub struct Settings {
     /// somebody who wrote one believes it works, and a line that looks like a server and starts
     /// nothing has to be named as a mistake rather than left to look like a server that failed.
     mcp_declared: Vec<(PathBuf, String)>,
+    /// The aliases a layer's `mcp.request` named, with the file each came from (SERVERS-2).
+    ///
+    /// Every layer's entries, for BACKEND-24's reason: a request only names a server that then has
+    /// to be declared and approved in the person's own directory, so no layer's entry widens what
+    /// another's allowed.
+    mcp_requested: Vec<(PathBuf, String)>,
     keybindings: BTreeMap<String, String>,
     attribution: Attribution,
     search: SearchCaps,
@@ -353,6 +359,7 @@ impl Settings {
         let mut allow = Vec::new();
         let mut allow_ignored = Vec::new();
         let mut mcp_declared = Vec::new();
+        let mut mcp_requested: Vec<(PathBuf, String)> = Vec::new();
         for path in paths.into_iter().flatten() {
             // A file already read as a layer above is not read again. Naming one of the three
             // explicitly is an ordinary thing to do, and reading it twice would report every name
@@ -374,6 +381,11 @@ impl Settings {
             // is never a declaration, so which file said it decides only what the report names.
             for key in server_keys(&root) {
                 mcp_declared.push((path.clone(), key));
+            }
+            for alias in requested_servers(&root) {
+                if !mcp_requested.iter().any(|(_, held)| *held == alias) {
+                    mcp_requested.push((path.clone(), alias));
+                }
             }
             let granting = grants(&path, home_layer.as_deref(), named, cwd, started);
             for rule in permission_lists(&root).allow {
@@ -411,6 +423,7 @@ impl Settings {
         settings.permissions.allow = allow;
         settings.allow_ignored = allow_ignored;
         settings.mcp_declared = mcp_declared;
+        settings.mcp_requested = mcp_requested;
         // `merged` goes here, and clears what every layer stated as it does: the settings hold what
         // they keep of it by now, so the rest is a spare copy of a gateway token.
         settings
@@ -471,6 +484,7 @@ impl Settings {
             allow_ignored: Vec::new(),
             // Filled by [`Settings::layered`], which knows which file each key was written in.
             mcp_declared: Vec::new(),
+            mcp_requested: Vec::new(),
             keybindings: keybindings_block(root),
             attribution: attribution_block(root),
             search: search_caps(root),
@@ -554,6 +568,17 @@ impl Settings {
             .map(|(path, key)| (path.as_path(), key.as_str()))
     }
 
+    /// The aliases a settings layer requested with `"mcp": { "request": [...] }`, each once, with the
+    /// first file that named it, weakest first (SERVERS-2).
+    ///
+    /// A request grants nothing. It names a server the person has to have declared in their own
+    /// directory, and approved there, before anything is started for it.
+    pub fn mcp_requested(&self) -> impl Iterator<Item = (&Path, &str)> {
+        self.mcp_requested
+            .iter()
+            .map(|(path, alias)| (path.as_path(), alias.as_str()))
+    }
+
     /// What the settings in force say a commit message and a pull request may carry.
     ///
     /// A name the block set is an answer even when it is empty, empty being how a file says to
@@ -603,6 +628,7 @@ impl Settings {
             && self.allow_ignored.is_empty()
             // And a file that only tried to declare a server, which `doctor` names too.
             && self.mcp_declared.is_empty()
+            && self.mcp_requested.is_empty()
     }
 
     /// The rule text and added directories the `permissions` block carried.
@@ -916,6 +942,17 @@ fn server_keys(root: &serde_json::Map<String, serde_json::Value>) -> Vec<String>
         None => {}
     }
     keys
+}
+
+/// The aliases one layer's `mcp.request` lists. An entry that is not a string names nothing.
+fn requested_servers(root: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
+    match root.get("mcp").and_then(|block| block.get("request")) {
+        Some(serde_json::Value::Array(names)) => names
+            .iter()
+            .filter_map(|name| name.as_str().map(str::to_string))
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// The variables one layer's `env` block sets, for working out which layer won a name.
@@ -2532,6 +2569,29 @@ mod tests {
             .project(r#"{"mcp": {"request": ["weather"], "deny": ["docs"]}}"#)
             .read();
         assert_eq!(settings.mcp_declared().count(), 0);
+    }
+
+    /// SERVERS-2: every layer's request is read, each alias once with the first file that named
+    /// it, and a later layer's list adds to an earlier one's rather than replacing it.
+    #[test]
+    fn every_layers_request_is_read_and_each_alias_is_kept_once() {
+        let layers = Layers::new("mcp-request-layers")
+            .global(r#"{"mcp": {"request": ["docs"]}}"#)
+            .project(r#"{"mcp": {"request": ["weather", 7, "docs"]}}"#)
+            .local(r#"{"mcp": {"request": "weather"}}"#);
+        let settings = layers.read();
+        let requested: Vec<(PathBuf, &str)> = settings
+            .mcp_requested()
+            .map(|(path, alias)| (path.to_path_buf(), alias))
+            .collect();
+        assert_eq!(
+            requested,
+            [
+                (layers.home.join(SETTINGS_FILE), "docs"),
+                (layers.cwd.join(PROJECT_DIR).join(SETTINGS_FILE), "weather"),
+            ]
+        );
+        assert!(!settings.is_empty());
     }
 
     /// The home layer may write an allow rule, which is the whole point of the list: a person

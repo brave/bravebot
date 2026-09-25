@@ -19,23 +19,23 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 /// Where the files are, and whether this run may write them.
-struct Home {
+pub(crate) struct Home {
     /// The state directory, or `None` where the platform names no profile directory.
-    directory: Option<PathBuf>,
+    pub(crate) directory: Option<PathBuf>,
     /// Whether anything may be written into it, which an incognito session answers no.
-    writable: bool,
+    pub(crate) writable: bool,
 }
 
 /// The other end of the question: where an answer is read, where things are shown, and whether
 /// anybody is there to give one.
-struct Person<R, W> {
-    answers: R,
-    screen: W,
-    present: bool,
+pub(crate) struct Person<R, W> {
+    pub(crate) answers: R,
+    pub(crate) screen: W,
+    pub(crate) present: bool,
 }
 
 /// How a command ended, where it did not end done.
-type Stopped = (Ending, String);
+pub(crate) type Stopped = (Ending, String);
 
 /// Run `bravebot mcp <command>`.
 pub fn command(args: &[String]) -> ExitCode {
@@ -175,7 +175,13 @@ fn add<R: BufRead, W: Write>(
     match ask(alias, &declaration, &changed, &approvals, person) {
         Asked::Already => say(person, already(alias, &declaration)),
         Asked::Yes => {
-            record(directory, &declarations, &mut approvals, &declaration)?;
+            record(
+                directory,
+                &declarations,
+                &mut approvals,
+                alias,
+                &declaration,
+            )?;
             say(person, recorded(alias, &declaration));
         }
         Asked::No => say(person, t!(mcp_left_unapproved, alias = alias)),
@@ -425,7 +431,13 @@ fn approve<R: BufRead, W: Write>(
     match ask(alias, &declaration, &[], &approvals, person) {
         Asked::Already => say(person, already(alias, &declaration)),
         Asked::Yes => {
-            record(directory, &declarations, &mut approvals, &declaration)?;
+            record(
+                directory,
+                &declarations,
+                &mut approvals,
+                alias,
+                &declaration,
+            )?;
             say(person, recorded(alias, &declaration));
         }
         Asked::No => {
@@ -502,6 +514,9 @@ fn ask<R: BufRead, W: Write>(
             ),
         );
     }
+    for line in crate::servers::fetching(alias, declaration) {
+        say(person, line);
+    }
     say(person, "");
     let _ = write!(person.screen, "  {} {} ", t!(mcp_question), t!(line_answer));
     let _ = person.screen.flush();
@@ -513,16 +528,17 @@ fn ask<R: BufRead, W: Write>(
     }
 }
 
-/// Record the approval of `declaration`'s digest, and of nothing else: the alias is a label and is
-/// not what was approved.
-fn record(
+/// Record the approval of `declaration`'s digest, and of nothing else: the alias is kept beside it
+/// as the name it was asked about under, and is not what was approved.
+pub(crate) fn record(
     directory: &Path,
     declarations: &Declarations,
     approvals: &mut Approvals,
+    alias: &str,
     declaration: &Declaration,
 ) -> Result<(), Stopped> {
-    approvals.approve(declaration.digest());
-    approvals.keep_only(&declarations.digests());
+    approvals.approve(alias, declaration.digest());
+    approvals.keep_only(declarations);
     replace(&mcp::approvals_file(directory), &approvals.to_text())
 }
 
@@ -531,7 +547,7 @@ fn record(
 ///
 /// Every argument is shown as the word it is, quoted where it holds a space or anything a terminal
 /// would not draw as itself, so `a b` and `"a b"` are told apart on the screen as they are in argv.
-fn drawn(alias: &str, declaration: &Declaration, digest: &str) -> Vec<String> {
+pub(crate) fn drawn(alias: &str, declaration: &Declaration, digest: &str) -> Vec<String> {
     let what = match declaration {
         Declaration::Stdio { argv, .. } => argv
             .iter()
@@ -567,7 +583,7 @@ fn drawn(alias: &str, declaration: &Declaration, digest: &str) -> Vec<String> {
 }
 
 /// The margin the lines under a declaration's first one start at.
-fn indent(alias: &str) -> String {
+pub(crate) fn indent(alias: &str) -> String {
     " ".repeat(2 + shown(alias).chars().count() + 3)
 }
 
@@ -616,11 +632,11 @@ fn not_declared(alias: &str) -> Stopped {
     )
 }
 
-fn say<R, W: Write>(person: &mut Person<R, W>, line: impl std::fmt::Display) {
+pub(crate) fn say<R, W: Write>(person: &mut Person<R, W>, line: impl std::fmt::Display) {
     let _ = writeln!(person.screen, "{line}");
 }
 
-fn no_state_directory() -> String {
+pub(crate) fn no_state_directory() -> String {
     t!(
         mcp_no_state_directory,
         variables = bravebot_agent::home::PROFILE_VARIABLES.join(" or ")
@@ -674,13 +690,13 @@ fn save(
         )
     })?;
     replace(&mcp::declarations_file(directory), &declarations.to_text())?;
-    approvals.keep_only(&declarations.digests());
+    approvals.keep_only(declarations);
     replace(&mcp::approvals_file(directory), &approvals.to_text())
 }
 
 /// Write `text` over `path` through a temporary file beside it, so an interrupted write leaves the
 /// file as it was rather than half of it.
-fn replace(path: &Path, text: &str) -> Result<(), Stopped> {
+pub(crate) fn replace(path: &Path, text: &str) -> Result<(), Stopped> {
     let mut temporary = path.as_os_str().to_owned();
     temporary.push(".tmp");
     let temporary = PathBuf::from(temporary);
@@ -699,7 +715,7 @@ fn replace(path: &Path, text: &str) -> Result<(), Stopped> {
         })
 }
 
-fn problem(found: &Problem) -> String {
+pub(crate) fn problem(found: &Problem) -> String {
     match found {
         Problem::Alias => t!(mcp_problem_alias).to_string(),
         Problem::NotAnObject => t!(mcp_problem_not_an_object).to_string(),
@@ -716,7 +732,7 @@ fn problem(found: &Problem) -> String {
     }
 }
 
-fn unreadable(why: &Unreadable) -> String {
+pub(crate) fn unreadable(why: &Unreadable) -> String {
     match why {
         Unreadable::TooLarge => t!(mcp_unreadable_too_large).to_string(),
         Unreadable::NotRead => t!(mcp_unreadable_not_read).to_string(),
@@ -807,6 +823,38 @@ mod tests {
         let args = ["add", "spaced", "--stdio", "--", "run", "a b", "c"];
         let (_, screen) = typing(&directory, &args, "n\n");
         assert!(screen.contains("run \"a b\" c"), "{screen}");
+    }
+
+    #[test]
+    fn the_question_names_a_runner_and_the_package_it_leaves_unpinned() {
+        let directory = scratch("cli-mcp-runner");
+        let (_, screen) = typing(&directory, ADD, "n\n");
+        let lines: Vec<&str> = screen.lines().map(str::trim).collect();
+        assert!(
+            lines.contains(&t!(servers_fetches, runner = "npx").as_str()),
+            "{screen}"
+        );
+        assert!(
+            lines.contains(&t!(servers_unpinned, package = "weather-mcp").as_str()),
+            "{screen}"
+        );
+
+        let pinned = [
+            "add",
+            "pinned",
+            "--stdio",
+            "--",
+            "npx",
+            "-y",
+            "weather-mcp@1.2.0",
+        ];
+        let (_, screen) = typing(&directory, &pinned, "n\n");
+        let lines: Vec<&str> = screen.lines().map(str::trim).collect();
+        assert!(
+            lines.contains(&t!(servers_fetches, runner = "npx").as_str()),
+            "{screen}"
+        );
+        assert!(!screen.contains("names no exact version"), "{screen}");
     }
 
     #[test]

@@ -13,6 +13,8 @@
 
 #[cfg(unix)]
 use crate::SandboxError;
+use std::ffi::OsString;
+use std::fmt;
 use std::fs::File;
 use std::io::{self, Read, Write};
 #[cfg(not(windows))]
@@ -64,12 +66,50 @@ pub struct Streams {
 /// variables a program is trusted with is a decision of its own, the caller makes it, and
 /// there is no default here to make it by omission. This crate applies the answer, so it
 /// is the same answer on every platform.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Environment {
     /// This process's own.
     Inherited,
     /// Empty.
     Empty,
+    /// These variables and no others.
+    Only(Variables),
+}
+
+/// Variables a caller hands a confined process, each a name and its value.
+///
+/// Its `Debug` names the variables and never shows a value, since a value handed over this
+/// way is typically a credential and a log line is readable by more than the process it
+/// was meant for.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct Variables(Vec<(OsString, OsString)>);
+
+impl Variables {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Hand over `name` holding `value`, in place of any earlier value for that name.
+    pub fn with(mut self, name: impl Into<OsString>, value: impl Into<OsString>) -> Self {
+        let name = name.into();
+        self.0.retain(|(held, _)| *held != name);
+        self.0.push((name, value.into()));
+        self
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &(OsString, OsString)> {
+        self.0.iter()
+    }
+
+    pub fn names(&self) -> impl Iterator<Item = &OsString> {
+        self.0.iter().map(|(name, _)| name)
+    }
+}
+
+impl fmt::Debug for Variables {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.names()).finish()
+    }
 }
 
 /// The write end of a confined process's standard input.
@@ -215,13 +255,17 @@ pub(crate) fn confined(
 pub(crate) fn start(
     mut command: Command,
     streams: Streams,
-    environment: Environment,
+    environment: &Environment,
 ) -> Result<ConfinedChild, SandboxError> {
-    // Matched rather than compared, so a third answer added here is a compile error
+    // Matched rather than compared, so a fourth answer added here is a compile error
     // instead of a program quietly handed everything this process holds.
     match environment {
         Environment::Empty => {
             command.env_clear();
+        }
+        Environment::Only(variables) => {
+            command.env_clear();
+            command.envs(variables.iter().map(|(name, value)| (name, value)));
         }
         Environment::Inherited => {}
     }
@@ -286,7 +330,7 @@ mod tests {
         let mut child = start(
             shell("echo produced; echo diagnostic >&2"),
             EVERY_STREAM_PIPED,
-            Environment::Inherited,
+            &Environment::Inherited,
         )
         .expect("/bin/sh runs");
 
@@ -298,11 +342,59 @@ mod tests {
         assert_eq!(diagnostic, "diagnostic\n");
     }
 
+    /// A process handed named variables receives exactly those: the values it was given,
+    /// and none of this process's own, so naming `PATH` for a server does not also hand it
+    /// every credential this process holds in a variable.
+    #[test]
+    fn a_process_handed_named_variables_receives_those_and_no_others() {
+        assert!(
+            std::env::var_os("CARGO_MANIFEST_DIR").is_some(),
+            "cargo sets this for a test, and without it there is nothing here to withhold"
+        );
+        let mut child = start(
+            Command::new("/usr/bin/env"),
+            Streams {
+                stdin: Stream::Null,
+                stdout: Stream::Piped,
+                stderr: Stream::Inherited,
+            },
+            &Environment::Only(
+                Variables::new()
+                    .with("PATH", "/usr/bin")
+                    .with("WEATHER_TOKEN", "a value"),
+            ),
+        )
+        .expect("/usr/bin/env runs");
+
+        let printed = read(child.take_stdout().expect("stdout was asked for a pipe"));
+        assert!(child.wait().expect("should wait").success());
+        // Names only: a variable that leaked carries this process's own value, a token among them.
+        let mut received: Vec<&str> = printed
+            .lines()
+            .filter_map(|line| line.split_once('=').map(|(name, _)| name))
+            .collect();
+        received.sort_unstable();
+        assert_eq!(received, vec!["PATH", "WEATHER_TOKEN"]);
+        assert!(printed.lines().any(|line| line == "WEATHER_TOKEN=a value"));
+    }
+
+    /// A value handed over this way is typically a credential, and a caller that logs what
+    /// it launched with `{:?}` must not publish it.
+    #[test]
+    fn a_variables_value_is_not_in_its_debug_form() {
+        let shown = format!(
+            "{:?}",
+            Environment::Only(Variables::new().with("WEATHER_TOKEN", "hunter2"))
+        );
+        assert!(shown.contains("WEATHER_TOKEN"), "{shown}");
+        assert!(!shown.contains("hunter2"), "{shown}");
+    }
+
     /// A stream nobody asked a pipe for produces none, so a caller is never handed a reader
     /// on a stream it decided to discard.
     #[test]
     fn a_process_asked_for_no_pipes_is_handed_none() {
-        let mut child = start(shell("exit 0"), nothing_attached(), Environment::Inherited)
+        let mut child = start(shell("exit 0"), nothing_attached(), &Environment::Inherited)
             .expect("/bin/sh runs");
 
         assert!(child.take_stdin().is_none());
@@ -327,7 +419,7 @@ mod tests {
                 stdout: Stream::Null,
                 stderr: Stream::Null,
             },
-            Environment::Inherited,
+            &Environment::Inherited,
         )
         .expect("/bin/sh runs");
 

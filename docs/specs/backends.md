@@ -722,7 +722,7 @@ every file that was found. The flag that names one, and the path it refuses, are
 | What | How layers combine |
 |---|---|
 | `env`, `provider`, `attribution`, `keybindings`, `search` | per name, one level down; the value under a name is replaced whole |
-| `run.scrubEnv`, every list under `permissions` | every layer's entries are kept |
+| `run.scrubEnv`, every list under `permissions`, `mcp.request` | every layer's entries are kept |
 | `model`, anything else | the closest layer that set it wins |
 
 The project layers are read from the directory the process started in and no ancestor of it. Each
@@ -749,6 +749,11 @@ that was otherwise allowed. Overriding either would let a layer hand back what a
 and a permission removed by a file somebody did not open is the one outcome worth ruling out. A model
 is one choice rather than a list, so it resolves like any other single value.
 
+`mcp.request` is kept from every layer for a different reason that arrives at the same rule. An entry
+names a server a person must already have declared in their own directory and then approved, so a
+layer adding one widens nothing, and a layer replacing another's would drop a server a checkout
+asked for without saying so ([SERVERS-2](mcp-servers.md#SERVERS-2)).
+
 Searching upward for the project layer is what this declines to do, because then what configures a
 session would depend on which directory somebody happened to change into, and the file found could sit
 above the thing being worked on. Refusing the whole stack over one bad layer is the other thing it
@@ -773,6 +778,7 @@ with it.
 `verified-by: bravebot_config::settings::every_layer_adds_to_the_names_kept_from_a_program`
 `verified-by: bravebot_config::settings::every_layer_adds_to_the_permission_rules`
 `verified-by: bravebot_config::settings::every_layer_adds_to_the_directories_a_file_makes_reachable`
+`verified-by: bravebot_config::settings::every_layers_request_is_read_and_each_alias_is_kept_once`
 `verified-by: bravebot_config::settings::the_closest_layer_that_named_a_model_wins`
 `verified-by: bravebot_config::settings::a_layer_answering_for_one_attribution_name_leaves_the_other`
 `verified-by: bravebot_config::settings::a_layer_capping_one_side_of_a_search_leaves_the_other`

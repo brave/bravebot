@@ -1034,6 +1034,9 @@ pub struct Session {
     /// Not a boundary this session is inside: it confines a process running code we did not write,
     /// and the session starts none of those. The words the screen draws say so.
     pub confinement: String,
+    /// The MCP servers this session started, which is what makes the confinement above one it is
+    /// using rather than one it has on offer.
+    pub servers: Servers,
     /// How much this session asks before it acts, which one key cycles.
     ///
     /// Not persisted, like `shell` and unlike the trust map: a mode is a standing answer somebody
@@ -1368,6 +1371,17 @@ pub struct Session {
     attachments_made: usize,
 }
 
+/// The MCP servers a session was started with (SERVERS-14), settled before its screen is drawn.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Servers {
+    /// The alias of each server that started and completed its handshake, in order.
+    pub started: Vec<String>,
+    /// Whether one of them is a process this session confined, which a remote one is not.
+    pub confined: bool,
+    /// Why each requested server that is not among them is absent, said on the opening screen.
+    pub notes: Vec<String>,
+}
+
 impl Session {
     pub fn new(confinement: impl Into<String>) -> Self {
         Self {
@@ -1405,6 +1419,7 @@ impl Session {
             history_search: None,
             laid: Laid::default(),
             confinement: confinement.into(),
+            servers: Servers::default(),
             // Asking, which is what a session has always done. `allowing_bypass` moves it, and is
             // the only thing that can: the flag is the record that somebody accepted the cost.
             permission_mode: bravebot_agent::PermissionMode::default(),

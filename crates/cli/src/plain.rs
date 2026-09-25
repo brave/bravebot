@@ -166,6 +166,27 @@ pub fn session(skip_permissions: bool) -> ExitCode {
         return ExitCode::SUCCESS;
     };
 
+    // After that question, and put on the same two streams every other question here is. Held for
+    // the length of the session, since dropping one stops its server.
+    let mut reached = crate::servers::for_this_session(
+        &settings,
+        workspace.root(),
+        match skip_permissions {
+            true => crate::servers::Asking::Bypass,
+            false => crate::servers::Asking::Person,
+        },
+        &mut crate::mcp::Person {
+            answers: &mut asking.input,
+            screen: &mut asking.output,
+            present: true,
+        },
+        // Where this session's own lines go, since nothing draws over them.
+        bravebot_sandbox::Stream::Inherited,
+    );
+    for note in std::mem::take(&mut reached.notes) {
+        asking.say(&note);
+    }
+
     // What compaction measures the conversation against, and whether the model in force reads an
     // effort level. A session in lines opens no picker, so the model in force here is the stored
     // one or the configured one, and this is the only place either can be looked up.
@@ -217,6 +238,7 @@ pub fn session(skip_permissions: bool) -> ExitCode {
         trust,
         programs: TrustedPrograms::new(),
         servers: None,
+        mcp: reached.grants(),
         asked_about: AskedAbout::new(),
         exposed: bravebot_core::credentials::Exposed::new(),
         auto_vetting: bravebot_core::vetting::auto(
@@ -378,11 +400,14 @@ struct Running<'a> {
     /// standing answers mean what they mean in a session that draws; what this mode does not have
     /// is the key that turns the mode on, since it offers one answer per question (CLI-14).
     auto_vetting: bool,
+    /// A grant for each MCP server this session started (SERVERS-9).
+    mcp: Vec<bravebot_core::capability::ServerAlias>,
 }
 
 impl<C: Confirmer + Send> Turns<C> for Running<'_> {
     fn take(&mut self, prompt: &str, asking: &mut C) -> Said {
         let task = Task::new(prompt.to_string())
+            .with_servers(self.mcp.clone())
             .with_home(self.home.clone())
             .with_profile(self.profile.clone())
             // No bound on the rounds, as a session passes: there is a person watching, and they

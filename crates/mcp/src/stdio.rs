@@ -5,8 +5,9 @@
 //! running with our privileges unless something stops it, so it is spawned through the
 //! sandbox and refused outright when confinement cannot be established.
 //!
-//! Messages are newline-delimited JSON on stdin/stdout. The server's stderr is left
-//! attached to ours so its diagnostics stay visible.
+//! Messages are newline-delimited JSON on stdin/stdout. Where the server's stderr goes is
+//! the caller's to say: ours, so its diagnostics stay visible, or nowhere, where they
+//! would draw over a screen.
 
 use crate::protocol::{
     OfferedTool, RpcNotification, RpcRequest, RpcResponse, ToolList, ToolResult, call_params,
@@ -19,7 +20,7 @@ use bravebot_core::value::Labelled;
 use bravebot_sandbox::policy::SandboxPolicy;
 use bravebot_sandbox::{
     ConfinedChild, ConfinedStdin, ConfinedStdout, Environment, Sandbox, SandboxError, Stream,
-    Streams,
+    Streams, Variables,
 };
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
@@ -54,7 +55,8 @@ impl Drop for StdioServer {
 }
 
 impl StdioServer {
-    /// Launch a server under confinement.
+    /// Launch a server under confinement, holding `variables` and nothing else of an
+    /// environment, with its stderr sent to `diagnostics`.
     ///
     /// `sandbox` must be a real backend. If confinement cannot be applied the server is
     /// not started: running unconfined third-party code would silently remove the
@@ -63,8 +65,10 @@ impl StdioServer {
         name: impl Into<String>,
         program: &str,
         args: &[String],
+        variables: Variables,
         sandbox: &dyn Sandbox,
         policy: &SandboxPolicy,
+        diagnostics: Stream,
     ) -> McpResult<Self> {
         let mut child = sandbox
             .spawn(
@@ -74,13 +78,13 @@ impl StdioServer {
                 Streams {
                     stdin: Stream::Piped,
                     stdout: Stream::Piped,
-                    // stderr is inherited so server diagnostics reach the user.
-                    stderr: Stream::Inherited,
+                    stderr: diagnostics,
                 },
                 // A server is code we did not write, and a credential this process
                 // authenticates with sits in a variable rather than in a file, so no
-                // confinement policy over paths withholds one.
-                Environment::Empty,
+                // confinement policy over paths withholds one. What it holds is what its
+                // declaration named, and none of this process's own besides.
+                Environment::Only(variables),
             )
             .map_err(|e| match e {
                 // A program that is not there is a person's own configuration to correct,

@@ -509,6 +509,45 @@ mcp-list-unusable =
     }
 
 
+## The MCP servers a session starts with, and why one it was asked for is not among them
+
+servers-none-reached = no requested MCP server was started ({ $aliases }): { $reason }
+servers-not-declared =
+    { $file } requests the MCP server { $alias }, which is not declared, so nothing was installed
+    or run for it: bravebot mcp add declares one
+servers-not-reached = { $alias } was not started: { $reason }
+servers-nobody-in-a-one-shot =
+    { $alias } was not started: a one-shot run asks nobody, so run bravebot mcp approve { $alias }
+    at a terminal
+servers-nobody-at-a-terminal =
+    { $alias } was not started: there is no terminal to ask at, so run bravebot mcp approve
+    { $alias } at one
+servers-declined = { $alias } is not used in this session
+servers-program-relative = { $program } is a relative path, which names a different program in each directory
+servers-program-without-path =
+    { $program } is found through PATH, which the declaration does not name: declare it with
+    --env PATH, or give the program as an absolute path
+servers-program-not-found = { $program } is in no directory the PATH it names lists
+servers-requested-by = requested by { $file }
+servers-program = runs { $path }
+servers-changed = changed since it was approved
+# A runner resolves a package when it starts, so what it runs is chosen then, not here.
+servers-fetches = { $runner } fetches what it runs when it starts
+servers-unpinned = { $package } names no exact version, so it runs whatever is published under it
+servers-answer-once = Yes
+servers-answer-project = Yes, and use all future MCP servers in this project
+servers-answer-no = No, continue without this server
+servers-answer = [1/2/3]
+servers-for-this-session-only =
+    { $alias } is used in this session only: an incognito session records no answer
+servers-not-kept = { $alias } is used, and its approval was not recorded: { $reason }
+servers-project-not-kept = { $path } was not recorded as a project whose servers are used
+servers-not-confined = { $alias } was not started, since nothing here can confine it: { $reason }
+servers-no-confinement-here =
+    { $alias } was not started: this platform has no confinement for a local MCP server yet
+servers-no-handshake = { $alias } was started and did not complete its handshake: { $reason }
+servers-too-slow = { $alias } did not complete its handshake within { $seconds } seconds
+
 ## Vouching for a directory, asked once when a session starts somewhere new
 
 trust-directory-title = trust this directory?
@@ -939,6 +978,12 @@ status-confinement = Confinement
 # is what this platform can enforce over a process running code we did not write, and the session
 # starts none of those.
 status-confinement-nothing-confined = this session confines nothing
+# Where the session started MCP servers, the level is in force over them and over nothing else.
+status-confinement-servers = this session confines the MCP servers it started, and nothing else it runs
+status-mcp-servers = MCP servers
+status-mcp-servers-none = none
+# No tool of a started server is offered to the model until each call can be put to the person.
+status-mcp-servers-no-tools = started; no tool of theirs is offered to the model yet
 status-loop = Loop
 status-loop-every = every { $every }
 status-loop-self-paced = paced by each turn

@@ -1967,6 +1967,7 @@ pub fn run(
     config: &mut Config,
     workspace: &Workspace,
     confinement: String,
+    servers: crate::state::Servers,
     start: Start,
     skip_permissions: bool,
 ) -> io::Result<Option<bravebot_session::sessions::Resumable>> {
@@ -2011,6 +2012,7 @@ pub fn run(
             config,
             workspace,
             confinement,
+            servers,
             start,
             skip_permissions,
         ),
@@ -2474,6 +2476,7 @@ fn event_loop(
     config: &mut Config,
     workspace: &Workspace,
     confinement: String,
+    mut mcp_servers: crate::state::Servers,
     start: Start,
     skip_permissions: bool,
 ) -> io::Result<Option<bravebot_session::sessions::Resumable>> {
@@ -2487,6 +2490,8 @@ fn event_loop(
         .with_stored_history()
         .in_workspace(workspace.root())
         .on_tier(config);
+    let absent = std::mem::take(&mut mcp_servers.notes);
+    session.servers = mcp_servers;
     // The flag both opens the session in bypass and puts that rung on the ladder the key walks.
     if skip_permissions {
         session = session.allowing_bypass();
@@ -2617,6 +2622,11 @@ fn event_loop(
     // session rather than in front of it.
     if let Some(newer) = crate::update::at_startup() {
         session.note(newer);
+    }
+    // Why a server this checkout asked for is not in the session, said where the person starts
+    // reading rather than on the plain terminal the screen is about to cover.
+    for note in absent {
+        session.note(note);
     }
 
     // The rules the user wrote in advance, read once for the workspace: a person editing the file
@@ -2925,6 +2935,7 @@ fn event_loop(
                     theme: &theme,
                     config,
                     confinement: &session.confinement,
+                    servers: &session.servers,
                     permission_mode: session.permission_mode(),
                     auto_vetting: session.auto_vetting(),
                     turns: session.turns,
@@ -5651,7 +5662,17 @@ fn run_turn_animated(
         // And the files this session has already agreed the planner may be given, so a planner
         // reading the same `.env` on turn after turn is asked about it once.
         .already_exposed(exposed.clone())
-        .working_towards(working_towards);
+        .working_towards(working_towards)
+        // A grant naming each server the session started, and no tool of any: none is offered to
+        // the planner until each call can be put to the person.
+        .with_servers(
+            session
+                .servers
+                .started
+                .iter()
+                .map(|alias| bravebot_core::capability::ServerAlias::new(alias.as_str()))
+                .collect(),
+        );
     // Every file named with `@` becomes context, which a turn treats as trusted: the user typed the
     // path and their keystroke is what vouches for it, exactly as `--file` does on the command
     // line. Read back out of the prompt rather than tracked while it is typed, so the line that was

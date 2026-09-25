@@ -45,7 +45,7 @@ pub mod vim;
 pub mod watch_command;
 pub mod wrap;
 
-pub use state::{Entry, Session, Speaker, Status};
+pub use state::{Entry, Servers, Session, Speaker, Status};
 
 /// Whether an environment variable of this shape asks for what it names: set, and not empty.
 ///

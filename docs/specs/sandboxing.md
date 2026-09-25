@@ -216,10 +216,13 @@ stopped being atomic.
 <a id="SANDBOX-8"></a>
 ### SANDBOX-8: the environment a confined process receives is the caller's
 
-A confined process starts with either the environment the calling process holds or none at all, and
-the caller says which as the process is started. Confinement applies that answer itself, so a
-caller asking for nothing is handed nothing whichever backend confines the process, and a caller
-asking for its own is handed all of it. A backend that reaches the program through a second program
+A confined process starts with the environment the calling process holds, with none at all, or
+with the variables the caller names and no others, and the caller says which as the process is
+started. Confinement applies that answer itself, so a caller asking for nothing is handed nothing
+whichever backend confines the process, a caller asking for its own is handed all of it, and a
+caller naming variables is handed those with the values it gave. The debug form of what a caller
+hands over names each variable and never shows its value, so a log line written from it publishes no
+credential. A backend that reaches the program through a second program
 answers for what that one loses on the way, and where it cannot restore what was lost it refuses
 rather than starting the process with less than was asked for. What it restores is what would
 otherwise be lost and no more: a command line is readable by every user of the machine and another
@@ -233,6 +236,11 @@ against is the difference between a credential withheld and a credential handed 
 write. Leaving the emptying to each caller costs the same thing one step further out, since a
 caller that forgets is a program handed everything with nothing saying so.
 
+The directory a process starts in is the caller's as well. A policy may name one, and otherwise the
+process starts in this one's. Naming it grants nothing: a process started in a directory it may not
+read is refused its first read of it, so a caller meaning the process to work there grants the
+directory too.
+
 `verified-by: bravebot_sandbox::linux::the_environment_a_confined_process_receives_is_the_callers`
 `verified-by: bravebot_sandbox::macos::the_environment_a_confined_process_receives_is_the_callers`
 `verified-by: bravebot_sandbox::linux::a_confined_process_given_an_empty_environment_receives_none_of_this_processes_variables`
@@ -242,6 +250,14 @@ caller that forgets is a program handed everything with nothing saying so.
 `verified-by: bravebot_sandbox::macos::a_caller_holding_nothing_the_platform_strips_reaches_its_program_directly`
 `verified-by: bravebot_sandbox::macos::a_confined_process_asked_to_receive_no_variables_is_handed_none_as_an_argument`
 `verified-by: bravebot_sandbox::macos::a_program_path_the_wrapper_would_read_as_a_variable_is_refused`
+`verified-by: bravebot_sandbox::macos::a_caller_naming_its_variables_has_only_the_named_loader_variables_carried_as_arguments`
+`verified-by: bravebot_sandbox::process::a_process_handed_named_variables_receives_those_and_no_others`
+`verified-by: bravebot_sandbox::process::a_variables_value_is_not_in_its_debug_form`
+`verified-by: bravebot_sandbox::windows::named_variables_are_written_as_a_sorted_block_of_those_alone`
+`verified-by: bravebot_sandbox::windows::an_empty_environment_is_an_empty_block_and_an_inherited_one_is_none`
+`verified-by: bravebot_sandbox::windows::a_variable_the_platform_would_misread_is_refused`
+`verified-by: bravebot_sandbox::macos::a_confined_process_starts_in_the_directory_its_policy_names`
+`verified-by: bravebot_sandbox::linux::a_confined_process_starts_in_the_directory_its_policy_names`
 
 <a id="SANDBOX-9"></a>
 ### SANDBOX-9: a path that is not on disk is left out before the policy is built, and named
@@ -281,7 +297,8 @@ decided on and the grant a program got is visible where it can be acted on.
 
 The opening screen and `/status` name the level this platform can enforce over a process running
 code we did not write. Neither reports the session as running inside it, and `/status` says beside
-the level that the session confines nothing.
+the level what the session confines: the MCP servers it started, where it started a local one, and
+nothing otherwise.
 
 **Why.** The level is a fact about the machine, read before the session opens. What it bounds is a
 process started to run somebody else's code, and a session that starts none of those is inside no
@@ -291,12 +308,15 @@ drawn with nothing beside it is read as a guarantee over all of that, which is
 [SANDBOX-5](#SANDBOX-5)'s overstated capability told to a person instead of to a caller, and the
 person is the one with no backend to check it against.
 
-**The line is a statement, not a count.** Nothing in a session starts a process for confinement to
-bound, so there is nothing to count and the panel says so outright. What it costs is a line that
-whatever first gives a session such a process has to revisit, rather than one that already accounts
-for it.
+**The line is a statement, not a count.** The one process a session starts for confinement to
+bound is a local MCP server ([mcp-servers.md](mcp-servers.md)), and the line beneath it names each
+one started. So the confinement line says which kind of process it covers and leaves the names to
+that one, rather than restating a list. A remote server is not a process here and is not confined,
+so a session that reached only remote ones still confines nothing. What it costs is a line that
+whatever next gives a session such a process has to revisit.
 
 `verified-by: bravebot_tui::status::the_confinement_is_reported_as_available_rather_than_in_force`
+`verified-by: bravebot_tui::status::the_servers_a_session_started_are_named_and_what_is_confined_follows_them`
 `verified-by: bravebot_tui::logo::the_mark_names_the_agent_its_confinement_and_its_tier`
 `verified-by: bravebot_tui::logo::a_narrow_pane_still_reports_the_confinement_and_the_tier`
 
@@ -378,6 +398,23 @@ confining a program was for.
 `verified-by: bravebot_sandbox::linux::a_program_starts_under_the_base_this_machine_resolved`
 `verified-by: bravebot_sandbox::linux::a_program_under_the_base_can_name_the_account_it_runs_as`
 `verified-by: bravebot_sandbox::linux::a_program_under_the_base_reads_the_machine_and_not_a_private_key`
+
+<a id="SANDBOX-13"></a>
+### SANDBOX-13: a confined process can look at any path, and reads and lists only its grants
+
+On Linux and macOS a look at a path is not bounded by a grant: whether something is there, what
+kind of thing it is, its size, when it changed, and where a link points. Opening a file for what it
+holds and listing a directory's entries are bounded, and outside the grants both are refused.
+
+**Why.** Landlock bounds no look, so on Linux this is the kernel's and not a choice. On macOS a
+profile that refused a look outside the grants refused the walk to them: node resolves its own
+script through each directory above it, and a search of `PATH` stops at an entry it is refused
+rather than told is missing, which a link outside the grants on the way to a granted directory is.
+Under that profile no node program started, which is most of what a runner runs. A look gives the
+shape of what is at a name a process had to know already; what it withholds is every byte a file
+holds and every name a directory lists, which is where a credential is.
+
+`verified-by: bravebot_sandbox::macos::a_confined_process_can_look_at_any_path_and_read_or_list_only_its_grants`
 
 ## Programs a person asked for
 

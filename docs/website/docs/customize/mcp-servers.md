@@ -1,7 +1,7 @@
 ---
 sidebar_position: 7
 title: MCP servers
-description: Declare a Model Context Protocol server, approve it, and see what is declared.
+description: Declare a Model Context Protocol server, approve it, have a checkout ask for it, and see what a session started.
 ---
 
 # MCP servers
@@ -11,9 +11,10 @@ offers tools. Before one can be used you declare it, which says what it is, and 
 which says you have read what it will run.
 
 :::note
-**This build declares and approves servers and does nothing else with them.** No session starts a
-declared server or offers its tools yet, so an approved server is a line in a file and no more.
-What follows is the part that is built.
+**This build starts an approved server and offers none of its tools.** A session starts the servers
+its checkout asks for, confined, and completes their handshakes. No tool of one is offered to the
+model yet: that waits for the question each call will be put to you with. What follows is the part
+that is built.
 :::
 
 ## Where a server is declared
@@ -107,7 +108,8 @@ either piped, `add` writes the declaration and tells you to run `approve` at a t
 
 What you approve is the **digest**: a hash of the transport, the program and every argument, the
 url, the variable names and the directory. The alias is not part of it. It is written, one per
-line, to `~/.bravebot/mcp-approved`.
+line with the alias you approved it as beside it, to `~/.bravebot/mcp-approved`. The alias is kept
+so a session can say a declaration changed since you approved it; it approves nothing.
 
 So changing anything a server would run is a server nobody approved. Pinning the version above:
 
@@ -121,6 +123,115 @@ So changing anything a server would run is a server nobody approved. Pinning the
 ```
 
 The old approval is gone whatever you answer, since nothing declares what it approved any more.
+
+## Asking for one from a checkout
+
+A checkout says which servers it expects in its `.bravebot/settings.json`:
+
+```json
+{ "mcp": { "request": ["weather"] } }
+```
+
+That is a list of aliases and nothing more. Each one is looked up among the servers *you* declared.
+One you have not declared is reported as the session opens, and nothing is fetched, installed or
+run for it:
+
+```
+.bravebot/settings.json requests the MCP server docs, which is not declared, so nothing was installed or run for it: bravebot mcp add declares one
+```
+
+A declared server no checkout asks for is not started, approved or not.
+
+### The question a session asks
+
+Where a requested server is declared and nothing you answered covers it, the session asks as it
+opens, before anything of the server runs:
+
+```
+  weather   stdio   npx -y @dangahagan/weather-mcp@latest
+            requested by .bravebot/settings.json
+            runs /opt/homebrew/bin/npx
+            variables: PATH
+            digest: 25edc5e8
+            npx fetches what it runs when it starts
+            @dangahagan/weather-mcp@latest names no exact version, so it runs whatever is published under it
+
+  Use this MCP server?
+  1. Yes
+  2. Yes, and use all future MCP servers in this project
+  3. No, continue without this server
+  [1/2/3]
+```
+
+| Answer | What it records |
+|---|---|
+| 1 | the approval of this digest |
+| 2 | the approval, and this project's path in `~/.bravebot/mcp-projects`, so a later server a checkout here asks for starts without the question |
+| 3 | nothing; the server is not used in this session and the session goes on |
+
+Anything else you type, and the end of the input, is 3. Answer 2 answers this question and no
+other: it does not reach a server whose declaration changed since you approved it, and it does not
+reach another project.
+
+`runs` is where a program named through `PATH` was found, and is left out where you gave the path
+yourself. The last two lines appear for a runner that fetches a package as it starts, `npx`,
+`bunx`, `npm exec`, `pnpm dlx`, `yarn dlx`, `uvx`, `uv tool run` and `pipx run`, and for a package
+that names no exact version: what you approve is the command line, and what that command runs is
+decided when it runs.
+
+In the full-screen interface the question is asked on the terminal before the interface opens. In
+`--plain` it is asked after the question about trusting the directory.
+
+### Where nobody can be asked
+
+A [one-shot run](../using/headless.md), `bravebot "..."`, asks nobody. A requested server nothing approved is left out, and
+the reason is printed to stderr:
+
+```
+weather was not started: a one-shot run asks nobody, so run bravebot mcp approve weather at a terminal
+```
+
+A session with no terminal says the same. An approved server starts in either. An incognito session
+asks, and a yes there starts the server for that session and records nothing.
+
+`--dangerously-skip-permissions` answers the question yes without drawing it, and records nothing,
+so a later run without it asks.
+
+## What a server can reach
+
+A program server is started confined, and on a platform with no confinement for one, which is
+Windows today, it is not started. It gets:
+
+- the variables you named with `--env`, read from your environment as it starts, and no others;
+- read access to the directories the `PATH` you named lists and the one its program is in, and for a
+  `bin` directory the installation around it;
+- the directory you gave with `--dir`, to read and write and start in, or the temporary directory
+  if you gave none;
+- the network, and the machine's own system directories;
+- a look at any path, which says whether something is there and what kind of thing it is, and
+  not what a file holds or what a directory lists.
+
+It does not get your home directory, other than a `PATH` entry inside it such as `~/.local/bin`, and
+it does not get the workspace unless `--dir` names it. A program named without a path is looked for
+only in the `PATH` you named: without `--env PATH` it is not found, and the session says to name it
+or give the program's full path.
+
+A service server is reached through the same network gate as everything else the session sends, and
+a redirect off the host and port you declared is refused.
+
+## Seeing what a session started
+
+`/status` in the full-screen interface names the servers the session started:
+
+```
+  Confinement   kernel-enforced
+                  this session confines the MCP servers it started, and nothing else it runs
+  MCP servers   weather
+                  started; no tool of theirs is offered to the model yet
+```
+
+It says `none` where it started none. A requested server that was not started is not on the line;
+why is said once, as the session opens.
 
 ## Seeing what is declared
 
@@ -162,8 +273,15 @@ profile directory there is no `~/.bravebot` at all: nothing is declared there, a
 
 ## Known costs
 
-- **Nothing uses a declaration yet.** Declaring and approving are built ahead of the session that
-  would start a server, so that what the question asks is settled before anything depends on it.
+- **A started server is never called yet.** No tool of one is offered to the model until each call
+  can be put to you, so a server starts, answers its handshake, and waits.
+- **The full-screen interface asks before it asks about the directory.** A server you approve can
+  start for a session whose directory you then decline, and runs until bravebot exits.
+- **A runner cannot write its cache in your home directory.** Pass a cache variable with `--env` and
+  point it into `--dir` or the temporary directory. A runner from a toolchain installed under your
+  home directory, as `nvm` installs one, does not start confined.
+- **The full-screen interface does not show a server's own error output.** `--plain` and a one-shot
+  run pass it through to stderr.
 - **A checkout cannot bring its own server.** A project that needs one says so in its README, and
   each person declares it. That is the point, and it costs a step per machine.
 - **An approval does not travel.** It lives in your own directory, so a second machine asks again.

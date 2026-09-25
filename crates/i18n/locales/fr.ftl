@@ -443,6 +443,45 @@ mcp-list-unusable =
     }
 
 
+## Les serveurs MCP qu'une session démarre, et pourquoi un serveur demandé n'en fait pas partie
+
+servers-none-reached = aucun serveur MCP demandé n'a été démarré ({ $aliases }) : { $reason }
+servers-not-declared =
+    { $file } demande le serveur MCP { $alias }, qui n'est pas déclaré : rien n'a été installé ni
+    exécuté pour lui, et bravebot mcp add en déclare un
+servers-not-reached = { $alias } n'a pas été démarré : { $reason }
+servers-nobody-in-a-one-shot =
+    { $alias } n'a pas été démarré : une exécution unique n'interroge personne, lancez donc
+    bravebot mcp approve { $alias } dans un terminal
+servers-nobody-at-a-terminal =
+    { $alias } n'a pas été démarré : il n'y a pas de terminal où demander, lancez donc
+    bravebot mcp approve { $alias } dans un terminal
+servers-declined = { $alias } n'est pas utilisé dans cette session
+servers-program-relative = { $program } est un chemin relatif, qui désigne un programme différent dans chaque répertoire
+servers-program-without-path =
+    { $program } se trouve par PATH, que la déclaration ne nomme pas : déclarez-le avec
+    --env PATH, ou donnez le programme sous forme de chemin absolu
+servers-program-not-found = { $program } n'est dans aucun répertoire du PATH qu'elle nomme
+servers-requested-by = demandé par { $file }
+servers-program = exécute { $path }
+servers-changed = modifié depuis son approbation
+# Un lanceur résout un paquet au démarrage : ce qu'il exécute est choisi à ce moment, pas ici.
+servers-fetches = { $runner } récupère ce qu'il exécute au démarrage
+servers-unpinned = { $package } ne nomme aucune version exacte : il exécute ce qui est publié sous ce nom
+servers-answer-once = Oui
+servers-answer-project = Oui, et utiliser tous les futurs serveurs MCP de ce projet
+servers-answer-no = Non, continuer sans ce serveur
+servers-answer = [1/2/3]
+servers-for-this-session-only =
+    { $alias } n'est utilisé que dans cette session : une session incognito n'enregistre aucune réponse
+servers-not-kept = { $alias } est utilisé, et son approbation n'a pas été enregistrée : { $reason }
+servers-project-not-kept = { $path } n'a pas été enregistré comme un projet dont les serveurs sont utilisés
+servers-not-confined = { $alias } n'a pas été démarré, rien ici ne pouvant le confiner : { $reason }
+servers-no-confinement-here =
+    { $alias } n'a pas été démarré : cette plateforme n'a pas encore de confinement pour un serveur MCP local
+servers-no-handshake = { $alias } a été démarré et n'a pas terminé sa poignée de main : { $reason }
+servers-too-slow = { $alias } n'a pas terminé sa poignée de main en { $seconds } secondes
+
 ## Approuver un répertoire, demandé une fois quand une session démarre ailleurs
 
 trust-directory-title = faire confiance à ce répertoire ?
@@ -849,6 +888,10 @@ status-premium-not-spent = aucun abonnement utilisé
 status-no-subscription = aucun abonnement configuré
 status-confinement = Confinement
 status-confinement-nothing-confined = cette session ne confine rien
+status-confinement-servers = cette session confine les serveurs MCP qu'elle a démarrés, et rien d'autre de ce qu'elle exécute
+status-mcp-servers = Serveurs MCP
+status-mcp-servers-none = aucun
+status-mcp-servers-no-tools = démarrés ; aucun de leurs outils n'est encore proposé au modèle
 status-loop = Boucle
 status-loop-every = toutes les { $every }
 status-loop-self-paced = cadencée par chaque tour

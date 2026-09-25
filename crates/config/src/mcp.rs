@@ -34,7 +34,7 @@
 //! ```
 
 use sha2::{Digest as _, Sha256};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// The declarations, inside the state directory.
@@ -42,6 +42,9 @@ const DECLARATIONS_FILE: &str = "mcp.json";
 
 /// The approvals, one digest per line, inside the state directory.
 const APPROVALS_FILE: &str = "mcp-approved";
+
+/// The projects answer 2 was given in, one path per line, inside the state directory.
+const PROJECTS_FILE: &str = "mcp-projects";
 
 /// The most of either file worth reading.
 ///
@@ -63,6 +66,11 @@ pub fn declarations_file(directory: &Path) -> PathBuf {
 /// Where a person's approvals are recorded.
 pub fn approvals_file(directory: &Path) -> PathBuf {
     directory.join(APPROVALS_FILE)
+}
+
+/// Where the projects answer 2 was given in are recorded.
+pub fn projects_file(directory: &Path) -> PathBuf {
+    directory.join(PROJECTS_FILE)
 }
 
 /// Whether `alias` may name a server.
@@ -566,64 +574,203 @@ fn entry(alias: &str, value: &serde_json::Value) -> Entry {
     }
 }
 
-/// The digests the person approved.
+/// The digests the person approved, each with the aliases it was approved under, and the aliases
+/// whose approved declaration has changed since.
 ///
-/// A line that spells no digest is passed over rather than refused, and an unreadable file approves
+/// A line that spells neither is passed over rather than refused, and an unreadable file approves
 /// nothing, which is the direction to be wrong in: a server nobody can show was approved is asked
 /// about again.
+///
+/// ```text
+/// 4f1c9a2e...  weather
+/// changed docs
+/// ```
+///
+/// The alias is not what was approved: [`Approvals::approves`] asks about a digest and nothing else,
+/// for the reason [`Declaration::digest`] leaves the alias out. It is kept so a session can tell a
+/// server nobody has been asked about from one that changed since somebody answered, which a
+/// project path recorded by answer 2 may pre-answer and this may not (SERVERS-5).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Approvals {
-    digests: BTreeSet<Digest>,
+    approved: BTreeMap<Digest, BTreeSet<String>>,
+    changed: BTreeSet<String>,
 }
+
+/// The word a line recording a changed declaration starts with.
+const CHANGED: &str = "changed";
 
 impl Approvals {
     /// Read the approvals in a state directory.
     pub fn read(home: &Path) -> Self {
-        let path = approvals_file(home);
-        match std::fs::metadata(&path) {
-            Ok(found) if found.len() <= MAX_BYTES => {}
-            _ => return Self::default(),
-        }
-        std::fs::read_to_string(&path)
+        bounded(&approvals_file(home))
             .map(|text| Self::parse(&text))
             .unwrap_or_default()
     }
 
     /// Read approvals out of the file's text.
+    ///
+    /// A digest alone on its line is an approval under no alias, which is how the file was written
+    /// before an alias was kept beside one.
     pub fn parse(text: &str) -> Self {
-        Self {
-            digests: text
-                .lines()
-                .filter_map(|line| Digest::parse(line.trim()))
-                .collect(),
+        let mut approvals = Self::default();
+        for line in text.lines() {
+            let mut words = line.split_whitespace();
+            match (words.next(), words.next(), words.next()) {
+                (Some(CHANGED), Some(alias), None) if is_alias(alias) => {
+                    approvals.changed.insert(alias.to_string());
+                }
+                (Some(hex), alias, None) if alias.is_none_or(is_alias) => {
+                    let Some(digest) = Digest::parse(hex) else {
+                        continue;
+                    };
+                    let aliases = approvals.approved.entry(digest).or_default();
+                    aliases.extend(alias.map(str::to_string));
+                }
+                _ => {}
+            }
         }
+        approvals
     }
 
     /// Whether this digest was approved.
     pub fn approves(&self, digest: &Digest) -> bool {
-        self.digests.contains(digest)
+        self.approved.contains_key(digest)
     }
 
-    /// Record an approval of this digest.
-    pub fn approve(&mut self, digest: Digest) {
-        self.digests.insert(digest);
+    /// Whether `alias` was approved as something other than `digest`, so the declaration it names
+    /// now is one the person has not seen.
+    pub fn changed(&self, alias: &str, digest: &Digest) -> bool {
+        !self.approves(digest)
+            && (self.changed.contains(alias)
+                || self
+                    .approved
+                    .values()
+                    .any(|aliases| aliases.contains(alias)))
     }
 
-    /// Keep only the approvals some declaration still resolves to.
+    /// Record an approval of this digest, given about `alias`.
+    pub fn approve(&mut self, alias: &str, digest: Digest) {
+        self.approved
+            .entry(digest)
+            .or_default()
+            .insert(alias.to_string());
+        self.changed.remove(alias);
+    }
+
+    /// Keep only the approvals a declaration still resolves to, each under the aliases that resolve
+    /// to it, and record every alias whose approved declaration has changed.
     ///
     /// An approval outliving its declaration is a digest nothing resolves, and one that would answer
-    /// for a declaration written back to exactly what it was, unseen. Called whenever the
-    /// declarations are rewritten, so the two files agree about what is approved.
-    pub fn keep_only(&mut self, live: &BTreeSet<Digest>) {
-        self.digests.retain(|digest| live.contains(digest));
+    /// for a declaration written back to exactly what it was, unseen. So a changed declaration's old
+    /// digest is dropped here, and what is kept of it is that its alias changed, which approves
+    /// nothing. Called whenever the declarations are rewritten, so the two files agree about what
+    /// is approved.
+    pub fn keep_only(&mut self, declarations: &Declarations) {
+        let mut kept = Self::default();
+        for Entry { alias, declaration } in declarations.entries() {
+            let digest = declaration.as_ref().ok().map(Declaration::digest);
+            match digest {
+                Some(digest) if self.approves(&digest) => {
+                    kept.approved.entry(digest).or_default().insert(alias);
+                }
+                _ if self.changed.contains(&alias)
+                    || self
+                        .approved
+                        .values()
+                        .any(|aliases| aliases.contains(&alias)) =>
+                {
+                    kept.changed.insert(alias);
+                }
+                _ => {}
+            }
+        }
+        *self = kept;
     }
 
-    /// The file's text, one digest per line.
+    /// The file's text, one approval per line and then one changed alias per line.
     pub fn to_text(&self) -> String {
-        self.digests
+        let mut text = String::new();
+        for (digest, aliases) in &self.approved {
+            match aliases.is_empty() {
+                true => text.push_str(&format!("{digest}\n")),
+                false => {
+                    for alias in aliases {
+                        text.push_str(&format!("{digest} {alias}\n"));
+                    }
+                }
+            }
+        }
+        for alias in &self.changed {
+            text.push_str(&format!("{CHANGED} {alias}\n"));
+        }
+        text
+    }
+}
+
+/// The projects in which answer 2 said to use every future server, one path per line.
+///
+/// Pre-answers [SERVERS-4]'s question for a server a checkout in one of these requested, and
+/// nothing else: not a capability, not a call, not a server whose declaration changed since it was
+/// approved. A line that is not an absolute path is passed over.
+///
+/// [SERVERS-4]: ../../../docs/specs/mcp-servers.md#SERVERS-4
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Projects {
+    paths: BTreeSet<PathBuf>,
+}
+
+impl Projects {
+    /// Read the projects recorded in a state directory.
+    pub fn read(home: &Path) -> Self {
+        bounded(&projects_file(home))
+            .map(|text| Self::parse(&text))
+            .unwrap_or_default()
+    }
+
+    /// Read projects out of the file's text.
+    pub fn parse(text: &str) -> Self {
+        Self {
+            paths: text
+                .lines()
+                .map(Path::new)
+                .filter(|path| path.is_absolute())
+                .map(Path::to_path_buf)
+                .collect(),
+        }
+    }
+
+    /// Whether `project` was recorded, as the path it was recorded as.
+    pub fn contains(&self, project: &Path) -> bool {
+        self.paths.contains(project)
+    }
+
+    /// Record `project`, where it is a path a line can hold. Whether it was recorded.
+    pub fn add(&mut self, project: &Path) -> bool {
+        let writable = project.is_absolute()
+            && project
+                .to_str()
+                .is_some_and(|text| !text.contains(['\n', '\r']));
+        if writable {
+            self.paths.insert(project.to_path_buf());
+        }
+        writable
+    }
+
+    /// The file's text.
+    pub fn to_text(&self) -> String {
+        self.paths
             .iter()
-            .map(|digest| format!("{digest}\n"))
+            .filter_map(|path| path.to_str())
+            .map(|path| format!("{path}\n"))
             .collect()
+    }
+}
+
+/// A small file's text, or `None` for one that is missing, too large, or not text.
+fn bounded(path: &Path) -> Option<String> {
+    match std::fs::metadata(path) {
+        Ok(found) if found.len() <= MAX_BYTES => std::fs::read_to_string(path).ok(),
+        _ => None,
     }
 }
 
@@ -908,18 +1055,87 @@ mod tests {
     }
 
     #[test]
+    fn an_approval_reads_back_with_the_alias_it_was_given_about() {
+        let digest = weather().digest();
+        let mut approvals = Approvals::default();
+        approvals.approve("weather", digest);
+        let text = approvals.to_text();
+        assert_eq!(text, format!("{digest} weather\n"));
+        assert_eq!(Approvals::parse(&text), approvals);
+        let spoiled = Approvals::parse(&format!("{digest} not:an:alias\nchanged\n"));
+        assert_eq!(spoiled, Approvals::default());
+    }
+
+    #[test]
     fn an_approval_nothing_resolves_to_is_dropped() {
         let other = Declaration::http("https://docs.example.com".into()).unwrap();
         let mut approvals = Approvals::default();
-        approvals.approve(weather().digest());
-        approvals.approve(other.digest());
+        approvals.approve("weather", weather().digest());
+        approvals.approve("docs", other.digest());
 
         let mut declarations = Declarations::default();
         declarations.insert("docs", &other);
-        approvals.keep_only(&declarations.digests());
+        approvals.keep_only(&declarations);
 
         assert!(!approvals.approves(&weather().digest()));
         assert!(approvals.approves(&other.digest()));
+        assert!(!approvals.changed("weather", &weather().digest()));
+        assert_eq!(approvals.to_text(), format!("{} docs\n", other.digest()));
+    }
+
+    /// SERVERS-5: a declaration changed since it was approved is recorded as changed, and the
+    /// record approves nothing, so writing the declaration back to what it was asks again.
+    #[test]
+    fn a_declaration_changed_since_its_approval_is_recorded_as_changed_and_approves_nothing() {
+        let pinned =
+            Declaration::stdio(words(&["npx", "-y", "weather-mcp@1.2.0"]), Vec::new(), None)
+                .unwrap();
+        let mut approvals = Approvals::default();
+        approvals.approve("weather", weather().digest());
+        let mut declarations = Declarations::default();
+        declarations.insert("weather", &pinned);
+
+        assert!(approvals.changed("weather", &pinned.digest()));
+        approvals.keep_only(&declarations);
+        assert!(approvals.changed("weather", &pinned.digest()));
+        assert!(!approvals.approves(&weather().digest()));
+        assert_eq!(approvals.to_text(), "changed weather\n");
+
+        declarations.insert("weather", &weather());
+        approvals.keep_only(&declarations);
+        assert!(!approvals.approves(&weather().digest()));
+        assert!(approvals.changed("weather", &weather().digest()));
+
+        approvals.approve("weather", weather().digest());
+        assert!(!approvals.changed("weather", &weather().digest()));
+        assert!(!approvals.changed("docs", &pinned.digest()));
+    }
+
+    /// A digest written before aliases were kept is still an approval, and takes the alias that
+    /// resolves to it the first time the file is rewritten.
+    #[test]
+    fn a_digest_alone_on_its_line_takes_its_alias_when_rewritten() {
+        let digest = weather().digest();
+        let mut approvals = Approvals::parse(&format!("{digest}\n"));
+        let mut declarations = Declarations::default();
+        declarations.insert("weather", &weather());
+        approvals.keep_only(&declarations);
+        assert_eq!(approvals.to_text(), format!("{digest} weather\n"));
+    }
+
+    /// SERVERS-4's answer 2 is recorded as the project's path and read back as it, and a path a
+    /// line cannot hold is not recorded as some other path.
+    #[test]
+    fn a_project_reads_back_as_the_path_it_was_recorded_as() {
+        let project = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut projects = Projects::default();
+        assert!(projects.add(project));
+        assert!(!projects.add(Path::new("relative/checkout")));
+        assert!(!projects.add(&project.join("two\nlines")));
+        let read = Projects::parse(&format!("{}not absolute\n", projects.to_text()));
+        assert_eq!(read, projects);
+        assert!(read.contains(project));
+        assert!(!read.contains(&project.join("src")));
     }
 
     #[test]
@@ -930,6 +1146,7 @@ mod tests {
         std::fs::create_dir_all(&home).unwrap();
         assert_eq!(Declarations::read(&home), Ok(Declarations::default()));
         assert_eq!(Approvals::read(&home), Approvals::default());
+        assert_eq!(Projects::read(&home), Projects::default());
 
         let mut declarations = Declarations::default();
         declarations.insert("weather", &weather());
@@ -937,6 +1154,8 @@ mod tests {
         std::fs::write(approvals_file(&home), format!("{}\n", weather().digest())).unwrap();
         assert_eq!(Declarations::read(&home), Ok(declarations));
         assert!(Approvals::read(&home).approves(&weather().digest()));
+        std::fs::write(projects_file(&home), format!("{}\n", home.display())).unwrap();
+        assert!(Projects::read(&home).contains(&home));
 
         std::fs::write(declarations_file(&home), " ".repeat(MAX_BYTES as usize + 1)).unwrap();
         assert_eq!(Declarations::read(&home), Err(Unreadable::TooLarge));
