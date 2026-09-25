@@ -392,6 +392,13 @@ does not know, and a value that is not a boolean, are no answer at all rather th
 `verified-by: bravebot_tui::status::an_ordinary_session_says_nothing_about_a_check`
 `verified-by: bravebot_config::settings::a_layer_that_named_only_vetting_is_not_a_layer_that_said_nothing`
 `verified-by: bravebot_cli::main::the_vet_flag_is_taken_out_wherever_it_appears`
+`verified-by: bravebot_ui_bridge::settings::auto_vetting_is_off_until_somebody_turns_it_on`
+`verified-by: bravebot_ui_bridge::settings::the_home_settings_file_turns_auto_vetting_on`
+`verified-by: bravebot_ui_bridge::settings::a_checkout_cannot_turn_auto_vetting_on`
+`verified-by: bravebot_ui_bridge::settings::a_recorded_choice_outranks_the_home_settings_file`
+`verified-by: bravebot_ui_bridge::vetting::a_session_says_auto_vetting_is_off_when_nobody_turned_it_on`
+`verified-by: bravebot_ui_bridge::vetting::a_checkout_cannot_have_a_session_open_with_auto_vetting_on`
+`verified-by: bravebot_ui_bridge::vetting::auto_vetting_is_reported_when_a_session_opens_and_held_for_the_rest_of_it`
 
 <a id="CHECK-12"></a>
 ### CHECK-12: with it on, a safe verdict promotes one slot, and nothing else does
@@ -443,6 +450,8 @@ owns the content gains from this, which is the reason it is off by default.
 `verified-by: bravebot_agent::turn::with_auto_vetting_an_unsafe_verdict_still_asks_about_command_output`
 `verified-by: bravebot_agent::turn::with_auto_vetting_a_broken_check_still_asks_about_command_output`
 `verified-by: bravebot_agent::turn::auto_vetting_does_not_answer_the_vouch_offer`
+`verified-by: bravebot_ui_bridge::vetting::with_auto_vetting_on_a_safe_verdict_reaches_the_planner_with_no_prompt_put`
+`verified-by: bravebot_ui_bridge::vetting::with_auto_vetting_off_a_safe_verdict_is_still_put_to_the_window`
 `verified-by: bravebot_agent::permission_mode::screening_under_bypass_refuses_what_a_check_would_not_pass`
 `verified-by: bravebot_agent::permission_mode::screening_under_bypass_still_promotes_what_a_check_found_nothing_in`
 `verified-by: bravebot_agent::permission_mode::screening_does_not_reach_the_vouch_offer`
