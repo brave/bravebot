@@ -145,6 +145,7 @@ pub(crate) fn reach<R: BufRead, W: Write>(
         asking,
         person,
         &|name| std::env::var_os(name),
+        Prelude::current(),
         &mut notes,
     );
     let started = start(plans, diagnostics, &mut notes);
@@ -171,6 +172,8 @@ enum Plan {
 /// Settle each request: resolve it, and put it to the person where nothing answers it already.
 ///
 /// Returns the servers to start. Every request that will not be is a line in `notes` saying why.
+/// `prelude` is this platform's confinement base, and a local server is not asked about without one.
+#[allow(clippy::too_many_arguments)]
 fn settle<R: BufRead, W: Write>(
     requested: &[(PathBuf, String)],
     project: &Path,
@@ -178,6 +181,7 @@ fn settle<R: BufRead, W: Write>(
     asking: Asking,
     person: &mut Person<R, W>,
     environment: &dyn Fn(&str) -> Option<OsString>,
+    prelude: Option<Prelude>,
     notes: &mut Vec<String>,
 ) -> Vec<(String, Plan)> {
     if requested.is_empty() {
@@ -250,6 +254,10 @@ fn settle<R: BufRead, W: Write>(
                 continue;
             }
         };
+        if matches!(plan, Plan::Stdio { .. }) && prelude.is_none() {
+            notes.push(t!(servers_no_confinement_here, alias = alias).to_string());
+            continue;
+        }
 
         let digest = declaration.digest();
         let changed = approvals.changed(alias, &digest);
@@ -313,9 +321,12 @@ fn aliases(requested: &[(PathBuf, String)]) -> String {
 }
 
 /// A settings file as the person knows it: relative to the project where it is inside it.
+///
+/// `project` has its links followed, so the file is compared with its own followed too.
 fn named(file: &Path, project: &Path) -> String {
+    let file = file.canonicalize().unwrap_or_else(|_| file.to_path_buf());
     file.strip_prefix(project)
-        .unwrap_or(file)
+        .unwrap_or(&file)
         .display()
         .to_string()
 }
@@ -534,22 +545,36 @@ pub(crate) fn fetching(alias: &str, declaration: &Declaration) -> Vec<String> {
         "{indent}{}",
         t!(servers_fetches, runner = shown(&fetched.runner))
     )];
-    lines.extend(fetched.unpinned.map(|package| {
-        format!(
-            "{indent}{}",
-            t!(servers_unpinned, package = shown(&package))
-        )
+    lines.extend(fetched.unpinned.map(|unpinned| {
+        let line = match unpinned {
+            Unpinned::Package(package) => t!(servers_unpinned, package = shown(&package)),
+            Unpinned::Unread(flag) => t!(
+                servers_unread,
+                flag = shown(&flag),
+                runner = shown(&fetched.runner)
+            ),
+        };
+        format!("{indent}{line}")
     }));
     lines
 }
 
-/// A program that fetches what it runs as it starts, and the package it names where it names one
-/// with no fixed version.
+/// A program that fetches what it runs as it starts, and what its words say of the version it runs
+/// where they do not say it is one exact version.
 #[derive(Debug, PartialEq, Eq)]
 struct Fetches {
     /// The runner, as the words it was invoked with.
     runner: String,
-    unpinned: Option<String>,
+    unpinned: Option<Unpinned>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Unpinned {
+    /// The package, which names no exact version.
+    Package(String),
+    /// A flag this does not know, which may take the next word as its value, so which word is the
+    /// package is not known.
+    Unread(String),
 }
 
 /// Whether `argv` starts a runner that resolves a package when it runs (SERVERS-6).
@@ -570,11 +595,13 @@ fn fetches(argv: &[String]) -> Option<Fetches> {
         ("pipx", Some("run")) => ("pipx run".to_string(), &rest[1..], Ecosystem::Python),
         _ => return None,
     };
-    let package = package(rest, ecosystem);
-    Some(Fetches {
-        runner,
-        unpinned: package.filter(|package| !ecosystem.pinned(package)),
-    })
+    let unpinned = match package(rest, ecosystem) {
+        Ok(package) => package
+            .filter(|package| !ecosystem.pinned(package))
+            .map(Unpinned::Package),
+        Err(flag) => Some(Unpinned::Unread(flag)),
+    };
+    Some(Fetches { runner, unpinned })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -592,56 +619,101 @@ impl Ecosystem {
         }
     }
 
+    /// The flags before the package that take no value.
+    fn switches(self) -> &'static [&'static str] {
+        match self {
+            Self::Node => &["-y", "--yes", "--no", "-q", "--quiet", "--bun"],
+            Self::Python => &[
+                "-q",
+                "--quiet",
+                "-v",
+                "--verbose",
+                "--isolated",
+                "--offline",
+                "-n",
+                "--no-cache",
+                "--refresh",
+            ],
+        }
+    }
+
+    /// The flags before the package whose value is some other word.
+    fn valued(self) -> &'static [&'static str] {
+        match self {
+            Self::Node => &["--registry", "--cache", "--userconfig"],
+            Self::Python => &[
+                "--with",
+                "-w",
+                "--python",
+                "-p",
+                "--index",
+                "--index-url",
+                "-i",
+                "--extra-index-url",
+            ],
+        }
+    }
+
     /// Whether a package names one exact version.
     fn pinned(self, package: &str) -> bool {
         match self {
             // `@scope/name@1.2.3`: the version follows the last `@` that is not the first
             // character. A tag, a range, or no version at all is a different program on
-            // different days.
+            // different days, and so is `1.2`, which npm reads as every `1.2.x`.
             Self::Node => package
                 .char_indices()
                 .rfind(|&(at, c)| c == '@' && at > 0)
-                .is_some_and(|(at, _)| exact(&package[at + 1..])),
-            // `name==1.2.3`, or uvx's own `name@1.2.3`.
+                .is_some_and(|(at, _)| release(&package[at + 1..]) == Some(3)),
+            // `name==1.2.3`, or uvx's own `name@1.2.3`. Here `1.2` is `1.2.0` and nothing else.
             Self::Python => package
                 .split_once("==")
                 .or_else(|| package.split_once('@'))
-                .is_some_and(|(_, version)| exact(version.trim_start_matches('='))),
+                .is_some_and(|(_, version)| release(version.trim_start_matches('=')).is_some()),
         }
     }
 }
 
-/// Whether a version is one exact release: numbers joined by dots, with a pre-release or build
-/// suffix after them.
-fn exact(version: &str) -> bool {
+/// How many numbers a version's release is, where it is numbers joined by dots with at most a
+/// pre-release or build suffix after them, and so one release rather than a range or a tag.
+fn release(version: &str) -> Option<usize> {
     let release = version.split(['-', '+']).next().unwrap_or_default();
-    !release.is_empty()
-        && release
-            .split('.')
-            .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
+    let parts: Vec<&str> = release.split('.').collect();
+    parts
+        .iter()
+        .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
+        .then_some(parts.len())
 }
 
-/// The package a runner's arguments name.
-fn package(arguments: &[String], ecosystem: Ecosystem) -> Option<String> {
-    let flags = ecosystem.package_flags();
+/// The package a runner's arguments name, or the flag before it that they cannot be read past.
+///
+/// A flag this does not know may take the next word as its value, and then that word is not the
+/// package: guessing either way could name a pinned word and leave the package unnamed.
+fn package(arguments: &[String], ecosystem: Ecosystem) -> Result<Option<String>, String> {
     let mut words = arguments.iter();
     while let Some(word) = words.next() {
-        if flags.contains(&word.as_str()) {
-            return words.next().cloned();
-        }
-        if let Some((flag, value)) = word.split_once('=')
-            && flags.contains(&flag)
-        {
-            return Some(value.to_string());
+        let (flag, value) = match word.split_once('=') {
+            Some((flag, value)) if flag.starts_with('-') => (flag, Some(value)),
+            _ => (word.as_str(), None),
+        };
+        if ecosystem.package_flags().contains(&flag) {
+            return Ok(value.map(str::to_string).or_else(|| words.next().cloned()));
         }
         if word == "--" {
-            return words.next().cloned();
+            return Ok(words.next().cloned());
         }
         if !word.starts_with('-') {
-            return Some(word.clone());
+            return Ok(Some(word.clone()));
         }
+        if value.is_some() || ecosystem.switches().contains(&flag) {
+            continue;
+        }
+        if ecosystem.valued().contains(&flag) {
+            words.next();
+            continue;
+        }
+        return Err(word.clone());
     }
-    None
+    Ok(None)
 }
 
 /// Start every planned server, and wait for their handshakes until [`HANDSHAKE`] has passed.
@@ -963,6 +1035,7 @@ mod tests {
             asking,
             &mut person,
             &environment,
+            Prelude::current(),
             &mut notes,
         );
         Settled {
@@ -1098,6 +1171,7 @@ mod tests {
             Asking::Person,
             &mut person,
             &|_| None,
+            Prelude::current(),
             &mut notes,
         );
 
@@ -1252,22 +1326,29 @@ mod tests {
 
     #[test]
     fn a_runner_is_named_as_one_and_an_unpinned_package_as_unpinned() {
-        for (argv, runner, unpinned) in [
+        let unpinned = |package: &str| Some(Unpinned::Package(package.to_string()));
+        for (argv, runner, expected) in [
             (
                 &["npx", "-y", "@dangahagan/weather-mcp@latest"][..],
                 Some("npx"),
-                Some("@dangahagan/weather-mcp@latest"),
+                unpinned("@dangahagan/weather-mcp@latest"),
             ),
             (&["npx", "-y", "@scope/server@1.4.2"][..], Some("npx"), None),
             (
                 &["npx", "-y", "@scope/server"][..],
                 Some("npx"),
-                Some("@scope/server"),
+                unpinned("@scope/server"),
             ),
             (
                 &["npx", "server@^1.2.0"][..],
                 Some("npx"),
-                Some("server@^1.2.0"),
+                unpinned("server@^1.2.0"),
+            ),
+            (&["npx", "server@1"][..], Some("npx"), unpinned("server@1")),
+            (
+                &["npx", "server@1.2"][..],
+                Some("npx"),
+                unpinned("server@1.2"),
             ),
             (
                 &[
@@ -1279,7 +1360,22 @@ mod tests {
                 Some("npx"),
                 None,
             ),
-            (&["bunx", "server"][..], Some("bunx"), Some("server")),
+            (
+                &["npx", "--registry", "https://registry.example", "server"][..],
+                Some("npx"),
+                unpinned("server"),
+            ),
+            (
+                &["npx", "--node-options=--no-warnings", "server"][..],
+                Some("npx"),
+                unpinned("server"),
+            ),
+            (
+                &["npx", "--prefer-offline", "server@1.0.0"][..],
+                Some("npx"),
+                Some(Unpinned::Unread("--prefer-offline".to_string())),
+            ),
+            (&["bunx", "server"][..], Some("bunx"), unpinned("server")),
             (
                 &["pnpm", "dlx", "server@3.1.0-beta.2"][..],
                 Some("pnpm dlx"),
@@ -1288,20 +1384,30 @@ mod tests {
             (
                 &["uvx", "mcp-server-fetch"][..],
                 Some("uvx"),
-                Some("mcp-server-fetch"),
+                unpinned("mcp-server-fetch"),
             ),
             (&["uvx", "mcp-server-fetch==1.0.0"][..], Some("uvx"), None),
             (&["uvx", "mcp-server-fetch@1.0.0"][..], Some("uvx"), None),
             (
                 &["uvx", "--from", "tool>=1", "serve"][..],
                 Some("uvx"),
-                Some("tool>=1"),
+                unpinned("tool>=1"),
+            ),
+            (
+                &["uvx", "--with", "helper==1.0.0", "server"][..],
+                Some("uvx"),
+                unpinned("server"),
+            ),
+            (
+                &["uvx", "--python", "3.12", "server==0.3.0"][..],
+                Some("uvx"),
+                None,
             ),
             (&["pipx", "run", "server==0.3"][..], Some("pipx run"), None),
             (
                 &["uv", "tool", "run", "server"][..],
                 Some("uv tool run"),
-                Some("server"),
+                unpinned("server"),
             ),
             (&["pipx", "install", "server"][..], None, None),
             (&["weather-mcp", "--stdio"][..], None, None),
@@ -1313,11 +1419,7 @@ mod tests {
                 runner,
                 "{argv:?}"
             );
-            assert_eq!(
-                found.as_ref().and_then(|found| found.unpinned.as_deref()),
-                unpinned,
-                "{argv:?}"
-            );
+            assert_eq!(found.and_then(|found| found.unpinned), expected, "{argv:?}");
         }
     }
 
@@ -1342,6 +1444,106 @@ mod tests {
                 &t!(servers_unpinned, package = "@dangahagan/weather-mcp@latest").as_str()
             ),
             "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn a_package_behind_a_flag_nobody_knows_is_drawn_as_not_known() {
+        let argv = words(&["npx", "--prefer-offline", "server@1.0.0"]);
+        let declaration = Declaration::stdio(argv, Vec::new(), None).expect("declaration");
+        let lines: Vec<String> = fetching("weather", &declaration)
+            .iter()
+            .map(|line| line.trim().to_string())
+            .collect();
+        assert_eq!(
+            lines,
+            vec![
+                t!(servers_fetches, runner = "npx").to_string(),
+                t!(servers_unread, flag = "--prefer-offline", runner = "npx").to_string(),
+            ]
+        );
+    }
+
+    /// Settle `requested` with `typed` at the terminal, an empty `PATH`, and `prelude` as the
+    /// platform's confinement base.
+    fn settled_on(
+        requested: &[(PathBuf, String)],
+        project: &Path,
+        home: &Path,
+        typed: &str,
+        prelude: Option<Prelude>,
+    ) -> Settled {
+        let home = Home {
+            directory: Some(home.to_path_buf()),
+            writable: true,
+        };
+        let mut person = Person {
+            answers: typed.as_bytes(),
+            screen: Vec::new(),
+            present: true,
+        };
+        let environment = |name: &str| (name == "PATH").then(OsString::new);
+        let mut notes = Vec::new();
+        let plans = settle(
+            requested,
+            project,
+            &home,
+            Asking::Person,
+            &mut person,
+            &environment,
+            prelude,
+            &mut notes,
+        );
+        Settled {
+            plans,
+            notes,
+            screen: String::from_utf8(person.screen).expect("screen"),
+        }
+    }
+
+    #[test]
+    fn a_local_server_is_not_asked_about_where_nothing_can_confine_it() {
+        let (home, project, declaration) = declared("cli-servers-unconfinable", &["/bin/cat"]);
+        let requested = vec![(
+            project.join(".bravebot/settings.json"),
+            "weather".to_string(),
+        )];
+
+        let settled = settled_on(&requested, &project, &home, "1\n", None);
+
+        assert!(settled.plans.is_empty());
+        assert_eq!(settled.screen, "", "asked about a server it cannot start");
+        assert_eq!(
+            settled.notes,
+            vec![t!(servers_no_confinement_here, alias = "weather").to_string()]
+        );
+        assert!(!Approvals::read(&home).approves(&declaration.digest()));
+
+        let settled = settled_on(&requested, &project, &home, "1\n", Prelude::current());
+        assert_eq!(started(&settled), vec!["weather"], "{:?}", settled.notes);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_checkout_reached_through_a_link_names_its_settings_file_inside_it() {
+        let (home, project, _) = declared("cli-servers-linked", &["/bin/cat"]);
+        let link = project.parent().unwrap().join("link");
+        std::os::unix::fs::symlink(&project, &link).expect("link");
+        std::fs::write(project.join(".bravebot/settings.json"), "{}").expect("settings");
+        let requested = vec![(link.join(".bravebot/settings.json"), "docs".to_string())];
+
+        let settled = settled_on(&requested, &project, &home, "", Prelude::current());
+
+        assert_eq!(
+            settled.notes,
+            vec![
+                t!(
+                    servers_not_declared,
+                    file = ".bravebot/settings.json",
+                    alias = "docs"
+                )
+                .to_string()
+            ]
         );
     }
 

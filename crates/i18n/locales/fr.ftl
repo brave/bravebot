@@ -468,6 +468,8 @@ servers-changed = modifié depuis son approbation
 # Un lanceur résout un paquet au démarrage : ce qu'il exécute est choisi à ce moment, pas ici.
 servers-fetches = { $runner } récupère ce qu'il exécute au démarrage
 servers-unpinned = { $package } ne nomme aucune version exacte : il exécute ce qui est publié sous ce nom
+servers-unread =
+    { $flag } n'est pas une option que bravebot connaît : quel paquet { $runner } exécute, et s'il nomme une version exacte, n'est pas connu
 servers-answer-once = Oui
 servers-answer-project = Oui, et utiliser tous les futurs serveurs MCP de ce projet
 servers-answer-no = Non, continuer sans ce serveur

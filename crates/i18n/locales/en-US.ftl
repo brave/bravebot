@@ -534,6 +534,8 @@ servers-changed = changed since it was approved
 # A runner resolves a package when it starts, so what it runs is chosen then, not here.
 servers-fetches = { $runner } fetches what it runs when it starts
 servers-unpinned = { $package } names no exact version, so it runs whatever is published under it
+servers-unread =
+    { $flag } is not a flag bravebot knows, so which package { $runner } runs, and whether it names an exact version, is not known
 servers-answer-once = Yes
 servers-answer-project = Yes, and use all future MCP servers in this project
 servers-answer-no = No, continue without this server

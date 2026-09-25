@@ -177,7 +177,9 @@ reach another project.
 yourself. The last two lines appear for a runner that fetches a package as it starts, `npx`,
 `bunx`, `npm exec`, `pnpm dlx`, `yarn dlx`, `uvx`, `uv tool run` and `pipx run`, and for a package
 that names no exact version: what you approve is the command line, and what that command runs is
-decided when it runs.
+decided when it runs. For `npx`, `@1.2` is not exact, since npm reads it as any `1.2.x`. Where a
+flag bravebot does not know comes before the package, the line says which package runs is not
+known, since that flag may take the next word as its value.
 
 In the full-screen interface the question is asked on the terminal before the interface opens. In
 `--plain` it is asked after the question about trusting the directory.

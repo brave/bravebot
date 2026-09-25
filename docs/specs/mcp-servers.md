@@ -245,11 +245,13 @@ case work: a checkout can tell a newcomer what it wants without being able to ha
 Every layer's `request` is read, as [BACKEND-24](backends.md#BACKEND-24)'s rows that keep each
 layer's entries are, and an alias two layers name is requested once, under the first file that named
 it. An alias nobody declared is a line at the session's start naming the file and the alias, and
-saying that `bravebot mcp add` declares one. A declared alias no checkout requested is not started,
-approved or not.
+saying that `bravebot mcp add` declares one. The file is named relative to the checkout where it is
+inside it, a checkout reached through a link included. A declared alias no checkout requested is
+not started, approved or not.
 
 `verified-by: bravebot_config::settings::every_layers_request_is_read_and_each_alias_is_kept_once`
 `verified-by: bravebot_cli::servers::a_request_nobody_declared_is_reported_and_nothing_is_started_for_it`
+`verified-by: bravebot_cli::servers::a_checkout_reached_through_a_link_names_its_settings_file_inside_it`
 
 <a id="SERVERS-3"></a>
 ### SERVERS-3: adding a server is a command a person types, and typing it is not the approval
@@ -407,6 +409,7 @@ digest is kept of what was approved, and a digest names no field.
 `verified-by: bravebot_config::mcp::an_approval_reads_back_with_the_alias_it_was_given_about`
 `verified-by: bravebot_config::mcp::a_declaration_changed_since_its_approval_is_recorded_as_changed_and_approves_nothing`
 `verified-by: bravebot_config::mcp::a_digest_alone_on_its_line_takes_its_alias_when_rewritten`
+`verified-by: bravebot_cli::mcp::replacing_a_declaration_approved_under_no_alias_still_says_it_changed`
 `verified-by: bravebot_cli::servers::an_approved_digest_starts_unasked_and_a_recorded_project_answers_only_an_unchanged_one`
 
 <a id="SERVERS-6"></a>
@@ -429,11 +432,14 @@ an approval prompt.
 The runners are `npx`, `bunx`, `npm exec`, `pnpm dlx` and `yarn dlx` for Node, and `uvx`,
 `uv tool run` and `pipx run` for Python, recognised by the name of the declared program whatever
 directory it is given in. The package is the one a `--package` or `-p` flag names for Node, or
-`--from` or `--spec` for Python, and otherwise the first word that is not a flag. A Node package is
-pinned where the version after its last `@` is one exact release, `@scope/name@1.4.2`, and a Python
-one where `==` or `@` is followed by one; a tag such as `latest`, a range, and no version at all are
-each unpinned. An exact release is numbers joined by dots, with a pre-release or build suffix
-allowed after them.
+`--from` or `--spec` for Python, and otherwise the first word that is not a flag or the value of a
+flag known to take one, such as `--registry` or `--with`. A flag the reading does not know may take
+the next word, so where one comes before the package the prompt says which package runs is not
+known, rather than name a word that may not be it. A Node package is pinned where the version after
+its last `@` is one exact release, `@scope/name@1.4.2`, and a Python one where `==` or `@` is
+followed by one; a tag such as `latest`, a range, and no version at all are each unpinned. An exact
+release is numbers joined by dots, with a pre-release or build suffix allowed after them, and for
+Node it is three numbers, since npm reads `@1.2` as every `1.2.x`.
 
 Both questions draw these lines: the one `bravebot mcp add` and `approve` ask, and the one a session
 asks. What is read is the words the person declared and nothing else, so this says what the line asks
@@ -442,6 +448,7 @@ calls one, is drawn as a plain program.
 
 `verified-by: bravebot_cli::servers::a_runner_is_named_as_one_and_an_unpinned_package_as_unpinned`
 `verified-by: bravebot_cli::servers::a_runner_and_its_unpinned_package_are_drawn_at_the_question`
+`verified-by: bravebot_cli::servers::a_package_behind_a_flag_nobody_knows_is_drawn_as_not_known`
 `verified-by: bravebot_cli::mcp::the_question_names_a_runner_and_the_package_it_leaves_unpinned`
 
 <a id="SERVERS-7"></a>
@@ -627,7 +634,8 @@ it that bravebot keeps its own files in. It is compared with its links followed,
 so a home reached through a link is kept out as well.
 
 A platform with no confinement for this, which is Windows today, starts no stdio server and says
-so. Where the sandbox cannot be built, the server is not started either, and the line says why.
+so, and asks nobody about one it could not start. Where the sandbox cannot be built, the server is
+not started either, and the line says why.
 
 `verified-by: bravebot_config::mcp::a_value_written_in_place_of_a_name_is_refused_without_repeating_it`
 `verified-by: bravebot_config::mcp::an_env_block_or_an_object_of_variables_is_values_and_is_refused`
@@ -635,6 +643,7 @@ so. Where the sandbox cannot be built, the server is not started either, and the
 `verified-by: bravebot_cli::running::a_value_given_to_a_variable_is_refused_and_never_repeated`
 `verified-by: bravebot_cli::servers::a_program_is_found_in_the_path_it_names_and_nowhere_else`
 `verified-by: bravebot_cli::servers::a_path_the_declaration_does_not_name_resolves_nothing`
+`verified-by: bravebot_cli::servers::a_local_server_is_not_asked_about_where_nothing_can_confine_it`
 `verified-by: bravebot_cli::servers::a_servers_confinement_reaches_its_installation_and_nothing_of_the_home_directory`
 `verified-by: bravebot_cli::servers::the_home_kept_out_of_a_launched_server_is_the_persons_and_not_the_state_directory`
 `verified-by: bravebot_cli::servers::a_home_reached_through_a_link_is_kept_out_of_a_servers_confinement`
@@ -968,7 +977,11 @@ This spec cannot land without these. Each is named by what the clause says rathe
   the plain interface pass it through to their own stderr.
 - **A server too slow for its handshake is left running.** A server that has not answered within 60
   seconds is left out of the session, and the thread waiting for it holds it until it answers or the
-  process exits.
+  process exits. The session opens after the last handshake or those 60 seconds, and draws nothing
+  while it waits.
+- **A server's line is read whole.** The client reads each line a server writes to its end before
+  looking at it, with no bound, so a started server that writes one line without end holds this
+  process's memory while it does.
 - **No stdio server starts on Windows.** The sandbox there has no base rows to build a server's
   policy on, so the line says the platform has no confinement for one yet, which is
   [MCP-3](mcp.md#MCP-3) holding rather than failing.

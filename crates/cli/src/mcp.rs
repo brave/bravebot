@@ -156,8 +156,11 @@ fn add<R: BufRead, W: Write>(
     let before = declarations
         .get(alias)
         .and_then(|entry| entry.declaration.ok());
-    declarations.insert(alias, &declaration);
     let mut approvals = Approvals::read(directory);
+    // A digest written with no alias beside it takes the alias it resolves to now, before the
+    // declaration it approved is replaced and nothing would say this alias changed.
+    approvals.keep_only(&declarations);
+    declarations.insert(alias, &declaration);
     save(directory, &declarations, &mut approvals)?;
     let path = mcp::declarations_file(directory);
     say(
@@ -878,5 +881,29 @@ mod tests {
             !approved(&directory, &weather()),
             "the old digest outlived its declaration"
         );
+    }
+
+    #[test]
+    fn replacing_a_declaration_approved_under_no_alias_still_says_it_changed() {
+        let directory = scratch("cli-mcp-changed-unnamed");
+        let (outcome, _) = typing(&directory, ADD, "n\n");
+        assert!(outcome.is_ok());
+        let unnamed = format!("{}\n", weather().digest());
+        std::fs::write(mcp::approvals_file(&directory), unnamed).expect("approvals");
+        let pinned = [
+            "add",
+            "weather",
+            "--stdio",
+            "--",
+            "npx",
+            "-y",
+            "weather-mcp@1.2.0",
+        ];
+        let (outcome, _) = typing(&directory, &pinned, "n\n");
+        assert!(outcome.is_ok());
+        let replaced =
+            Declaration::stdio(words(&["npx", "-y", "weather-mcp@1.2.0"]), Vec::new(), None)
+                .unwrap();
+        assert!(Approvals::read(&directory).changed("weather", &replaced.digest()));
     }
 }
