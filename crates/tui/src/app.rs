@@ -3486,6 +3486,10 @@ fn change_directory(
     // here starts one for this directory with the person asked again.
     *servers = None;
     session.now_in_workspace(&moved.root);
+    // An MCP server is not a tree's, so it stays; answer 2 is about a project, so it moves.
+    if let Some(mcp) = &session.servers.session {
+        mcp.now_in_workspace(&moved.root);
+    }
     session.note(t!(
         session_directory_changed,
         directory = moved.root.display().to_string()

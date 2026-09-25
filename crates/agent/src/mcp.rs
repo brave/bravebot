@@ -162,8 +162,9 @@ struct Server {
 
 struct Shared {
     servers: Vec<Server>,
-    /// The workspace root, which answer 2 of a call records.
-    project: PathBuf,
+    /// The workspace root, which answer 2 of a call records and is read against. It moves with the
+    /// session, since a standing answer is about the project a person is in.
+    project: Mutex<PathBuf>,
     /// The state directory, where there is one.
     directory: Option<PathBuf>,
     /// Whether anything may be written into it, which an incognito session may not.
@@ -226,6 +227,10 @@ impl<R: Reporter> Said<'_, R> {
     }
 }
 
+fn stopped(chat: &Chat<'_>) -> bool {
+    chat.cancel.is_some_and(|cancel| cancel.is_cancelled())
+}
+
 fn held<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -251,10 +256,15 @@ impl Session {
             .collect();
         Self(Arc::new(Shared {
             servers,
-            project,
+            project: Mutex::new(project),
             directory,
             writable,
         }))
+    }
+
+    /// Read and record answer 2 against `root` from now on, the session having moved there.
+    pub fn now_in_workspace(&self, root: &Path) {
+        *held(&self.0.project) = root.to_path_buf();
     }
 
     /// The aliases of the servers reached, in order.
@@ -302,7 +312,7 @@ impl Session {
     /// nobody asked. Every other list is checked, unless every check is being bypassed, and put to
     /// the person as it is drawn. A yes promotes it, and records its digest where the session may
     /// write and a person gave the answer; a no offers none of its tools for the rest of the
-    /// session. Settled at the start of a turn a person asked for, since that is where there is
+    /// session, and a turn stopped at the question leaves it unasked. Settled at the start of a turn a person asked for, since that is where there is
     /// somebody to put the question to.
     pub fn settle<S: Sink, C: Confirmer, R: Reporter>(
         &self,
@@ -314,6 +324,9 @@ impl Session {
     ) -> Settled {
         let mut settled = Settled::default();
         for server in &self.0.servers {
+            if stopped(chat) {
+                break;
+            }
             // Taken out rather than held, so nothing is locked while the person reads the list.
             let listing = {
                 let mut state = held(&server.state);
@@ -401,7 +414,12 @@ impl Session {
             verdict,
             reason,
         };
-        if confirmer.confirm_tool_list(&request) == Decision::Reject {
+        let answer = confirmer.confirm_tool_list(&request);
+        // Stopping the turn at the question is not answering it, so the next turn asks again.
+        if stopped(chat) {
+            return (State::Unasked(listing), usage);
+        }
+        if answer == Decision::Reject {
             said.notice(t!(mcp_tools_declined, alias = alias));
             return (State::Declined, usage);
         }
@@ -438,9 +456,14 @@ impl Session {
         let Ok(text) = list.clone().into_trusted() else {
             return;
         };
-        let mut approvals = Approvals::read(directory);
-        approvals.vouch_list(server.declaration, Digest::of_list(&text));
-        if let Err(error) = replace(&records::approvals_file(directory), &approvals.to_text()) {
+        let written = Approvals::to_change(directory)
+            .map_err(|why| unreadable_record(&why))
+            .and_then(|mut approvals| {
+                approvals.vouch_list(server.declaration, Digest::of_list(&text));
+                replace(&records::approvals_file(directory), &approvals.to_text())
+                    .map_err(|error| error.to_string())
+            });
+        if let Err(error) = written {
             said.notice(t!(
                 mcp_tools_not_recorded,
                 alias = server.alias.as_str(),
@@ -476,10 +499,9 @@ impl Session {
 
     /// Whether answer 2 was given about this tool in this project.
     fn stands(&self, alias: &str, tool: &str) -> bool {
-        self.0
-            .directory
-            .as_deref()
-            .is_some_and(|directory| Standing::read(directory).covers(alias, tool, &self.0.project))
+        self.0.directory.as_deref().is_some_and(|directory| {
+            Standing::read(directory).covers(alias, tool, &held(&self.0.project))
+        })
     }
 
     /// Whether answer 2 can be recorded, which needs a state directory this session may write.
@@ -492,8 +514,10 @@ impl Session {
         let Some(directory) = self.0.directory.as_deref() else {
             return Ok(());
         };
-        let mut standing = Standing::read(directory);
-        if !standing.add(alias, tool, &self.0.project) {
+        let mut standing = Standing::to_change(directory)
+            .map_err(|why| std::io::Error::other(unreadable_record(&why)))?;
+        let project = held(&self.0.project).clone();
+        if !standing.add(alias, tool, &project) {
             return Err(std::io::Error::other(t!(mcp_call_path_not_one_line)));
         }
         replace(&records::tools_file(directory), &standing.to_text())
@@ -548,12 +572,30 @@ fn listed(alias: &str, text: &str) -> Vec<ListedTool> {
 
 /// Write `text` over `path` through a temporary file beside it, so an interrupted write leaves the
 /// file as it was.
-fn replace(path: &Path, text: &str) -> std::io::Result<()> {
+/// Write a record whole, through a file of its own so a reader never sees half of it.
+///
+/// The temporary file is named for this process and this write, since two sessions answering at
+/// once would otherwise write into one file and rename whatever the pair of them left there.
+pub fn replace(path: &Path, text: &str) -> std::io::Result<()> {
+    static WRITES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let write = WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut temporary = path.as_os_str().to_owned();
-    temporary.push(".tmp");
+    temporary.push(format!(".{}.{write}.tmp", std::process::id()));
     let temporary = PathBuf::from(temporary);
-    crate::home::write_file(&temporary, text.as_bytes())?;
-    std::fs::rename(&temporary, path)
+    let written = crate::home::write_file(&temporary, text.as_bytes())
+        .and_then(|()| std::fs::rename(&temporary, path));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    written
+}
+
+/// Why a record read to be written back was left as it is.
+pub fn unreadable_record(why: &records::Unreadable) -> String {
+    match why {
+        records::Unreadable::TooLarge => t!(mcp_record_too_large).to_string(),
+        _ => t!(mcp_record_not_read).to_string(),
+    }
 }
 
 /// One tool a turn offers.

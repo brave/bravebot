@@ -9,12 +9,14 @@
 use bravebot_agent::confirm::{CallDecision, McpCallRequest, ToolListRequest};
 use bravebot_agent::mcp::{Connection, Offering, Reached, Session};
 use bravebot_agent::turn::{self, Task};
-use bravebot_agent::{Confirmer, Decision, PermissionMode, Unattended, Workspace};
+use bravebot_agent::{Confirmer, Decision, IgnoreReports, PermissionMode, Unattended, Workspace};
 use bravebot_config::Config;
 use bravebot_config::mcp::{Approvals, Digest, Standing, approvals_file, tools_file};
+use bravebot_core::cancel::Cancel;
 use bravebot_core::capability::{Capability, CapabilitySet, ServerAlias};
 use bravebot_core::event::RecordingSink;
 use bravebot_core::policy::{Policy, ReleasePlan, Routing};
+use bravebot_core::trust::TrustStore;
 use bravebot_mcp::HttpServer;
 use bravebot_net::Egress;
 use serde_json::{Value, json};
@@ -271,12 +273,14 @@ fn session(url: &str, scratch: &Scratch, writable: bool) -> Session {
     )
 }
 
-/// Answers the two MCP prompts as it was told and records both; refuses everything else.
+/// Answers the two MCP prompts as it was told and records both; refuses everything else. With a
+/// `stop`, it stops the turn at the list, as Ctrl-C there does.
 struct Answering {
     list: Decision,
     call: CallDecision,
     lists: Vec<ToolListRequest>,
     calls: Vec<McpCallRequest>,
+    stop: Option<Cancel>,
 }
 
 impl Answering {
@@ -286,6 +290,7 @@ impl Answering {
             call,
             lists: Vec::new(),
             calls: Vec::new(),
+            stop: None,
         }
     }
 }
@@ -335,6 +340,9 @@ impl Confirmer for Answering {
 
     fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision {
         self.lists.push(request.clone());
+        if let Some(stop) = &self.stop {
+            stop.cancel();
+        }
         self.list
     }
 
@@ -653,6 +661,59 @@ fn a_declined_list_offers_nothing_and_is_not_asked_again() {
     );
 }
 
+/// A turn stopped at the list has not answered it: nothing is offered or recorded, and the next turn
+/// somebody asks for puts the list to them again.
+#[test]
+fn a_turn_stopped_at_the_list_leaves_it_to_be_asked_again() {
+    let scratch = Scratch::new("stopped");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+
+    let (endpoint, _chat) = serve_chat(vec![reply_with("stopped"), reply_with("asked again")]);
+    let cancel = Cancel::new();
+    let mut stopping = Answering::new(Decision::Reject, CallDecision::reject());
+    stopping.stop = Some(cancel.clone());
+    let workspace = Workspace::new(scratch.project()).expect("workspace");
+    let _ = turn::run_cancellable(
+        &config_for(&endpoint),
+        &Egress::new(),
+        &workspace,
+        &Task::new("what is the forecast").with_mcp(Some(session.clone())),
+        &mut stopping,
+        &mut IgnoreReports,
+        &mut RecordingSink::new(),
+        TrustStore::new(bravebot_agent::workspace::key_of(workspace.root())),
+        &cancel,
+    );
+    assert_eq!(
+        session.offering(),
+        [("weather".to_string(), Offering::Unasked)],
+        "a stop at the list was taken as an answer to it"
+    );
+    assert!(
+        !approvals_file(&scratch.state()).exists(),
+        "a stop at the list was recorded"
+    );
+
+    let mut asked = Answering::new(Decision::Approve, CallDecision::reject());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("and now").with_mcp(Some(session.clone())),
+        &mut asked,
+    );
+    assert_eq!(
+        asked.lists.len(),
+        1,
+        "a list a stopped turn was put to was not asked about again"
+    );
+    assert_eq!(
+        session.offering(),
+        [("weather".to_string(), Offering::Tools(1))]
+    );
+}
+
 /// A call the person refuses reaches no server, and the planner is told so in the driver's words.
 #[test]
 fn a_refused_call_reaches_no_server() {
@@ -728,6 +789,98 @@ fn answer_two_stops_asking_for_the_one_tool_in_the_one_project() {
     let called: Vec<String> = server.try_iter().collect();
     assert_eq!(called.len(), 2, "the server was sent {called:?}");
     assert!(called[1].contains(r#""city":"Lyon""#), "{}", called[1]);
+}
+
+/// Answer 2 is about the project the session is in when it is read, so once the session has moved
+/// to another one the next call asks again and its answer 2 names the new project.
+#[test]
+fn answer_two_follows_the_session_to_another_project() {
+    let scratch = Scratch::new("moved");
+    let elsewhere = scratch.path.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).expect("create scratch");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+        tool_request(FORECAST, r#"{"city":"Lyon"}"#),
+        reply_with("done again"),
+    ]);
+    let mut standing = Answering::new(Decision::Approve, CallDecision::approve_and_stand());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast for Paris").with_mcp(Some(session.clone())),
+        &mut standing,
+    );
+
+    session.now_in_workspace(&elsewhere);
+    let mut again = Answering::new(Decision::Reject, CallDecision::approve_and_stand());
+    run_turn(
+        &endpoint,
+        &elsewhere,
+        Task::new("the forecast for Lyon").with_mcp(Some(session)),
+        &mut again,
+    );
+    assert_eq!(
+        again.calls.len(),
+        1,
+        "answer 2 given in one project stood in another"
+    );
+    let recorded = Standing::read(&scratch.state());
+    assert!(recorded.covers("weather", "get_forecast", &scratch.project()));
+    assert!(recorded.covers("weather", "get_forecast", &elsewhere));
+}
+
+/// A record that is there and cannot be read is left as it is. A yes still offers the list and
+/// answer 2 still makes the call, neither is written over the record it could not read, and the
+/// next call asks again.
+#[test]
+fn a_record_that_cannot_be_read_is_not_written_over() {
+    let scratch = Scratch::new("unreadable");
+    let too_large = " ".repeat(64 * 1024 + 1);
+    for file in [
+        approvals_file(&scratch.state()),
+        tools_file(&scratch.state()),
+    ] {
+        std::fs::write(file, &too_large).expect("write the record");
+    }
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        tool_request(FORECAST, r#"{"city":"Lyon"}"#),
+        reply_with("done"),
+    ]);
+    let mut standing = Answering::new(Decision::Approve, CallDecision::approve_and_stand());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast twice").with_mcp(Some(session)),
+        &mut standing,
+    );
+
+    assert_eq!(
+        standing.calls.len(),
+        2,
+        "answer 2 stood though it was not recorded"
+    );
+    assert_eq!(server.try_iter().count(), 2, "a call was not made");
+    for file in [
+        approvals_file(&scratch.state()),
+        tools_file(&scratch.state()),
+    ] {
+        assert_eq!(
+            std::fs::read_to_string(&file).expect("read the record"),
+            too_large,
+            "{} was written over",
+            file.display()
+        );
+    }
 }
 
 /// A list vouched for under this declaration before is offered with nobody asked, and one that

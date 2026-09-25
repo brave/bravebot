@@ -497,8 +497,21 @@ fn forget<R: BufRead, W: Write>(
 ) -> Result<(), Stopped> {
     let directory = writable(home)?;
     let project = project(path)?;
-    let mut projects = Projects::read(directory);
-    let mut standing = Standing::read(directory);
+    let unreadable = |file: PathBuf, why: Unreadable| -> Stopped {
+        (
+            Ending::Failed,
+            t!(
+                mcp_unreadable,
+                path = shown(&file.display().to_string()),
+                reason = bravebot_agent::mcp::unreadable_record(&why)
+            )
+            .to_string(),
+        )
+    };
+    let mut projects = Projects::to_change(directory)
+        .map_err(|why| unreadable(mcp::projects_file(directory), why))?;
+    let mut standing = Standing::to_change(directory)
+        .map_err(|why| unreadable(mcp::tools_file(directory), why))?;
     let every_server = projects.remove(&project);
     let tools = standing.in_project(&project);
     standing.forget(&project);
@@ -763,22 +776,17 @@ fn save(
 /// Write `text` over `path` through a temporary file beside it, so an interrupted write leaves the
 /// file as it was rather than half of it.
 pub(crate) fn replace(path: &Path, text: &str) -> Result<(), Stopped> {
-    let mut temporary = path.as_os_str().to_owned();
-    temporary.push(".tmp");
-    let temporary = PathBuf::from(temporary);
-    bravebot_agent::home::write_file(&temporary, text.as_bytes())
-        .and_then(|()| std::fs::rename(&temporary, path))
-        .map_err(|error| {
-            (
-                Ending::Failed,
-                t!(
-                    mcp_not_written,
-                    path = path.display().to_string(),
-                    error = error.to_string()
-                )
-                .to_string(),
+    bravebot_agent::mcp::replace(path, text).map_err(|error| {
+        (
+            Ending::Failed,
+            t!(
+                mcp_not_written,
+                path = path.display().to_string(),
+                error = error.to_string()
             )
-        })
+            .to_string(),
+        )
+    })
 }
 
 pub(crate) fn problem(found: &Problem) -> String {
@@ -1041,6 +1049,36 @@ mod tests {
         assert!(outcome.is_ok(), "{outcome:?}");
         assert!(!Projects::read(&directory).contains(&gone));
         assert!(!Standing::read(&directory).covers("weather", "get_forecast", &gone));
+    }
+
+    /// A record that is there and cannot be read is left as it is and said to be, rather than
+    /// written back as the one line fewer it would be once read as empty.
+    #[test]
+    fn forget_leaves_a_record_it_cannot_read_as_it_is() {
+        let directory = scratch("cli-mcp-forget-unreadable");
+        let project = directory.join("checkout");
+        answered_in(&directory, &project, &directory.join("elsewhere"));
+        let too_large = " ".repeat(64 * 1024 + 1);
+        std::fs::write(mcp::tools_file(&directory), &too_large).unwrap();
+        let projects = std::fs::read_to_string(mcp::projects_file(&directory)).unwrap();
+
+        let (outcome, _) = typing(
+            &directory,
+            &["forget", project.to_str().expect("utf-8")],
+            "",
+        );
+        let (ending, said) = outcome.expect_err("an unreadable record was forgotten from");
+        assert_eq!(ending, Ending::Failed);
+        assert!(said.contains(t!(mcp_record_too_large)), "{said}");
+        assert_eq!(
+            std::fs::read_to_string(mcp::tools_file(&directory)).unwrap(),
+            too_large
+        );
+        assert_eq!(
+            std::fs::read_to_string(mcp::projects_file(&directory)).unwrap(),
+            projects,
+            "a record was written though the other could not be read"
+        );
     }
 
     #[test]

@@ -544,7 +544,8 @@ and tells the planner the person declined.
 Answer 2 is written to `mcp-tools` as the alias, the tool and the workspace root with its links
 followed. Where the session has no state directory, or writes nothing as an incognito one does, it
 is drawn as not offered and its key does nothing. A record that will not take it still makes the
-call, and a line says the next call asks again.
+call, and a line says the next call asks again. A record that is there and cannot be read, this one
+or `mcp-approved`, is left as it is rather than written over with the one answer.
 
 The plain interface asks the question as a line answered yes or no, and its yes is answer 1: a line
 has room for one answer, and the one that stops asking outlives the session. A one-shot run has
@@ -560,8 +561,10 @@ public today, as every tool call's are, so no call is labelled private.
 `verified-by: bravebot_agent::mcp::a_vouched_list_offers_its_tool_and_a_call_answers_quarantined`
 `verified-by: bravebot_agent::mcp::a_refused_call_reaches_no_server`
 `verified-by: bravebot_agent::mcp::answer_two_stops_asking_for_the_one_tool_in_the_one_project`
+`verified-by: bravebot_agent::mcp::answer_two_follows_the_session_to_another_project`
 `verified-by: bravebot_agent::mcp::a_rule_decides_a_call_before_the_prompt`
 `verified-by: bravebot_agent::mcp::a_session_that_writes_nothing_records_neither_answer`
+`verified-by: bravebot_agent::mcp::a_record_that_cannot_be_read_is_not_written_over`
 `verified-by: bravebot_core::policy::a_deny_rule_refuses_an_mcp_call_before_anybody_is_asked`
 `verified-by: bravebot_core::policy::an_mcp_call_asks_unless_a_rule_or_a_standing_answer_says_otherwise`
 `verified-by: bravebot_core::policy::private_arguments_ask_even_for_a_tool_a_rule_allows`
@@ -571,8 +574,10 @@ public today, as every tool call's are, so no call is labelled private.
 `verified-by: bravebot_config::mcp::a_standing_answer_reaches_one_tool_of_one_server_in_one_project`
 `verified-by: bravebot_config::mcp::a_standing_answer_reads_back_with_a_space_in_its_project`
 `verified-by: bravebot_config::mcp::forgetting_a_project_drops_its_standing_answers_and_no_others`
+`verified-by: bravebot_config::mcp::a_record_that_cannot_be_read_is_not_read_to_be_written_over`
 `verified-by: bravebot_cli::mcp::forget_drops_a_projects_standing_answers_and_nobody_elses`
 `verified-by: bravebot_cli::mcp::forget_takes_a_path_that_no_longer_resolves_as_typed`
+`verified-by: bravebot_cli::mcp::forget_leaves_a_record_it_cannot_read_as_it_is`
 `verified-by: bravebot_cli::mcp::forget_takes_one_path_at_most_and_writes_nothing_incognito`
 `verified-by: bravebot_tui::confirm::a_call_prompt_draws_the_tool_its_arguments_and_three_answers`
 `verified-by: bravebot_tui::confirm::a_call_prompt_cuts_a_long_description_until_it_is_expanded`
@@ -625,7 +630,7 @@ drawn above the list.
 
 A yes is the person vouching for the list, and it is the one road by which the list is promoted
 ([LABEL-8](labels.md#LABEL-8)). A no offers none of its tools for the rest of the session and is not
-asked again. The list's digest is recorded as a `tools` line in `mcp-approved`, beside the digest of
+asked again. A turn stopped at the question has not answered it, so the next turn asks again. The list's digest is recorded as a `tools` line in `mcp-approved`, beside the digest of
 the declaration it was listed under. A later session whose server sends the same list offers it with
 nobody asked. One whose list changed says so, and asks again. A project path that
 [SERVERS-4](#SERVERS-4)'s answer 2 recorded answers for a server and not for its list.
@@ -665,6 +670,7 @@ be the order they were listed in. A delegate is offered none of them.
 `verified-by: bravebot_agent::mcp::a_servers_tool_named_like_a_built_in_one_shadows_nothing`
 `verified-by: bravebot_agent::mcp::two_servers_composing_one_name_offer_neither_under_it`
 `verified-by: bravebot_agent::mcp::a_declined_list_offers_nothing_and_is_not_asked_again`
+`verified-by: bravebot_agent::mcp::a_turn_stopped_at_the_list_leaves_it_to_be_asked_again`
 `verified-by: bravebot_agent::mcp::a_list_vouched_for_before_asks_nothing_and_a_changed_one_asks_again`
 `verified-by: bravebot_tui::confirm::a_tool_list_draws_every_description_row_behind_the_margin`
 `verified-by: bravebot_tui::confirm::a_tool_list_answers_by_its_rows`

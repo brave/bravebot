@@ -590,6 +590,8 @@ mcp-call-not-recorded =
     { $tool } a été appelé, et votre réponse de ne plus demander n'a pas pu être enregistrée : le
     prochain appel demandera encore ({ $error })
 mcp-call-path-not-one-line = le chemin du projet ne peut pas s'écrire sur une ligne
+mcp-record-too-large = il est plus grand qu'un registre de réponses n'a de raison de l'être, il a donc été laissé tel quel
+mcp-record-not-read = il n'a pas pu être lu comme du texte, il a donc été laissé tel quel
 
 ## Approuver un répertoire, demandé une fois quand une session démarre ailleurs
 

@@ -652,6 +652,11 @@ impl Approvals {
             .unwrap_or_default()
     }
 
+    /// Read the approvals to change and write back, refusing a file that is there and unreadable.
+    pub fn to_change(home: &Path) -> Result<Self, Unreadable> {
+        to_change(&approvals_file(home)).map(|text| Self::parse(&text))
+    }
+
     /// Read approvals out of the file's text.
     ///
     /// A digest alone on its line is an approval under no alias, which is how the file was written
@@ -800,6 +805,11 @@ impl Projects {
             .unwrap_or_default()
     }
 
+    /// Read the projects to change and write back, refusing a file that is there and unreadable.
+    pub fn to_change(home: &Path) -> Result<Self, Unreadable> {
+        to_change(&projects_file(home)).map(|text| Self::parse(&text))
+    }
+
     /// Read projects out of the file's text.
     pub fn parse(text: &str) -> Self {
         Self {
@@ -874,6 +884,12 @@ impl Standing {
         bounded(&tools_file(home))
             .map(|text| Self::parse(&text))
             .unwrap_or_default()
+    }
+
+    /// Read the standing answers to change and write back, refusing a file that is there and
+    /// unreadable.
+    pub fn to_change(home: &Path) -> Result<Self, Unreadable> {
+        to_change(&tools_file(home)).map(|text| Self::parse(&text))
     }
 
     /// Read standing answers out of the file's text.
@@ -955,6 +971,17 @@ fn bounded(path: &Path) -> Option<String> {
     match std::fs::metadata(path) {
         Ok(found) if found.len() <= MAX_BYTES => std::fs::read_to_string(path).ok(),
         _ => None,
+    }
+}
+
+/// A record's text, to be changed and written back: nothing where there is no file yet, and an
+/// error where there is one this cannot read, which written over would lose every line it holds.
+fn to_change(path: &Path) -> Result<String, Unreadable> {
+    match std::fs::metadata(path) {
+        Ok(found) if found.len() > MAX_BYTES => Err(Unreadable::TooLarge),
+        Ok(_) => std::fs::read_to_string(path).map_err(|_| Unreadable::NotRead),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(_) => Err(Unreadable::NotRead),
     }
 }
 
@@ -1480,6 +1507,41 @@ mod tests {
 
         std::fs::write(declarations_file(&home), " ".repeat(MAX_BYTES as usize + 1)).unwrap();
         assert_eq!(Declarations::read(&home), Err(Unreadable::TooLarge));
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// A record read to be written back is refused where it is there and cannot be read, since
+    /// what is written would be every line it held but the one being added. One that is not there
+    /// yet is empty, and one that reads is what it says.
+    #[test]
+    fn a_record_that_cannot_be_read_is_not_read_to_be_written_over() {
+        let home = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch/config-mcp-to-change");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        assert_eq!(Approvals::to_change(&home), Ok(Approvals::default()));
+        assert_eq!(Projects::to_change(&home), Ok(Projects::default()));
+        assert_eq!(Standing::to_change(&home), Ok(Standing::default()));
+
+        let answer = format!("weather get_forecast {}\n", home.display());
+        std::fs::write(tools_file(&home), &answer).unwrap();
+        let read = Standing::to_change(&home).expect("a record that reads");
+        assert!(read.covers("weather", "get_forecast", &home));
+
+        let too_large = " ".repeat(MAX_BYTES as usize + 1);
+        for file in [
+            approvals_file(&home),
+            projects_file(&home),
+            tools_file(&home),
+        ] {
+            std::fs::write(&file, &too_large).unwrap();
+        }
+        assert_eq!(Approvals::to_change(&home), Err(Unreadable::TooLarge));
+        assert_eq!(Projects::to_change(&home), Err(Unreadable::TooLarge));
+        assert_eq!(Standing::to_change(&home), Err(Unreadable::TooLarge));
+
+        std::fs::write(tools_file(&home), [0xff, 0xfe, b'\n']).unwrap();
+        assert_eq!(Standing::to_change(&home), Err(Unreadable::NotRead));
         let _ = std::fs::remove_dir_all(&home);
     }
 }

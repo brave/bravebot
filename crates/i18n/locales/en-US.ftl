@@ -669,6 +669,9 @@ mcp-call-not-recorded =
     { $tool } was called, and your answer to stop asking could not be recorded, so the next call
     asks again: { $error }
 mcp-call-path-not-one-line = the project's path cannot be written on one line
+# Why a record of answers under the state directory was left as it is rather than written over.
+mcp-record-too-large = it is larger than a record of answers has any reason to be, so it was left as it is
+mcp-record-not-read = it could not be read as text, so it was left as it is
 
 ## Vouching for a directory, asked once when a session starts somewhere new
 
