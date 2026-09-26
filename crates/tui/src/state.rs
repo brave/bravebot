@@ -3146,14 +3146,7 @@ impl Session {
             self.completion = 0;
         }
 
-        // A line-wise selection is whole lines as much as `dd` is, so the newline is handled the same way
-        // and what goes into the register goes back as a line.
-        let whole_lines = extent == crate::vim::Extent::Line
-            || (extent == crate::vim::Extent::Selection
-                && matches!(
-                    self.vi_mode(),
-                    Some(crate::vim::Mode::Visual { lines: true })
-                ));
+        let whole_lines = self.takes_whole_lines(extent);
         self.register = Some(Yanked {
             text: self.input[from..to].to_string(),
             lines: whole_lines,
@@ -3200,6 +3193,23 @@ impl Session {
         }
     }
 
+    /// Whether an operator over this extent takes whole lines: the doubled letter, the row keys under
+    /// an operator, and a line-wise selection.
+    ///
+    /// Decided here once, because it settles two things that have to agree: what happens to the
+    /// newline and how the register puts the stretch back, and whether a stretch of no characters is
+    /// still one to act on. An empty row is a row, so `dd` there takes it, where `dl` at the end of a
+    /// line has nothing to take.
+    fn takes_whole_lines(&self, extent: crate::vim::Extent) -> bool {
+        extent == crate::vim::Extent::Line
+            || matches!(extent, crate::vim::Extent::To(motion) if motion.line_wise())
+            || (extent == crate::vim::Extent::Selection
+                && matches!(
+                    self.vi_mode(),
+                    Some(crate::vim::Mode::Visual { lines: true })
+                ))
+    }
+
     /// The extent an operator actually acts on, which is not always the one the keys spelled.
     ///
     /// `cw` on a character that is not a blank means `ce`: it changes the word and leaves the space
@@ -3244,6 +3254,7 @@ impl Session {
         extent: crate::vim::Extent,
         count: Option<u32>,
     ) -> Option<(usize, usize)> {
+        let whole_lines = self.takes_whole_lines(extent);
         let (from, to) = self.stretch_unchecked(extent, count)?;
         // Widened to whole markers rather than refused, so an object that reached into one takes it with
         // what it was already taking. Refusing would leave `daw` over a marker doing nothing at all,
@@ -3256,7 +3267,7 @@ impl Session {
             .marker_spans()
             .find(|(start, end)| *start < to && to < *end)
             .map_or(to, |(_, end)| end);
-        Some((from, to)).filter(|(from, to)| from < to)
+        Some((from, to)).filter(|(from, to)| from < to || whole_lines)
     }
 
     /// The stretch an extent names, before the markers are taken into account.
@@ -3272,6 +3283,7 @@ impl Session {
     ) -> Option<(usize, usize)> {
         use crate::vim::Extent;
 
+        let whole_lines = self.takes_whole_lines(extent);
         let was = self.caret;
         let span = match extent {
             // The line's own characters, and not the newline that ends it. What happens to that
@@ -3308,6 +3320,24 @@ impl Session {
                 }
                 Some((self.caret, to))
             }
+            // Every row from the caret's to the one landed on, and not the newline after the last,
+            // which is the operator's business for the reason it is for `dd`. `dG` on the last row
+            // still takes that row, where `dj` there is a row that is not there to take.
+            Extent::To(motion) if motion.line_wise() => {
+                self.move_by_counted(motion, count, true);
+                let landed = self.caret;
+                if landed == was
+                    && matches!(motion, crate::vim::Motion::Down | crate::vim::Motion::Up)
+                {
+                    None
+                } else {
+                    self.caret = landed.min(was);
+                    let (start, _) = self.caret_line();
+                    self.caret = landed.max(was);
+                    let (_, end) = self.caret_line();
+                    Some((start, end))
+                }
+            }
             Extent::To(motion) => {
                 self.move_by_counted(motion, count, true);
                 let landed = self.caret;
@@ -3332,7 +3362,9 @@ impl Session {
             Extent::Selection => self.vi_selection(),
         };
         self.caret = was;
-        span.filter(|(from, to)| from < to)
+        // A stretch of no characters names nothing, unless it is rows: an empty row is still one for
+        // `dd` to take and `cc` to type on.
+        span.filter(|(from, to)| from < to || whole_lines)
     }
 
     /// The stretch a text object names, on the line the caret is on.
@@ -3549,6 +3581,11 @@ impl Session {
         // with the terminal still in raw mode.
         for start in starts.into_iter().rev() {
             if further {
+                // An empty row stays empty, as it does in vi: spaces there are nothing anybody can
+                // see, and they would go out with the prompt.
+                if self.input[start..].starts_with('\n') || start == self.input.len() {
+                    continue;
+                }
                 self.input.insert_str(start, &" ".repeat(STEP));
                 if start <= self.caret {
                     self.caret += STEP;
@@ -3828,7 +3865,7 @@ impl Session {
     /// means somewhere else entirely rather than more of the same: `3G` and `3gg` are both the third
     /// row, which is what the count is for on a key that already goes as far as it can go.
     /// Told whether it is moving the caret or measuring a stretch, the way [`Session::move_by_for`]
-    /// is: the stretch `d2G` names is the one `2G` would reach, so the count has to be read the same
+    /// is: the stretch `d2G` names reaches the row `2G` would, so the count has to be read the same
     /// way on both sides or the operator takes the whole input where the motion took two rows.
     fn move_by_counted(&mut self, motion: crate::vim::Motion, count: Option<u32>, measuring: bool) {
         use crate::vim::Motion;
@@ -3901,6 +3938,12 @@ impl Session {
             Motion::InputEnd => {
                 self.caret = self.input.len();
                 self.move_to_line_start();
+            }
+            Motion::Down => {
+                self.move_down_a_line();
+            }
+            Motion::Up => {
+                self.move_up_a_line();
             }
             Motion::ToChar(find) => {
                 self.last_find = Some(find);
@@ -14811,12 +14854,10 @@ mod tests {
             "it went past the last row"
         );
         // An operator reads the count the same way, or `d2G` takes the whole input where `2G`
-        // reached two rows: the stretch a motion names is the one the motion would reach.
-        assert_eq!(
-            edited("one\ntwo\nthree\nfour", 0, "d2G"),
-            "two\nthree\nfour"
-        );
-        assert_eq!(edited("one\ntwo\nthree\nfour", 0, "dG"), "four");
+        // reached two rows: the stretch a motion names reaches the row the motion would.
+        assert_eq!(edited("one\ntwo\nthree\nfour", 0, "d2G"), "three\nfour");
+        assert_eq!(edited("one\ntwo\nthree\nfour", 0, "d3gg"), "four");
+        assert_eq!(edited("one\ntwo\nthree\nfour", 0, "dG"), "");
     }
 
     /// `>` and `<` move every row the stretch reaches, so the caret has to follow every one of them
@@ -15021,6 +15062,73 @@ mod tests {
         assert_eq!(edited("one two three", 4, "d$"), "one ");
         assert_eq!(edited("one two three", 0, "dfo"), " three");
         assert_eq!(edited("one two three", 0, "dto"), "o three");
+        // The row keys name whole rows, from the caret's to the one landed on, which is what they
+        // mean in vi. Read by the character, `dG` leaves the last row standing with what was left of
+        // the caret's row joined onto it, and `dj` from the middle of a row splits two rows apart.
+        let rows = "one\ntwo\nthree";
+        assert_eq!(edited(rows, 1, "dj"), "three");
+        assert_eq!(edited(rows, 5, "dk"), "three");
+        assert_eq!(edited(rows, 5, "dG"), "one");
+        assert_eq!(edited(rows, 9, "dgg"), "");
+    }
+
+    /// The row keys under an operator take rows as far as the input has them. The caret's own row is
+    /// one to take, so `dG` on the last row takes it, while `dj` there reaches no row and takes
+    /// nothing, as in vi. A count past the end stops at the end, the way `9dd` does.
+    #[test]
+    fn a_row_key_under_an_operator_takes_the_rows_there_are() {
+        let rows = "one\ntwo\nthree";
+        assert_eq!(edited(rows, 8, "dG"), "one\ntwo");
+        assert_eq!(edited(rows, 0, "dgg"), "two\nthree");
+        assert_eq!(
+            edited(rows, 9, "dj"),
+            rows,
+            "there is no row below the last"
+        );
+        assert_eq!(
+            edited(rows, 1, "dk"),
+            rows,
+            "there is no row above the first"
+        );
+        assert_eq!(edited("a\nb\nc\nd", 0, "d2j"), "d");
+        assert_eq!(edited("a\nb\nc\nd", 0, "2dj"), "d");
+        assert_eq!(edited("a\nb\nc\nd", 2, "d9j"), "a");
+    }
+
+    /// The other operators take the same rows, so what `yj` records goes back as lines, `cj` leaves one
+    /// empty row to type on, and `>j` moves both rows.
+    #[test]
+    fn every_operator_over_a_row_key_takes_the_rows() {
+        assert_eq!(
+            edited("one\ntwo\nthree", 1, "yjp"),
+            "one\none\ntwo\ntwo\nthree"
+        );
+        assert_eq!(edited("one\ntwo\nthree", 5, "cjX"), "one\nX");
+        assert_eq!(edited("one\ntwo\nthree", 1, ">j"), "  one\n  two\nthree");
+    }
+
+    /// An empty row is a row to every operator that takes whole ones. `o` and then Escape leaves the
+    /// caret on one, so `dd` and `dG` there have to take it, `cc` and `S` have to open INSERT on it,
+    /// and `yy` has to put back an empty row. Read as characters there is nothing on it, and every
+    /// one of these did nothing, `cc` leaving the next word typed to run as commands.
+    #[test]
+    fn an_empty_row_is_a_row_to_every_line_wise_operator() {
+        let gap = "one\n\nthree";
+        assert_eq!(edited(gap, 4, "dd"), "one\nthree");
+        assert_eq!(edited(gap, 4, "Vd"), "one\nthree");
+        assert_eq!(edited(gap, 4, "ccX"), "one\nX\nthree");
+        assert_eq!(edited(gap, 4, "SX"), "one\nX\nthree");
+        assert_eq!(edited(gap, 4, "yyp"), "one\n\n\nthree");
+        assert_eq!(edited("one\n", 4, "dG"), "one");
+        assert_eq!(edited("\ntwo", 0, "dgg"), "two");
+    }
+
+    /// `>` leaves an empty row empty, as vi does. Two spaces on a row with nothing else on it are
+    /// nothing anybody can see, and they would go out with the prompt.
+    #[test]
+    fn indenting_leaves_an_empty_row_empty() {
+        assert_eq!(edited("one\n\nthree", 4, ">>"), "one\n\nthree");
+        assert_eq!(edited("a\n\nb", 0, ">G"), "  a\n\n  b");
     }
 
     /// `x` takes the character under the caret and `dd` the whole line, newline and all: a line taken
