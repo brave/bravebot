@@ -77,6 +77,19 @@ pub const MAX_ATTACHMENT_BYTES: usize = 8 * 1024 * 1024;
 /// the budget is what is held at once, not what each turn may add.
 pub const MAX_REWIND_BYTES: usize = 32 * 1024 * 1024;
 
+/// A `read_git` call's arguments: the three the planner spells as text, which are gated as
+/// routing, and the literals the tool already parsed.
+#[derive(Clone, Copy)]
+pub struct GitQuestion<'a> {
+    pub repository: &'a Labelled<String>,
+    pub revision: Option<&'a Labelled<String>>,
+    pub path: Option<&'a Labelled<String>>,
+    pub query: crate::git::Query,
+    pub count: usize,
+    pub since: Option<i64>,
+    pub until: Option<i64>,
+}
+
 #[derive(Debug)]
 pub enum WorkspaceError {
     /// The policy refused the operation.
@@ -97,6 +110,11 @@ pub enum WorkspaceError {
     TooLarge { path: String, limit: usize },
     /// The search pattern is not a regular expression this engine can match.
     Pattern { detail: String },
+    /// `read_git` did not answer, for the reason carried.
+    Git {
+        path: String,
+        declined: crate::git::Declined,
+    },
 }
 
 impl WorkspaceError {
@@ -140,6 +158,7 @@ impl WorkspaceError {
                 limit / (1024 * 1024)
             ),
             Self::Pattern { detail } => format!("the search pattern is not usable: {detail}"),
+            Self::Git { declined, .. } => declined.describe(named),
         }
     }
 
@@ -159,7 +178,8 @@ impl WorkspaceError {
             | Self::Stale { path }
             | Self::Contended { path }
             | Self::Binary { path }
-            | Self::TooLarge { path, .. } => path,
+            | Self::TooLarge { path, .. }
+            | Self::Git { path, .. } => path,
         }
     }
 }
@@ -1664,6 +1684,15 @@ const IGNORED_DIRECTORIES: &[&str] = &[
     ".bundle",
 ];
 
+/// A path inside the repository the planner called `named`, spelled the way it spelled the
+/// repository, so the trust map is asked about the name it would be asked about for a read.
+pub(crate) fn in_repository(named: &str, inside: &str) -> String {
+    match named {
+        "" | "." => inside.to_owned(),
+        _ => format!("{}/{inside}", named.trim_end_matches('/')),
+    }
+}
+
 /// Shorten a string to at most `limit` bytes without splitting a character.
 ///
 /// `String::truncate` panics if the index is not a character boundary, so a matching line
@@ -2238,6 +2267,124 @@ impl Workspace {
                 },
                 label,
             ))
+        })
+    }
+
+    /// The name the trust map holds `.git` under, for the repository the planner called `named`.
+    pub fn git_dir_key(&self, named: &str) -> String {
+        self.trust_key(&in_repository(named, ".git"))
+    }
+
+    /// Answer a question about the history of the repository at `repository`, from the files under
+    /// its `.git` and without starting git.
+    ///
+    /// Every argument is routing, as a search's are. Whether the repository is opened at all rests
+    /// on the name the planner wrote and the rules, and is decided before any file in it is read:
+    /// the map has to trust `.git` and everything beneath it, and no deny rule may cover a file
+    /// there. Following history means following ids the files hold, so doing it over bytes nobody
+    /// vouched for would be the driver branching on them, and a repository whose files are only
+    /// partly readable has no history this could show without reading the rest.
+    ///
+    /// The answer is labelled by the whole of `.git` and by each working-tree path it showed, so a
+    /// blob that committed a file the map distrusts comes back as untrusted as that file.
+    pub fn read_git<S: Sink>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        question: &GitQuestion<'_>,
+    ) -> Result<Labelled<crate::git::Answer>, WorkspaceError> {
+        let GitQuestion {
+            repository,
+            revision,
+            path,
+            query,
+            count,
+            since,
+            until,
+        } = *question;
+        policy.capture_files(|policy, _capture| {
+            policy.before_capability(Capability::FileRead)?;
+            policy.before_action("read_git", "repository", Role::Routing, repository)?;
+            let trusted = |field: &'static str, value: &Labelled<String>| {
+                value
+                    .clone()
+                    .into_trusted()
+                    .map_err(|_| WorkspaceError::Invalid {
+                        path: "<untrusted>".into(),
+                        reason: match field {
+                            "revision" => "the revision was not trusted",
+                            "path" => "the path was not trusted",
+                            _ => "the repository was not trusted",
+                        },
+                    })
+            };
+            let named = trusted("repository", repository)?;
+            let revision = match revision {
+                Some(revision) => {
+                    policy.before_action("read_git", "revision", Role::Routing, revision)?;
+                    Some(trusted("revision", revision)?)
+                }
+                None => None,
+            };
+            let path = match path {
+                Some(path) => {
+                    policy.before_action("read_git", "path", Role::Routing, path)?;
+                    Some(trusted("path", path)?)
+                }
+                None => None,
+            };
+            let declined = |declined| WorkspaceError::Git {
+                path: named.clone(),
+                declined,
+            };
+
+            let root = self.resolve(&named)?;
+            let git_dir = root.join(".git");
+            let spelled = |inside: &str| in_repository(&named, inside);
+            let git_key = self.git_dir_key(&named);
+            if !policy.trusts_beneath(&git_key) {
+                return Err(declined(crate::git::Declined::Untrusted));
+            }
+            if policy.read_is_denied(&git_key) {
+                return Err(declined(crate::git::Declined::Fenced));
+            }
+            let deadline = Instant::now() + self.search_time;
+            let files = crate::git::survey(&git_dir, deadline).map_err(declined)?;
+            let fenced = files.iter().any(|file| {
+                let below = file.strip_prefix(&root).unwrap_or(file);
+                let below = bravebot_core::spelling::to_slash(
+                    &below.to_string_lossy(),
+                    BACKSLASH_SEPARATES,
+                )
+                .into_owned();
+                policy.read_is_denied(&self.trust_key(&spelled(&below)))
+            });
+            if fenced {
+                return Err(declined(crate::git::Declined::Fenced));
+            }
+
+            let opened = crate::git::Repository::open(&git_dir).map_err(declined)?;
+            let request = crate::git::Request {
+                query,
+                revision: revision.as_deref(),
+                path: path.as_deref(),
+                count,
+                since,
+                until,
+                deadline,
+            };
+            let withheld = |inside: &str| policy.read_is_denied(&self.trust_key(&spelled(inside)));
+            let answer = opened.answer(&request, &withheld).map_err(declined)?;
+            let shown: Vec<String> = answer
+                .shown
+                .iter()
+                .map(|inside| self.trust_key(&spelled(inside)))
+                .collect();
+            let label = policy.observe_repository(
+                Capability::FileRead,
+                &git_key,
+                shown.iter().map(String::as_str),
+            )?;
+            Ok(Labelled::new(answer, label))
         })
     }
 

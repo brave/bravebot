@@ -6,7 +6,7 @@ description: Every tool the model may call, what it takes, and what it is allowe
 
 # Tools
 
-There are eighteen tools, and no way to add another from a configuration file. Each one splits its
+There are nineteen tools, and no way to add another from a configuration file. Each one splits its
 arguments into **routing**, the part that decides where the effect lands, and **content**, the part
 that is merely carried.
 
@@ -15,6 +15,7 @@ that is merely carried.
 | [`read_file`](#read_file) | `path`, `path_ref`, `offset`, `limit` | none | only to trust a quarantined file |
 | [`list_files`](#list_files) | `directory`, `pattern`, `depth` | none | no |
 | [`search`](#search) | `pattern`, `directory`, `include`, `offset`, `case_sensitive` | none | no |
+| [`read_git`](#read_git) | `query`, `repository`, `revision`, `path`, `count`, `since`, `until` | none | only if what it would show holds a credential |
 | [`lsp`](#lsp) | `operation`, `path`, `line`, `character`, `query` | none | **yes, to start a language server** |
 | [`write_file`](#write_file) | `path`, `path_ref`, `contents_ref` | `contents` | **yes, every time** |
 | [`edit_file`](#edit_file) | `path`, `path_ref`, `replace_all` | `old_text`, `new_text` | **yes, every time** |
@@ -196,6 +197,50 @@ See [Configuration](../customize/configuration.md).
 
 Raising a cap does not unbound a search. The walk still stops at `search.maxFiles`, the reading still
 stops at `search.maxSeconds`, and the match cap holds regardless of both.
+
+## `read_git`
+
+Reads a repository's history from the files under its `.git`, **without starting git**.
+
+| Parameter | |
+|---|---|
+| `query` | `log`, `show` or `diff` |
+| `repository` | workspace-relative directory holding `.git`, defaults to `.` |
+| `revision` | in git's syntax: a branch, a tag, `HEAD`, an id or its prefix, then `~N`, `^N` or `^{commit}`. `log` takes one or a range `A..B`; `show` takes one, or `<revision>:<path>` for a file or directory as it was; `diff` takes two, as `A..B` or `A B` |
+| `path` | relative to the repository's root. Limits `log` to commits that changed it, and `show` and `diff` to changes under it |
+| `count` | commits a `log` lists: 20 unless given, at most 200 |
+| `since`, `until` | `log` only: whole days in UTC, written `YYYY-MM-DD`, both ends included |
+
+`log` prints one commit per line: the first ten characters of its id, the day it was authored, its
+author and its subject. `show` prints a commit
+with its message and diff, a tag with its message and then its commit, or a file or directory at a
+revision. `diff` compares two commits. A merge is shown without a diff and says which diff to ask for.
+
+**Why not just run git.** git runs programs its configuration names: an alias, a pager, a diff
+driver, `core.fsmonitor`, and `include.path` pulls configuration in from any file. That configuration
+lives in the repository being inspected, so [`run`](#run) cannot prove a git command safe and asks
+unless something you set already covers it. `read_git`
+applies nothing the configuration names and returns no remote URL, so the same question needs nobody
+to answer it.
+
+**It opens only a repository you trust in full.** Following history means following what the files
+under `.git` say, so `.git` and everything beneath it has to be trusted before any of it is read.
+Anywhere else it says so, and the planner uses `run`. An answer showing a file you distrust is
+quarantined like a read of that file, since a commit holds that file's bytes.
+
+**A deny rule on a file covers its history.** Naming a denied file, as a `path` or as
+`HEAD:.env`, is refused. A denied file met in a diff or a listing is left out, and the answer says
+so. A rule over `.git` or anything in it keeps the repository closed.
+
+What it would show is scanned for credentials as a file read is, and held back until you agree. A
+file's lines in a commit are scanned as that file, so agreeing to one file's key is not agreeing to
+another's. A `run` of git whose output the planner could not be shown mentions `read_git`.
+
+It does not read the index or the working tree, so `status`, staged or uncommitted changes, blame and
+`--follow` go through `run`. A repository laid out in a way that changes what a read means, such as
+borrowed objects, replace refs, an included configuration file, `core.worktree`, or a `.git` that is a
+file, is declined with the same pointer. An answer cut by the count, by 2,000 lines, or by the search
+deadline says it was cut.
 
 ## `lsp`
 

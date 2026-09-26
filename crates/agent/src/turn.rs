@@ -3906,8 +3906,18 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                          read a file, use read_file."
                                         .to_string(),
                                 };
+                                // Only where git ran: the output of git log or show is what
+                                // read_git answers with nobody asked, where the repository is
+                                // trusted, and for any other program the sentence is noise.
+                                let history = if output.ran_git {
+                                    " To read a repository's history, use read_git: it reads \
+                                     .git without starting git, and in a trusted repository \
+                                     nobody is asked."
+                                } else {
+                                    ""
+                                };
                                 format!(
-                                    "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{}{capped}{advice}",
+                                    "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{}{capped}{advice}{history}",
                                     output.tool,
                                     reference.describe()
                                 )

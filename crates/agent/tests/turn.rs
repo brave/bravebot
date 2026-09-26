@@ -4,6 +4,8 @@
 //! a reply. The injection test is the important one: it asserts that a file whose
 //! contents try to redirect the turn cannot do so.
 
+mod repository;
+
 use bravebot_agent::Workspace;
 use bravebot_agent::turn::{
     self, MAX_TOOL_ROUNDS, PastedImage, ROUNDS_AFTER_WRITING_BEFORE_RUNNING, ROUNDS_BEFORE_WRITING,
@@ -27780,4 +27782,512 @@ fn a_finding_is_written_outside_the_tree_and_outlives_the_turn() {
             "the record carried a piece of the value ({piece}): {written}"
         );
     }
+}
+
+/// GIT-1. Where the whole of `.git` is vouched for, its history reaches the planner as it would
+/// through `git log`, with nobody asked: that is what the tool is for, and a result the planner
+/// never saw would leave it running git anyway.
+#[test]
+fn read_git_shows_the_planner_the_history_of_a_trusted_repository() {
+    const SUBJECT: &str = "SUBJECT-OF-A-TRUSTED-COMMIT";
+    let scratch = Scratch::new("read-git-trusted");
+    repository::commit_files(&scratch.path, &[("README", "hello\n")], SUBJECT);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_git", r#"{"query":"log"}"#),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what changed"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let answered = tool_results(&received.recv().expect("second request"));
+    assert!(
+        answered.contains(&format!("2023-11-14 A U Thor {SUBJECT}")),
+        "the log of a trusted repository did not reach the planner: {answered}"
+    );
+}
+
+/// GIT-2. Following history means following ids the files under `.git` hold, so a repository
+/// nobody vouched for is not opened, and the planner is told to use run instead. Its configuration
+/// names a format read_git would decline too, so the refusal naming trust rather than the format
+/// is what shows the decision was taken before any file there was read.
+#[test]
+fn read_git_does_not_open_a_repository_nobody_vouched_for() {
+    const SUBJECT: &str = "SUBJECT-OF-AN-UNVOUCHED-COMMIT";
+    let scratch = Scratch::new("read-git-untrusted");
+    repository::commit_files(&scratch.path, &[("README", "hello\n")], SUBJECT);
+    std::fs::write(
+        scratch.path.join(".git/config"),
+        "[core]\n\trepositoryformatversion = 9\n",
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_git", r#"{"query":"log"}"#),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what changed"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let answered = tool_results(&received.recv().expect("second request"));
+    assert!(
+        !answered.contains(SUBJECT),
+        "an unvouched repository's history reached the planner: {answered}"
+    );
+    assert!(
+        answered.contains("read_git does not open it") && answered.contains("Use run"),
+        "the planner was not told why the repository was not read, or what to use: {answered}"
+    );
+}
+
+/// GIT-3. A blob holds the bytes of the file it committed, so an answer showing a path the map
+/// distrusts is as untrusted as that file, however trusted the `.git` it came out of. Narrowed to a
+/// path the map trusts, the same commit is shown.
+#[test]
+fn a_history_answer_showing_a_distrusted_path_is_quarantined() {
+    const THEIRS: &str = "LINE-FROM-A-DISTRUSTED-FILE";
+    const OURS: &str = "LINE-FROM-A-TRUSTED-FILE";
+    let scratch = Scratch::new("read-git-distrusted-path");
+    repository::commit_files(
+        &scratch.path,
+        &[
+            ("README", &format!("{OURS}\n")),
+            ("vendor/b.js", &format!("{THEIRS}\n")),
+        ],
+        "add both",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_git", r#"{"query":"show"}"#),
+        tool_request_2("read_git", r#"{"query":"show","path":"README"}"#),
+        reply_with("understood"),
+    ]);
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    trust.distrust("vendor");
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what changed"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let whole = tool_results(&received.recv().expect("second request"));
+    assert!(
+        !whole.contains(THEIRS) && !whole.contains(OURS),
+        "a commit showing a distrusted file reached the planner: {whole}"
+    );
+    assert!(
+        whole.contains("could not be shown to you"),
+        "the planner was not told the answer was withheld: {whole}"
+    );
+    let narrowed = tool_results(&received.recv().expect("third request"));
+    assert!(
+        narrowed.contains(&format!("+{OURS}")) && !narrowed.contains(THEIRS),
+        "the commit narrowed to a trusted path was not shown: {narrowed}"
+    );
+}
+
+/// GIT-4. A deny rule over a file covers what history holds of it, or `git show HEAD:.env` would
+/// be the way round every rule. Named, it is refused as every read refuses it, before anything
+/// under `.git` is opened; met in a commit's diff, it is left out and the answer says so.
+#[test]
+fn a_deny_rule_over_a_file_refuses_reading_its_history() {
+    const DENIED: &str = "LINE-A-RULE-DENIES";
+    let scratch = Scratch::new("read-git-denied-path");
+    repository::commit_files(
+        &scratch.path,
+        &[(".env", &format!("{DENIED}\n")), ("README", "hello\n")],
+        "add env",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_git", r#"{"query":"show","revision":"HEAD:.env"}"#),
+        tool_request_2("read_git", r#"{"query":"log","path":".env"}"#),
+        tool_request_2("read_git", r#"{"query":"show"}"#),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what is in .env").with_permissions(rules(&["Read(./.env)"], &[], &[])),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let shown = tool_results(&received.recv().expect("second request"));
+    assert!(
+        !shown.contains(DENIED) && shown.contains("deny rule"),
+        "a denied file's history was shown, or the refusal did not say why: {shown}"
+    );
+    let logged = tool_results(&received.recv().expect("third request"));
+    assert_eq!(
+        logged.matches("deny rule").count(),
+        2,
+        "a log of a denied file was not refused: {logged}"
+    );
+    let commit = tool_results(&received.recv().expect("fourth request"));
+    assert!(
+        !commit.contains(DENIED)
+            && commit.contains("+hello")
+            && commit.contains("was left out of this answer"),
+        "a commit's diff showed a denied file, or did not say it was left out: {commit}"
+    );
+}
+
+/// GIT-4. read_git reads every file under `.git` or none, so a rule over one of them keeps the
+/// whole repository closed rather than leaving a history with holes in it.
+#[test]
+fn a_repository_holding_a_file_a_deny_rule_covers_is_not_opened() {
+    const SUBJECT: &str = "SUBJECT-BEHIND-A-DENIED-FILE";
+    let scratch = Scratch::new("read-git-fenced");
+    repository::commit_files(&scratch.path, &[("README", "hello\n")], SUBJECT);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_git", r#"{"query":"log"}"#),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what changed").with_permissions(rules(&["Read(./.git/config)"], &[], &[])),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let answered = tool_results(&received.recv().expect("second request"));
+    assert!(
+        !answered.contains(SUBJECT) && answered.contains("a deny rule covers"),
+        "a repository holding a denied file was read: {answered}"
+    );
+}
+
+/// CRED-15. A commit that added a key puts the key in the diff, so what read_git would show is
+/// scanned as a file read is, and held back until the person agrees. Both directions, since a scan
+/// that held every such answer back would make a repository with a `.env` in its history unreadable.
+#[test]
+fn a_credential_in_history_is_held_back_until_the_person_agrees() {
+    for (name, agrees) in [("declined", false), ("approved", true)] {
+        let scratch = Scratch::new(&format!("read-git-credential-{name}"));
+        repository::commit_files(
+            &scratch.path,
+            &[(".env", &format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n"))],
+            "add env",
+        );
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request_2("read_git", r#"{"query":"show"}"#),
+            reply_with("understood"),
+        ]);
+        let mut sink = RecordingSink::new();
+        let task = Task::new("what changed");
+        if agrees {
+            turn::run_with_trust(
+                &config_for(&endpoint),
+                &bravebot_net::Egress::new(),
+                &workspace,
+                &task,
+                &mut bravebot_agent::confirm::ExposesReads,
+                &mut sink,
+                trusting_the_workspace(),
+            )
+        } else {
+            turn::run_with_trust(
+                &config_for(&endpoint),
+                &bravebot_net::Egress::new(),
+                &workspace,
+                &task,
+                &mut bravebot_agent::confirm::Unattended,
+                &mut sink,
+                trusting_the_workspace(),
+            )
+        }
+        .expect("turn runs");
+
+        let _first = received.recv().expect("first request");
+        let answered = tool_results(&received.recv().expect("second request"));
+        if agrees {
+            assert!(
+                answered.contains(DECLARED_KEY),
+                "a history the person agreed to show was held back: {answered}"
+            );
+        } else {
+            assert!(
+                !answered.contains(DECLARED_KEY) && answered.contains("refused"),
+                "a history the person declined still put the credential in the planner's \
+                 context: {answered}"
+            );
+        }
+    }
+}
+
+/// CRED-15. A file's lines in an answer are scanned as a read of that file, so the question names
+/// the file, and agreeing to one file's key is not agreeing to another's: the second file is asked
+/// about, and the first is not asked about twice.
+#[test]
+fn agreeing_to_one_files_key_in_history_is_not_agreeing_to_anothers() {
+    let scratch = Scratch::new("read-git-credential-per-file");
+    repository::commit_files(
+        &scratch.path,
+        &[
+            (".env", &format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n")),
+            ("deploy/master.key", &format!("{GENERATED_SECRET}\n")),
+        ],
+        "add keys",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_git", r#"{"query":"show","path":".env"}"#),
+        tool_request_2("read_git", r#"{"query":"show","path":"deploy/master.key"}"#),
+        tool_request_2("read_git", r#"{"query":"show","path":".env"}"#),
+        reply_with("understood"),
+    ]);
+    let mut confirmer = RemembersExposures {
+        allow: true,
+        ..Default::default()
+    };
+    let asked = confirmer.asked.clone();
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what changed"),
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let env = tool_results(&received.recv().expect("second request"));
+    let key = tool_results(&received.recv().expect("third request"));
+    let again = tool_results(&received.recv().expect("fourth request"));
+    assert!(
+        env.contains(DECLARED_KEY)
+            && key.contains(GENERATED_SECRET)
+            && again.contains(DECLARED_KEY),
+        "a history the person agreed to show was held back: {env}\n{key}\n{again}"
+    );
+    let asked = asked.lock().unwrap();
+    let named: Vec<String> = asked.iter().map(|a| a.credentials.join("; ")).collect();
+    assert_eq!(
+        named.len(),
+        2,
+        "each file with a key is asked about once, and only once: {named:?}"
+    );
+    assert!(
+        named[0].contains(".env:1") && named[1].contains("deploy/master.key:1"),
+        "the question did not name the file and line the key is on: {named:?}"
+    );
+}
+
+/// CRED-15. A value that is the whole of a new file is recognised in the commit that added it as
+/// it is in the file, which it could not be if the answer were read as one document.
+#[test]
+fn a_key_that_is_the_whole_of_a_file_is_caught_in_the_commit_that_added_it() {
+    let scratch = Scratch::new("read-git-credential-alone");
+    repository::commit_files(
+        &scratch.path,
+        &[
+            ("README", "hello\n"),
+            ("master.key", &format!("{GENERATED_SECRET}\n")),
+        ],
+        "add a key",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_git", r#"{"query":"show"}"#),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what changed"),
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let answered = tool_results(&received.recv().expect("second request"));
+    assert!(
+        !answered.contains(GENERATED_SECRET) && answered.contains("refused"),
+        "a key standing as the whole of a new file reached the planner: {answered}"
+    );
+}
+
+/// GIT-5. The question is one of three words, and a word off the list is refused by name rather
+/// than guessed at; status, the one a planner most often reaches for, is pointed at run.
+#[test]
+fn read_git_answers_three_questions_and_points_status_at_run() {
+    let scratch = Scratch::new("read-git-queries");
+    repository::commit_files(&scratch.path, &[("README", "hello\n")], "first");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_git", r#"{"query":"status"}"#),
+        tool_request_2("read_git", r#"{"query":"blame"}"#),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what changed"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let status = tool_results(&received.recv().expect("second request"));
+    assert!(
+        status.contains("does not answer status") && status.contains("git status --short"),
+        "status was not pointed at run: {status}"
+    );
+    let blame = tool_results(&received.recv().expect("third request"));
+    assert!(
+        blame.contains("answers log, show and diff, not blame"),
+        "a query off the list was not refused by name: {blame}"
+    );
+}
+
+/// GIT-6. `since` and `until` are whole days in UTC, so a commit made late on the day `until`
+/// names is inside it, and anything that is not a calendar day is refused with the form it takes
+/// rather than read as some other day.
+#[test]
+fn since_and_until_are_whole_days_and_anything_else_is_refused() {
+    const SUBJECT: &str = "SUBJECT-LATE-ON-ITS-DAY";
+    let scratch = Scratch::new("read-git-days");
+    // 22:13 UTC on 2023-11-14.
+    repository::commit_files(&scratch.path, &[("README", "hello\n")], SUBJECT);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_git", r#"{"query":"log","until":"2023-11-14"}"#),
+        tool_request_2("read_git", r#"{"query":"log","since":"2023-11-15"}"#),
+        tool_request_2("read_git", r#"{"query":"log","since":"2023-02-30"}"#),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what changed"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let until = tool_results(&received.recv().expect("second request"));
+    assert!(
+        until.contains(SUBJECT),
+        "a commit made on the day until names was left out: {until}"
+    );
+    let since = tool_results(&received.recv().expect("third request"));
+    assert!(
+        since.contains("(no commits match)"),
+        "a commit made before the day since names was listed: {since}"
+    );
+    let invalid = tool_results(&received.recv().expect("fourth request"));
+    assert!(
+        invalid.contains("'since' must be a day written YYYY-MM-DD"),
+        "a day that is not on the calendar was not refused: {invalid}"
+    );
+}
+
+/// GIT-7. A git run's sealed output names read_git, which answers the same question with nobody
+/// asked where the repository is trusted. Any other program's does not, where the sentence would
+/// be noise.
+#[test]
+fn a_sealed_git_run_names_read_git_and_another_programs_does_not() {
+    const SENTENCE: &str = "To read a repository's history, use read_git";
+    let scratch = Scratch::new("read-git-named-by-a-run");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    for program in ["git", "other"] {
+        let script = scratch.path.join(program);
+        std::fs::write(&script, "#!/bin/sh\necho SENTINEL-SEALED\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./git log"}"#),
+        tool_request("run", r#"{"command":"./other"}"#),
+        reply_with("done"),
+    ]);
+    let mut sink = RecordingSink::new();
+    // Approves each run without vouching, so the output is sealed.
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what changed"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    let _first = received.recv().expect("first request");
+    let git = tool_results(&received.recv().expect("second request"));
+    assert!(
+        git.contains("could not be shown to you") && git.contains(SENTENCE),
+        "a sealed git run did not name read_git: {git}"
+    );
+    let both = tool_results(&received.recv().expect("third request"));
+    assert_eq!(
+        both.matches(SENTENCE).count(),
+        1,
+        "another program's sealed run named read_git: {both}"
+    );
 }

@@ -49,15 +49,27 @@ allow = [
 # and a type from one is not the type from the other. Not automatically wrong, which is why
 # every one of them is recorded below rather than left to be counted by hand.
 multiple-versions = "deny"
+# The gitoxide crates that start a process, or that reach one through what they depend on.
+# `read_git` answers from a repository's own files because git runs programs `.git/config`
+# names, so the plumbing it is built on must not be able to either, and a ban makes a crate that
+# could a failing build rather than something a reviewer has to notice.
+deny = [
+    { crate = "gix", reason = "depends on gix-protocol and gix-transport whatever features are chosen" },
+    { crate = "gix-command", reason = "starts programs: diff drivers, textconv, credential helpers" },
+    { crate = "gix-credentials", reason = "runs credential helpers" },
+    { crate = "gix-filter", reason = "runs clean and smudge filter drivers" },
+    { crate = "gix-protocol", reason = "the network half of git, which is how gix-transport is reached" },
+    { crate = "gix-transport", reason = "starts ssh and git-upload-pack" },
+]
 # `wildcards` is left at its default. It reads every intra-workspace path dependency here as
 # a `*` requirement, and `allow-wildcard-paths` does not apply to them because no crate in
 # the workspace declares `publish = false`, so enabling it means declaring that across the
 # workspace first, before it can say anything about a real `*`.
 
 # Every duplicate the build compiles, and why it cannot be unified here. Cargo.lock lists
-# nine crates at more than one version; the five not here are reachable only through
-# dev-dependencies of dependencies, so no build of this workspace resolves them at any
-# feature set or target.
+# ten crates at more than one version; the five not here are reachable only through
+# dev-dependencies of dependencies or through an optional feature no crate here turns on, so
+# no build of this workspace resolves them.
 #
 # An entry that no longer matches anything is a reason left behind to be believed, so the
 # command in `make check-deps` raises that from a warning to an error. Each version is
@@ -66,6 +78,7 @@ multiple-versions = "deny"
 # that unchanged should not have to be signed off again.
 skip = [
     { crate = "base64:0.22", reason = "the version challenge-bypass-ristretto 2.1 pins, and the workspace pins it to match; ureq 3.4 is on 0.23 internally" },
+    { crate = "getrandom:0.2", reason = "rand 0.8, pinned to match challenge-bypass-ristretto, is on it; gix-utils, under read_git's plumbing, is on 0.4" },
     { crate = "hashbrown:0.16", reason = "kasuari 0.4 pins it while the rest of ratatui 0.30 is on 0.17; neither is a dependency of this workspace" },
     { crate = "syn:2", reason = "proc macros only, so nothing of either version is in the binary; ratatui's macro crates are on 2 and serde_derive is on 3" },
     { crate = "windows-sys:0.52", reason = "compiled for the Windows targets only; ring 0.17 pins it while rustix and mio are on 0.61" },
