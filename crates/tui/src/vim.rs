@@ -323,6 +323,16 @@ pub enum Motion {
     WordEnd,
     /// `b`: the start of this word, or of the one before.
     WordLeft,
+    /// `ge`: the end of the word before.
+    WordEndLeft,
+    /// `W`: the start of the next run of anything that is not a blank.
+    BigwordRight,
+    /// `E`: the end of this run, or of the next one.
+    BigwordEnd,
+    /// `B`: the start of this run, or of the one before.
+    BigwordLeft,
+    /// `gE`: the end of the run before.
+    BigwordEndLeft,
     /// `0`: the first column of the line.
     LineStart,
     /// `$`: the last character of the line.
@@ -351,10 +361,16 @@ impl Motion {
     /// stops having taken its last. Both are what the keys mean, and the difference is exactly this.
     ///
     /// The forward-looking motions that land *on* something are inclusive. The ones that land where the
-    /// next thing begins are not, since that character is the start of what was not asked for.
+    /// next thing begins are not, since that character is the start of what was not asked for. `ge`
+    /// is vim's exception, and going back it takes the character the caret was on as well: `dge` on
+    /// the first letter of a word takes that letter and the end of the word before.
     pub fn takes_what_it_lands_on(self) -> bool {
         match self {
-            Motion::WordEnd | Motion::LineEnd => true,
+            Motion::WordEnd
+            | Motion::BigwordEnd
+            | Motion::WordEndLeft
+            | Motion::BigwordEndLeft
+            | Motion::LineEnd => true,
             // `f` lands on the character and takes it; `t` stops one short and takes that one.
             Motion::ToChar(find) => find.forwards,
             // An object names both its ends, so there is no character beyond it to take or leave.
@@ -363,6 +379,8 @@ impl Motion {
             | Motion::Right
             | Motion::WordRight
             | Motion::WordLeft
+            | Motion::BigwordRight
+            | Motion::BigwordLeft
             | Motion::LineStart
             | Motion::FirstNonBlank
             | Motion::InputStart
@@ -521,6 +539,8 @@ impl Pending {
             Pending::G => match case_under_g(c) {
                 Some(case) => Command::Wait(Pending::Operate(Operator::Case(case))),
                 None if c == 'g' => Command::Move(Motion::InputStart),
+                None if c == 'e' => Command::Move(Motion::WordEndLeft),
+                None if c == 'E' => Command::Move(Motion::BigwordEndLeft),
                 // vi's other operators under `g`: rot13, formatting and the operator function. Each
                 // takes a stretch, so the keys naming one are not left to run on their own and open
                 // INSERT mode on the `i` of `g?iw`.
@@ -560,6 +580,8 @@ impl Pending {
             Pending::Operate(operator) => operated(operator, c),
             Pending::OperateG(operator) => match c {
                 'g' => Command::Change(operator, Extent::To(Motion::InputStart)),
+                'e' => Command::Change(operator, Extent::To(Motion::WordEndLeft)),
+                'E' => Command::Change(operator, Extent::To(Motion::BigwordEndLeft)),
                 // `gugu` is `guu`, spelled with the `g` again, which vi takes as well. Only for the
                 // operators under `g`: `dgd` is nothing in vi, and a line out would be a surprise.
                 c if matches!(operator, Operator::Case(_)) && Some(c) == operator.doubled() => {
@@ -714,6 +736,9 @@ pub fn command(c: char) -> Command {
         'w' => Command::Move(Motion::WordRight),
         'e' => Command::Move(Motion::WordEnd),
         'b' => Command::Move(Motion::WordLeft),
+        'W' => Command::Move(Motion::BigwordRight),
+        'E' => Command::Move(Motion::BigwordEnd),
+        'B' => Command::Move(Motion::BigwordLeft),
         '0' => Command::Move(Motion::LineStart),
         '$' => Command::Move(Motion::LineEnd),
         '^' => Command::Move(Motion::FirstNonBlank),
@@ -960,6 +985,44 @@ mod tests {
         assert_eq!(Pending::G.then('x'), Command::Nothing);
     }
 
+    /// `ge` and `gE` are motions wherever a motion is read: alone, after an operator's `g`, and in
+    /// VISUAL mode. After an operator the `g` is already waiting for `gg`, so the `e` has to be read
+    /// there too, or `dge` would mean nothing.
+    #[test]
+    fn ge_and_g_capital_e_are_motions_alone_after_an_operator_and_in_visual_mode() {
+        assert_eq!(Pending::G.then('e'), Command::Move(Motion::WordEndLeft));
+        assert_eq!(Pending::G.then('E'), Command::Move(Motion::BigwordEndLeft));
+        assert_eq!(
+            Pending::VisualG.then('e'),
+            Command::Move(Motion::WordEndLeft)
+        );
+        assert_eq!(
+            Pending::VisualG.then('E'),
+            Command::Move(Motion::BigwordEndLeft)
+        );
+        assert_eq!(
+            Pending::OperateG(Operator::Delete).then('e'),
+            Command::Change(Operator::Delete, Extent::To(Motion::WordEndLeft))
+        );
+        assert_eq!(
+            Pending::OperateG(Operator::Change).then('E'),
+            Command::Change(Operator::Change, Extent::To(Motion::BigwordEndLeft))
+        );
+    }
+
+    /// `W`, `E` and `B` are the word motions again, over runs of anything that is not a blank, and an
+    /// operator takes them as it takes any motion.
+    #[test]
+    fn the_capital_word_keys_are_motions_of_their_own() {
+        assert_eq!(command('W'), Command::Move(Motion::BigwordRight));
+        assert_eq!(command('E'), Command::Move(Motion::BigwordEnd));
+        assert_eq!(command('B'), Command::Move(Motion::BigwordLeft));
+        assert_eq!(
+            Pending::Operate(Operator::Delete).then('W'),
+            Command::Change(Operator::Delete, Extent::To(Motion::BigwordRight))
+        );
+    }
+
     /// The operators vi spells after `g` that this box has none of take a stretch the way `d` does, so
     /// the keys naming one go with them: `g?iw` takes the `iw`, and `g?gg` the second `g`. `g'` and
     /// `` g` `` take one key more, as they do in vi. Any other pair is whole, and one that means
@@ -1157,6 +1220,11 @@ mod tests {
             Motion::WordRight,
             Motion::WordEnd,
             Motion::WordLeft,
+            Motion::WordEndLeft,
+            Motion::BigwordRight,
+            Motion::BigwordEnd,
+            Motion::BigwordLeft,
+            Motion::BigwordEndLeft,
             Motion::LineStart,
             Motion::LineEnd,
             Motion::FirstNonBlank,
@@ -1229,13 +1297,27 @@ mod tests {
     }
 
     /// `de` takes the word's last letter and `dw` stops before the next word's first, which is the whole
-    /// of the difference between an inclusive motion and an exclusive one.
+    /// of the difference between an inclusive motion and an exclusive one. `ge` is inclusive too, as
+    /// it is in vim.
     #[test]
     fn a_motion_says_whether_an_operator_takes_the_character_it_landed_on() {
-        assert!(Motion::WordEnd.takes_what_it_lands_on());
-        assert!(Motion::LineEnd.takes_what_it_lands_on());
-        assert!(!Motion::WordRight.takes_what_it_lands_on());
-        assert!(!Motion::WordLeft.takes_what_it_lands_on());
+        for motion in [
+            Motion::WordEnd,
+            Motion::BigwordEnd,
+            Motion::WordEndLeft,
+            Motion::BigwordEndLeft,
+            Motion::LineEnd,
+        ] {
+            assert!(motion.takes_what_it_lands_on(), "{motion:?}");
+        }
+        for motion in [
+            Motion::WordRight,
+            Motion::WordLeft,
+            Motion::BigwordRight,
+            Motion::BigwordLeft,
+        ] {
+            assert!(!motion.takes_what_it_lands_on(), "{motion:?}");
+        }
     }
 
     /// `i` and `a` after an operator are not the keys that open INSERT mode: they say the stretch is a
@@ -1334,7 +1416,7 @@ mod tests {
     /// rather than restating them: a motion added to one would otherwise be missing from the other.
     #[test]
     fn the_motions_mean_the_same_thing_in_both_modes() {
-        for c in ['h', 'l', 'w', 'e', 'b', '0', '$', '^', 'G'] {
+        for c in ['h', 'l', 'w', 'e', 'b', 'W', 'E', 'B', '0', '$', '^', 'G'] {
             assert_eq!(
                 visual_command(c),
                 command(c),

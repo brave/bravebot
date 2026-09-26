@@ -94,7 +94,8 @@ armed by accident except deleting back past the mark.
 | Keys | Where the caret goes |
 |---|---|
 | `h`, `l`, Space | one character left or right |
-| `w`, `e`, `b` | the start of the next word, the end of this word or the next, the start of this word or the previous |
+| `w`, `e`, `b`, `ge` | the start of the next word, the end of this word or the next, the start of this word or the previous, the end of the word before |
+| `W`, `E`, `B`, `gE` | the same four, where a word is a run of anything that is not a blank |
 | `0`, `$`, `^` | the first column, the last character, the first character that is not a blank |
 | `gg`, `G` | the first line of the input, the last |
 | `f`, `F`, `t`, `T` then a character | the next or previous occurrence of it on this line, landing on it or stopping one short |
@@ -103,6 +104,12 @@ armed by accident except deleting back past the mark.
 A jump looks only along the line the caret is on, and one that finds nothing leaves the caret where
 it was. `w` lands on the first character of the next word, rather than after the word it crossed
 where the word keys under Ctrl land.
+
+**`w` ends a word where punctuation begins, as vi does.** In `src/main.rs` each name is a word and so
+are the slash and the dot, so `dw` on `src` takes `src` alone. `W` crosses the whole path in one
+press. A picture or paste is a word by itself to `w`, `e`, `b` and `ge`, and part of the word it
+touches to the capitals. An empty row is a stop for `w`, `b` and `ge`, so none of them crosses a
+paragraph break in one press.
 
 **`k`, `j` and `/` are the keys they spell rather than motions of their own.** `k` and `j` are Up and
 Down: they walk the rows of a paragraph, then your prompt history, then the transcript, exactly as
@@ -159,7 +166,10 @@ a letter with no capital of its own, such as the `ﬀ` ligature, stays as it is.
 So `dw`, `cw` and `yw` are one idea rather than three bindings, and `d$` and `dG` work without being
 listed. Whether the character a motion landed on is taken depends on the motion, as it does in vi:
 `de` takes the word's last letter where `dw` stops before the next word's first, and `cw` on a
-character that is not a blank behaves as `ce`, leaving the space after the word.
+character that is not a blank behaves as `ce`, leaving the space after the word. `cW` is `cE` in the
+same way, and on the last character of a word either changes that character alone. `dw` on the last
+word of a row takes the word and leaves the newline. `dge` takes both ends: the last letter of the
+word before, and the character the caret was on.
 
 `p` and `P` put the register back after and before the caret, and a stretch that was whole lines comes
 back as a line of its own. `J` makes this line and the one below into one, with a single space where
