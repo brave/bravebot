@@ -1037,15 +1037,15 @@ character lands at the caret. NORMAL takes a letter as an instruction, and a let
 instruction for does nothing at all rather than being typed. Every session opens in INSERT.
 
 A key beginning one of vi's instructions that this box does not have does nothing either, and nor
-does the key vi would give it. `"`, `q`, `@`, `m`, `'`, `` ` ``, `z`, `Z`, `[`, `]`, `r` and `R`
-each take one more key, and so do `g'`, `` g` `` and `gr`. `R` begins vi's replace mode, which this
-box does not have, and takes one key the way `r` does rather than every key up to Escape. The
-operators vi spells after `g`, which are `gu`, `gU`, `g~`, `g?`, `gq`, `gw` and `g@`, take the
-stretch they would act on, the way `d` does. After an operator, `'`, `` ` ``, `[`, `]` and `z` still
-take their key, so `d'a` does nothing. The other prefixes end the operator there, as they do in vi,
-and the key after `dm` is read on its own. VISUAL mode reads the prefixes the same way, except that
-`r` and `gr` there replace the selection (INPUT-30), and the operators under `g` and `R` take no key,
-since the selection is already the stretch they act on.
+does the key vi would give it. `"`, `q`, `@`, `m`, `'`, `` ` ``, `z`, `Z`, `[`, `]` and `R` each
+take one more key, and so do `g'` and `` g` ``. `R` begins vi's replace mode, which this box
+does not have, and takes one key the way `r` does (INPUT-28) rather than every key up to Escape. The
+operators vi spells after `g` that this box does not have, which are `g?`, `gq`, `gw` and `g@`, take
+the stretch they would act on, the way `d` does. After an operator, `'`, `` ` ``, `[`, `]` and `z`
+still take their key, so `d'a` does nothing. The other prefixes end the operator there, as they do
+in vi, and the key after `dm` is read on its own. VISUAL mode reads the prefixes the same way, except
+that the operators under `g` and `R` take no key, since the selection is already the stretch they act
+on.
 
 The ordinary box is in neither mode, and nothing about a mode is drawn at it.
 
@@ -1063,8 +1063,8 @@ it would make NORMAL mode a place where half the alphabet quietly edits the prom
 would find out by reading the line rather than by pressing the key.
 
 A prefix is the same promise one key later. `ma` is one instruction, and a box that did nothing with
-the `m` alone would read the `a` as the next one and open INSERT mode. For the same reason `rx` would
-delete a character and `guiw` would type a `w`. Taking the key vi would give the prefix keeps the
+the `m` alone would read the `a` as the next one and open INSERT mode. For the same reason `Rx` would
+delete a character and `g?iw` would type a `w`. Taking the key vi would give the prefix keeps the
 box doing nothing for the whole of an instruction it does not have. Taking more than that is the
 opposite failure: after an operator vi gives `m` no key, and a box that waited for one would swallow
 the instruction typed next. One key after `R` is the least wait that keeps `Rx` from deleting, and
@@ -1274,16 +1274,30 @@ cannot see scroll away above it.
 ### INPUT-28: an operator and an extent, and a marker is taken whole or not at all
 
 `d` takes a stretch out, `c` takes it out and opens INSERT mode where it was, `y` keeps it and leaves
-the line alone, `>` and `<` move every row the stretch reaches a step from or towards the margin.
-Each waits for the stretch to act on:
+the line alone, `>` and `<` move every row the stretch reaches a step from or towards the margin,
+and `gu`, `gU` and `g~` make it lower case, upper case or the other case. Each waits for the stretch
+to act on:
 
 | Keys | The stretch |
 |---|---|
 | any other motion | from the caret to wherever that motion would take it |
 | `j`, `k`, `G`, `gg` | every row from the caret's to the one the key reaches, whole |
-| the operator's own letter doubled | the whole line |
+| the operator's own letter doubled | the whole line: `dd`, and `guu` or `gugu` |
 | `D`, `C`, `x`, `s` | to the end of the line, and the character under the caret |
+| `X` | the character before the caret, taken out as `dh` would |
 | `Y`, `S` | the whole line |
+
+`~` changes the case of the character under the caret and moves the caret past it. `r`, or `gr` as
+vim spells it too, makes that character the key typed next, whatever the key is, so `r3` puts a `3`
+there. Counted, `r` changes that many characters, or none where the line holds fewer, and leaves the
+caret on the last one it changed; `r` then Enter is the Enter alone ([INPUT-24](#INPUT-24)). The case
+operators leave the caret where their stretch begins. A case change is one character for one, as vim
+makes it. A letter is raised to Unicode's one-character capital, and one with none stays as it is,
+except that `ß` raised is `SS`. A letter with a capital is lower case, so the title-case `ǅ` is raised
+by `U` and `~` and left by `u`, and only other letters are lowered.
+
+Only `d`, `c`, `y` and the keys spelled from them fill the register. A shift, a case change and `r`
+leave it holding what it held.
 
 Whether the character the motion landed on is taken depends on the motion: `de` takes the word's last
 letter, `dw` stops before the next word's first. `cw` on a character that is not a blank leaves the
@@ -1301,6 +1315,7 @@ the newline was. `u` puts back what the last change took, one step. `.` does the
 the caret.
 
 A marker is taken whole by every operator, or not at all, and taking one takes the attachment off.
+A case change goes around a marker and leaves it as it was, and `r` over one does nothing.
 
 **Why.** One operator over one set of extents is why `dw`, `cw` and `yw` are one idea rather than
 three bindings, and why `d$` works without being listed: the letter says what happens and the rest
@@ -1320,7 +1335,14 @@ hands expect.
 
 The register is vi's unnamed one and the only one. Named registers are a filing system, and a box
 holding one line of thought has nothing to file. It is not the system clipboard, which Ctrl-V owns
-and which a person shares with every other window they have open.
+and which a person shares with every other window they have open. Only what takes a stretch away or
+copies it goes there, which is vi's rule: the others leave what they acted on in the line, and a
+register they filled would lose the word somebody had yanked to put back.
+
+`r` changes all the characters its count asks for or none, as vim does. A count the line cannot hold
+is not one anybody meant, and replacing what there is would be a guess at what they did mean. One
+character for one is vim's case rule too, and cutting a two-character case to its first would turn
+`ß` into an `S` that had lost a letter.
 
 Undo is one step, on the same footing as putting a line away: the press that undoes and the keystroke
 that will be regretted are one apart, and a depth is a thing to remember. `.` repeats the instruction
@@ -1329,7 +1351,10 @@ rather than what it produced, which is the whole point of the key.
 A marker is one thing on the screen and one thing to the person looking at it, so half of one stands
 for nothing and text that still reads as an attachment over something no longer attached is the
 outcome to rule out. It holds because a stretch is measured between positions the caret could rest
-at, and no such position is inside a marker.
+at, and no such position is inside a marker. A case change goes around one because a marker is
+found by its text: raised to `[IMAGE #1]` it names no picture, and the picture would be left off the
+prompt while the line still read as though it carried one. `r` is refused over one for the reason a
+selection holding one is ([INPUT-30](#INPUT-30)).
 
 `verified-by: bravebot_tui::vim::an_operator_takes_any_motion_as_its_stretch`
 `verified-by: bravebot_tui::vim::an_operator_takes_the_row_keys_as_its_stretch`
@@ -1338,6 +1363,11 @@ at, and no such position is inside a marker.
 `verified-by: bravebot_tui::vim::an_operator_over_a_jump_waits_again_for_the_character`
 `verified-by: bravebot_tui::vim::a_motion_says_whether_an_operator_takes_the_character_it_landed_on`
 `verified-by: bravebot_tui::vim::the_yank_is_the_operator_that_only_reads`
+`verified-by: bravebot_tui::vim::a_case_change_under_g_is_an_operator_and_doubled_is_the_line`
+`verified-by: bravebot_tui::vim::the_keys_for_one_character_name_it_and_r_waits_for_what_it_becomes`
+`verified-by: bravebot_tui::vim::only_the_operators_that_take_or_copy_the_stretch_fill_the_register`
+`verified-by: bravebot_tui::vim::a_case_change_is_one_character_for_one_as_vim_makes_it`
+`verified-by: bravebot_tui::vim::a_case_change_raises_a_letter_to_the_capital_vim_gives_it`
 `verified-by: bravebot_tui::state::the_delete_operator_takes_the_stretch_a_motion_names`
 `verified-by: bravebot_tui::state::a_row_key_under_an_operator_takes_the_rows_there_are`
 `verified-by: bravebot_tui::state::every_operator_over_a_row_key_takes_the_rows`
@@ -1358,6 +1388,18 @@ at, and no such position is inside a marker.
 `verified-by: bravebot_tui::state::the_repeat_key_does_the_last_change_again_at_the_caret`
 `verified-by: bravebot_tui::state::an_operator_takes_a_marker_whole`
 `verified-by: bravebot_tui::state::an_operator_that_takes_a_marker_takes_the_attachment_with_it`
+`verified-by: bravebot_tui::state::a_case_change_leaves_a_marker_naming_its_picture`
+`verified-by: bravebot_tui::state::replacing_characters_across_a_marker_leaves_the_line_alone`
+`verified-by: bravebot_tui::state::r_replaces_as_many_characters_as_the_count_says`
+`verified-by: bravebot_tui::state::r_is_one_change_to_undo_and_to_repeat`
+`verified-by: bravebot_tui::state::tilde_changes_the_case_under_the_caret_and_moves_on`
+`verified-by: bravebot_tui::state::tilde_lands_after_a_letter_whose_other_case_is_shorter`
+`verified-by: bravebot_tui::state::tilde_is_one_change_to_undo_and_to_repeat`
+`verified-by: bravebot_tui::state::capital_x_deletes_the_characters_before_the_caret`
+`verified-by: bravebot_tui::state::the_case_operators_change_the_stretch_a_motion_names`
+`verified-by: bravebot_tui::state::a_case_operator_doubled_is_the_line`
+`verified-by: bravebot_tui::state::a_case_operator_is_one_change_to_undo_and_to_repeat`
+`verified-by: bravebot_tui::state::a_key_that_leaves_the_stretch_in_the_line_leaves_the_register_alone`
 
 <a id="INPUT-29"></a>
 ### INPUT-29: a text object is a stretch named by what it is
@@ -1414,8 +1456,10 @@ the stretch is never empty. Motions move the end the caret is at, `o` puts the c
 and a text object becomes the selection.
 
 An operator there needs no extent and acts on the selection: `x` is `d` and `s` is `c`, having nothing
-left to distinguish. `r` replaces every selected character with one, and `~`, `u` and `U` change the
-case. A line-wise selection goes into the register as lines.
+left to distinguish. `r` or `gr` replaces every selected character with one, and `~`, `u` and `U`
+change the case, as do `g~`, `gu` and `gU`, the selection being the stretch they would otherwise
+wait for. A case change there goes around a marker as it does over a motion
+([INPUT-28](#INPUT-28)). A line-wise selection goes into the register as lines.
 
 The key that opened the mode closes it, the other of the two changes which kind is in force, and
 Escape abandons the selection. Every operator ends it, and so does an edit of the line it was marked
@@ -1736,7 +1780,7 @@ is `d6w`.
 | how many times over the motion is meant | every motion of [INPUT-26](#INPUT-26), and `;` and `,` |
 | which row to go to | `G` and `gg` |
 | how many rows to move inside the input | `j` and `k`, which reach no history counted ([INPUT-27](#INPUT-27)) |
-| how much of the extent the operator takes | `3dd`, `d3w`, `3x`, `3>>` |
+| how much of the extent the operator takes | `3dd`, `d3w`, `3x`, `3X`, `3~`, `3rx`, `3gUU`, `3>>` |
 | how many copies, and how many rows end as one | `p`, `P`, and `J`, where `3J` is three rows and `2J` is the bare key |
 | how many the repeat is of, in place of the count recorded | `.` |
 
@@ -1746,9 +1790,10 @@ in VISUAL mode act on what the uncounted one would.
 
 **The line bounds a count, and not the number typed.** Every counted motion stops at the first step
 that moves nothing, so `999l` costs the length of a line, and an extent takes what there is, so
-`9dd` on a two-row paragraph takes the two rows. `p` is the one that can ask for more than the line
-holds, since a copy always goes somewhere: what bounds it is the cap the digits are read up to, and
-nothing else. A digit typed past the cap leaves the count there.
+`9dd` on a two-row paragraph takes the two rows. `r` takes all of its count or nothing, so `5rx`
+with two characters left changes neither ([INPUT-28](#INPUT-28)). `p` is the one that can ask for
+more than the line holds, since a copy always goes somewhere: what bounds it is the cap the digits
+are read up to, and nothing else. A digit typed past the cap leaves the count there.
 
 **A counted change is one change and one step to undo.** A count is spent by the instruction it was
 typed in front of, including one that means nothing, and it is abandoned by everything that abandons
@@ -1783,6 +1828,7 @@ and a person who typed one by accident would otherwise find out from what the ne
 `verified-by: bravebot_tui::state::a_count_stops_where_the_line_does`
 `verified-by: bravebot_tui::state::a_count_makes_the_input_motions_a_row`
 `verified-by: bravebot_tui::state::a_count_claims_the_row_keys_and_leaves_the_search_key`
+`verified-by: bravebot_tui::state::r_with_fewer_characters_left_than_its_count_changes_nothing`
 
 <a id="INPUT-36"></a>
 ### INPUT-36: Ctrl-Enter stops the turn and sends what is waiting, as one turn
