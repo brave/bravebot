@@ -643,7 +643,9 @@ trail that `read_output` would have written, and the reference it was kept under
 the model round a `read_output` call would have cost. Output longer than the
 [`run.maxOutput`](../customize/configuration.md#runmaxoutput) cap is the exception: the planner asked
 before it could see the size, so it gets the reference, which states the size, and is told the output
-was too long for one result.
+was too long for one result. It is told where the rest is too: `read_output` hands back the whole of
+it, and a filter such as `tail` given the reference as `stdin_ref` reads part of it without the line
+being run again.
 
 In every other mode `read` changes nothing: the output is quarantined as usual, and you are asked, or
 a check reads it, only when the planner calls `read_output`. The same holds for an

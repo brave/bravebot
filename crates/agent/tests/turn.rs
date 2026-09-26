@@ -14113,8 +14113,19 @@ fn asking_to_read_more_than_one_result_may_hold_hands_back_the_reference_and_say
         "output past the cap came back in the result: {after_the_run}"
     );
     assert!(
-        after_the_run.contains("longer than one result may hold"),
+        after_the_run.contains("longer than a run's result may hold"),
         "the planner was not told why what it asked to read is not here: {after_the_run}"
+    );
+    // Told only that it was too long, a planner took read_output to be held to the same size and
+    // ran the whole command again to grep it.
+    assert!(
+        after_the_run.contains("read_output is not held to that size"),
+        "the planner was not told read_output hands back the whole of it: {after_the_run}"
+    );
+    assert!(
+        after_the_run.contains("stdin_ref set to the reference"),
+        "the planner was not told how to read part of it without running it again: \
+         {after_the_run}"
     );
     assert!(
         !after_the_run.contains("call run with read: true"),
@@ -14123,6 +14134,71 @@ fn asking_to_read_more_than_one_result_may_hold_hands_back_the_reference_and_say
     assert!(
         releases_of_output(&sink).is_empty(),
         "the trail records a release past the cap: {:?}",
+        releases_of_output(&sink)
+    );
+}
+
+/// The route that advice names, taken: output too long for its run's result is read in part by a
+/// filter fed its reference, released by the same path as any other read.
+#[test]
+fn output_too_long_for_its_result_is_read_in_part_by_a_filter_fed_its_reference() {
+    let scratch = Scratch::new("run-read-capped-filtered");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(
+        scratch.path.join("where.txt"),
+        format!("SENTINEL-XYZZY {}\n", "x".repeat(200)),
+    )
+    .unwrap();
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cat where.txt","read":true}"#),
+        tool_request(
+            "run",
+            r#"{"command":"head -c 14","stdin_ref":"ref:1","read":true}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reading = ReadsWhatItRan::new(true);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut reading, bravebot_agent::PermissionMode::Bypass, false);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out")
+            .with_permission_mode(bravebot_agent::PermissionMode::Bypass)
+            .with_output_cap(Some(64)),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    let [_, after_the_run, after_the_filter] = sent.as_slice() else {
+        panic!("expected three rounds, got {}", sent.len());
+    };
+    assert!(
+        !after_the_run.contains("SENTINEL-XYZZY"),
+        "output past the cap came back in the result: {after_the_run}"
+    );
+    assert!(
+        after_the_filter.contains("SENTINEL-XYZZY"),
+        "the filter fed the reference did not hand back what it kept: {after_the_filter}"
+    );
+    assert_eq!(
+        releases_of_output(&sink).len(),
+        1,
+        "the filter's output was not released, or the capped run's was: {:?}",
         releases_of_output(&sink)
     );
 }
