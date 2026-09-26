@@ -2806,6 +2806,8 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     // Cleared only by a failure. A summary that could not be made once will not be made on the
     // next round either, and a turn should not spend a request per round finding that out.
     let mut may_compact = true;
+    // Whether the last request went out because the one before it came back empty (TURN-6).
+    let mut asked_after_an_empty_reply = false;
     // When the planner asked for the next tick, where this turn is one and it asked at all.
     let mut wakeup = None;
     // Every watch the turn armed, in the order it asked for them, for whoever holds the session
@@ -3039,7 +3041,23 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         conversation.measured(context_tokens);
                     }
                 }
-                let completion = completion?;
+                // An empty reply is the planner's own output saying nothing, so deciding on it
+                // reads nothing untrusted. The same request sent again tends to stay empty, so the
+                // turn adds a line and asks once. Two in a row is a model with nothing to say here,
+                // and asking a third time would only spend another request finding that out.
+                let completion = match completion {
+                    Err(error) if error.is_empty_reply() && !asked_after_an_empty_reply => {
+                        asked_after_an_empty_reply = true;
+                        conversation.push(Message::user(format!(
+                            "{TOOL_BUDGET_SPENT} Your last reply was empty. Carry on from where \
+                             you were: make the next call, or if the work is done, say what you \
+                             found."
+                        )));
+                        continue;
+                    }
+                    other => other?,
+                };
+                asked_after_an_empty_reply = false;
                 // A reply the ceiling stopped is kept for what it says, so the person has to be
                 // told that it stops short: the text arrives looking like an answer, and an answer
                 // that ends mid-sentence is worth nothing if it is read as a whole one. The

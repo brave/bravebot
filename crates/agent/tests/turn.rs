@@ -6340,8 +6340,10 @@ fn a_turn_that_failed_is_still_part_of_the_conversation() {
     let scratch = Scratch::new("session-after-failure");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    // A reply with no content at all: an error, and not one worth sending again.
+    // Two replies with no content at all: the turn asks once after the first and ends on the
+    // second (TURN-6).
     let (endpoint, received) = serve_sequence(vec![
+        r#"{"model":"test-model","choices":[]}"#.to_string(),
         r#"{"model":"test-model","choices":[]}"#.to_string(),
         reply_with("four"),
     ]);
@@ -6367,10 +6369,15 @@ fn a_turn_that_failed_is_still_part_of_the_conversation() {
     .expect("the second turn runs");
 
     let _first = received.recv().expect("a first request");
-    let second = received.recv().expect("a second request");
+    let _asked_again = received.recv().expect("the failing turn's second request");
+    let next_turn = received.recv().expect("the next turn's request");
     assert!(
-        second.contains("what is 2 + 2?"),
-        "the failed turn was forgotten: {second}"
+        next_turn.contains("try that again"),
+        "the third request was not the next turn's: {next_turn}"
+    );
+    assert!(
+        next_turn.contains("what is 2 + 2?"),
+        "the failed turn was forgotten: {next_turn}"
     );
 }
 
@@ -25369,12 +25376,16 @@ mod usage {
     }
 }
 
-/// Completed requests remain charged once when their reply cannot be used.
+/// Completed requests remain charged once when their reply cannot be used. Two empty replies,
+/// because one is asked about again (TURN-6) and it is the second that ends the turn.
 #[test]
 fn completed_empty_reply_keeps_reported_usage_on_failure() {
     let scratch = Scratch::new("completed-empty-usage");
     let workspace = Workspace::new(&scratch.path).unwrap();
-    let (url, received) = serve_script(vec![Served::Reply(reply_with_usage("", 100, 7))]);
+    let (url, received) = serve_script(vec![
+        Served::Reply(reply_with_usage("", 100, 7)),
+        Served::Reply(reply_with_usage("", 120, 9)),
+    ]);
     let mut conversation = bravebot_agent::Conversation::new();
     let mut reporter = bravebot_agent::report::RecordingReporter::default();
     let error = take_a_turn_reporting(
@@ -25390,13 +25401,84 @@ fn completed_empty_reply_keeps_reported_usage_on_failure() {
         why_it_failed(&error).category,
         bravebot_agent::Category::Undecodable
     );
-    assert_eq!(received.try_iter().count(), 1);
-    assert_eq!(reporter.spent.last().unwrap().tokens, 107);
+    assert_eq!(received.try_iter().count(), 2);
+    assert_eq!(reporter.spent.last().unwrap().tokens, 236);
     assert_eq!(
         conversation.last_request_tokens(),
-        100,
+        120,
         "completed prompt measurement"
     );
+}
+
+const ASKED_AFTER_AN_EMPTY_REPLY: &str =
+    "(from the system, not the user) Your last reply was empty.";
+
+/// A model that finishes a reply having said nothing is asked to carry on, and the person never
+/// sees it. Ending the turn instead leaves the work half done behind "the reply could not be
+/// read", and all the person can do about that is ask again, which the turn can do for them.
+///
+/// Two empty replies with an answered round between them, so that being asked once per turn
+/// rather than once per empty reply fails the turn on the second.
+#[test]
+fn an_empty_reply_is_asked_about_and_the_turn_carries_on() {
+    let scratch = Scratch::new("empty-reply-continues");
+    let workspace = Workspace::new(&scratch.path).unwrap();
+    let (url, received) = serve_script(vec![
+        Served::Reply(reply_with_usage("", 10, 1)),
+        Served::Reply(tool_request("list_files", r#"{"directory":"."}"#)),
+        Served::Reply(reply_with_usage("", 20, 2)),
+        Served::Reply(reply_with_usage("done", 30, 3)),
+    ]);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let outcome = take_a_turn_reporting(
+        &config_for(&url),
+        &workspace,
+        &mut conversation,
+        Task::new("work"),
+        &mut reporter,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn carries on past an empty reply");
+
+    assert_eq!(outcome.reply_for_display(), "done");
+    let bodies: Vec<String> = received.try_iter().collect();
+    let asked = bodies
+        .iter()
+        .map(|body| body.matches(ASKED_AFTER_AN_EMPTY_REPLY).count())
+        .collect::<Vec<_>>();
+    assert_eq!(asked, [0, 1, 1, 2], "{bodies:#?}");
+    assert_eq!(reporter.spent.last().unwrap().tokens, 66);
+}
+
+/// Asked once and no more. A second empty reply in a row is a model with nothing to say here, and
+/// asking again would spend a request per round finding that out for as long as it went on.
+#[test]
+fn two_empty_replies_in_a_row_end_the_turn() {
+    let scratch = Scratch::new("empty-reply-twice");
+    let workspace = Workspace::new(&scratch.path).unwrap();
+    let (url, received) = serve_script(vec![
+        Served::Reply(reply_with_usage("", 10, 1)),
+        Served::Reply(reply_with_usage("", 20, 2)),
+        Served::Reply(reply_with_usage("never asked for", 30, 3)),
+    ]);
+    let error = take_a_turn_reporting(
+        &config_for(&url),
+        &workspace,
+        &mut bravebot_agent::Conversation::new(),
+        Task::new("work"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        why_it_failed(&error).category,
+        bravebot_agent::Category::Undecodable
+    );
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 2, "{bodies:#?}");
+    assert_eq!(bodies[1].matches(ASKED_AFTER_AN_EMPTY_REPLY).count(), 1);
 }
 
 /// Completed requests remain charged once when their reply cannot be used.
@@ -25660,6 +25742,9 @@ fn rejected_subrequests_are_counted_once_when_the_parent_succeeds() {
 }
 
 /// Retry costs are cumulative, while the measured prompt belongs only to the final attempt.
+///
+/// An empty reply is asked about once (TURN-6), so the empty ending is preceded by an empty reply
+/// the turn has already asked about, which leaves the retried request as the one that ends it.
 #[test]
 fn planner_retry_costs_do_not_replace_the_last_prompt_measurement() {
     for ending in ["success", "empty", "incomplete"] {
@@ -25670,11 +25755,16 @@ fn planner_retry_costs_do_not_replace_the_last_prompt_measurement() {
             "empty" => Served::Reply(reply_with_usage("", 10, 1)),
             _ => Served::Unfinished,
         };
-        let (url, received) = serve_script(vec![
+        let mut script = Vec::new();
+        if ending == "empty" {
+            script.push(Served::Reply(reply_with_usage("", 30, 4)));
+        }
+        script.extend([
             Served::BrokenReply(reply_with_usage("first", 100, 7)),
             Served::BrokenReply(reply_with_usage("second", 23, 3)),
             last,
         ]);
+        let (url, received) = serve_script(script);
         let mut conversation = bravebot_agent::Conversation::new();
         conversation.measured(55);
         let mut reporter = bravebot_agent::report::RecordingReporter::default();
@@ -25686,7 +25776,11 @@ fn planner_retry_costs_do_not_replace_the_last_prompt_measurement() {
             &mut reporter,
             &bravebot_core::cancel::Cancel::new(),
         );
-        let expected = if ending == "incomplete" { 133 } else { 144 };
+        let expected = match ending {
+            "success" => 144,
+            "empty" => 178,
+            _ => 133,
+        };
         match ending {
             "success" => assert_eq!(result.unwrap().tokens, expected),
             _ => {
@@ -25703,11 +25797,18 @@ fn planner_retry_costs_do_not_replace_the_last_prompt_measurement() {
                 assert_eq!(diagnosis.attempts, Some(3));
             }
         }
-        assert_eq!(received.try_iter().count(), 3);
+        assert_eq!(
+            received.try_iter().count(),
+            if ending == "empty" { 4 } else { 3 }
+        );
         assert_eq!(reporter.spent.last().unwrap().tokens, expected);
         assert_eq!(
             reporter.spent.last().unwrap().output_tokens,
-            if ending == "incomplete" { 10 } else { 11 }
+            match ending {
+                "success" => 11,
+                "empty" => 15,
+                _ => 10,
+            }
         );
         assert_eq!(
             conversation.last_request_tokens(),

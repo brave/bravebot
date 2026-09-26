@@ -184,6 +184,19 @@ impl BackendError {
             _ => false,
         }
     }
+
+    /// Whether the model finished its reply and said nothing in it: no text and no calls.
+    ///
+    /// Apart from every other unreadable reply because the conversation, not the connection, is
+    /// what produced it. Sending the same request again gets the same silence, and adding a line
+    /// to the conversation is what gets an answer.
+    pub fn is_empty_reply(&self) -> bool {
+        match self {
+            Self::Aichat(ChatError::NoContent) | Self::Bedrock(BedrockError::NoContent) => true,
+            Self::Attempted { cause, .. } => cause.is_empty_reply(),
+            _ => false,
+        }
+    }
 }
 
 /// Keep the HTTP status but omit URLs, which may contain credentials.
@@ -1233,6 +1246,27 @@ mod tests {
             }
             .is_unreachable()
         );
+    }
+
+    /// A turn asks again after an empty reply, so a reply that was cut or garbled must not pass
+    /// for one: asking a model to carry on from something it never finished saying is answering
+    /// the wrong failure.
+    #[test]
+    fn only_a_finished_reply_with_nothing_in_it_is_an_empty_reply() {
+        assert!(BackendError::from(ChatError::NoContent).is_empty_reply());
+        assert!(BackendError::from(BedrockError::NoContent).is_empty_reply());
+        assert!(
+            BackendError::from(BedrockError::NoContent)
+                .counted(1, None, None)
+                .is_empty_reply()
+        );
+
+        let garbled = || "expected value at line 1 column 1".to_string();
+        assert!(!BackendError::from(ChatError::Decode { detail: garbled() }).is_empty_reply());
+        assert!(!BackendError::from(BedrockError::Decode { detail: garbled() }).is_empty_reply());
+        assert!(!BackendError::from(ChatError::Incomplete).is_empty_reply());
+        assert!(!BackendError::from(BedrockError::Incomplete).is_empty_reply());
+        assert!(!BackendError::from(ChatError::Cancelled).is_empty_reply());
     }
 
     /// Anything else is a real failure and must not be mistaken for a stop, or a turn that broke

@@ -21,7 +21,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [vetting.md](vetting.md) | `CHECK` | 15 | checking quarantined content for an injection attempt before every prompt that would promote it, so a person deciding has a second opinion |
 | [delegation.md](delegation.md) | `DELEGATE` | 23 | a second planner, narrower than the first, and what crosses back from one |
 | [addressing-a-definition.md](addressing-a-definition.md) | `ADDRESS` | 12 | running one of those definitions yourself, in place of describing the work and hoping the planner picks it |
-| [turns.md](turns.md) | `TURN` | 5 | how long a turn may go on, what happens when it does not stop, and what is said when it produces nothing or checks nothing |
+| [turns.md](turns.md) | `TURN` | 6 | how long a turn may go on, what happens when it does not stop, and what is said when it produces nothing or checks nothing |
 | [prompting.md](prompting.md) | `PROMPT` | 10 | every moment the system stops and puts something to a human, and what an answer grants |
 | [permission-modes.md](permission-modes.md) | `MODE` | 10 | a standing answer to those prompts: accepting edits, planning, or asking about nothing at all |
 | [naming-files.md](naming-files.md) | `NAME` | 7 | writing `@path` in a prompt: what it puts into the turn and what it vouches for |

@@ -59,7 +59,7 @@ capability probes.
 | the service rejected the request | the request was refused as invalid |
 | the request did not get through | nothing reached the service: network, proxy or TLS roots |
 | the reply stopped before it was finished | the reply was cut off part way |
-| the reply could not be read | a reply arrived that could not be decoded |
+| the reply could not be read | a reply arrived that could not be decoded, or the model sent back nothing twice in a row |
 | the model reached its output limit | the reply hit a ceiling, which `BRAVEBOT_OUTPUT_BUDGET` raises |
 | nothing here was configured to send the request | no model service is set up |
 | a gate here would not let the request out | a gate refused it before it left, so it never went |
