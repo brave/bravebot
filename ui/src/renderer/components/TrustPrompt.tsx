@@ -12,7 +12,7 @@ interface Props {
 
 /** The box both answers are drawn in, so the pair differ only where they are meant to. */
 const ANSWER =
-  'min-h-8 rounded-[7px] border px-3.5 py-1.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary'
+  'min-h-8 rounded-full border px-3.5 py-1.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary'
 
 /**
  * The one question the agent asks before it will work in a directory.

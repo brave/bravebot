@@ -320,8 +320,8 @@ function BotRow({
       <Button
         variant="ghost"
         className={cn(
-          'bot-open-button h-auto min-w-0 flex-1 justify-start gap-1.5 rounded-lg bg-transparent px-2 py-1.5 text-left font-normal hover:bg-foreground/8',
-          open && 'bg-bubble-user text-bubble-user-foreground hover:bg-bubble-user',
+          'bot-open-button h-auto min-w-0 flex-1 justify-start gap-1.5 rounded-lg bg-transparent px-2 py-1.5 text-left font-normal hover:bg-foreground/8 hover:text-foreground',
+          open && 'bg-foreground/8 hover:bg-foreground/8',
         )}
         onClick={() => onOpen(bot)}
       >
@@ -330,7 +330,7 @@ function BotRow({
           <span className="bot-name truncate">{bot.name}</span>
           {/* The whole path in the tooltip, because the column clips it — the one case the
               tooltip rule here allows, which is text the layout took away. */}
-          <span className={cn('bot-where truncate text-xs', open ? 'opacity-85' : 'text-muted-foreground/70')} title={bot.directory}>
+          <span className="bot-where truncate text-xs text-muted-foreground/70" title={bot.directory}>
             {where}
             {bot.session === null && ' · not spoken to yet'}
           </span>
@@ -485,7 +485,7 @@ function BotForm({
                 type="button"
                 variant="ghost"
                 size="icon-xs"
-                className="bot-avatar-refresh absolute right-0 bottom-0 size-8 rounded-md bg-transparent p-0 text-muted-foreground opacity-60 hover:text-foreground hover:opacity-100"
+                className="bot-avatar-refresh absolute right-0 bottom-0 size-8 rounded-full bg-transparent p-0 text-muted-foreground opacity-60 hover:text-foreground hover:opacity-100"
                 aria-label="Refresh avatar"
                 title="Try a new avatar appearance"
                 onClick={() => setAvatar(newAvatarSeed(crypto.randomUUID()))}

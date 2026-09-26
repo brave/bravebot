@@ -66,7 +66,7 @@ export function About({ info, onClose }: { info: AboutInfo; onClose: () => void 
       >
         <DialogTitle className="sr-only">About Brave Bot</DialogTitle>
         <button
-          className="about-close absolute top-3 right-3 z-[1] grid size-8 place-items-center rounded-[7px] border border-transparent bg-transparent p-0 text-muted-foreground hover:bg-code hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+          className="about-close absolute top-3 right-3 z-[1] grid size-8 place-items-center rounded-full border border-transparent bg-transparent p-0 text-muted-foreground hover:bg-code hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
           aria-label="Close About Brave Bot"
           onClick={onClose}
         >
@@ -105,7 +105,7 @@ export function About({ info, onClose }: { info: AboutInfo; onClose: () => void 
           </dl>
           <div className="about-copy flex flex-wrap items-center gap-2.5 pb-4">
             <button
-              className="min-h-8 rounded-[7px] border border-border bg-background px-3 py-1.5 text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+              className="min-h-8 rounded-full border border-border bg-background px-3 py-1.5 text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
               onClick={() => void copyBuildInfo()}
             >
               Copy build info

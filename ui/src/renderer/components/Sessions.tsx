@@ -122,7 +122,7 @@ export function Sessions({
               tooltip — the same disclosure discipline the column folds follow. A control
               that renamed itself would be one the reader has to re-find after every press. */}
           <Toggle
-            className="session-group grid size-auto min-h-8 w-7.5 flex-none place-items-center rounded-md border-0 bg-transparent text-muted-foreground hover:bg-bubble-agent hover:text-foreground aria-pressed:bg-bubble-agent aria-pressed:text-primary"
+            className="session-group grid size-auto min-h-8 w-7.5 flex-none place-items-center rounded-full border-0 bg-transparent text-muted-foreground hover:bg-bubble-agent hover:text-foreground aria-pressed:bg-bubble-agent aria-pressed:text-primary"
             pressed={grouped}
             aria-label="Group by project"
             title={grouped ? 'Show one flat list' : 'Group by project'}
@@ -314,16 +314,16 @@ function Session({
   const [menu, setMenu] = useState(false)
   const current = session.id === openId
   const state = info?.state
-  return <div className={cn('session-row relative flex items-center rounded-[9px]', current && 'current bg-bubble-user text-bubble-user-foreground')}>
+  return <div className={cn('session-row relative flex items-center rounded-[9px]', current && 'current bg-foreground/5')}>
     <Button
       variant="ghost"
       className={cn(
         // A row is three stacked lines, not a label, so the button has to grow rather than
         // hold the default control height. The right-hand padding is the room the actions
         // button below sits in.
-        'session mb-px h-auto min-w-0 flex-1 flex-col items-start gap-0.5 rounded-lg bg-transparent px-2.5 py-2 pr-8 text-left font-normal hover:bg-foreground/5',
+        'session mb-px h-auto min-w-0 flex-1 flex-col items-start gap-0.5 rounded-lg bg-transparent px-2.5 py-2 pr-8 text-left font-normal hover:bg-foreground/5 hover:text-foreground',
         '[.app.comfortable_&]:py-3',
-        current && 'current bg-transparent text-inherit hover:bg-foreground/10',
+        current && 'current bg-transparent hover:bg-foreground/5',
       )}
       onClick={() => onOpen(session)}
       onContextMenu={contextMenu('session', session.id)}
@@ -339,7 +339,7 @@ function Session({
           </span>
         )}{session.title}
       </span>
-      <span className={cn('session-where w-full truncate text-xs font-normal', current ? 'opacity-85' : 'text-muted-foreground/70')}>{session.project}{session.branch && <span className="branch"> · {session.branch}</span>} · {ago(session.updated)}</span>
+      <span className="session-where w-full truncate text-xs font-normal text-muted-foreground/70">{session.project}{session.branch && <span className="branch"> · {session.branch}</span>} · {ago(session.updated)}</span>
       {(info?.bot || state) && <span className="session-badges mt-1.5 flex flex-wrap gap-1 text-[10px] font-normal">
         {info.bot && <span className="rounded bg-bubble-agent px-1.5 py-px text-muted-foreground">{info.bot}</span>}
         {state && <span className={cn(
@@ -361,7 +361,7 @@ function Session({
       label="Conversation actions"
       items={[{ id: 'pin', label: preferences?.pinned ? 'Unpin conversation' : 'Pin conversation' }, { id: 'archive', label: preferences?.archived ? 'Restore conversation' : 'Archive conversation' }]}
       onChoose={(id) => setConversation(key, id === 'pin' ? { pinned: !preferences?.pinned } : { archived: !preferences?.archived })}
-      trigger={<Button variant="ghost" size="icon-sm" className="session-more absolute top-2.5 right-1 rounded-md bg-transparent text-muted-foreground" aria-label={`Actions for ${session.title}`}>⋯</Button>}
+      trigger={<Button variant="ghost" size="icon-sm" className="session-more absolute top-2.5 right-1 bg-transparent text-muted-foreground" aria-label={`Actions for ${session.title}`}>⋯</Button>}
     />
   </div>
 

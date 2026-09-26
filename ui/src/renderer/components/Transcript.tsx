@@ -163,7 +163,7 @@ function ColumnToggle({
     // same exemption the New button gets in the session list.
     <button
       className={cn(
-        'fold-toggle relative z-40 grid size-5.5 flex-none place-items-center rounded-md border-0 bg-transparent p-0',
+        'fold-toggle relative z-40 grid size-5.5 flex-none place-items-center rounded-full border-0 bg-transparent p-0',
         'text-[15px] leading-none text-muted-foreground/70 [-webkit-app-region:no-drag]',
         'hover:bg-foreground/12 hover:text-foreground',
         'focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary',
@@ -416,7 +416,7 @@ export function Transcript({
           button in it would have a primary action, and none of these is one. */}
       {live && <div className={cn(
         'conversation-toolbar flex flex-wrap items-center gap-1.5 px-5 pt-1.5 pb-2.5',
-        '[&>button]:min-h-7.5 [&>button]:rounded-md [&>button]:border [&>button]:border-border',
+        '[&>button]:min-h-7.5 [&>button]:rounded-full [&>button]:border [&>button]:border-border',
         '[&>button]:bg-transparent [&>button]:px-2.5 [&>button]:py-1 [&>button]:text-xs',
       )}>
         <button onClick={() => setSearching((value) => !value)} aria-expanded={searching}>Find</button>
@@ -447,7 +447,7 @@ export function Transcript({
       {problem && <ErrorCard detail={problem} />}
       {searching && <div className={cn(
         'conversation-search flex items-center gap-1.5 border-t border-border px-5 py-2',
-        '[&_button]:min-h-7.5 [&_button]:min-w-7 [&_button]:rounded-md [&_button]:border [&_button]:border-border [&_button]:bg-background',
+        '[&_button]:min-h-7.5 [&_button]:min-w-7 [&_button]:rounded-full [&_button]:border [&_button]:border-border [&_button]:bg-background',
       )}>
         <input className="min-w-0 flex-1 rounded-md border border-border bg-background p-2 text-foreground [appearance:none] focus:border-primary focus:outline-none [&::-webkit-search-cancel-button]:[appearance:none]"
           autoFocus type="search" aria-label="Find in conversation" placeholder="Find in conversation…" value={query}
@@ -474,7 +474,7 @@ export function Transcript({
             <div className="welcome-mark mb-5.5 grid size-12.5 place-items-center rounded-[15px] bg-primary text-2xl font-bold text-primary-foreground">B</div>
             <h1 className="mt-0 mb-3.5 text-[28px] leading-[1.2] tracking-[-0.5px] text-foreground">What would you like to build?</h1>
             <p className="leading-[1.6]">Work with an agent in your project. Track changes and review approval requests as you work.</p>
-            <button className="primary rounded-lg border-0 bg-primary px-4.5 py-2.5 font-semibold text-primary-foreground" onClick={() => onNew()}>Open project</button>
+            <button className="primary rounded-full border-0 bg-primary px-4.5 py-2.5 font-semibold text-primary-foreground" onClick={() => onNew()}>Open project</button>
             {!!recents.length && <div className={cn(
               'welcome-recents mt-8 grid gap-1.5',
               '[&>button]:flex [&>button]:flex-col [&>button]:gap-0.75 [&>button]:rounded-lg [&>button]:border [&>button]:border-border',
@@ -574,7 +574,7 @@ export function Transcript({
             {live.tokens > 0 && <span className="count text-muted-foreground/70"> · {live.tokens} tokens written</span>}
             {Object.values(live.turns).filter((turn) => turn.status === 'running').slice(-1).map((turn) =>
               <Button variant="link" size="sm" className="turn-audit-link h-auto p-0 py-1.25 text-xs text-muted-foreground hover:text-foreground hover:underline pointer-coarse:min-h-11" key={turn.turn} aria-controls="turn-audit-inspector" onClick={(event) => onAudit(turn.turn, event.currentTarget)}>Audit</Button>)}
-            <Button variant="outline" size="sm" className="cancel ml-auto h-auto rounded-md px-2.5 py-0.75 text-[11px] font-normal" onClick={onCancel}>
+            <Button variant="outline" size="sm" className="cancel ml-auto h-auto px-2.5 py-0.75 text-[11px] font-normal" onClick={onCancel}>
               Cancel
             </Button>
           </div>
@@ -587,14 +587,14 @@ export function Transcript({
         'attention-bar flex min-h-8.5 items-center justify-between gap-2 py-1.5 text-xs text-muted-foreground',
         'px-[max(20px,calc((100%-880px)/2))]',
       )} aria-live="polite">
-        {pending ? <Button variant="secondary" size="sm" className="pending-jump rounded-[7px] border border-border bg-warning/10 px-2.5 py-1.5 text-left font-semibold text-warning hover:bg-warning/20" onClick={() => {
+        {pending ? <Button variant="secondary" size="sm" className="pending-jump border border-border bg-warning/10 px-2.5 py-1.5 text-left font-semibold text-warning hover:bg-warning/20" onClick={() => {
           document.dispatchEvent(new CustomEvent('bravebot:reveal-entry', { detail: pending.id }))
           const element = scroller.current?.querySelector<HTMLElement>(`[data-entry-id="${pending.id}"]`)
           jump(element ?? bottom.current)
         }}>{pending.kind === 'ask' ? 'Your answer is needed' : 'Approval needed'} · {waitingOn(pending.kind)} — Review ↑</Button> :
           live.running ? <span>{workingWord(live.phase, live.checking)} · You can draft your next message</span> :
           <span>{live.entries.at(-1)?.kind === 'error' ? 'Needs attention' : live.entries.length ? 'Ready for your next message' : 'Ready to begin'}</span>}
-        {unseen && <Button variant="secondary" size="sm" className="rounded-[7px] border border-border bg-background px-2.5 py-1.5" onClick={latest}>New activity ↓</Button>}
+        {unseen && <Button variant="secondary" size="sm" className="border border-border bg-background px-2.5 py-1.5" onClick={latest}>New activity ↓</Button>}
       </div>
       <footer className={cn(
         'composer flex flex-col items-stretch gap-2.5 border-t border-border bg-background pt-3 pb-4',
@@ -622,11 +622,11 @@ export function Transcript({
           />
           <InputGroupAddon align="block-end" className="composer-toolbar flex flex-wrap items-center gap-2 [&_.model-picker]:max-w-55 [&_.model-picker]:self-center">
             <ModelPicker session={live.handle} scope={bot ? 'bot' : 'conversation'} key={live.handle} model={live.model} disabled={live.running} onChoose={onModel} />
-            <Button variant="outline" size="sm" className="attach-files h-auto rounded-[7px] border-border bg-background px-2.25 py-1.75 text-xs font-normal whitespace-nowrap" onClick={onAttach} disabled={attachments.length >= 5} title="Choose project files to share as trusted context">Attach files</Button>
+            <Button variant="outline" size="sm" className="attach-files h-auto border-border bg-background px-2.25 py-1.75 text-xs font-normal whitespace-nowrap" onClick={onAttach} disabled={attachments.length >= 5} title="Choose project files to share as trusted context">Attach files</Button>
             {/* The first thing a narrow window gives up: it is a reminder, and the two controls
                 beside it are not. */}
             <InputGroupText className="composer-hint min-w-[130px] flex-1 text-[11px] text-muted-foreground max-[1120px]:hidden">Enter to send · Shift+Enter for newline</InputGroupText>
-            {live.running && <Button variant="outline" size="sm" className="stop min-h-9 rounded-lg border-destructive bg-background px-3 py-1.5 text-destructive" onClick={onCancel}>Stop</Button>}
+            {live.running && <Button variant="outline" size="sm" className="stop min-h-9 border-destructive bg-background px-3 py-1.5 text-destructive" onClick={onCancel}>Stop</Button>}
             <Button
               className="send ml-auto h-auto min-h-9 rounded-[10px] px-4.5 font-medium whitespace-nowrap"
               onClick={() => { latest(); live.running ? onQueue() : onSubmit() }}
@@ -726,7 +726,7 @@ function ExportMenu({
             variant="outline"
             size="sm"
             className={cn(
-              'export-open inline-flex h-auto min-h-7.5 items-center gap-1.25 rounded-md border-border',
+              'export-open inline-flex h-auto min-h-7.5 items-center gap-1.25 rounded-full border-border',
               'bg-transparent px-2.5 py-1 text-xs font-normal whitespace-nowrap text-muted-foreground',
               'hover:bg-code hover:text-foreground',
             )}
@@ -1012,7 +1012,7 @@ function Questions({
                   key={row.index}
                   value={String(row.index)}
                   className={cn(
-                    'choice h-auto w-full flex-col items-start gap-0.5 rounded-[7px] border border-border',
+                    'choice h-auto w-full flex-col items-start gap-0.5 rounded-full border border-border',
                     'bg-transparent px-2.25 py-1.5 text-left font-normal whitespace-normal',
                     'hover:border-muted-foreground/70',
                     (picked[at] ?? []).includes(row.index) && 'picked border-primary bg-warning/10',
@@ -1248,7 +1248,7 @@ function EntryCard({
                     // independent `translate` property, and a pointer aimed at the middle of the
                     // chip then lands on the bubble behind it — `drive-fork.mjs` cannot click the
                     // control at all, and neither can anything else driving the window.
-                    'fork-here absolute top-[calc(50%-12px)] left-[-30px] size-6 rounded-[7px]',
+                    'fork-here absolute top-[calc(50%-12px)] left-[-30px] size-6 rounded-full',
                     'border border-border bg-background p-0 leading-none text-muted-foreground select-none',
                     // Hidden until the row is under the pointer, because a transcript is a column
                     // of these and a control on every one would be a column of controls. Kept in

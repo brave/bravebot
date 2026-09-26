@@ -1318,7 +1318,7 @@ export function App(): React.JSX.Element {
           {[...openedLives.current.values()].filter((item) => item.handle !== live?.handle && item.running).map((item) => (
             <button
               key={item.handle}
-              className="rounded-lg border border-primary bg-background px-2.5 py-2 text-left text-xs shadow-sm"
+              className="rounded-full border border-primary bg-background px-2.5 py-2 text-left text-xs shadow-sm"
               onClick={() => setLive(item)}
             >
               {t.outstanding(item.entries) ? t.outstanding(item.entries)?.kind === 'ask' ? 'Answer needed' : 'Approval needed' : 'Working'} · {item.summary.title}
