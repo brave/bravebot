@@ -3141,8 +3141,8 @@ impl Session {
     /// Do something to the stretch of the line an extent names.
     ///
     /// The one place a vi instruction changes the line, so the register, the undo step and the record
-    /// of what `.` repeats are all kept here. Three copies of that bookkeeping, one per operator, is
-    /// how one of them would come to be missing.
+    /// of what `.` repeats are all kept here. A copy of that bookkeeping for each operator is how one
+    /// of them would come to be missing.
     fn change(
         &mut self,
         operator: crate::vim::Operator,
@@ -3154,6 +3154,17 @@ impl Session {
         let Some((from, to)) = self.stretch(self.as_vi_reads_it(operator, extent), count) else {
             return;
         };
+        // All of the characters asked for or none, which is vim's rule: `5rx` with three left on the
+        // line is a count nobody meant, and replacing the three would be a guess at what they did
+        // mean. A marker is not characters to overwrite, for the reason it is not in a selection.
+        if let Operator::Replace(_) = operator
+            && (self.input[from..to].chars().count() < count.unwrap_or(1) as usize
+                || self
+                    .marker_spans()
+                    .any(|(start, end)| start < to && from < end))
+        {
+            return;
+        }
 
         if !operator.reads_only() {
             self.before_last_change = Some((self.input.clone(), self.caret));
@@ -3163,10 +3174,12 @@ impl Session {
         }
 
         let whole_lines = self.takes_whole_lines(extent);
-        self.register = Some(Yanked {
-            text: self.input[from..to].to_string(),
-            lines: whole_lines,
-        });
+        if operator.fills_the_register() {
+            self.register = Some(Yanked {
+                text: self.input[from..to].to_string(),
+                lines: whole_lines,
+            });
+        }
 
         match operator {
             // Nothing moves, so the caret has no reason to be anywhere but where the yank began, which
@@ -3199,6 +3212,25 @@ impl Session {
             }
             Operator::Indent | Operator::Dedent => {
                 self.shift_the_lines(from, to, operator == Operator::Indent)
+            }
+            Operator::Case(case) => {
+                let end = self.change_the_case(from, to, case);
+                // `~` moves on past what it changed, so pressing it again walks along the line, and
+                // stops on the last character rather than past it. The operator spelled after `g`
+                // leaves the caret at the start of its stretch, as a yank does.
+                self.caret = if extent == crate::vim::Extent::Character {
+                    end
+                } else {
+                    from
+                };
+                self.step_back_off_the_end();
+            }
+            Operator::Replace(with) => {
+                let replaced = self.input[from..to].chars().count();
+                self.input
+                    .replace_range(from..to, &with.to_string().repeat(replaced));
+                // On the last character replaced, which is where vi leaves it.
+                self.caret = from + (replaced - 1) * with.len_utf8();
             }
         }
         // Every operator ends the selection, the stretch it named having been acted on. A change has
@@ -3771,10 +3803,9 @@ impl Session {
         self.leave_visual_mode();
     }
 
-    /// Change the case of the selection, which is what `~`, `u` and `U` ask for there.
+    /// Change the case of the selection, which is what `~`, `u` and `U` ask for there, and `g~`, `gu`
+    /// and `gU`.
     fn change_the_case_of_the_selection(&mut self, case: crate::vim::Case) {
-        use crate::vim::Case;
-
         let Some((from, to)) = self.vi_selection() else {
             return;
         };
@@ -3782,18 +3813,33 @@ impl Session {
         self.history.leave();
         self.completion = 0;
 
-        let changed: String = self.input[from..to]
-            .chars()
-            .map(|c| match case {
-                Case::Lower => c.to_lowercase().next().unwrap_or(c),
-                Case::Upper => c.to_uppercase().next().unwrap_or(c),
-                Case::Swapped if c.is_lowercase() => c.to_uppercase().next().unwrap_or(c),
-                Case::Swapped => c.to_lowercase().next().unwrap_or(c),
-            })
-            .collect();
-        self.input.replace_range(from..to, &changed);
+        self.change_the_case(from, to, case);
         self.caret = from;
         self.leave_visual_mode();
+    }
+
+    /// Change the case of a stretch of the line, and return where the stretch now ends.
+    ///
+    /// Around the markers in it rather than through them: a marker is found by its text, so `[IMAGE
+    /// #1]` names no picture, and the picture would be left off the prompt while the line still
+    /// read as though it carried one. The end moves because a letter can become two, as `ß` does.
+    fn change_the_case(&mut self, from: usize, to: usize, case: crate::vim::Case) -> usize {
+        let mut markers: Vec<(usize, usize)> = self
+            .marker_spans()
+            .filter(|(start, end)| from < *end && *start < to)
+            .collect();
+        markers.sort_unstable();
+        let mut changed = String::new();
+        let mut at = from;
+        for (start, end) in markers {
+            let (start, end) = (start.max(from), end.min(to));
+            changed.push_str(&case.applied_to(&self.input[at..start]));
+            changed.push_str(&self.input[start..end]);
+            at = end;
+        }
+        changed.push_str(&case.applied_to(&self.input[at..to]));
+        self.input.replace_range(from..to, &changed);
+        from + changed.len()
     }
 
     /// Back to NORMAL mode with no selection, which is where every operator leaves VISUAL mode.
@@ -14470,7 +14516,7 @@ mod tests {
     }
 
     /// A key beginning an instruction this box does not have changes nothing, and nor does the key vi
-    /// would give it: `ma` must not open INSERT mode on the `a`, nor `mw` move on the `w`, nor `rx`
+    /// would give it: `ma` must not open INSERT mode on the `a`, nor `mw` move on the `w`, nor `Rx`
     /// delete on the `x`. Every prefix, after an operator and after none, against every key that can
     /// be typed after it, and in VISUAL mode the prefixes that mean there what they mean here.
     #[test]
@@ -14478,11 +14524,8 @@ mod tests {
         let in_both_modes = [
             "\"", "q", "@", "m", "'", "`", "z", "Z", "[", "]", "g'", "g`",
         ];
-        // In VISUAL mode `r` and `gr` replace the selection, and the operators under `g` and `R`
-        // act on it and take no key.
-        let in_normal_mode = [
-            "r", "R", "gr", "gu", "gU", "g~", "g?", "gq", "gw", "g@", "gui", "guf",
-        ];
+        // In VISUAL mode the operators under `g` and `R` act on the selection and take no key.
+        let in_normal_mode = ["R", "g?", "gq", "gw", "g@", "g?i", "g?f", "g?'"];
         let after_an_operator = ["d'", "c`", "y[", "d]", "dz", "gu'"];
         for prefix in in_both_modes
             .iter()
@@ -14533,7 +14576,7 @@ mod tests {
             (s.input.clone(), s.caret, s.vi_selection(), s.vi_mode())
         };
         assert_eq!(pressed("vl").1, 1);
-        for prefix in ["gu", "gU", "g~", "g?", "gq", "gw", "g@", "R"] {
+        for prefix in ["g?", "gq", "gw", "g@", "R"] {
             assert_eq!(pressed(&format!("v{prefix}l")), pressed("vl"), "v{prefix}l");
         }
         assert_eq!(pressed("vlgrx").0, "xxe two");
@@ -14547,8 +14590,8 @@ mod tests {
     #[test]
     fn a_prefix_this_box_has_no_instruction_for_takes_the_key_vi_would_give_it_and_no_more() {
         for keys in [
-            "ma", "rx", "\"a", "zz", "]]", "Rx", "g'a", "g`a", "grx", "guw", "guu", "guiw", "gufa",
-            "gugg", "gu'a", "d'a", "dzz", "dm", "c\"", "yq", "d@", "dr", "dZ", "dR",
+            "ma", "\"a", "zz", "]]", "Rx", "g'a", "g`a", "g?w", "g??", "g?iw", "g?fa", "g?gg",
+            "g?'a", "gu'a", "d'a", "dzz", "dm", "c\"", "yq", "d@", "dr", "dZ", "dR",
         ] {
             assert_eq!(
                 edited("one two", 0, &format!("{keys}x")),
@@ -15443,12 +15486,22 @@ mod tests {
         assert_eq!(edited("one\ntwo\nthree", 5, "Vd"), "one\nthree");
     }
 
-    /// The keys that change case, which mean this only here: `u` in NORMAL mode undoes.
+    /// The keys that change case, which mean this only here: `u` in NORMAL mode undoes. The
+    /// operators spelled after `g` are the same keys over a selection, which is already the stretch
+    /// they would otherwise wait for, so `vgU` is `vU` as it is in vi.
     #[test]
     fn the_case_keys_act_on_the_selection() {
         assert_eq!(edited("one two", 0, "vl~"), "ONe two");
         assert_eq!(edited("one two", 0, "vlU"), "ONe two");
         assert_eq!(edited("ONE TWO", 0, "vlu"), "onE TWO");
+        assert_eq!(edited("one two", 0, "vlg~"), "ONe two");
+        assert_eq!(edited("one two", 0, "vlgU"), "ONe two");
+        assert_eq!(edited("ONE TWO", 0, "vlgu"), "onE TWO");
+        assert_eq!(
+            edited("one two", 0, "vlgUx"),
+            "Ne two",
+            "the selection was left open"
+        );
     }
 
     /// `o` puts the caret at the other end, which is how the end that is not being moved gets adjusted
@@ -15752,6 +15805,257 @@ mod tests {
             "the picture is still named by a line that has no marker"
         );
     }
+
+    /// A session in NORMAL mode over `Look `, a marker and ` Now`, with the caret at the start and
+    /// the marker as it was written.
+    fn around_a_marker() -> (Session, String) {
+        let mut s = vi();
+        for c in "Look ".chars() {
+            s.type_char(c);
+        }
+        s.attach(picture(b"pixels"));
+        let marker = s.input["Look ".len()..].to_string();
+        for c in " Now".chars() {
+            s.type_char(c);
+        }
+        s.enter_vi_normal();
+        s.caret = 0;
+        (s, marker)
+    }
+
+    /// A case change goes around a marker rather than through it. A marker is found by its text, so
+    /// one raised to `[IMAGE #1]` names no picture, and the picture would be left off the prompt
+    /// while the line still read as though it carried one. Every key that changes case over the
+    /// line, in NORMAL mode and over a selection.
+    #[test]
+    fn a_case_change_leaves_a_marker_naming_its_picture() {
+        for keys in [
+            "gUU", "guu", "g~~", "gUgU", "10~", "v$U", "v$u", "v$~", "v$gU",
+        ] {
+            let (mut s, marker) = around_a_marker();
+            let before = s.input.clone();
+
+            for c in keys.chars() {
+                s.type_char(c);
+            }
+
+            assert_ne!(s.input, before, "{keys} changed nothing");
+            assert!(
+                s.input.contains(&marker),
+                "{keys} rewrote the marker: {:?}",
+                s.input
+            );
+            assert_eq!(
+                s.pasted_named(&s.input).len(),
+                1,
+                "{keys} left the picture named by nothing"
+            );
+        }
+    }
+
+    /// `r` over a marker is refused, as it is over a selection holding one: a marker is not
+    /// characters to overwrite, and a row of `x` where a picture was is a line nobody can read.
+    #[test]
+    fn replacing_characters_across_a_marker_leaves_the_line_alone() {
+        let (mut s, marker) = around_a_marker();
+        s.caret = "Look ".len();
+        let before = s.input.clone();
+        s.type_char('r');
+        s.type_char('x');
+        assert_eq!(s.input, before, "the marker was overwritten");
+
+        let (mut s, _) = around_a_marker();
+        for c in "9rx".chars() {
+            s.type_char(c);
+        }
+        assert_eq!(s.input, before, "a counted r ran over the marker");
+        assert_eq!(
+            s.pasted_named(&s.input).len(),
+            1,
+            "{marker} lost its picture"
+        );
+    }
+
+    /// `r` makes the character under the caret the next key typed, and a count is how many
+    /// characters from there, left with the caret on the last of them, which is where vim leaves it.
+    /// The key after `r` is the character whatever it is, so `r3` puts a `3` there rather than
+    /// reading a count, and `rr` an `r`. `gr` is the same key, as it is in vim.
+    #[test]
+    fn r_replaces_as_many_characters_as_the_count_says() {
+        assert_eq!(edited("hello world", 0, "rx"), "xello world");
+        assert_eq!(after("hello world", 0, "rx"), 0);
+        assert_eq!(edited("hello world", 0, "3rx"), "xxxlo world");
+        assert_eq!(after("hello world", 0, "3rx"), 2);
+        assert_eq!(edited("hello world", 0, "3grx"), "xxxlo world");
+        assert_eq!(after("hello world", 0, "3grx"), 2);
+        assert_eq!(edited("hello world", 0, "r3"), "3ello world");
+        assert_eq!(edited("hello world", 0, "rr"), "rello world");
+        assert_eq!(edited("héllo", 1, "rx"), "hxllo");
+        assert_eq!(edited("hello", 0, "3ré"), "ééélo");
+        assert_eq!(
+            after("hello", 0, "3ré"),
+            4,
+            "the caret is not on the last é"
+        );
+    }
+
+    /// All of the characters asked for or none, which is vim's rule: `5rx` with two left on the line
+    /// is a count nobody meant, and replacing the two would be a guess at what they did mean. The
+    /// newline is not a character to replace, so a count does not reach the line below, and an
+    /// empty line has nothing under the caret to replace.
+    #[test]
+    fn r_with_fewer_characters_left_than_its_count_changes_nothing() {
+        assert_eq!(edited("hello world", 9, "5rx"), "hello world");
+        assert_eq!(edited("hello world", 9, "2rx"), "hello worxx");
+        assert_eq!(edited("ab\ncd", 0, "3rx"), "ab\ncd");
+        assert_eq!(edited("ab\ncd", 0, "2rx"), "xx\ncd");
+        assert_eq!(edited("ab\n\ncd", 3, "rx"), "ab\n\ncd");
+    }
+
+    /// `r` is one change, so one undo puts every character back, and `.` replaces as many again from
+    /// the caret, or as many as a count in front of it says.
+    #[test]
+    fn r_is_one_change_to_undo_and_to_repeat() {
+        assert_eq!(edited("hello world", 0, "3rxu"), "hello world");
+        assert_eq!(edited("hello world", 0, "3rx."), "xxxxx world");
+        assert_eq!(after("hello world", 0, "3rx."), 4);
+        assert_eq!(edited("hello world", 0, "3rx2."), "xxxxo world");
+    }
+
+    /// `~` changes the case of the character under the caret and moves on, so pressing it again
+    /// walks along the line. A count is how many characters, stopping at the end of the line with the
+    /// caret on the last character rather than past it, and never reaching the line below.
+    #[test]
+    fn tilde_changes_the_case_under_the_caret_and_moves_on() {
+        assert_eq!(edited("Hello World", 0, "~"), "hello World");
+        assert_eq!(after("Hello World", 0, "~"), 1);
+        assert_eq!(edited("abc", 0, "~~~"), "ABC");
+        assert_eq!(edited("Hello World", 0, "3~"), "hELlo World");
+        assert_eq!(after("Hello World", 0, "3~"), 3);
+        assert_eq!(edited("Hello World", 6, "10~"), "Hello wORLD");
+        assert_eq!(after("Hello World", 6, "10~"), 10);
+        assert_eq!(after("ab", 1, "~"), 1);
+        assert_eq!(edited("ab\ncd", 0, "5~"), "AB\ncd");
+        assert_eq!(after("ab\ncd", 0, "5~"), 1);
+    }
+
+    /// A letter whose other case is a different number of bytes moves the end of what `~` changed, so
+    /// the caret has to land after the changed text and not after the bytes that were there: `ı` is
+    /// two bytes and `I` one, and a caret left where the old end was is on the wrong character.
+    #[test]
+    fn tilde_lands_after_a_letter_whose_other_case_is_shorter() {
+        assert_eq!(edited("ıab", 0, "~"), "Iab");
+        assert_eq!(after("ıab", 0, "~"), 1);
+        assert_eq!(edited("ⱥab", 0, "~"), "Ⱥab");
+        assert_eq!(after("ⱥab", 0, "~"), 2);
+    }
+
+    /// `~` is one change, so one undo puts every character back and `.` changes as many again from
+    /// where it moved to, or as many as a count in front of it says.
+    #[test]
+    fn tilde_is_one_change_to_undo_and_to_repeat() {
+        assert_eq!(edited("hello world", 0, "3~u"), "hello world");
+        assert_eq!(edited("hello world", 0, "2~."), "HELLo world");
+        assert_eq!(edited("hello world", 0, "2~3."), "HELLO world");
+        assert_eq!(after("hello world", 0, "2~3."), 5);
+    }
+
+    /// `X` takes the character before the caret, which is `dh`: a count is how many, stopping at the
+    /// start of the line and never taking the newline before it, and what it took goes into the
+    /// register as `x` puts what it takes there.
+    #[test]
+    fn capital_x_deletes_the_characters_before_the_caret() {
+        assert_eq!(edited("hello world", 5, "X"), "hell world");
+        assert_eq!(after("hello world", 5, "X"), 4);
+        assert_eq!(edited("hello world", 5, "3X"), "he world");
+        assert_eq!(after("hello world", 5, "3X"), 2);
+        assert_eq!(edited("hello world", 2, "10X"), "llo world");
+        assert_eq!(edited("hello world", 0, "X"), "hello world");
+        assert_eq!(edited("ab\ncd", 3, "X"), "ab\ncd");
+        assert_eq!(edited("hello world", 5, "3Xp"), "he lloworld");
+        assert_eq!(edited("hello world", 5, "X."), "hel world");
+    }
+
+    /// `gu`, `gU` and `g~` are operators, so they change the case of whatever stretch a motion or an
+    /// object names, and leave the caret at its start, as a yank does. A count multiplies with the
+    /// motion's as it does for `d`.
+    #[test]
+    fn the_case_operators_change_the_stretch_a_motion_names() {
+        assert_eq!(edited("hello world", 2, "gUiw"), "HELLO world");
+        assert_eq!(after("hello world", 2, "gUiw"), 0);
+        assert_eq!(edited("hello world foo", 2, "gUw"), "heLLO world foo");
+        assert_eq!(after("hello world foo", 2, "gUw"), 2);
+        assert_eq!(edited("hello world foo", 8, "gUb"), "hello WOrld foo");
+        assert_eq!(after("hello world foo", 8, "gUb"), 6);
+        assert_eq!(edited("hello world", 3, "gU$"), "helLO WORLD");
+        assert_eq!(edited("hello world", 3, "gU0"), "HELlo world");
+        assert_eq!(edited("hello world", 0, "gUfo"), "HELLO world");
+        assert_eq!(edited("hello world", 2, "2gUl"), "heLLo world");
+        assert_eq!(edited("a b c d", 0, "gU3w"), "A B C d");
+        assert_eq!(edited("HELLO WORLD", 0, "guiw"), "hello WORLD");
+        assert_eq!(edited("Hello World", 0, "g~iw"), "hELLO World");
+        assert_eq!(edited("Straße", 0, "gUiw"), "STRASSE");
+    }
+
+    /// Each case operator doubled is the line, and so is it spelled with its `g` again, which vi
+    /// takes as well: `guu` and `gugu`. A count is how many lines, and the row keys take the row
+    /// above or below with this one, as `dj` does.
+    #[test]
+    fn a_case_operator_doubled_is_the_line() {
+        for keys in ["gUU", "gUgU"] {
+            assert_eq!(
+                edited("one\ntwo\nthree", 5, keys),
+                "one\nTWO\nthree",
+                "{keys}"
+            );
+            assert_eq!(after("one\ntwo\nthree", 5, keys), 4, "{keys}");
+        }
+        for keys in ["guu", "gugu"] {
+            assert_eq!(edited("ONE\nTWO", 5, keys), "ONE\ntwo", "{keys}");
+        }
+        for keys in ["g~~", "g~g~"] {
+            assert_eq!(edited("One\nTwo", 5, keys), "One\ntWO", "{keys}");
+        }
+        assert_eq!(edited("one\ntwo\nthree", 0, "3gUU"), "ONE\nTWO\nTHREE");
+        assert_eq!(edited("one\ntwo\nthree", 0, "gUj"), "ONE\nTWO\nthree");
+        assert_eq!(edited("one\ntwo\nthree", 5, "gUk"), "ONE\nTWO\nthree");
+        assert_eq!(edited("one\ntwo\nthree", 0, "gUG"), "ONE\nTWO\nTHREE");
+    }
+
+    /// A case change is one change, so one undo puts the stretch back, and `.` changes the case of
+    /// the same kind of stretch wherever the caret has gone.
+    #[test]
+    fn a_case_operator_is_one_change_to_undo_and_to_repeat() {
+        assert_eq!(edited("hello world", 0, "gUiwu"), "hello world");
+        assert_eq!(edited("hello world", 0, "gUiww."), "HELLO WORLD");
+        assert_eq!(edited("one\ntwo", 0, "gUUG."), "ONE\nTWO");
+    }
+
+    /// Only a key that takes the stretch away or copies it fills the register, which is vi's rule. A
+    /// replaced character, a case change and a shift leave what they acted on in the line, and a
+    /// register they filled would lose the word somebody had yanked to put back. `x` is the control:
+    /// it does fill the register, so the same keys with it put back what it took.
+    #[test]
+    fn a_key_that_leaves_the_stretch_in_the_line_leaves_the_register_alone() {
+        assert_eq!(edited("one two", 0, "yiwx$p"), "ne twoo");
+        for (keys, left) in [
+            ("rx", "xne two"),
+            ("~", "One two"),
+            ("gUiw", "ONE two"),
+            ("g~~", "ONE TWO"),
+            ("guu", "one two"),
+            (">>", "  one two"),
+            ("vlU", "ONe two"),
+            ("vlrx", "xxe two"),
+        ] {
+            assert_eq!(
+                edited("one two", 0, &format!("yiw{keys}$p")),
+                format!("{left}one"),
+                "{keys} filled the register"
+            );
+        }
+    }
+
     /// A stopped turn still occupies wall time when no request has completed.
     #[test]
     fn unanswered_turns_keep_the_session_clock_and_the_completed_breakdown() {

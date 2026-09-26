@@ -59,12 +59,12 @@ An instruction still waiting for its next key is drawn after the mode, as vi's `
 whole.
 
 A key beginning one of vi's instructions that this box does not have does nothing, and nor does the
-key vi would give it: `"`, `q`, `@`, `m`, `'`, `` ` ``, `z`, `Z`, `[`, `]`, `r`, `R`, `g'`, `` g` ``
-and `gr` each take one more key, so `ma` sets no mark and opens no INSERT mode. `R` takes one key
-rather than replacing until Escape. `gu`, `gU`, `g~`, `g?`, `gq`, `gw` and `g@` take the stretch they
-would act on, so `guiw` changes nothing. After an operator only `'`, `` ` ``, `[`, `]` and `z` take
-their key, as in vi, so `dm` ends the `d` and the key after it is read on its own. In VISUAL mode
-the operators under `g` and `R` take no key, since the selection is the stretch.
+key vi would give it: `"`, `q`, `@`, `m`, `'`, `` ` ``, `z`, `Z`, `[`, `]`, `R`, `g'` and `` g` ``
+each take one more key, so `ma` sets no mark and opens no INSERT mode. `R` takes one key rather
+than replacing until Escape. `g?`, `gq`, `gw` and `g@` take the stretch they would act on, so `g?iw`
+changes nothing. After an operator only `'`, `` ` ``, `[`, `]` and `z` take their key, as in vi, so
+`dm` ends the `d` and the key after it is read on its own. In VISUAL mode those four and `R` take no
+key, since the selection is the stretch.
 
 **Escape enters NORMAL mode and leaves the line exactly as it was.** It also abandons an instruction
 still waiting for a key, so `d`, Escape, `w` moves a word rather than deleting one, and so does any
@@ -122,14 +122,15 @@ in front of an operator and one in front of its motion multiply, so `2d3w` is `d
 | `3w`, `5l`, `2f,`, `3;` | how many times over the motion is meant |
 | `2G`, `2gg` | which row to go to |
 | `3j`, `3k` | how many rows to move, inside the input and no further |
-| `3dd`, `d3w`, `3x`, `3>>` | how much of the stretch the operator takes |
+| `3dd`, `d3w`, `3x`, `3X`, `3~`, `3rx`, `3gUU`, `3>>` | how much of the stretch the operator takes |
 | `3p`, `3J` | how many copies go back, and how many rows end up as one |
 | `3.` | how many the repeat is of, in place of the count it recorded |
 
 **The line bounds a count, not the number you type.** A counted motion stops at the first step that
 moves nothing, so `999l` reaches the end of the line, and an extent takes what there is, so `9dd` on
 a two-row paragraph takes the two rows. `p` is the exception, since a copy always goes somewhere: it
-puts back as many as you asked for. A counted change is one change and one step to undo.
+puts back as many as you asked for. `r` takes all of its count or nothing, so `5rx` with two
+characters left changes neither. A counted change is one change and one step to undo.
 
 The count is drawn after the mode with the rest of the instruction, so three presses are
 `NORMAL 2d3`. Escape abandons it, as it abandons any instruction still waiting for a key.
@@ -137,15 +138,23 @@ The count is drawn after the mode with the rest of the instruction, so three pre
 ### Operators
 
 `d` takes a stretch out, `c` takes it out and opens INSERT mode where it was, `y` keeps it and leaves
-the line alone, and `>` and `<` move every row the stretch reaches a step from or towards the margin.
-Each waits for the stretch to act on:
+the line alone, `>` and `<` move every row the stretch reaches a step from or towards the margin, and
+`gu`, `gU` and `g~` make it lower case, upper case or the other case. Each waits for the stretch to
+act on:
 
 | Keys | The stretch |
 |---|---|
 | a motion | from the caret to wherever that motion would take it |
-| the operator's own letter doubled | the whole line |
+| the operator's own letter doubled | the whole line: `dd`, and `guu` or `gugu` |
 | `D`, `C`, `x`, `s` | to the end of the line, and the character under the caret |
+| `X` | the character before the caret |
 | `Y`, `S` | the whole line |
+
+`~` changes the case of the character under the caret and moves on, so pressing it again walks
+along the line. `r` or `gr` then a key makes the character under the caret that key, and `3rx` makes
+three of them `x`. `r` then Enter is the Enter alone, where vi would break the line, since Enter
+abandons a key still waiting. Case changes as vim changes it: `gUiw` over `Straße` is `STRASSE`, and
+a letter with no capital of its own, such as the `ﬀ` ligature, stays as it is.
 
 So `dw`, `cw` and `yw` are one idea rather than three bindings, and `d$` and `dG` work without being
 listed. Whether the character a motion landed on is taken depends on the motion, as it does in vi:
@@ -159,7 +168,8 @@ last change again at the caret.
 
 The register is vi's unnamed one and the only one. It is not the system clipboard, which Ctrl-V owns
 and which you share with every other window you have open, so a yank here does not travel out of the
-box.
+box. Only `d`, `c`, `y` and the keys spelled from them fill it: a shift, a case change and `r` leave
+what you yanked there to put back.
 
 ### Text objects
 
@@ -182,8 +192,8 @@ choose it**, on every row it crosses. That is the point of having both this and 
 for a motion: the stretch is on the screen while it is being chosen, and the next key acts on it.
 
 An operator here needs no extent: `x` is `d` and `s` is `c`, `r` replaces every selected character
-with one, and `~`, `u` and `U` change the case. Motions move the end the caret is at, `o` puts the
-caret at the other end, and a text object becomes the selection.
+with one, and `~`, `u` and `U` change the case, as do `g~`, `gu` and `gU`. Motions move the end the
+caret is at, `o` puts the caret at the other end, and a text object becomes the selection.
 
 The key that opened the mode closes it, the other of the two changes which kind is in force, and
 Escape abandons the selection. Every operator ends it, so nothing acts on a stretch that is no longer
@@ -196,9 +206,9 @@ prompt is not where somebody edits columns.
 
 A [marker](#markers) is one thing to every key above. A motion crosses it whole and leaves the caret
 nowhere inside it. An operator takes it whole or not at all, and taking it takes the attachment off.
-A selection holding one is not replaced character by character, so `r` over such a selection does
-nothing: replacing the text either side and leaving the marker standing would be a line nobody could
-read.
+`r` over one does nothing, over a selection or not: replacing the text either side and leaving the
+marker standing would be a line nobody could read. A case change goes around one and leaves it as it
+was, since a marker spelled in capitals would name no picture.
 
 ## Moving a key
 
