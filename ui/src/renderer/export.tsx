@@ -3,14 +3,16 @@
  *
  * It renders one document and then says so. Everything about why this exists as a second
  * entry point rather than a string of HTML is in `src/main/export.ts`.
+ *
+ * Imports `globals.css` only — never `theme.ts` — so `.dark` is never set and the print
+ * window stays on the light `brave` palette regardless of the interactive window's theme.
  */
 
 import { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { ExportView } from './components/ExportView'
 import type { ExportDocument } from '../shared/export'
-import './styles.css'
-import './export.css'
+import './globals.css'
 
 function Page(): React.JSX.Element | null {
   const [ready, setReady] = useState<{ document: ExportDocument; at: number } | null>(null)

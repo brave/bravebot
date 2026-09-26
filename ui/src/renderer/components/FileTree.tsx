@@ -1,9 +1,25 @@
 import { FilePreview } from './FilePreview'
 import type { FileSearch } from '../../shared/files'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { ChevronRightIcon, RefreshCwIcon, SearchIcon, XIcon } from 'lucide-react'
+import { cn } from '@/lib/utils'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
+import { Empty, EmptyDescription } from '@/components/ui/empty'
+import { Input } from '@/components/ui/input'
 import { Fold } from './Fold'
-import { FileGlyph } from './FileGlyph'
+import { FileGlyph, glyphBox } from './FileGlyph'
 import { type FileRow, type Listing, isSubpath, under } from '../../shared/files'
+
+/**
+ * What the panel says when there is nothing to list. Said here rather than in a dialog: each of
+ * these is about one folder, and the folder is on screen.
+ */
+const NONE = 'none min-h-0 flex-none items-start gap-0 border-0 px-1.5 py-1 text-left text-xs text-muted-foreground/70'
+const NONE_TEXT = 'text-left text-xs text-inherit'
+
+/** The panel's own small controls, quiet until the pointer is on them. */
+const TOOL = 'tree-tool flex-none text-muted-foreground/70 hover:bg-foreground/14 hover:text-muted-foreground'
 
 /**
  * The folder the session is working in.
@@ -146,43 +162,85 @@ export function FileTree({
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean)
 
   return (
-    <div className="tree">
-      <div className="tree-tools">
+    <div className="tree flex min-h-0 min-w-0 flex-1 flex-col gap-2">
+      <div className="tree-tools flex flex-none items-center gap-1">
         {/* The whole path, because the panel head says only "Files" and two sessions in sibling
             checkouts are otherwise indistinguishable here. Ellipsised, with the tooltip carrying
             it back — the same bargain the file lists above strike. */}
-        <code className="tree-root" title={root}>
+        <code className="tree-root min-w-0 flex-1 truncate font-mono text-[10px] text-muted-foreground/70" title={root}>
           {root}
         </code>
-        <button ref={searchButton} className={`tree-tool ${searchOpen ? 'on' : ''}`}
-          title="Search files" aria-label="Search files" aria-expanded={searchOpen}
-          onClick={() => searchOpen ? closeSearch() : setSearchOpen(true)}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 5 5" /></svg>
-        </button>
+        <Button
+          ref={searchButton}
+          variant="ghost"
+          size="icon-sm"
+          className={cn(TOOL, searchOpen && 'on text-primary hover:text-primary')}
+          title="Search files"
+          aria-label="Search files"
+          aria-expanded={searchOpen}
+          onClick={() => searchOpen ? closeSearch() : setSearchOpen(true)}
+        >
+          <SearchIcon />
+        </Button>
         {/* Labelled with the thing it is about rather than with an eye or a dot: `.*` is what a
             dotfile looks like, and it is legible at 10px where a pictogram is not. */}
-        <button
-          className={`tree-tool dotfiles ${hidden ? 'on' : ''}`}
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className={cn(TOOL, 'dotfiles font-mono text-[10px]', hidden && 'on text-primary hover:text-primary')}
           aria-pressed={hidden}
           title={hidden ? 'Hide dotfiles' : 'Show dotfiles'}
           onClick={() => setHidden(!hidden)}
         >
           .*
-        </button>
-        <button className="tree-tool" title="Read the folder again" onClick={() => void refresh()}>
-          ↻
-        </button>
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className={TOOL}
+          title="Read the folder again"
+          onClick={() => void refresh()}
+        >
+          <RefreshCwIcon />
+        </Button>
       </div>
 
-      {searchOpen && <div className="tree-search">
-        <input autoFocus type="search" className="tree-find" value={query}
-          placeholder="Search project filenames…" aria-label="Search project files by name"
-          onChange={event => setQuery(event.target.value)}
-          onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); closeSearch() } }} />
-        <button className="tree-tool" aria-label="Close file search" onClick={closeSearch}>×</button>
-      </div>}
+      {searchOpen && (
+        <div className="tree-search flex flex-none items-center gap-1">
+          {/* The same box as the session filter next door, at the size this column speaks in:
+              one shape for "type to narrow this list" wherever the window offers it. */}
+          <Input
+            autoFocus
+            type="search"
+            className="tree-find flex-1 bg-tree text-[11px] md:text-[11px]"
+            value={query}
+            placeholder="Search project filenames…"
+            aria-label="Search project files by name"
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.stopPropagation()
+                closeSearch()
+              }
+            }}
+          />
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className={TOOL}
+            aria-label="Close file search"
+            onClick={closeSearch}
+          >
+            <XIcon />
+          </Button>
+        </div>
+      )}
 
-      {problem && <p className="tree-problem">{problem}</p>}
+      {problem && (
+        <Alert variant="destructive" className="tree-problem text-[11px]">
+          <AlertDescription className="text-[11px]">{problem}</AlertDescription>
+        </Alert>
+      )}
 
       {/* The rows sit in a well of their own rather than straight on the column. Everything else
           in this panel is a short list of names the session mentioned; this is a folder somebody
@@ -190,15 +248,39 @@ export function FileTree({
           edge to say where it began. The well also gives the tree somewhere to scroll: a project
           with forty things in its root would otherwise push the column's own scrollbar down and
           take the header with it. */}
-      <div className="tree-body">
-        {terms.length > 0 ? <div className="file-search-results">
-          {searching && <p role="status">Searching project…</p>}
-          {!searching && results?.paths.length === 0 && <p>No matching files.</p>}
-          {results?.paths.map((path) => <button key={path} onClick={() => setPreviewPath(path)} title={path}>{path}</button>)}
-          <p className="tree-note">Search skips .git, node_modules, target and dist. Symbolic-link directories are not followed.</p>
-          {results?.incomplete && <p role="status">Results are limited or some folders could not be read. Narrow the search.</p>}
-        </div> : rootListing === undefined ? (
-          <p className="none">{unreadable.has('') ? 'That folder cannot be read.' : 'Reading…'}</p>
+      <div className="tree-body min-h-0 flex-1 overflow-auto overscroll-contain rounded-[10px] border border-border bg-tree px-0.5 py-1">
+        {terms.length > 0 ? (
+          <div className="file-search-results flex flex-col gap-1 p-1.5">
+            {searching && <p role="status">Searching project…</p>}
+            {!searching && results?.paths.length === 0 && (
+              <Empty className={NONE}>
+                <EmptyDescription className={NONE_TEXT}>No matching files.</EmptyDescription>
+              </Empty>
+            )}
+            {results?.paths.map((path) => (
+              <Button
+                key={path}
+                variant="ghost"
+                className="h-auto w-full justify-start truncate p-2 font-mono text-xs"
+                onClick={() => setPreviewPath(path)}
+                title={path}
+              >
+                {path}
+              </Button>
+            ))}
+            <p className="tree-note text-[10px] text-muted-foreground/70">
+              Search skips .git, node_modules, target and dist. Symbolic-link directories are not followed.
+            </p>
+            {results?.incomplete && (
+              <p role="status">Results are limited or some folders could not be read. Narrow the search.</p>
+            )}
+          </div>
+        ) : rootListing === undefined ? (
+          <Empty className={NONE}>
+            <EmptyDescription className={NONE_TEXT}>
+              {unreadable.has('') ? 'That folder cannot be read.' : 'Reading…'}
+            </EmptyDescription>
+          </Empty>
         ) : (
           <Rows
             path=""
@@ -303,13 +385,16 @@ function Rows({
 
   if (rows.length === 0) {
     return (
-      <p className="none">
-        {terms.length > 0
-          ? 'Nothing read so far matches.'
-          : listing.rows.length === 0
-            ? 'This folder is empty.'
-            : 'Everything here is hidden.'}
-      </p>
+      // Indented with the rows it stands in for, wherever it is not the whole panel's answer.
+      <Empty className={cn(NONE, !tree && 'pl-3')}>
+        <EmptyDescription className={NONE_TEXT}>
+          {terms.length > 0
+            ? 'Nothing read so far matches.'
+            : listing.rows.length === 0
+              ? 'This folder is empty.'
+              : 'Everything here is hidden.'}
+        </EmptyDescription>
+      </Empty>
     )
   }
 
@@ -338,7 +423,16 @@ function Rows({
                 folders deep still ellipsises against the column's own edge instead of against a
                 box that has been indented out of it. */}
             <button
-              className={`tree-row ${row.kind}`}
+              className={cn(
+                'tree-row flex w-full items-center gap-0.5 rounded-[4px] py-0.5 pr-1 pl-[calc(4px+var(--depth)*11px)] text-left',
+                // Full-strength ink. These are names somebody is reading one by one to find one
+                // of them, unlike the dimmed lists above, which are read as a group.
+                'text-foreground hover:bg-foreground/16',
+                'focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring',
+                row.kind,
+                // A folder is the thing you aim at to get somewhere, so it takes the weight.
+                row.kind === 'directory' && 'font-medium',
+              )}
               style={{ '--depth': depth } as React.CSSProperties}
               title={row.kind === 'directory' ? row.name : `Open ${row.name}`}
               // A double-click is how a file is opened, which is what a file list has meant since
@@ -356,27 +450,42 @@ function Rows({
                   : undefined
               }
             >
-              <span className={`chevron ${expanded ? 'open' : ''}`} aria-hidden="true">
-                {row.kind === 'directory' ? '›' : ''}
+              {/* The box is held even on a file, so names line up whether or not the row opens. */}
+              <span
+                className={cn(
+                  'chevron w-[9px] flex-none text-[11px] text-muted-foreground/70',
+                  'transition-transform duration-[180ms] ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none',
+                  expanded && 'open rotate-90',
+                )}
+                aria-hidden="true"
+              >
+                {row.kind === 'directory' ? <ChevronRightIcon className="size-3!" /> : null}
               </span>
               {/* A folder's badge is a slash, which is what a folder is called in a path. It
                   earns its place by holding the column the file badges stand in: without it the
                   names either side of a folder would not line up. */}
               {row.kind === 'directory' ? (
-                <span className="tree-glyph folder" aria-hidden="true">
+                <span
+                  className={cn('tree-glyph folder', glyphBox, 'text-[11px] font-normal text-muted-foreground/70')}
+                  aria-hidden="true"
+                >
                   /
                 </span>
               ) : (
                 <FileGlyph name={row.name} />
               )}
-              <span className="tree-name">{row.name}</span>
+              <span className="tree-name min-w-0 truncate font-mono text-[11px]">{row.name}</span>
             </button>
             {row.kind === 'directory' && (
               <Fold open={expanded}>
                 {unreadable.has(here) ? (
-                  <p className="none">That folder cannot be read.</p>
+                  <Empty className={cn(NONE, 'pl-3')}>
+                    <EmptyDescription className={NONE_TEXT}>That folder cannot be read.</EmptyDescription>
+                  </Empty>
                 ) : below === undefined ? (
-                  <p className="none">Reading…</p>
+                  <Empty className={cn(NONE, 'pl-3')}>
+                    <EmptyDescription className={NONE_TEXT}>Reading…</EmptyDescription>
+                  </Empty>
                 ) : (
                   <Rows
                     path={here}
@@ -397,7 +506,7 @@ function Rows({
         )
       })}
       {listing.truncated && (
-        <li className="tree-more">
+        <li className="tree-more px-1 py-[3px] text-[10px] text-muted-foreground/70">
           Too many entries to list. What is here is the first part of the folder.
         </li>
       )}

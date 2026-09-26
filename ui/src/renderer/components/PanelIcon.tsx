@@ -62,7 +62,7 @@ export function PanelIcon({
 }): React.JSX.Element {
   return (
     <svg
-      className="panel-icon"
+      className="panel-icon block"
       width={size}
       height={size}
       viewBox="0 0 16 16"

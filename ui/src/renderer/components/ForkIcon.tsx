@@ -12,7 +12,9 @@
 export function ForkIcon({ size = 12 }: { size?: number }): React.JSX.Element {
   return (
     <svg
-      className="fork-icon"
+      // Sat on the text baseline rather than hung off the line box, so a mark before a title lines
+      // up with the title instead of riding above it.
+      className="fork-icon align-[-1px]"
       width={size}
       height={size}
       viewBox="0 0 16 16"

@@ -1,3 +1,5 @@
+import { cn } from '@/lib/utils'
+
 /**
  * What kind of thing a filename is, in the width of two characters.
  *
@@ -9,6 +11,24 @@
  *
  * Every colour is a token this window already uses. Nothing new was invented for a badge.
  */
+
+/**
+ * The box a badge stands in, exported because the slash a folder wears instead of one has to
+ * stand in the same box: a fixed width so every name in the folder starts at the same x, where a
+ * badge sized to its own letters would leave the column ragged.
+ */
+export const glyphBox = 'w-[23px] flex-none text-center font-mono tracking-[0.02em]'
+
+/** The colour each family wears. Every one is a token this window already uses. */
+const TINTS: Record<string, string> = {
+  code: 'text-primary',
+  data: 'text-warning',
+  markup: 'text-confine',
+  doc: 'text-muted-foreground',
+  image: 'text-success',
+  media: 'text-destructive',
+  archive: 'text-primary',
+}
 
 /** Which family each extension belongs to. Extensions, not names: a name is not a type. */
 const FAMILIES: Record<string, string> = {
@@ -70,7 +90,18 @@ export function glyphOf(name: string): { label: string; family: string } {
 export function FileGlyph({ name }: { name: string }): React.JSX.Element {
   const { label, family } = glyphOf(name)
   return (
-    <span className={`tree-glyph ${family}`} aria-hidden="true">
+    <span
+      className={cn(
+        'tree-glyph',
+        family,
+        glyphBox,
+        'text-[8px] font-semibold',
+        // A family this table has never heard of wears the quietest ink there is, which is the
+        // colour saying "not one I know".
+        TINTS[family] ?? 'text-muted-foreground/70',
+      )}
+      aria-hidden="true"
+    >
       {label}
     </span>
   )

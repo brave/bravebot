@@ -34,6 +34,7 @@ import { AuditInspector } from './components/AuditInspector'
 import { conversationKey } from '../shared/experience'
 import { useExperience, conversationPreferences, setConversation, experienceError } from './experience'
 import { ThemePicker } from './components/ThemePicker'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { applyTheme, watchAppearance } from './theme'
 import { BRAVE, BRAVE_THEME, BUILTINS, findTheme, type Theme } from '../shared/theme'
 
@@ -1182,13 +1183,32 @@ export function App(): React.JSX.Element {
   usePublishedState(menuState)
 
   return (
+    <TooltipProvider>
     <div
       className={[
-        'app',
+        'app relative grid h-screen bg-background text-foreground',
+        // The side widths come from the custom properties below; the transcript takes what is
+        // left. `minmax(0, 1fr)` rather than a pixel minimum because the minimum is enforced in
+        // columns.ts against the window — a floor declared here as well would fight it.
+        //
+        // With no session there is no context column to size, and on a narrow window the panel
+        // stops being a column and becomes an overlay (see `Context`), so both collapse the last
+        // two tracks to nothing.
+        !live
+          ? 'grid-cols-[var(--col-left)_1px_minmax(0,1fr)_0_0]'
+          : 'grid-cols-[var(--col-left)_1px_minmax(0,1fr)_1px_var(--col-right)] max-[1120px]:grid-cols-[var(--col-left)_1px_minmax(0,1fr)_0_0]',
         !live ? 'no-session' : '',
         preferences.density,
-        dragging ? 'resizing' : '',
-        folding ? 'folding' : '',
+        // While a drag is live the pointer is often over the transcript rather than the divider.
+        // Both of these keep the gesture feeling like one thing: no text gets selected on the way
+        // past, and the cursor does not flicker between column-resize and a text caret.
+        dragging ? 'resizing cursor-col-resize select-none transition-none' : '',
+        // A side column folds away rather than blinking out: the browser interpolates between two
+        // track lists of the same shape, so nothing here has to know how wide the column was and
+        // the dividers stay where they belong throughout. Armed only while something is actually
+        // folding — a drag, an arrow key and a window resize all move these same tracks and must
+        // land on the frame they happen.
+        folding ? 'folding transition-[grid-template-columns] duration-[180ms] ease-[cubic-bezier(0.32,0.72,0,1)]' : '',
         collapsed.left ? 'left-folded' : '',
         collapsed.right ? 'right-folded' : '',
       ]
@@ -1294,9 +1314,13 @@ export function App(): React.JSX.Element {
       <Context live={live} onClose={() => toggle('right')} audit={selectedAudit ?
         <AuditInspector key={`${selectedAudit.handle}:${selectedAudit.turn}`} details={selectedAudit.turn === null ? undefined : live?.turns[selectedAudit.turn]} onClose={closeAudit} /> : null} />
       {[...openedLives.current.values()].some((item) => item.handle !== live?.handle && item.running) && (
-        <div className="background-tasks" aria-label="Background tasks">
+        <div className="background-tasks fixed bottom-3 left-3 z-25 grid w-55 gap-1.5" aria-label="Background tasks">
           {[...openedLives.current.values()].filter((item) => item.handle !== live?.handle && item.running).map((item) => (
-            <button key={item.handle} onClick={() => setLive(item)}>
+            <button
+              key={item.handle}
+              className="rounded-lg border border-primary bg-background px-2.5 py-2 text-left text-xs shadow-sm"
+              onClick={() => setLive(item)}
+            >
               {t.outstanding(item.entries) ? t.outstanding(item.entries)?.kind === 'ask' ? 'Answer needed' : 'Approval needed' : 'Working'} · {item.summary.title}
             </button>
           ))}
@@ -1329,6 +1353,7 @@ export function App(): React.JSX.Element {
         />
       )}
     </div>
+    </TooltipProvider>
   )
 }
 

@@ -25,7 +25,7 @@
 /**
  * The nine meanings a palette assigns a colour to.
  *
- * Nine rather than the nineteen tokens `styles.css` actually uses, because the extra ten are
+ * Nine rather than the tokens `globals.css` actually uses, because the extras are
  * derivable — a rule at 12% of the failure colour, a ground four points off the background — and
  * asking somebody writing a palette for nineteen values would be asking them to do arithmetic the
  * stylesheet can do itself. The derivation lives in the `:root[data-theme]` block there.
@@ -81,22 +81,22 @@ const MAX_THEME_BYTES = 64
  *
  * Exported although nothing imports them: `scripts/drive-theme.mjs` finds them by this spelling.
  *
- * These duplicate the `:root` block in `styles.css`, which is a real cost and a deliberate one.
- * The alternative is reading the tokens back out of the document with `getComputedStyle`, and that
- * only tells the truth while no theme is applied — the moment one is, the values it would report
- * are the theme's own, so a partial palette applied second would inherit from the first. A pair of
- * literals cannot drift silently either: `scripts/drive-theme.mjs` asserts they still match what
- * the stylesheet computes.
+ * These duplicate the `:root` / `.dark` blocks in `globals.css`, which is a real cost and a
+ * deliberate one. The alternative is reading the tokens back out of the document with
+ * `getComputedStyle`, and that only tells the truth while no theme is applied — the moment one
+ * is, the values it would report are the theme's own, so a partial palette applied second would
+ * inherit from the first. A pair of literals cannot drift silently either:
+ * `scripts/drive-theme.mjs` asserts they still match what the stylesheet computes.
  *
  * `note` and `primary` are the same orange in both, because the accent is the one thing the dark
- * block in `styles.css` deliberately does not override.
+ * block in `globals.css` deliberately does not override.
  */
 export const BRAVE_LIGHT: Palette = {
   background: '#ffffff',
-  text: '#1c1c1e',
-  muted: '#6b6b70',
+  text: '#0a0a0a',
+  muted: '#737373',
   ok: '#1a7f37',
-  fail: '#c0392b',
+  fail: '#e7000b',
   running: '#9a6700',
   accent: '#6f42c1',
   note: '#f2600c',
@@ -104,11 +104,11 @@ export const BRAVE_LIGHT: Palette = {
 }
 
 export const BRAVE_DARK: Palette = {
-  background: '#1c1c1e',
-  text: '#f2f2f7',
-  muted: '#a1a1a6',
+  background: '#0a0a0a',
+  text: '#fafafa',
+  muted: '#a3a3a3',
   ok: '#3fb950',
-  fail: '#f85149',
+  fail: '#ff6467',
   running: '#d4a72c',
   accent: '#b392f0',
   note: '#f2600c',

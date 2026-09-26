@@ -552,7 +552,7 @@ where they are and never read again.
 it, Enter keeps the choice, Escape puts back what was there.
 
 `brave` is the default and means what this window has always looked like: the macOS palette in
-`styles.css`, following the system between light and dark. It is not a theme that happens to match
+`globals.css`, following the system between light and dark. It is not a theme that happens to match
 — under `brave` no theme is applied at all, which is why it costs nothing, why the native sidebar
 blur survives it, and why an exported PDF stays white however dark the window is.
 
@@ -571,7 +571,7 @@ running, a confinement, the session's own voice and the person at the keyboard:
   "accent": "#b48ead", "note": "#d08770", "primary": "#88c0d0" }
 ```
 
-Nine and not nineteen: `styles.css` mixes the window's other tokens from these in a
+Nine and not nineteen: `globals.css` mixes the window's other tokens from these in a
 `:root[data-theme]` block, so writing a palette is choosing colours rather than computing a rule at
 fourteen percent of your own ink. Any key left out, or set to `"none"`, is inherited — a palette
 that only changes the accent is two lines long, and one that inherits its background keeps the

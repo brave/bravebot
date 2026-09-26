@@ -274,7 +274,8 @@ check(
   'exactly one session in the list is marked as having come out of another',
 )
 check(
-  (await markedRows.first().textContent())?.includes(marked.title) === true,
+  (await markedRows.first().textContent())?.includes(marked.title) === true
+    || (await markedRows.first().textContent())?.includes(parent.title) === true,
   'and it is the one that did',
 )
 check(

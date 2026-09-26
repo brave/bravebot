@@ -93,7 +93,11 @@ check(
 
 // --- a width worth remembering -------------------------------------------------------
 // Measured rather than assumed: this app remembers its layout between runs, so the width
-// the window opens at is whatever the last driver left behind.
+// the window opens at is whatever the last driver left behind. Double-click resets to the
+// shipped default first so a previous run that left the column at its max still leaves
+// room for the +60px drag below.
+await page.locator('.gutter').nth(0).dblclick()
+await page.waitForTimeout(150)
 const started = await width(page, '.sessions')
 await drag(page, 0, 60)
 const dragged = await width(page, '.sessions')

@@ -57,7 +57,7 @@ async function render(document: ExportDocument, at: number): Promise<Buffer> {
   const window = new BrowserWindow({
     show: false,
     // Roughly a page's proportions, so what the page measures while laying out is close to
-    // what it will be printed at. The paper itself is decided by `@page` in `export.css`.
+    // what it will be printed at. The paper itself is decided by `@page` in `globals.css`.
     width: 850,
     height: 1100,
     webPreferences: {
@@ -106,7 +106,7 @@ async function render(document: ExportDocument, at: number): Promise<Buffer> {
       // Without this the bubbles print colourless, which is most of what "looks like the
       // app" means.
       printBackground: true,
-      // The paper and the styles that fit it live together in `export.css`, rather than the
+      // The paper and the styles that fit it live together in `globals.css`, rather than the
       // size being decided here and the margins there.
       preferCSSPageSize: true,
       // Reading order and structure in the file, so the result is a document with selectable

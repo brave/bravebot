@@ -1,0 +1,314 @@
+@layer theme, base, components, utilities;
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-confine: var(--confine);
+  --color-confine-foreground: var(--confine-foreground);
+  --color-bubble-user: var(--bubble-user);
+  --color-bubble-user-foreground: var(--bubble-user-foreground);
+  --color-bubble-agent: var(--bubble-agent);
+  --color-code: var(--code);
+  /* The ground under the file tree. Its own token because the two appearances want opposite
+     things of it: the window's own white in light, a lift off the dark ground in dark. */
+  --color-tree: var(--tree-bg);
+  --font-mono: var(--mono);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+  --font-heading: var(--font-sans);
+  --font-sans: 'Geist Variable', sans-serif;
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+}
+
+:root {
+  --radius: 0.625rem;
+  --background: #ffffff;
+  --foreground: #0a0a0a;
+  --card: #ffffff;
+  --card-foreground: #0a0a0a;
+  --popover: #ffffff;
+  --popover-foreground: #0a0a0a;
+  --primary: #f2600c;
+  --primary-foreground: #ffffff;
+  --secondary: #f5f5f5;
+  --secondary-foreground: #171717;
+  --muted: #f5f5f5;
+  --muted-foreground: #737373;
+  --accent: #f5f5f5;
+  --accent-foreground: #171717;
+  --destructive: #e7000b;
+  --border: #e5e5e5;
+  --input: #e5e5e5;
+  --ring: #f2600c;
+  --sidebar: rgba(245, 245, 245, 0.72);
+  --sidebar-foreground: #0a0a0a;
+  --sidebar-primary: #f2600c;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #f5f5f5;
+  --sidebar-accent-foreground: #171717;
+  --sidebar-border: #e5e5e5;
+  --sidebar-ring: #f2600c;
+  --success: #1a7f37;
+  --success-foreground: #ffffff;
+  --warning: #9a6700;
+  --warning-foreground: #ffffff;
+  --confine: #6f42c1;
+  --confine-foreground: #ffffff;
+  --bubble-user: #f2600c;
+  --bubble-user-foreground: #ffffff;
+  --bubble-agent: #f5f5f5;
+  --code: rgba(0, 0, 0, 0.055);
+  /* Four legacy names remain load-bearing and are read from components: `--mono` behind
+     `font-mono`, `--tree-bg` behind `--color-tree`, `--panel-duration` behind the fold
+     transition, and `--confine-bg` behind the hatching on a confined block — a repeating
+     gradient is not a colour, so no `bg-*` utility can carry it. */
+  --confine-bg: color-mix(in srgb, var(--confine) 12%, transparent);
+  --tree-bg: color-mix(in srgb, var(--foreground) 4%, var(--background));
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  --lights: 78px;
+  --panel-duration: 180ms;
+  --panel-motion: var(--panel-duration) cubic-bezier(0.32, 0.72, 0, 1);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+}
+
+.dark {
+  --background: #0a0a0a;
+  --foreground: #fafafa;
+  --card: #171717;
+  --card-foreground: #fafafa;
+  --popover: #171717;
+  --popover-foreground: #fafafa;
+  --primary: #f2600c;
+  --primary-foreground: #ffffff;
+  --secondary: #262626;
+  --secondary-foreground: #fafafa;
+  --muted: #262626;
+  --muted-foreground: #a3a3a3;
+  --accent: #262626;
+  --accent-foreground: #fafafa;
+  --destructive: #ff6467;
+  --border: #ffffff1a;
+  --input: #ffffff26;
+  --ring: #f2600c;
+  --sidebar: rgba(23, 23, 23, 0.72);
+  --sidebar-foreground: #fafafa;
+  --sidebar-primary: #f2600c;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #262626;
+  --sidebar-accent-foreground: #fafafa;
+  --sidebar-border: #ffffff1a;
+  --sidebar-ring: #f2600c;
+  --success: #3fb950;
+  --success-foreground: #0a0a0a;
+  --warning: #d4a72c;
+  --warning-foreground: #0a0a0a;
+  --confine: #b392f0;
+  --confine-foreground: #0a0a0a;
+  --bubble-user: #f2600c;
+  --bubble-user-foreground: #ffffff;
+  --bubble-agent: #262626;
+  --code: rgba(255, 255, 255, 0.07);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+}
+
+/* Named themes: bridge the nine role variables onto shadcn + app tokens. */
+:root[data-theme] {
+  color-scheme: var(--role-scheme);
+  --background: var(--role-background);
+  --foreground: var(--role-text);
+  --card: var(--role-background);
+  --card-foreground: var(--role-text);
+  --popover: var(--role-background);
+  --popover-foreground: var(--role-text);
+  --primary: var(--role-note);
+  --primary-foreground: var(--role-note-ink);
+  --secondary: color-mix(in srgb, var(--role-text) 8%, var(--role-background));
+  --secondary-foreground: var(--role-text);
+  --muted: color-mix(in srgb, var(--role-text) 8%, var(--role-background));
+  --muted-foreground: color-mix(in srgb, var(--role-muted) 72%, var(--role-text));
+  --accent: color-mix(in srgb, var(--role-text) 8%, var(--role-background));
+  --accent-foreground: var(--role-text);
+  --destructive: var(--role-fail);
+  --border: color-mix(in srgb, var(--role-text) 14%, transparent);
+  --input: color-mix(in srgb, var(--role-text) 14%, transparent);
+  --ring: var(--role-note);
+  --sidebar: color-mix(in srgb, var(--role-text) 4%, var(--role-background));
+  --sidebar-foreground: var(--role-text);
+  --sidebar-primary: var(--role-note);
+  --sidebar-primary-foreground: var(--role-note-ink);
+  --sidebar-accent: color-mix(in srgb, var(--role-text) 8%, var(--role-background));
+  --sidebar-accent-foreground: var(--role-text);
+  --sidebar-border: color-mix(in srgb, var(--role-text) 14%, transparent);
+  --sidebar-ring: var(--role-note);
+  --success: var(--role-ok);
+  --success-foreground: var(--role-note-ink);
+  --warning: var(--role-running);
+  --warning-foreground: var(--role-note-ink);
+  --confine: var(--role-accent);
+  --confine-foreground: var(--role-note-ink);
+  --bubble-user: var(--role-primary);
+  --bubble-user-foreground: var(--role-primary-ink);
+  --bubble-agent: color-mix(in srgb, var(--role-text) 9%, var(--role-background));
+  --code: color-mix(in srgb, var(--role-text) 7%, transparent);
+}
+
+:root[data-theme]:not([data-ground]) {
+  --background: #ffffff;
+  --sidebar: rgba(245, 245, 245, 0.72);
+}
+
+:root[data-theme].dark:not([data-ground]) {
+  --background: #0a0a0a;
+  --sidebar: rgba(23, 23, 23, 0.72);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    box-sizing: border-box;
+  }
+  body {
+    @apply bg-background text-foreground;
+    margin: 0;
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    /* The window does not scroll. The three columns each scroll their own contents, and a
+       scrollbar on the window itself would be a fourth one nothing needs. */
+    overflow: hidden;
+  }
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
+  button {
+    color: inherit;
+    cursor: pointer;
+  }
+  /* Keyboard focus, for the bare elements in the window that are not one of the shadcn controls
+     — the buttons in the conversation toolbar, the find row, the welcome screen. It sits in the
+     base layer so those get it by default while the shadcn components' own focus rings, which are
+     utilities, keep winning where they are used. Not expressible as a utility: the whole point is
+     that it applies without being asked for. */
+  :is(a, button, input, textarea, summary):focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 3px;
+  }
+  html {
+    @apply font-sans;
+  }
+}
+
+/* ------------------------------------------------------------------ motion
+
+   The two animations the window owns. Everything else in this file's former companion sheet
+   is now a utility on the component that draws it; these cannot be, because a keyframe set has
+   no utility form — only the `animate-[…]` reference to one does.
+
+   `fork-landed` is where a fork's link touched down. Two rings, the inner one the page's own
+   ground: a prompt bubble is already accent-coloured, and an accent ring drawn against it is no
+   mark at all. The gap is what makes it read on any row, whatever colour the row is. */
+@keyframes fork-landed {
+  0%,
+  60% {
+    box-shadow: 0 0 0 3px var(--background), 0 0 0 5px var(--primary);
+  }
+  100% {
+    box-shadow: 0 0 0 3px var(--background), 0 0 0 5px transparent;
+  }
+}
+
+@keyframes about-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Somebody who has asked for less movement gets the end state rather than the journey. The mark
+   on a landed fork keeps its ring, because it is information and not decoration; the two panels
+   simply arrive. A media query cannot be a utility, and `motion-reduce:` cannot reach an
+   animation's own keyframes, so this is the one shape these can take. */
+@media (prefers-reduced-motion: reduce) {
+  .entry-hit.focused > * {
+    animation: none;
+    box-shadow: 0 0 0 3px var(--background), 0 0 0 5px var(--primary);
+  }
+  .popmenu,
+  .modal.about {
+    animation: none;
+  }
+}
+
+/* ------------------------------------------------------------------ export / print
+
+   The offscreen PDF window shares this stylesheet but must scroll and stay light. It never
+   imports `theme.ts`, so `.dark` is never set; `:has(.export)` lifts the app shell's
+   overflow:hidden so Chromium can measure a page taller than the window. */
+@page {
+  size: Letter;
+  margin: 18mm 16mm;
+}
+
+html:has(.export),
+html:has(.export) body {
+  overflow: visible;
+  height: auto;
+  background: #ffffff;
+}

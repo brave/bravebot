@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { cn } from '@/lib/utils'
 import {
   FOLD_MS,
   INITIAL,
@@ -218,7 +219,26 @@ export function Gutter({
 
   return (
     <div
-      className={`gutter ${side} ${dragging ? 'dragging' : ''} ${collapsed ? 'inert' : ''}`}
+      className={cn(
+        'gutter relative touch-none bg-border',
+        // A 9px catch area straddling the 1px seam. Hit target and appearance are separate
+        // problems and this is the cheapest way to stop them being the same number.
+        'after:absolute after:inset-y-0 after:-right-1 after:-left-1 after:z-2 after:content-[""]',
+        // With nothing to resize, the seam stays — it is the transcript's border — and stops
+        // behaving like a handle. The catch pad in particular has to go: beside a folded left
+        // column it would reach past the window's own edge, where macOS wants its resize cursor.
+        collapsed && 'after:hidden',
+        // There is no context column to divide off when no session is open, so the seam that
+        // would have bordered it is not drawn either.
+        '[.app.no-session_&:last-of-type]:invisible',
+        // A narrow window floats the context column over the transcript instead of dividing the
+        // two, so there is no seam between them to drag.
+        side === 'right' && 'max-[1120px]:hidden',
+        side,
+        dragging ? 'dragging bg-primary' : '',
+        collapsed ? 'inert cursor-default hover:bg-border' : 'cursor-col-resize hover:bg-primary',
+        !collapsed && 'focus-visible:bg-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary',
+      )}
       // Kept as a separator, and kept named, even when it does nothing: announcing it as
       // unavailable says more than having it disappear from under the reader.
       role="separator"

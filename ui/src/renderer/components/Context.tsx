@@ -1,7 +1,14 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { ChevronRightIcon, XIcon } from 'lucide-react'
+import { cn } from '@/lib/utils'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Empty, EmptyDescription } from '@/components/ui/empty'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { Fold } from './Fold'
 import { FileTree } from './FileTree'
-import { type PanelName } from '../../shared/state'
+import { PanelIcon } from './PanelIcon'
+import { PANEL_NAMES, type PanelName } from '../../shared/state'
 import { isConfined, type Activity, type Phase, type Shown, type TodoRow } from '../../shared/protocol'
 import type { Entry } from '../transcript'
 
@@ -15,6 +22,57 @@ interface Live {
   phase: Phase | null
   tokens: number
   running: boolean
+}
+
+/**
+ * The column itself.
+ *
+ * `[&>*]:min-w-…` hands every direct child the width the column will come back at, so a fold
+ * slides them under a clip instead of reflowing them — panel headings re-wrapping into narrower
+ * and narrower shapes for 180ms, on their way to being invisible. A no-op while the column is
+ * open, where the two widths are the same number.
+ *
+ * A folded column must not be tabbable or read out, and a zero-width track does neither on its
+ * own; hiding waits for the fold to finish so there is something to watch on the way out, and
+ * lifts at once on the way back. Driven from the root class so the column need not know that
+ * folding exists.
+ *
+ * Narrow windows have no room for a third track, so the column stops being one and lies over the
+ * transcript instead — with the shadow that says it is on top, and inert while it is folded away.
+ */
+const COLUMN = cn(
+  'context',
+  'flex flex-col overflow-hidden bg-sidebar',
+  '[&>*]:min-w-[var(--col-right-open)]',
+  '[.app.right-folded_&]:invisible [.app.right-folded_&]:[transition:visibility_0s_linear_180ms]',
+  '[.app.no-session_&]:invisible',
+  'max-[1120px]:absolute max-[1120px]:inset-y-0 max-[1120px]:right-0 max-[1120px]:z-35 max-[1120px]:w-[310px] max-[1120px]:bg-background max-[1120px]:shadow-[-12px_0_32px_#0002]',
+  'max-[1120px]:[.app.right-folded_&]:pointer-events-none',
+)
+
+/** The lists of paths this column keeps, and the parts one line of one is made of. */
+const FILE_LIST = 'files flex flex-col gap-0 text-xs'
+const FILE_ROW = 'flex items-baseline gap-1.5 py-[3px]'
+/** Full-strength ink: a path is the thing being read here, not an aside about one. */
+const FILE_LINK = 'context-link h-auto min-w-0 truncate px-0 py-1 text-left font-mono text-xs text-foreground'
+const TAG = 'tag ml-auto text-[9px] uppercase'
+
+/**
+ * What each outcome is coloured.
+ *
+ * Only the two ends are spoken for: a write that landed, and one that will not. Everything
+ * between them is the warn colour, because "approved", "applying" and "waiting" are the same
+ * thing to a reader — not finished yet — and colouring them apart would claim a difference this
+ * panel cannot stand behind.
+ */
+const TAG_TINT: Record<Write['state'], string> = {
+  approved: 'text-warning',
+  applying: 'text-warning',
+  waiting: 'text-warning',
+  applied: 'text-success',
+  failed: 'text-destructive',
+  refused: 'text-destructive',
+  cancelled: 'text-muted-foreground/70',
 }
 
 /**
@@ -37,15 +95,29 @@ interface Live {
  * like in a real editor — is not one the transcript can be asked.
  */
 export function Context({ live, onClose, audit }: { live: Live | null; onClose: () => void; audit?: React.ReactNode }): React.JSX.Element {
-  const [tab, setTab] = useState<'overview' | 'files'>('overview')
-  const off = new Set<PanelName>(tab === 'overview' ? ['files'] : ['plan', 'read', 'writes', 'confined'])
+  const [off, setOff] = useState<ReadonlySet<PanelName>>(new Set())
+
+  useEffect(() => {
+    void window.bravebot.readPanels().then((panels) => setOff(new Set(panels.off)))
+  }, [])
+
+  const on = PANEL_NAMES.filter((name) => !off.has(name))
+  const setOn = (next: readonly string[]) => {
+    const pressed = new Set(next.filter((name): name is PanelName =>
+      (PANEL_NAMES as readonly string[]).includes(name)))
+    const nextOff = PANEL_NAMES.filter((name) => !pressed.has(name))
+    setOff(new Set(nextOff))
+    window.bravebot.writePanels({ off: nextOff })
+  }
+
   const reveal = (path: string) => {
     const entry = [...(live?.entries ?? [])].reverse().find((entry) =>
       entry.kind === 'tool' ? fileTarget(entry.activity.target) === path : entry.kind === 'confirm' ? entry.request.path === path : false)
     if (entry) document.dispatchEvent(new CustomEvent('bravebot:reveal-entry', { detail: entry.id }))
   }
 
-  if (!live) return <aside className={`context ${tab === 'files' ? 'context-files' : ''}`} id="context-column" />
+  const filesOn = !off.has('files')
+  if (!live) return <aside className={cn(COLUMN, filesOn && 'context-files')} id="context-column" />
 
   const files = touched(live.entries)
   const writes = written(live.entries)
@@ -70,8 +142,16 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
   }
 
   return (
-    <aside className={`context ${tab === 'files' ? 'context-files' : ''}`} id="context-column">
-      <div className="context-content" hidden={!!audit}>
+    <aside className={cn(COLUMN, filesOn && 'context-files')} id="context-column">
+      {/* With the tree on, the body is a column that clips and hands the panel below it the rest
+          of the height; with it off, the body is what scrolls. */}
+      <div
+        className={cn(
+          'context-content min-h-0 flex-1',
+          filesOn ? 'flex flex-col overflow-hidden' : 'overflow-y-auto',
+        )}
+        hidden={!!audit}
+      >
       {/* One connected row, because these five are one choice about one column rather than five
           unrelated switches — the shape a segmented control has on this platform.
 
@@ -83,22 +163,69 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
       {/* Wrapped, because `.context > *` hands every direct child of this column the width the
           column will come back at when it unfolds — which a full-width row of buttons plus its
           own margins overflows. The wrapper takes that width and the bar sits inside it. */}
-      <div className="context-head">
-        <div className="inspector-title"><strong>Project context</strong><button className="drawer-close" onClick={onClose} aria-label="Close context panel">×</button></div>
-        <div className="inspector-tabs" role="tablist" aria-label="Project context">
-          {(['overview', 'files'] as const).map((name) => <button key={name} role="tab" aria-selected={tab === name} onClick={() => setTab(name)}>{name === 'overview' ? 'Overview' : 'Files'}</button>)}
+      <div className="context-head flex-none px-3.5 pt-3.5 pb-2">
+        <div className="inspector-title flex items-center justify-between gap-2 pb-3.5 text-[13px]">
+          <strong>Project context</strong>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="drawer-close"
+            onClick={onClose}
+            aria-label="Close context panel"
+          >
+            <XIcon />
+          </Button>
         </div>
-
+        {/* Borders on the insides only, so the row reads as a single object with divisions in it
+            rather than as five controls that happen to be adjacent. Nothing of its own behind it:
+            the lit segments are the light ones, so the ground has to be the column's, or the
+            panels that are *off* would be the ones glowing. */}
+        <ToggleGroup
+          multiple
+          spacing={0}
+          className="panel-bar w-full overflow-hidden rounded-[7px] border border-border bg-transparent"
+          value={on}
+          onValueChange={setOn}
+          aria-label="Context panels"
+        >
+          {PANEL_NAMES.map((name) => (
+            <ToggleGroupItem
+              key={name}
+              value={name}
+              // On, in the accent and on a ground of its own. Two differences rather than one:
+              // colour alone would leave the state invisible to anybody who cannot see this
+              // particular orange, and `aria-pressed` is what says it to a screen reader anyway.
+              className={cn(
+                'panel-pick h-[26px] flex-1 rounded-none border-0 border-l border-border first:border-l-0',
+                'text-muted-foreground/70 hover:bg-foreground/12 hover:text-muted-foreground',
+                'aria-pressed:bg-tree aria-pressed:text-primary',
+              )}
+              aria-controls={`panel-${name}`}
+              aria-label={labels[name]}
+              title={labels[name]}
+            >
+              <PanelIcon panel={name} />
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
       </div>
 
       <Section id="plan" title="Plan" count={live.todos.length} off={off.has('plan')}>
         {live.todos.length === 0 ? (
-          <p className="none">{onlyReplayed ? 'No plan was recorded.' : 'No plan yet.'}</p>
+          <ContextEmpty>{onlyReplayed ? 'No plan was recorded.' : 'No plan yet.'}</ContextEmpty>
         ) : (
-          <ul className="todos">
+          <ul className="todos flex flex-col gap-0 text-xs">
             {live.todos.map((row, index) => (
-              <li key={index} className={row.status}>
-                <span className="marker">
+              <li
+                key={index}
+                className={cn(
+                  row.status,
+                  'flex gap-1.5 py-[3px] text-muted-foreground',
+                  row.status === 'done' && 'text-muted-foreground/70 line-through',
+                  row.status === 'active' && 'font-medium text-foreground',
+                )}
+              >
+                <span className="marker text-primary">
                   {row.status === 'done' ? '✓' : row.status === 'active' ? '▸' : '·'}
                 </span>
                 {row.content}
@@ -121,34 +248,45 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
       >
         {onlyReplayed ? (
           <>
-            <p className="none">
+            <ContextEmpty>
               From the record. It keeps what each turn did, not what came of it, so
               there is nothing to say about where these landed.
-            </p>
+            </ContextEmpty>
             {/* Every path in this list and the two below it ellipsises, and a path clipped
                 on the right loses the filename — the one part of it somebody is reading
                 for. The tooltip is the whole string back. It repeats what is already on
                 screen when the path is short enough to fit, which is the cheaper of the two
                 mistakes available: the alternative is measuring every row on every render
-                to decide whether to offer one. */}
-            <ul className="files">
+                to decide whether to offer one.
+
+                These rows are lines from the record, which have no outcome behind them, so they
+                are marked off down the left and drawn back: all they say is that the turn made
+                the call. */}
+            <ul className={FILE_LIST}>
               {replayed.map((entry) =>
                 entry.kind === 'replayed-tool' ? (
-                  <li key={entry.id} className="from-record">
-                    <code title={entry.text}>{entry.text}</code>
+                  <li key={entry.id} className={cn('from-record', FILE_ROW, 'border-l-2 border-border pl-1.5')}>
+                    <code className="min-w-0 truncate font-mono text-[11px] opacity-70" title={entry.text}>{entry.text}</code>
                   </li>
                 ) : null,
               )}
             </ul>
           </>
         ) : files.length === 0 ? (
-          <p className="none">Nothing read yet.</p>
+          <ContextEmpty>Nothing read yet.</ContextEmpty>
         ) : (
-          <ul className="files">
+          <ul className={FILE_LIST}>
             {files.map((file) => (
-              <li key={file.target} className={file.confined ? 'confined' : ''}>
-                <button className="context-link" onClick={() => reveal(file.target)} title={file.target}>{file.target}</button>
-                {file.confined && <span className="tag">confined</span>}
+              <li key={file.target} className={cn(file.confined && 'confined', FILE_ROW)}>
+                <Button
+                  variant="link"
+                  className={FILE_LINK}
+                  onClick={() => reveal(file.target)}
+                  title={file.target}
+                >
+                  {file.target}
+                </Button>
+                {file.confined && <Badge variant="outline" className={cn(TAG, 'text-confine')}>confined</Badge>}
               </li>
             ))}
           </ul>
@@ -157,17 +295,24 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
 
       <Section id="writes" title="Changes" count={writes.length} off={off.has('writes')}>
         {writes.length === 0 ? (
-          <p className="none">
+          <ContextEmpty>
             {onlyReplayed
               ? 'Not recorded for past turns.'
               : 'Nothing has been written.'}
-          </p>
+          </ContextEmpty>
         ) : (
-          <ul className="files">
+          <ul className={FILE_LIST}>
             {writes.map((write) => (
-              <li key={write.target} className={write.state}>
-                <button className="context-link" onClick={() => reveal(write.target)} title={write.target}>{write.target}</button>
-                <span className="tag">{write.state}</span>
+              <li key={write.target} className={cn(write.state, FILE_ROW)}>
+                <Button
+                  variant="link"
+                  className={FILE_LINK}
+                  onClick={() => reveal(write.target)}
+                  title={write.target}
+                >
+                  {write.target}
+                </Button>
+                <Badge variant="outline" className={cn(TAG, TAG_TINT[write.state])}>{write.state}</Badge>
               </li>
             ))}
           </ul>
@@ -181,19 +326,19 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
         off={off.has('confined')}
       >
         {live.quarantine.length === 0 ? (
-          <p className="none">
+          <ContextEmpty>
             {onlyReplayed
               ? 'Not recorded for past turns. Confined content is never written down.'
               : 'Nothing confined.'}
-          </p>
+          </ContextEmpty>
         ) : (
-          <ul className="confined-list">
+          <ul className="confined-list flex flex-col gap-0 text-xs">
             {live.quarantine.map((shown, index) => (
-              <li key={index}>
-                <div className="origin" title={shown.origin}>
+              <li key={index} className="border-b border-border py-[5px]">
+                <div className="origin font-mono text-[11px] break-all" title={shown.origin}>
                   {shown.origin}
                 </div>
-                <div className="detail">
+                <div className="detail text-[10px] text-muted-foreground/70">
                   {shown.lines} line{shown.lines === 1 ? '' : 's'} · {shown.label}
                 </div>
               </li>
@@ -211,7 +356,14 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
 
           Keyed by the handle so switching sessions resets the tree rather than showing one
           project's folders under another's root while the new listing arrives. */}
-      <section className={`files-panel ${off.has('files') ? 'off' : ''}`} id="panel-files" aria-label="Project files">
+      <section
+        className={cn(
+          'panel files-panel flex min-h-0 flex-1 border-b border-border px-3.5 pt-2 pb-3.5',
+          off.has('files') && 'off hidden',
+        )}
+        id="panel-files"
+        aria-label="Project files"
+      >
         <FileTree
           key={live.handle}
           session={live.handle}
@@ -222,6 +374,21 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
       </div>
       {audit}
     </aside>
+  )
+}
+
+/**
+ * What a panel says when it has nothing to list.
+ *
+ * Its own margins rather than the panel's padding, because a panel that holds one of these is
+ * holding a sentence and not a list, and the room a list needs around it makes the sentence look
+ * lost. The panel takes its padding back in `has-[.none]`.
+ */
+function ContextEmpty({ children }: { children: React.ReactNode }): React.JSX.Element {
+  return (
+    <Empty className="none mt-1 mb-2.5 min-h-0 flex-none items-start gap-0 border-0 p-0 text-left text-muted-foreground/70">
+      <EmptyDescription className="text-left text-xs text-inherit">{children}</EmptyDescription>
+    </Empty>
   )
 }
 
@@ -247,21 +414,36 @@ function Section({
 }): React.JSX.Element {
   const [open, setOpen] = useState(true)
   return (
-    <section className={`panel ${off ? 'off' : ''}`} id={`panel-${id}`}>
-      <button
-        className="panel-head"
+    // Turned off from the bar. Out of the flow rather than folded away: this is not a movement
+    // anybody should watch, and it takes the panel out of the tab order and the accessibility
+    // tree with it.
+    <section className={cn('panel flex-none border-b border-border', off && 'off hidden')} id={`panel-${id}`}>
+      <Button
+        variant="ghost"
+        className="panel-head h-auto w-full justify-start rounded-none px-3.5 py-2.5 text-xs font-semibold tracking-[0.02em] text-muted-foreground"
         aria-expanded={open}
         // The verb in the title and the name staying put, the rule `ColumnToggle` states.
         title={`${open ? 'Hide' : 'Show'} ${title.toLowerCase()}`}
         onClick={() => setOpen(!open)}
       >
-        <span className={`chevron ${open ? 'open' : ''}`} aria-hidden="true">
-          ›
-        </span>
+        <ChevronRightIcon
+          className={cn(
+            'chevron size-3! transition-transform duration-[180ms] ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none',
+            open && 'open rotate-90',
+          )}
+          aria-hidden="true"
+        />
         {title}
-        {count !== undefined && count > 0 && <span className="count">{count}</span>}
-      </button>
-      <Fold open={open} className="panel-inner">
+        {count !== undefined && count > 0 && (
+          <Badge variant="secondary" className="count ml-auto h-auto rounded-lg px-1.5 py-px text-[10px]">{count}</Badge>
+        )}
+      </Button>
+      {/* A panel holding a sentence instead of a list gives most of its padding back: the
+          sentence carries its own, and the two together left a hole under every empty panel. */}
+      <Fold
+        open={open}
+        className="panel-inner px-3.5 pt-2 pb-3.5 has-[.none]:pt-0 has-[.none]:pb-1"
+      >
         {children}
       </Fold>
     </section>

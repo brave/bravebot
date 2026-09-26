@@ -6,19 +6,18 @@
  * its background. The same reasoning `App.tsx` gives for setting the column widths as custom
  * properties on the root element — a drag has to be cheap, and so does this.
  *
- * What lands on the root is one attribute and twelve properties. The attribute is the switch:
- * `styles.css` derives its nineteen colour tokens from the properties inside a `:root[data-theme]`
- * block, and with no attribute that block does not apply and the window is the macOS palette it
- * has always been. That is what `brave` is here — not a theme that happens to match, but the
- * absence of one.
+ * What lands on the root is one class, optional attributes, and twelve properties. The class is
+ * the dark-mode switch Tailwind/shadcn read (`@custom-variant dark (&:is(.dark *))`). The
+ * `data-theme` attribute is the switch for named palettes: `globals.css` derives its colour
+ * tokens from the `--role-*` properties inside a `:root[data-theme]` block, and with no
+ * attribute that block does not apply and the window is the stock `brave` palette. That is
+ * what `brave` is here — not a theme that happens to match, but the absence of one.
  *
  * ## The one rule about the offscreen window
  *
- * Nothing in this module may be called from `export.tsx`. The PDF is pinned light by source order:
- * `export.css` re-declares the tokens in a plain `:root` block that beats the dark `@media` rule in
- * `styles.css` only because they have the same specificity. `:root[data-theme]` outranks both. The
- * print window stays on `brave` because the attribute is never set there, and that is the whole of
- * the mechanism — a session exported at night, in Nord, still comes out white on paper.
+ * Nothing in this module may be called from `export.tsx`. The PDF is pinned light because the
+ * export entry never imports this module, so `.dark` is never set there and named themes never
+ * land. A session exported at night, in Nord, still comes out white on paper.
  */
 
 import { BRAVE, roleVariables, paintsBackground, type Theme } from '../shared/theme'
@@ -30,12 +29,18 @@ function dark(): boolean {
   return window.matchMedia(DARK).matches
 }
 
+/** Toggle the `.dark` class Tailwind's dark variant reads. */
+function setDarkClass(on: boolean): void {
+  document.documentElement.classList.toggle('dark', on)
+}
+
 /**
  * Paint the window in a theme.
  *
  * `brave` clears everything rather than writing the app's own values back over themselves, so that
  * there is no state to get wrong: the window after choosing `brave` is the same document as the
- * window that has never been themed.
+ * window that has never been themed. Under `brave`, dark mode follows the system; under a named
+ * theme it follows that theme's computed scheme.
  */
 export function applyTheme(theme: Theme): void {
   const root = document.documentElement
@@ -45,9 +50,11 @@ export function applyTheme(theme: Theme): void {
     for (const name of [...root.style]) {
       if (name.startsWith('--role-')) root.style.removeProperty(name)
     }
+    setDarkClass(dark())
     return
   }
-  for (const [name, value] of Object.entries(roleVariables(theme, dark()))) {
+  const variables = roleVariables(theme, dark())
+  for (const [name, value] of Object.entries(variables)) {
     root.style.setProperty(name, value)
   }
   root.setAttribute('data-theme', theme.name)
@@ -57,6 +64,7 @@ export function applyTheme(theme: Theme): void {
   // the blur, so a three-line palette that only changes the accent does not flatten the window.
   if (paintsBackground(theme)) root.setAttribute('data-ground', 'own')
   else root.removeAttribute('data-ground')
+  setDarkClass(variables['--role-scheme'] === 'dark')
 }
 
 /**
@@ -70,5 +78,7 @@ export function watchAppearance(current: () => Theme): () => void {
   const query = window.matchMedia(DARK)
   const handler = (): void => applyTheme(current())
   query.addEventListener('change', handler)
+  // Apply once so `.dark` matches the system before any theme is chosen.
+  applyTheme(current())
   return () => query.removeEventListener('change', handler)
 }

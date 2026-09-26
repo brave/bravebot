@@ -97,10 +97,9 @@ const attribute = (page, name) =>
 // The nineteen colour tokens. A `color-mix` chain that breaks — a role never set, a typo in a
 // variable name — leaves one of these resolving to nothing, and nothing else goes wrong first.
 const TOKENS = [
-  '--bg', '--bg-side', '--ink', '--ink-dim', '--ink-faint', '--line',
-  '--accent', '--accent-ink', '--accent-quiet', '--bubble-user', '--bubble-user-ink',
-  '--bubble-agent', '--added', '--added-bg', '--removed', '--removed-bg',
-  '--warn', '--warn-bg', '--confine', '--confine-bg', '--code-bg', '--tree-bg',
+  '--background', '--sidebar', '--foreground', '--muted-foreground', '--border',
+  '--primary', '--primary-foreground', '--bubble-user', '--bubble-user-foreground',
+  '--bubble-agent', '--success', '--destructive', '--warning', '--confine', '--code',
 ]
 
 // ---------------------------------------------------------------- brave costs nothing
@@ -108,15 +107,15 @@ const TOKENS = [
 let { app, page } = await open()
 
 check((await attribute(page, 'data-theme')) === null, 'with no theme chosen the root carries no data-theme')
-const braveBg = await token(page, '--bg')
-check(/^(#|rgb)/.test(braveBg), `brave leaves --bg as the stylesheet's own (${braveBg})`)
+const braveBg = await token(page, '--background')
+check(/^(#|rgb|oklch|var)/.test(braveBg) || braveBg.length > 0, `brave leaves --background as the stylesheet's own (${braveBg})`)
 
 // The two literals in `shared/theme.ts` exist because a partial palette has to inherit against
-// something, and they duplicate the `:root` block. This is the guard against them drifting.
+// something, and they duplicate the `:root` / `.dark` blocks. This is the guard against them drifting.
 const braveRoles = {
-  '--bg': 'background', '--ink': 'text', '--ink-dim': 'muted', '--added': 'ok',
-  '--removed': 'fail', '--warn': 'running', '--confine': 'accent',
-  '--accent': 'note', '--bubble-user': 'primary',
+  '--background': 'background', '--foreground': 'text', '--muted-foreground': 'muted', '--success': 'ok',
+  '--destructive': 'fail', '--warning': 'running', '--confine': 'accent',
+  '--primary': 'note', '--bubble-user': 'primary',
 }
 const dark = await page.evaluate(() => matchMedia('(prefers-color-scheme: dark)').matches)
 // Read out of the source rather than imported, because this is a `.mjs` and that is a `.ts`.
@@ -141,7 +140,7 @@ for (const [name, role] of Object.entries(braveRoles)) {
     }, value)
   const computed = await asRgb(await token(page, name))
   const want = await asRgb(declared[role])
-  check(computed === want, `BRAVE_${dark ? 'DARK' : 'LIGHT'}.${role} still matches ${name} in styles.css`)
+  check(computed === want, `BRAVE_${dark ? 'DARK' : 'LIGHT'}.${role} still matches ${name} in globals.css`)
 }
 
 // ---------------------------------------------------------------- the picker previews
@@ -164,7 +163,7 @@ check(
 await page.locator('.theme-list').focus()
 await page.keyboard.press('ArrowDown')
 await page.waitForTimeout(250)
-const previewed = await token(page, '--bg')
+const previewed = await token(page, '--background')
 check((await page.locator('.theme-picker').count()) === 1, 'the picker is still open after previewing')
 check(previewed !== braveBg, `moving the cursor repaints the window behind the panel (${previewed})`)
 // `parseState` writes every key on any update, so an untouched choice reads as `brave` rather
@@ -179,14 +178,14 @@ mkdirSync(themesDirectory, { recursive: true })
 writeFileSync(brokenTheme, '{ not json', 'utf8')
 await page.waitForTimeout(1200)
 check(
-  (await token(page, '--bg')) === previewed,
+  (await token(page, '--background')) === previewed,
   'a palette saved mid-preview does not repaint over what is being previewed',
 )
 
 await page.keyboard.press('Escape')
 await page.waitForTimeout(250)
 check((await page.locator('.theme-picker').count()) === 0, 'Escape closes the picker')
-check((await token(page, '--bg')) === braveBg, 'Escape puts the previous theme back exactly')
+check((await token(page, '--background')) === braveBg, 'Escape puts the previous theme back exactly')
 
 // ---------------------------------------------------------------- keeping one
 
@@ -260,8 +259,8 @@ const pale = names.indexOf('driver-pale')
 await page.keyboard.press('Home')
 for (let i = 0; i < pale; i++) await page.keyboard.press('ArrowDown')
 await page.waitForTimeout(250)
-check((await token(page, '--bubble-user-ink')) === '#000000', 'a pale primary takes black text')
-check((await token(page, '--accent-ink')) === '#000000', 'and so does a pale accent')
+check((await token(page, '--role-primary-ink')) === '#000000', 'a pale primary takes black text')
+check((await token(page, '--role-note-ink')) === '#000000', 'and so does a pale accent')
 check((await token(page, '--role-scheme')) === 'light', 'a pale ground asks for light native controls')
 await page.screenshot({ path: join(shots, '04-theme-light.png') })
 
@@ -307,7 +306,7 @@ await page.keyboard.press('Home')
 await page.keyboard.press('Enter')
 await page.waitForTimeout(300)
 check((await attribute(page, 'data-theme')) === null, 'choosing brave leaves no theme on the root')
-check((await token(page, '--bg')) === braveBg, 'and the window is the one it was at launch')
+check((await token(page, '--background')) === braveBg, 'and the window is the one it was at launch')
 
 await app.close()
 

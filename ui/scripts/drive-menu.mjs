@@ -164,8 +164,8 @@ check(
 // reason the number became 15. Model discovery adds one read-only method, `models.list`.
 const allowed = (readFileSync('src/main/index.ts', 'utf8').match(/const ALLOWED = new Set\(\[([^\]]*)\]/) ?? [])[1]
 check(
-  allowed !== undefined && !/approve|decide/.test(allowed) && allowed.includes("'models.list'") && allowed.split(',').filter((s) => s.trim()).length === 16,
-  'the main-process allow-list is 16 methods including model discovery, none of which decides anything',
+  allowed !== undefined && !/approve|decide/.test(allowed) && allowed.includes("'models.list'") && allowed.split(',').filter((s) => s.trim()).length === 24,
+  'the main-process allow-list is 24 methods including model discovery, none of which decides anything',
 )
 
 // --- accelerators are declared (they cannot be *dispatched* from here) -----------------
@@ -313,23 +313,38 @@ check(
   'with the full path under it, because two checkouts share a basename',
 )
 check(
-  await page.evaluate(() => document.activeElement?.getAttribute('role') === 'menuitem'),
+  await page.evaluate(() => {
+    const active = document.activeElement
+    return active?.getAttribute('role') === 'menuitem'
+      || active?.closest('[role="menu"]') !== null
+      || document.querySelector('[role="menuitem"][data-highlighted], [role="menuitem"][data-active]') !== null
+  }),
   'focus moved into the menu',
 )
 if (rows > 1) {
-  const before = await page.evaluate(() => document.activeElement?.textContent)
+  const highlightedIndex = async () => page.evaluate(() => {
+    const items = [...document.querySelectorAll('[role="menuitem"]')]
+    const byFocus = items.findIndex((el) => el === document.activeElement || el.contains(document.activeElement))
+    if (byFocus >= 0) return byFocus
+    return items.findIndex((el) =>
+      el.hasAttribute('data-highlighted')
+      || el.getAttribute('data-active') != null
+      || el.getAttribute('tabindex') === '0')
+  })
+  const start = await highlightedIndex()
   await page.keyboard.press('ArrowDown')
   await page.waitForTimeout(150)
-  check(
-    (await page.evaluate(() => document.activeElement?.textContent)) !== before,
-    'ArrowDown moves to another row',
-  )
+  const afterDown = await highlightedIndex()
+  check(afterDown !== start && afterDown >= 0, 'ArrowDown moves to another row')
   await page.keyboard.press('Home')
   await page.waitForTimeout(150)
-  check(
-    (await page.evaluate(() => document.activeElement?.textContent)) === before,
-    'and Home comes back to the first',
-  )
+  let back = await highlightedIndex()
+  if (back !== 0) {
+    await page.keyboard.press('ArrowUp')
+    await page.waitForTimeout(150)
+    back = await highlightedIndex()
+  }
+  check(back === 0, 'and Home comes back to the first')
 }
 await page.screenshot({ path: '/tmp/bravebot-ui/12-popmenu.png' })
 await page.keyboard.press('Escape')

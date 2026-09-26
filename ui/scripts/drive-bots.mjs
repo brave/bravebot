@@ -112,6 +112,21 @@ putKey('view', undefined)
  * picker itself undriven. The window is then told to read the list back, exactly as it does after
  * saving one.
  */
+/**
+ * Make a bot without the folder picker.
+ *
+ * The picker is native and a driver cannot answer one, so the dialog is stubbed to return this
+ * run's checkout and then exercised through the same channel the form uses — which is what
+ * `opened.ts` remembers, and what `writeBot` then accepts. The window is then told to read the
+ * list back, exactly as it does after saving one.
+ */
+const openCheckout = async (app, page) => {
+  await app.evaluate(({ dialog }, where) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [where] })
+  }, checkout)
+  await page.evaluate(() => window.bravebot.chooseDirectory())
+}
+
 const makeBot = (page, name, purpose) =>
   page.evaluate(
     ([name, purpose, directory]) => window.bravebot.writeBot({ name, purpose, directory }),
@@ -130,13 +145,13 @@ await page.waitForTimeout(2500)
 const tabs = page.locator('.sidebar-tab')
 check((await tabs.count()) === 2, 'the column offers two lists')
 check(
-  (await tabs.nth(0).getAttribute('aria-pressed')) === 'true',
+  (await tabs.nth(0).getAttribute('aria-selected')) === 'true',
   'and opens on the sessions, which is what every launch before this showed',
 )
 
 await tabs.nth(1).click()
 await page.waitForTimeout(300)
-check((await tabs.nth(1).getAttribute('aria-pressed')) === 'true', 'pressing Bots shows the bots')
+check((await tabs.nth(1).getAttribute('aria-selected')) === 'true', 'pressing Bots shows the bots')
 // Only where the list is genuinely empty. This driver no longer clears somebody's bots to make it
 // so — that key is not a preference, it is their bots — so on a machine that has some, the empty
 // state is not a thing that can be shown and saying it was would be a false ok.
@@ -160,6 +175,7 @@ check(
 
 // --- two bots, two faces ----------------------------------------------------------------
 
+await openCheckout(app, page)
 await makeBot(page, 'Release Notes', 'Draft release notes from the commits since the last tag.')
 await makeBot(page, 'Triage', 'Read new issues and say which are duplicates.')
 // The list is the main process's; the window reads it back the way it does after saving one.
@@ -210,11 +226,11 @@ check(
   'and the form shows what the bot has remembered',
 )
 await page.screenshot({ path: '/tmp/bravebot-ui/23-bots-form.png' })
-await page.locator('.bot-form input').fill('Release Notes (weekly)')
+await page.locator('.bot-form #bot-name').fill('Release Notes (weekly)')
 await page.locator('.bot-save').click()
 await page.waitForTimeout(600)
 
-const renamed = rowFor('Release Notes \\(weekly\\)')
+const renamed = rowFor('Release Notes (weekly)')
 check((await renamed.count()) === 1, 'a renamed bot is called what it was renamed to')
 check((await faceOf(renamed)) === first, 'and keeps the face it had — the point of storing the seed')
 
@@ -244,7 +260,7 @@ const backRow = (name) =>
 const backMine = backRow('Release Notes (weekly)')
 
 check(
-  (await back.locator('.sidebar-tab').nth(1).getAttribute('aria-pressed')) === 'true',
+  (await back.locator('.sidebar-tab').nth(1).getAttribute('aria-selected')) === 'true',
   'the column comes back on the tab it was left on',
 )
 check(
@@ -275,7 +291,7 @@ check(
 // remember — the same reason the session id and the compaction watermark are not its to set.
 await backMine.locator('.bot-edit').click()
 await back.waitForTimeout(300)
-await back.locator('.bot-form input').fill('Release Notes (weekly)')
+await back.locator('.bot-form #bot-name').fill('Release Notes (weekly)')
 await back.locator('.bot-save').click()
 await back.waitForTimeout(600)
 check(
@@ -387,11 +403,11 @@ await openArchive()
 await archivedRow.locator('.bot-delete').click()
 await back.waitForTimeout(400)
 check(
-  onDisk(MINE[0]) !== null && (await archivedRow.locator('.bot-keep').count()) === 1,
+  onDisk(MINE[0]) !== null && (await back.locator('.bot-keep').count()) === 1,
   'pressing Delete asks rather than deletes, and offers the way out first',
 )
 await back.screenshot({ path: '/tmp/bravebot-ui/24-bots-delete.png' })
-await archivedRow.locator('.bot-keep').click()
+await back.locator('.bot-keep').click()
 await back.waitForTimeout(400)
 check(
   onDisk(MINE[0]) !== null && (await archivedRow.locator('.bot-restore').count()) === 1,
@@ -400,7 +416,7 @@ check(
 
 await archivedRow.locator('.bot-delete').click()
 await back.waitForTimeout(400)
-await archivedRow.locator('.bot-delete-armed').click()
+await back.locator('.bot-delete-armed').click()
 await back.waitForTimeout(600)
 check(
   (await backMine.count()) === 0 &&

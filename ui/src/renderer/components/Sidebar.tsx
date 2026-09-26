@@ -23,11 +23,14 @@
  * prevent within a single one.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { SessionSummary } from '../../shared/protocol'
 import type { Bot } from '../../shared/bots'
 import type { Doing } from './BotAvatar'
 import type { Tab } from '../../shared/view'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import { Sessions } from './Sessions'
 import { Bots } from './Bots'
 
@@ -98,57 +101,108 @@ export function Sidebar({
     }
   }, [tab, grouped, collapsed])
 
-  const show = useCallback((next: Tab) => setTab(next), [])
-
   return (
-    <aside className="sessions" id="sessions-column">
-      {/* The label stays put and `aria-pressed` carries which is on, the disclosure discipline
-          every toggle in this window follows. No tooltips: the labels are the whole of what
-          these do, and a popup could only repeat them. */}
-      <div className="sidebar-tabs" role="group" aria-label="What the column shows">
-        <button
-          className="sidebar-tab"
-          aria-pressed={tab === 'sessions'}
-          onClick={() => show('sessions')}
+    <aside
+      className={
+        // A folded column must not be tabbable or read out, and a zero-width grid track does
+        // neither on its own. Hiding waits for the fold to finish so there is something to watch
+        // on the way out; on the way back it lifts at once.
+        //
+        // The contents keep the width the column will come back at, so a fold slides them under a
+        // clip instead of reflowing them — session titles re-wrapping into narrower and narrower
+        // shapes for 180ms on their way to being invisible. A no-op while the column is open,
+        // where the two widths are the same number.
+        'sessions flex h-full flex-col overflow-hidden bg-sidebar text-sidebar-foreground' +
+        ' [&>*]:min-w-[var(--col-left-open)]' +
+        ' [.app.left-folded_&]:invisible [.app.left-folded_&]:[transition:visibility_0s_linear_var(--panel-duration)]'
+      }
+      id="sessions-column"
+    >
+      <Tabs
+        value={tab}
+        onValueChange={(value) => setTab(value as Tab)}
+        className="flex min-h-0 flex-1 flex-col gap-0"
+      >
+        {/* No tooltips: the labels are the whole of what these do, and a popup could only
+            repeat them. */}
+        {/* The tabs carry the traffic-light clearance: 16px of inset, three 12px lights, two 8px
+            gaps and a little air after them. They are what is at the top of the column now, and
+            both bodies get the same head below them, so the offset has to be above the pair
+            rather than inside each. The strip itself drags the window; the tabs opt out. */}
+        <TabsList
+          variant="line"
+          className="sidebar-tabs h-auto w-full flex-none justify-stretch gap-0.5 px-3 pt-[46px] [-webkit-app-region:no-drag]"
+          aria-label="What the column shows"
         >
-          Sessions
-        </button>
-        <button className="sidebar-tab" aria-pressed={tab === 'bots'} onClick={() => show('bots')}>
-          Bots
-        </button>
-      </div>
+          <TabsTrigger value="sessions" className="sidebar-tab h-auto px-2 py-1 text-xs">
+            Sessions
+          </TabsTrigger>
+          <TabsTrigger value="bots" className="sidebar-tab h-auto px-2 py-1 text-xs">
+            Bots
+          </TabsTrigger>
+        </TabsList>
 
-      <div className="sidebar-body" hidden={tab !== 'sessions'}>
-        <Sessions
-          sessions={sessions}
-          openId={openId}
-          forked={forked}
-          onOpen={onOpen}
-          onNew={onNew}
-          grouped={grouped}
-          onGroup={setGrouped}
-          collapsed={collapsed}
-          onCollapse={setCollapsed}
-        />
-      </div>
+        {/* Each body owns the rest of the column, and the one not chosen is hidden rather than
+            unmounted — a filter somebody typed and a form half filled in both survive a look at
+            the other tab. */}
+        <TabsContent
+          value="sessions"
+          keepMounted
+          className={cn(
+            'sidebar-body flex min-h-0 flex-1 flex-col',
+            // Base UI's keepMounted exit transition can leave `hidden` unset; drive scripts
+            // and the preserved filter state both need the inactive body truly not shown.
+            tab !== 'sessions' && '!hidden',
+          )}
+        >
+          <Sessions
+            sessions={sessions}
+            openId={openId}
+            forked={forked}
+            onOpen={onOpen}
+            onNew={onNew}
+            grouped={grouped}
+            onGroup={setGrouped}
+            collapsed={collapsed}
+            onCollapse={setCollapsed}
+          />
+        </TabsContent>
 
-      <div className="sidebar-body" hidden={tab !== 'bots'}>
-        <Bots
-          bots={bots}
-          sessions={sessions}
-          onNewConversation={onNewBotConversation}
-          onConversation={onBotConversation}
-          openSlug={openSlug}
-          openDoing={openDoing}
-          onSave={onSaveBot}
-          onRetire={onRetireBot}
-          onRemove={onRemoveBot}
-        />
-      </div>
+        <TabsContent
+          value="bots"
+          keepMounted
+          className={cn(
+            'sidebar-body flex min-h-0 flex-1 flex-col',
+            tab !== 'bots' && '!hidden',
+          )}
+        >
+          <Bots
+            bots={bots}
+            sessions={sessions}
+            onNewConversation={onNewBotConversation}
+            onConversation={onBotConversation}
+            openSlug={openSlug}
+            openDoing={openDoing}
+            onSave={onSaveBot}
+            onRetire={onRetireBot}
+            onRemove={onRemoveBot}
+          />
+        </TabsContent>
+      </Tabs>
 
-      <button className="agent-settings-open" onClick={onSettings}>Agent settings</button>
+      {/* Keeps the open width while the column folds, with room for both horizontal margins. */}
+      <Button
+        variant="ghost"
+        className="agent-settings-open mx-4 my-2.5 min-w-[calc(var(--col-left-open)-32px)] shrink-0"
+        onClick={onSettings}
+      >
+        Agent settings
+      </Button>
       {build && (
-        <footer className="build" title="The agent build these sessions are stamped with">
+        <footer
+          className="build shrink-0 border-t border-border px-3.5 py-2 font-mono text-[10px] text-muted-foreground/70"
+          title="The agent build these sessions are stamped with"
+        >
           {build}
         </footer>
       )}

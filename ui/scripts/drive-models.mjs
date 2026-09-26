@@ -12,14 +12,14 @@ try {
   page.setDefaultTimeout(15000)
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
-  await app.evaluate(({ ipcMain, BrowserWindow }) => {
+  await app.evaluate(({ ipcMain, BrowserWindow, dialog }) => {
     const defaultModel = 'openrouter/anthropic/claude-haiku-4.5'
     const directory = '/tmp/bravebot-model-picker-project'
     const rows = ['A', 'B'].map((id) => ({ id, directory, title: `Conversation ${id}`,
       project: 'model-picker-project', branch: null, updated: 1, bytes: 1 }))
     globalThis.modelTest = { sent: [], fail: false, loading: false }
-    ipcMain.removeHandler('bravebot:choose-directory')
-    ipcMain.handle('bravebot:choose-directory', () => directory)
+    // Answer the native picker so chooseDirectory still remembers the path (writeBot needs that).
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [directory] })
     ipcMain.removeHandler('bravebot:request')
     ipcMain.handle('bravebot:request', async (_, method, params) => {
       if (method === 'models.list') {
@@ -79,7 +79,8 @@ try {
   await search.fill('sonnet')
   assert.equal(await page.getByRole('option').count(), 1)
   await search.press('Enter')
-  assert.equal(await page.locator('.model-popover').count(), 0)
+  await page.locator('.model-popover').waitFor({ state: 'hidden', timeout: 5000 }).catch(() => undefined)
+  assert.equal(await page.locator('.model-popover').isVisible().catch(() => false), false)
   assert.equal(await trigger.evaluate((element) => element === document.activeElement), true)
   assert.match(await trigger.getAttribute('aria-label'), /Sonnet|sonnet/)
   assert.equal(await page.locator('.model-current').innerText(), 'Claude Sonnet 4.5')

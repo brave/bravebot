@@ -32,6 +32,7 @@
 import { useEffect, useId, useRef } from 'react'
 import { available, show, tell, express, type Expression, type Doing } from '../avatar/stage'
 import { paintsOf, signature, traitsOf, headWidth, eyeDimensions, torsoDimensions, type Traits } from '../avatar/figure'
+import { cn } from '@/lib/utils'
 
 export type { Doing }
 
@@ -48,6 +49,23 @@ interface Props {
   /** An interactive expression for the About mascot; independent of task status. */
   expression?: Expression
 }
+
+/**
+ * The chip a face is drawn on, shared by the rendered figure and its flat stand-in.
+ *
+ * Nothing here paints the figure — its colours are its own, from a fixed set, and deliberately do
+ * not follow the theme (see figure.ts for why). The disc does two jobs. It makes every avatar the
+ * same shape, so a tall head and a squat one sit in a row the same way, and it puts a surface
+ * behind the pale pieces — a bobble, an ear — which on a light theme were otherwise pale paint on
+ * a paler page. Mid-grey at low alpha, which is what `foreground` at twelve percent comes out as:
+ * a shade darker than a light column and a shade lighter than a dark one, whichever the theme is.
+ * The picture is transparent where there is no figure, so the disc shows through around it and the
+ * body is cropped by the circle at the bottom corners the way a headshot is.
+ */
+const CHIP = 'bot-avatar block size-full shrink-0 rounded-full bg-foreground/12'
+
+/** The glyph inside the status disc: stroked rather than filled, and inset so it keeps its ring. */
+const MARK = 'size-[90%] fill-none stroke-current stroke-[1.5] [stroke-linecap:round] [stroke-linejoin:round]'
 
 export function BotAvatar({ seed, size = 38, doing = 'idle', expression = 'neutral' }: Props): React.JSX.Element {
   const canvas = useRef<HTMLCanvasElement>(null)
@@ -73,9 +91,10 @@ export function BotAvatar({ seed, size = 38, doing = 'idle', expression = 'neutr
   }, [expression, seed, size])
 
   const hasStatus = doing === 'working' || doing === 'failed'
+  const statusSize = Math.max(7, Math.round(size * 0.23))
   return (
     <span
-      className="bot-avatar-frame"
+      className="bot-avatar-frame relative inline-flex shrink-0 align-middle"
       style={{ width: size, height: size }}
       role={hasStatus ? 'img' : undefined}
       aria-label={hasStatus ? (doing === 'failed' ? 'Bot needs attention' : 'Bot working') : undefined}
@@ -85,7 +104,7 @@ export function BotAvatar({ seed, size = 38, doing = 'idle', expression = 'neutr
       {available() ? (
         <canvas
           ref={canvas}
-          className="bot-avatar"
+          className={CHIP}
           width={size * 2}
           height={size * 2}
           style={{ width: size, height: size }}
@@ -95,14 +114,23 @@ export function BotAvatar({ seed, size = 38, doing = 'idle', expression = 'neutr
       ) : <FlatAvatar seed={seed} size={size} doing={doing} expression={expression} />}
       {hasStatus && (
         <span
-          className={`bot-avatar-status bot-avatar-status-${doing}`}
-          style={{ width: Math.max(7, Math.round(size * 0.23)), height: Math.max(7, Math.round(size * 0.23)) }}
+          className={cn(
+            // Ringed in the window's own ground and sized outside its border, so the marker reads
+            // as sitting on top of the face rather than as part of it.
+            'bot-avatar-status absolute -right-px -bottom-px box-content flex items-center justify-center',
+            'rounded-full border-[1.5px] border-background bg-muted-foreground text-background',
+            'font-sans text-[10px] leading-none font-bold',
+            doing === 'failed'
+              ? 'bot-avatar-status-failed bg-[#b83e43] text-white'
+              : 'bot-avatar-status-working',
+          )}
+          style={{ width: statusSize, height: statusSize }}
           aria-hidden="true"
         >
           {doing === 'failed' ? (
-            <svg viewBox="0 0 12 12" focusable="false"><path d="M6 2v4M6 9v.1" /></svg>
+            <svg className={MARK} viewBox="0 0 12 12" focusable="false"><path d="M6 2v4M6 9v.1" /></svg>
           ) : (
-            <svg viewBox="0 0 12 12" focusable="false"><path d="M6 2v4l2.5 1.5" /></svg>
+            <svg className={MARK} viewBox="0 0 12 12" focusable="false"><path d="M6 2v4l2.5 1.5" /></svg>
           )}
         </span>
       )}
@@ -151,7 +179,7 @@ function FlatAvatar({ seed, size, doing, expression }: { seed: string; size: num
 
   return (
     <svg
-      className="bot-avatar"
+      className={CHIP}
       width={size}
       height={size}
       viewBox="0 0 100 100"

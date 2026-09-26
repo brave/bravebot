@@ -229,6 +229,12 @@ if (sessions > 0) {
   if (await page.locator('.trust').isVisible().catch(() => false)) {
     await page.locator('.trust-actions .decline').click()
     await page.waitForTimeout(400)
+    // Decline answers the question; the draft session is still open. Close it so the list
+    // count matches what was on screen before the plus, for the next driver as much as for us.
+    await app.evaluate(({ Menu }) => {
+      Menu.getApplicationMenu()?.getMenuItemById('session.close')?.click()
+    })
+    await page.waitForTimeout(400)
   }
 
   // Back to flat, for the next driver as much as for this assertion.

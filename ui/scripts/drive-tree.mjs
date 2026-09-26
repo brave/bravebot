@@ -179,12 +179,17 @@ if (sample.length < 5) {
   console.log('  --   nothing in this root has a name long enough to filter on')
 } else {
   const term = sample.slice(2, 5)
+  // The find box sits behind the search control, same as before the restyle.
+  await page.getByRole('button', { name: 'Search files' }).click()
+  await page.locator('.tree-find').waitFor({ state: 'visible' })
   await page.locator('.tree-find').fill(term)
   await page.waitForTimeout(500)
-  const after = await rows.count()
+  const resultRows = page.locator('.file-search-results button, .tree-list[role="tree"] > li > .tree-row')
+  const after = await resultRows.count()
   check(after > 0 && after <= before, `filtering on "${term}" narrows the list (${before} → ${after})`)
+  const resultNames = await page.locator('.file-search-results button, .tree-list[role="tree"] > li > .tree-row .tree-name').allInnerTexts()
   check(
-    (await names()).every((name) => name.toLowerCase().includes(term.toLowerCase())) ||
+    resultNames.every((name) => name.toLowerCase().includes(term.toLowerCase())) ||
       (await page.locator('.tree-list[role="tree"] > li[aria-expanded="true"]').count()) > 0,
     'a row that does not match itself is only there to hold a match underneath it',
   )
@@ -223,7 +228,7 @@ const link = root ? join(root, 'bravebot-tree-probe-link') : null
 try {
   if (link) {
     symlinkSync('/etc', link)
-    await page.locator('.tree-tool').nth(1).click()
+    await page.getByTitle('Read the folder again').click()
     await page.waitForTimeout(900)
     const probe = page
       .locator('.tree-list[role="tree"] > li')
