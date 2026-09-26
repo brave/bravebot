@@ -160,6 +160,12 @@ pub struct Settings {
     /// settled rather than here, so one spelling rule answers for a hand-edited settings file and a
     /// hand-edited record alike.
     effort: Option<String>,
+    /// Whether `model` was named by a layer above the person's own file, which a saved `/model`
+    /// pick ranks as (BACKEND-11). Settled by [`Settings::layered`], the one caller that knows which
+    /// file a key came from.
+    model_outranks_a_pick: bool,
+    /// Whether `effort` was, on the same footing (BACKEND-43).
+    effort_outranks_a_pick: bool,
     /// What the top-level `editorMode` key named, if it named anything.
     ///
     /// The word as the file spelled it, not a mode. Which words name an editing style is a question
@@ -371,6 +377,10 @@ impl Settings {
         let mut allow_ignored = Vec::new();
         let mut mcp_declared = Vec::new();
         let mut mcp_requested: Vec<(PathBuf, String)> = Vec::new();
+        // Which kind of layer spelled each key last, which is the layer the merge lets answer for
+        // it. The merged root cannot say, and it decides whether a saved pick outranks the answer.
+        let mut model_above_home = false;
+        let mut effort_above_home = false;
         for path in paths.into_iter().flatten() {
             // A file already read as a layer above is not read again. Naming one of the three
             // explicitly is an ordinary thing to do, and reading it twice would report every name
@@ -382,11 +392,18 @@ impl Settings {
             let Some(mut root) = read(&path) else {
                 continue;
             };
+            let own = Some(&path) == home_layer.as_ref();
             if root.contains_key(VETTING_BLOCK) {
-                match Some(&path) == home_layer.as_ref() {
+                match own {
                     true => vetting = auto_vetting(&root),
                     false => vetting_ignored.push(path.clone()),
                 }
+            }
+            if root.contains_key("model") {
+                model_above_home = !own;
+            }
+            if root.contains_key("effort") {
+                effort_above_home = !own;
             }
             // Every layer, the person's own among them: what a settings file names about a server
             // is never a declaration, so which file said it decides only what the report names.
@@ -435,6 +452,10 @@ impl Settings {
         settings.allow_ignored = allow_ignored;
         settings.mcp_declared = mcp_declared;
         settings.mcp_requested = mcp_requested;
+        // A layer above that spelled the key blank, or as something other than a word, named
+        // nothing, and a pick is not outranked by nothing.
+        settings.model_outranks_a_pick = model_above_home && settings.model.is_some();
+        settings.effort_outranks_a_pick = effort_above_home && settings.effort.is_some();
         // `merged` goes here, and clears what every layer stated as it does: the settings hold what
         // they keep of it by now, so the rest is a spare copy of a gateway token.
         settings
@@ -484,6 +505,10 @@ impl Settings {
             permissions: permission_lists(root),
             model: word(root, "model"),
             effort: word(root, "effort"),
+            // False here, one root being read as the person's own until [`Settings::layered`]
+            // says which file it was.
+            model_outranks_a_pick: false,
+            effort_outranks_a_pick: false,
             editor_mode: word(root, "editorMode"),
             // Read here so one file's worth can be parsed on its own, and overwritten by
             // [`Settings::layered`], which is the only caller that knows which layer this came
@@ -521,21 +546,31 @@ impl Settings {
 
     /// The model the settings in force asked for, if they asked for one.
     ///
-    /// A default rather than the model: `/model` records a choice that outlives the session making
-    /// it, and that choice wins. This is what answers for somebody who has never made one.
+    /// Not always the model: a choice `/model` saved ranks as the person's own file does, so it
+    /// outranks this where the person's own file is what named it.
+    /// [`Settings::model_outranks_a_pick`] says which.
     pub fn model(&self) -> Option<&str> {
         self.model.as_deref()
+    }
+
+    /// Whether [`Settings::model`] came from a file above the person's own: a checkout's, or the
+    /// one `--settings` named. Such a file outranks a saved pick (BACKEND-11).
+    pub fn model_outranks_a_pick(&self) -> bool {
+        self.model_outranks_a_pick
     }
 
     /// How hard the settings in force asked the model to think, if they asked for anything.
     ///
     /// The word the file spelled, unrecognised words and all, for the reason
-    /// [`Settings::editor_mode`] answers with one. A default rather than the level in force: the
-    /// interface records a choice that outlives the session making it, and that choice wins. This is
-    /// what answers for somebody who has never made one, which on a machine where nobody ever opens
-    /// the interface is everybody.
+    /// [`Settings::editor_mode`] answers with one. Ranked against a saved `/effort` pick the way
+    /// [`Settings::model`] is, which [`Settings::effort_outranks_a_pick`] settles.
     pub fn effort(&self) -> Option<&str> {
         self.effort.as_deref()
+    }
+
+    /// Whether [`Settings::effort`] came from a file above the person's own (BACKEND-43).
+    pub fn effort_outranks_a_pick(&self) -> bool {
+        self.effort_outranks_a_pick
     }
 
     /// The editing style the settings in force asked for, if they asked for one.
@@ -2132,6 +2167,12 @@ mod tests {
             self
         }
 
+        /// The command line naming the person's own file.
+        fn naming_the_home_layer(mut self) -> Self {
+            self.named = Some(self.home.join(SETTINGS_FILE));
+            self
+        }
+
         /// The command line naming a file that is already one of the three found layers.
         fn naming_the_project_layer(mut self) -> Self {
             self.named = Some(self.cwd.join(PROJECT_DIR).join(SETTINGS_FILE));
@@ -2988,6 +3029,86 @@ mod tests {
             .project(r#"{"model": "this-checkout"}"#)
             .read();
         assert_eq!(only_global.effort(), Some("low"));
+    }
+
+    /// A saved `/model` or `/effort` pick ranks as the person's own file does, so any file above
+    /// that one outranks it: a checkout that names a model or a level is choosing one for the work
+    /// in it, and a pick recorded once per person cannot tell two checkouts apart.
+    #[test]
+    fn a_layer_above_the_home_one_outranks_a_saved_pick() {
+        let above = [
+            (
+                Layers::new("pick-project")
+                    .global(r#"{"model": "personal", "effort": "low"}"#)
+                    .project(r#"{"model": "this-checkout", "effort": "max"}"#),
+                Some("this-checkout"),
+            ),
+            (
+                Layers::new("pick-local").local(r#"{"model": "mine-here", "effort": "high"}"#),
+                Some("mine-here"),
+            ),
+            (
+                Layers::new("pick-named").named(r#"{"model": "from-the-flag", "effort": "high"}"#),
+                Some("from-the-flag"),
+            ),
+            // A word that is no level still answers, as no level, on BACKEND-34's footing.
+            (
+                Layers::new("pick-nonsense").project(r#"{"effort": "fastest"}"#),
+                None,
+            ),
+        ];
+        for (layers, model) in &above {
+            let settings = layers.read();
+            let seen = settings.layers().collect::<Vec<_>>();
+            assert_eq!(settings.model(), *model, "{seen:?}");
+            assert_eq!(
+                settings.model_outranks_a_pick(),
+                model.is_some(),
+                "{seen:?}"
+            );
+            assert!(settings.effort_outranks_a_pick(), "{seen:?}");
+        }
+    }
+
+    /// The person's own file is where the pick ranks, and the pick is the later of the two things
+    /// they said there, so it stands. Naming that file with `--settings` does not move it up.
+    #[test]
+    fn the_home_layer_does_not_outrank_a_saved_pick() {
+        let own = [
+            Layers::new("pick-home")
+                .global(r#"{"model": "personal", "effort": "low"}"#)
+                .project(r#"{"env": {"AWS_PROFILE": "this-checkout"}}"#),
+            Layers::new("pick-home-named")
+                .global(r#"{"model": "personal", "effort": "low"}"#)
+                .naming_the_home_layer(),
+        ];
+        for layers in &own {
+            let settings = layers.read();
+            assert_eq!(settings.model(), Some("personal"));
+            assert!(
+                !settings.model_outranks_a_pick(),
+                "{:?}",
+                settings.layers().collect::<Vec<_>>()
+            );
+            assert!(
+                !settings.effort_outranks_a_pick(),
+                "{:?}",
+                settings.layers().collect::<Vec<_>>()
+            );
+        }
+    }
+
+    /// A blank value, or one that is not a word, names nothing, and a pick is not outranked by
+    /// nothing.
+    #[test]
+    fn a_layer_above_that_names_nothing_does_not_outrank_a_saved_pick() {
+        let settings = Layers::new("pick-blank")
+            .global(r#"{"model": "personal", "effort": "low"}"#)
+            .project(r#"{"model": "  ", "effort": 3}"#)
+            .read();
+        assert_eq!(settings.model(), None);
+        assert!(!settings.model_outranks_a_pick());
+        assert!(!settings.effort_outranks_a_pick());
     }
 
     /// A layer that says nothing about the model leaves the one a weaker layer named, on the same

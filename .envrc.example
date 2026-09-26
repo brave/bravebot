@@ -96,9 +96,9 @@ esac
 # "automatic-bravebot" lets the server triage per request for this agent, and is what an
 # unrecognised name is reset to anyway. Leo uses "automatic" for a different routing policy.
 #
-# Exported here, so it outranks a "model" key in ~/.bravebot/settings.json.
-# Comment this line out to let that file decide, which is what a released binary
-# does: there the settings key outranks the value baked in at build time.
+# A default, so a "model" key in any settings file and a /model pick both outrank
+# it. It outranks the value baked in at build time, and a "model" key outranks
+# both.
 #
 # The model requested is not necessarily the model used: some entries are
 # weighted ensembles that resolve randomly, and "automatic-bravebot" itself picks per

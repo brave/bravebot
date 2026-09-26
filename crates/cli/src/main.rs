@@ -148,7 +148,8 @@ fn main() -> ExitCode {
         // The task flags may lead: `bravebot -p "task"` and `bravebot --mode manifest "task"`
         // would otherwise be caught below as unknown options.
         Some(
-            "-p" | "--print" | "--mode" | "--model" | "--file" | "--add-dir" | "--trace" | "--json",
+            "-p" | "--print" | "--mode" | "--model" | "--effort" | "--file" | "--add-dir"
+            | "--trace" | "--json",
         ) => run_task(&args, skip_permissions),
         Some("doctor") => doctor(),
         Some("mcp") => mcp::command(&args[1..]),
@@ -286,6 +287,7 @@ fn print_help() {
         ("--settings <path>", t!(cli_option_settings)),
         ("--mode <mode>", t!(cli_option_mode)),
         ("--model <name>", t!(cli_option_model)),
+        ("--effort <level>", t!(cli_option_effort)),
         ("-p, --print", t!(cli_option_print)),
         ("--trace", t!(cli_option_trace)),
         ("--json", t!(cli_option_json)),
@@ -414,6 +416,9 @@ struct Invocation {
     /// The model the command line named. `None` leaves the configured one in force rather than
     /// standing for a model of its own.
     model: Option<String>,
+    /// The level the command line named, which outranks the saved pick and every settings file for
+    /// this run alone. `None` leaves those to answer.
+    effort: Option<bravebot_session::store::Effort>,
     /// Directories outside the working one that this run may reach into.
     directories: Vec<String>,
     trace: bool,
@@ -423,12 +428,13 @@ struct Invocation {
 }
 
 /// Parse `<prompt> [--file path]... [--add-dir path]... [--mode name] [--model name]
-/// [--trace] [--json] [-p]`.
+/// [--effort level] [--trace] [--json] [-p]`.
 fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
     let mut prompt = String::new();
     let mut files = Vec::new();
     let mut mode = Mode::default();
     let mut model = None;
+    let mut effort = None;
     let mut directories = Vec::new();
     let mut trace = false;
     let mut print = false;
@@ -457,6 +463,25 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
                     index += 2;
                 }
                 _ => return Err(t!(cli_model_needs_a_name).to_string()),
+            },
+            // Refused unless it is a level, for the reason a blank `--model` is, and for a stronger
+            // one: a model name the service does not know is substituted and reported, where a word
+            // that is no level would be dropped without a word and the run sent at another level.
+            "--effort" => match args
+                .get(index + 1)
+                .and_then(|word| bravebot_session::store::Effort::named(word))
+            {
+                Some(level) => {
+                    effort = Some(level);
+                    index += 2;
+                }
+                None => {
+                    let levels: Vec<&str> = bravebot_session::store::Effort::ALL
+                        .iter()
+                        .map(|level| level.as_str())
+                        .collect();
+                    return Err(t!(cli_effort_needs_a_level, levels = levels.join(", ")));
+                }
             },
             "--file" => match args.get(index + 1) {
                 Some(path) => {
@@ -499,6 +524,7 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
         files,
         mode,
         model,
+        effort,
         directories,
         trace,
         print,
@@ -519,6 +545,7 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
         files,
         mode,
         model,
+        effort,
         directories,
         trace,
         print,
@@ -646,14 +673,14 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
         .with_profile(bravebot_agent::home::profile())
         .with_model(model_asked_for(
             named,
-            bravebot_session::store::load_model(),
+            bravebot_session::store::model(bravebot_session::store::load_model(), &settings),
         ))
-        // The recorded pick, and otherwise the level the settings layers named (BACKEND-43), which
-        // is the only route a machine where nobody ever opens the interface has to one.
-        .with_effort(bravebot_session::store::effort(
-            bravebot_session::store::load_effort(),
-            settings.effort(),
-        ))
+        // The flag, then the settings layers and the saved pick ranked as BACKEND-43 ranks them.
+        // The layers are the only route a machine where nobody ever opens the interface has to a
+        // level that outlives one run.
+        .with_effort(effort.or_else(|| {
+            bravebot_session::store::effort(bravebot_session::store::load_effort(), &settings)
+        }))
         .with_permissions(permissions)
         .with_permission_mode(permission_mode)
         // What the settings say this run may add to a commit message or a pull request it writes
@@ -1105,7 +1132,7 @@ fn open_directories(workspace: &mut Workspace, directories: &[String]) -> Result
 /// A run started from a script resolves a model the way a session opening in the same directory
 /// does, so a script reaches the model somebody already chose without an interactive step, and
 /// neither surface has a model the other cannot ask for. Below both is the configured model,
-/// which is what an absent record leaves in force.
+/// which is what an absent record, or one a checkout outranks, leaves in force.
 ///
 /// The command line outranks the record because it names a model for one run and nothing else,
 /// which is the only way a script can pin one against a choice made elsewhere.
@@ -1116,7 +1143,8 @@ fn model_asked_for(named: Option<String>, stored: Option<String>) -> Option<Stri
 /// The model this run or session will ask a service for.
 ///
 /// The same three sources the task below is built from, in the same order: a name given on the
-/// command line, the one a session recorded, and the configured default. `named` is the raw
+/// command line, the one a session recorded where no checkout's settings outrank it, and the
+/// configured default. `named` is the raw
 /// argument, resolved against the configuration here for the reason the task resolves it, since a
 /// tier word names a model only the configuration knows.
 ///
@@ -1125,7 +1153,10 @@ fn model_asked_for(named: Option<String>, stored: Option<String>) -> Option<Stri
 fn model_for_this_run(named: Option<&str>, config: &Config) -> String {
     model_asked_for(
         named.map(|name| config.model_named(name)),
-        bravebot_session::store::load_model(),
+        bravebot_session::store::model(
+            bravebot_session::store::load_model(),
+            &bravebot_config::Settings::load(),
+        ),
     )
     .unwrap_or_else(|| config.default_model.clone())
 }
@@ -2060,8 +2091,10 @@ fn doctor() -> ExitCode {
             }
 
             // What a run would actually request, since a choice made with `/model` overrides the
-            // configured default and reporting only the default would explain the wrong thing.
-            match bravebot_session::store::load_model() {
+            // configured default and reporting only the default would explain the wrong thing. Not
+            // where a checkout's settings outrank the choice, since naming it then would explain
+            // the wrong thing the other way round.
+            match bravebot_session::store::model(bravebot_session::store::load_model(), &settings) {
                 Some(chosen) => fact(t!(doctor_model), t!(doctor_model_chosen, model = chosen)),
                 None => fact(
                     t!(doctor_model),
@@ -4553,6 +4586,39 @@ mod tests {
         ] {
             let err = parse_invocation(&typed).expect_err("must refuse");
             assert!(err.contains("--model"), "{typed:?}: {err}");
+        }
+    }
+
+    /// The level a run asks for, in any case, and nothing where the flag was not given, which
+    /// leaves the settings and the saved pick to answer.
+    #[test]
+    fn an_effort_flag_names_the_level_a_run_asks_for() {
+        let invocation =
+            parse_invocation(&args(&["--effort", "XHigh", "do a thing"])).expect("parses");
+        assert_eq!(
+            invocation.effort,
+            Some(bravebot_session::store::Effort::Xhigh)
+        );
+        assert_eq!(invocation.prompt, "do a thing");
+
+        let invocation = parse_invocation(&args(&["do a thing"])).expect("parses");
+        assert_eq!(invocation.effort, None);
+    }
+
+    /// A word that is no level must not reach a request field, and read as no choice it would
+    /// hand a script that asked for one whatever the settings said without telling it. The refusal
+    /// names the levels, since the word typed is the one thing the person got wrong.
+    #[test]
+    fn an_effort_flag_naming_no_level_is_refused() {
+        for typed in [
+            args(&["--effort"]),
+            args(&["--effort", "", "do a thing"]),
+            args(&["--effort", "  ", "do a thing"]),
+            args(&["--effort", "highest", "do a thing"]),
+        ] {
+            let err = parse_invocation(&typed).expect_err("must refuse");
+            assert!(err.contains("--effort"), "{typed:?}: {err}");
+            assert!(err.contains("xhigh"), "{typed:?}: {err}");
         }
     }
 

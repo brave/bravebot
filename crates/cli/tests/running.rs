@@ -2027,6 +2027,160 @@ fn a_run_sends_the_level_a_settings_file_named_where_nothing_is_recorded() {
     );
 }
 
+/// A checkout under `scratch` whose own settings file says `json`, for a run started in it.
+fn a_checkout_saying(scratch: &Scratch, json: &str) -> PathBuf {
+    let cwd = scratch.path.join("checkout");
+    let project = cwd.join(".bravebot");
+    std::fs::create_dir_all(&project).expect("create the project directory");
+    std::fs::write(project.join("settings.json"), json).expect("write the project layer");
+    cwd
+}
+
+/// A checkout that names a level outranks the one recorded in the store (BACKEND-43), because a
+/// pick is recorded once per person and cannot tell two checkouts apart. The recorded level is
+/// left where it was: the next checkout that names none is answered by it again.
+#[test]
+fn a_run_sends_a_checkouts_level_over_the_recorded_one() {
+    let gateway = a_gateway_listing(r#"["tools", "reasoning", "reasoning_effort"]"#);
+    let scratch = Scratch::new("cli-running-effort-checkout")
+        .with_settings(&settings_for(&gateway))
+        .with_effort("max");
+    let cwd = a_checkout_saying(&scratch, r#"{"effort": "low"}"#);
+
+    bravebot_started_in(&scratch.path, &cwd, AT_A_GATEWAY, &["-p", "say something"]);
+
+    let asked = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the run reached the gateway");
+    assert!(
+        asked.contains(r#""reasoning_effort":"low""#),
+        "the recorded level outranked the checkout's: {asked}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".bravebot").join("effort"))
+            .expect("the recorded level")
+            .trim(),
+        "max"
+    );
+}
+
+/// `--effort` names a level for one run, above the checkout, the recorded pick and the person's
+/// own file alike, which is the only way a script can pin one against all three. Given first, so
+/// the flag is also one a command line may lead with.
+#[test]
+fn a_run_sends_the_level_the_command_line_named_over_every_other() {
+    let gateway = a_gateway_listing(r#"["tools", "reasoning", "reasoning_effort"]"#);
+    let settings = settings_for(&gateway).replace(
+        r#""model": "openrouter/reasons-only""#,
+        r#""model": "openrouter/reasons-only", "effort": "high""#,
+    );
+    let scratch = Scratch::new("cli-running-effort-flag")
+        .with_settings(&settings)
+        .with_effort("max");
+    let cwd = a_checkout_saying(&scratch, r#"{"effort": "medium"}"#);
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        AT_A_GATEWAY,
+        &["--effort", "low", "-p", "say something"],
+    );
+
+    let (_, stderr) = said(&output);
+    let asked = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .unwrap_or_else(|_| panic!("the run never reached the gateway: {stderr}"));
+    assert!(
+        asked.contains(r#""reasoning_effort":"low""#),
+        "the flag was outranked: {asked}"
+    );
+    // For this run alone: nothing is recorded, so the next run is answered as it would have been.
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".bravebot").join("effort"))
+            .expect("the recorded level")
+            .trim(),
+        "max"
+    );
+}
+
+/// A checkout that names a model outranks the one `/model` recorded (BACKEND-11), for the reason
+/// a checkout's level does.
+#[test]
+fn a_run_asks_for_a_checkouts_model_over_the_recorded_one() {
+    let gateway = a_gateway_listing(r#"["tools", "reasoning"]"#);
+    let scratch = Scratch::new("cli-running-model-checkout")
+        .with_settings(&settings_for(&gateway).replace(
+            r#""model": "openrouter/reasons-only""#,
+            r#""model": "openrouter/somebody-elses""#,
+        ))
+        .with_state("model", "openrouter/picked-before\n");
+    let cwd = a_checkout_saying(&scratch, r#"{"model": "openrouter/reasons-only"}"#);
+
+    bravebot_started_in(&scratch.path, &cwd, AT_A_GATEWAY, &["-p", "say something"]);
+
+    let asked = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the run reached the gateway");
+    assert!(
+        asked.contains(r#""model":"reasons-only""#),
+        "the checkout's model was outranked: {asked}"
+    );
+}
+
+/// The settings key outranks an exported `BRAVE_AI_CHAT_DEFAULT_MODEL` (BACKEND-11). The variable
+/// names a default, which is what a `.envrc` exporting it for every checkout means by it; ranked
+/// above the file it would outrank every `model` key on a machine that sources one.
+#[test]
+fn a_run_asks_for_the_settings_model_over_an_exported_default() {
+    let gateway = a_gateway_listing(r#"["tools", "reasoning"]"#);
+    let scratch =
+        Scratch::new("cli-running-model-over-export").with_settings(&settings_for(&gateway));
+    let mut environment = AT_A_GATEWAY.to_vec();
+    environment.push(("BRAVE_AI_CHAT_DEFAULT_MODEL", "openrouter/exported"));
+
+    bravebot(&scratch.path, &environment, &["-p", "say something"]);
+
+    let asked = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the run reached the gateway");
+    assert!(
+        asked.contains(r#""model":"reasons-only""#),
+        "the exported variable outranked the settings file: {asked}"
+    );
+}
+
+/// `doctor` says a model was chosen with `/model` only where that choice is the one in force. Where
+/// a checkout outranks it, naming it would send somebody looking for why their checkout's model
+/// was ignored when it was not.
+#[test]
+fn doctor_names_a_checkouts_model_rather_than_the_pick_it_outranks() {
+    let scratch =
+        Scratch::new("cli-running-doctor-model-checkout").with_state("model", "picked-before\n");
+    let cwd = a_checkout_saying(&scratch, r#"{"model": "the-checkouts"}"#);
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(stdout.contains("the-checkouts"), "{stdout}{stderr}");
+    assert!(
+        !stdout.contains("picked-before"),
+        "doctor named a pick the checkout outranks: {stdout}"
+    );
+}
+
 /// A one-shot run takes one turn and exits, so nothing is left holding the line to send it again:
 /// a tool for arranging a later look is not offered here (SCHED-6).
 ///

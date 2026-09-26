@@ -252,20 +252,46 @@ rather than a way to get stuck.
 `verified-by: bravebot_bedrock::credentials::forgetting_one_profile_leaves_the_others_alone`
 
 <a id="BACKEND-11"></a>
-### BACKEND-11: a settings file names the model above what the build baked in
+### BACKEND-11: a settings file names the model above the build, and a checkout's above a pick
 
-Where a settings file names a model and an exported variable does not, that name is what a request
-uses, in preference to the model compiled into the binary. A choice already recorded with `/model`
-still wins over all of it.
+Where a settings file names a model, that name is what a request uses, in preference to the model
+compiled into the binary and to one exported as `BRAVE_AI_CHAT_DEFAULT_MODEL`. The exported variable
+answers where no file names one, above the build.
+
+A choice recorded with `/model` ranks as the person's own file, `~/.bravebot/settings.json`, does.
+It outranks the `model` key in that file, and is outranked by one in a checkout's
+`.bravebot/settings.json` or `.bravebot/settings.local.json`, or in the file `--settings` named. A
+key spelled blank, or as something other than a string, names nothing and does not outrank a pick.
+It still displaces the key a lower file named, so with nothing recorded the exported variable or the
+build answers. Above all of it are `--model` and a model picked in the session that is running.
 
 **Why.** Every release bakes a default model in, so this value ranked like the rest of the file would
 lose on every binary anybody was given: the key would parse, `doctor` would report it, and nothing
-would change outside a source build. An exported variable stays above the file because it is the most
-specific thing a person said, and a recorded pick stays above both because it is the more recent one.
+would change outside a source build.
+
+The variable is named as a default, and a default is how it is used: a `.envrc` that exports it for
+every checkout of a project is saying what answers when nothing else does. Ranked above the file it
+would outrank every `model` key on any machine that sources one, the key a checkout wrote to state
+its model included. Claude Code ranks its counterpart, `ANTHROPIC_DEFAULT_MODEL`, last.
+
+A pick is recorded once per person and read back in every checkout. Ranked above a checkout's file,
+it is the one thing a checkout cannot override: two checkouts in one account cannot want different
+models, and a project that states its model is undone by whatever its reader last picked anywhere.
+Claude Code's `/model` writes the person's own settings file, which every other settings file
+outranks, and this is that rung. The pick outranks that file's own key because both are the same
+person speaking at the same rung, and the pick is the later of the two.
 
 `verified-by: bravebot_config::lib::a_model_in_the_settings_file_outranks_the_baked_in_one`
-`verified-by: bravebot_config::lib::an_exported_model_outranks_the_settings_file`
+`verified-by: bravebot_config::lib::a_model_in_the_settings_file_outranks_an_exported_one`
 `verified-by: bravebot_config::lib::the_env_block_spelling_stays_below_the_baked_in_value`
+`verified-by: bravebot_config::settings::a_layer_above_the_home_one_outranks_a_saved_pick`
+`verified-by: bravebot_config::settings::the_home_layer_does_not_outrank_a_saved_pick`
+`verified-by: bravebot_config::settings::a_layer_above_that_names_nothing_does_not_outrank_a_saved_pick`
+`verified-by: bravebot_session::store::a_checkouts_model_outranks_the_saved_pick_and_the_home_file_does_not`
+`verified-by: bravebot_tui::persist::a_recorded_model_answers_between_a_checkouts_file_and_the_persons_own`
+`verified-by: bravebot_cli::running::a_run_asks_for_a_checkouts_model_over_the_recorded_one`
+`verified-by: bravebot_cli::running::a_run_asks_for_the_settings_model_over_an_exported_default`
+`verified-by: bravebot_cli::running::doctor_names_a_checkouts_model_rather_than_the_pick_it_outranks`
 
 <a id="BACKEND-12"></a>
 ### BACKEND-12: a tier word names a model some reachable service serves
@@ -1246,7 +1272,8 @@ the endpoint, the key id and the signing key included, and a project layer can n
 That is the case the file exists for, and what it costs is under Known costs.
 
 BACKEND-11 is the one exception and says why: a `model` key ranked here would lose to the baked-in
-default on every binary anybody was given. A name a machine-level file pinned is resolved from that
+default on every binary anybody was given, and an exported default would outrank every `model` key
+on a machine whose `.envrc` sets one. A name a machine-level file pinned is resolved from that
 file and from none of these three, which is BACKEND-38.
 
 `verified-by: bravebot_config::lib::the_environment_outranks_the_settings_file`
@@ -1591,36 +1618,44 @@ finished call except the stop reason, and the stop reason says not to trust any 
 `verified-by: bravebot_bedrock::lib::reaching_the_token_ceiling_is_not_retried`
 
 <a id="BACKEND-43"></a>
-### BACKEND-43: a settings file names the effort level below a recorded pick
+### BACKEND-43: a settings file names the effort level, and a checkout's outranks a pick
 
 An `effort` key in the settings files names how hard the model is asked to think, taking the words
-`/effort` takes. A level already recorded with `/effort` wins over it. Where nothing is recorded the
-key is what every surface asks for: the interface, a session in lines, and a one-shot run.
+`/effort` takes. A level recorded with `/effort` ranks as the person's own file does, which is the
+rung [BACKEND-11](#BACKEND-11) gives a model pick: it outranks the key in `~/.bravebot/settings.json`,
+and is outranked by one in a checkout's `.bravebot/settings.json` or `.bravebot/settings.local.json`,
+or in the file `--settings` named. Above all of it are `--effort`, for the one run it starts, and a
+level picked with `/effort` in the session that is running. Whatever answers is what every surface
+asks for: the interface, a session in lines, and a one-shot run.
 
 The word is read on the terms [SESSION-15](sessions.md#SESSION-15) reads the recorded one on, by the
 same rule and in one place. A word this program does not define is no level at all rather than a
-level of something, so it never reaches a request field; a blank is absence, on the footing the
-`model` key's is. Whether the level then goes out at all is still [BACKEND-22](#BACKEND-22)'s
-question, and a level the model in force reads none of is withheld and not forgotten, whichever of
-the two named it. Nothing is recorded: a level a file named is not a pick, and writing one down would
-make reading a file once enough to outlive the file.
+level of something, so it never reaches a request field. Named in a layer that outranks the record,
+it still outranks the record, and the run asks for no level: the layer said something, and what it
+said was not a level. A blank, or a value that is not a string, is absence on the footing the
+`model` key's is: it does not outrank a pick, and it still displaces the key a lower file named, so
+with nothing recorded the run asks for no level. `--effort` takes only a word this program defines,
+and refuses any other before a run starts. Whether the level then goes out at all is still
+[BACKEND-22](#BACKEND-22)'s question, and a level the model in force reads none of is withheld and
+not forgotten, whichever of them named it. Nothing is recorded: a level a file named is not a pick,
+and writing one down would make reading a file once enough to outlive the file.
 
-Where the key sits against the other layers is settled by the record alone, there being no other. It
-outranks nothing else, because nothing else can name a level: no release bakes one in, no variable is
-read for one, and the machine-level layer of [BACKEND-38](#BACKEND-38) does not pin it.
+Nothing else names a level: no release bakes one in, no variable is read for one, and the
+machine-level layer of [BACKEND-38](#BACKEND-38) does not pin it.
 
-**Why.** The model can be named in four places and the level in one, and that one is a pick stored
-once per person, read back by every run. So a script inherits whatever the last person to open the
-interface chose and cannot ask for its own: two checkouts in one account cannot want different
-levels, which is the argument [CLI-9](cli.md#CLI-9) already makes for `--model`. A project cannot
-state one either, so "the work in this repository is worth thinking hard about" has nowhere to live,
-and a machine where nobody ever opens the interface has no route to a level at all.
+**Why.** A pick is stored once per person and read back by every run. Ranked above every file, it
+would be the one thing a checkout cannot override: two checkouts in one account cannot want
+different levels, and "the work in this repository is worth thinking hard about" is undone by
+whatever the reader last picked anywhere else. Ranked below every file, a level somebody picked in
+the interface would lose to one they wrote into their own settings once and forgot. The person's own
+file and the pick are the same person at the same rung, so the later of the two answers, and a
+checkout outranks both because it is the one thing that can tell one checkout from another. A script
+that wants its own level for one run says so with `--effort`, the way [CLI-9](cli.md#CLI-9) lets it
+say `--model`.
 
-**The record wins, which is the rule `model` follows.** A pick outlives the session that made it, and
-a file read afterwards would undo what somebody had just asked for. [BACKEND-11](#BACKEND-11)'s other
-half does not transfer: the `model` key sits above the baked-in default because every release bakes a
-model in, and a key ranked below it would change nothing on any binary anybody was given. Nothing
-bakes in a level, so there is no such rung here.
+[BACKEND-11](#BACKEND-11)'s other half does not transfer: the `model` key sits above the baked-in
+default because every release bakes a model in, and a key ranked below it would change nothing on
+any binary anybody was given. Nothing bakes in a level, so there is no such rung here.
 
 **One rule reads both words.** Both come out of a file somebody may have edited by hand, so a
 settings file naming nonsense is read the way a hand-edited record naming nonsense is, rather than
@@ -1631,10 +1666,17 @@ what drifting costs is a word no service defines in a request field.
 `verified-by: bravebot_config::settings::an_effort_word_is_read_as_the_file_spelled_it`
 `verified-by: bravebot_config::settings::an_effort_that_is_blank_or_not_a_string_names_nothing`
 `verified-by: bravebot_config::settings::the_closest_layer_that_named_an_effort_wins`
-`verified-by: bravebot_session::store::a_recorded_level_outranks_the_one_a_settings_file_named`
+`verified-by: bravebot_config::settings::a_layer_above_the_home_one_outranks_a_saved_pick`
+`verified-by: bravebot_config::settings::the_home_layer_does_not_outrank_a_saved_pick`
+`verified-by: bravebot_config::settings::a_layer_above_that_names_nothing_does_not_outrank_a_saved_pick`
+`verified-by: bravebot_session::store::a_checkouts_level_outranks_the_saved_pick_and_the_home_file_does_not`
 `verified-by: bravebot_session::store::a_settings_file_naming_no_level_asks_for_none`
-`verified-by: bravebot_tui::persist::a_recorded_level_is_read_back_and_a_settings_file_answers_where_none_is`
+`verified-by: bravebot_tui::persist::a_recorded_level_answers_between_a_checkouts_file_and_the_persons_own`
 `verified-by: bravebot_cli::running::a_run_sends_the_level_a_settings_file_named_where_nothing_is_recorded`
+`verified-by: bravebot_cli::running::a_run_sends_a_checkouts_level_over_the_recorded_one`
+`verified-by: bravebot_cli::running::a_run_sends_the_level_the_command_line_named_over_every_other`
+`verified-by: bravebot_cli::main::an_effort_flag_names_the_level_a_run_asks_for`
+`verified-by: bravebot_cli::main::an_effort_flag_naming_no_level_is_refused`
 `verified-by: bravebot_config::managed::a_name_outside_the_pinnable_set_pins_nothing`
 
 ## Known costs
@@ -1648,7 +1690,7 @@ what drifting costs is a word no service defines in a request field.
   what they picked.
 
 - **Which model answers is the individual's, and a managed layer cannot pin it.** A pinned default
-  model would lose to a `/model` choice the moment one was recorded, so it would pin nothing, and
+  model would lose to a `/model` choice wherever one is in force, so it would pin nothing, and
   making that choice unavailable is a change to what a person is offered rather than to where a
   request goes. An organisation with a reason to care, a cost or a data-handling consequence
   attached to one model, has the endpoint and the account to say it with and not the name.
@@ -1656,11 +1698,13 @@ what drifting costs is a word no service defines in a request field.
 - **Asking for no level does not outlive the session against a file that names one.**
   [SESSION-15](sessions.md#SESSION-15) removes the record rather than writing an empty one, because
   absence and a chosen absence were the same request while nothing else could name a level. With
-  BACKEND-43 they are not: somebody whose settings say `high` and who picks no level is asking for
-  none, and the next session reads the file and asks for `high` again. Distinguishing the two needs a
-  recorded absence, which is a change to what that clause writes down and to what reads it, and the
-  level is a preference somebody re-picks in one keystroke rather than an effect. `/effort` is what
-  says so for the session in front of them, and the file is what says so for every session.
+  BACKEND-43 they are not: somebody whose own settings say `high` and who picks no level is asking
+  for none, and the next session reads the file and asks for `high` again. Distinguishing the two
+  needs a recorded absence, which is a change to what that clause writes down and to what reads it,
+  and the level is a preference somebody re-picks in one keystroke rather than an effect. Against a
+  checkout's file a recorded absence would change nothing, since that file outranks any record.
+  `/effort` is what says so for the session in front of them, `--effort` for one run, and the file
+  is what says so for every session.
 
 - **How hard a model thinks is not something an administrator pins.** The machine-level layer reads
   the names that decide where a request goes, and a level decides what a request costs and how long
@@ -1735,12 +1779,13 @@ what drifting costs is a word no service defines in a request field.
   it does not know, and no listing distinguishes that from honouring it.
 
 - **A blank exported variable reaches the file for the model and for nothing else.** BACKEND-11's
-  resolution treats a blank as absence the whole way down, so a `model` key still answers. BACKEND-35's
-  stops at the build: on a binary built with nothing, exporting a name blank leaves the configuration
-  holding the blank and the value in the file unread. The two orders are the same argument, that a
-  placeholder in a shell profile is not an instruction to discard anything, applied to one more source
-  in one of them than in the other, and which behaviour a person meets depends on which name they
-  blanked.
+  resolution treats a blank as absence the whole way down, so the `env` block's spelling still
+  answers on a binary built with nothing, and a `model` key outranks the variable whatever it holds.
+  BACKEND-35's stops at the build: on a binary built with nothing, exporting a name blank leaves the
+  configuration holding the blank and the value in the file unread. The two orders are the same
+  argument, that a placeholder in a shell profile is not an instruction to discard anything, applied
+  to one more source in one of them than in the other, and which behaviour a person meets depends on
+  which name they blanked.
 
 - **A gateway that wants a credential and was told of none is refused by the service rather than
   here.** BACKEND-16 reads a block naming no credential as the person saying none is wanted, so a
