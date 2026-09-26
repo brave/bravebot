@@ -3639,7 +3639,6 @@ mod preserved_history {
         let config = config_for(endpoint);
         let worker_cancel = cancel.clone();
         let typed = session.interjections();
-        let (finished, result) = std::sync::mpsc::channel();
         let worker = std::thread::spawn(move || {
             let mut confirmer = RemoteConfirmer::new(outbound.clone(), replies, typed);
             let mut reporter = RemoteReporter::new(outbound);
@@ -3657,7 +3656,7 @@ mod preserved_history {
                 None,
                 &worker_cancel,
             );
-            finished.send((outcome, running_conversation)).unwrap();
+            (outcome, running_conversation)
         });
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         let mut accepted = Vec::new();
@@ -3701,10 +3700,7 @@ mod preserved_history {
                 ),
             }
         }
-        let (result, continued) = result
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .unwrap();
-        worker.join().unwrap();
+        let (result, continued) = worker.join().unwrap();
         *conversation = continued;
         match result {
             Ok(outcome) => {
