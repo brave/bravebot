@@ -97,13 +97,22 @@ armed by accident except deleting back past the mark.
 | `w`, `e`, `b`, `ge` | the start of the next word, the end of this word or the next, the start of this word or the previous, the end of the word before |
 | `W`, `E`, `B`, `gE` | the same four, where a word is a run of anything that is not a blank |
 | `0`, `$`, `^` | the first column, the last character, the first character that is not a blank |
-| `gg`, `G` | the first line of the input, the last |
+| `_` | the first character that is not a blank, on the row a count names counting this one as the first |
+| `\|` | the column a count names, counting the first as one |
+| `gg`, `G` | the first character that is not a blank on the first line of the input, and on the last |
+| `%` | the bracket that pairs with the first one at or after the caret on this line |
 | `f`, `F`, `t`, `T` then a character | the next or previous occurrence of it on this line, landing on it or stopping one short |
 | `;`, `,` | that jump again, and the same jump reversed |
 
 A jump looks only along the line the caret is on, and one that finds nothing leaves the caret where
 it was. `w` lands on the first character of the next word, rather than after the word it crossed
 where the word keys under Ctrl land.
+
+**`%` stays on the caret's line, where vi's crosses lines.** It pairs `(` with `)`, `[` with `]` and
+`{` with `}`, counting only brackets of the kind it found, and a bracket with no partner on the line
+leaves the caret where it was. A pair split over rows, a block pasted in with its closing brace three
+rows down, is `j` and `f}` away instead. The brackets a picture or paste is written with are not
+brackets to it. A count in front of `%` is spent and moves nothing.
 
 **`w` ends a word where punctuation begins, as vi does.** In `src/main.rs` each name is a word and so
 are the slash and the dot, so `dw` on `src` takes `src` alone. `W` crosses the whole path in one
@@ -127,10 +136,11 @@ in front of an operator and one in front of its motion multiply, so `2d3w` is `d
 | Keys | What the count says |
 |---|---|
 | `3w`, `5l`, `2f,`, `3;` | how many times over the motion is meant |
-| `2G`, `2gg` | which row to go to |
+| `2G`, `2gg`, `2_` | which row to go to, where `_` counts the caret's row as the first |
+| `8\|` | which column to go to |
 | `3j`, `3k` | how many rows to move, inside the input and no further |
 | `3dd`, `d3w`, `3x`, `3X`, `3~`, `3rx`, `3gUU`, `3>>` | how much of the stretch the operator takes |
-| `3p`, `3J` | how many copies go back, and how many rows end up as one |
+| `3p`, `3J`, `3gJ` | how many copies go back, and how many rows end up as one |
 | `3.` | how many the repeat is of, in place of the count it recorded |
 
 **The line bounds a count, not the number you type.** A counted motion stops at the first step that
@@ -152,6 +162,7 @@ act on:
 | Keys | The stretch |
 |---|---|
 | a motion | from the caret to wherever that motion would take it |
+| `j`, `k`, `G`, `gg`, `_` | every row from the caret's to the one the key reaches, whole |
 | the operator's own letter doubled | the whole line: `dd`, and `guu` or `gugu` |
 | `D`, `C`, `x`, `s` | to the end of the line, and the character under the caret |
 | `X` | the character before the caret |
@@ -169,11 +180,14 @@ listed. Whether the character a motion landed on is taken depends on the motion,
 character that is not a blank behaves as `ce`, leaving the space after the word. `cW` is `cE` in the
 same way, and on the last character of a word either changes that character alone. `dw` on the last
 word of a row takes the word and leaves the newline. `dge` takes both ends: the last letter of the
-word before, and the character the caret was on.
+word before, and the character the caret was on. `d%` takes both brackets and everything between
+them, from either bracket, and `d|` stops short of the column, so `d|` is `d0`. `d_` is `dd`, and
+`d3_` is `3dd`.
 
 `p` and `P` put the register back after and before the caret, and a stretch that was whole lines comes
 back as a line of its own. `J` makes this line and the one below into one, with a single space where
-the newline was. `u` puts back what the last change took, **one step and no further**. `.` does the
+the newline was. `gJ` joins them with nothing there and leaves the blanks the next line began with,
+for a line broken in the middle of a word or a path. `u` puts back what the last change took, **one step and no further**. `.` does the
 last change again at the caret, except after a put, a join, or `r` or a case change over a selection,
 where it does nothing.
 
@@ -186,8 +200,8 @@ change and `r` leave what you yanked there to put back.
 
 After an operator, `i` and `a` say the stretch is a thing rather than a distance, and the next press
 says which: `w` a word, `W` a run of anything that is not a blank, and a quote or either half of a
-bracket pair for what lies between them. `i` takes what is inside and `a` takes what surrounds it
-too. All on the line the caret is on.
+bracket pair for what lies between them, with `b` for the round pair and `B` for the curly one, as in
+vi. `i` takes what is inside and `a` takes what surrounds it too. All on the line the caret is on.
 
 `ci(` is what you mean when you want the arguments replaced, and it works with the caret on the name
 in front of the bracket, where it usually is: a pair is the one enclosing the caret, or else the next
