@@ -2146,6 +2146,104 @@ fn a_listing_can_be_narrowed_by_glob() {
     assert_eq!(listing.files, vec!["src/lib.rs", "src/main.rs"]);
 }
 
+/// A profile in each of two directories under `projects`, and one under a sibling of it.
+fn profiles_tree(name: &str) -> Scratch {
+    let scratch = Scratch::new(name);
+    for dir in ["projects/a", "projects/b", "other/a"] {
+        std::fs::create_dir_all(scratch.path.join(dir)).unwrap();
+        std::fs::write(scratch.path.join(dir).join("profile.json"), "needle\n").unwrap();
+    }
+    std::fs::write(scratch.path.join("projects/b/other.json"), "needle\n").unwrap();
+    scratch
+}
+
+fn list_under(root: &std::path::Path, directory: &str, pattern: &str) -> Vec<String> {
+    let workspace = Workspace::new(root).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+    let listing = workspace
+        .list(
+            &mut policy,
+            &Labelled::trusted(directory.to_string()),
+            Some(&Labelled::trusted(pattern.to_string())),
+            None,
+        )
+        .expect("list succeeds");
+    let proof = policy.authorise_content_release("test", "paths");
+    listing.declassify(&proof).files
+}
+
+/// A caller naming a directory writes the rest of the path from there. Read from the root alone,
+/// `*/profile.json` under `projects` selects nothing and is reported as a glob that matched no
+/// files, which sends the planner guessing globs for files that are there.
+#[test]
+fn a_listing_glob_may_be_written_from_the_directory_it_names() {
+    let scratch = profiles_tree("list-glob-under");
+    let both = vec![
+        "projects/a/profile.json".to_string(),
+        "projects/b/profile.json".to_string(),
+    ];
+
+    assert_eq!(
+        list_under(&scratch.path, "projects", "*/profile.json"),
+        both
+    );
+    assert_eq!(
+        list_under(&scratch.path, "projects", "projects/*/profile.json"),
+        both,
+        "the spelling from the workspace root stopped working"
+    );
+    assert_eq!(
+        list_under(&scratch.path, "projects", "b/*"),
+        vec!["projects/b/other.json", "projects/b/profile.json"]
+    );
+    // From the root the same glob still says one directory level and no more.
+    assert_eq!(
+        list_under(&scratch.path, ".", "*/profile.json"),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_search_include_may_be_written_from_the_directory_it_names() {
+    let scratch = profiles_tree("grep-include-under");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let found = workspace
+        .grep(
+            &mut policy,
+            std::slice::from_ref(&Labelled::trusted("needle".to_string())),
+            &Labelled::trusted("projects".to_string()),
+            Some(&Labelled::trusted("*/profile.json".to_string())),
+            true,
+            1,
+        )
+        .expect("grep succeeds");
+    let proof = policy.authorise_content_release("test", "matches");
+    let found = found.declassify(&proof);
+
+    assert_eq!(found.considered, 2, "the include selected the wrong files");
+    let paths: Vec<&str> = found.matches.iter().map(|m| m.path.as_str()).collect();
+    assert_eq!(
+        paths,
+        ["projects/a/profile.json", "projects/b/profile.json"]
+    );
+}
+
 /// An untrusted pattern must not choose what is looked at, exactly as an untrusted
 /// directory must not.
 #[test]

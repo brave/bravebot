@@ -219,7 +219,9 @@ pub fn available(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<To
                                         depth, \"src/**/*.rs\" to anchor it, or \
                                         \"**/*.{rs,toml}\" for either extension. Supports *, ?, \
                                         ** and brace groups. Character classes and extended \
-                                        globs are not supported."
+                                        globs are not supported. A pattern with a / in it may \
+                                        be written from the directory or from the workspace \
+                                        root."
                     },
                     "depth": {
                         "type": "integer",
@@ -381,7 +383,9 @@ pub fn available(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<To
                         "description": "Optional glob limiting which files are searched, \
                                         e.g. \"*.rs\" or \"**/*.{cc,h,mm}\". Supports *, ?, \
                                         ** and brace groups. Character classes and extended \
-                                        globs are not supported."
+                                        globs are not supported. A pattern with a / in it may \
+                                        be written from the directory or from the workspace \
+                                        root."
                     },
                     "case_sensitive": {
                         "type": "boolean",
