@@ -3856,6 +3856,11 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 // result and not on a job's. It is not offered again where it was
                                 // asked for: the output was then too long for one result, which is
                                 // said, or its release was refused, which read_output reports.
+                                //
+                                // Too long is said with where the rest is. Told only that, a planner
+                                // took read_output's result to be held to the same size and ran a
+                                // four-minute make check again through grep, when the whole log was
+                                // in the slot and a filter fed it through stdin_ref reads it there.
                                 let advice = match (
                                     output.printed_by.is_some(),
                                     output.covered_by_record,
@@ -3863,24 +3868,31 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 ) {
                                     (false, _, _) => String::new(),
                                     (true, _, true) => {
-                                        let in_the_result =
-                                            match (output.tool == "run", output.read_asked) {
-                                                (false, _) => "",
-                                                (true, false) => {
-                                                    " To have what a command prints come back in \
+                                        let in_the_result = match (
+                                            output.tool == "run",
+                                            output.read_asked,
+                                        ) {
+                                            (false, _) => "",
+                                            (true, false) => {
+                                                " To have what a command prints come back in \
                                                      the result that ran it, call run with read: \
                                                      true."
-                                                }
-                                                (true, true)
-                                                    if reference
-                                                        .bytes
-                                                        .is_none_or(|bytes| bytes > output_cap) =>
-                                                {
-                                                    " It is longer than one result may hold, so it \
-                                                     was left out of this one."
-                                                }
-                                                (true, true) => "",
-                                            };
+                                            }
+                                            (true, true)
+                                                if reference
+                                                    .bytes
+                                                    .is_none_or(|bytes| bytes > output_cap) =>
+                                            {
+                                                " It is longer than a run's result may hold, so \
+                                                     it was left out of this one. read_output is not \
+                                                     held to that size and hands back all of it. To \
+                                                     see part of it without running the command \
+                                                     again, call run with a filter such as tail -n \
+                                                     100 or grep, stdin_ref set to the reference, \
+                                                     and read: true."
+                                            }
+                                            (true, true) => "",
+                                        };
                                         format!(
                                             "\n\nThis is about the command rather than about what \
                                              it printed, and it is not the end of the road. To see \

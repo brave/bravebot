@@ -711,7 +711,8 @@ pub fn available(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<To
                                         the user or checking it, it comes back here as text you \
                                         can read, and there is no read_output call to make. \
                                         Output too long for one result still comes back as a \
-                                        reference, with its size. \
+                                        reference, with its size, and read_output is not held \
+                                        to that size. \
                                         Everywhere else this changes nothing, and output you \
                                         may not read still comes back as a reference. Defaults \
                                         to false. Not with background: true, which has printed \
