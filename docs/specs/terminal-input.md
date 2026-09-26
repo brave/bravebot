@@ -1189,11 +1189,19 @@ INSERT mode still arms it, which is where somebody who wanted a command is.
 | Keys | Where the caret goes |
 |---|---|
 | `h`, `l`, Space | one character left or right |
-| `w`, `e`, `b` | the start of the next word, the end of this word or the next, the start of this word or the previous |
+| `w`, `e`, `b`, `ge` | the start of the next word, the end of this word or the next, the start of this word or the previous, the end of the word before |
+| `W`, `E`, `B`, `gE` | the same four, where a word is a run of anything that is not a blank |
 | `0`, `$`, `^` | the first column, the last character, the first character that is not a blank |
 | `gg`, `G` | the first line of the input, the last |
 | `f`, `F`, `t`, `T` then a character | the next or previous occurrence of it on this line, landing on it or stopping one short |
 | `;`, `,` | the last such jump again, and the same jump reversed |
+
+To `w`, `e`, `b` and `ge` a word is a run of letters, digits and `_`, or a run of the other characters
+that are not blanks, as it is to `iw` ([INPUT-29](#INPUT-29)): in `src/main.rs` each name is a word,
+and so are the slash and the dot. A marker is a word by itself to these four, and to the capitals it
+is part of the run it touches. In the first word there is no word before, and `ge` and `gE` go to the
+start of the input. An empty row is a stop for `w`, `b` and `ge` and their capitals, and `e` and `E`
+cross it.
 
 The caret comes to rest on a character and never in the column after the line, since NORMAL mode's
 caret sits on the character the next instruction acts on. A jump looks only along the line the caret
@@ -1206,7 +1214,14 @@ leave the caret at.
 **Why.** These are the keys somebody's hands already know, so what they do here has to be what they
 do everywhere else. `w` lands on the first character of the next word rather than after the word it
 crossed, which is where the word keys under Ctrl land: both are wanted, and the letter has to mean
-vi's.
+vi's. The word keys under Ctrl split on blanks alone, as every other line editor's do.
+
+The word ends where vi ends one, and the motions read the classes of character `iw` and `iW` read, so
+a motion and an object never disagree about where a word is. Split on blanks alone, `dw` on `src`
+would take the whole path. The capitals are for crossing a path or a flag in one press. A marker is a
+word by itself because it stands for one picture or paste, and the punctuation beside it is not part
+of that. An empty row is a paragraph break, and a `db` that crossed it would take the end of the
+paragraph above; `e` crossing it is vim's own exception, kept with the rest.
 
 A jump crossing a newline would land off the row being read, which is not what a key for reaching a
 bracket in front of you is for. Leaving the caret at the end of the line when the character is not
@@ -1222,8 +1237,15 @@ names a character a marker is spelled with, and it did exactly that before it wa
 `verified-by: bravebot_tui::vim::the_press_after_a_jump_key_is_the_character_to_jump_to`
 `verified-by: bravebot_tui::vim::reversing_a_jump_changes_its_direction_and_nothing_else`
 `verified-by: bravebot_tui::vim::a_pair_beginning_with_g_is_the_start_of_the_input_or_nothing`
+`verified-by: bravebot_tui::vim::ge_and_g_capital_e_are_motions_alone_after_an_operator_and_in_visual_mode`
+`verified-by: bravebot_tui::vim::the_capital_word_keys_are_motions_of_their_own`
 `verified-by: bravebot_tui::state::the_character_motions_move_one_character`
 `verified-by: bravebot_tui::state::the_word_motions_land_where_vi_lands`
+`verified-by: bravebot_tui::state::the_word_motions_stop_where_punctuation_begins_and_ends`
+`verified-by: bravebot_tui::state::the_capital_word_motions_cross_a_path_whole`
+`verified-by: bravebot_tui::state::ge_goes_back_to_the_end_of_the_word_before`
+`verified-by: bravebot_tui::state::a_marker_is_a_word_of_its_own_to_the_word_motions`
+`verified-by: bravebot_tui::state::the_word_motions_stop_on_an_empty_row`
 `verified-by: bravebot_tui::state::the_line_motions_reach_the_ends_and_the_first_word`
 `verified-by: bravebot_tui::state::the_input_motions_reach_the_first_and_last_line`
 `verified-by: bravebot_tui::state::the_jumps_to_a_character_land_on_it_or_just_short_of_it`
@@ -1300,8 +1322,12 @@ Only `d`, `c`, `y` and the keys spelled from them fill the register. A shift, a 
 leave it holding what it held.
 
 Whether the character the motion landed on is taken depends on the motion: `de` takes the word's last
-letter, `dw` stops before the next word's first. `cw` on a character that is not a blank leaves the
-space after it, and on a blank takes it.
+letter, `dw` stops before the next word's first. `ge` and `gE` take both ends, the character they land
+on and the one the caret was on, so `dge` on the first letter of a word takes that letter and the last
+of the word before. `cw` on a character that is not a blank leaves the space after it, and on a blank
+takes it, and so does `cW`. On the last character of a word `cw` changes that character alone. The
+last word a `w` or `W` counts under an operator ends at the end of its line, so `dw` on the last word
+of a row leaves the newline, and on an empty row takes that row.
 
 After an operator `j` and `k` are the row below and the row above, and where there is no such row they
 take nothing. The rows those four keys name are whole lines to every operator, as the doubled letter's
@@ -1327,11 +1353,14 @@ it, and `dj` from the middle of a row would split two rows apart. `j` and `k` ar
 on their own (INPUT-27), and an operator waiting for its stretch claims them, since a stretch cannot
 reach into a prompt that is not in the box.
 
-The inclusive and exclusive motions are vi's distinction and not decoration. `cw` behaving as `ce` is
-vi's own special case, kept because the alternative is useless: a word replaced and run into the next
-one is never what somebody meant, and typing the space back each time is what the key would cost.
-Both were measured against vim rather than reasoned about, since they are facts about what people's
-hands expect.
+The inclusive and exclusive motions are vi's distinction and not decoration, and `ge` is inclusive in
+vim going back as well. `cw` behaving as `ce`, and `cW` as `cE`, is vi's own special case, kept
+because the alternative is useless: a word replaced and run into the next one is never what somebody
+meant, and typing the space back each time is what the key would cost. Run on from a word's last
+character, it would take the next word too, and a slash in a path is such a word. A `dw` crossing the
+newline after the last word would join the next row onto this one.
+All of these were measured against vim rather than reasoned about, since they are facts about what
+people's hands expect.
 
 The register is vi's unnamed one and the only one. Named registers are a filing system, and a box
 holding one line of thought has nothing to file. It is not the system clipboard, which Ctrl-V owns
@@ -1376,6 +1405,10 @@ selection holding one is ([INPUT-30](#INPUT-30)).
 `verified-by: bravebot_tui::state::the_character_and_the_line_are_extents_of_their_own`
 `verified-by: bravebot_tui::state::the_change_operator_takes_the_stretch_and_starts_typing`
 `verified-by: bravebot_tui::state::changing_a_word_leaves_the_space_after_it`
+`verified-by: bravebot_tui::state::the_capital_word_motions_cross_a_path_whole`
+`verified-by: bravebot_tui::state::ge_goes_back_to_the_end_of_the_word_before`
+`verified-by: bravebot_tui::state::cw_on_the_last_character_of_a_word_changes_that_character_alone`
+`verified-by: bravebot_tui::state::dw_on_the_last_word_of_a_row_takes_it_and_leaves_the_newline`
 `verified-by: bravebot_tui::state::the_yank_operator_leaves_the_line_alone`
 `verified-by: bravebot_tui::state::a_yanked_line_comes_back_as_a_line`
 `verified-by: bravebot_tui::state::the_register_goes_back_on_either_side_of_the_caret`
@@ -1414,7 +1447,9 @@ something. `aw` takes the blanks after the word, or the ones before it where the
 pair is the one enclosing the caret, or else the next one along the line. `a` over a quote pair takes
 the blanks in front of it and over a bracket pair does not.
 
-A key naming no kind of thing does nothing. A marker is taken whole or left alone.
+A key naming no kind of thing does nothing. A marker is taken whole or left alone, and to the word
+objects it is what it is to the word motions ([INPUT-26](#INPUT-26)): a word by itself to `iw` and
+`aw`, and part of the run it touches to `iW`.
 
 **Why.** `ci(` is what somebody means when they want the arguments replaced, and the alternative is
 counting characters to a closing bracket they can see perfectly well.
@@ -1447,6 +1482,7 @@ digit, so `di[` named the brackets one is written with and left half of it stand
 `verified-by: bravebot_tui::state::a_text_object_works_with_every_operator`
 `verified-by: bravebot_tui::state::a_pair_naming_no_kind_of_object_does_nothing`
 `verified-by: bravebot_tui::state::a_text_object_over_a_marker_takes_it_whole_or_not_at_all`
+`verified-by: bravebot_tui::state::a_marker_is_a_word_of_its_own_to_the_word_objects`
 
 <a id="INPUT-30"></a>
 ### INPUT-30: a stretch can be marked out first, and it is drawn while it is chosen

@@ -576,15 +576,39 @@ pub enum Offered {
 
 /// What kind of character one is, for working out where a word begins and ends.
 ///
-/// Three kinds rather than two, because vi's `w` treats punctuation as a word of its own: in
-/// `src/main.rs` the slashes are not part of either name, which is what makes `diw` on one of them
-/// take the slash alone. `W` uses the same machinery with punctuation folded into `Word`, and that is
-/// the whole of the difference between the two.
+/// Blanks, words and punctuation rather than blanks and the rest, because vi's `w` treats punctuation
+/// as a word of its own: in `src/main.rs` the slashes are not part of either name, which is what makes
+/// `diw` on one of them take the slash alone. `W` uses the same machinery with punctuation folded into
+/// `Word`, and that is the whole of the difference between the two.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Class {
     Blank,
     Word,
     Punctuation,
+    /// A marker, to the word motions of `w`, `e`, `b` and `ge`. It stands for one picture or paste,
+    /// so it is a word by itself and joins no run, not even that of a marker beside it.
+    Marker,
+}
+
+/// The kind of character `c` is to `w` and `iw`.
+fn word_class(c: char) -> Class {
+    if c.is_whitespace() {
+        Class::Blank
+    } else if c.is_alphanumeric() || c == '_' {
+        Class::Word
+    } else {
+        Class::Punctuation
+    }
+}
+
+/// The kind of character `c` is to `W` and `iW`, where anything but a blank is one thing: that is
+/// what makes a path or a flag a single word.
+fn bigword_class(c: char) -> Class {
+    if c.is_whitespace() {
+        Class::Blank
+    } else {
+        Class::Word
+    }
 }
 
 /// What a yank or a delete took, and whether it was whole lines.
@@ -3151,7 +3175,8 @@ impl Session {
     ) {
         use crate::vim::Operator;
 
-        let Some((from, to)) = self.stretch(self.as_vi_reads_it(operator, extent), count) else {
+        let (read, read_count) = self.as_vi_reads_it(operator, extent, count);
+        let Some((from, to)) = self.stretch(read, read_count) else {
             return;
         };
         // All of the characters asked for or none, which is vim's rule: `5rx` with three left on the
@@ -3266,24 +3291,37 @@ impl Session {
     /// never wants it run into the next one, and typing the space back every time is what `cw` would
     /// otherwise cost. On a blank there is no word to change, and it means `dw` again.
     ///
+    /// On the last character of a word, `ce` would reach the end of the next word, and vim's `cw`
+    /// changes that character alone, so the first of the count is the word the caret is already at
+    /// the end of. That is every one-character word, which a slash or a dot in a path is.
+    ///
     /// Measured against vim itself rather than reasoned about, since a special case is a fact about
     /// what people's hands expect and not something the rest of this can predict.
     fn as_vi_reads_it(
         &self,
         operator: crate::vim::Operator,
         extent: crate::vim::Extent,
-    ) -> crate::vim::Extent {
+        count: Option<u32>,
+    ) -> (crate::vim::Extent, Option<u32>) {
         use crate::vim::{Extent, Motion, Operator};
 
-        let on_a_blank = self.input[self.caret..]
-            .chars()
-            .next()
-            .is_some_and(char::is_whitespace);
-        match (operator, extent) {
-            (Operator::Change, Extent::To(Motion::WordRight)) if !on_a_blank => {
-                Extent::To(Motion::WordEnd)
-            }
-            _ => extent,
+        let (big, end) = match (operator, extent) {
+            (Operator::Change, Extent::To(Motion::WordRight)) => (false, Motion::WordEnd),
+            (Operator::Change, Extent::To(Motion::BigwordRight)) => (true, Motion::BigwordEnd),
+            _ => return (extent, count),
+        };
+        let Some(here) = self
+            .class_at(self.caret, big)
+            .filter(|class| *class != Class::Blank)
+        else {
+            return (extent, count);
+        };
+        let at_its_end =
+            here == Class::Marker || self.class_at(self.past(self.caret), big) != Some(here);
+        match (at_its_end, count.unwrap_or(1)) {
+            (false, _) => (Extent::To(end), count),
+            (true, 1) => (Extent::Character, None),
+            (true, words) => (Extent::To(end), Some(words - 1)),
         }
     }
 
@@ -3403,7 +3441,18 @@ impl Session {
                     }
                     // Backwards, where the character the caret started on is the one not asked for:
                     // `db` takes back to the start of the word and leaves what the caret was on.
-                    std::cmp::Ordering::Less => Some((landed, was)),
+                    // Except for the motions that take it, where `dge` takes that character too.
+                    // Not the newline of an empty row, which is no character the caret was on.
+                    std::cmp::Ordering::Less => {
+                        let end = if motion.takes_what_it_lands_on()
+                            && !self.input[was..].starts_with('\n')
+                        {
+                            self.past(was)
+                        } else {
+                            was
+                        };
+                        Some((landed, end))
+                    }
                 }
             }
             Extent::Object(object) => self.object_span(object),
@@ -3424,23 +3473,8 @@ impl Session {
         use crate::vim::Kind;
 
         match object.kind {
-            Kind::Word => self.run_span(object.around, |c| {
-                if c.is_whitespace() {
-                    Class::Blank
-                } else if c.is_alphanumeric() || c == '_' {
-                    Class::Word
-                } else {
-                    Class::Punctuation
-                }
-            }),
-            // Anything but a blank is one thing, which is what makes a path or a flag a single object.
-            Kind::Bigword => self.run_span(object.around, |c| {
-                if c.is_whitespace() {
-                    Class::Blank
-                } else {
-                    Class::Word
-                }
-            }),
+            Kind::Word => self.run_span(object.around, false),
+            Kind::Bigword => self.run_span(object.around, true),
             Kind::Pair(opens, closes) => self.pair_span(opens, closes, object.around),
         }
     }
@@ -3449,50 +3483,64 @@ impl Session {
     ///
     /// A run of blanks is itself a run, which is what makes `diw` on a space take the spaces: the caret
     /// is in something, and the object is whatever it is in.
-    fn run_span(&self, around: bool, class: impl Fn(char) -> Class) -> Option<(usize, usize)> {
+    ///
+    /// Read with the word motions' classes, markers included, so an object and a motion never
+    /// disagree about where a word is: a marker is a word by itself to `iw` as it is to `w`.
+    fn run_span(&self, around: bool, big: bool) -> Option<(usize, usize)> {
         let (line_start, line_end) = self.caret_line();
-        let line = &self.input[line_start..line_end];
-        let at = self.caret.min(line_end) - line_start;
-        let here = class(line[at..].chars().next()?);
-
-        let from = line[..at]
-            .char_indices()
-            .rev()
-            .take_while(|(_, c)| class(*c) == here)
-            .last()
-            .map_or(at, |(index, _)| index);
-        let mut to = at
-            + line[at..]
+        let at = self.caret.min(line_end);
+        if at == line_end {
+            return None;
+        }
+        let class = |at: usize| self.class_at(at, big);
+        let here = class(at)?;
+        let forward = |from: usize| {
+            self.input[from..line_end]
                 .char_indices()
-                .take_while(|(_, c)| class(*c) == here)
-                .map(|(index, c)| index + c.len_utf8())
-                .last()
-                .unwrap_or(0);
+                .map(move |(index, c)| (from + index, c))
+        };
+        let backward = |to: usize| {
+            self.input[line_start..to]
+                .char_indices()
+                .rev()
+                .map(|(index, c)| (line_start + index, c))
+        };
+
+        let (from, mut to) = match self.marker_at(at) {
+            Some(marker) if here == Class::Marker => marker,
+            _ => (
+                backward(at)
+                    .take_while(|(index, _)| class(*index) == Some(here))
+                    .last()
+                    .map_or(at, |(index, _)| index),
+                forward(at)
+                    .take_while(|(index, _)| class(*index) == Some(here))
+                    .last()
+                    .map_or(at, |(index, c)| index + c.len_utf8()),
+            ),
+        };
 
         // `aw` takes the blanks after the word as well, which is what makes it the whole word rather
         // than the word alone: deleting one and leaving two spaces behind is not what was asked for.
         if around {
-            let after = to
-                + line[to..]
-                    .char_indices()
-                    .take_while(|(_, c)| class(*c) == Class::Blank && here != Class::Blank)
-                    .map(|(index, c)| index + c.len_utf8())
-                    .last()
-                    .unwrap_or(0);
+            let after = forward(to)
+                .take_while(|(index, _)| {
+                    class(*index) == Some(Class::Blank) && here != Class::Blank
+                })
+                .last()
+                .map_or(to, |(index, c)| index + c.len_utf8());
             // Nothing after it, so the blanks before it are what `aw` takes instead: on the last word
             // of a line, taking nothing extra would make `daw` the same as `diw`.
             if after == to && here != Class::Blank {
-                let before = line[..from]
-                    .char_indices()
-                    .rev()
-                    .take_while(|(_, c)| class(*c) == Class::Blank)
+                let before = backward(from)
+                    .take_while(|(index, _)| class(*index) == Some(Class::Blank))
                     .last()
                     .map_or(from, |(index, _)| index);
-                return Some((line_start + before, line_start + to));
+                return Some((before, to));
             }
             to = after;
         }
-        Some((line_start + from, line_start + to))
+        Some((from, to))
     }
 
     /// The stretch a pair of delimiters names, with or without the delimiters themselves.
@@ -3929,11 +3977,23 @@ impl Session {
     /// Told whether it is moving the caret or measuring a stretch, the way [`Session::move_by_for`]
     /// is: the stretch `d2G` names reaches the row `2G` would, so the count has to be read the same
     /// way on both sides or the operator takes the whole input where the motion took two rows.
+    ///
+    /// `w` measured for an operator is the other exception: the last word of the count ends where
+    /// its line does, as vim's does, so `dw` on the last word of a row takes that word and leaves
+    /// the newline, where the caret moving on would have crossed it to the next row.
     fn move_by_counted(&mut self, motion: crate::vim::Motion, count: Option<u32>, measuring: bool) {
         use crate::vim::Motion;
 
         match (motion, count) {
             (Motion::InputStart | Motion::InputEnd, Some(row)) => self.move_to_row(row),
+            (Motion::WordRight | Motion::BigwordRight, _) if measuring => {
+                let big = motion == Motion::BigwordRight;
+                let before_the_last = count.unwrap_or(1).saturating_sub(1);
+                self.repeatedly(Some(before_the_last), |session| {
+                    session.move_word_start_right(big, false);
+                });
+                self.move_word_start_right(big, true);
+            }
             _ => self.repeatedly(count, |session| session.move_by_for(motion, measuring)),
         }
     }
@@ -3985,9 +4045,14 @@ impl Session {
                     self.step_back_off_the_end();
                 }
             }
-            Motion::WordRight => self.move_word_start_right(),
-            Motion::WordEnd => self.move_word_end_right(),
-            Motion::WordLeft => self.move_word_left(),
+            Motion::WordRight => self.move_word_start_right(false, false),
+            Motion::WordEnd => self.move_word_end_right(false),
+            Motion::WordLeft => self.move_word_start_left(false),
+            Motion::WordEndLeft => self.move_word_end_left(false),
+            Motion::BigwordRight => self.move_word_start_right(true, false),
+            Motion::BigwordEnd => self.move_word_end_right(true),
+            Motion::BigwordLeft => self.move_word_start_left(true),
+            Motion::BigwordEndLeft => self.move_word_end_left(true),
             Motion::LineStart => self.move_to_line_start(),
             // The last character rather than the position after it, since that is not one the caret
             // can hold in NORMAL mode.
@@ -4063,76 +4128,166 @@ impl Session {
         self.step_back_off_the_end();
     }
 
-    /// Move to the start of the next word, which is what `w` asks for.
+    /// The kind of thing at `at` to the word motions, or nothing at the end of the input.
+    ///
+    /// `big` asks for the capital motions' answer, where a marker is part of the run of non-blanks
+    /// beside it as any other character would be. The small motions see a marker as a word by itself.
+    fn class_at(&self, at: usize, big: bool) -> Option<Class> {
+        if self.marker_at(at).is_some() {
+            return Some(if big { Class::Word } else { Class::Marker });
+        }
+        let c = self.input.get(at..)?.chars().next()?;
+        Some(if big { bigword_class(c) } else { word_class(c) })
+    }
+
+    /// Whether the character at the caret carries on a run of `run`.
+    ///
+    /// A marker carries on nothing, not even a marker beside it: each is one picture or paste.
+    fn run_continues(&self, run: Class, big: bool) -> bool {
+        run != Class::Marker && self.class_at(self.caret, big) == Some(run)
+    }
+
+    /// Move to the start of the next word, which is what `w` and `W` ask for.
     ///
     /// Different from the word motion the arrows use under Ctrl: that one lands after the word it
     /// crossed, and this one lands on the first character of the next. Both are wanted, and vi's is
     /// the one an instruction typed as `w` has to mean.
-    fn move_word_start_right(&mut self) {
+    ///
+    /// Every step is a caret step, so a marker is crossed whole and never landed inside. An empty
+    /// row is a word to `w`, `b` and `ge`, as it is in vim, so none of them crosses a paragraph
+    /// break unnoticed and `db` at the start of a paragraph leaves the one above alone.
+    ///
+    /// `ends_the_operand` is the last `w` of an operator's count, which stops at the end of the
+    /// line it started on rather than crossing it: the stretch ends there, and the newline stays.
+    /// From an empty row it crosses the one newline, which is the row `dw` there takes.
+    fn move_word_start_right(&mut self, big: bool, ends_the_operand: bool) {
+        let (_, line_end) = self.caret_line();
         let was = self.caret;
-        // Out of the word the caret is in, then over the blanks after it. A caret already on a blank
-        // skips the first loop and lands on the next word, which is the same answer.
-        while !self.at_input_end()
-            && self.input[self.caret..]
-                .chars()
-                .next()
-                .is_some_and(|c| !c.is_whitespace())
-        {
+        // Out of the run the caret is in, then over the blanks after it. A caret already on a blank
+        // skips the first part and lands on the next word, which is the same answer.
+        let Some(here) = self.class_at(self.caret, big) else {
+            return;
+        };
+        self.move_right();
+        if here != Class::Blank {
+            while self.run_continues(here, big) {
+                self.move_right();
+            }
+        }
+        while self.class_at(self.caret, big) == Some(Class::Blank) && !self.on_an_empty_row() {
             self.move_right();
         }
-        while !self.at_input_end()
-            && self.input[self.caret..]
-                .chars()
-                .next()
-                .is_some_and(char::is_whitespace)
-        {
-            self.move_right();
-        }
-        // At the end of the input there is no next word, so the caret stays where it was rather than
-        // coming to rest past the last character.
-        if self.at_input_end() {
-            self.caret = was;
-            self.move_to_line_end();
+        if ends_the_operand {
+            self.caret = self.caret.min(if was < line_end {
+                line_end
+            } else {
+                self.past(line_end)
+            });
+        } else if self.at_input_end() {
+            // At the end of the input there is no next word, so the caret stays on the last
+            // character rather than coming to rest past it.
             self.step_back_off_the_end();
         }
     }
 
+    /// Whether the caret is on a row with nothing on it.
+    fn on_an_empty_row(&self) -> bool {
+        let (start, end) = self.caret_line();
+        start == end
+    }
+
     /// Move to the end of this word, or of the next one where the caret is already at an end.
     ///
-    /// Which is what `e` asks for, and why it is not `w` stepped back: on the last character of a
-    /// word it has to reach the end of the following one.
-    fn move_word_end_right(&mut self) {
+    /// Which is what `e` and `E` ask for, and why it is not `w` stepped back: on the last character
+    /// of a word it has to reach the end of the following one.
+    fn move_word_end_right(&mut self, big: bool) {
         let was = self.caret;
+        let Some(started) = self.class_at(self.caret, big) else {
+            return;
+        };
         self.move_right();
-        while !self.at_input_end()
-            && self.input[self.caret..]
-                .chars()
-                .next()
-                .is_some_and(char::is_whitespace)
-        {
-            self.move_right();
+        if started == Class::Blank || !self.run_continues(started, big) {
+            // At an end already, so the end wanted is that of the next word.
+            while self.class_at(self.caret, big) == Some(Class::Blank) {
+                self.move_right();
+            }
+            if let Some(word) = self.class_at(self.caret, big) {
+                self.move_right();
+                while self.run_continues(word, big) {
+                    self.move_right();
+                }
+            }
+        } else {
+            while self.run_continues(started, big) {
+                self.move_right();
+            }
         }
-        while !self.at_input_end()
-            && self.input[self.caret..]
-                .chars()
-                .nth(1)
-                .is_some_and(|c| !c.is_whitespace())
-        {
-            self.move_right();
-        }
-        if self.at_input_end() {
-            // There is no further word end, so the caret comes back to the last position it can
-            // hold. Reached by stepping back from the end of the input rather than by subtracting
-            // the final character's width: where the line ends in a marker that byte offset is a
-            // position inside it, and `move_left` is the step that knows a marker is one character.
-            self.caret = self.input.len();
-            self.move_left();
+        // One step past the end found, so back one. Stepped rather than subtracted: where the word
+        // ends in a marker that byte offset is a position inside it, and `move_left` is the step that
+        // knows a marker is one character.
+        let reached_the_end = self.at_input_end();
+        self.move_left();
+        if reached_the_end {
             // The final character of the input is a newline where the input ends with one, and that
             // is the column after the line above it rather than a character to land on.
             self.step_back_off_the_end();
             // Never behind where the motion started: a key that reaches forwards and finds nothing
             // leaves the caret alone rather than walking it back a word.
             self.caret = self.caret.max(was);
+        }
+    }
+
+    /// Move to the start of this word, or of the one before where the caret is already at a start,
+    /// which is what `b` and `B` ask for.
+    fn move_word_start_left(&mut self, big: bool) {
+        if self.caret == 0 {
+            return;
+        }
+        self.move_left();
+        while self.class_at(self.caret, big) == Some(Class::Blank) {
+            if self.caret == 0 || self.on_an_empty_row() {
+                return;
+            }
+            self.move_left();
+        }
+        let Some(word) = self.class_at(self.caret, big) else {
+            return;
+        };
+        // Back to the first character of the run, which is where the step behind it leaves it.
+        while self.caret > 0 {
+            let here = self.caret;
+            self.move_left();
+            if !self.run_continues(word, big) {
+                self.caret = here;
+                return;
+            }
+        }
+    }
+
+    /// Move to the end of the word before, which is what `ge` and `gE` ask for.
+    ///
+    /// Out of the word the caret is in, then back over the blanks before it, stopping on an empty
+    /// row. In the first word there is no word before, and the caret goes to the start of the input
+    /// as vim's does.
+    fn move_word_end_left(&mut self, big: bool) {
+        let started = self.class_at(self.caret, big).unwrap_or(Class::Blank);
+        if self.caret == 0 {
+            return;
+        }
+        self.move_left();
+        if started != Class::Blank {
+            while self.run_continues(started, big) {
+                if self.caret == 0 {
+                    return;
+                }
+                self.move_left();
+            }
+        }
+        while self.class_at(self.caret, big) == Some(Class::Blank) {
+            if self.caret == 0 || self.on_an_empty_row() {
+                return;
+            }
+            self.move_left();
         }
     }
 
@@ -14424,6 +14579,235 @@ mod tests {
         assert_eq!(after("x\n", 0, "e"), 0);
     }
 
+    /// `w`, `e` and `b` end a word where punctuation begins or ends, as `iw` does, so in
+    /// `src/main.rs` each name is a word and so are the slash and the dot. Split on blanks alone,
+    /// `w` there would cross the whole path to the `x`, and `dw` would take the path.
+    #[test]
+    fn the_word_motions_stop_where_punctuation_begins_and_ends() {
+        let path = "src/main.rs x";
+        assert_eq!(after(path, 0, "w"), 3);
+        assert_eq!(after(path, 0, "ww"), 4);
+        assert_eq!(after(path, 0, "3w"), 8);
+        assert_eq!(after(path, 0, "e"), 2);
+        assert_eq!(after(path, 3, "e"), 7);
+        assert_eq!(after(path, 12, "b"), 9);
+        assert_eq!(after(path, 9, "b"), 8);
+        // A run of punctuation is one word, as a run of letters is.
+        assert_eq!(after("a --flag", 2, "w"), 4);
+        assert_eq!(edited(path, 0, "dw"), "/main.rs x");
+        assert_eq!(edited(path, 0, "de"), "/main.rs x");
+        assert_eq!(edited(path, 12, "db"), "src/main.x");
+        assert_eq!(edited(path, 0, "cwX"), "X/main.rs x");
+    }
+
+    /// `W`, `E` and `B` count in runs of anything that is not a blank, so a path is one word to
+    /// them. That is the reason to have both kinds: `w` for the names inside a path and `W` for
+    /// crossing it in one press.
+    #[test]
+    fn the_capital_word_motions_cross_a_path_whole() {
+        let path = "src/main.rs x";
+        assert_eq!(after(path, 0, "W"), 12);
+        assert_eq!(after(path, 0, "E"), 10);
+        assert_eq!(after(path, 12, "B"), 0);
+        assert_eq!(after(path, 5, "B"), 0);
+        assert_eq!(edited(path, 0, "dW"), "x");
+        assert_eq!(edited(path, 0, "dE"), " x");
+        assert_eq!(edited(path, 12, "dB"), "x");
+        assert_eq!(edited("a.b c.d e.f", 0, "d2W"), "e.f");
+        // `cW` on a character that is not a blank is `cE`, as `cw` is `ce`.
+        assert_eq!(edited(path, 0, "cWX"), "X x");
+    }
+
+    /// `ge` and `gE` go back to the end of the word before, which is `e` the other way round. In the
+    /// first word there is no end before it, and the caret goes to the start of the input, as vim's
+    /// does. Under an operator both ends are taken, the character landed on and the one the caret
+    /// was on, so `dge` on the first letter of a word joins what is left of it to the word before.
+    #[test]
+    fn ge_goes_back_to_the_end_of_the_word_before() {
+        assert_eq!(after("one two three", 8, "ge"), 6);
+        assert_eq!(after("one two three", 6, "ge"), 2);
+        assert_eq!(after("one two three", 12, "2ge"), 2);
+        assert_eq!(after("one\ntwo", 4, "ge"), 2);
+        assert_eq!(after("one.two three", 4, "ge"), 3);
+        assert_eq!(after("one.two three", 8, "gE"), 6);
+        assert_eq!(after("one.two three", 4, "gE"), 0);
+        assert_eq!(edited("one two", 4, "dge"), "onwo");
+        assert_eq!(edited("one two three", 8, "d2ge"), "onhree");
+        assert_eq!(edited("src/main.rs x", 12, "dgE"), "src/main.r");
+        // From an empty row the caret is on no character, so there is none of its own to take.
+        assert_eq!(edited("one\n\ntwo", 4, "dge"), "on\ntwo");
+    }
+
+    /// A marker is a word of its own to `w`, `e`, `b` and `ge`, whatever is beside it, and to the
+    /// capitals it is part of the word it touches, as any character that is not a blank is.
+    ///
+    /// Each step is read a caret step at a time rather than a byte at a time: the byte after a
+    /// marker's first one is inside the marker, and read as a character it would carry `e` over the
+    /// blank after the marker to the end of the next word.
+    #[test]
+    fn a_marker_is_a_word_of_its_own_to_the_word_motions() {
+        let landed = |at: fn(usize, usize) -> usize, keys: &str| {
+            let mut s = vi();
+            for c in "see.".chars() {
+                s.type_char(c);
+            }
+            s.attach(picture(b"pixels"));
+            for c in " and say".chars() {
+                s.type_char(c);
+            }
+            let opens = s.input.find('[').expect("the marker is in the line");
+            let closes = s.input.find(']').expect("the marker is in the line") + 1;
+            s.enter_vi_normal();
+            s.caret = at(opens, closes);
+            for c in keys.chars() {
+                s.type_char(c);
+            }
+            (s.caret, opens, closes)
+        };
+        let start: fn(usize, usize) -> usize = |_, _| 0;
+        let dot: fn(usize, usize) -> usize = |_, _| 3;
+        let marker: fn(usize, usize) -> usize = |opens, _| opens;
+        let and: fn(usize, usize) -> usize = |_, closes| closes + 1;
+
+        // Onto the marker from either side, and never past it to the word beyond.
+        for (at, keys) in [(dot, "w"), (dot, "e"), (and, "b"), (and, "ge"), (and, "gE")] {
+            let (caret, opens, _) = landed(at, keys);
+            assert_eq!(caret, opens, "{keys} left the caret at {caret}");
+        }
+        // Off it, and onto the dot or the word beside it rather than into it.
+        assert_eq!(landed(marker, "b").0, 3, "b from the marker");
+        assert_eq!(landed(marker, "ge").0, 3, "ge from the marker");
+        let (caret, _, closes) = landed(marker, "w");
+        assert_eq!(caret, closes + 1, "w from the marker");
+        let (caret, _, closes) = landed(marker, "e");
+        assert_eq!(caret, closes + 3, "e from the marker");
+        // The capitals read `see.` and the marker as one word.
+        let (caret, opens, _) = landed(start, "E");
+        assert_eq!(caret, opens, "E from the start");
+        let (caret, _, closes) = landed(start, "W");
+        assert_eq!(caret, closes + 1, "W from the start");
+        assert_eq!(landed(and, "B").0, 0, "B from `and`");
+
+        // Two side by side are two words, since each is one picture.
+        let mut s = vi();
+        s.attach(picture(b"one"));
+        s.attach(picture(b"two"));
+        for c in " x".chars() {
+            s.type_char(c);
+        }
+        let second = s
+            .input
+            .rfind('[')
+            .expect("the second marker is in the line");
+        s.enter_vi_normal();
+        s.caret = 0;
+        s.type_char('w');
+        assert_eq!(s.caret, second, "w from the first of two markers");
+    }
+
+    /// `cw` on the last character of a word changes that character alone, as vim's does, where `ce`
+    /// would run on to the end of the next word. With the punctuation split that is every slash and
+    /// dot in a path, and every marker.
+    #[test]
+    fn cw_on_the_last_character_of_a_word_changes_that_character_alone() {
+        let path = "src/main.rs x";
+        assert_eq!(edited(path, 3, "cwX"), "srcXmain.rs x");
+        assert_eq!(edited(path, 2, "cwX"), "srX/main.rs x");
+        assert_eq!(edited(path, 2, "c2wX"), "srXmain.rs x");
+        assert_eq!(edited(path, 10, "cWX"), "src/main.rX x");
+        assert_eq!(edited("a b", 0, "cwX"), "X b");
+        assert_eq!(edited("one two", 2, "c2wX"), "onX");
+
+        let mut s = vi();
+        for c in "see.".chars() {
+            s.type_char(c);
+        }
+        s.attach(picture(b"pixels"));
+        for c in " and say".chars() {
+            s.type_char(c);
+        }
+        s.enter_vi_normal();
+        s.caret = s.input.find('[').expect("the marker is in the line");
+        s.type_char('c');
+        s.type_char('w');
+        assert_eq!(s.input, "see. and say", "cw on a marker");
+    }
+
+    /// Under an operator the last word `w` counts ends at the end of its line, as vim's does: `dw`
+    /// on the last word of a row takes the whole word and leaves the newline, and on the last word
+    /// of the input takes the word to its last character. From an empty row it takes that row.
+    #[test]
+    fn dw_on_the_last_word_of_a_row_takes_it_and_leaves_the_newline() {
+        assert_eq!(edited("one two", 4, "dw"), "one ");
+        assert_eq!(edited("call f()", 6, "dw"), "call f");
+        assert_eq!(edited("x", 0, "dw"), "");
+        assert_eq!(edited("a src/main.rs", 2, "dW"), "a ");
+        assert_eq!(edited("one two\nthree", 4, "dw"), "one \nthree");
+        assert_eq!(edited("one two\nthree four", 0, "d2w"), "\nthree four");
+        assert_eq!(edited("one two\nthree four", 0, "d3w"), "four");
+        assert_eq!(edited("one\n\n  two", 4, "dw"), "one\n  two");
+    }
+
+    /// An empty row is a stop for `w`, `b` and `ge` and their capitals, as it is in vim, so none of
+    /// them crosses a paragraph break in one press and `db` at the start of a paragraph leaves the
+    /// one above it alone. `e` is vim's exception and crosses it.
+    #[test]
+    fn the_word_motions_stop_on_an_empty_row() {
+        assert_eq!(after("one\n\ntwo", 0, "w"), 4);
+        assert_eq!(after("one\n\ntwo", 4, "w"), 5);
+        assert_eq!(after("one\n\n\ntwo", 4, "w"), 5);
+        assert_eq!(after("one\n", 0, "w"), 4);
+        assert_eq!(after("one\n\ntwo", 5, "b"), 4);
+        assert_eq!(after("one\n\ntwo", 5, "ge"), 4);
+        assert_eq!(after("a.b\n\nc", 0, "W"), 4);
+        assert_eq!(after("a.b\n\nc", 5, "B"), 4);
+        assert_eq!(after("a.b\n\nc", 5, "gE"), 4);
+        assert_eq!(after("one\n\ntwo", 2, "e"), 7);
+        assert_eq!(edited("one\n\ntwo", 5, "db"), "one\ntwo");
+        assert_eq!(edited("one\n\ntwo", 5, "dge"), "one\nwo");
+        assert_eq!(edited("a\n\n\nb", 3, "dge"), "a\n\nb");
+    }
+
+    /// `iw`, `iW` and `aw` read a marker as the motions do: a word by itself to `iw` and `aw`, and
+    /// part of the run it touches to `iW`, never characters of its own. Read as its characters, the
+    /// space inside `[Image #1]` would end an `iW` half way through the picture.
+    #[test]
+    fn a_marker_is_a_word_of_its_own_to_the_word_objects() {
+        let edited_around = |before: &str, after: &str, at: fn(&str) -> usize, keys: &str| {
+            let mut s = vi();
+            for c in before.chars() {
+                s.type_char(c);
+            }
+            s.attach(picture(b"pixels"));
+            for c in after.chars() {
+                s.type_char(c);
+            }
+            s.enter_vi_normal();
+            let typed = s.input.clone();
+            s.caret = at(&s.input);
+            for c in keys.chars() {
+                s.type_char(c);
+            }
+            (typed, s.input)
+        };
+        let marker: fn(&str) -> usize = |input| input.find('[').expect("the marker is in the line");
+        let start: fn(&str) -> usize = |_| 0;
+        let dot: fn(&str) -> usize = |_| 3;
+
+        assert_eq!(
+            edited_around("see.", " and say", marker, "diw").1,
+            "see. and say"
+        );
+        assert_eq!(
+            edited_around("see.", " and say", marker, "daw").1,
+            "see.and say"
+        );
+        // The dot alone, and not the marker beside it.
+        let (typed, left) = edited_around("see.", " and say", dot, "diw");
+        assert_eq!(left, typed.replacen('.', "", 1));
+        assert_eq!(edited_around("a", "b c", start, "diW").1, " c");
+    }
+
     /// The ends of the line, and the first character that is not a blank. `$` lands on the last
     /// character rather than past it, since the column after the line holds nothing for an
     /// instruction to act on.
@@ -14461,12 +14845,16 @@ mod tests {
             "x\n",
             "one\ntwo\n",
             "\n\n",
+            "a.b\n-c",
+            "x/\n",
         ];
         // Every motion of INPUT-26, and the pairs that reach a second line before the motion under
         // test runs.
         let runs = [
-            "h", "l", " ", "w", "e", "b", "0", "$", "^", "gg", "G", "fo", "Fo", "to", "To", "fo;",
-            "fo,", "hh", "ll", "ww", "ee", "bb", "$h", "0l", "^h", "Ge", "Gw", "ggw", "gge",
+            "h", "l", " ", "w", "e", "b", "W", "E", "B", "ge", "gE", "0", "$", "^", "gg", "G",
+            "fo", "Fo", "to", "To", "fo;", "fo,", "hh", "ll", "ww", "ee", "bb", "WW", "EE", "BB",
+            "gege", "gEgE", "$h", "0l", "^h", "Ge", "Gw", "GE", "GW", "ggw", "gge", "ggE", "Gge",
+            "GgE",
         ];
         for input in inputs {
             for at in 0..=input.len() {
@@ -14686,10 +15074,15 @@ mod tests {
             ("l", true),
             ("w", true),
             ("e", true),
+            ("W", true),
+            ("E", true),
             ("f]", true),
             ("$", true),
             ("h", false),
             ("b", false),
+            ("B", false),
+            ("ge", false),
+            ("gE", false),
             ("F[", false),
             ("0", false),
         ];
@@ -14977,8 +15370,8 @@ mod tests {
     #[test]
     fn a_count_says_how_much_of_the_extent_an_operator_takes() {
         assert_eq!(edited("a b c d e f", 0, "d3w"), "d e f");
-        assert_eq!(edited("a b c d e f", 0, "2d3w"), "f");
-        assert_eq!(edited("a b c d e f", 0, "3d2w"), "f");
+        assert_eq!(edited("a b c d e f g", 0, "2d3w"), "g");
+        assert_eq!(edited("a b c d e f g", 0, "3d2w"), "g");
         assert_eq!(edited("hello", 0, "3x"), "lo");
         assert_eq!(edited("hello", 0, "9x"), "", "it stopped short of the line");
         assert_eq!(edited("one\ntwo\nthree\nfour", 0, "2dd"), "three\nfour");
