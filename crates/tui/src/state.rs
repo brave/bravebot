@@ -5516,7 +5516,9 @@ impl Session {
         self.set_input(returning);
         // The pictures come back with the words. A line that returned without them would return
         // carrying markers that name nothing, and the user has no way to tell.
-        self.pasted = std::mem::take(&mut self.sent_pasted);
+        // A stashed draft can still name attachments staged while this turn ran.
+        self.attached.append(&mut self.sent);
+        self.pasted.append(&mut self.sent_pasted);
         // Discarded rather than kept: the prompt is going back into the box as though it had never
         // been sent, so a plan for a turn that is being un-sent has nothing to describe.
         self.todos.clear();

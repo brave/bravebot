@@ -6058,25 +6058,7 @@ fn run_turn_animated(
     for file in files_named_in(prompt, wrote) {
         task = task.with_file(file);
     }
-    // Dropped files, read back out of the line the same way and for the same reason: a marker the
-    // user deleted is an attachment they took off.
-    for attached in session.sent_attachments().to_vec() {
-        task = match attached.kind {
-            crate::dropped::Kind::Attachment(media) => task.with_attachment(attached.name, media),
-            // A text file is context, which is what `@` and `--file` already do with one. It
-            // goes in as a drop rather than as a named file because a drop comes from wherever
-            // the user dragged it from, and that is rarely inside the workspace.
-            crate::dropped::Kind::Text => task.with_dropped_text(attached.name),
-        };
-    }
-    // Pasted pictures, in the order the markers in the prompt number them. A model reading
-    // "[Image #2]" has to be able to count to the picture that answers it.
-    for image in session.sent_pasted() {
-        task = task.with_image(PastedImage {
-            media_type: image.media_type,
-            bytes: image.bytes.clone(),
-        });
-    }
+    task = with_submitted_attachments(task, session);
     // The worker shares file decisions so errors cannot return the pre-write map.
     let file_authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
     let task = task.with_file_authority(file_authority.clone());
@@ -6520,6 +6502,31 @@ fn finish_turn(
         exposed: carried.exposed,
         events,
     }
+}
+
+/// Carry the attachments owned by the submitted line into its turn request.
+///
+/// Drops precede pastes, as they do in the model request. The session has already
+/// removed attachments whose markers the person deleted before submitting.
+pub fn with_submitted_attachments(mut task: Task, session: &Session) -> Task {
+    for attached in session.sent_attachments() {
+        task = match attached.kind {
+            crate::dropped::Kind::Attachment(media) => {
+                task.with_attachment(attached.name.clone(), media)
+            }
+            // A text file is context, which is what `@` and `--file` already do with one. It
+            // goes in as a drop rather than as a named file because a drop comes from wherever
+            // the user dragged it from, and that is rarely inside the workspace.
+            crate::dropped::Kind::Text => task.with_dropped_text(attached.name.clone()),
+        };
+    }
+    for image in session.sent_pasted() {
+        task = task.with_image(PastedImage {
+            media_type: image.media_type,
+            bytes: image.bytes.clone(),
+        });
+    }
+    task
 }
 
 /// Hand the worker's messages to `handle`: the one this frame waited for, and then everything

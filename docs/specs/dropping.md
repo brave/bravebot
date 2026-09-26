@@ -104,6 +104,7 @@ Waiting changes none of this, so a command the queue reaches when a turn ends ca
 dispatched at rest carries.
 
 `verified-by: bravebot_tui::drop::a_dropped_text_file_is_context_rather_than_an_attachment`
+`verified-by: bravebot_tui::sessions::cancelled_attachments_return_to_the_editor_and_the_next_request`
 `verified-by: bravebot_tui::drop::dropping_an_unsupported_type_writes_out_the_path`
 `verified-by: bravebot_tui::dropped::an_unsupported_type_is_a_drop_that_attaches_nothing`
 `verified-by: bravebot_tui::dropped::an_unsupported_file_beside_a_supported_one_leaves_it_attachable`
