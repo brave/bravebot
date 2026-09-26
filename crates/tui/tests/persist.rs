@@ -311,44 +311,96 @@ fn adopted(configured: Option<&str>) -> bravebot_tui::vim::Editing {
     session.editing()
 }
 
-/// BACKEND-43: the pick outranks the file, because somebody who picked a level during a session
-/// picked it knowing what their settings said; and with nothing recorded the file is what the
-/// session opens on, which is the whole reason the key exists. A word neither file defines is no
-/// level at all, which `bravebot_session::store::a_settings_file_naming_no_level_asks_for_none` pins
-/// for both.
+/// Settings with the person's own file saying `home` and a checkout's saying `checkout`, laid out
+/// under the scratch home the enclosing test runs in.
+fn settings(home: &str, checkout: &str) -> bravebot_config::Settings {
+    let own = store::directory().expect("a home");
+    let project = own.parent().expect("the scratch home").join("checkout");
+    std::fs::create_dir_all(&own).expect("home layer directory");
+    std::fs::create_dir_all(project.join(".bravebot")).expect("checkout layer directory");
+    std::fs::write(own.join("settings.json"), home).expect("home layer");
+    std::fs::write(project.join(".bravebot").join("settings.json"), checkout)
+        .expect("checkout layer");
+    bravebot_config::Settings::layered(Some(own), Some(&project), None)
+}
+
+/// BACKEND-43: the pick ranks as the person's own file does, so it outranks what that file named,
+/// being the later of the two things they said there, and is outranked by what a checkout's file
+/// named, since a pick recorded once per person cannot tell two checkouts apart. With nothing
+/// recorded the file is what the session opens on, which is the whole reason the key exists. A
+/// word neither file defines is no level at all, which
+/// `bravebot_session::store::a_settings_file_naming_no_level_asks_for_none` pins for both.
 #[test]
-fn a_recorded_level_is_read_back_and_a_settings_file_answers_where_none_is() {
+fn a_recorded_level_answers_between_a_checkouts_file_and_the_persons_own() {
+    use bravebot_aichat::protocol::Effort;
     with_temp_home("effort-adopted", || {
         assert_eq!(
-            level(Some("high")),
-            Some(bravebot_aichat::protocol::Effort::High),
+            level(&settings(r#"{"effort": "high"}"#, "{}")),
+            Some(Effort::High),
             "a settings file answered for nobody"
         );
 
-        store::save_effort(Some(bravebot_aichat::protocol::Effort::Low));
-        assert_eq!(level(None), Some(bravebot_aichat::protocol::Effort::Low));
+        store::save_effort(Some(Effort::Low));
+        assert_eq!(level(&settings("{}", "{}")), Some(Effort::Low));
         assert_eq!(
-            level(Some("max")),
-            Some(bravebot_aichat::protocol::Effort::Low),
-            "a settings file outranked the choice somebody made"
+            level(&settings(r#"{"effort": "max"}"#, "{}")),
+            Some(Effort::Low),
+            "the person's own file outranked the choice they made"
+        );
+        assert_eq!(
+            level(&settings(r#"{"effort": "low"}"#, r#"{"effort": "max"}"#)),
+            Some(Effort::Max),
+            "the choice outranked a checkout's file"
         );
 
         // Asking for no level removes the record (SESSION-15), which puts somebody back where they
         // were before they ever chose: with a file naming one, that is the file answering again.
         store::save_effort(None);
-        assert_eq!(level(None), None);
+        assert_eq!(level(&settings("{}", "{}")), None);
         assert_eq!(
-            level(Some("max")),
-            Some(bravebot_aichat::protocol::Effort::Max)
+            level(&settings(r#"{"effort": "max"}"#, "{}")),
+            Some(Effort::Max)
         );
     });
 }
 
-/// What a session that persists asks for, given what a settings file said.
-fn level(configured: Option<&str>) -> Option<bravebot_aichat::protocol::Effort> {
+/// What a session that persists asks for, given the settings in force.
+fn level(settings: &bravebot_config::Settings) -> Option<bravebot_aichat::protocol::Effort> {
     let mut session = bravebot_tui::state::Session::new("test").with_stored_history();
-    session.adopt_effort(configured);
+    session.adopt_effort(settings);
     session.effort()
+}
+
+/// BACKEND-11, the model's half of the same rule. `None` is the configured model, which is what a
+/// checkout naming one resolves to.
+#[test]
+fn a_recorded_model_answers_between_a_checkouts_file_and_the_persons_own() {
+    with_temp_home("model-adopted", || {
+        store::save_model("picked");
+        assert_eq!(
+            opened_on(&settings(r#"{"model": "mine"}"#, "{}")).as_deref(),
+            Some("picked"),
+            "the person's own file outranked the choice they made"
+        );
+        assert_eq!(
+            opened_on(&settings(r#"{"model": "mine"}"#, r#"{"model": "its"}"#)),
+            None,
+            "the choice outranked a checkout's file"
+        );
+
+        // A session that does not persist is handed nobody's pick, for the reason it is handed no
+        // recorded level.
+        let mut session = bravebot_tui::state::Session::new("test");
+        session.adopt_model(&settings("{}", "{}"));
+        assert_eq!(session.model(), None);
+    });
+}
+
+/// The model a session that persists opens on, given the settings in force.
+fn opened_on(settings: &bravebot_config::Settings) -> Option<String> {
+    let mut session = bravebot_tui::state::Session::new("test").with_stored_history();
+    session.adopt_model(settings);
+    session.model().map(str::to_string)
 }
 
 /// The effort choice outlives the session that made it, the same way the model choice does.

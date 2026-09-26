@@ -375,20 +375,21 @@ indistinguishable from a session that was lost, and the way to reach an older on
 <a id="SESSION-15"></a>
 ### SESSION-15: the effort level is stored globally, like the model
 
-How hard the model is asked to think is written under `~/.bravebot` and read back at the next
-start. It is not a property of a checkout: the same choice applies in every directory, and a blank
-file, or one naming a level this program does not define, is no choice at all, leaving the request
-to carry none. Asking for no level removes the record rather than writing an empty one, so somebody
-who unsets it is back where they were before they ever chose.
+How hard the model is asked to think is written under `~/.bravebot` and read back at the next start.
+It is not a property of a checkout: the same choice applies in every directory whose settings do not
+name a level of their own, and a blank file, or one naming a level this program does not define, is
+no choice at all, leaving the request to carry none. Asking for no level removes the record rather
+than writing an empty one, so somebody who unsets it is back where they were before they ever chose.
 
-This is not the only route to a level: a settings file may name one, below whatever is recorded here
-([BACKEND-43](backends.md#BACKEND-43)), which is what a checkout and an unattended machine have. With
-one written, somebody back where they were before they ever chose is somebody the file answers for.
+This is not the only route to a level ([BACKEND-43](backends.md#BACKEND-43)). A checkout's settings
+file may name one, which outranks whatever is recorded here, and the person's own file may name one,
+which answers only where nothing is recorded. With either written, somebody back where they were
+before they ever chose is somebody a file answers for.
 
-**Why.** Asking again in every project for the same preference is answering it repeatedly, and
-nothing about how hard to think depends on which files are open. Refusing to store a word this
-program does not define is what keeps an edited file from putting an unrecognised level into a
-request field.
+**Why.** Asking again in every project for the same preference is answering it repeatedly, and a
+project whose work does call for a level of its own says so in its settings rather than in a record
+that cannot tell one checkout from another. Refusing to store a word this program does not define is
+what keeps an edited file from putting an unrecognised level into a request field.
 
 `verified-by: bravebot_tui::persist::a_chosen_effort_is_read_back_next_session`
 `verified-by: bravebot_tui::persist::asking_for_no_effort_is_read_back_as_no_choice`

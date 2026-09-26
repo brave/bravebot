@@ -84,7 +84,9 @@ what it is read for.
 
 Opens a picker on the model in use. The list comes from the endpoint rather than a set compiled in, so
 it is whatever the backend offers today. The choice is written to `~/.bravebot`, so it outlives the
-session and applies in every directory.
+session and applies in every directory, except one whose own settings name a
+[`model`](../customize/configuration.md#model): that key outranks the choice, and the one in your own
+`~/.bravebot/settings.json` does not.
 
 Typing narrows the list rather than walking it, and rows are grouped under the service that answers
 them. See [Configuration](../customize/configuration.md#choosing-a-model).
@@ -110,9 +112,11 @@ asking for no level at all, so a first pick is not permanent. With a word, `/eff
 directly, and a word that names no level changes nothing and says so rather than reaching a request
 field.
 
-The choice is written to `~/.bravebot`, so it outlives the session and applies in every directory, and
-it outranks the [`effort`](../customize/configuration.md#effort) key, which is what a settings file
-answers with for somebody who has never picked one. See
+The choice is written to `~/.bravebot`, so it outlives the session and applies in every directory,
+except one whose own settings name an [`effort`](../customize/configuration.md#effort): that key
+outranks the choice, and the one in your own `~/.bravebot/settings.json` answers only while no level
+is recorded. Picking the row for none removes the record, so from the next session your own file's
+level answers again. See
 [Choosing how hard to think](../customize/configuration.md#choosing-how-hard-to-think), which is also
 where the two cases worth knowing are: the models that read no level, and the Brave endpoint, which
 accepts one and discards it.

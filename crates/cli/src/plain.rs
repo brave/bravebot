@@ -124,7 +124,7 @@ pub fn session(skip_permissions: bool) -> ExitCode {
         false => PermissionMode::Ask,
     };
 
-    let model = bravebot_session::store::load_model();
+    let model = bravebot_session::store::model(bravebot_session::store::load_model(), &settings);
     let mut asking = Prompting::new(std::io::BufReader::new(std::io::stdin()), std::io::stderr());
 
     asking.say(&t!(
@@ -189,12 +189,11 @@ pub fn session(skip_permissions: bool) -> ExitCode {
         .unwrap_or_else(|| config.default_model.clone());
     let reads_effort = bravebot_tui::app::adopt_listing_for_model(&mut config, &named);
 
-    // The level the turns below ask for: the recorded pick, and otherwise the one the settings
-    // layers named (BACKEND-43). Resolved once, here, beside the other answers this session reads
-    // out of a file, because a file edited mid-session describes the next one and this mode has no
+    // The level the turns below ask for: the recorded pick and the settings layers, ranked as
+    // BACKEND-43 ranks them. Resolved once, here, beside the other answers this session reads out
+    // of a file, because a file edited mid-session describes the next one and this mode has no
     // command that changes the level.
-    let effort =
-        bravebot_session::store::effort(bravebot_session::store::load_effort(), settings.effort());
+    let effort = bravebot_session::store::effort(bravebot_session::store::load_effort(), &settings);
 
     // Said where a level was chosen and the model in force reads none, because a level charged for
     // and discarded at the far end answers exactly like one that was honoured, so silence would

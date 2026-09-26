@@ -899,16 +899,21 @@ fn resolve(
 /// given, leaving a key that parses, is reported by `doctor`, and changes nothing outside a source
 /// build.
 ///
-/// An exported variable still wins, as it does everywhere else. `env.BRAVE_AI_CHAT_DEFAULT_MODEL`
-/// is read last, below the baked-in value, because that block is variables and is ranked like them.
+/// It sits above an exported variable too, the one place a person's settings file outranks one. The
+/// variable names a default, which is what a `.envrc` that exports it for every checkout means by
+/// it, and a file that names a model is somebody choosing one. A variable ranked above the file
+/// would also rank above a saved `/model` pick, which answers as the person's own file does.
+/// `env.BRAVE_AI_CHAT_DEFAULT_MODEL` is read last, below the baked-in value, because that block is
+/// variables and is ranked like them.
 fn resolve_model(
     from_env: Option<String>,
     settings: &Settings,
     baked: impl Fn(&str) -> Option<String>,
 ) -> Option<String> {
-    from_env
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| settings.model().map(str::to_string))
+    settings
+        .model()
+        .map(str::to_string)
+        .or_else(|| from_env.filter(|value| !value.trim().is_empty()))
         .or_else(|| baked(env_var::DEFAULT_MODEL))
         .or_else(|| settings.get(env_var::DEFAULT_MODEL).map(str::to_string))
 }
@@ -918,8 +923,9 @@ impl Config {
     /// built into this binary.
     ///
     /// The environment wins over both, so a developer can point a released binary at a local
-    /// backend without rebuilding it. What the machine-level file pinned wins over the environment,
-    /// which is the one thing that does.
+    /// backend without rebuilding it. What the machine-level file pinned wins over the environment
+    /// for every value, and a `model` key in a settings file wins over it for the model, since the
+    /// exported model is a default (`resolve_model` says why).
     pub fn from_env() -> Result<Self, ConfigError> {
         Self::from_env_and_settings(&Settings::load(), &Managed::load())
     }
@@ -939,7 +945,8 @@ impl Config {
     /// The `model` key is the other exception, and sits above the baked-in value rather than below
     /// it. Every release bakes in a default model, so a `model` key ranked like the `env` block
     /// would lose to it on every binary anybody was given: the key would parse, be reported by
-    /// `doctor`, and change nothing outside a source build. An exported variable still outranks it.
+    /// `doctor`, and change nothing outside a source build. It outranks an exported variable too,
+    /// for the reason [`resolve_model`] gives.
     pub fn from_env_and_settings(
         settings: &Settings,
         managed: &Managed,
@@ -2575,21 +2582,28 @@ mod tests {
         assert_eq!(chosen.as_deref(), Some("opus"));
     }
 
-    /// A variable exported for one session is still the most specific thing the person said, here as
-    /// everywhere else.
+    /// The variable names a default, and a `.envrc` exports it for every checkout. Ranked above the
+    /// file it would outrank every `model` key and every saved `/model` pick on any machine that
+    /// sources one. Where no file names a model, the variable still decides over the build.
     #[test]
-    fn an_exported_model_outranks_the_settings_file() {
+    fn a_model_in_the_settings_file_outranks_an_exported_one() {
         let settings = Settings::parse(r#"{"model": "opus"}"#);
         let chosen = resolve_model(Some("from-the-env".into()), &settings, |_| None);
+        assert_eq!(chosen.as_deref(), Some("opus"));
+
+        let chosen = resolve_model(Some("from-the-env".into()), &Settings::default(), |_| {
+            Some("baked".into())
+        });
         assert_eq!(chosen.as_deref(), Some("from-the-env"));
     }
 
-    /// A blank variable is a placeholder rather than an instruction to discard what the file said.
+    /// A blank variable is a placeholder rather than an instruction to discard what the build said.
     #[test]
-    fn a_blank_exported_model_does_not_shadow_the_settings_file() {
-        let settings = Settings::parse(r#"{"model": "opus"}"#);
-        let chosen = resolve_model(Some("   ".into()), &settings, |_| None);
-        assert_eq!(chosen.as_deref(), Some("opus"));
+    fn a_blank_exported_model_does_not_shadow_the_baked_in_one() {
+        let chosen = resolve_model(Some("   ".into()), &Settings::default(), |_| {
+            Some("baked".into())
+        });
+        assert_eq!(chosen.as_deref(), Some("baked"));
     }
 
     /// The `env` block is variables, and is ranked like them: below what the build baked in. Only

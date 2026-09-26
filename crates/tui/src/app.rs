@@ -2544,11 +2544,21 @@ fn event_loop(
     // (the session record, where AGENTS.md is looked for) moves underneath.
     let mut workspace = workspace.clone();
 
+    // The rules the user wrote in advance, read once for the workspace: a person editing the file
+    // mid-session is describing the next one, and rules that changed halfway through a turn would
+    // be the harder thing to explain. Every turn below is given these, until `/cd` or `/clear`
+    // reads them again. Read before the session is built, since they decide the model it opens on.
+    // `/cd` reads only the rules again, so the model and level settled from them stay as they are.
+    let settings = bravebot_config::Settings::load();
+
     // The one place persistence is turned on: history in ~/.bravebot outlives the session.
     let mut session = Session::new(confinement)
         .with_stored_history()
         .in_workspace(workspace.root())
         .on_tier(config);
+    // The saved pick where a checkout's settings do not outrank it (BACKEND-11), before the window
+    // below is asked for, which is the window of whichever model this settles on.
+    session.adopt_model(&settings);
     let absent = std::mem::take(&mut mcp_servers.notes);
     session.servers = mcp_servers;
     // Windows reports modifiers on every key without being asked, and crossterm says it cannot be
@@ -2691,17 +2701,12 @@ fn event_loop(
         session.note(note);
     }
 
-    // The rules the user wrote in advance, read once for the workspace: a person editing the file
-    // mid-session is describing the next one, and rules that changed halfway through a turn would
-    // be the harder thing to explain. Every turn below is given these, until `/cd` or `/clear`
-    // reads them again.
-    let settings = bravebot_config::Settings::load();
     // Settled before a key can be pressed, since this is what decides whether a letter is a letter.
     session.adopt_editing(settings.editor_mode());
-    // And the level a turn asks for, which the record or this file answers (BACKEND-43). Read once
-    // beside the rest: a file edited mid-session describes the next one, and `/effort` is how this
-    // one is changed.
-    session.adopt_effort(settings.effort());
+    // And the level a turn asks for, which the record or this file answers, whichever BACKEND-43
+    // ranks higher. Read once beside the rest: a file edited mid-session describes the next one,
+    // and `/effort` is how this one is changed.
+    session.adopt_effort(&settings);
     // Settled here too, and once, for the reason the mode is read once per turn: what decides
     // whether somebody is asked must not change under a prompt already on the screen. The command
     // line's switch is read here and nowhere else in the interface.

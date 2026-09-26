@@ -140,8 +140,10 @@ rather than obeyed.
 opens a picker on the model currently in use, as a panel in the middle of the screen. The list comes
 from the endpoint rather than from a set compiled in, so it is whatever the backend actually offers
 today. The choice is written to `~/.bravebot/model`, so it outlives the session that made it and
-applies in every directory. A one-shot run reads the same record, so a script uses the model you
-picked unless [`--model`](../reference/cli.md#--model-name) names another.
+applies in every directory, except one whose own settings name a [`model`](#model): a checkout that
+says which model it wants gets that one in the next session. A one-shot run reads the same record,
+so a script uses the model you picked unless [`--model`](../reference/cli.md#--model-name) names
+another.
 
 **Type to narrow the list rather than arrowing through it.** A search matches the name shown, the name
 a request would carry and the service that answers, ignoring case and anywhere in any of them, and
@@ -185,17 +187,17 @@ than instead of it, each under its own heading. See
 
 opens a picker of five levels, cheapest first (`low`, `medium`, `high`, `xhigh` and `max`), above a
 row for asking for no level at all. `/effort high` takes one without opening the panel. The choice is
-written to `~/.bravebot/effort`, so it outlives the session and applies in every directory, and
-`/status` reports it beside the model.
+written to `~/.bravebot/effort`, so it outlives the session and applies in every directory whose own
+settings name no [`effort`](#effort), and `/status` reports it beside the model.
 
 **Nothing infers a level.** Until you choose one the request carries no such field at all and each
 service applies its own default. Taking the row for no level removes the record rather than writing an
 empty one, which puts you back where you were before you ever chose. A word bravebot does not define
 changes nothing and says so.
 
-The picker is not the only route: the [`effort`](#effort) key names a level in a settings file, below
-whatever `/effort` recorded, which is how a project asks for one and how an unattended machine has one
-at all.
+The picker is not the only route: the [`effort`](#effort) key names a level in a settings file, which
+is how a project asks for one and how an unattended machine has one at all, and
+[`--effort`](../reference/cli.md#--effort-level) names one for a single one-shot run.
 
 **A level goes only where the roster says it is read.** Reasoning is two parameters rather than one on
 a gateway, so a model can reason and still not read a level sent this way. Where the listing describing
@@ -324,7 +326,8 @@ on what the planner does. Switching language changes what you read and never wha
 
 The environment wins when set, over both the built-in values and
 [`settings.json`](#settingsjson). That is how a released binary is pointed at a local backend
-without rebuilding it.
+without rebuilding it. The one exception is `BRAVE_AI_CHAT_DEFAULT_MODEL`, which a
+[`model`](#model) key outranks.
 
 | Variable | What it sets |
 |---|---|
@@ -332,7 +335,7 @@ without rebuilding it.
 | `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` | the premium host, used once a subscription is imported |
 | `SERVICES_KEY_AICHAT` | the services key requests are signed with |
 | `BRAVE_SERVICES_KEY_ID` | the key id that goes with it |
-| `BRAVE_AI_CHAT_DEFAULT_MODEL` | the model to request when nobody has chosen one |
+| `BRAVE_AI_CHAT_DEFAULT_MODEL` | the model to request when no settings file or `/model` choice names one |
 | `BRAVEBOT_CONTEXT_BUDGET` | the token budget before a conversation is compacted |
 | `BRAVEBOT_OUTPUT_BUDGET` | how far one reply may run before the service cuts it off ([below](#how-long-a-reply-may-run)) |
 | `BRAVEBOT_LOCALE` | the language the interface is read in |
@@ -347,8 +350,9 @@ To point a release build at a backend running locally:
 BRAVE_AI_CHAT_ENDPOINT=http://127.0.0.1:8000 bravebot doctor
 ```
 
-`BRAVE_AI_CHAT_DEFAULT_MODEL` is a **default rather than the setting**: `/model` picks one per user
-and that choice wins, so this applies until somebody makes one.
+`BRAVE_AI_CHAT_DEFAULT_MODEL` is a **default rather than the setting**: a [`model`](#model) key in any
+settings file and a choice made with `/model` both win over it, so this applies until somebody names
+one.
 
 `BRAVEBOT_CONTEXT_BUDGET` is never baked into a binary. It is a knob one person turns while working,
 so it has to be set in the environment.
@@ -356,7 +360,8 @@ so it has to be set in the environment.
 **Thirteen names can also go in a settings file's [`env`](#settingsjson) block**, under the same
 spelling: seven of the nine above, plus the six AWS ones. The two exceptions are `BRAVEBOT_LOCALE` and
 `BRAVEBOT_SUBPROCESS_ENV_SCRUB`, which are read from the environment alone. Exporting a name wins over
-the file, except where an [administrator pinned it](#pinned-by-an-administrator).
+the file, except where an [administrator pinned it](#pinned-by-an-administrator), and except for
+`BRAVE_AI_CHAT_DEFAULT_MODEL`, which the top-level [`model`](#model) key outranks.
 
 ## `settings.json`
 
@@ -495,10 +500,18 @@ from your home file alone and never from a checkout's.
 { "model": "sonnet" }
 ```
 
-The model to request when nobody has chosen one. This is the one key in the file that **outranks the
-model baked into the binary**. An exported `BRAVE_AI_CHAT_DEFAULT_MODEL` still wins over it, a choice
-recorded by `/model` wins over both, and [`--model`](../reference/cli.md#--model-name) on a one-shot
-run wins over everything.
+The model to request. This is the one key in the file that **outranks the model baked into the
+binary**, and it outranks an exported `BRAVE_AI_CHAT_DEFAULT_MODEL` too, since that variable names a
+default.
+
+A choice recorded by `/model` sits **between your own file and a checkout's**: it wins over the key in
+`~/.bravebot/settings.json`, and loses to one in `.bravebot/settings.json`,
+`.bravebot/settings.local.json` or the file `--settings` names. So a project that says which model it
+wants gets that model whatever you last picked elsewhere, and your own default gives way to a pick.
+[`--model`](../reference/cli.md#--model-name) on a one-shot run, and a model picked in the session
+that is running, win over everything. A key left blank names nothing, so a pick still wins over it,
+but it hides the key in a file below it: with nothing picked, the exported variable or the build
+answers.
 
 `opus`, `sonnet` and `haiku` name a **tier** rather than a model, since that is what a settings file
 written for another tool puts here. Each resolves to something reachable: the model your AWS account
@@ -513,14 +526,19 @@ Bedrock refuses a model it does not recognise, and the aichat endpoint silently 
 { "effort": "high" }
 ```
 
-How hard the model is asked to think when nobody has chosen, in the words
+How hard the model is asked to think, in the words
 [`/effort`](../reference/commands.md#effort-level) takes: `low`, `medium`, `high`, `xhigh` and `max`,
 read whatever their case. A word bravebot does not define is no level at all, so nothing you mistype
 reaches a request; the request carries no such field and the service applies its own default.
 
-A level recorded by `/effort` outranks this file, which answers for somebody who has never picked one.
-That is the whole of the ranking: nothing bakes a level in and no variable names one, so this key and
-the picker are the only two routes to one.
+A level recorded by `/effort` ranks as a recorded model does: it wins over the key in
+`~/.bravebot/settings.json`, and loses to one in `.bravebot/settings.json`,
+`.bravebot/settings.local.json` or the file `--settings` names. A word there that is no level still
+wins, and the run asks for none. A blank or a value that is not a string names nothing, so the
+record answers, but it hides the key in a file below it: with nothing recorded, the run asks for no
+level. [`--effort`](../reference/cli.md#--effort-level) on a one-shot run, and a level
+picked in the session that is running, win over everything. Nothing bakes a level in and no
+variable names one.
 
 This is the way a **project** can ask for a level, and the way a machine where nobody ever opens the
 interactive interface gets one at all: `bravebot -p` and `bravebot --plain` read the key just as the
@@ -530,7 +548,7 @@ different levels.
 Everything under [Choosing how hard to think](#choosing-how-hard-to-think) still applies, including
 the two cases worth knowing: the models that read no level, and the Brave endpoint, which accepts one
 and discards it. Taking the row for no level in the picker removes the record rather than writing an
-empty one, so a file that names a level answers again in the next session; unset it there if you want
+empty one, so your own file's level answers again in the next session; unset it there if you want
 none.
 
 ### `editorMode`

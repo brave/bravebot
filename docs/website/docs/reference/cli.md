@@ -53,6 +53,7 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--plain` | a session in lines, taking nothing from the terminal ([below](#--plain)) |
 | `--mode <turn\|manifest>` | how a one-shot is run; `turn` (the default) decides step by step, `manifest` plans the whole run first ([below](#--mode-turnmanifest)) |
 | `--model <name>` | the model this run asks for; outranks every other way one is named ([below](#--model-name)) |
+| `--effort <level>` | how hard this run asks the model to think; outranks every other way one is named ([below](#--effort-level)) |
 | `--settings <path>` | read one more settings file, above every layer found ([below](#--settings-path)) |
 | `--json` | put one result object on stdout in the reply's place ([below](#--json)) |
 | `--trace` | print the audit trail to stderr |
@@ -105,11 +106,13 @@ bravebot --model opus "review the diff on this branch"
 ```
 
 Names the model for one run, and outranks every other way one is named. Where no flag names one, a
-run asks for the model a session opening in the same directory would: the choice
-[`/model`](../customize/configuration.md#choosing-a-model) recorded, then an exported
-`BRAVE_AI_CHAT_DEFAULT_MODEL`, then the settings file's [`model`](../customize/configuration.md#model)
-key, then the model the build was made with. So a script uses the model you picked without your
-having to write it down twice, and the flag is the one route to a different one.
+run asks for the model a session opening in the same directory would: a
+[`model`](../customize/configuration.md#model) key in the checkout's settings or the file
+`--settings` names, then the choice [`/model`](../customize/configuration.md#choosing-a-model)
+recorded, then the key in `~/.bravebot/settings.json`, then an exported
+`BRAVE_AI_CHAT_DEFAULT_MODEL`, then the model the build was made with. So a script uses the model
+you picked without your having to write it down twice, a checkout that names its model gets it, and
+the flag names a different one for a single run.
 
 `opus`, `sonnet` and `haiku` name a **tier** here, exactly as they do in a settings file, and resolve
 the same way. Any other name is sent as you wrote it. `--model` with no name after it, or a blank
@@ -122,6 +125,23 @@ also **exits non-zero**, which is the part a script is certain to read. A run th
 takes whatever was recorded or configured and does not fail over it. Two cases are neither reported
 nor failed: an entry that resolves per request, such as `automatic-bravebot`, and a backend asked by
 an opaque handle, which never reports back the name it was given.
+
+## `--effort <level>`
+
+```sh
+bravebot --effort high "why does this test fail only on the second run?"
+```
+
+Names how hard the model is asked to think for one run, in the words
+[`/effort`](commands.md#effort-level) takes (`low`, `medium`, `high`, `xhigh` and `max`, in any
+case), and outranks every other way one is named. Where no flag names one, a run asks for the level a
+session opening in the same directory would: an [`effort`](../customize/configuration.md#effort) key
+in the checkout's settings or the file `--settings` names, then the level `/effort` recorded, then the
+key in `~/.bravebot/settings.json`. Nothing is recorded, so the next run is back to those.
+
+`--effort` with no word after it, a blank one, or a word that is no level is refused and the run
+stops, naming the levels it takes. A level the model in force reads none of is not sent, as it is
+not from any other source.
 
 ## `--add-dir <path>`
 

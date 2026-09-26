@@ -1577,13 +1577,13 @@ impl Session {
     /// input box for the user to read and submit. That keystroke is what makes it trusted, exactly
     /// as typing it would have been.
     ///
-    /// Not the effort level, which a settings file may also name and which is therefore settled by
-    /// [`Session::adopt_effort`], the way the style of editing is: reading the record here as well
-    /// would put the rule that ranks the two in two places.
+    /// Not the model or the effort level, which a settings file may also name and which are
+    /// therefore settled by [`Session::adopt_model`] and [`Session::adopt_effort`], the way the
+    /// style of editing is: reading the record here as well would put the rule that ranks the two
+    /// in two places.
     pub fn with_stored_history(mut self) -> Self {
         self.history =
             crate::history::History::from_entries(bravebot_session::store::load_history());
-        self.model = bravebot_session::store::load_model();
         self.persist = true;
         self
     }
@@ -2748,7 +2748,23 @@ impl Session {
             .unwrap_or_default();
     }
 
-    /// Settle how hard this session asks the model to think, given what a settings file said.
+    /// Settle the model this session opens on, given the settings in force.
+    ///
+    /// The saved pick where [`bravebot_session::store::model`] leaves it in force, and otherwise
+    /// `None`, which is the configured model: a checkout's settings that outrank the pick named
+    /// the model the configuration already resolved to (BACKEND-11). The rule is in the store for
+    /// the reason [`Session::adopt_effort`]'s is.
+    ///
+    /// The pick is read only for a session that persists, for the reason given there.
+    pub fn adopt_model(&mut self, settings: &bravebot_config::Settings) {
+        let recorded = self
+            .persist
+            .then(bravebot_session::store::load_model)
+            .flatten();
+        self.model = bravebot_session::store::model(recorded, settings);
+    }
+
+    /// Settle how hard this session asks the model to think, given the settings in force.
     ///
     /// The rule is [`bravebot_session::store::effort`] and the whole of it is there, so the terminal,
     /// a session in lines and a one-shot run cannot come to disagree about which of the two answers
@@ -2762,12 +2778,12 @@ impl Session {
     /// The recorded pick is read only for a session that persists, the rule
     /// [`Session::adopt_editing`] follows: a test must not be handed the developer's own choice, or
     /// what it asks for would depend on the machine it ran on.
-    pub fn adopt_effort(&mut self, configured: Option<&str>) {
+    pub fn adopt_effort(&mut self, settings: &bravebot_config::Settings) {
         let recorded = self
             .persist
             .then(bravebot_session::store::load_effort)
             .flatten();
-        self.effort = bravebot_session::store::effort(recorded, configured);
+        self.effort = bravebot_session::store::effort(recorded, settings);
     }
 
     /// Settle whether a check that finds nothing may promote a slot without anybody being asked.
