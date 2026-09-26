@@ -3873,6 +3873,61 @@ mod preserved_history {
         }
     }
 
+    /// Returning a cancelled prompt must preserve the attachments a stashed draft still names.
+    #[test]
+    fn cancelled_attachments_preserve_a_stashed_draft() {
+        use super::completed_usage::endpoint_stopping_at;
+        use bravebot_core::cancel::Cancel;
+        let scratch = Scratch::new("cancelled-stashed-attachments");
+        let root = &scratch.project;
+        std::fs::write(root.join("sent.txt"), "sent file").unwrap();
+        std::fs::write(root.join("draft.txt"), "draft file").unwrap();
+        let mut session = Session::new("test").in_workspace(root);
+        assert!(session.drop_files(root.join("sent.txt").to_str().unwrap()));
+        session.attach(bravebot_tui::clipboard::Image {
+            media_type: "image/png",
+            bytes: vec![1, 2, 3],
+        });
+        let prompt = session.submit().unwrap();
+        let sent_drops = session.sent_attachments().to_vec();
+        let sent_pastes = session.sent_pasted().to_vec();
+        assert!(session.drop_files(root.join("draft.txt").to_str().unwrap()));
+        session.attach(bravebot_tui::clipboard::Image {
+            media_type: "image/png",
+            bytes: vec![4, 5, 6],
+        });
+        let draft = session.input().to_string();
+        let draft_drops = session.attachments_named(&draft);
+        let draft_pastes = session.pasted_named(&draft);
+        assert!(session.stash());
+        let cancel = Cancel::new();
+        let (endpoint, requests) =
+            endpoint_stopping_at(vec![String::new()], Some((0, cancel.clone())));
+        run_submitted(
+            &mut session,
+            &mut Conversation::new(),
+            root,
+            &endpoint,
+            &cancel,
+            &prompt,
+            None,
+        );
+        requests
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(session.input(), prompt);
+        assert_eq!(session.attachments_named(&prompt), sent_drops);
+        assert_eq!(session.pasted_named(&prompt), sent_pastes);
+        session.clear_input();
+        assert!(session.stash());
+        assert_eq!(session.input(), draft);
+        assert_eq!(session.attachments_named(&draft), draft_drops);
+        assert_eq!(session.pasted_named(&draft), draft_pastes);
+        assert_eq!(session.submit().unwrap(), draft);
+        assert_eq!(session.sent_attachments(), draft_drops);
+        assert_eq!(session.sent_pasted(), draft_pastes);
+    }
+
     /// Cancellation must not move old attachments onto a draft, queued prompt, or recorded turn.
     #[test]
     fn cancellation_keeps_attachment_ownership_when_the_prompt_stays_sent() {

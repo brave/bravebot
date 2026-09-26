@@ -235,6 +235,7 @@ the exit. One way out, and it is the one people already reach for.
 `verified-by: bravebot_aichat::client::a_stop_does_not_wait_for_an_endpoint_that_has_not_answered`
 `verified-by: bravebot_tui::state::cancelling_before_anything_happens_still_un_sends_the_prompt`
 `verified-by: bravebot_tui::sessions::cancelled_attachments_return_to_the_editor_and_the_next_request`
+`verified-by: bravebot_tui::sessions::cancelled_attachments_preserve_a_stashed_draft`
 `verified-by: bravebot_tui::sessions::cancellation_keeps_attachment_ownership_when_the_prompt_stays_sent`
 `verified-by: bravebot_tui::state::a_turn_stopped_over_a_typed_line_keeps_the_line_and_the_prompt`
 `verified-by: bravebot_tui::app::a_key_that_would_stop_a_turn_is_answered_during_a_summary`
@@ -727,6 +728,7 @@ person back in the middle of a sentence they have not looked at since.
 `verified-by: bravebot_tui::state::a_command_comes_back_as_words_and_not_as_a_command`
 `verified-by: bravebot_tui::state::a_line_can_be_stashed_while_a_turn_runs`
 `verified-by: bravebot_tui::state::what_a_stashed_line_named_is_still_named_when_it_comes_back`
+`verified-by: bravebot_tui::sessions::cancelled_attachments_preserve_a_stashed_draft`
 `verified-by: bravebot_tui::render::a_stashed_line_is_named_under_the_box`
 `verified-by: bravebot_tui::render::the_row_goes_when_the_stashed_line_comes_back`
 `verified-by: bravebot_tui::render::a_stashed_paragraph_is_one_row`
