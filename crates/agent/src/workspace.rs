@@ -2347,7 +2347,8 @@ impl Workspace {
             if policy.read_is_denied(&git_key) {
                 return Err(declined(crate::git::Declined::Fenced));
             }
-            let files = crate::git::survey(&git_dir).map_err(declined)?;
+            let deadline = Instant::now() + self.search_time;
+            let files = crate::git::survey(&git_dir, deadline).map_err(declined)?;
             let fenced = files.iter().any(|file| {
                 let below = file.strip_prefix(&root).unwrap_or(file);
                 let below = bravebot_core::spelling::to_slash(
@@ -2369,7 +2370,7 @@ impl Workspace {
                 count,
                 since,
                 until,
-                deadline: Instant::now() + self.search_time,
+                deadline,
             };
             let withheld = |inside: &str| policy.read_is_denied(&self.trust_key(&spelled(inside)));
             let answer = opened.answer(&request, &withheld).map_err(declined)?;

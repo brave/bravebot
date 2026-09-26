@@ -7011,10 +7011,7 @@ fn read_git<S: Sink, C: Confirmer>(
             "path" => Some(written.as_str()),
             _ => crate::git::path_in(&written),
         };
-        if let Some(relative) = relative
-            .map(str::trim)
-            .filter(|r| !r.is_empty() && *r != ".")
-        {
+        if let Some(relative) = relative.filter(|r| !r.is_empty() && *r != ".") {
             named_paths.push(inside(relative));
         }
     }
@@ -7039,17 +7036,45 @@ fn read_git<S: Sink, C: Confirmer>(
     };
 
     // Scanned before the planner is given it, as a file read is (CRED-15): a commit that added a
-    // key puts the key in the diff. Keyed by `.git`, which is what the trust map answered for.
-    let keyed = workspace.git_dir_key(&shown);
-    let body = policy.render_in_place("read_git", &answer, |a| a.text);
-    let found = policy.scan_a_read("read_git", &shown, 1, &body);
-    if !found.is_empty() && !policy.read_exposure_is_allowed(&keyed) {
-        tools
-            .recording()
-            .record(workspace.root(), &found.iter().collect::<Vec<_>>());
+    // key puts the key in the diff. A file's lines are scanned as a read of that file and keyed
+    // by it, so agreeing to one file's key agrees to nothing about another's; everything else the
+    // answer holds is scanned as a read of `.git`.
+    let mut keyed_findings: Vec<(String, bravebot_core::credentials::Finding)> = Vec::new();
+    if answer.label().is_trusted() {
+        let read = match policy.read_trusted_content("read_git", &answer) {
+            Ok(read) => read,
+            Err(denial) => return Produced::problem(format!("refused: {denial}")),
+        };
+        let pieces = read
+            .printed
+            .into_iter()
+            .map(|p| (inside(&p.path), p.first_line, p.text))
+            .chain([(git_shown.clone(), 1, read.around)]);
+        for (path, first_line, text) in pieces {
+            let key = workspace.trust_key(&path);
+            let text = Labelled::new(text, answer.label());
+            for finding in policy.scan_a_read("read_git", &path, first_line, &text) {
+                let again = keyed_findings
+                    .iter()
+                    .any(|(k, f)| *k == key && f.fingerprint == finding.fingerprint);
+                if !again {
+                    keyed_findings.push((key.clone(), finding));
+                }
+            }
+        }
+    } else {
+        let body = policy.render_in_place("read_git", &answer, |a| a.text);
+        policy.scan_a_read("read_git", &shown, 1, &body);
+    }
+    let (asked, allowed): (Vec<_>, Vec<_>) = keyed_findings
+        .into_iter()
+        .partition(|(key, _)| !policy.read_exposure_is_allowed(key));
+    if !asked.is_empty() {
+        let pending: Vec<_> = asked.iter().map(|(_, finding)| finding).collect();
+        tools.recording().record(workspace.root(), &pending);
         let request = crate::confirm::ExposureRequest {
             path: git_shown.clone(),
-            credentials: described(&found),
+            credentials: describe_all(&pending),
         };
         if confirmer.confirm_exposing_read(&request) != Decision::Approve {
             return Produced::refused_with_a_note(
@@ -7059,11 +7084,18 @@ fn read_git<S: Sink, C: Confirmer>(
                      read it another way: work without it, or say in your reply what you needed \
                      from it."
                 ),
-                format!("not shown, it holds {}", exposure_note(&found)),
+                format!("not shown, it holds {}", describe_all(&pending).join("; ")),
             );
         }
-        policy.allow_exposing_read(&keyed);
+        for (key, _) in &asked {
+            policy.allow_exposing_read(key);
+        }
     }
+    let found: Vec<_> = allowed
+        .into_iter()
+        .chain(asked)
+        .map(|(_, finding)| finding)
+        .collect();
 
     let incomplete = {
         let shaped = policy.render_in_place("read_git", &answer, |a| a.cut || a.timed_out);

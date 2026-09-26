@@ -12,8 +12,10 @@
 //! which paths are withheld; this module reports which paths it showed, so the answer can carry
 //! their labels too.
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -59,6 +61,10 @@ const ABBREV: usize = 7;
 /// Bytes looked at for a NUL, which is how git decides a blob is binary.
 const BINARY_PROBE: usize = 8000;
 
+/// How many more commits a range's walk takes once every commit left is one it will not list, as
+/// git's `limit_list` does, in case a commit clocked earlier still leads back into the range.
+const SLOP: usize = 5;
+
 /// The questions `read_git` answers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Query {
@@ -103,6 +109,21 @@ pub struct Answer {
     /// Whether the text stops short of everything the question matched.
     pub cut: bool,
     pub timed_out: bool,
+    /// Each run of a file's lines the text printed, so each is scanned as a read of that file.
+    pub printed: Vec<Printed>,
+    /// The text with every line of a file's contents left blank: the ids, names and messages
+    /// around them, which are `.git`'s own.
+    pub around: String,
+}
+
+/// Lines of one file, as an answer printed them.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Printed {
+    /// Relative to the repository's root.
+    pub path: String,
+    /// Which line of the file the first of them is.
+    pub first_line: usize,
+    pub text: String,
 }
 
 /// Why a repository or a question was not answered.
@@ -195,9 +216,9 @@ impl Declined {
                  or damaged. {fallback}"
             ),
             Declined::NoCommits => format!("{named} has no commits yet."),
-            Declined::TooSlow => format!(
-                "Resolving that revision in {named} took longer than read_git allows. {fallback}"
-            ),
+            Declined::TooSlow => {
+                format!("Reading {named}/.git took longer than read_git allows. {fallback}")
+            }
             Declined::Unknown(revision) => {
                 format!("{revision} names no commit, tag, branch or object in {named}.")
             }
@@ -249,9 +270,11 @@ impl Declined {
 /// The workspace holds each against the permission rules before [`Repository::open`] reads any of
 /// them, which is how a repository with a file a rule withholds is never decoded at all. The list
 /// covers what the ref store and the object finder read: `HEAD`, the configuration, `packed-refs`,
-/// `shallow`, the pseudo refs at the top (`FETCH_HEAD`, `ORIG_HEAD`) a revision may name, and
-/// everything under `refs` and `objects`.
-pub fn survey(git_dir: &Path) -> Result<Vec<PathBuf>, Declined> {
+/// `shallow`, the pseudo refs at the top (`FETCH_HEAD`, `ORIG_HEAD`) a revision may name, every
+/// file under `refs` a ref name can reach, and the loose objects and paired packs under `objects`.
+/// A name is matched as a file system that ignores case would open it, and listed as the reader
+/// spells it.
+pub fn survey(git_dir: &Path, deadline: Instant) -> Result<Vec<PathBuf>, Declined> {
     let meta = match std::fs::symlink_metadata(git_dir) {
         Ok(meta) => meta,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(Declined::NoRepository),
@@ -284,19 +307,23 @@ pub fn survey(git_dir: &Path) -> Result<Vec<PathBuf>, Declined> {
         let Some(name) = name.to_str() else {
             continue;
         };
-        let wanted = matches!(
-            name,
+        let lower = name.to_ascii_lowercase();
+        let spelled = if matches!(
+            lower.as_str(),
             "config" | "config.worktree" | "packed-refs" | "shallow"
-        ) || is_pseudo_ref(name);
-        if !wanted {
+        ) {
+            lower
+        } else if is_pseudo_ref(name) {
+            name.to_owned()
+        } else {
             continue;
-        }
+        };
         let kind = entry.file_type().map_err(|_| Declined::Unreadable)?;
         if kind.is_symlink() {
             return Err(Declined::Linked);
         }
         if kind.is_file() {
-            files.push(entry.path());
+            files.push(git_dir.join(spelled));
         }
     }
     if !files
@@ -305,16 +332,76 @@ pub fn survey(git_dir: &Path) -> Result<Vec<PathBuf>, Declined> {
     {
         return Err(Declined::NoRepository);
     }
-    for tree in ["refs", "objects"] {
-        walk(&git_dir.join(tree), &mut files)?;
+
+    let refs = git_dir.join("refs");
+    let mut found = Vec::new();
+    walk(&refs, &mut found, deadline)?;
+    let under = |file: &Path, root: &Path| -> Option<Vec<String>> {
+        file.strip_prefix(root)
+            .ok()?
+            .iter()
+            .map(|part| part.to_str().map(str::to_owned))
+            .collect()
+    };
+    for file in found {
+        let Some(parts) = under(&file, &refs) else {
+            continue;
+        };
+        if parts
+            .first()
+            .is_some_and(|top| top.eq_ignore_ascii_case("replace"))
+        {
+            return Err(Declined::Replaced);
+        }
+        let named = parts.iter().all(|part| !part.starts_with('.'))
+            && parts
+                .last()
+                .is_some_and(|last| !last.to_ascii_lowercase().ends_with(".lock"));
+        if named {
+            files.push(file);
+        }
     }
-    if files
-        .iter()
-        .any(|f| f.starts_with(git_dir.join("refs/replace")))
-    {
-        return Err(Declined::Replaced);
+
+    let objects = git_dir.join("objects");
+    let mut found = Vec::new();
+    walk(&objects, &mut found, deadline)?;
+    for file in found {
+        let loose = under(&file, &objects).is_some_and(|parts| match parts.as_slice() {
+            [dir, name] => dir.len() == 2 && is_hex(dir) && name.len() == 38 && is_hex(name),
+            _ => false,
+        });
+        if loose {
+            files.push(file);
+        }
+    }
+    for index in pack_indexes(&objects)? {
+        files.push(index.with_extension("pack"));
+        files.push(index);
     }
     Ok(files)
+}
+
+/// The pack indexes under `objects/pack` with their pack beside them, which are the packs a read
+/// opens.
+fn pack_indexes(objects: &Path) -> Result<Vec<PathBuf>, Declined> {
+    let mut indexes = Vec::new();
+    match std::fs::read_dir(objects.join("pack")) {
+        Ok(entries) => {
+            for entry in entries {
+                let path = entry.map_err(|_| Declined::Unreadable)?.path();
+                if path.extension().is_some_and(|e| e == "idx")
+                    && path.is_file()
+                    && path.with_extension("pack").is_file()
+                {
+                    indexes.push(path);
+                }
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err(Declined::Unreadable),
+    }
+    indexes.sort();
+    Ok(indexes)
 }
 
 fn read_if_present(path: &Path) -> Result<Option<Vec<u8>>, Declined> {
@@ -340,9 +427,12 @@ fn is_pseudo_ref(name: &str) -> bool {
     !name.is_empty() && name.bytes().all(|b| b.is_ascii_uppercase() || b == b'_')
 }
 
-fn walk(root: &Path, files: &mut Vec<PathBuf>) -> Result<(), Declined> {
+fn walk(root: &Path, files: &mut Vec<PathBuf>, deadline: Instant) -> Result<(), Declined> {
     let mut pending = vec![root.to_path_buf()];
     while let Some(dir) = pending.pop() {
+        if Instant::now() >= deadline {
+            return Err(Declined::TooSlow);
+        }
         let meta = match std::fs::symlink_metadata(&dir) {
             Ok(meta) => meta,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
@@ -606,9 +696,15 @@ enum Spec<'a> {
     Range(&'a str, &'a str),
 }
 
+/// Everything after the first `:` is a path, read as a name whatever it holds, so only the
+/// revision before it is read for git's syntax.
 fn spec(revision: &str) -> Result<Spec<'_>, Declined> {
-    let text = revision.trim();
-    let unsupported = |what| Err(Declined::Unsupported(text.to_owned(), what));
+    let text = revision.trim_start();
+    let (rev, path) = match text.split_once(':') {
+        Some((rev, path)) => (rev, Some(path)),
+        None => (text.trim_end(), None),
+    };
+    let unsupported = |what| Err(Declined::Unsupported(text.trim_end().to_owned(), what));
     for (needle, what) in [
         ("...", "a symmetric difference (A...B)"),
         ("@{", "a reflog or upstream selector (@{...})"),
@@ -617,36 +713,36 @@ fn spec(revision: &str) -> Result<Spec<'_>, Declined> {
         ("^!", "the ^! selector"),
         ("^-", "the ^- selector"),
     ] {
-        if text.contains(needle) {
+        if rev.contains(needle) {
             return unsupported(what);
         }
     }
-    if text.starts_with(':') {
-        return unsupported("the index (:path) or a message search (:/...)");
-    }
-    if text.starts_with('-') {
+    if rev.starts_with('-') {
         return unsupported("git's options");
     }
-    if text.is_empty() {
-        return Err(Declined::Unknown(revision.to_owned()));
+    if rev.trim().is_empty() {
+        return match path {
+            Some(_) => unsupported("the index (:path) or a message search (:/...)"),
+            None => Err(Declined::Unknown(revision.to_owned())),
+        };
     }
-    let words: Vec<&str> = text.split_whitespace().collect();
+    let words: Vec<&str> = rev.split_whitespace().collect();
+    if path.is_some() {
+        return match words.as_slice() {
+            [one] if one.contains("..") => unsupported("a path inside a range"),
+            [_] => Ok(Spec::One(text)),
+            _ => unsupported("a path inside a pair of revisions"),
+        };
+    }
     match words.as_slice() {
-        [one] => {
-            let before_path = one.split_once(':').map_or(*one, |(rev, _)| rev);
-            match before_path.split_once("..") {
-                Some(_) if one.contains(':') => unsupported("a path inside a range"),
-                Some((a, b)) => Ok(Spec::Range(
-                    if a.is_empty() { "HEAD" } else { a },
-                    if b.is_empty() { "HEAD" } else { b },
-                )),
-                None => Ok(Spec::One(one)),
-            }
-        }
+        [one] => match one.split_once("..") {
+            Some((a, b)) => Ok(Spec::Range(
+                if a.is_empty() { "HEAD" } else { a },
+                if b.is_empty() { "HEAD" } else { b },
+            )),
+            None => Ok(Spec::One(one)),
+        },
         [a, b] => {
-            if a.contains(':') || b.contains(':') {
-                return unsupported("a path inside a pair of revisions");
-            }
             if a.contains("..") || b.contains("..") || a.starts_with('-') || b.starts_with('-') {
                 return unsupported("a range or an option inside a pair of revisions");
             }
@@ -659,7 +755,7 @@ fn spec(revision: &str) -> Result<Spec<'_>, Declined> {
 /// The path a single revision names after its `:`, relative to the repository's root, so the
 /// caller can hold it against the trust map before anything is opened.
 pub fn path_in(revision: &str) -> Option<&str> {
-    let (_, path) = revision.trim().split_once(':')?;
+    let (_, path) = revision.trim_start().split_once(':')?;
     Some(path)
 }
 
@@ -697,7 +793,7 @@ fn plausible_ref(name: &str) -> bool {
         && !name.starts_with("main-worktree/")
         && !name.starts_with(['-', '/'])
         && !name.ends_with(['/', '.'])
-        && !name.ends_with(".lock")
+        && !name.to_ascii_lowercase().ends_with(".lock")
         && !name.contains("..")
         && !name.contains("@{")
         && name != "@"
@@ -725,23 +821,7 @@ impl Objects {
     fn open(git_dir: &Path) -> Result<Self, Declined> {
         let objects = git_dir.join("objects");
         let loose = gix_odb::loose::Store::at(&objects, HashKind::Sha1);
-        let mut indexes = Vec::new();
-        match std::fs::read_dir(objects.join("pack")) {
-            Ok(entries) => {
-                for entry in entries {
-                    let path = entry.map_err(|_| Declined::Unreadable)?.path();
-                    if path.extension().is_some_and(|e| e == "idx")
-                        && path.with_extension("pack").is_file()
-                    {
-                        indexes.push(path);
-                    }
-                }
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(_) => return Err(Declined::Unreadable),
-        }
-        indexes.sort();
-        let packs = indexes
+        let packs = pack_indexes(&objects)?
             .iter()
             .map(|index| {
                 gix_odb::pack::Bundle::at(index, HashKind::Sha1).map_err(|_| Declined::Unreadable)
@@ -898,6 +978,7 @@ impl Repository {
         let mut out = Out {
             text: Text::default(),
             shown: Vec::new(),
+            printed: Vec::new(),
             withheld_any: false,
             timed_out: false,
             withheld,
@@ -931,6 +1012,8 @@ impl Repository {
             withheld: out.withheld_any,
             cut: cut || out.text.cut,
             timed_out: out.timed_out,
+            printed: out.printed,
+            around: out.text.around,
         })
     }
 
@@ -1262,116 +1345,84 @@ impl Repository {
         if let Some(path) = filter {
             out.shown.push(path.to_owned());
         }
-        let mut infos: HashMap<ObjectId, Info> = HashMap::new();
-        let mut hidden: HashSet<ObjectId> = HashSet::new();
-        let mut seen: HashSet<ObjectId> = HashSet::new();
-        let mut queue = BinaryHeap::new();
-        let mut order = 0u64;
-        let mut enqueue = |id: ObjectId,
-                           infos: &mut HashMap<ObjectId, Info>,
-                           queue: &mut BinaryHeap<Queued>|
-         -> Result<(), Declined> {
-            let info = self.info(&id)?;
-            order += 1;
-            queue.push(Queued {
-                time: info.time,
-                order,
-                id,
-            });
-            infos.insert(id, info);
-            Ok(())
-        };
-        for id in hidden_tips {
-            hidden.insert(id);
-            if seen.insert(id) {
-                enqueue(id, &mut infos, &mut queue)?;
-            }
+        let mut walk = Walk::default();
+        for &id in &hidden_tips {
+            walk.ensure(self, id)?;
+            walk.hidden.insert(id);
+            walk.bottoms.insert(id);
+            walk.hide_ancestors(walk.infos[&id].parents.clone());
         }
-        for id in tips {
-            if seen.insert(id) {
-                enqueue(id, &mut infos, &mut queue)?;
-            }
+        for &id in hidden_tips.iter().chain(&tips) {
+            walk.enqueue(self, id)?;
         }
+        // A range is walked to its end before any of it is listed, because a commit is known to
+        // be reachable from the range's start only once everything newer has been read.
+        let limited = !hidden_tips.is_empty();
         let count = request.count.min(MAX_COUNT);
+        let mut listed = Vec::new();
         let mut shown = 0;
-        while let Some(next) = queue.pop() {
-            if Instant::now() >= out.deadline {
-                out.timed_out = true;
+        let mut date = i64::MAX;
+        let mut slop = SLOP;
+        while let Some(next) = walk.queue.pop() {
+            if out.late() {
                 break;
             }
-            let is_hidden = hidden.contains(&next.id);
-            if is_hidden && queue.iter().all(|q| hidden.contains(&q.id)) {
-                break;
+            let id = next.id;
+            if request.since.is_some_and(|since| next.time < since) {
+                if !limited {
+                    continue;
+                }
+                walk.hidden.insert(id);
             }
-            let Some(info) = infos.get(&next.id) else {
-                return Err(Declined::Unreadable);
-            };
-            let parents = info.parents.clone();
-            let time = info.time;
-            let tree = info.tree;
-            if is_hidden {
-                for parent in parents {
-                    hidden.insert(parent);
-                    if seen.insert(parent) {
-                        enqueue(parent, &mut infos, &mut queue)?;
-                    }
+            if walk.hidden.contains(&id) {
+                walk.hide_parents_of(self, id)?;
+                slop = walk.still_interesting(date, slop);
+                if slop == 0 {
+                    break;
                 }
                 continue;
             }
-            if request.since.is_some_and(|since| time < since) {
+            if let Some(path) = filter {
+                walk.simplify(self, id, path)?;
+            }
+            for parent in walk.infos[&id].parents.clone() {
+                walk.enqueue(self, parent)?;
+            }
+            if request.until.is_some_and(|until| next.time > until) {
                 continue;
             }
-            for &parent in &parents {
-                if seen.insert(parent) {
-                    enqueue(parent, &mut infos, &mut queue)?;
-                }
-            }
-            if request.until.is_some_and(|until| time > until) {
+            if limited {
+                date = next.time;
+                listed.push(id);
                 continue;
             }
-            if let Some(path) = filter
-                && !self.touches(tree, &parents, path, &infos)?
-            {
+            if walk.treesame.contains(&id) {
                 continue;
             }
             if shown == count {
                 return Ok(true);
             }
-            out.text.line(&self.log_line(&next.id)?);
+            out.text.line(&self.log_line(&id)?);
             shown += 1;
-            if out.text.full() {
-                break;
+        }
+        // A range cut off by the deadline lists nothing: a commit its start reaches is known to
+        // be one only once the walk is done.
+        if limited && !out.timed_out {
+            for id in listed {
+                if walk.hidden.contains(&id) || walk.treesame.contains(&id) {
+                    continue;
+                }
+                if shown == count {
+                    return Ok(true);
+                }
+                out.text.line(&self.log_line(&id)?);
+                shown += 1;
             }
         }
         if shown == 0 && !out.timed_out {
             out.text.line("(no commits match)");
         }
         Ok(false)
-    }
-
-    /// Whether a commit changed `path`: its entry there differs from every parent's, or, for a
-    /// root commit, exists.
-    fn touches(
-        &self,
-        tree: ObjectId,
-        parents: &[ObjectId],
-        path: &str,
-        infos: &HashMap<ObjectId, Info>,
-    ) -> Result<bool, Declined> {
-        let mine = self.entry_at(tree, path)?;
-        if parents.is_empty() {
-            return Ok(mine.is_some());
-        }
-        for parent in parents {
-            let parent_tree = match infos.get(parent) {
-                Some(info) => info.tree,
-                None => self.info(parent)?.tree,
-            };
-            if self.entry_at(parent_tree, path)? == mine {
-                return Ok(false);
-            }
-        }
-        Ok(true)
     }
 
     fn log_line(&self, id: &oid) -> Result<String, Declined> {
@@ -1528,6 +1579,9 @@ impl Repository {
                 out.withheld_any = true;
                 continue;
             }
+            if !out.room() {
+                break;
+            }
             out.shown.push(child);
             let slash = if entry.kind == EntryKind::Tree {
                 "/"
@@ -1540,9 +1594,6 @@ impl Repository {
                 entry_word(entry.kind),
                 entry.id.to_hex_with_len(SHORT)
             ));
-            if out.text.full() {
-                break;
-            }
         }
         Ok(())
     }
@@ -1563,10 +1614,20 @@ impl Repository {
                 .line(&format!("({path} is binary, {} bytes)", data.len()));
             return Ok(());
         }
-        for line in String::from_utf8_lossy(&data).lines() {
-            if !out.text.line(line) {
+        let mut printed = String::new();
+        for line in escaped(&data).lines() {
+            let Some(end) = out.text.add(line, true) else {
                 break;
-            }
+            };
+            printed.push_str(&line[..end]);
+            printed.push('\n');
+        }
+        if !printed.is_empty() {
+            out.printed.push(Printed {
+                path: path.to_owned(),
+                first_line: 1,
+                text: printed,
+            });
         }
         Ok(())
     }
@@ -1609,7 +1670,10 @@ impl Repository {
         let new_entries = self.entries(new)?;
         let keys: BTreeSet<&Vec<u8>> = old_entries.keys().chain(new_entries.keys()).collect();
         for key in keys {
-            if out.stopped() {
+            // Full and already cut means a file below this tree found no room, so nothing after
+            // it fits either. Full and not yet cut is an answer that may be complete: whether it
+            // was cut is known only once another file it would show turns up.
+            if out.late() || (out.text.cut && out.text.full()) {
                 return Ok(());
             }
             let a = old_entries.get(key);
@@ -1643,6 +1707,9 @@ impl Repository {
                     depth + 1,
                 )?;
             } else {
+                if !out.room() {
+                    return Ok(());
+                }
                 match (side(a), side(b)) {
                     (Some(x), Some(y)) if family(x.0) != family(y.0) => {
                         self.patch(out, &path, Some(x), None)?;
@@ -1735,6 +1802,10 @@ impl Repository {
             }
         };
         let (a, b) = (read(old)?, read(new)?);
+        // An empty file added or deleted ends at its index line, as git prints one.
+        if a.is_empty() && b.is_empty() {
+            return Ok(());
+        }
         if is_binary(&a) || is_binary(&b) {
             out.text
                 .line(&format!("Binary files {before} and {after} differ"));
@@ -1742,7 +1813,7 @@ impl Repository {
         }
         out.text.line(&format!("--- {before}"));
         out.text.line(&format!("+++ {after}"));
-        let diff = Diff::compute(&String::from_utf8_lossy(&a), &String::from_utf8_lossy(&b));
+        let diff = Diff::compute(&escaped(&a), &escaped(&b));
         if !diff.is_exact() {
             out.text.line(&format!(
                 "(too different to diff line by line: {} lines removed, {} added)",
@@ -1753,7 +1824,7 @@ impl Repository {
             out.text
                 .line("(the two differ only in line endings or in a final newline)");
         } else {
-            hunks(out, &diff);
+            hunks(out, path, &diff);
         }
         Ok(())
     }
@@ -1789,9 +1860,141 @@ impl PartialOrd for Queued {
     }
 }
 
+/// A log's walk through history, in date order as git's is. A hidden commit is one the start of a
+/// range reaches, and a commit read is one whose parents are known, which is how far marking a
+/// commit hidden reaches down at once.
+#[derive(Default)]
+struct Walk {
+    infos: HashMap<ObjectId, Info>,
+    hidden: HashSet<ObjectId>,
+    /// The starts of a range, which stay relevant to simplifying a merge though hidden.
+    bottoms: HashSet<ObjectId>,
+    seen: HashSet<ObjectId>,
+    queue: BinaryHeap<Queued>,
+    order: u64,
+    /// Commits that changed nothing under the log's path.
+    treesame: HashSet<ObjectId>,
+}
+
+impl Walk {
+    fn ensure(&mut self, repo: &Repository, id: ObjectId) -> Result<(), Declined> {
+        if let std::collections::hash_map::Entry::Vacant(slot) = self.infos.entry(id) {
+            slot.insert(repo.info(&id)?);
+        }
+        Ok(())
+    }
+
+    fn enqueue(&mut self, repo: &Repository, id: ObjectId) -> Result<(), Declined> {
+        self.ensure(repo, id)?;
+        if self.seen.insert(id) {
+            self.order += 1;
+            self.queue.push(Queued {
+                time: self.infos[&id].time,
+                order: self.order,
+                id,
+            });
+        }
+        Ok(())
+    }
+
+    /// Hide a hidden commit's parents and queue them, as git's `process_parents` does for one.
+    fn hide_parents_of(&mut self, repo: &Repository, id: ObjectId) -> Result<(), Declined> {
+        for parent in self.infos[&id].parents.clone() {
+            self.hidden.insert(parent);
+            self.ensure(repo, parent)?;
+            self.hide_ancestors(self.infos[&parent].parents.clone());
+            self.enqueue(repo, parent)?;
+        }
+        Ok(())
+    }
+
+    /// Hide `pending` and, through commits already read, their ancestors, stopping at one already
+    /// hidden, as git's `mark_parents_uninteresting` does.
+    fn hide_ancestors(&mut self, mut pending: Vec<ObjectId>) {
+        while let Some(id) = pending.pop() {
+            if !self.hidden.insert(id) {
+                continue;
+            }
+            if let Some(info) = self.infos.get(&id) {
+                pending.extend(info.parents.iter().copied());
+            }
+        }
+    }
+
+    /// git's `still_interesting`: how many more hidden commits to take before stopping, where
+    /// `date` is the time of the last commit listed.
+    fn still_interesting(&self, date: i64, slop: usize) -> usize {
+        let Some(head) = self.queue.peek() else {
+            return 0;
+        };
+        if date <= head.time || self.queue.iter().any(|q| !self.hidden.contains(&q.id)) {
+            return SLOP;
+        }
+        slop - 1
+    }
+
+    /// Whether a parent counts in simplifying a merge: one the range has not hidden, or its start.
+    fn relevant(&self, id: ObjectId) -> bool {
+        !self.hidden.contains(&id) || self.bottoms.contains(&id)
+    }
+
+    /// Mark `id` as changing nothing under `path`, and narrow its parents to the one it took
+    /// `path` from, as git's `try_to_simplify_commit` does with its default history
+    /// simplification. A merge the same as a relevant parent follows that parent alone, so a side
+    /// whose changes to `path` the merge did not keep is never walked.
+    fn simplify(&mut self, repo: &Repository, id: ObjectId, path: &str) -> Result<(), Declined> {
+        let (tree, parents) = {
+            let info = &self.infos[&id];
+            (info.tree, info.parents.clone())
+        };
+        let mine = repo.entry_at(tree, path)?;
+        if parents.is_empty() {
+            if mine.is_none() {
+                self.treesame.insert(id);
+            }
+            return Ok(());
+        }
+        let mut relevant_parents = 0;
+        let (mut relevant_change, mut irrelevant_change) = (false, false);
+        for parent in parents {
+            let relevant = self.relevant(parent);
+            if relevant {
+                relevant_parents += 1;
+            }
+            self.ensure(repo, parent)?;
+            let theirs = repo.entry_at(self.infos[&parent].tree, path)?;
+            if theirs == mine {
+                if relevant {
+                    if let Some(info) = self.infos.get_mut(&id) {
+                        info.parents = vec![parent];
+                    }
+                    self.treesame.insert(id);
+                    return Ok(());
+                }
+                continue;
+            }
+            if relevant {
+                relevant_change = true;
+            } else {
+                irrelevant_change = true;
+            }
+        }
+        let changed = if relevant_parents > 0 {
+            relevant_change
+        } else {
+            irrelevant_change
+        };
+        if !changed {
+            self.treesame.insert(id);
+        }
+        Ok(())
+    }
+}
+
 struct Out<'w> {
     text: Text,
     shown: Vec<String>,
+    printed: Vec<Printed>,
     withheld_any: bool,
     timed_out: bool,
     withheld: &'w dyn Fn(&str) -> bool,
@@ -1799,43 +2002,65 @@ struct Out<'w> {
 }
 
 impl Out<'_> {
-    fn stopped(&mut self) -> bool {
-        if self.text.full() {
-            return true;
-        }
+    /// Whether the deadline has passed, noting that it has.
+    fn late(&mut self) -> bool {
         if Instant::now() >= self.deadline {
             self.timed_out = true;
-            return true;
         }
-        false
+        self.timed_out
+    }
+
+    /// Whether another entry fits. One that does not is what makes a full answer a cut one.
+    fn room(&mut self) -> bool {
+        if self.text.full() {
+            self.text.cut = true;
+            return false;
+        }
+        true
     }
 }
 
 #[derive(Default)]
 struct Text {
     body: String,
+    /// The body with each line of a file's contents left blank, so its line numbers are the
+    /// body's.
+    around: String,
     lines: usize,
     cut: bool,
 }
 
 impl Text {
-    /// Add a line, shortened past [`MAX_LINE_CHARS`]; false once the answer is full.
-    fn line(&mut self, line: &str) -> bool {
+    /// Add a line, shortened past [`MAX_LINE_CHARS`], and say how many of its bytes were shown;
+    /// `None` once the answer is full. `content` marks a line of a file's contents.
+    fn add(&mut self, line: &str, content: bool) -> Option<usize> {
         if self.lines >= MAX_LINES {
             self.cut = true;
-            return false;
+            return None;
         }
-        match line.char_indices().nth(MAX_LINE_CHARS) {
+        let end = match line.char_indices().nth(MAX_LINE_CHARS) {
             Some((end, _)) => {
-                self.body.push_str(&line[..end]);
-                self.body.push_str(" [line cut]");
                 self.cut = true;
+                end
             }
-            None => self.body.push_str(line),
+            None => line.len(),
+        };
+        self.body.push_str(&line[..end]);
+        if end < line.len() {
+            self.body.push_str(" [line cut]");
         }
         self.body.push('\n');
+        if !content {
+            self.around.push_str(&line[..end]);
+        }
+        self.around.push('\n');
         self.lines += 1;
-        true
+        Some(end)
+    }
+
+    /// Add a line that is not a file's contents; false once the answer is full.
+    fn line(&mut self, line: &str) -> bool {
+        self.add(line, false).is_some()
     }
 
     fn full(&self) -> bool {
@@ -1843,13 +2068,15 @@ impl Text {
     }
 }
 
-fn hunks(out: &mut Out<'_>, diff: &Diff) {
+/// Print a diff's hunks, and record each hunk's shown lines as the file's on each side: the kept
+/// and added ones from the new file, the kept and removed ones from the old.
+fn hunks(out: &mut Out<'_>, path: &str, diff: &Diff) {
     struct Hunk {
         old_start: usize,
         new_start: usize,
         old_count: usize,
         new_count: usize,
-        lines: Vec<String>,
+        lines: Vec<(char, String)>,
     }
     fn range(start: usize, count: usize) -> String {
         match count {
@@ -1858,17 +2085,37 @@ fn hunks(out: &mut Out<'_>, diff: &Diff) {
             n => format!("{start},{n}"),
         }
     }
-    fn flush(out: &mut Out<'_>, hunk: &mut Option<Hunk>) {
-        if let Some(h) = hunk.take() {
-            out.text.line(&format!(
-                "@@ -{} +{} @@",
-                range(h.old_start, h.old_count),
-                range(h.new_start, h.new_count)
-            ));
-            for line in h.lines {
-                if !out.text.line(&line) {
-                    return;
+    fn flush(out: &mut Out<'_>, path: &str, hunk: &mut Option<Hunk>) {
+        let Some(h) = hunk.take() else {
+            return;
+        };
+        if !out.text.line(&format!(
+            "@@ -{} +{} @@",
+            range(h.old_start, h.old_count),
+            range(h.new_start, h.new_count)
+        )) {
+            return;
+        }
+        let (mut old, mut new) = (String::new(), String::new());
+        for (sign, line) in &h.lines {
+            let Some(end) = out.text.add(&format!("{sign}{line}"), true) else {
+                break;
+            };
+            let shown = &line[..end - sign.len_utf8()];
+            for (side, left_out) in [(&mut old, '+'), (&mut new, '-')] {
+                if *sign != left_out {
+                    side.push_str(shown);
+                    side.push('\n');
                 }
+            }
+        }
+        for (first_line, text) in [(h.new_start, new), (h.old_start, old)] {
+            if !text.is_empty() {
+                out.printed.push(Printed {
+                    path: path.to_owned(),
+                    first_line,
+                    text,
+                });
             }
         }
     }
@@ -1876,7 +2123,7 @@ fn hunks(out: &mut Out<'_>, diff: &Diff) {
     let mut hunk: Option<Hunk> = None;
     for change in diff.condensed(3) {
         if let Change::Elided(n) = change {
-            flush(out, &mut hunk);
+            flush(out, path, &mut hunk);
             old_line += n;
             new_line += n;
             continue;
@@ -1890,26 +2137,44 @@ fn hunks(out: &mut Out<'_>, diff: &Diff) {
         });
         match change {
             Change::Kept(line) => {
-                h.lines.push(format!(" {line}"));
+                h.lines.push((' ', line.to_string()));
                 h.old_count += 1;
                 h.new_count += 1;
                 old_line += 1;
                 new_line += 1;
             }
             Change::Removed(line) => {
-                h.lines.push(format!("-{line}"));
+                h.lines.push(('-', line.to_string()));
                 h.old_count += 1;
                 old_line += 1;
             }
             Change::Added(line) => {
-                h.lines.push(format!("+{line}"));
+                h.lines.push(('+', line.to_string()));
                 h.new_count += 1;
                 new_line += 1;
             }
             Change::Elided(_) => {}
         }
     }
-    flush(out, &mut hunk);
+    flush(out, path, &mut hunk);
+}
+
+/// Bytes as text, with each byte that is not part of UTF-8 written as `\xNN` rather than all of
+/// them replaced by one character, so two lines that differ only there still differ.
+fn escaped(bytes: &[u8]) -> Cow<'_, str> {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => Cow::Borrowed(text),
+        Err(_) => {
+            let mut text = String::with_capacity(bytes.len());
+            for chunk in bytes.utf8_chunks() {
+                text.push_str(chunk.valid());
+                for byte in chunk.invalid() {
+                    let _ = write!(text, "\\x{byte:02x}");
+                }
+            }
+            Cow::Owned(text)
+        }
+    }
 }
 
 fn message(out: &mut Out<'_>, message: &[u8]) {
@@ -2147,7 +2412,7 @@ mod tests {
         }
 
         fn opened(&self) -> Result<Repository, Declined> {
-            survey(&self.git)?;
+            survey(&self.git, later())?;
             Repository::open(&self.git)
         }
 
@@ -2174,6 +2439,10 @@ mod tests {
         }
     }
 
+    fn later() -> Instant {
+        Instant::now() + Duration::from_secs(60)
+    }
+
     fn request<'a>(query: Query, revision: Option<&'a str>, path: Option<&'a str>) -> Request<'a> {
         Request {
             query,
@@ -2182,7 +2451,7 @@ mod tests {
             count: DEFAULT_COUNT,
             since: None,
             until: None,
-            deadline: Instant::now() + Duration::from_secs(60),
+            deadline: later(),
         }
     }
 
@@ -2293,18 +2562,30 @@ mod tests {
         );
         h.repo.point("FETCH_HEAD", h.second);
         h.repo.point("ORIG_HEAD", h.second);
-        for unread in [
+        h.repo.put("objects/pack/pack-a.idx", "an index\n");
+        h.repo.put("objects/pack/pack-a.pack", "its pack\n");
+        let unread = [
             "hooks/pre-commit",
             "index",
             "description",
             "info/exclude",
             "logs/HEAD",
             "COMMIT_EDITMSG.lock",
-        ] {
-            h.repo.put(unread, "not a ref\n");
+            "refs/heads/main.lock",
+            "refs/heads/.hidden",
+            "objects/info/packs",
+            "objects/pack/orphan.idx",
+            "objects/pack/pack-a.keep",
+            "objects/ab/not-an-object",
+        ];
+        for name in unread {
+            h.repo.put(name, "not a ref\n");
         }
 
-        let listed = relative(&h.repo.git, &survey(&h.repo.git).expect("surveyed"));
+        let listed = relative(
+            &h.repo.git,
+            &survey(&h.repo.git, later()).expect("surveyed"),
+        );
 
         for read in [
             "HEAD",
@@ -2313,6 +2594,8 @@ mod tests {
             "config",
             "packed-refs",
             "refs/heads/main",
+            "objects/pack/pack-a.idx",
+            "objects/pack/pack-a.pack",
         ] {
             assert!(
                 listed.iter().any(|f| f == read),
@@ -2320,20 +2603,18 @@ mod tests {
             );
         }
         let objects = listed.iter().filter(|f| f.starts_with("objects/")).count();
-        assert_eq!(objects, 10, "every loose object is listed: {listed:?}");
-        for unread in [
-            "hooks/pre-commit",
-            "index",
-            "description",
-            "info/exclude",
-            "logs/HEAD",
-            "COMMIT_EDITMSG.lock",
-        ] {
+        assert_eq!(
+            objects, 12,
+            "every loose object and paired pack is listed: {listed:?}"
+        );
+        for unread in unread {
             assert!(
                 !listed.iter().any(|f| f == unread),
                 "{unread} is never read but is listed"
             );
         }
+        // A tree of refs too large to list in time is declined rather than listed in part.
+        assert_eq!(survey(&h.repo.git, Instant::now()), Err(Declined::TooSlow));
     }
 
     /// Each of these sends a read to files outside the ones [`survey`] listed, or answers with
@@ -2344,7 +2625,7 @@ mod tests {
         let file = Repo::new("declined-git-file");
         std::fs::remove_dir_all(&file.git).expect("removed");
         std::fs::write(&file.git, "gitdir: /elsewhere/.git\n").expect("git file");
-        assert_eq!(survey(&file.git), Err(Declined::LinkedGitDir));
+        assert_eq!(survey(&file.git, later()), Err(Declined::LinkedGitDir));
 
         let cases: [(&str, &str, Declined); 4] = [
             ("commondir", "../other/.git\n", Declined::CommonDir),
@@ -2400,18 +2681,18 @@ mod tests {
             h.repo.git.join("refs/heads/alias"),
         )
         .expect("link");
-        assert_eq!(survey(&h.repo.git), Err(Declined::Linked));
+        assert_eq!(survey(&h.repo.git, later()), Err(Declined::Linked));
 
         let top = history("linked-top");
         std::os::unix::fs::symlink(top.repo.git.join("HEAD"), top.repo.git.join("ORIG_HEAD"))
             .expect("link");
-        assert_eq!(survey(&top.repo.git), Err(Declined::Linked));
+        assert_eq!(survey(&top.repo.git, later()), Err(Declined::Linked));
 
         let whole = history("linked-whole");
         let moved = whole.repo.root.join("real-git");
         std::fs::rename(&whole.repo.git, &moved).expect("moved");
         std::os::unix::fs::symlink(&moved, &whole.repo.git).expect("link");
-        assert_eq!(survey(&whole.repo.git), Err(Declined::Linked));
+        assert_eq!(survey(&whole.repo.git, later()), Err(Declined::Linked));
     }
 
     /// git reads these keys to decide what a repository means: another file's configuration, a
@@ -2535,6 +2816,31 @@ mod tests {
             Ok(Spec::One("HEAD~2:src/lib.rs"))
         );
         assert_eq!(spec(" "), Err(Declined::Unknown(" ".to_owned())));
+    }
+
+    /// What follows the colon is a file's name, and a name may hold what would be revision syntax
+    /// anywhere else: a space, two or three dots, `@{`.
+    #[test]
+    fn a_path_after_a_revision_is_read_as_a_name_whatever_it_holds() {
+        let repo = Repo::new("path-names");
+        let blob = repo.blob("named\n");
+        let docs = repo.tree(&[("100644", "a b.md", blob)]);
+        let commit = repo.commit(
+            repo.tree(&[
+                ("40000", "docs", docs),
+                ("100644", "notes...md", blob),
+                ("100644", "x@{y}", blob),
+            ]),
+            &[],
+            T1,
+            "names",
+        );
+        repo.point("refs/heads/main", commit);
+        for text in ["HEAD:docs/a b.md", "HEAD:notes...md", "HEAD:x@{y}"] {
+            assert_eq!(spec(text), Ok(Spec::One(text)), "{text}");
+            assert_eq!(path_in(text), text.strip_prefix("HEAD:"), "{text}");
+            assert_eq!(repo.text(Query::Show, text), "named\n", "{text}");
+        }
     }
 
     /// The trust map is keyed by paths as written, so a path that names the same file another
@@ -2716,6 +3022,31 @@ mod tests {
         );
     }
 
+    /// A commit's time is whatever its author's clock said, so a parent can be dated after its
+    /// child. The start of a range still hides it, whether that is known when the walk first meets
+    /// it or only once the walk reaches it again through the start.
+    #[test]
+    fn a_range_leaves_out_its_start_whatever_the_commit_times() {
+        let repo = Repo::new("range-times");
+        let tree = repo.tree(&[("100644", "README", repo.blob("hello\n"))]);
+        let root = repo.commit(tree, &[], T1, "root");
+        let late = repo.commit(tree, &[root], T1 + 3 * DAY, "late");
+        let early = repo.commit(tree, &[late], T1 + DAY / 2, "early");
+        let start = repo.commit(tree, &[late], T1 + DAY, "start");
+        let behind = repo.commit(tree, &[early], T1 + DAY, "behind");
+        let end = repo.commit(tree, &[late], T1 + 2 * DAY, "end");
+        repo.point("refs/heads/main", end);
+        for from in [start, behind] {
+            let range = format!("{}..{}", from.to_hex(), end.to_hex());
+            let listed: Vec<String> = repo
+                .text(Query::Log, &range)
+                .lines()
+                .map(|line| line[..10].to_owned())
+                .collect();
+            assert_eq!(listed, [short(end, 10)], "{range}");
+        }
+    }
+
     /// The bounds are whole days in UTC, both ends included, which is what a planner asking for
     /// "since the 15th" means.
     #[test]
@@ -2773,6 +3104,36 @@ mod tests {
                 .text,
             "(no commits match)\n"
         );
+    }
+
+    /// Narrowed to a path, a merge that kept one side's version of it is followed down that side
+    /// alone, as git's default simplification does: the other side's commits changed a version
+    /// the merge threw away. A merge that kept neither is listed, and both sides with it.
+    #[test]
+    fn a_log_narrowed_to_a_path_follows_the_side_a_merge_kept_it_from() {
+        let repo = Repo::new("log-merge-path");
+        let base = ("100644", "base", repo.blob("base\n"));
+        let with = |text: &str| repo.tree(&[base, ("100644", "README", repo.blob(text))]);
+        let root = repo.commit(repo.tree(&[base]), &[], T1, "root");
+        let x = repo.commit(with("x\n"), &[root], T1 + DAY, "x");
+        let y = repo.commit(with("y\n"), &[x], T1 + 2 * DAY, "y");
+        let z = repo.commit(with("z\n"), &[root], T1 + 3 * DAY, "z");
+        let log = |parents: &[ObjectId], text: &str| {
+            let merge = repo.commit(with(text), parents, T1 + 4 * DAY, "merge");
+            repo.point("refs/heads/main", merge);
+            let listed: Vec<String> = repo
+                .ask(Query::Log, None, Some("README"))
+                .expect("answered")
+                .text
+                .lines()
+                .map(|line| line[..10].to_owned())
+                .collect();
+            (merge, listed)
+        };
+        assert_eq!(log(&[z, y], "z\n").1, [short(z, 10)]);
+        assert_eq!(log(&[y, z], "z\n").1, [short(z, 10)]);
+        let (merge, listed) = log(&[z, y], "w\n");
+        assert_eq!(listed, [merge, z, y, x].map(|id| short(id, 10)));
     }
 
     /// A log stops at its count, and says it stopped, so the planner can tell "these are all
@@ -3125,6 +3486,138 @@ mod tests {
         assert_eq!(
             wide.body,
             format!("{} [line cut]\n", "é".repeat(MAX_LINE_CHARS))
+        );
+    }
+
+    /// A listing or a diff that exactly fills the answer is whole; the entry after it is what
+    /// makes it cut. A planner told a whole answer was cut narrows a question that needed none.
+    #[test]
+    fn a_listing_or_a_diff_that_fills_the_answer_says_it_was_cut_only_when_more_was_left() {
+        let repo = Repo::new("fills");
+        let empty = repo.blob("");
+        let one = repo.blob("one\n");
+        let names: Vec<String> = (0..=MAX_LINES).map(|n| format!("f{n:04}")).collect();
+        let files = |count: usize| -> Vec<(&str, &str, ObjectId)> {
+            names[..count]
+                .iter()
+                .map(|name| ("100644", name.as_str(), empty))
+                .collect()
+        };
+        for (count, cut) in [(MAX_LINES, false), (MAX_LINES + 1, true)] {
+            let commit = repo.commit(repo.tree(&files(count)), &[], T1, "listing");
+            repo.point("refs/heads/main", commit);
+            let answer = repo
+                .ask(Query::Show, Some("HEAD:"), None)
+                .expect("answered");
+            assert_eq!((answer.text.lines().count(), answer.cut), (MAX_LINES, cut));
+            assert_eq!(
+                answer.shown.len(),
+                MAX_LINES + 1,
+                "a file left out was shown"
+            );
+        }
+
+        // An empty file added is three lines and a one-line file seven, so this fills it exactly.
+        let whole = files((MAX_LINES - 2 * 7) / 3);
+        let nothing = repo.commit(repo.tree(&[]), &[], T1, "nothing");
+        for cut in [false, true] {
+            let mut entries = whole.clone();
+            entries.extend([("100644", "one-a", one), ("100644", "one-b", one)]);
+            if cut {
+                entries.push(("100644", "z", empty));
+            }
+            let commit = repo.commit(repo.tree(&entries), &[nothing], T1 + DAY, "files");
+            repo.point("refs/heads/main", commit);
+            let answer = repo
+                .ask(Query::Diff, Some("HEAD~1..HEAD"), None)
+                .expect("answered");
+            assert_eq!((answer.text.lines().count(), answer.cut), (MAX_LINES, cut));
+            assert!(
+                answer.text.starts_with(&format!(
+                    "diff --git a/f0000 b/f0000\nnew file mode 100644\nindex 0000000..{}\ndiff \
+                     --git a/f0001",
+                    short(empty, 7)
+                )),
+                "an empty file added is more than its index line"
+            );
+            assert!(
+                !answer.shown.iter().any(|path| path == "z"),
+                "a file left out was shown"
+            );
+        }
+    }
+
+    /// Each file's lines an answer holds are kept apart with the line of the file they start at,
+    /// the new side and the old side of a diff each whole, and the rest of the answer is kept with
+    /// those lines left blank: a credential is found in a file as a read of that file would find
+    /// it, and at the line the person would open.
+    #[test]
+    fn each_file_an_answer_shows_is_kept_with_the_line_it_starts_at() {
+        let repo = Repo::new("printed");
+        let lines: Vec<String> = (1..=10).map(|n| n.to_string()).collect();
+        let before = repo.blob(&format!("{}\n", lines.join("\n")));
+        let mut changed = lines.clone();
+        changed[7] = "eight".to_owned();
+        let after = repo.blob(&format!("{}\n", changed.join("\n")));
+        let first = repo.commit(repo.tree(&[("100644", "notes", before)]), &[], T1, "one");
+        let second = repo.commit(
+            repo.tree(&[("100644", "notes", after)]),
+            &[first],
+            T1 + DAY,
+            "two",
+        );
+        repo.point("refs/heads/main", second);
+
+        let answer = repo.ask(Query::Show, Some("HEAD"), None).expect("answered");
+        let printed = |first_line, text: &str| Printed {
+            path: "notes".to_owned(),
+            first_line,
+            text: text.to_owned(),
+        };
+        assert_eq!(
+            answer.printed,
+            [
+                printed(5, "5\n6\n7\neight\n9\n10\n"),
+                printed(5, "5\n6\n7\n8\n9\n10\n"),
+            ]
+        );
+        assert_eq!(answer.around.lines().count(), answer.text.lines().count());
+        assert!(
+            answer.around.contains("\n    two\n") && answer.around.contains("@@ -5,6 +5,6 @@\n\n"),
+            "{}",
+            answer.around
+        );
+        assert!(!answer.around.contains("eight"), "{}", answer.around);
+
+        let file = repo
+            .ask(Query::Show, Some("HEAD:notes"), None)
+            .expect("answered");
+        assert_eq!(
+            file.printed,
+            [printed(1, &format!("{}\n", changed.join("\n")))]
+        );
+    }
+
+    /// A file's bytes that are not UTF-8 are shown as `\xNN`, each on its own, so two versions that
+    /// differ only in such a byte are shown differing rather than as one line twice.
+    #[test]
+    fn bytes_that_are_not_utf8_are_shown_escaped_and_diffed_as_bytes() {
+        let repo = Repo::new("not-utf8");
+        let before = repo.object(Kind::Blob, b"caf\xe9\n");
+        let after = repo.object(Kind::Blob, b"caf\xe8\n");
+        let first = repo.commit(repo.tree(&[("100644", "menu", before)]), &[], T1, "one");
+        let second = repo.commit(
+            repo.tree(&[("100644", "menu", after)]),
+            &[first],
+            T1 + DAY,
+            "two",
+        );
+        repo.point("refs/heads/main", second);
+        assert_eq!(repo.text(Query::Show, "HEAD:menu"), "caf\\xe8\n");
+        let diff = repo.text(Query::Diff, "HEAD~1..HEAD");
+        assert!(
+            diff.ends_with("@@ -1 +1 @@\n-caf\\xe9\n+caf\\xe8\n"),
+            "{diff}"
         );
     }
 

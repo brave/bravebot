@@ -28056,6 +28056,105 @@ fn a_credential_in_history_is_held_back_until_the_person_agrees() {
     }
 }
 
+/// CRED-15. A file's lines in an answer are scanned as a read of that file, so the question names
+/// the file, and agreeing to one file's key is not agreeing to another's: the second file is asked
+/// about, and the first is not asked about twice.
+#[test]
+fn agreeing_to_one_files_key_in_history_is_not_agreeing_to_anothers() {
+    let scratch = Scratch::new("read-git-credential-per-file");
+    repository::commit_files(
+        &scratch.path,
+        &[
+            (".env", &format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n")),
+            ("deploy/master.key", &format!("{GENERATED_SECRET}\n")),
+        ],
+        "add keys",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_git", r#"{"query":"show","path":".env"}"#),
+        tool_request_2("read_git", r#"{"query":"show","path":"deploy/master.key"}"#),
+        tool_request_2("read_git", r#"{"query":"show","path":".env"}"#),
+        reply_with("understood"),
+    ]);
+    let mut confirmer = RemembersExposures {
+        allow: true,
+        ..Default::default()
+    };
+    let asked = confirmer.asked.clone();
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what changed"),
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let env = tool_results(&received.recv().expect("second request"));
+    let key = tool_results(&received.recv().expect("third request"));
+    let again = tool_results(&received.recv().expect("fourth request"));
+    assert!(
+        env.contains(DECLARED_KEY)
+            && key.contains(GENERATED_SECRET)
+            && again.contains(DECLARED_KEY),
+        "a history the person agreed to show was held back: {env}\n{key}\n{again}"
+    );
+    let asked = asked.lock().unwrap();
+    let named: Vec<String> = asked.iter().map(|a| a.credentials.join("; ")).collect();
+    assert_eq!(
+        named.len(),
+        2,
+        "each file with a key is asked about once, and only once: {named:?}"
+    );
+    assert!(
+        named[0].contains(".env:1") && named[1].contains("deploy/master.key:1"),
+        "the question did not name the file and line the key is on: {named:?}"
+    );
+}
+
+/// CRED-15. A value that is the whole of a new file is recognised in the commit that added it as
+/// it is in the file, which it could not be if the answer were read as one document.
+#[test]
+fn a_key_that_is_the_whole_of_a_file_is_caught_in_the_commit_that_added_it() {
+    let scratch = Scratch::new("read-git-credential-alone");
+    repository::commit_files(
+        &scratch.path,
+        &[
+            ("README", "hello\n"),
+            ("master.key", &format!("{GENERATED_SECRET}\n")),
+        ],
+        "add a key",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_git", r#"{"query":"show"}"#),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what changed"),
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let answered = tool_results(&received.recv().expect("second request"));
+    assert!(
+        !answered.contains(GENERATED_SECRET) && answered.contains("refused"),
+        "a key standing as the whole of a new file reached the planner: {answered}"
+    );
+}
+
 /// GIT-5. The question is one of three words, and a word off the list is refused by name rather
 /// than guessed at; status, the one a planner most often reaches for, is pointed at run.
 #[test]
