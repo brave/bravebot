@@ -50,7 +50,9 @@ Hand-written rather than a dependency, for the reason the conventions give.
 
 Brace groups in `include` are **expanded before the walk**, not matched during it. Each alternative
 is an ordinary pattern applied once per path, so a group costs a multiple of the work rather than a
-power of it, and an expansion past the cap falls back to matching the pattern literally.
+power of it, and an expansion past the cap falls back to matching the pattern literally. A glob
+with a `/` in it may be written from `directory` or from the workspace root, as
+[LIST-3](list-files.md#LIST-3) reads a listing's.
 
 `verified-by: bravebot_agent::regex::a_pattern_built_to_backtrack_catastrophically_still_returns_promptly`
 `verified-by: bravebot_agent::regex::a_pattern_past_the_length_cap_is_refused`
