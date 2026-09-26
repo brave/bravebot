@@ -18,7 +18,10 @@ question is asked, the next three name which repository, which commits and which
 about, and the rest bound the commits a log lists. There are no content arguments. The result is
 the answer, or a reference where a path it showed is untrusted. What it shows is scanned for
 credentials before the planner receives it, as a file read is
-([credential-protection.md](../credential-protection.md)).
+([credential-protection.md](../credential-protection.md)): the lines it prints of a file are
+scanned as a read of that file, one side of a diff at a time and from the line they start at, and
+the rest of the answer as a read of `.git`. A person agreeing to be shown one file's key has agreed
+to nothing about another's.
 
 ## Clauses
 
@@ -60,7 +63,11 @@ the gix crates that start one.
 `verified-by: bravebot_agent::git::revisions_resolve_through_names_ancestry_and_peels_as_git_does`
 `verified-by: bravebot_agent::git::ranges_and_pairs_are_read_as_git_reads_them`
 `verified-by: bravebot_agent::git::a_range_leaves_out_what_its_start_already_reaches`
+`verified-by: bravebot_agent::git::a_range_leaves_out_its_start_whatever_the_commit_times`
+`verified-by: bravebot_agent::git::a_path_after_a_revision_is_read_as_a_name_whatever_it_holds`
 `verified-by: bravebot_agent::git::a_path_keeps_only_the_commits_that_changed_it`
+`verified-by: bravebot_agent::git::a_log_narrowed_to_a_path_follows_the_side_a_merge_kept_it_from`
+`verified-by: bravebot_agent::git::bytes_that_are_not_utf8_are_shown_escaped_and_diffed_as_bytes`
 `verified-by: bravebot_agent::git::a_tag_is_shown_with_its_message_then_its_commit`
 `verified-by: bravebot_agent::git::a_merge_is_shown_without_a_diff_and_names_the_diff_that_gives_one`
 `verified-by: bravebot_agent::git::a_binary_file_is_described_rather_than_printed`
@@ -79,7 +86,10 @@ and the rules alone, before any file under `.git` is read, and a repository it f
 with a sentence pointing at `run`.
 
 The files a read opens are listed before any of them is decoded, and that list is what the rules
-are held against. A file a read opens is on it; a file no read opens is not.
+are held against. A file a read opens is on it; a file no read opens is not. That is the
+configuration, whatever case its name is written in, the refs a name can reach, which leaves out a
+`.lock` and any name with a part starting `.`, the loose objects, and each pack index with the pack
+beside it. A listing that runs past the search deadline is declined as a read out of time is.
 
 **Why.** Reading history means following ids the files hold: a ref naming a commit, a commit its
 parent and its tree, a tree its entries. Following them over bytes nobody vouched for is the driver
@@ -226,3 +236,4 @@ though it were the whole draws conclusions from what is missing.
 `verified-by: bravebot_agent::git::an_answer_past_its_lines_or_a_line_past_its_width_is_cut`
 `verified-by: bravebot_agent::git::a_file_past_the_size_cap_is_described_by_its_size`
 `verified-by: bravebot_agent::git::a_read_out_of_time_says_so`
+`verified-by: bravebot_agent::git::a_listing_or_a_diff_that_fills_the_answer_says_it_was_cut_only_when_more_was_left`
