@@ -1044,8 +1044,8 @@ operators vi spells after `g` that this box does not have, which are `g?`, `gq`,
 the stretch they would act on, the way `d` does. After an operator, `'`, `` ` ``, `[`, `]` and `z`
 still take their key, so `d'a` does nothing. The other prefixes end the operator there, as they do
 in vi, and the key after `dm` is read on its own. VISUAL mode reads the prefixes the same way, except
-that the operators under `g` and `R` take no key, since the selection is already the stretch they act
-on.
+that the operators under `g` take no key, since the selection is already the stretch they act on, and
+`R` there is an instruction of its own ([INPUT-30](#INPUT-30)).
 
 The ordinary box is in neither mode, and nothing about a mode is drawn at it.
 
@@ -1079,10 +1079,10 @@ every key up to Escape would be replace mode without the replacing.
 `verified-by: bravebot_tui::vim::a_prefix_this_box_has_no_instruction_for_waits_for_its_key_and_then_does_nothing`
 `verified-by: bravebot_tui::vim::an_operator_vi_spells_after_g_waits_for_the_stretch_it_would_take`
 `verified-by: bravebot_tui::vim::an_operator_waits_for_the_key_after_a_prefix_only_where_vi_reads_one`
-`verified-by: bravebot_tui::vim::visual_mode_gives_an_operator_under_g_no_stretch_and_capital_r_no_key`
+`verified-by: bravebot_tui::vim::visual_mode_gives_an_operator_under_g_no_stretch`
 `verified-by: bravebot_tui::state::a_prefix_this_box_has_no_instruction_for_changes_nothing_whatever_follows_it`
 `verified-by: bravebot_tui::state::a_prefix_this_box_has_no_instruction_for_takes_the_key_vi_would_give_it_and_no_more`
-`verified-by: bravebot_tui::state::visual_mode_leaves_the_key_after_an_operator_under_g_or_capital_r_to_act_on_its_own`
+`verified-by: bravebot_tui::state::visual_mode_leaves_the_key_after_an_operator_under_g_to_act_on_its_own`
 `verified-by: bravebot_tui::state::a_configured_style_is_adopted_and_an_unknown_word_is_not`
 `verified-by: bravebot_tui::state::choosing_a_style_of_editing_leaves_the_box_taking_letters`
 `verified-by: bravebot_tui::state::choosing_a_style_abandons_an_instruction_still_waiting_for_a_key`
@@ -1338,7 +1338,8 @@ as an empty row. `>` leaves an empty row empty, as vi does.
 `p` and `P` put the register back after and before the caret. A stretch that was whole lines comes
 back as a line of its own. `J` makes this line and the one below into one with a single space where
 the newline was. `u` puts back what the last change took, one step. `.` does the last change again at
-the caret.
+the caret. A put and a join are changes it cannot yet make again, and so are `r` and a case change
+over a selection, so after one of those `.` does nothing rather than make the change before it.
 
 A marker is taken whole by every operator, or not at all, and taking one takes the attachment off.
 A case change goes around a marker and leaves it as it was, and `r` over one does nothing.
@@ -1419,6 +1420,7 @@ selection holding one is ([INPUT-30](#INPUT-30)).
 `verified-by: bravebot_tui::state::undo_puts_back_what_a_change_took`
 `verified-by: bravebot_tui::state::there_is_nothing_to_undo_after_a_yank_or_before_a_change`
 `verified-by: bravebot_tui::state::the_repeat_key_does_the_last_change_again_at_the_caret`
+`verified-by: bravebot_tui::state::a_repeat_after_a_change_it_cannot_make_again_does_nothing`
 `verified-by: bravebot_tui::state::an_operator_takes_a_marker_whole`
 `verified-by: bravebot_tui::state::an_operator_that_takes_a_marker_takes_the_attachment_with_it`
 `verified-by: bravebot_tui::state::a_case_change_leaves_a_marker_naming_its_picture`
@@ -1492,10 +1494,22 @@ the stretch is never empty. Motions move the end the caret is at, `o` puts the c
 and a text object becomes the selection.
 
 An operator there needs no extent and acts on the selection: `x` is `d` and `s` is `c`, having nothing
-left to distinguish. `r` or `gr` replaces every selected character with one, and `~`, `u` and `U`
-change the case, as do `g~`, `gu` and `gU`, the selection being the stretch they would otherwise
-wait for. A case change there goes around a marker as it does over a motion
-([INPUT-28](#INPUT-28)). A line-wise selection goes into the register as lines.
+left to distinguish. The capitals act on every row the selection crosses, whole, whichever kind it
+is: `D` and `X` take the rows, `Y` keeps them, and `C`, `S` and `R` change them. `r` or `gr` replaces
+every selected character with one, and `~`, `u` and `U` change the case, as do `g~`, `gu` and `gU`,
+the selection being the stretch they would otherwise wait for. A case change there goes around a
+marker as it does over a motion ([INPUT-28](#INPUT-28)). A line-wise selection goes into the register
+as lines, and so do the rows a capital takes. `.` after `D`, `X`, `C`, `S` or `R`, or after `d`,
+`c`, `>` or `<` over a line-wise selection, makes the change again to as many rows from the caret.
+
+`p` puts the register where the selection is and leaves what the selection held in the register.
+`P` does the same and leaves the register as it was. A count is how many copies. Rows stay rows:
+over a line-wise selection the register replaces the rows, a copy to a row, and rows put over a
+character-wise one split the line either side of it. The caret ends on the last character put. Where
+the characters run over more than one row it ends on the first, and where rows went in, on the first
+character of the first of them that is not a blank. A selection on the empty last row holds no
+character, and the register goes there all the same and keeps what it held. With nothing yanked
+neither key does anything, and the selection stays.
 
 The key that opened the mode closes it, the other of the two changes which kind is in force, and
 Escape abandons the selection. Every operator ends it, and so does an edit of the line it was marked
@@ -1516,6 +1530,21 @@ selection takes its place.
 `u` meaning lower-case here and undo without a selection is why each mode reads its own table. The
 motions fall through to the other table rather than being restated, or a motion added to one would be
 missing from the other.
+
+The capitals take rows because that is what they do in vi, and what they mean without a selection,
+the end of the line or the character before the caret, has no counterpart over a stretch already
+marked out. `R` is among them for the same reason: replace mode over a selection has nothing to
+replace that `c` would not. `.` counts rows because the selection is gone by the time it is pressed,
+and a stretch nothing marks out any longer would leave the key doing nothing. vim repeats a change to
+rows the same way.
+
+`p` over a selection is how one stretch is swapped for another: `p` and then `p` again trades two, and
+`P` puts one yank over several without the second press putting back what the first replaced. Rows
+split the line for the reason a yanked row goes back as a row of its own ([INPUT-28](#INPUT-28)). vim
+takes the selection out before finding nothing to put, which is a delete nobody asked for, so an empty
+register leaves the selection standing instead. The empty last row is a place a person can put
+something, as it is in vim, and the register keeps what it held because nothing was taken out to fill
+it with. The caret is where vim leaves it in every case, measured rather than reasoned about.
 
 Every operator ending the selection is what stops the next press acting on a stretch again for reasons
 nothing on the screen explains. Escape abandoning it is the same rule from the other side.
@@ -1538,6 +1567,8 @@ comes back to may have no key that could act on a stretch and no mode to draw on
 Block-wise selection is a known cost rather than a clause.
 
 `verified-by: bravebot_tui::vim::an_operator_in_visual_mode_acts_on_the_selection`
+`verified-by: bravebot_tui::vim::a_capital_in_visual_mode_acts_on_the_rows_the_selection_crosses`
+`verified-by: bravebot_tui::vim::putting_in_visual_mode_goes_over_the_selection`
 `verified-by: bravebot_tui::vim::the_letters_the_two_modes_disagree_about`
 `verified-by: bravebot_tui::vim::the_motions_mean_the_same_thing_in_both_modes`
 `verified-by: bravebot_tui::vim::a_text_object_in_visual_mode_selects`
@@ -1547,6 +1578,10 @@ Block-wise selection is a known cost rather than a clause.
 `verified-by: bravebot_tui::state::a_selection_is_marked_out_and_then_acted_on`
 `verified-by: bravebot_tui::state::a_selection_covers_the_character_it_opened_on`
 `verified-by: bravebot_tui::state::the_line_wise_selection_takes_whole_lines`
+`verified-by: bravebot_tui::state::a_capital_takes_every_row_the_selection_crosses`
+`verified-by: bravebot_tui::state::a_repeat_takes_as_many_rows_as_the_selection_crossed`
+`verified-by: bravebot_tui::state::putting_over_a_selection_replaces_it`
+`verified-by: bravebot_tui::state::rows_put_over_a_selection_stay_rows`
 `verified-by: bravebot_tui::state::the_case_keys_act_on_the_selection`
 `verified-by: bravebot_tui::state::swapping_the_ends_moves_the_other_one`
 `verified-by: bravebot_tui::state::a_motion_or_an_object_extends_the_selection`
@@ -1820,9 +1855,10 @@ is `d6w`.
 | how many copies, and how many rows end as one | `p`, `P`, and `J`, where `3J` is three rows and `2J` is the bare key |
 | how many the repeat is of, in place of the count recorded | `.` |
 
-The three extents that name no quantity take no count, since there is no second end of the line to
-reach, no second thing the keys named and no second selection: `3D`, `d3iw` and a counted operator
-in VISUAL mode act on what the uncounted one would.
+A counted motion moves the end of a selection as far as it moves a bare caret, so `v2j` marks three
+rows out. The extents that name no quantity take no count, since there is no second end of the line
+to reach, no second thing the keys named and no second selection: `3D`, `d3iw`, and a counted
+operator or capital in VISUAL mode act on what the uncounted one would.
 
 **The line bounds a count, and not the number typed.** Every counted motion stops at the first step
 that moves nothing, so `999l` costs the length of a line, and an extent takes what there is, so
@@ -1860,6 +1896,7 @@ and a person who typed one by accident would otherwise find out from what the ne
 `verified-by: bravebot_tui::vim::a_digit_is_a_count_only_where_nothing_is_waiting_for_that_key`
 `verified-by: bravebot_tui::vim::the_two_counts_of_an_instruction_multiply`
 `verified-by: bravebot_tui::state::a_count_repeats_a_motion`
+`verified-by: bravebot_tui::state::a_count_moves_the_end_of_the_selection`
 `verified-by: bravebot_tui::state::a_count_moves_the_caret_by_rows`
 `verified-by: bravebot_tui::state::a_count_stops_where_the_line_does`
 `verified-by: bravebot_tui::state::a_count_makes_the_input_motions_a_row`

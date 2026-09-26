@@ -2972,10 +2972,19 @@ impl Session {
     /// `d` take two characters rather than one. Whole lines in the line-wise mode however far along a
     /// line either end happens to sit.
     pub fn vi_selection(&self) -> Option<(usize, usize)> {
+        self.marked_out(matches!(
+            self.vi_mode(),
+            Some(crate::vim::Mode::Visual { lines: true })
+        ))
+    }
+
+    /// The stretch between the anchor and the caret, as the whole rows it crosses where `rows` says
+    /// so, or `None` where VISUAL mode is not open.
+    fn marked_out(&self, rows: bool) -> Option<(usize, usize)> {
         // The mode as well as the anchor: the anchor is what the stretch is, and the mode is whether
         // there is one at all. Read from the anchor alone, a box that had left VISUAL mode without
         // dropping it would draw a stretch its keys can no longer act on.
-        let Some(crate::vim::Mode::Visual { lines }) = self.vi_mode() else {
+        let Some(crate::vim::Mode::Visual { .. }) = self.vi_mode() else {
             return None;
         };
         // Clamped to the line as it stands rather than trusted to be within it, the way `wrap`
@@ -2985,7 +2994,7 @@ impl Session {
         // panics out of the draw with the terminal still in raw mode.
         let anchor = crate::wrap::boundary_at_or_before(&self.input, self.anchor?);
         let (from, to) = (anchor.min(self.caret), anchor.max(self.caret));
-        if lines {
+        if rows {
             let starts = self.input[..from].rfind('\n').map_or(0, |at| at + 1);
             let ends = self.input[to..]
                 .find('\n')
@@ -3113,6 +3122,7 @@ impl Session {
                 }
             }
             Command::Paste { before } => self.put_the_register_back(before, count),
+            Command::PutOver { keep } => self.put_over_the_selection(keep, count),
             Command::Join => self.join_the_line_below(count),
             Command::Select { lines } => self.select(lines),
             Command::SwapEnds => self.swap_the_ends_of_the_selection(),
@@ -3191,14 +3201,23 @@ impl Session {
             return;
         }
 
+        let whole_lines = self.takes_whole_lines(extent);
         if !operator.reads_only() {
-            self.before_last_change = Some((self.input.clone(), self.caret));
-            self.last_change = Some((operator, extent, count));
-            self.history.leave();
-            self.completion = 0;
+            self.begin_a_change();
+            self.last_change = Some(match extent {
+                // The selection is gone by the time `.` is pressed, so the rows it crossed are kept
+                // as that many rows from the caret, which is what vim repeats.
+                crate::vim::Extent::Selection | crate::vim::Extent::SelectedRows if whole_lines => {
+                    (
+                        operator,
+                        crate::vim::Extent::Line,
+                        Some(self.input[from..to].matches('\n').count() as u32 + 1),
+                    )
+                }
+                _ => (operator, extent, count),
+            });
         }
 
-        let whole_lines = self.takes_whole_lines(extent);
         if operator.fills_the_register() {
             self.register = Some(Yanked {
                 text: self.input[from..to].to_string(),
@@ -3267,7 +3286,7 @@ impl Session {
     }
 
     /// Whether an operator over this extent takes whole lines: the doubled letter, the row keys under
-    /// an operator, and a line-wise selection.
+    /// an operator, a line-wise selection and the rows of any selection.
     ///
     /// Decided here once, because it settles two things that have to agree: what happens to the
     /// newline and how the register puts the stretch back, and whether a stretch of no characters is
@@ -3275,6 +3294,7 @@ impl Session {
     /// line has nothing to take.
     fn takes_whole_lines(&self, extent: crate::vim::Extent) -> bool {
         extent == crate::vim::Extent::Line
+            || extent == crate::vim::Extent::SelectedRows
             || matches!(extent, crate::vim::Extent::To(motion) if motion.line_wise())
             || (extent == crate::vim::Extent::Selection
                 && matches!(
@@ -3359,8 +3379,8 @@ impl Session {
     /// The stretch an extent names, before the markers are taken into account.
     ///
     /// The count is how many of the extent to take: `3dd` is three lines, `3x` three characters and
-    /// `d3w` three words. The three that name no quantity of anything take no count, since there is
-    /// no second end of the line to reach, no second object the keys named and no second selection:
+    /// `d3w` three words. Those that name no quantity of anything take no count, since there is no
+    /// second end of the line to reach, no second object the keys named and no second selection:
     /// `3D`, `d3iw` and a counted operator in VISUAL mode act on what the uncounted one would.
     fn stretch_unchecked(
         &mut self,
@@ -3457,6 +3477,7 @@ impl Session {
             }
             Extent::Object(object) => self.object_span(object),
             Extent::Selection => self.vi_selection(),
+            Extent::SelectedRows => self.marked_out(true),
         };
         self.caret = was;
         // A stretch of no characters names nothing, unless it is rows: an empty row is still one for
@@ -3713,10 +3734,8 @@ impl Session {
         // A count is how many copies, and they go in together: one insertion is one change and one
         // step to undo, where putting it back N times over would leave N-1 of them unreachable.
         let copies = count.unwrap_or(1) as usize;
-        self.before_last_change = Some((self.input.clone(), self.caret));
+        self.begin_a_change();
         self.abandon_the_selection();
-        self.history.leave();
-        self.completion = 0;
 
         if yanked.lines {
             // A yanked line goes back as a line rather than into the middle of the one the caret is
@@ -3747,6 +3766,56 @@ impl Session {
         self.step_back_off_the_end();
     }
 
+    /// Put the register where the selection is, which is what `p` and `P` ask for there.
+    ///
+    /// `p` leaves what the selection held in the register, so two stretches trade places in two
+    /// presses, and `P` leaves the register as it was, so one yank can go over several. Rows stay
+    /// rows: over rows they replace them, and over a stretch within a row they split it, so neither
+    /// half of the line runs into them. Measured against vim, caret included.
+    ///
+    /// Nothing where nothing has been yanked, and the selection stays. vim takes the stretch out and
+    /// then finds nothing to put, which is a delete nobody asked for.
+    fn put_over_the_selection(&mut self, keep: bool, count: Option<u32>) {
+        let Some(yanked) = self.register.clone() else {
+            return;
+        };
+        // A selection on the empty last row holds no character, and the register still goes there,
+        // as it does in vim. The register keeps what it held, nothing having been taken out.
+        let (from, to) = self
+            .stretch(crate::vim::Extent::Selection, None)
+            .unwrap_or((self.caret, self.caret));
+        let rows = self.takes_whole_lines(crate::vim::Extent::Selection);
+        self.begin_a_change();
+        if !keep && (from < to || rows) {
+            self.register = Some(Yanked {
+                text: self.input[from..to].to_string(),
+                lines: rows,
+            });
+        }
+
+        // How many copies, as beside the caret, and in one insertion for the same reason. Where
+        // either side is rows, every copy is a row of its own.
+        let copies = vec![yanked.text.as_str(); count.unwrap_or(1) as usize];
+        let text = match (rows, yanked.lines) {
+            (true, _) => copies.join("\n"),
+            (false, true) => format!("\n{}\n", copies.join("\n")),
+            (false, false) => copies.concat(),
+        };
+        self.input.replace_range(from..to, &text);
+        if rows || yanked.lines {
+            self.caret = if rows { from } else { from + 1 };
+            self.move_to_first_non_blank();
+        } else if yanked.text.contains('\n') {
+            // Characters that run over rows leave the caret where they begin, as vim does, since
+            // their last one is on another row from the place they were put.
+            self.caret = from;
+        } else {
+            self.caret = from + text.len();
+            self.move_left();
+        }
+        self.leave_visual_mode();
+    }
+
     /// The position just past the character the caret is on, which is where `p` inserts.
     fn after_the_caret(&self) -> usize {
         if let Some((_, end)) = self.marker_at_caret() {
@@ -3768,10 +3837,8 @@ impl Session {
         if end >= self.input.len() {
             return;
         }
-        self.before_last_change = Some((self.input.clone(), self.caret));
+        self.begin_a_change();
         self.abandon_the_selection();
-        self.history.leave();
-        self.completion = 0;
 
         // A count is how many rows end up as one, so it is one join fewer than the number typed and
         // `2J` is the bare key: joining two rows is what one press does. One snapshot for the lot,
@@ -3838,9 +3905,7 @@ impl Session {
             self.leave_visual_mode();
             return;
         }
-        self.before_last_change = Some((self.input.clone(), self.caret));
-        self.history.leave();
-        self.completion = 0;
+        self.begin_a_change();
 
         let replaced: String = self.input[from..to]
             .chars()
@@ -3857,9 +3922,7 @@ impl Session {
         let Some((from, to)) = self.vi_selection() else {
             return;
         };
-        self.before_last_change = Some((self.input.clone(), self.caret));
-        self.history.leave();
-        self.completion = 0;
+        self.begin_a_change();
 
         self.change_the_case(from, to, case);
         self.caret = from;
@@ -3920,6 +3983,14 @@ impl Session {
         if self.anchor.take().is_some() {
             self.mode = crate::vim::Mode::Normal;
         }
+    }
+
+    /// Keep the line for `u` and forget what `.` repeats, since this edit is now the last change.
+    fn begin_a_change(&mut self) {
+        self.before_last_change = Some((self.input.clone(), self.caret));
+        self.last_change = None;
+        self.history.leave();
+        self.completion = 0;
     }
 
     /// Put the line back as it stood before the last change.
@@ -14951,11 +15022,11 @@ mod tests {
         }
     }
 
-    /// With a selection on the screen, an operator under `g` and `R` take no key of their own, so
-    /// the motion after them moves the end of the selection as it would have without them. `gr` is
-    /// `r` there, as it is in vi.
+    /// With a selection on the screen, an operator under `g` takes no key of its own, so the motion
+    /// after it moves the end of the selection as it would have without it. `gr` is `r` there, as it
+    /// is in vi.
     #[test]
-    fn visual_mode_leaves_the_key_after_an_operator_under_g_or_capital_r_to_act_on_its_own() {
+    fn visual_mode_leaves_the_key_after_an_operator_under_g_to_act_on_its_own() {
         let pressed = |keys: &str| {
             let mut s = normal("one two", 0);
             for c in keys.chars() {
@@ -14964,7 +15035,7 @@ mod tests {
             (s.input.clone(), s.caret, s.vi_selection(), s.vi_mode())
         };
         assert_eq!(pressed("vl").1, 1);
-        for prefix in ["g?", "gq", "gw", "g@", "R"] {
+        for prefix in ["g?", "gq", "gw", "g@"] {
             assert_eq!(pressed(&format!("v{prefix}l")), pressed("vl"), "v{prefix}l");
         }
         assert_eq!(pressed("vlgrx").0, "xxe two");
@@ -15879,6 +15950,124 @@ mod tests {
         assert_eq!(edited("one\ntwo\nthree", 5, "Vd"), "one\nthree");
     }
 
+    /// The capitals take every row the selection crosses, whole, whichever kind of selection it is,
+    /// so `vD` on a character is `dd` and `vYp` puts the row back as a row. A count changes nothing,
+    /// the rows being already named.
+    ///
+    /// Every case here was measured against vim.
+    #[test]
+    fn a_capital_takes_every_row_the_selection_crosses() {
+        for keys in ["vD", "vX", "VD", "v3D"] {
+            assert_eq!(edited("one\ntwo", 1, keys), "two", "{keys}");
+        }
+        assert_eq!(edited("one\ntwo\nthree", 5, "vD"), "one\nthree");
+        assert_eq!(edited("one\ntwo\nthree", 5, "vGD"), "one");
+        assert_eq!(edited("one\ntwo", 1, "vYp"), "one\none\ntwo");
+        for keys in ["vCz", "vSz", "vRz"] {
+            assert_eq!(edited("one\ntwo", 1, keys), "z\ntwo", "{keys}");
+        }
+    }
+
+    /// `.` after a change to the rows a selection crossed makes it again to as many rows from the
+    /// caret, since the selection is gone by the time it is pressed and a stretch it no longer
+    /// marks out would leave the key doing nothing. Measured against vim.
+    #[test]
+    fn a_repeat_takes_as_many_rows_as_the_selection_crossed() {
+        assert_eq!(edited("a\nb\nc\nd\ne", 0, "v1jD."), "e");
+        assert_eq!(edited("a\nb\nc\nd\ne", 0, "V1jd."), "e");
+        assert_eq!(edited("a\nb\nc", 2, "V1k>."), "    a\n    b\nc");
+    }
+
+    /// `.` after a change it cannot yet make again does nothing, rather than make the change before
+    /// it, which here is the `x`, again at a caret that has since moved on.
+    #[test]
+    fn a_repeat_after_a_change_it_cannot_make_again_does_nothing() {
+        for (keys, line) in [
+            ("p", "Noe two\nthree"),
+            ("P", "oNe two\nthree"),
+            ("J", "Ne two three"),
+            ("vJ", "Ne two three"),
+            ("viwp", "o two\nthree"),
+            ("viwP", "o two\nthree"),
+            ("vrz", "ze two\nthree"),
+            ("viwU", "NE two\nthree"),
+            ("viwgu", "ne two\nthree"),
+            ("viw~", "nE two\nthree"),
+        ] {
+            assert_eq!(
+                edited("oNe two\nthree", 0, &format!("x{keys}.")),
+                line,
+                "{keys}"
+            );
+        }
+    }
+
+    /// The register yanked at the start of the line and then put over a selection made at `at`,
+    /// with the line and the caret that leaves.
+    fn put_over(line: &str, yank: &str, at: usize, keys: &str) -> (String, usize) {
+        let mut s = normal(line, 0);
+        for c in yank.chars().chain(keys.chars()) {
+            if c == '|' {
+                s.caret = at;
+                continue;
+            }
+            s.type_char(c);
+        }
+        (s.input, s.caret)
+    }
+
+    /// `p` over a selection puts the register there and leaves what the selection held in the
+    /// register, so two stretches trade places in two presses. `P` keeps the register, so one yank
+    /// can go over several. The caret ends on the last character put, or on the first where they
+    /// run over rows, and a count is how many copies. On the empty last row the selection holds
+    /// nothing, and the register goes there all the same and keeps what it held.
+    ///
+    /// Every case here was measured against vim.
+    #[test]
+    fn putting_over_a_selection_replaces_it() {
+        let put = |yank, keys| put_over("one two three", yank, 4, keys);
+        assert_eq!(put("yiw", "|viwp"), ("one one three".to_string(), 6));
+        assert_eq!(put("yiw", "|viwpp").0, "one onetwo three");
+        assert_eq!(put("yiw", "|viwP"), ("one one three".to_string(), 6));
+        assert_eq!(put("yiw", "|viwPp").0, "one oneone three");
+        assert_eq!(put("yiw", "|v2p"), ("one oneonewo three".to_string(), 9));
+        assert_eq!(put("yiw", "|viw2P").0, "one oneone three");
+
+        let across = |keys| put_over("one\ntwo\nthree", "llvey", 8, keys);
+        assert_eq!(across("|viwp"), ("one\ntwo\ne\ntwo".to_string(), 8));
+        assert_eq!(across("|viw2p"), ("one\ntwo\ne\ntwoe\ntwo".to_string(), 8));
+
+        assert_eq!(
+            put_over("one\n", "yiw", 4, "|vp"),
+            ("one\none".to_string(), 6)
+        );
+        assert_eq!(put_over("one\n", "yiw", 4, "|vpp").0, "one\noneone");
+    }
+
+    /// Rows stay rows. Over rows a stretch or rows replace them, a copy to a row, and over a stretch
+    /// within a row they split it, so neither half of the line runs into them. What rows held goes
+    /// into the register as rows. The caret ends on the first character of the first row put that
+    /// is not a blank.
+    ///
+    /// Every case here was measured against vim.
+    #[test]
+    fn rows_put_over_a_selection_stay_rows() {
+        let put = |line, yank, keys| put_over(line, yank, 4, keys).0;
+        assert_eq!(put("one\ntwo", "yy", "|Vp"), "one\none");
+        assert_eq!(put("one\ntwo\nthree", "yy", "|V2p"), "one\none\none\nthree");
+        assert_eq!(put("one\ntwo\nthree", "yiw", "|VGp"), "one\none");
+        assert_eq!(put("one\ntwo", "yiw", "|V2p"), "one\none\none");
+        assert_eq!(put("one\ntwo", "yiw", "|VpP"), "one\ntwo\none");
+        assert_eq!(put("one\ntwo", "yiw", "|VPp"), "one\noonene");
+        assert_eq!(put("one\ntwo", "yy", "|viwp"), "one\n\none\n");
+        assert_eq!(put("one\ntwo", "yy", "|viw2p"), "one\n\none\none\n");
+        assert_eq!(put("one\n\ntwo", "yy", "|vp"), "one\n\none\ntwo");
+        assert_eq!(put("one\n", "yy", "|vp"), "one\n\none\n");
+        assert_eq!(put("one\n", "yiw", "|Vp"), "one\none");
+        assert_eq!(put_over("  one\ntwo", "yy", 6, "|Vp").1, 8);
+        assert_eq!(put_over("  one\ntwo", "yy", 6, "|viwp").1, 9);
+    }
+
     /// The keys that change case, which mean this only here: `u` in NORMAL mode undoes. The
     /// operators spelled after `g` are the same keys over a selection, which is already the stretch
     /// they would otherwise wait for, so `vgU` is `vU` as it is in vi.
@@ -15911,6 +16100,18 @@ mod tests {
         assert_eq!(edited("one two", 0, "vwd"), "wo");
         assert_eq!(edited("one two", 0, "viwd"), " two");
         assert_eq!(edited("call(a, b) ok", 5, "vi(d"), "call() ok");
+    }
+
+    /// A count moves the end of the selection as far as it moves a bare caret, the motions there
+    /// being the same motions: `v2e` reaches the end of the second word and `v2j` the row two below.
+    ///
+    /// Every case here was measured against vim.
+    #[test]
+    fn a_count_moves_the_end_of_the_selection() {
+        assert_eq!(edited("one two", 0, "v3ld"), "two");
+        assert_eq!(edited("one two", 0, "v2ed"), "");
+        assert_eq!(edited("one\ntwo\nthree", 0, "v2jd"), "hree");
+        assert_eq!(edited("one\ntwo\nthree", 0, "V2jd"), "");
     }
 
     /// One key both ways, read against the mode in force: the press that opens the mode closes it, so
@@ -15999,7 +16200,7 @@ mod tests {
     /// nothing at all to the line it was pressed over.
     #[test]
     fn a_press_that_changes_nothing_leaves_the_selection() {
-        let presses: [(&str, &str, usize, Press); 5] = [
+        let presses: [(&str, &str, usize, Press); 7] = [
             ("Backspace at the start of the line", "hello", 0, |s| {
                 s.backspace()
             }),
@@ -16015,6 +16216,8 @@ mod tests {
             ("stashing an empty line with nothing put away", "", 0, |s| {
                 s.stash();
             }),
+            ("p with nothing yanked", "hello", 0, |s| s.type_char('p')),
+            ("P with nothing yanked", "hello", 0, |s| s.type_char('P')),
         ];
 
         for (press, line, at, press_it) in presses {
@@ -16031,19 +16234,22 @@ mod tests {
 
     /// The keys VISUAL mode maps that are not operators change the line as much as an operator does,
     /// and nothing else ends the selection for them: `J` shortens it by the newline and the blanks the
-    /// line below was indented with, and `p` puts the register back into the middle of it.
+    /// line below was indented with, and `p` and `P` put the register where the selection was.
     #[test]
     fn a_visual_key_that_changes_the_line_abandons_the_selection() {
-        for key in ['J', 'p'] {
+        for key in ['J', 'p', 'P'] {
             let mut s = normal("one\n  two", 0);
-            // Yanked before the selection is opened, so `p` has something to put back. Yanking the
-            // selection would end it, that being what an operator does and these two keys not being
+            // Yanked before the selection is opened, so `p` has something to put back, and a
+            // character other than the one selected, so the put changes the line. Yanking the
+            // selection would end it, that being what an operator does and these keys not being
             // operators.
             s.type_char('y');
             s.type_char('l');
+            s.caret = 1;
             s.type_char('v');
             s.type_char(key);
 
+            assert_ne!(s.input, "one\n  two", "{key} changed nothing");
             assert_eq!(s.vi_selection(), None, "{key} left the selection standing");
             assert_eq!(
                 s.vi_mode(),
@@ -16108,7 +16314,7 @@ mod tests {
     /// acted on again by the next press for reasons nothing on the screen explains.
     #[test]
     fn an_operator_ends_the_selection() {
-        for keys in ["d", "y", "x", ">", "~", "rz"] {
+        for keys in ["d", "y", "x", ">", "~", "rz", "D", "Y"] {
             let mut s = normal("one two", 0);
             s.type_char('v');
             s.type_char('l');
