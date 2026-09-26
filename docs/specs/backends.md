@@ -1365,8 +1365,15 @@ above the process environment and therefore above every other source. It is
 These names may be pinned, being the ones that decide where a request goes:
 `BRAVE_AI_CHAT_ENDPOINT`, `BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, `BRAVEBOT_USE_BEDROCK`, `AWS_REGION`,
 `AWS_PROFILE`, the three tier models of BACKEND-33's table, and the `provider` block. Every other
-name in the file decides nothing, the signing key and the key id included. A pinned name is resolved
-from this file alone, and a name it does not pin resolves exactly as it would with no such file.
+name in the file decides nothing, the signing key and the key id included, save the server lists
+below. A pinned name is resolved from this file alone, and a name it does not pin resolves exactly
+as it would with no such file.
+
+The file may also keep an MCP server from starting, and that is the one thing it decides that is
+not a destination: `"mcp": { "allow": [...], "deny": [...] }` names servers by the host a url
+reaches or the command a program runs, and a session starts none the lists refuse.
+[SERVERS-12](mcp-servers.md#SERVERS-12) is those keys, and says why the layer may keep a server
+from starting and never add one.
 
 No credential is read from this file. A gateway entry's `apiKey` is dropped, and the entry's host,
 models and variable names are honoured without it.

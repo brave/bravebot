@@ -1,9 +1,11 @@
-//! The MCP servers a session starts with (SERVERS-2, SERVERS-4, SERVERS-6, SERVERS-10).
+//! The MCP servers a session starts with (SERVERS-2, SERVERS-4, SERVERS-6, SERVERS-10, SERVERS-12).
 //!
 //! A checkout names the aliases it wants, and naming one grants nothing. Each resolves against the
-//! person's own declarations, is put to them where no answer of theirs covers the declaration it
-//! resolves to, and is started confined (MCP-3) holding the variables it names and no others
-//! (MCP-9). A declared alias nothing requested is not started.
+//! person's own declarations; one the machine's managed layer keeps from starting, by the host it
+//! reaches or the command it runs, goes no further in any mode, and the rest are put to the person
+//! where no answer of theirs covers the declaration they resolve to, and started confined (MCP-3)
+//! holding the variables they name and no others (MCP-9). A declared alias nothing requested is not
+//! started.
 //!
 //! A server's handshake is its `initialize` and then its `tools/list`, and the list is held as the
 //! one labelled text it arrived as: nothing of it reaches the planner until a person has read it at
@@ -13,6 +15,7 @@
 use crate::mcp::{self as command, Home, Person, say, shown};
 use bravebot_agent::mcp::{Connection, Session};
 use bravebot_config::mcp::{self, Approvals, Declaration, Declarations, Digest, Projects};
+use bravebot_config::{Managed, Refusal, Rule, Server};
 use bravebot_core::capability::{Capability, CapabilitySet, ServerAlias};
 use bravebot_core::event::RecordingSink;
 use bravebot_core::policy::{Policy, ReleasePlan, Routing};
@@ -93,7 +96,15 @@ pub(crate) fn for_this_session<R: BufRead, W: Write>(
         directory: bravebot_agent::home::directory(),
         writable: bravebot_agent::home::writable().is_some(),
     };
-    reach(&requested, &project, &home, asking, person, diagnostics)
+    reach(
+        &requested,
+        &project,
+        &home,
+        &Managed::load(),
+        asking,
+        person,
+        diagnostics,
+    )
 }
 
 /// Whoever is at this process's terminal: both ends, for the reason `bravebot mcp` asks for both. A
@@ -119,11 +130,13 @@ pub(crate) fn nobody() -> Person<std::io::Empty, std::io::Sink> {
 /// Reach every server `requested` names, asking whoever `asking` says where an answer is needed.
 ///
 /// `requested` is each alias with the settings file that asked for it. `project` is the workspace
-/// root, which is what answer 2 records. `diagnostics` is where a local server's stderr goes.
+/// root, which is what answer 2 records. `managed` is the machine's layer, whose refusals no answer
+/// reaches. `diagnostics` is where a local server's stderr goes.
 pub(crate) fn reach<R: BufRead, W: Write>(
     requested: &[(PathBuf, String)],
     project: &Path,
     home: &Home,
+    managed: &Managed,
     asking: Asking,
     person: &mut Person<R, W>,
     diagnostics: Stream,
@@ -133,6 +146,7 @@ pub(crate) fn reach<R: BufRead, W: Write>(
         requested,
         project,
         home,
+        managed,
         asking,
         person,
         &|name| std::env::var_os(name),
@@ -180,6 +194,7 @@ fn settle<R: BufRead, W: Write>(
     requested: &[(PathBuf, String)],
     project: &Path,
     home: &Home,
+    managed: &Managed,
     asking: Asking,
     person: &mut Person<R, W>,
     environment: &dyn Fn(&str) -> Option<OsString>,
@@ -256,6 +271,20 @@ fn settle<R: BufRead, W: Write>(
                 continue;
             }
         };
+        // Once the program is the path it resolved to, and before anything is asked or recorded,
+        // so bypassing reaches a refused server no more than an answer would (SERVERS-12,
+        // SERVERS-13).
+        if let Some(reason) = refused(managed, &plan) {
+            notes.push(
+                t!(
+                    servers_refused_by_managed,
+                    alias = shown(alias),
+                    reason = reason
+                )
+                .to_string(),
+            );
+            continue;
+        }
         if matches!(plan, Plan::Stdio { .. }) && prelude.is_none() {
             notes.push(t!(servers_no_confinement_here, alias = alias).to_string());
             continue;
@@ -385,6 +414,59 @@ fn planned(
         directory: directory.as_ref().map(PathBuf::from),
         declared: declaration.digest(),
     })
+}
+
+/// Why the machine's managed layer keeps `plan` from starting, where it does (SERVERS-12).
+fn refused(managed: &Managed, plan: &Plan) -> Option<String> {
+    match plan {
+        Plan::Stdio {
+            program, arguments, ..
+        } => {
+            let argv: Vec<String> = std::iter::once(program.to_string_lossy().into_owned())
+                .chain(arguments.iter().cloned())
+                .collect();
+            refusal(managed, Server::Local(&argv))
+        }
+        Plan::Http { url, .. } => refusal(managed, Server::Remote(url)),
+    }
+}
+
+/// Why the managed layer keeps `declaration` from starting, for `list` and `get` to say beside it.
+///
+/// A local server is compared by the path its program resolves to here, and one that does not
+/// resolve by its argv as it was written.
+pub(crate) fn refused_declaration(
+    managed: &Managed,
+    declaration: &Declaration,
+    environment: &dyn Fn(&str) -> Option<OsString>,
+) -> Option<String> {
+    match (planned(declaration, environment), declaration) {
+        (Ok(plan), _) => refused(managed, &plan),
+        (Err(_), Declaration::Stdio { argv, .. }) => refusal(managed, Server::Local(argv)),
+        (Err(_), Declaration::Http { url }) => refusal(managed, Server::Remote(url)),
+    }
+}
+
+/// The reason the managed layer gives for `server`, naming its file, where it gives one.
+fn refusal(managed: &Managed, server: Server<'_>) -> Option<String> {
+    let (path, refusal) = managed.refuses(server)?;
+    let path = path.display().to_string();
+    Some(match refusal {
+        Refusal::NotAllowed => t!(managed_not_allowed, path = path).to_string(),
+        Refusal::Denied(rule) => t!(managed_denied, path = path, entry = entry(rule)).to_string(),
+        Refusal::HostUnread => t!(managed_host_unread, path = path).to_string(),
+    })
+}
+
+/// A managed entry as its file's author would find it again.
+fn entry(rule: &Rule) -> String {
+    match rule {
+        Rule::Host(host) => format!("host {}", shown(host)),
+        Rule::Command(argv) => {
+            let words: Vec<String> = argv.iter().map(|word| shown(word)).collect();
+            format!("command {}", words.join(" "))
+        }
+    }
 }
 
 /// The path a declaration's program starts from.
@@ -1032,7 +1114,7 @@ mod tests {
     }
 
     /// Settle `weather`'s request with `typed` at the terminal, a `PATH` naming `bin`, and nothing
-    /// started.
+    /// started. The machine's layer is `managed.json` beside `home`, absent unless a test writes it.
     fn settled(
         home: &Path,
         project: &Path,
@@ -1046,6 +1128,7 @@ mod tests {
             project.join(".bravebot/settings.json"),
             "weather".to_string(),
         )];
+        let managed = Managed::at(&managed_beside(home));
         let home = Home {
             directory: Some(home.to_path_buf()),
             writable,
@@ -1062,6 +1145,7 @@ mod tests {
             &requested,
             project,
             &home,
+            &managed,
             asking,
             &mut person,
             &environment,
@@ -1073,6 +1157,11 @@ mod tests {
             notes,
             screen: String::from_utf8(person.screen).expect("screen"),
         }
+    }
+
+    /// Where [`settled`] reads the machine's layer from, for a state directory at `home`.
+    fn managed_beside(home: &Path) -> PathBuf {
+        home.parent().expect("a scratch root").join("managed.json")
     }
 
     fn started(settled: &Settled) -> Vec<&str> {
@@ -1198,6 +1287,7 @@ mod tests {
                 directory: Some(home),
                 writable: true,
             },
+            &Managed::default(),
             Asking::Person,
             &mut person,
             &|_| None,
@@ -1274,6 +1364,190 @@ mod tests {
         assert!(settled.screen.is_empty(), "{}", settled.screen);
         assert!(!mcp::approvals_file(&home).exists());
         assert_eq!(recorded_projects(&home), "");
+    }
+
+    /// An administrator's refusal is not a question put to the person running the program, so no
+    /// answer reaches past it: not a yes at the prompt, not an approval already recorded, and not
+    /// bypassing every prompt. The program is compared as the path it resolved to, so a bare name
+    /// the declaration's `PATH` finds is refused by an entry naming that path, and the line names
+    /// the file and why, since nothing else tells a person why a server they approved is gone.
+    #[test]
+    fn a_server_the_managed_layer_refuses_is_started_in_no_mode_and_nothing_is_asked_or_recorded() {
+        for (lists, asking, present, approved) in [
+            (
+                r#""deny": [{"command": [PROGRAM]}]"#,
+                Asking::Person,
+                true,
+                false,
+            ),
+            (
+                r#""deny": [{"command": [PROGRAM]}]"#,
+                Asking::OneShot,
+                false,
+                true,
+            ),
+            (
+                r#""deny": [{"command": [PROGRAM]}]"#,
+                Asking::Bypass,
+                true,
+                false,
+            ),
+            (r#""allow": []"#, Asking::Bypass, true, true),
+            (
+                r#""allow": [{"host": "*.corp.example"}]"#,
+                Asking::Bypass,
+                true,
+                false,
+            ),
+            (
+                r#""allow": [{"command": [PROGRAM]}], "deny": [{"command": [PROGRAM]}]"#,
+                Asking::Bypass,
+                true,
+                false,
+            ),
+        ] {
+            let case = format!("{lists} {asking:?}");
+            let (home, project, declaration) = declared("cli-servers-refused", &["weather-mcp"]);
+            let bin = home.parent().unwrap().join("bin");
+            let program = installed(&bin, "weather-mcp");
+            let managed = managed_beside(&home);
+            let spelled = format!("\"{}\"", program.display());
+            let lists = lists.replace("PROGRAM", &spelled);
+            std::fs::write(&managed, format!(r#"{{"mcp": {{{lists}}}}}"#)).expect("managed.json");
+            if approved {
+                let mut approvals = Approvals::default();
+                approvals.approve("weather", declaration.digest());
+                std::fs::write(mcp::approvals_file(&home), approvals.to_text()).expect("approve");
+            }
+            let recorded = std::fs::read_to_string(mcp::approvals_file(&home)).ok();
+
+            let settled = settled(&home, &project, asking, present, true, "2\n", &bin);
+
+            assert!(settled.plans.is_empty(), "{case}");
+            let path = managed.display().to_string();
+            let reason = match lists.contains("deny") {
+                true => t!(
+                    managed_denied,
+                    path = path,
+                    entry = entry(&Rule::Command(vec![program.display().to_string()]))
+                ),
+                false => t!(managed_not_allowed, path = path),
+            };
+            assert_eq!(
+                settled.notes,
+                vec![
+                    t!(
+                        servers_refused_by_managed,
+                        alias = "weather",
+                        reason = reason
+                    )
+                    .to_string()
+                ],
+                "{case}"
+            );
+            assert!(settled.screen.is_empty(), "{case}: {}", settled.screen);
+            assert_eq!(
+                std::fs::read_to_string(mcp::approvals_file(&home)).ok(),
+                recorded,
+                "{case}"
+            );
+            assert_eq!(recorded_projects(&home), "", "{case}");
+        }
+    }
+
+    /// What the managed layer does not refuse is the person's to decide about as before: an entry
+    /// naming the resolved program lets it through an allow list, and an alias, a host or another
+    /// argv names nothing a local server is compared by.
+    #[test]
+    fn a_server_the_managed_layer_does_not_refuse_is_settled_as_before() {
+        for lists in [
+            r#""allow": [{"command": [PROGRAM]}]"#,
+            r#""allow": [{"host": "*.corp.example"}, {"command": [PROGRAM]}]"#,
+            r#""deny": ["weather", {"host": "weather.example"}, {"command": ["weather-mcp"]}]"#,
+            r#""deny": [{"command": [PROGRAM, "--verbose"]}]"#,
+        ] {
+            let (home, project, _) = declared("cli-servers-not-refused", &["weather-mcp"]);
+            let bin = home.parent().unwrap().join("bin");
+            let program = installed(&bin, "weather-mcp");
+            let spelled = format!("\"{}\"", program.display());
+            let lists = lists.replace("PROGRAM", &spelled);
+            std::fs::write(managed_beside(&home), format!(r#"{{"mcp": {{{lists}}}}}"#))
+                .expect("managed.json");
+
+            let settled = settled(&home, &project, Asking::Bypass, true, true, "", &bin);
+
+            assert_eq!(started(&settled), vec!["weather"], "{lists}");
+            assert!(settled.notes.is_empty(), "{lists}: {:?}", settled.notes);
+        }
+    }
+
+    /// A remote server is compared by the host its url names, and bypassing reaches a refused one
+    /// no more than it reaches a local one.
+    #[test]
+    fn a_remote_server_is_refused_by_its_host() {
+        for (url, lists, reason) in [
+            (
+                "https://mcp.corp.example/mcp",
+                r#""allow": [{"host": "*.corp.example"}]"#,
+                None,
+            ),
+            (
+                "https://mcp.elsewhere.example/mcp",
+                r#""allow": [{"host": "*.corp.example"}]"#,
+                Some("allow"),
+            ),
+            (
+                "https://staging.corp.example/mcp",
+                r#""allow": [{"host": "*.corp.example"}], "deny": [{"host": "staging.corp.example"}]"#,
+                Some("deny"),
+            ),
+            (
+                r"https://evil.test\.staging.corp.example/",
+                r#""deny": [{"host": "*.corp.example"}]"#,
+                Some("unread"),
+            ),
+        ] {
+            let root = scratch("cli-servers-remote-refused");
+            let home = root.join("home");
+            let project = root.join("project");
+            std::fs::create_dir_all(&home).expect("home");
+            std::fs::create_dir_all(project.join(".bravebot")).expect("project");
+            let declaration = Declaration::http(url.to_string()).expect("declaration");
+            let mut declarations = Declarations::default();
+            declarations.insert("weather", &declaration);
+            std::fs::write(mcp::declarations_file(&home), declarations.to_text())
+                .expect("mcp.json");
+            let managed = managed_beside(&home);
+            std::fs::write(&managed, format!(r#"{{"mcp": {{{lists}}}}}"#)).expect("managed.json");
+
+            let settled = settled(&home, &project, Asking::Bypass, true, true, "", &root);
+
+            let path = managed.display().to_string();
+            let expected: Vec<String> = match reason {
+                None => Vec::new(),
+                Some(reason) => {
+                    let reason = match reason {
+                        "allow" => t!(managed_not_allowed, path = path),
+                        "deny" => t!(
+                            managed_denied,
+                            path = path,
+                            entry = entry(&Rule::Host("staging.corp.example".into()))
+                        ),
+                        _ => t!(managed_host_unread, path = path),
+                    };
+                    vec![
+                        t!(
+                            servers_refused_by_managed,
+                            alias = "weather",
+                            reason = reason
+                        )
+                        .to_string(),
+                    ]
+                }
+            };
+            assert_eq!(settled.notes, expected, "{url}");
+            assert_eq!(settled.plans.is_empty(), reason.is_some(), "{url}");
+        }
     }
 
     #[test]
@@ -1518,6 +1792,7 @@ mod tests {
             requested,
             project,
             &home,
+            &Managed::default(),
             Asking::Person,
             &mut person,
             &environment,

@@ -497,6 +497,7 @@ mcp-list-declared-in = déclarations dans { $path }
 mcp-approved = approuvé
 mcp-unapproved = non approuvé
 mcp-unapproved-run-approve = non approuvé : lancez bravebot mcp approve { $alias }
+mcp-refused-by-managed = non démarré : { $reason }
 mcp-cannot-be-used = inutilisable : { $problem }
 mcp-unusable = { $alias } est inutilisable : { $problem }
 mcp-list-unusable =
@@ -513,6 +514,17 @@ servers-not-declared =
     { $file } demande le serveur MCP { $alias }, qui n'est pas déclaré : rien n'a été installé ni
     exécuté pour lui, et bravebot mcp add en déclare un
 servers-not-reached = { $alias } n'a pas été démarré : { $reason }
+servers-refused-by-managed =
+    { $alias } n'a pas été démarré, quoi qu'on ait déclaré ou approuvé : { $reason }
+managed-not-allowed =
+    { $path }, que gère l'administrateur de cette machine, n'autorise que les serveurs que nomme
+    son mcp.allow, et pas celui-ci
+managed-denied =
+    { $path }, que gère l'administrateur de cette machine, le refuse par l'entrée { $entry } de
+    son mcp.deny
+managed-host-unread =
+    { $path }, que gère l'administrateur de cette machine, refuse des serveurs par hôte, et cette
+    url écrit son hôte d'une façon qu'aucune entrée ne peut comparer
 servers-nobody-in-a-one-shot =
     { $alias } n'a pas été démarré : une exécution unique n'interroge personne, lancez donc
     bravebot mcp approve { $alias } dans un terminal

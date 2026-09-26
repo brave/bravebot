@@ -11,6 +11,7 @@
 //! an effect nobody could be asked about is refused rather than applied unseen.
 
 use crate::exit::{Ending, fail};
+use bravebot_config::Managed;
 use bravebot_config::mcp::{
     self, Approvals, Declaration, Declarations, Entry, Field, Problem, Projects, Standing,
     Unreadable,
@@ -53,15 +54,18 @@ pub fn command(args: &[String]) -> ExitCode {
         screen: std::io::stdout().lock(),
         present,
     };
-    match run(args, &home, &mut person) {
+    match run(args, &home, &Managed::load(), &mut person) {
         Ok(()) => ExitCode::SUCCESS,
         Err((ending, message)) => fail(ending, message),
     }
 }
 
+/// `managed` is the machine's layer, read only to say which servers it keeps from starting
+/// (SERVERS-12).
 fn run<R: BufRead, W: Write>(
     args: &[String],
     home: &Home,
+    managed: &Managed,
     person: &mut Person<R, W>,
 ) -> Result<(), Stopped> {
     let Some((command, rest)) = args.split_first() else {
@@ -69,9 +73,9 @@ fn run<R: BufRead, W: Write>(
     };
     match command.as_str() {
         "add" => add(rest, home, person),
-        "get" => get(one_alias(command, rest)?, home, person),
+        "get" => get(one_alias(command, rest)?, home, managed, person),
         "list" => match rest.first() {
-            None => list(home, person),
+            None => list(home, managed, person),
             Some(extra) => Err(unexpected(command, extra)),
         },
         "approve" => approve(one_alias(command, rest)?, home, person),
@@ -315,6 +319,7 @@ fn place(typed: &str) -> Result<String, Stopped> {
 fn get<R: BufRead, W: Write>(
     alias: &str,
     home: &Home,
+    managed: &Managed,
     person: &mut Person<R, W>,
 ) -> Result<(), Stopped> {
     let (directory, declarations) = readable(home)?;
@@ -349,14 +354,29 @@ fn get<R: BufRead, W: Write>(
             format!("{indent}{}", t!(mcp_unapproved_run_approve, alias = alias)),
         ),
     }
+    if let Some(refused) = refused(managed, &declaration) {
+        say(person, format!("{indent}{refused}"));
+    }
     Ok(())
+}
+
+/// What `get` and `list` add for a server the managed layer keeps from starting, which is the line
+/// that stops an approved server looking reachable when no session will start it (SERVERS-12,
+/// SERVERS-14).
+fn refused(managed: &Managed, declaration: &Declaration) -> Option<String> {
+    crate::servers::refused_declaration(managed, declaration, &|name| std::env::var_os(name))
+        .map(|reason| t!(mcp_refused_by_managed, reason = reason).to_string())
 }
 
 /// SERVERS-14's list half: every declared alias, its transport, and whether it is approved.
 ///
 /// An entry that cannot be used is listed with what is wrong with it rather than left out, since a
 /// list that dropped it would make a declaration somebody wrote look like one nobody read.
-fn list<R: BufRead, W: Write>(home: &Home, person: &mut Person<R, W>) -> Result<(), Stopped> {
+fn list<R: BufRead, W: Write>(
+    home: &Home,
+    managed: &Managed,
+    person: &mut Person<R, W>,
+) -> Result<(), Stopped> {
     let (directory, declarations) = readable(home)?;
     let Some(directory) = directory else {
         say(person, no_state_directory());
@@ -380,6 +400,10 @@ fn list<R: BufRead, W: Write>(home: &Home, person: &mut Person<R, W>) -> Result<
         .unwrap_or_default();
     let mut unusable = 0usize;
     for Entry { alias, declaration } in &entries {
+        let refusal = declaration
+            .as_ref()
+            .ok()
+            .and_then(|declaration| refused(managed, declaration));
         let alias = pad(&shown(alias), width);
         match declaration {
             Ok(declaration) => {
@@ -388,14 +412,18 @@ fn list<R: BufRead, W: Write>(home: &Home, person: &mut Person<R, W>) -> Result<
                     true => &approved,
                     false => &unapproved,
                 };
+                let line = format!(
+                    "  {alias}  {}  {}  {}",
+                    pad(declaration.transport(), 5),
+                    pad(word, state),
+                    digest.short()
+                );
                 say(
                     person,
-                    format!(
-                        "  {alias}  {}  {}  {}",
-                        pad(declaration.transport(), 5),
-                        pad(word, state),
-                        digest.short()
-                    ),
+                    match refusal {
+                        Some(refusal) => format!("{line}  {refusal}"),
+                        None => line,
+                    },
                 );
             }
             Err(found) => {
@@ -853,7 +881,8 @@ mod tests {
         "weather-mcp",
     ];
 
-    /// Run a command as a person at a terminal who types `typed`.
+    /// Run a command as a person at a terminal who types `typed`. The machine's layer is
+    /// `managed.json` in `directory`, absent unless a test writes it.
     fn typing(directory: &Path, args: &[&str], typed: &str) -> (Result<(), Stopped>, String) {
         let home = Home {
             directory: Some(directory.to_path_buf()),
@@ -864,8 +893,88 @@ mod tests {
             screen: Vec::new(),
             present: true,
         };
-        let outcome = run(&words(args), &home, &mut person);
+        let managed = Managed::at(&directory.join("managed.json"));
+        let outcome = run(&words(args), &home, &managed, &mut person);
         (outcome, String::from_utf8(person.screen).unwrap())
+    }
+
+    /// No session starts a server the machine's administrator refused, whatever its approval says,
+    /// so `list` and `get` say so beside the approval, and why. Without it an approved server reads
+    /// as one the next session starts, which is the report SERVERS-14 exists to keep true.
+    #[test]
+    fn list_and_get_say_why_the_managed_layer_refuses_a_server_and_no_other() {
+        let directory = scratch("cli-mcp-refused");
+        for add in [
+            &[
+                "add",
+                "weather",
+                "--stdio",
+                "--",
+                "/opt/weather-mcp",
+                "--stdio",
+            ][..],
+            &["add", "docs", "--stdio", "--", "/opt/docs-mcp"],
+            &["add", "maps", "--http", "https://maps.example/mcp"],
+        ] {
+            let (outcome, _) = typing(&directory, add, "y\n");
+            assert!(outcome.is_ok(), "{add:?}: {outcome:?}");
+        }
+        let managed = directory.join("managed.json");
+        std::fs::write(
+            &managed,
+            r#"{"mcp": {
+                "allow": [
+                    {"command": ["/opt/weather-mcp", "--stdio"]},
+                    {"command": ["/opt/docs-mcp"]}
+                ],
+                "deny": [{"command": ["/opt/weather-mcp", "--stdio"]}]
+            }}"#,
+        )
+        .expect("managed.json");
+        let path = managed.display().to_string();
+        let denied = t!(
+            mcp_refused_by_managed,
+            reason = t!(
+                managed_denied,
+                path = path.clone(),
+                entry = "command /opt/weather-mcp --stdio"
+            )
+        )
+        .to_string();
+        let not_allowed = t!(
+            mcp_refused_by_managed,
+            reason = t!(managed_not_allowed, path = path.clone())
+        )
+        .to_string();
+
+        let (outcome, listed) = typing(&directory, &["list"], "");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let row = |alias: &str| {
+            listed
+                .lines()
+                .find(|line| line.split_whitespace().next() == Some(alias))
+                .unwrap_or_else(|| panic!("{alias} is not listed: {listed}"))
+        };
+        assert!(row("weather").ends_with(&denied), "{listed}");
+        assert!(row("maps").ends_with(&not_allowed), "{listed}");
+        let approved = t!(mcp_approved).to_string();
+        assert_eq!(
+            row("weather").split_whitespace().nth(2),
+            Some(approved.as_str()),
+            "the approval is kept beside the refusal: {listed}"
+        );
+        assert_eq!(row("docs").split_whitespace().count(), 4, "{listed}");
+
+        let (outcome, got) = typing(&directory, &["get", "weather"], "");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(got.lines().any(|line| line.trim() == denied), "{got}");
+        let (_, maps) = typing(&directory, &["get", "maps"], "");
+        assert!(
+            maps.lines().any(|line| line.trim() == not_allowed),
+            "{maps}"
+        );
+        let (_, docs) = typing(&directory, &["get", "docs"], "");
+        assert!(!docs.contains(&path), "{docs}");
     }
 
     #[test]
@@ -1096,7 +1205,7 @@ mod tests {
             screen: Vec::new(),
             present: true,
         };
-        let outcome = run(&words(&["forget"]), &home, &mut person);
+        let outcome = run(&words(&["forget"]), &home, &Managed::default(), &mut person);
         assert_eq!(outcome.map_err(|(ending, _)| ending), Err(Ending::Failed));
     }
 }

@@ -575,6 +575,7 @@ mcp-list-declared-in = declared in { $path }
 mcp-approved = approved
 mcp-unapproved = unapproved
 mcp-unapproved-run-approve = unapproved: run bravebot mcp approve { $alias }
+mcp-refused-by-managed = not started: { $reason }
 mcp-cannot-be-used = cannot be used: { $problem }
 mcp-unusable = { $alias } cannot be used: { $problem }
 mcp-list-unusable =
@@ -591,6 +592,17 @@ servers-not-declared =
     { $file } requests the MCP server { $alias }, which is not declared, so nothing was installed
     or run for it: bravebot mcp add declares one
 servers-not-reached = { $alias } was not started: { $reason }
+servers-refused-by-managed =
+    { $alias } was not started, whatever was declared or approved: { $reason }
+managed-not-allowed =
+    { $path }, which this machine's administrator manages, allows only the servers its mcp.allow
+    names, and not this one
+managed-denied =
+    { $path }, which this machine's administrator manages, denies it with the mcp.deny entry
+    { $entry }
+managed-host-unread =
+    { $path }, which this machine's administrator manages, denies servers by host, and this url
+    spells its host in a way no entry can be compared with
 servers-nobody-in-a-one-shot =
     { $alias } was not started: a one-shot run asks nobody, so run bravebot mcp approve { $alias }
     at a terminal

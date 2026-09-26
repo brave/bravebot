@@ -845,8 +845,11 @@ to say so.
 **Only these names may be pinned**, being the ones that decide where a request goes:
 `BRAVE_AI_CHAT_ENDPOINT`, `BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, `BRAVEBOT_USE_BEDROCK`, `AWS_REGION`,
 `AWS_PROFILE`, the three `ANTHROPIC_DEFAULT_*_MODEL` tiers, and the `provider` block. Every other name
-in the file decides nothing, the signing key and key id included. A name it does not pin resolves
-exactly as it would with no such file.
+in the file decides nothing, the signing key and key id included, save the server lists: `"mcp": {
+"allow": [...], "deny": [...] }` name the [MCP servers](mcp-servers.md#refused-by-an-administrator)
+a session on the machine may start and may not, by host or by command. The file can keep a server
+from starting and never add one. A name it does not pin resolves exactly as it would with no such
+file.
 
 A layer that can pin a preference is a layer somebody uses to pin one. What two parties have a
 legitimate say in is where a request goes and whose account pays for it; which theme is on and which
