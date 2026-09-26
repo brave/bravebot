@@ -1291,7 +1291,9 @@ space after it, and on a blank takes it.
 
 After an operator `j` and `k` are the row below and the row above, and where there is no such row they
 take nothing. The rows those four keys name are whole lines to every operator, as the doubled letter's
-are: `dj` closes the gap and `cj` leaves one empty row to type on.
+are: `dj` closes the gap and `cj` leaves one empty row to type on. An empty row is a row to every
+operator that takes whole ones: `dd` and `dG` take it, `cc` opens INSERT on it, and `yy` puts it back
+as an empty row. `>` leaves an empty row empty, as vi does.
 
 `p` and `P` put the register back after and before the caret. A stretch that was whole lines comes
 back as a line of its own. `J` makes this line and the one below into one with a single space where
@@ -1339,6 +1341,8 @@ at, and no such position is inside a marker.
 `verified-by: bravebot_tui::state::the_delete_operator_takes_the_stretch_a_motion_names`
 `verified-by: bravebot_tui::state::a_row_key_under_an_operator_takes_the_rows_there_are`
 `verified-by: bravebot_tui::state::every_operator_over_a_row_key_takes_the_rows`
+`verified-by: bravebot_tui::state::an_empty_row_is_a_row_to_every_line_wise_operator`
+`verified-by: bravebot_tui::state::indenting_leaves_an_empty_row_empty`
 `verified-by: bravebot_tui::state::the_character_and_the_line_are_extents_of_their_own`
 `verified-by: bravebot_tui::state::the_change_operator_takes_the_stretch_and_starts_typing`
 `verified-by: bravebot_tui::state::changing_a_word_leaves_the_space_after_it`
