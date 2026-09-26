@@ -982,10 +982,11 @@ fn inside(cwd: Option<&Path>, path: &Path) -> bool {
 /// The keys one layer names a server under, as `doctor` should spell them back.
 ///
 /// `mcpServers` is Claude Code's key, and a block copied from `.mcp.json` arrives under it. The `mcp`
-/// block is where a checkout will request an alias (SERVERS-2), so `request` there names nothing to
-/// run, and neither does `deny`, which only ever removes one (SERVERS-12). Every other key in the
-/// block is a server, which is opencode's shape for the same declaration. A block that is not an
-/// object at all is itself the key, since whatever it holds is not a request.
+/// block is where a checkout requests an alias (SERVERS-2), so `request` there names nothing to
+/// run, and neither do `allow` and `deny`, which only keep a server from starting and are read from
+/// the managed layer alone (SERVERS-12). Every other key in the block is a server, which is
+/// opencode's shape for the same declaration. A block that is not an object at all is itself the
+/// key, since whatever it holds is not a request.
 fn server_keys(root: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
     let mut keys = Vec::new();
     if root.contains_key("mcpServers") {
@@ -995,7 +996,7 @@ fn server_keys(root: &serde_json::Map<String, serde_json::Value>) -> Vec<String>
         Some(serde_json::Value::Object(block)) => keys.extend(
             block
                 .keys()
-                .filter(|key| !matches!(key.as_str(), "request" | "deny"))
+                .filter(|key| !matches!(key.as_str(), "request" | "allow" | "deny"))
                 .map(|key| format!("mcp.{key}")),
         ),
         Some(_) => keys.push("mcp".to_string()),
@@ -2671,12 +2672,18 @@ mod tests {
         assert!(!settings.is_empty());
     }
 
-    /// A request names an alias and grants nothing (SERVERS-2), and a denial only removes one, so
-    /// neither is reported as a server somebody tried to declare.
+    /// A request names an alias and grants nothing (SERVERS-2), and an allow or a deny list only
+    /// keeps a server from starting, so none is reported as a server somebody tried to declare.
     #[test]
-    fn a_request_or_a_denial_in_the_mcp_block_is_not_a_declaration() {
+    fn a_request_or_a_server_list_in_the_mcp_block_is_not_a_declaration() {
         let settings = Layers::new("mcp-requested")
-            .project(r#"{"mcp": {"request": ["weather"], "deny": ["docs"]}}"#)
+            .project(
+                r#"{"mcp": {
+                    "request": ["weather"],
+                    "allow": [{"command": ["/usr/local/bin/weather-mcp"]}],
+                    "deny": [{"host": "docs.example"}]
+                }}"#,
+            )
             .read();
         assert_eq!(settings.mcp_declared().count(), 0);
     }

@@ -405,6 +405,63 @@ bravebot mcp remove docs
 Removes the declaration and its approval together. An approval another declaration still resolves
 to is kept.
 
+## Refused by an administrator
+
+The machine's [administrator file](configuration.md#pinned-by-an-administrator) can keep a server
+from starting in every session on the machine, and cannot give one. It names servers by the host a
+url reaches or the command a program runs, never by the name you gave it:
+
+```json
+{
+  "mcp": {
+    "allow": [
+      { "host": "*.example.com" },
+      { "command": ["/opt/homebrew/bin/npx", "-y", "@dangahagan/weather-mcp@1.4.0"] }
+    ],
+    "deny": [{ "host": "staging.example.com" }]
+  }
+}
+```
+
+- A `host` entry matches a url naming that host, on any port and path. `*.example.com` matches
+  `mcp.example.com` and `a.b.example.com`, and neither `example.com` nor `badexample.com`.
+- A `command` entry matches a command line word for word, with the program as the absolute path it
+  was found at, the path `mcp get` shows as `runs`. `npx -y @dangahagan/weather-mcp@latest` is not
+  the command above, so it is not allowed.
+- With no `allow` list, every server not denied starts. With one, only what it names starts, and
+  `"allow": []` starts nothing.
+- A `deny` entry wins over an `allow` entry.
+
+A refused server is not started in any mode, including `--dangerously-skip-permissions`, nothing
+is asked about it and nothing is recorded, and the session says why as it opens:
+
+```
+weather was not started, whatever was declared or approved: /Library/Application Support/bravebot/managed.json, which this machine's administrator manages, allows only the servers its mcp.allow names, and not this one
+```
+
+`list` and `get` keep showing your declaration and your approval, and add the same reason:
+
+```
+$ bravebot mcp list
+declared in /Users/you/.bravebot/mcp.json
+  docs     http   unapproved  256e540f
+  weather  stdio  approved    25edc5e8  not started: /Library/Application Support/bravebot/managed.json, which this machine's administrator manages, allows only the servers its mcp.allow names, and not this one
+```
+
+Your approval is left where it is, so a server comes back as you answered for it once the file stops
+refusing it. Only a list counts, and an entry in neither form is skipped: a deny list of nothing
+else denies nothing, and an allow list of nothing else starts nothing. A url whose host is spelled
+in a way bravebot and the connection could read apart, with a backslash or a percent escape for
+one, matches no `allow` entry, and is refused wherever `deny` names a host. The file cannot declare
+a server, approve one or answer any of the three questions for you, so a declaration or an
+`mcp.request` written there is read as nothing, and `bravebot doctor` names `mcp.allow` and
+`mcp.deny` among what the file pins.
+
+A `deny` entry names one spelling. A link or a copy of a denied program, or another name for a
+denied host, is not denied, and the variables a server starts with are not part of a match. An
+`allow` list holds against all of those. The same keys in your own `settings.json` refuse nothing;
+to be rid of a server yourself, [remove it](#removing-one).
+
 ## Where nothing is written
 
 An [incognito session](../using/sessions.md#a-session-that-leaves-nothing-behind) writes nothing

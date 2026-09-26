@@ -1,13 +1,14 @@
 ---
 id: SERVERS
 title: Declaring an MCP server
-status: proposed
+status: normative
 governs:
   - crates/mcp/src/lib.rs
   - crates/mcp/src/protocol.rs
   - crates/mcp/src/stdio.rs
   - crates/mcp/src/http.rs
   - crates/config/src/mcp.rs
+  - crates/config/src/managed.rs
   - crates/config/src/settings.rs
   - crates/cli/src/mcp.rs
   - crates/cli/src/servers.rs
@@ -38,6 +39,12 @@ it was asked about, lists what is declared, and forgets a project's standing ans
 ([SERVERS-1](#SERVERS-1), [SERVERS-3](#SERVERS-3), [SERVERS-5](#SERVERS-5), and the `list` half of
 [SERVERS-14](#SERVERS-14)). `doctor` names a settings layer that tries to declare one.
 
+The machine's managed layer can keep a server from starting, by the host its url names or the
+command it runs, and can add none. An allow list starts only what it names, a deny entry wins over
+it, and neither names an alias. A session starts no server the layer refuses, in any mode, and says
+which file refused it and why; `list` and `get` say the same beside the approval, and `doctor`
+names each list among what the layer pins ([SERVERS-12](#SERVERS-12)).
+
 A session reads the aliases its checkout requests ([SERVERS-2](#SERVERS-2)), resolves each against
 those declarations, and puts the three-answer question to the person where no answer of theirs
 covers it, naming a runner and an unpinned package as it does ([SERVERS-4](#SERVERS-4),
@@ -58,8 +65,9 @@ rule naming the server or the tool ([SERVERS-7](#SERVERS-7)). Bypassing answers 
 records neither ([SERVERS-13](#SERVERS-13)).
 
 What is not built: [SERVERS-11](#SERVERS-11)'s question about a hop, which is refused in its place;
-[SERVERS-12](#SERVERS-12); the columns of `list` and `doctor`'s half of [SERVERS-14](#SERVERS-14);
-and a server in the desktop application, which starts none.
+the columns of `list` and `doctor`'s half of [SERVERS-14](#SERVERS-14); and a server in the desktop
+application, which starts none. The first two are stated as unbuilt in the clause each belongs to,
+and the third among the known costs at the end.
 
 Issue #83 is where the unwired client was written down, and it names the four things wiring needs
 decided first: where a server is declared, what a name and an argv is trusted for, how the untrusted
@@ -68,13 +76,13 @@ clause below answers one of them. Whether a server's description reaches the pla
 settled there too: the person vouches for the tool list after the handshake, and its digest is
 recorded beside the server's approval.
 
-Where a clause is `verified-by: none` it is a requirement on work nobody has started, not a
-description of this program, and that marking is what keeps a reader from taking the present tense
-as a claim about the current build. Where a built clause has an unbuilt half, the clause says which.
+Every clause names the tests that pin it. Where a built clause has an unbuilt half, the clause says
+which, and that sentence is what keeps a reader from taking the present tense as a claim about the
+current build.
 
 ## The parity target
 
-What Claude Code offers, as the list this spec is measured against. Two rows in bold are where
+What Claude Code offers, as the list this spec is measured against. Three rows in bold are where
 parity is refused on purpose. One row in italics is where the behaviour is adopted and the storage
 is not, and [the divergence](#the-one-place-this-diverges-from-claude-code) says why.
 
@@ -95,6 +103,7 @@ is not, and [the divergence](#the-one-place-this-diverges-from-claude-code) says
 | Confinement of a stdio server | none | required already by [MCP-3](mcp.md#MCP-3) |
 | A remote server | fetched directly | an egress destination, and the host is approved |
 | A mode that skips the prompts | `--dangerously-skip-permissions` | [SERVERS-13](#SERVERS-13), and it skips prompts only |
+| An administrator's server lists | `allowedMcpServers` and `deniedMcpServers`, by name, command or url; a managed file may also add servers | `mcp.allow` and `mcp.deny`, by host or command; **no** name form, and the managed layer adds nothing |
 
 ## Why a settings layer cannot declare a server
 
@@ -195,7 +204,7 @@ was recorded, and leaves every other project's as it was. An incognito session w
 | "use all future servers in this project", one project path per line | `~/.bravebot/mcp-projects` | the person's own directory | until `mcp forget` |
 | "stop asking for this tool here", one alias, tool and project path per line | `~/.bravebot/mcp-tools` | the person's own directory | until `mcp forget` |
 | A request for an alias, `"mcp": { "request": ["weather"] }` | `.bravebot/settings.json` beside the work | that checkout | that checkout |
-| A removal, `"mcp": { "deny": ["weather"] }` | the managed layer | the machine | as long as it is pinned |
+| What may start, `"mcp": { "allow": [{ "host": "*.corp.example" }], "deny": [{ "command": ["/opt/weather-mcp"] }] }` | the managed layer | the machine | as long as it is pinned |
 | A declaration, an argv, a url, or a variable's value | `.bravebot/settings.json` or `.bravebot/settings.local.json` | **nothing.** [SERVERS-1](#SERVERS-1) | n/a |
 | A variable's value | nowhere. The declaration names variables; the values are the person's own environment at launch | n/a | n/a |
 
@@ -227,14 +236,15 @@ turns a tool call into execution nobody approved. Keeping the declaration outsid
 keeps `doctor`'s answer about settings free of a question it cannot settle.
 
 What a settings layer is taken to be declaring is `mcpServers`, the key another tool declares with,
-any key under `mcp` other than the two this spec gives a layer, `request` and `deny`, and an `mcp`
-that is not an object at all. Each one is
-a `doctor` line naming the key and the file, and the report fails on it. The line names nothing
+any key under `mcp` other than `request`, which a checkout's layer carries, and `allow` and `deny`,
+which only the managed layer acts on ([SERVERS-12](#SERVERS-12)), and an `mcp` that is not an
+object at all.
+Each one is a `doctor` line naming the key and the file, and the report fails on it. The line names nothing
 inside the entry, since the entry may hold an argv and the values of variables, and the rest of the
 file is read as it would have been.
 
 `verified-by: bravebot_config::settings::every_layer_that_names_a_server_is_recorded_and_none_declares_one`
-`verified-by: bravebot_config::settings::a_request_or_a_denial_in_the_mcp_block_is_not_a_declaration`
+`verified-by: bravebot_config::settings::a_request_or_a_server_list_in_the_mcp_block_is_not_a_declaration`
 `verified-by: bravebot_config::mcp::the_files_are_read_from_the_state_directory`
 `verified-by: bravebot_cli::running::doctor_reports_a_server_declared_in_a_checkouts_settings`
 
@@ -834,10 +844,17 @@ port together, as above.
 `verified-by: bravebot_core::policy::a_servers_request_cannot_be_redirected_to_another_port_on_the_same_host`
 
 <a id="SERVERS-12"></a>
-### SERVERS-12: the managed layer may remove a server and never add one
+### SERVERS-12: the managed layer may keep a server from starting and never add one
 
-An administrator's layer may deny an alias, or deny all of them. It may not declare one, approve
-one, grant a capability to one, or pre-answer either prompt.
+An administrator's layer may say which servers may start and which may not, by the host a remote
+one reaches or the command a local one runs. It may not declare one, approve one, grant a capability
+to one, or pre-answer any of the three prompts.
+
+A server the layer refuses is not started in any mode. Nothing is asked about it and nothing is
+recorded for it. The session says, once as it opens, that it was not started, which file refused it
+and why: that the file's allow list does not name it, or the deny entry that does. `bravebot mcp
+list` and `get` say the same beside whatever the person's own declaration and approval say, and
+`doctor` names `mcp.allow` and `mcp.deny` among the names the layer pins.
 
 **Why.** The machine-level layer exists to make an approved destination the only destination, and
 the names it may pin are the ones that decide where a request goes. A layer that could add a server
@@ -845,9 +862,74 @@ would be a layer that installs a program on every machine it reaches, which is a
 than the inversion that layer was built for, and `managed.rs` already argues the general form: a
 layer that can pin anything is a layer somebody uses to pin a preference.
 
-**Unbuilt, so nothing pins this.** The managed layer knows nothing about servers.
+**Why not an alias.** The person who declares a server chooses its alias, so a list of aliases
+bounds nothing: the same argv declared under another name starts as before. What an administrator
+is deciding about is where a server connects and what it runs, and those are what an entry names.
 
-`verified-by: none`
+**How it is built.** The keys are `"mcp": { "allow": [...], "deny": [...] }` in `managed.json`, the
+file [BACKEND-38](backends.md#BACKEND-38) reads. An entry is an object with one key:
+
+- `{"host": "mcp.corp.example"}` matches a remote server whose url names that host, whatever its
+  port and path. Both sides are compared lowercased with one trailing dot dropped. `*.` may open
+  the entry as a whole first label: `*.corp.example` matches `mcp.corp.example` and
+  `a.b.corp.example`, and matches neither `corp.example` nor `evilcorp.example`, since a match inside
+  a label is one a person could satisfy with a name they registered.
+- `{"command": ["/usr/local/bin/approved-server", "--stdio"]}` matches a local server whose argv is
+  those words exactly, once its program is the path the session resolved it to through the `PATH`
+  its declaration names ([SERVERS-10](#SERVERS-10)). The first word must be an absolute path, since
+  a resolved program is never anything else.
+
+Without an `allow` list, every server not denied starts as it did. With one, a server no entry names
+is refused, and `"allow": []` refuses every server. A deny entry wins over an allow entry naming the
+same server. Only a list counts: a string, an object, `null` or anything else under either key
+decides nothing, and an empty `deny` denies nothing, which `doctor` does not report either. An entry
+in neither form, an alias among them, is skipped. In a deny list it denies nothing; in an allow list
+it allows nothing, so an allow list of nothing else still refuses every server. The layer has no
+field that could hold a declaration, an approval or a request, so an `mcp.request`, an
+`mcp.approve`, a server block or an `mcpServers` object in that file is read as nothing at all.
+
+A url's host is read only where it is spelled plainly: labels of ASCII letters, digits, `-` and
+`_`, or an address in brackets, then a port of digits or none. The HTTP client reads the url with its
+own parser, and a host read here that differed from the one it connects to would let a url match an
+entry it does not reach; a backslash, a percent escape, an `@`, a second colon or a letter outside
+those is where two parsers part. A url spelled any other way matches no allow entry, and a deny list
+naming any host refuses it, since whether it reaches a denied host cannot be told.
+
+The check is made once the declaration resolves and before anything is asked, recorded or started,
+so [SERVERS-13](#SERVERS-13)'s mode reaches a refused server no more than an answer would, and
+nothing is written to `mcp-approved` or `mcp-projects`. An approval the person already holds is left
+where it is: the refusal is the administrator's, and taking it away brings the server back as it
+was answered for.
+
+The same keys in a settings layer are not a declaration, so `doctor` does not name them, and they
+refuse nothing: the person's own road to a server gone is `bravebot mcp remove`, and a checkout's is
+not to request it.
+
+**Known costs.**
+
+- A command entry binds a path, not a program. A link, a `..`, a copy under another name or, where
+  the filesystem ignores case, another spelling of the same file is another argv, so each one evades
+  a deny entry. An allow list holds against all of them, since it names what may start, as long as
+  the person cannot write to the path it names.
+- A host entry names a spelling. Another name for the same machine, or its address, is another host,
+  so a deny entry is evaded by either, and the allow list is again the form that holds.
+- A command match reads the argv and nothing else. The variables and the directory a declaration
+  names are not part of it, so an allowed program can be started with an environment that changes
+  what it does, a loader variable among them.
+
+`verified-by: bravebot_config::managed::an_allow_list_starts_only_what_it_names`
+`verified-by: bravebot_config::managed::an_empty_allow_list_starts_nothing`
+`verified-by: bravebot_config::managed::a_deny_entry_wins_over_an_allow_entry`
+`verified-by: bravebot_config::managed::without_an_allow_list_only_what_is_denied_is_refused`
+`verified-by: bravebot_config::managed::a_host_two_parsers_could_read_apart_matches_no_entry`
+`verified-by: bravebot_config::managed::a_list_that_is_not_a_list_decides_nothing`
+`verified-by: bravebot_config::managed::an_entry_in_neither_form_is_skipped`
+`verified-by: bravebot_config::managed::a_server_declared_or_requested_here_is_read_as_nothing`
+`verified-by: bravebot_config::settings::a_request_or_a_server_list_in_the_mcp_block_is_not_a_declaration`
+`verified-by: bravebot_cli::servers::a_server_the_managed_layer_refuses_is_started_in_no_mode_and_nothing_is_asked_or_recorded`
+`verified-by: bravebot_cli::servers::a_server_the_managed_layer_does_not_refuse_is_settled_as_before`
+`verified-by: bravebot_cli::servers::a_remote_server_is_refused_by_its_host`
+`verified-by: bravebot_cli::mcp::list_and_get_say_why_the_managed_layer_refuses_a_server_and_no_other`
 
 <a id="SERVERS-13"></a>
 ### SERVERS-13: bypassing answers this spec's three prompts and reaches nothing else here
@@ -873,7 +955,7 @@ Each of the following holds in that mode exactly as it holds outside it:
 | [MCP-1](mcp.md#MCP-1), a result is untrusted | A label is not an approval. Nothing a person could have said at a call would have made what it returned trusted, so there is nothing here for a skipped question to have granted. |
 | [SERVERS-1](#SERVERS-1), only the person's own directory declares a server | An undeclared server does not become declared by nobody being asked about it. A checkout's request still resolves against declarations or resolves to nothing. |
 | [SERVERS-9](#SERVERS-9), the capability | A capability is configuration, not a prompt. A server with no grant is called by nobody in this mode either. |
-| [SERVERS-12](#SERVERS-12), a managed denial | An administrator's removal is not a question being put to the person running the program. |
+| [SERVERS-12](#SERVERS-12), the managed allow and deny lists | An administrator's refusal is not a question being put to the person running the program. |
 | [SERVERS-11](#SERVERS-11), the egress gate and the host in the digest | The gate decides on labels. This mode answers three named questions and not every question, and a hop leaving the declared destination is neither of them, so it is refused here rather than followed. |
 
 **Nothing is recorded.** A skipped question leaves no approval, no vouched list, no project path and
@@ -939,7 +1021,8 @@ interface reports a property that is not in force. A list that quietly omitted t
 make a declaration somebody wrote and never answered for look like a file that was never read.
 
 `bravebot mcp list` is built for what a declaration alone can answer: per alias, the transport,
-whether it is approved, and the digest, under the path of the file that declared it. A declaration
+whether it is approved, and the digest, under the path of the file that declared it, and, where the
+managed layer refuses the server, the file that refused it and why ([SERVERS-12](#SERVERS-12)). A declaration
 that cannot be used is listed with its problem, and the list then fails. The capability, the
 requesting checkout and the standing answers are unbuilt with the things they report, and so is
 `doctor`'s half.
@@ -1028,6 +1111,9 @@ what a person reading a marked result sees, not values this program has vouched 
 | Declare a stdio server on a machine where confinement is unavailable | Not launched. [MCP-3](mcp.md#MCP-3), in every mode. [SERVERS-13](#SERVERS-13) |
 | Run in the skip-prompts mode, then run again without it | Every question is asked again; the first run recorded nothing. [SERVERS-13](#SERVERS-13) |
 | Give the server a variable it needs without naming it in the declaration | It does not receive it. [SERVERS-10](#SERVERS-10) |
+| Write `{"mcp": {"deny": [{"command": ["/opt/weather-mcp", "--stdio"]}]}}` in the machine's `managed.json`, where `weather` runs that argv | The server is not started in any mode, whatever it is called, the session's line names that file and the entry, and `mcp list` says the same. [SERVERS-12](#SERVERS-12) |
+| Write `{"mcp": {"allow": [{"host": "*.corp.example"}]}}` in the machine's `managed.json` | A server whose url names a host under `corp.example` starts as it did; every other server, local ones included, is not started, and the line says the allow list does not name it. [SERVERS-12](#SERVERS-12) |
+| Write `{"mcp": {"weather": {...}}}` in the machine's `managed.json` for a server not declared at home | Nothing is declared, and a request for it still resolves to nothing. [SERVERS-12](#SERVERS-12) |
 
 ## Amendments to existing specs
 
@@ -1040,6 +1126,7 @@ This spec cannot land without these. Each is named by what the clause says rathe
 | [mcp.md](mcp.md) | [MCP-1](mcp.md#MCP-1), what a server returns is untrusted | Extended, not amended. A description and an input schema join a result as content from outside, which is [SERVERS-8](#SERVERS-8). The clause's reasoning already covers them; the wording says "a tool result". |
 | [layering.md](layering.md) | [LAYER-1](layering.md#LAYER-1)'s table, and `bravebot-mcp` being a crate nothing depends on | Amended. Whichever of `bravebot-agent` and `bravebot-cli` reaches the client gains the dependency, and the row's constraint gains the declaration surface. `a_rows_dependency_list_is_what_the_manifest_asks_for` fails until the table is updated, which is the check working. **Applied**: the `bravebot-cli` and `bravebot-config` constraints name the declaration surface, and `bravebot-cli` is the crate that reaches the client, so its row lists `mcp` and says it starts a server only on a person's answer, a recorded one, or the mode that answers for them. `bravebot-agent` reaches it too, to offer a started server's tools and call them, so its row lists `mcp` as well, and `bravebot-mcp` lists `config` for the one rule of what a tool's word may be. |
 | [backends.md](backends.md) | [BACKEND-1](backends.md#BACKEND-1), a settings file may name a destination and never a permission, and none of them names a command to run | **Unchanged and reaffirmed.** [SERVERS-1](#SERVERS-1) exists so this clause does not have to move. A reviewer should read any future proposal to put a declaration in a settings layer as a proposal to amend this. |
+| [backends.md](backends.md) | [BACKEND-38](backends.md#BACKEND-38), the managed file pins the names that decide where a request goes, and "every other name in the file decides nothing" | Extended by two names that are not destinations, `mcp.allow` and `mcp.deny`, which keep a server from starting and add none, for [SERVERS-12](#SERVERS-12)'s reason. **Applied**. |
 | [backends.md](backends.md) | [BACKEND-24](backends.md#BACKEND-24), settings layers resolve a name at a time | Extended. `mcp.request` is a list, and joins the row where every layer's entries are kept, for that row's reason: an entry only ever names something that then has to be approved separately. **Applied** with the session that reads the key. |
 | [permissions.md](permissions.md) | [PERM-1](permissions.md#PERM-1), a rule names a family of tools and matches on routing only, and "four families exist" | Amended. A fifth family, `Mcp`, with `Mcp(weather)` covering a server and `Mcp(weather:get_current_conditions)` one tool of it. The routing field is the alias and the tool name; the arguments are payload and no specifier matches them, which is [SERVERS-7](#SERVERS-7). **Applied**: `Mcp(weather:*)` is `Mcp(weather)`, and a name is matched whole, so `Mcp(weather)` does not cover `weather2`. |
 | [permissions.md](permissions.md) | [PERM-9](permissions.md#PERM-9), three prompts no rule can answer | Extended to four. A call carrying the person's private data asks whatever the rules say, for that clause's own confidentiality reason. A server is further from the person than a local program is, not closer. **Applied** in the policy, and not reached: nothing labels a planner's arguments private yet. |
@@ -1140,6 +1227,10 @@ This spec cannot land without these. Each is named by what the clause says rathe
 - **No stdio server starts on Windows.** The sandbox there has no base rows to build a server's
   policy on, so the line says the platform has no confinement for one yet, which is
   [MCP-3](mcp.md#MCP-3) holding rather than failing.
+- **An administrator's deny list names a spelling.** A command entry binds a path and a host entry
+  a name, so a link, a copy or another name for the same machine is not denied, and a command match
+  leaves out the variables a server starts with. The allow list is the form that holds
+  ([SERVERS-12](#SERVERS-12)).
 - **The desktop application starts no server.** The terminal client's three sessions settle a
   request; a desktop session reads the same settings file, starts nothing for it, and says nothing
   about it.

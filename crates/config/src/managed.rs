@@ -17,6 +17,10 @@
 //! Only the names that decide *where a request goes* may be pinned, and no credential is read from
 //! here at all. A layer that could pin the theme is a layer somebody will use to pin the theme, and
 //! a preference is not the thing two parties disagree about.
+//!
+//! It may also keep an MCP server from starting, by the host it reaches or the command it runs, and
+//! never add one (SERVERS-12). A layer that could declare a server would install a program on every
+//! machine it reaches.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -61,6 +65,64 @@ const PINNABLE: [&str; 8] = [
 /// The gateway block's name, which is pinned whole rather than a name at a time.
 const PROVIDER_BLOCK: &str = "provider";
 
+/// Where the servers a machine may start are listed, and the name `doctor` reports the list by
+/// (SERVERS-12).
+const SERVER_ALLOW: &str = "mcp.allow";
+
+/// Where the servers it may not start are listed, and the name `doctor` reports that list by.
+const SERVER_DENY: &str = "mcp.deny";
+
+/// A server as the managed layer compares it with an entry (SERVERS-12).
+#[derive(Debug, Clone, Copy)]
+pub enum Server<'a> {
+    /// A local server, by what it starts: the program as the absolute path a session resolved it
+    /// to, then its arguments.
+    Local(&'a [String]),
+    /// A remote server, by the url it was declared with.
+    Remote(&'a str),
+}
+
+/// One entry of `mcp.allow` or `mcp.deny`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Rule {
+    /// A host, lowercased and without a trailing dot, whose first label may be `*`.
+    Host(String),
+    /// An argv whose program is an absolute path.
+    Command(Vec<String>),
+}
+
+impl Rule {
+    /// Whether this entry names `server`, whose url's host, where it has one, is `host`.
+    fn names(&self, server: Server<'_>, host: Option<&str>) -> bool {
+        match (self, server) {
+            (Rule::Command(argv), Server::Local(started)) => argv.as_slice() == started,
+            (Rule::Host(entry), Server::Remote(_)) => host.is_some_and(|host| {
+                match entry.strip_prefix("*.") {
+                    // A label and a dot before the rest, so `*.corp.example` is neither
+                    // `corp.example` nor `evilcorp.example`.
+                    Some(rest) => host
+                        .strip_suffix(rest)
+                        .is_some_and(|head| head.len() > 1 && head.ends_with('.')),
+                    None => host == entry,
+                }
+            }),
+            _ => false,
+        }
+    }
+}
+
+/// Why the managed layer keeps a server from starting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal<'a> {
+    /// `mcp.allow` is in force and no entry in it names the server.
+    NotAllowed,
+    /// This entry of `mcp.deny` names it.
+    Denied(&'a Rule),
+    /// `mcp.deny` names hosts, and the server's url spells its host in a way no entry can be
+    /// compared with.
+    HostUnread,
+}
+
 /// What the managed layer pinned, or nothing where there is no such file.
 ///
 /// Not comparable, because a gateway it pinned may carry a token and [`crate::Secret`] refuses
@@ -75,6 +137,14 @@ pub struct Managed {
     /// refuses a gateway somebody configured for themselves. Absence cannot say that, so the
     /// presence of the block is kept rather than only what was under it.
     gateways: Option<Vec<Provider>>,
+    /// The servers it allows, or `None` where it wrote no such list.
+    ///
+    /// `Some` of an empty list allows none, for the reason an empty gateway block names none.
+    /// Neither this nor `denied` can hold a declaration, an approval or a request, so
+    /// nothing written in this file can make a server reachable that was not already.
+    allowed: Option<Vec<Rule>>,
+    /// The servers it denies, which no allow entry brings back.
+    denied: Vec<Rule>,
     /// The file, where there is one there at all.
     ///
     /// Recorded for a file that exists rather than for one that was understood, so that a report can
@@ -128,7 +198,11 @@ impl Managed {
             // gateway on the machine on the strength of a stray `null`.
             gateways: matches!(root.get(PROVIDER_BLOCK), Some(serde_json::Value::Object(_)))
                 .then(|| approved(layer.providers())),
-            path: found,
+            allowed: server_list(&root, "allow").map(rules),
+            denied: server_list(&root, "deny").map(rules).unwrap_or_default(),
+            // Read, so there, whatever `exists` said a moment ago: a refusal always has a file to
+            // name.
+            path: Some(path.to_path_buf()),
         }
     }
 
@@ -145,6 +219,41 @@ impl Managed {
         self.gateways.as_deref()
     }
 
+    /// The file that keeps `server` from starting and why, where this layer keeps it from starting
+    /// (SERVERS-12).
+    ///
+    /// The alias is not compared, because the person declaring a server chooses it. A deny entry
+    /// is read before the allow list, so a server both name is denied.
+    pub fn refuses(&self, server: Server<'_>) -> Option<(&Path, Refusal<'_>)> {
+        let host = match server {
+            Server::Remote(url) => plain_host(url),
+            Server::Local(_) => None,
+        };
+        let refusal = match self
+            .denied
+            .iter()
+            .find(|rule| rule.names(server, host.as_deref()))
+        {
+            Some(rule) => Some(Refusal::Denied(rule)),
+            None if matches!(server, Server::Remote(_))
+                && host.is_none()
+                && self.denied.iter().any(|rule| matches!(rule, Rule::Host(_))) =>
+            {
+                Some(Refusal::HostUnread)
+            }
+            None => self
+                .allowed
+                .as_ref()
+                .filter(|allowed| {
+                    !allowed
+                        .iter()
+                        .any(|rule| rule.names(server, host.as_deref()))
+                })
+                .map(|_| Refusal::NotAllowed),
+        };
+        Some((self.path.as_deref()?, refusal?))
+    }
+
     /// The names it pinned, for `doctor` to report.
     ///
     /// Names rather than values, for the reason the settings report gives: everyone on the machine
@@ -155,6 +264,8 @@ impl Managed {
             .keys()
             .map(String::as_str)
             .chain(self.gateways.is_some().then_some(PROVIDER_BLOCK))
+            .chain(self.allowed.is_some().then_some(SERVER_ALLOW))
+            .chain((!self.denied.is_empty()).then_some(SERVER_DENY))
     }
 
     /// The file, where there is one there at all, read or not.
@@ -186,6 +297,120 @@ fn approved(gateways: &[Provider]) -> Vec<Provider> {
             ..gateway.clone()
         })
         .collect()
+}
+
+/// The entries of `mcp.allow` or `mcp.deny`, where that key holds a list.
+///
+/// Anything else there is a mistyped file rather than a decision, on the footing a stray value
+/// under `provider` is one.
+fn server_list<'a>(
+    root: &'a serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Option<&'a [serde_json::Value]> {
+    match root.get("mcp").and_then(|block| block.get(key)) {
+        Some(serde_json::Value::Array(entries)) => Some(entries),
+        _ => None,
+    }
+}
+
+/// The entries of a list that are one of the two forms, and nothing else.
+///
+/// An entry is an object with one key, `host` or `command`. Any other is skipped rather than
+/// spoiling the list: in an allow list that allows less, and in a deny list it denies nothing, so
+/// a deny list of nothing else is not reported as a pin that does nothing.
+fn rules(entries: &[serde_json::Value]) -> Vec<Rule> {
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let entry = entry.as_object().filter(|entry| entry.len() == 1)?;
+            match (entry.get("host"), entry.get("command")) {
+                (Some(serde_json::Value::String(host)), None) => host_rule(host).map(Rule::Host),
+                (None, Some(serde_json::Value::Array(argv))) => {
+                    command_rule(argv).map(Rule::Command)
+                }
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// A host entry, where it is a plain host whose first label may be `*`.
+///
+/// `*` is a whole label and only the first one: an entry that could match inside a label would be
+/// one a person could satisfy with a name they registered.
+fn host_rule(written: &str) -> Option<String> {
+    let written = written.trim();
+    match written.strip_prefix("*.") {
+        Some(rest) => plain(rest)
+            .filter(|name| !name.starts_with('['))
+            .map(|name| format!("*.{name}")),
+        None => plain(written),
+    }
+}
+
+/// A command entry, where every word is a string and the program is an absolute path.
+///
+/// Absolute, because a session compares the path it resolved the program to, and a bare name is
+/// no path any session resolves to.
+fn command_rule(argv: &[serde_json::Value]) -> Option<Vec<String>> {
+    let argv: Vec<String> = argv
+        .iter()
+        .map(|word| word.as_str().map(str::to_string))
+        .collect::<Option<_>>()?;
+    argv.first()
+        .is_some_and(|program| Path::new(program).is_absolute())
+        .then_some(argv)
+}
+
+/// The host a remote server's url names, where it is spelled plainly, and `None` where it is not.
+///
+/// Plain on purpose. The HTTP client reads the url with its own parser, and a host read here that
+/// differed from the one it connects to would let a url match an entry it does not go to: a
+/// backslash, a percent escape or a letter outside the ones a DNS name is spelled in is where two
+/// parsers part. Such a url names no host, which no allow entry matches and no deny list naming a
+/// host lets through.
+fn plain_host(url: &str) -> Option<String> {
+    let (_, rest) = url.split_once("://")?;
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let (host, port) = match authority.strip_prefix('[') {
+        Some(bracketed) => {
+            let (address, port) = bracketed.split_once(']')?;
+            (&authority[..address.len() + 2], port)
+        }
+        None => authority
+            .find(':')
+            .map_or((authority, ""), |at| authority.split_at(at)),
+    };
+    let port = match port.strip_prefix(':') {
+        Some(digits) => digits.bytes().all(|b| b.is_ascii_digit()),
+        None => port.is_empty(),
+    };
+    port.then(|| plain(host)).flatten()
+}
+
+/// `written` lowercased with one trailing dot dropped, where it is a name in the letters a DNS name
+/// is spelled in or an address in brackets, and `None` where it is anything else.
+fn plain(written: &str) -> Option<String> {
+    let lower = written.to_ascii_lowercase();
+    if let Some(address) = lower
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+    {
+        let address = !address.is_empty()
+            && address
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() || b == b':' || b == b'.');
+        return address.then_some(lower);
+    }
+    let name = lower.strip_suffix('.').unwrap_or(&lower);
+    let labelled = !name.is_empty()
+        && name.split('.').all(|label| {
+            !label.is_empty()
+                && label
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        });
+    labelled.then(|| name.to_string())
 }
 
 /// A managed layer written into a scratch directory, the real path being root's.
@@ -386,5 +611,285 @@ mod tests {
         );
         assert!(managed.is_empty());
         assert!(managed.path().is_some());
+    }
+
+    fn argv(words: &[&str]) -> Vec<String> {
+        words.iter().map(|word| (*word).to_string()).collect()
+    }
+
+    /// What the layer says about a server, without the file it says it from.
+    fn refusal<'a>(managed: &'a Managed, server: Server<'_>) -> Option<Refusal<'a>> {
+        managed.refuses(server).map(|(path, refusal)| {
+            assert_eq!(Some(path), managed.path(), "a refusal names its file");
+            refusal
+        })
+    }
+
+    const CORP: &str = r#"{"mcp": {"allow": [
+        {"host": "*.corp.example"},
+        {"host": "[::1]"},
+        {"command": ["/usr/local/bin/approved-server", "--stdio"]}
+    ]}}"#;
+
+    /// An allow list is the form that holds: the person chooses an alias and cannot choose what
+    /// the list names, so a server it does not name is not started whatever it is called.
+    #[test]
+    fn an_allow_list_starts_only_what_it_names() {
+        let managed = scratch("managed-allow", CORP);
+        for url in [
+            "https://mcp.corp.example/mcp",
+            "https://a.b.corp.example:8443/",
+            "HTTP://MCP.Corp.Example./mcp",
+            "http://[::1]:8931/mcp",
+        ] {
+            assert_eq!(refusal(&managed, Server::Remote(url)), None, "{url}");
+        }
+        for url in [
+            "https://corp.example/",
+            "https://evilcorp.example/",
+            "https://corp.example.evil.test/",
+            "http://[::2]/",
+        ] {
+            assert_eq!(
+                refusal(&managed, Server::Remote(url)),
+                Some(Refusal::NotAllowed),
+                "{url}"
+            );
+        }
+        let approved = argv(&["/usr/local/bin/approved-server", "--stdio"]);
+        assert_eq!(refusal(&managed, Server::Local(&approved)), None);
+        for started in [
+            argv(&["/usr/local/bin/approved-server"]),
+            argv(&["/usr/local/bin/approved-server", "--stdio", "--more"]),
+            argv(&["/opt/other-server", "--stdio"]),
+        ] {
+            assert_eq!(
+                refusal(&managed, Server::Local(&started)),
+                Some(Refusal::NotAllowed),
+                "{started:?}"
+            );
+        }
+        assert_eq!(managed.pinned().collect::<Vec<_>>(), vec![SERVER_ALLOW]);
+    }
+
+    /// An empty allow list allows nothing, which is how a machine says it runs no server at all.
+    /// It is reported, because it decides something.
+    #[test]
+    fn an_empty_allow_list_starts_nothing() {
+        let managed = scratch("managed-allow-none", r#"{"mcp": {"allow": []}}"#);
+        assert_eq!(
+            refusal(&managed, Server::Remote("https://mcp.corp.example/")),
+            Some(Refusal::NotAllowed)
+        );
+        let started = argv(&["/usr/local/bin/approved-server"]);
+        assert_eq!(
+            refusal(&managed, Server::Local(&started)),
+            Some(Refusal::NotAllowed)
+        );
+        assert_eq!(managed.pinned().collect::<Vec<_>>(), vec![SERVER_ALLOW]);
+    }
+
+    /// A deny entry wins over an allow entry naming the same server, so one host can be taken out
+    /// of a domain the list allows. Case and a trailing dot are not a way around it.
+    #[test]
+    fn a_deny_entry_wins_over_an_allow_entry() {
+        let managed = scratch(
+            "managed-deny-wins",
+            r#"{"mcp": {
+                "allow": [
+                    {"host": "*.corp.example"},
+                    {"command": ["/usr/local/bin/approved-server", "--stdio"]}
+                ],
+                "deny": [
+                    {"host": "Staging.Corp.Example."},
+                    {"command": ["/usr/local/bin/approved-server", "--stdio"]}
+                ]
+            }}"#,
+        );
+        let staging = Rule::Host("staging.corp.example".into());
+        for url in [
+            "https://staging.corp.example/mcp",
+            "https://STAGING.corp.example.:443/",
+        ] {
+            assert_eq!(
+                refusal(&managed, Server::Remote(url)),
+                Some(Refusal::Denied(&staging)),
+                "{url}"
+            );
+        }
+        assert_eq!(
+            refusal(&managed, Server::Remote("https://mcp.corp.example/")),
+            None
+        );
+        let approved = argv(&["/usr/local/bin/approved-server", "--stdio"]);
+        assert_eq!(
+            refusal(&managed, Server::Local(&approved)),
+            Some(Refusal::Denied(&Rule::Command(approved.clone())))
+        );
+        assert_eq!(
+            managed.pinned().collect::<Vec<_>>(),
+            vec![SERVER_ALLOW, SERVER_DENY]
+        );
+    }
+
+    /// Without an allow list the file refuses what it denies and nothing else, so a machine that
+    /// denies one host leaves every other server the person's to decide about.
+    #[test]
+    fn without_an_allow_list_only_what_is_denied_is_refused() {
+        let managed = scratch(
+            "managed-deny-only",
+            r#"{"mcp": {"deny": [{"host": "*.tracker.example"}, {"command": ["/opt/bad"]}]}}"#,
+        );
+        assert_eq!(
+            refusal(&managed, Server::Remote("https://a.tracker.example/")),
+            Some(Refusal::Denied(&Rule::Host("*.tracker.example".into())))
+        );
+        assert_eq!(
+            refusal(&managed, Server::Local(&argv(&["/opt/bad"]))),
+            Some(Refusal::Denied(&Rule::Command(argv(&["/opt/bad"]))))
+        );
+        for url in ["https://tracker.example/", "https://docs.example/"] {
+            assert_eq!(refusal(&managed, Server::Remote(url)), None, "{url}");
+        }
+        for started in [argv(&["/opt/bad", "--flag"]), argv(&["/opt/good"])] {
+            assert_eq!(
+                refusal(&managed, Server::Local(&started)),
+                None,
+                "{started:?}"
+            );
+        }
+        assert_eq!(managed.pinned().collect::<Vec<_>>(), vec![SERVER_DENY]);
+    }
+
+    /// A url whose host another parser could read as a different one is compared with no entry.
+    /// `https://evil.test\.corp.example/` goes to `evil.test` for a WHATWG parser and would end in
+    /// `.corp.example` for a split on `/`, so it is not allowed by `*.corp.example`, and a deny
+    /// list naming a host refuses it rather than letting it past.
+    #[test]
+    fn a_host_two_parsers_could_read_apart_matches_no_entry() {
+        let unplain = [
+            r"https://evil.test\.corp.example/",
+            "https://evil.test%2f.corp.example/",
+            "https://staging%2Ecorp.example/",
+            "https://st\u{e4}ging.corp.example/",
+            "https://mcp.corp.example:80:90/",
+            "https://mcp..corp.example/",
+            "https://[::1/",
+        ];
+        let allowing = scratch("managed-unplain-allow", CORP);
+        let denying = scratch(
+            "managed-unplain-deny",
+            r#"{"mcp": {"deny": [{"host": "staging.corp.example"}]}}"#,
+        );
+        let commands = scratch(
+            "managed-unplain-commands",
+            r#"{"mcp": {"deny": [{"command": ["/opt/bad"]}]}}"#,
+        );
+        for url in unplain {
+            assert_eq!(
+                refusal(&allowing, Server::Remote(url)),
+                Some(Refusal::NotAllowed),
+                "{url}"
+            );
+            assert_eq!(
+                refusal(&denying, Server::Remote(url)),
+                Some(Refusal::HostUnread),
+                "{url}"
+            );
+            assert_eq!(
+                refusal(&commands, Server::Remote(url)),
+                None,
+                "{url}: a list naming no host has none to compare"
+            );
+        }
+    }
+
+    /// A stray value is a mistyped file, not a decision, and nothing a person declared goes away on
+    /// the strength of one. An empty deny list denies nothing, so it is not reported as a pin.
+    #[test]
+    fn a_list_that_is_not_a_list_decides_nothing() {
+        for spelling in [
+            r#"{"mcp": {"allow": "*.corp.example"}}"#,
+            r#"{"mcp": {"allow": {"host": "*.corp.example"}}}"#,
+            r#"{"mcp": {"allow": null}}"#,
+            r#"{"mcp": {"deny": {"host": "mcp.corp.example"}}}"#,
+            r#"{"mcp": {"deny": null}}"#,
+            r#"{"mcp": {"deny": []}}"#,
+            r#"{"mcp": ["deny", "weather"]}"#,
+        ] {
+            let managed = scratch("managed-lists-mistyped", spelling);
+            assert_eq!(
+                refusal(&managed, Server::Remote("https://mcp.corp.example/")),
+                None,
+                "{spelling} refused a server"
+            );
+            assert!(managed.is_empty(), "{spelling} was reported as a pin");
+        }
+    }
+
+    /// An entry that is neither form is skipped. In a deny list that denies nothing, so a list of
+    /// nothing else is not reported; in an allow list it allows nothing, so the list still stands
+    /// and allows less. An alias is one of them: the person declaring a server chooses it.
+    #[test]
+    fn an_entry_in_neither_form_is_skipped() {
+        let malformed = r#"[
+            "weather",
+            {"alias": "weather"},
+            {"host": "*"},
+            {"host": "a.*.corp.example"},
+            {"host": "*corp.example"},
+            {"host": "*.[::1]"},
+            {"host": ""},
+            {"host": "mcp.corp.example/path"},
+            {"command": ["approved-server", "--stdio"]},
+            {"command": []},
+            {"command": ["/usr/local/bin/approved-server", 3]},
+            {"host": "mcp.corp.example", "command": ["/usr/local/bin/approved-server"]},
+            {"host": "mcp.corp.example", "port": 443}
+        ]"#;
+        let remote = Server::Remote("https://mcp.corp.example/");
+        let program = argv(&["/usr/local/bin/approved-server"]);
+        let denying = scratch(
+            "managed-deny-malformed",
+            &format!(r#"{{"mcp": {{"deny": {malformed}}}}}"#),
+        );
+        assert!(denying.is_empty(), "a deny list of nothing was reported");
+        assert_eq!(refusal(&denying, remote), None);
+        assert_eq!(refusal(&denying, Server::Local(&program)), None);
+        let allowing = scratch(
+            "managed-allow-malformed",
+            &format!(r#"{{"mcp": {{"allow": {malformed}}}}}"#),
+        );
+        assert_eq!(refusal(&allowing, remote), Some(Refusal::NotAllowed));
+        assert_eq!(
+            refusal(&allowing, Server::Local(&program)),
+            Some(Refusal::NotAllowed)
+        );
+        let spaced = scratch(
+            "managed-deny-spaced",
+            r#"{"mcp": {"deny": [{"host": "  MCP.corp.example  "}]}}"#,
+        );
+        assert!(refusal(&spaced, remote).is_some());
+    }
+
+    /// The layer may keep a server from starting and never add one. [`Managed`] has nowhere to
+    /// hold a server, so a declaration, a request or an approval spelled here is read as nothing,
+    /// and an allow entry permits a declaration the person made rather than making one.
+    #[test]
+    fn a_server_declared_or_requested_here_is_read_as_nothing() {
+        let managed = scratch(
+            "managed-declares",
+            r#"{
+                "mcp": {
+                    "request": ["weather"],
+                    "approve": ["weather"],
+                    "weather": {"command": "weather-mcp", "args": ["--stdio"]}
+                },
+                "mcpServers": {"weather": {"command": "weather-mcp"}}
+            }"#,
+        );
+        assert!(managed.is_empty(), "a server was read out of the file");
+        let started = argv(&["/usr/local/bin/weather-mcp", "--stdio"]);
+        assert_eq!(refusal(&managed, Server::Local(&started)), None);
     }
 }

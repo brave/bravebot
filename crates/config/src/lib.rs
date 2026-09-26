@@ -26,7 +26,7 @@ mod settings;
 #[cfg(test)]
 mod testutil;
 
-pub use managed::{Managed, managed_file};
+pub use managed::{Managed, Refusal, Rule, Server, managed_file};
 pub use settings::{
     Attribution, NotADocument, PermissionLists, Settings, check_document, name_a_settings_file,
     named_settings_file, user_settings_file,
