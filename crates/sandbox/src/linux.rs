@@ -692,7 +692,7 @@ mod tests {
         };
         let temporary_directory = a_temporary_directory("bravebot-base-starts");
         let home = std::env::var_os("HOME").map(PathBuf::from);
-        let wanted = base(Prelude::Linux, &temporary_directory, home.as_deref());
+        let wanted = base(Prelude::Linux, &temporary_directory, None, home.as_deref());
 
         let resolved = wanted.nameable_under(&sandbox.capabilities());
 
@@ -723,7 +723,7 @@ mod tests {
             return;
         };
         let temporary_directory = a_temporary_directory("bravebot-base-account");
-        let policy = base(Prelude::Linux, &temporary_directory, None)
+        let policy = base(Prelude::Linux, &temporary_directory, None, None)
             .nameable_under(&sandbox.capabilities())
             .policy;
 
@@ -763,7 +763,7 @@ mod tests {
         let key = home.join(".ssh").join("id_rsa");
         std::fs::write(&key, CONTENTS).expect("the key file is writable");
 
-        let policy = base(Prelude::Linux, &temporary_directory, Some(&home))
+        let policy = base(Prelude::Linux, &temporary_directory, None, Some(&home))
             .nameable_under(&sandbox.capabilities())
             .policy;
         let cat = |path: &Path| {

@@ -12,10 +12,10 @@
 //! reach of a program whose plan never named them. `docs/specs/sandboxing.md` is where the rows
 //! are decided, row by row, and this is that table in code.
 //!
-//! Nothing here reads the machine. The two rows that are not fixed, the temporary directory the
-//! session resolved as it opened and the account's home directory, are handed in by the caller
-//! that resolved them, so what this produces is the same list from the same arguments on every
-//! machine and every platform.
+//! Nothing here reads the machine. The rows that are not fixed, the temporary directory the
+//! session resolved as it opened, the developer directory on macOS and the account's home
+//! directory, are handed in by the caller that resolved them, so what this produces is the same
+//! list from the same arguments on every machine and every platform.
 
 use crate::policy::SandboxPolicy;
 use std::path::{Path, PathBuf};
@@ -68,7 +68,10 @@ impl Prelude {
 ///
 /// The loader and the system libraries, the system binary directories, the locale data,
 /// terminfo, the certificates a TLS client reads with the directory holding them, the files a
-/// host lookup and a user lookup read, and the devices. Each entry is one of the rows the base
+/// host lookup and a user lookup read, the machine's git configuration, and the devices. `git`
+/// stops on a configuration file that is there and that it is refused, where one that is absent
+/// is nothing, so a row for it is what lets a machine that has one run git at all. Each entry is
+/// one of the rows the base
 /// table names, spelled the way this platform spells it, and a spelling a given distribution
 /// does not use is left out when the policy is resolved rather than refusing the program.
 const LINUX_PRELUDE: &[&str] = &[
@@ -94,6 +97,7 @@ const LINUX_PRELUDE: &[&str] = &[
     "/etc/nsswitch.conf",
     "/etc/passwd",
     "/etc/group",
+    "/etc/gitconfig",
     "/dev/null",
     "/dev/zero",
     "/dev/random",
@@ -108,6 +112,12 @@ const LINUX_PRELUDE: &[&str] = &[
 /// is where this platform keeps them, because the backend here matches the path a grant is
 /// written on against the one a program opens after the link has been followed, so a row saying
 /// `/etc` reaches nothing and is granted in silence.
+///
+/// One row has no Linux counterpart: the TLS library this platform ships aborts in every program
+/// linked against it, `curl`, `openssl` and rustup's `cargo` among them, when it cannot read its
+/// configuration file. The developer directory the `/usr/bin` shims run out of is the other thing
+/// a program here needs to start, and it is not in this list because where it is differs by
+/// machine.
 const MACOS_PRELUDE: &[&str] = &[
     "/usr/lib",
     "/System/Library",
@@ -122,10 +132,12 @@ const MACOS_PRELUDE: &[&str] = &[
     "/private/etc/localtime",
     "/private/etc/ssl/certs",
     "/private/etc/ssl/cert.pem",
+    "/private/etc/ssl/openssl.cnf",
     "/private/etc/hosts",
     "/private/etc/resolv.conf",
     "/private/etc/passwd",
     "/private/etc/group",
+    "/private/etc/gitconfig",
     "/dev/null",
     "/dev/zero",
     "/dev/random",
@@ -140,6 +152,12 @@ const MACOS_PRELUDE: &[&str] = &[
 /// client on it trusts.
 const THE_NULL_DEVICE: &str = "/dev/null";
 
+/// Where the Command Line Tools install their developer directory, which is granted as it is.
+const THE_COMMAND_LINE_TOOLS: &str = "/Library/Developer/CommandLineTools";
+
+/// The directory an application bundle holding a developer directory is granted from.
+const APPLICATIONS: &str = "/Applications";
+
 /// The rows every program a person asked for gets, before its plan is read.
 ///
 /// `temporary_directory` is the system temporary directory this process resolved as the session
@@ -147,6 +165,10 @@ const THE_NULL_DEVICE: &str = "/dev/null";
 /// `TMPDIR=` assignment changes where a program writes without changing what the profile allows.
 /// It arrives with its links followed, since a backend matching a grant against the path a
 /// program opens grants nothing for the name a link is reached by.
+///
+/// `developer_directory` is, on macOS, the one `xcode-select -p` prints, resolved the same way
+/// and with its links followed: `git`, `cc`, `make` and `python3` in `/usr/bin` are shims that
+/// run the real program out of it. What is granted is [`developer_row`]'s, and elsewhere nothing.
 ///
 /// `home` is the account's home directory where the machine has one. It is in no row itself:
 /// what it contributes is the two spellings of the git configuration, and a machine without one
@@ -157,13 +179,22 @@ const THE_NULL_DEVICE: &str = "/dev/null";
 /// the endorsed argv can, and a policy denying children is one two of the three backends refuse
 /// outright rather than apply, so a base asking for that denial is every program refused on
 /// them.
-pub fn base(prelude: Prelude, temporary_directory: &Path, home: Option<&Path>) -> SandboxPolicy {
+pub fn base(
+    prelude: Prelude,
+    temporary_directory: &Path,
+    developer_directory: Option<&Path>,
+    home: Option<&Path>,
+) -> SandboxPolicy {
     let mut policy = SandboxPolicy::strict()
         .allow_network_egress()
         .allow_subprocesses();
 
     for path in prelude.rows() {
         policy = policy.allow_read(*path);
+    }
+
+    if let Some(row) = developer_directory.and_then(developer_row) {
+        policy = policy.allow_read(row);
     }
 
     // Neither write row says what is at the path it names, so nothing creates either of them.
@@ -182,6 +213,27 @@ pub fn base(prelude: Prelude, temporary_directory: &Path, home: Option<&Path>) -
     }
 
     policy
+}
+
+/// The row a developer directory is granted as, where it is one of the two the platform installs.
+///
+/// The Command Line Tools' is granted as it is. An application bundle's, one directly in
+/// `/Applications` whatever the bundle is called, is granted as the bundle whole: its developer
+/// directory loads frameworks from beside it, and with the lookup cache the shims keep in the
+/// temporary directory empty, a shim asks `xcodebuild`, which loads from further across the
+/// bundle. Anywhere else is a directory of a person's choosing rather than the machine's, and is
+/// in no row.
+fn developer_row(developer_directory: &Path) -> Option<PathBuf> {
+    if developer_directory == Path::new(THE_COMMAND_LINE_TOOLS) {
+        return Some(developer_directory.to_path_buf());
+    }
+    let bundle = developer_directory.parent()?.parent()?;
+    let is_a_bundles = developer_directory.ends_with("Contents/Developer")
+        && bundle.parent() == Some(Path::new(APPLICATIONS))
+        && bundle
+            .extension()
+            .is_some_and(|extension| extension == "app");
+    is_a_bundles.then(|| bundle.to_path_buf())
 }
 
 /// The git configuration any stage may read for an identity, in both spellings.
@@ -211,10 +263,25 @@ mod tests {
 
     const BOTH_PLATFORMS: [Prelude; 2] = [Prelude::Linux, Prelude::MacOs];
 
+    /// What `xcode-select -p` prints for an Xcode installed where the platform puts one, which
+    /// is the widest developer row a base names.
+    const AN_XCODE: &str = "/Applications/Xcode.app/Contents/Developer";
+
     fn a_base(prelude: Prelude) -> SandboxPolicy {
+        let developer_directory = (prelude == Prelude::MacOs).then(|| Path::new(AN_XCODE));
         base(
             prelude,
             Path::new(THE_SESSIONS_TEMPORARY_DIRECTORY),
+            developer_directory,
+            Some(Path::new(A_HOME)),
+        )
+    }
+
+    fn a_macos_base_with(developer_directory: &str) -> SandboxPolicy {
+        base(
+            Prelude::MacOs,
+            Path::new(THE_SESSIONS_TEMPORARY_DIRECTORY),
+            Some(Path::new(developer_directory)),
             Some(Path::new(A_HOME)),
         )
     }
@@ -300,28 +367,33 @@ mod tests {
     }
 
     /// The configuration is in the base so that a stage nobody asked about can read an identity
-    /// out of it. Writing it is a different thing: a program that can write this file names the
-    /// command `git` runs for a push in it.
+    /// out of it, and the machine's copy is in it because git stops on a configuration file that
+    /// is there and that it is refused. Writing any of them is a different thing: a program that
+    /// can write one names the command `git` runs for a push in it.
     #[test]
     fn the_git_configuration_is_read_and_never_written() {
-        let policy = a_base(Prelude::Linux);
-
-        assert!(
-            policy
-                .readable
-                .contains(&PathBuf::from("/home/a-person/.gitconfig"))
-        );
-        assert!(
-            policy
-                .readable
-                .contains(&PathBuf::from("/home/a-person/.config/git/config"))
-        );
-        assert!(
-            written_paths(&policy)
-                .iter()
-                .all(|path| !path.starts_with(A_HOME)),
-            "a base grants writing somewhere under a home directory"
-        );
+        for (prelude, the_machines) in [
+            (Prelude::Linux, "/etc/gitconfig"),
+            (Prelude::MacOs, "/private/etc/gitconfig"),
+        ] {
+            let policy = a_base(prelude);
+            for configuration in [
+                the_machines,
+                "/home/a-person/.gitconfig",
+                "/home/a-person/.config/git/config",
+            ] {
+                assert!(
+                    policy.readable.contains(&PathBuf::from(configuration)),
+                    "the {prelude:?} base misses {configuration}"
+                );
+                assert!(
+                    !written_paths(&policy)
+                        .iter()
+                        .any(|path| Path::new(configuration).starts_with(path)),
+                    "the {prelude:?} base grants writing {configuration}"
+                );
+            }
+        }
     }
 
     /// The git rows are the only part of the base a home directory decides, so a machine with
@@ -331,6 +403,7 @@ mod tests {
         let policy = base(
             Prelude::Linux,
             Path::new(THE_SESSIONS_TEMPORARY_DIRECTORY),
+            None,
             None,
         );
 
@@ -390,6 +463,7 @@ mod tests {
         let policy = base(
             Prelude::Linux,
             &temporary_directory,
+            None,
             Some(Path::new(A_HOME)),
         );
 
@@ -476,6 +550,84 @@ mod tests {
             let policy = a_base(prelude);
             assert!(reaches(&policy, "/usr/bin/git"), "{prelude:?}");
             assert!(reaches(&policy, "/dev/urandom"), "{prelude:?}");
+        }
+    }
+
+    /// Without its configuration file the TLS library macOS ships aborts every program linked
+    /// against it, and without the developer directory the `/usr/bin` developer tools are shims
+    /// with nothing to run: `cargo`, `curl` and `git` all refused before any plan is read. The
+    /// developer directory is the one the caller resolved, whatever the bundle holding it is
+    /// called, and no row widens to what holds it, since `/Applications` is every program a
+    /// person installed.
+    #[test]
+    fn a_macos_base_names_what_its_tls_library_and_developer_tools_start_from() {
+        for (developer_directory, needed, another) in [
+            (
+                THE_COMMAND_LINE_TOOLS,
+                "/Library/Developer/CommandLineTools/usr/bin/git",
+                "/Applications/Xcode.app/Contents/Developer/usr/bin/git",
+            ),
+            (
+                AN_XCODE,
+                "/Applications/Xcode.app/Contents/SharedFrameworks/DVTSystemPrerequisites.framework",
+                "/Library/Developer/CommandLineTools/usr/bin/git",
+            ),
+            (
+                "/Applications/Xcode_16.4.app/Contents/Developer",
+                "/Applications/Xcode_16.4.app/Contents/Developer/usr/bin/git",
+                "/Applications/Xcode.app/Contents/Developer/usr/bin/git",
+            ),
+        ] {
+            let macos = a_macos_base_with(developer_directory);
+            assert!(reaches(&macos, "/private/etc/ssl/openssl.cnf"));
+            assert!(reaches(&macos, needed), "{developer_directory}: {needed}");
+            for elsewhere in [
+                another,
+                "/Applications/Docker.app/Contents/Resources/bin/docker",
+                "/Library/Developer/CoreSimulator/Devices",
+                "/Library/Keychains/System.keychain",
+            ] {
+                assert!(
+                    !reaches(&macos, elsewhere),
+                    "{developer_directory}: {elsewhere}"
+                );
+            }
+        }
+    }
+
+    /// A developer directory is granted in the two shapes the platform installs one in. Any other
+    /// is a path somebody pointed `xcode-select` at, and a row for it is the base naming a
+    /// directory of a person's, or `/Applications` whole, on the word of that setting.
+    #[test]
+    fn a_developer_directory_anywhere_else_is_in_no_row() {
+        let without_one = base(
+            Prelude::MacOs,
+            Path::new(THE_SESSIONS_TEMPORARY_DIRECTORY),
+            None,
+            Some(Path::new(A_HOME)),
+        );
+
+        for elsewhere in [
+            "/Users/a-person/Applications/Xcode.app/Contents/Developer",
+            "/Applications/../Users/a-person/Xcode.app/Contents/Developer",
+            "/Applications/Utilities/Xcode.app/Contents/Developer",
+            "/Applications/Xcode/Contents/Developer",
+            "/Applications/.app/Contents/Developer",
+            "/Applications/Xcode.app/Contents",
+            "/Applications/Xcode.app/Contents/Resources",
+            "/Applications/Xcode.app/Contents/Developer/usr",
+            "/Applications/Xcode.app",
+            "/Applications",
+            "/Library/Developer",
+            "/Library/Developer/CommandLineTools/usr",
+            A_HOME,
+            "/",
+        ] {
+            assert_eq!(
+                granted_paths(&a_macos_base_with(elsewhere)),
+                granted_paths(&without_one),
+                "a developer directory at {elsewhere} is a row"
+            );
         }
     }
 

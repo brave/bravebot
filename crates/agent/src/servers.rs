@@ -1780,7 +1780,7 @@ fn confinement(
     temporary: &Path,
     home: Option<&Path>,
 ) -> Option<SandboxPolicy> {
-    let mut policy = base(prelude?, temporary, None);
+    let mut policy = base(prelude?, temporary, None, None);
     let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     // Compared with paths whose links are followed, so a home reached through one is followed too.
     let home = home.map(canonical);

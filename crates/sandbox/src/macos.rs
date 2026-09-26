@@ -1393,4 +1393,153 @@ int main(void) {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// A scratch directory holding a home and a temporary directory, with the two returned as
+    /// their links are followed, since that is the path Seatbelt matches a grant against. They are
+    /// apart because the base grants its temporary directory whole, and a home inside it would
+    /// have every file in it reached through that row.
+    fn a_home_and_a_temporary_directory(name: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let scratch = crate::testutil::scratch_dir(name);
+        let _ = std::fs::remove_dir_all(&scratch);
+        let home = scratch.join("home");
+        let temporary = scratch.join("tmp");
+        std::fs::create_dir_all(&home).expect("the scratch home is creatable");
+        std::fs::create_dir_all(&temporary).expect("the scratch directory is creatable");
+        let home = home.canonicalize().expect("the scratch home is there");
+        let temporary = temporary
+            .canonicalize()
+            .expect("the scratch directory is there");
+        (scratch, home, temporary)
+    }
+
+    /// What a stage run for the account whose home is `home` is handed: that home, as a session's
+    /// stage has the home its policy was built for, and a search path the base reaches.
+    fn a_stage_for(home: &Path) -> crate::process::Variables {
+        crate::process::Variables::new()
+            .with("HOME", home)
+            .with("PATH", "/usr/bin:/bin")
+    }
+
+    /// The code `program` exits with under `policy` holding `environment` and nothing else, which
+    /// is `None` for a process a signal ended.
+    fn exit_code_under(
+        policy: &SandboxPolicy,
+        environment: crate::process::Variables,
+        program: &str,
+        arguments: &[&str],
+    ) -> Option<i32> {
+        let arguments: Vec<String> = arguments.iter().map(|a| a.to_string()).collect();
+        SeatbeltSandbox::new()
+            .expect("sandbox-exec is present on macOS")
+            .spawn(
+                program,
+                &arguments,
+                policy,
+                nothing_attached(),
+                Environment::Only(environment),
+            )
+            .expect("should spawn")
+            .wait()
+            .expect("should wait")
+            .code()
+    }
+
+    /// The TLS library this platform ships aborts every program linked against it that cannot
+    /// read its configuration file, before the program's own code runs. A base without the row is
+    /// `curl`, `openssl` and rustup's `cargo` refused on every machine, as a program that failed.
+    #[test]
+    fn a_program_linked_against_the_platforms_tls_library_starts_under_the_base() {
+        let (scratch, home, temporary) =
+            a_home_and_a_temporary_directory("bravebot-sandbox-base-starts-tls");
+        let policy = crate::base::base(crate::base::Prelude::MacOs, &temporary, None, Some(&home));
+
+        for (program, argument) in [
+            ("/usr/bin/openssl", "version"),
+            ("/usr/bin/curl", "--version"),
+        ] {
+            assert_eq!(
+                exit_code_under(&policy, a_stage_for(&home), program, &[argument]),
+                Some(0),
+                "{program} did not start under the base"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// `git` and `make` in `/usr/bin` are shims that run the real program out of the active
+    /// developer directory. A base without it is every git stage refused before git runs. The
+    /// suite was linked by `cc`, which is the same kind of shim, so a machine running this test
+    /// has a developer directory, and it is the one `xcode-select` names, as a session's is.
+    ///
+    /// The temporary directory and `HOME` are this process's, as a session's are: the shims keep
+    /// a lookup cache in the account's temporary directory, keyed on its home, and a lookup that
+    /// misses it runs `xcodebuild`, which refuses on a machine whose Xcode licence has not been
+    /// accepted since its last update, confined or not. git is pointed at an empty configuration
+    /// of the account's, so that what starts or does not is the shim and the machine's own
+    /// configuration rather than this account's settings.
+    #[test]
+    fn a_developer_tool_the_platform_ships_as_a_shim_starts_under_the_base() {
+        // Nothing is created here but the repository below, which is removed: the path becomes
+        // the base's temporary row, and the shims keep their lookup cache in it.
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir
+        let temporary = std::env::temp_dir()
+            .canonicalize()
+            .expect("the temporary directory is there");
+        let selected = Command::new("/usr/bin/xcode-select")
+            .arg("-p")
+            .output()
+            .expect("xcode-select is on every macOS");
+        let developer_directory = PathBuf::from(String::from_utf8_lossy(&selected.stdout).trim())
+            .canonicalize()
+            .expect("the selected developer directory is there");
+        let policy = crate::base::base(
+            crate::base::Prelude::MacOs,
+            &temporary,
+            Some(&developer_directory),
+            None,
+        );
+        let home = std::env::var_os("HOME").expect("cargo runs a test with a HOME");
+        let repository = temporary.join(format!(
+            "bravebot-sandbox-a-shim-repository-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&repository);
+        let repository = repository
+            .to_str()
+            .expect("the temporary directory is UTF-8");
+
+        for program in ["/usr/bin/git", "/usr/bin/make"] {
+            assert!(
+                Command::new(program)
+                    .arg("--version")
+                    .env_clear()
+                    .env("HOME", &home)
+                    .env("PATH", "/usr/bin:/bin")
+                    .stdout(std::process::Stdio::null())
+                    .status()
+                    .expect("the shim is on every macOS")
+                    .success(),
+                "{program} does not start here unconfined either"
+            );
+        }
+        for (program, arguments) in [
+            ("/usr/bin/git", vec!["--version"]),
+            ("/usr/bin/make", vec!["--version"]),
+            ("/usr/bin/git", vec!["init", "-q", repository]),
+            ("/usr/bin/git", vec!["-C", repository, "status", "--short"]),
+        ] {
+            let environment = crate::process::Variables::new()
+                .with("HOME", &home)
+                .with("PATH", "/usr/bin:/bin")
+                .with("GIT_CONFIG_GLOBAL", "/dev/null");
+            assert_eq!(
+                exit_code_under(&policy, environment, program, &arguments),
+                Some(0),
+                "{program} {arguments:?} did not start under the base"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(repository);
+    }
 }

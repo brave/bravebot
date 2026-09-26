@@ -402,13 +402,14 @@ not built.
 
 The rows a confined program reaches before its own plan is read are the same for every program
 and are decided in code: what a dynamic executable needs in order to start, the temporary
-directory the session resolved as it opened, and the git configuration a stage reads for an
-identity. Nothing a program prints, no value a model supplied, no argument vector and no
-configuration file adds a row. The home directory is in no row, no directory a credential sits in
-is in one, and the only paths granted for writing are the temporary directory and the null
-device. Egress and children are left where they were, since what the base bounds is the
-filesystem. A platform whose prelude is not written down has no base, and so nothing to assemble
-a profile from.
+directory the session resolved as it opened, on macOS the developer directory resolved with it,
+and the git configuration a stage reads for an identity. Nothing a program prints, no value a model
+supplied, no argument vector and no configuration file adds a row, and the developer directory is
+granted only where the platform installs one. The home directory is in no row, no directory a
+credential sits in is in one, and the only paths granted for writing are the temporary directory
+and the null device. Egress and children are left where they were, since what the base bounds is
+the filesystem. A platform whose prelude is not written down has no base, and so nothing to
+assemble a profile from.
 
 **Why.** A profile denies everything and then names what may be reached, so something has to
 carry what every program needs before any plan is read: a dynamic executable without its loader
@@ -431,11 +432,15 @@ confining a program was for.
 `verified-by: bravebot_sandbox::base::the_base_leaves_egress_and_children_to_the_plan`
 `verified-by: bravebot_sandbox::base::the_base_names_no_filesystem_root`
 `verified-by: bravebot_sandbox::base::each_platform_starts_a_program_out_of_its_own_directories`
+`verified-by: bravebot_sandbox::base::a_macos_base_names_what_its_tls_library_and_developer_tools_start_from`
+`verified-by: bravebot_sandbox::base::a_developer_directory_anywhere_else_is_in_no_row`
 `verified-by: bravebot_sandbox::base::a_prelude_names_the_machines_directories_and_none_of_a_persons`
 `verified-by: bravebot_sandbox::base::a_platform_with_no_prelude_written_down_has_no_base`
 `verified-by: bravebot_sandbox::linux::a_program_starts_under_the_base_this_machine_resolved`
 `verified-by: bravebot_sandbox::linux::a_program_under_the_base_can_name_the_account_it_runs_as`
 `verified-by: bravebot_sandbox::linux::a_program_under_the_base_reads_the_machine_and_not_a_private_key`
+`verified-by: bravebot_sandbox::macos::a_program_linked_against_the_platforms_tls_library_starts_under_the_base`
+`verified-by: bravebot_sandbox::macos::a_developer_tool_the_platform_ships_as_a_shim_starts_under_the_base`
 
 <a id="SANDBOX-13"></a>
 ### SANDBOX-13: a confined process can look at any path, and reads and lists only its grants
@@ -508,20 +513,30 @@ whose plan never named them.
 
 | The base holds | To |
 |---|---|
-| the loader, the system libraries, the system binary directories, the locale data, terminfo, the time zone data, the CA bundle and the certificate directory beside it, `/etc/hosts`, `/etc/resolv.conf`, `/etc/nsswitch.conf`, `/etc/passwd`, `/etc/group`, `/dev/null`, `/dev/zero`, `/dev/random` and `/dev/urandom` | read, and write for `/dev/null` |
+| the loader, the system libraries, the system binary directories, the locale data, terminfo, the time zone data, the CA bundle and the certificate directory beside it, `/etc/hosts`, `/etc/resolv.conf`, `/etc/nsswitch.conf`, `/etc/passwd`, `/etc/group`, the machine's git configuration `/etc/gitconfig`, `/dev/null`, `/dev/zero`, `/dev/random` and `/dev/urandom`, and on macOS the TLS configuration `/private/etc/ssl/openssl.cnf` | read, and write for `/dev/null` |
 | the system temporary directory this process resolved as the session opened | read and write |
+| on macOS, the developer directory `xcode-select -p` names as the session opens, where it is `/Library/Developer/CommandLineTools` or an application bundle's directly in `/Applications`, which is then the bundle whole | read |
 | the git configuration any stage may read for an identity: `~/.gitconfig` and `~/.config/git/config` | read |
 
-Three rows is the whole of what stays invisible, and each one is here because every program needs it
+Four rows is the whole of what stays invisible, and each one is here because every program needs it
 and none of it sits beside a token. The prelude is what a dynamic executable needs to start at all.
 A lookup reads `/etc/group` as well as `/etc/passwd`, and a program stamping a time reads the time
 zone data, so both are in it on the same ground: what a program without them produces is wrong
 rather than absent, a listing naming a number where a group belongs, and neither sits beside a
-token either.
+token either. The machine's git configuration is in it because git stops on a configuration file
+that is there and that it is refused. On macOS the TLS library the platform ships aborts every
+program linked against it, `curl` and rustup's `cargo` among them, when it cannot read its
+configuration file, so that file is in it too. And `git`, `cc`, `make` and `python3` in `/usr/bin`
+are shims that run the real program out of the active developer directory, which differs by
+machine, so it is resolved as the temporary directory is and not from a stage's own
+`DEVELOPER_DIR=` assignment. The Command Line Tools' is granted as it is. An application bundle's
+is granted as the bundle whole, whatever the bundle is called, because its developer directory
+loads frameworks from beside it, and a shim whose lookup cache is empty asks `xcodebuild`, which
+loads from further across the bundle. A developer directory anywhere else is in no row.
 The git configuration is in the base rather than in one program's list because a stage that never
 mentions `git` still shells out to it for an identity, a `cargo` fetching a git dependency among
 them, and it can name a credential store without holding one. The remote scope below naming
-`~/.gitconfig` as well costs nothing. What keeps the base to three rows is that a row shown on every
+`~/.gitconfig` as well costs nothing. What keeps the base to four rows is that a row shown on every
 run is a row that teaches a person to approve without reading, and a row shown on no run is one
 nobody audits: neither is free, so the split is by whether every program needs it.
 
@@ -717,6 +732,15 @@ reported as what it is.
   rather than applied without it ([SANDBOX-5](#SANDBOX-5)). What it costs is that the two
   platforms confine nothing for a caller whose policy wants a program to have no children, where
   Seatbelt applies one.
+- A macOS developer directory outside the two places the platform installs one, an Xcode kept
+  under the home or in a folder inside `/Applications`, is in no row, so on that machine every
+  `/usr/bin` developer shim is refused under the base. A row for it names a directory of the
+  person's on the word of a setting, and nothing has decided that yet.
+- The cold path of a macOS developer shim has not been exercised. With the lookup cache the shims
+  keep empty, a shim asks `xcodebuild`, which refuses every invocation until the Xcode licence
+  is accepted, confined or not, so a machine in that state cannot show whether that path starts,
+  and the kernel test runs with the cache the account already has. On Linux the kernel tests start
+  `true`, `id` and `cat` under the base, and no TLS program or compiler.
 - The suite does not run on Windows. The decisions this backend makes before a process starts are
   pure and are run by every job that runs the suite: which capability a policy asks for, what each
   grant permits, which policies are refused, and how an argument is written onto a command line.
