@@ -91,12 +91,14 @@ the person opened with a key and closes with any of four.
 
 | Keys | Where the view goes |
 |---|---|
-| Up / Down, `k` / `j` | one line back / on |
-| Ctrl-U / Ctrl-D | half a screen back / on |
-| Space / `b`, Ctrl-F / Ctrl-B | a whole screen on / back |
-| `g` / `G`, Home / End | the first row / the last |
+| Up / Down, `k` / `j`, `y` / `e`, Ctrl-Y / Ctrl-E, Ctrl-P / Ctrl-N | one line back / on |
+| Ctrl-U / Ctrl-D, `u` / `d` | half a screen back / on |
+| Space or `f` / `b`, Ctrl-F / Ctrl-B | a whole screen on / back |
+| `g` / `G`, `<` / `>`, Home / End | the first row / the last |
 | `{` / `}` | the prompt before this one / the prompt after |
 | the wheel | what it does at rest, stopping at the ends as everything here does |
+
+Ctrl-N is a line on, and `n` alone is the next match (SCROLL-4).
 
 Each end is a stop rather than a count that keeps going: neither direction moves past the first row
 or the last, so a held key comes to rest somewhere the next press can move away from.
@@ -128,7 +130,7 @@ that the Known costs below do not already admit.
 `verified-by: bravebot_tui::app::the_line_keys_move_the_view_by_a_line`
 `verified-by: bravebot_tui::app::the_half_page_keys_move_the_view_by_half_a_screen`
 `verified-by: bravebot_tui::app::the_page_keys_move_the_view_by_a_whole_screen`
-`verified-by: bravebot_tui::app::g_and_shift_g_reach_the_first_row_and_the_last`
+`verified-by: bravebot_tui::app::the_end_keys_reach_the_first_row_and_the_last`
 `verified-by: bravebot_tui::app::the_prompt_keys_land_on_the_turn_before_and_the_turn_after`
 `verified-by: bravebot_tui::app::the_view_stops_at_the_first_row_rather_than_scrolling_past_it`
 `verified-by: bravebot_tui::app::the_view_stops_at_the_last_row_rather_than_scrolling_past_it`

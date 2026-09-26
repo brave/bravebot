@@ -718,33 +718,39 @@ fn scroller_key(session: &mut Session, key: KeyEvent) -> Action {
             Action::Redraw
         }
 
-        // A line at a time.
-        KeyCode::Up | KeyCode::Char('k') => {
+        // A line at a time. The letters here are the same key with or without Ctrl, as `b` is
+        // below: `less` reads `e` and Ctrl-E alike, and vi has only the chord. Ctrl-N and Ctrl-P
+        // are chords only, since `n` alone is the next match.
+        KeyCode::Up | KeyCode::Char('k' | 'y') => {
             session.scroller_back(by(1));
             Action::Redraw
         }
-        KeyCode::Down | KeyCode::Char('j') => {
+        KeyCode::Char('p') if ctrl => {
+            session.scroller_back(by(1));
+            Action::Redraw
+        }
+        KeyCode::Down | KeyCode::Char('j' | 'e') => {
+            session.scroller_on(by(1));
+            Action::Redraw
+        }
+        KeyCode::Char('n') if ctrl => {
             session.scroller_on(by(1));
             Action::Redraw
         }
 
         // Half a screen, which is the one movement that keeps context on both sides of itself.
-        KeyCode::Char('u') if ctrl => {
+        KeyCode::Char('u') => {
             session.scroller_back(by(session.half_screen()));
             Action::Redraw
         }
-        KeyCode::Char('d') if ctrl => {
+        KeyCode::Char('d') => {
             session.scroller_on(by(session.half_screen()));
             Action::Redraw
         }
 
-        // A whole screen, in both dialects. `b` is the same key with or without Ctrl, because
-        // somebody who knows one spelling should not find the other typing a letter.
-        KeyCode::Char(' ') | KeyCode::PageDown => {
-            session.scroller_on(by(session.whole_screen()));
-            Action::Redraw
-        }
-        KeyCode::Char('f') if ctrl => {
+        // A whole screen, in both dialects. `b` and `f` are the same key with or without Ctrl,
+        // because somebody who knows one spelling should not find the other typing a letter.
+        KeyCode::Char(' ' | 'f') | KeyCode::PageDown => {
             session.scroller_on(by(session.whole_screen()));
             Action::Redraw
         }
@@ -762,11 +768,11 @@ fn scroller_key(session: &mut Session, key: KeyEvent) -> Action {
             session.scroller_to_last_row();
             Action::Redraw
         }
-        KeyCode::Home => {
+        KeyCode::Char('<') | KeyCode::Home => {
             session.scroller_to_first_row();
             Action::Redraw
         }
-        KeyCode::End => {
+        KeyCode::Char('>') | KeyCode::End => {
             session.scroller_to_last_row();
             Action::Redraw
         }
@@ -8428,12 +8434,19 @@ mod tests {
             assert_eq!(session.input(), "a prompt", "the line was taken");
         }
 
+        /// `p` is among them: Ctrl-P is a line back, and the letter alone is nothing in either
+        /// dialect.
         #[test]
         fn a_key_the_scroller_does_not_take_does_nothing() {
             let mut session = opened();
             let before = session.scroll;
 
-            for pressed in [key(KeyCode::Char('z')), key(KeyCode::Tab), ctrl('w')] {
+            for pressed in [
+                key(KeyCode::Char('z')),
+                key(KeyCode::Char('p')),
+                key(KeyCode::Tab),
+                ctrl('w'),
+            ] {
                 assert_eq!(
                     handle_key(&mut session, pressed),
                     Action::None,
@@ -8445,6 +8458,9 @@ mod tests {
             assert!(session.input().is_empty());
         }
 
+        /// Every spelling `less` and vi give a line, since a key either dialect's reader reaches
+        /// for that does nothing reads as a broken scroller. Ctrl-N is a line and not the next
+        /// match, which is the bare letter.
         #[test]
         fn the_line_keys_move_the_view_by_a_line() {
             let mut session = opened();
@@ -8457,16 +8473,32 @@ mod tests {
             assert_eq!(session.scroll, 1);
             handle_key(&mut session, key(KeyCode::Down));
             assert_eq!(session.scroll, 0);
+
+            for (back, on) in [
+                (key(KeyCode::Char('y')), key(KeyCode::Char('e'))),
+                (ctrl('y'), ctrl('e')),
+                (ctrl('p'), ctrl('n')),
+            ] {
+                let mut session = opened();
+                handle_key(&mut session, back);
+                assert_eq!(session.scroll, 1, "{back:?} did not move a line back");
+                handle_key(&mut session, on);
+                assert_eq!(session.scroll, 0, "{on:?} did not move a line on");
+            }
         }
 
         #[test]
         fn the_half_page_keys_move_the_view_by_half_a_screen() {
-            let mut session = opened();
-
-            handle_key(&mut session, ctrl('u'));
-            assert_eq!(session.scroll, 5);
-            handle_key(&mut session, ctrl('d'));
-            assert_eq!(session.scroll, 0);
+            for (back, on) in [
+                (ctrl('u'), ctrl('d')),
+                (key(KeyCode::Char('u')), key(KeyCode::Char('d'))),
+            ] {
+                let mut session = opened();
+                handle_key(&mut session, back);
+                assert_eq!(session.scroll, 5, "{back:?} did not move half a screen");
+                handle_key(&mut session, on);
+                assert_eq!(session.scroll, 0, "{on:?} did not move half a screen");
+            }
         }
 
         /// Both dialects, because somebody who knows one spelling should not find the other
@@ -8475,6 +8507,7 @@ mod tests {
         fn the_page_keys_move_the_view_by_a_whole_screen() {
             for (back, on) in [
                 (key(KeyCode::Char('b')), key(KeyCode::Char(' '))),
+                (key(KeyCode::Char('b')), key(KeyCode::Char('f'))),
                 (ctrl('b'), ctrl('f')),
                 (key(KeyCode::PageUp), key(KeyCode::PageDown)),
             ] {
@@ -8487,9 +8520,10 @@ mod tests {
         }
 
         #[test]
-        fn g_and_shift_g_reach_the_first_row_and_the_last() {
+        fn the_end_keys_reach_the_first_row_and_the_last() {
             for (first, last) in [
                 (key(KeyCode::Char('g')), key(KeyCode::Char('G'))),
+                (key(KeyCode::Char('<')), key(KeyCode::Char('>'))),
                 (ctrl_key(KeyCode::Home), ctrl_key(KeyCode::End)),
             ] {
                 let mut session = opened();
@@ -8569,7 +8603,11 @@ mod tests {
                 ("5", key(KeyCode::Up), 5),
                 ("12", key(KeyCode::Char('k')), 12),
                 ("10", key(KeyCode::Char('k')), 10),
+                ("5", key(KeyCode::Char('y')), 5),
+                ("5", ctrl('y'), 5),
+                ("5", ctrl('p'), 5),
                 ("2", ctrl('u'), 10),
+                ("2", key(KeyCode::Char('u')), 10),
                 ("3", key(KeyCode::Char('b')), 30),
                 ("3", ctrl('b'), 30),
                 ("3", key(KeyCode::PageUp), 30),
@@ -8590,6 +8628,20 @@ mod tests {
                 ("2", ctrl('f'), 30),
                 ("2", key(KeyCode::PageDown), 10),
             ] {
+                type_keys(&mut session, count);
+                handle_key(&mut session, pressed);
+                assert_eq!(session.scroll, scroll, "{count} then {pressed:?}");
+            }
+
+            for (count, pressed, scroll) in [
+                ("5", key(KeyCode::Char('e')), 85),
+                ("5", ctrl('e'), 85),
+                ("5", ctrl('n'), 85),
+                ("2", key(KeyCode::Char('d')), 80),
+                ("2", key(KeyCode::Char('f')), 70),
+            ] {
+                let mut session = opened();
+                session.scroller_to_first_row();
                 type_keys(&mut session, count);
                 handle_key(&mut session, pressed);
                 assert_eq!(session.scroll, scroll, "{count} then {pressed:?}");
@@ -8701,6 +8753,8 @@ mod tests {
             for dropping in [
                 key(KeyCode::Char('G')),
                 key(KeyCode::Char('g')),
+                key(KeyCode::Char('<')),
+                key(KeyCode::Char('>')),
                 key(KeyCode::End),
                 key(KeyCode::Char('z')),
                 key(KeyCode::Tab),

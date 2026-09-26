@@ -1422,12 +1422,16 @@ fn draw_scroller(frame: &mut Frame, session: &Session) -> Laid {
 ///
 /// The way out is last and is never the row that did not fit: a list that scrolled its own exit
 /// off the screen would be a mode nobody could leave.
-fn scroller_keys() -> [(&'static str, &'static str); 11] {
+fn scroller_keys() -> [(&'static str, &'static str); 13] {
     [
-        ("up/down, j/k", t!(scroller_key_line)),
+        // vi's two pairs of line chords take rows of their own: the key column of the first row
+        // is full, and a parenthesis on its meaning would not hold them either.
+        ("up/down, j/k, y/e", t!(scroller_key_line)),
+        ("ctrl-y / ctrl-e", t!(scroller_key_line)),
+        ("ctrl-p / ctrl-n", t!(scroller_key_line)),
         ("ctrl-u / ctrl-d", t!(scroller_key_half_page)),
-        ("space / b", t!(scroller_key_full_page)),
-        ("g / G", t!(scroller_key_ends)),
+        ("space, f / b", t!(scroller_key_full_page)),
+        ("g / G, < / >", t!(scroller_key_ends)),
         ("{ / }", t!(scroller_key_prompts)),
         ("/ then n/N", t!(scroller_key_search)),
         ("5j, 3}, 2n", t!(scroller_key_count)),
@@ -5118,10 +5122,12 @@ mod tests {
             // Every key docs/specs/scroller.md names, in the spelling the list gives it. The
             // wheel is the one thing in that file which is not a key.
             for spelling in [
-                "up/down, j/k",
+                "up/down, j/k, y/e",
+                "ctrl-y / ctrl-e",
+                "ctrl-p / ctrl-n",
                 "ctrl-u / ctrl-d",
-                "space / b",
-                "g / G",
+                "space, f / b",
+                "g / G, < / >",
                 "{ / }",
                 "/ then n/N",
                 "5j, 3}, 2n",
@@ -5144,9 +5150,9 @@ mod tests {
             );
 
             // A key that is a second spelling of one already listed rides on the description of
-            // the row it shares, which is where ctrl-f, home and ctrl-c are.
+            // the row it shares, which is where u, ctrl-f, home and ctrl-c are.
             let list = rows.join("\n");
-            for alternate in ["ctrl-f / ctrl-b", "home / end", "ctrl-c"] {
+            for alternate in ["u / d", "ctrl-f / ctrl-b", "home / end", "ctrl-c"] {
                 assert!(
                     list.contains(alternate),
                     "the list named no key {alternate:?}: {list}"
