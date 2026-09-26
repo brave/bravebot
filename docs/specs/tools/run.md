@@ -1194,8 +1194,10 @@ a line or written by reference.
 [RUN-21](#RUN-21)'s cap bounds the release, where it does not bound `read_output`. A `read_output`
 call is made by a planner that has seen the reference and the size it states, and `read` is asked
 before there is a size to see. Output longer than the cap stays behind its reference, and the
-result says it was too long for one result rather than pointing at `read` again. The size is the
-slot's, as its reference states it, so no byte the program printed is read to decide.
+result says it was too long for a run's result rather than pointing at `read` again. It says with
+that where the rest is: `read_output` is not held to the cap, and a filter given the reference as
+`stdin_ref` reads part of it without the line being run again. The size is the slot's, as its
+reference states it, so no byte the program printed is read to decide.
 
 Everywhere else `read` changes nothing. Where a person or a check answers `read_output`, the output
 is quarantined, nobody is asked and no check is made, since a prompt or a check made here would be
@@ -1214,6 +1216,12 @@ rather than for every run keeps output the planner does not want out of its cont
 or test log is often the largest thing a turn produces and is often read only for how it ended,
 which [RUN-13](#RUN-13) already says.
 
+**Why the result says where the rest is.** Told only that the output was too long for one result, a
+planner took `read_output`'s result to be held to the same size, and ran a four-minute `make check`
+a second time through `grep` to learn which tests had failed. The whole log was in the slot the
+first run filled. Both routes it names release by the paths above and no other, so saying them
+changes what the planner knows to ask for and nothing it may be given.
+
 **This changes no label.** The value and the trail entry are the ones `read_output` makes, a round
 early. What decides whether the release happens is the mode, the tools the turn was offered, the
 slot's size and the planner's own argument. The mode is the person's answer given before the session
@@ -1227,6 +1235,7 @@ started, and a planner offered `read_output` may call it on any reference it hol
 `verified-by: bravebot_agent::turn::a_background_line_cannot_ask_to_read_what_it_printed`
 `verified-by: bravebot_agent::turn::asking_to_read_does_not_hand_output_to_a_definition_left_without_read_output`
 `verified-by: bravebot_agent::turn::asking_to_read_more_than_one_result_may_hold_hands_back_the_reference_and_says_why`
+`verified-by: bravebot_agent::turn::output_too_long_for_its_result_is_read_in_part_by_a_filter_fed_its_reference`
 `verified-by: bravebot_agent::turn::a_read_that_was_refused_is_not_asked_for_again`
 `verified-by: bravebot_agent::turn::a_read_that_is_not_true_or_false_is_refused_before_the_line_runs`
 
