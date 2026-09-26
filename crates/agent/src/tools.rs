@@ -5551,16 +5551,17 @@ fn run<S: Sink, C: Confirmer>(
             produced.covered_by_record = covered_by_record;
             produced.read_asked = read_asked;
             produced.ran_a_program = true;
-            produced.ran_git = plan
-                .steps()
-                .iter()
-                .any(|step| step.resolved.file_stem().is_some_and(|stem| stem == "git"));
+            produced.ran_git = plan.steps().into_iter().any(runs_git);
             produced
         }
         // A run that produced nothing still says what happened. The plan is safe to repeat back:
         // a person endorsed it, so it is not something an attacker chose.
         Err(error) => Produced::problem(format!("error: `{displayed}` did not run: {error}")),
     }
+}
+
+fn runs_git(step: &bravebot_core::command::Step) -> bool {
+    step.resolved.file_stem().is_some_and(|stem| stem == "git")
 }
 
 fn fetch_url<S: Sink, C: Confirmer>(
