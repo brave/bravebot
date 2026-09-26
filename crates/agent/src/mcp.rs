@@ -460,7 +460,7 @@ impl Session {
             .map_err(|why| unreadable_record(&why))
             .and_then(|mut approvals| {
                 approvals.vouch_list(server.declaration, Digest::of_list(&text));
-                replace(&records::approvals_file(directory), &approvals.to_text())
+                replace(&records::approvals_file(directory), approvals.to_text())
                     .map_err(|error| error.to_string())
             });
         if let Err(error) = written {
@@ -520,7 +520,7 @@ impl Session {
         if !standing.add(alias, tool, &project) {
             return Err(std::io::Error::other(t!(mcp_call_path_not_one_line)));
         }
-        replace(&records::tools_file(directory), &standing.to_text())
+        replace(&records::tools_file(directory), standing.to_text())
     }
 
     fn call<S: Sink>(
@@ -576,13 +576,13 @@ fn listed(alias: &str, text: &str) -> Vec<ListedTool> {
 ///
 /// The temporary file is named for this process and this write, since two sessions answering at
 /// once would otherwise write into one file and rename whatever the pair of them left there.
-pub fn replace(path: &Path, text: &str) -> std::io::Result<()> {
+pub fn replace(path: &Path, text: impl AsRef<[u8]>) -> std::io::Result<()> {
     static WRITES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let write = WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut temporary = path.as_os_str().to_owned();
     temporary.push(format!(".{}.{write}.tmp", std::process::id()));
     let temporary = PathBuf::from(temporary);
-    let written = crate::home::write_file(&temporary, text.as_bytes())
+    let written = crate::home::write_file(&temporary, text.as_ref())
         .and_then(|()| std::fs::rename(&temporary, path));
     if written.is_err() {
         let _ = std::fs::remove_file(&temporary);

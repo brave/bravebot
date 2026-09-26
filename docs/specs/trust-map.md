@@ -13,6 +13,7 @@ governs:
   - crates/agent/src/workspace.rs
   - crates/agent/src/rewind.rs
   - crates/agent/src/scratch.rs
+  - crates/agent/src/trusted.rs
   - crates/cli/src/main.rs
   - crates/tui/src/app.rs
   - crates/ui-files/src/main.rs
@@ -204,9 +205,15 @@ fetched page into a project nobody may edit.
 <a id="TRUST-6"></a>
 ### TRUST-6: the map belongs to the session, not the directory
 
-Every session start asks, whatever any earlier session in that directory answered. `/clear` begins
-a session and therefore asks. `--resume` does not ask, and restores the map from the record of the
-session chosen; a record from before maps were kept has none, and is asked about.
+Every session start asks, whatever any earlier session in that directory answered, unless the person
+said to remember the answer there ([TRUST-23](#TRUST-23)). `/clear` begins a session and therefore
+asks, on the same terms. `--resume` does not ask, and restores the map from the record of the session
+chosen; a record from before maps were kept has none, and is asked about.
+
+A remembered answer is the answer and nothing else the session held. The session it settles starts
+from the rule a yes writes and from no other: a path an earlier session's writes marked untrusted, a
+directory it opened, a file it vouched for, and a no given inside the tree are all left behind with
+that session, as they are when the person presses `y` again.
 
 **What the record keeps is the name, not the key.** A rule inside the project is written down
 relative to it and a rule outside is written down in full, and a resume reads the relative ones
@@ -223,20 +230,25 @@ TRUST-1 rules out: it is an answer a person gave, about one rule text from one n
 rule decides is whether they are asked rather than what is trusted. The map is still asked about
 afresh, so a session inheriting such a grant trusts no path nobody vouched for.
 
-**Why.** The question grants standing permission. Honouring last week's answer grants it on behalf
-of a user who was never asked, and trust assumed from silence is not trust granted. A resume is not
-an exception: the answer honoured is the one that session's own user gave, and it carries the rules
-that session's writes recorded, which is what stops a resumed turn reading back a file an earlier
-turn of the same session poisoned.
+**Why.** The question grants standing permission. Honouring last week's yes as though it had been
+given for every session grants it on behalf of a user who was never asked whether it should last,
+and trust assumed from silence is not trust granted. A resume is not an exception: the answer
+honoured is the one that session's own user gave, and it carries the rules that session's writes
+recorded, which is what stops a resumed turn reading back a file an earlier turn of the same session
+poisoned. Nor is a remembered answer: the person was asked exactly that, on a screen that named the
+file it would be written to.
 
-**Why a granted rule may last where this answer may not.** This answer covers a whole tree and
-everything that appears in it afterwards, so there is no narrowing that would make keeping it worth
-the risk. A granted rule is the opposite shape: one text, from one file, in one workspace, lapsing
-the moment the checkout edits it. What a later session honours unasked is therefore exactly what
-somebody read, which is the property this answer cannot have.
+**Why this answer lasts only where the person said so.** It covers a whole tree and everything that
+appears in it afterwards, and a granted rule does not: one text, from one file, lapsing the moment
+the checkout edits it. So a granted rule may last by default and this answer may not. What asking
+again does not buy is a reading of what arrived since the last session, since a fresh yes trusts
+that too and a question answered every morning is answered without it. The person is therefore the
+one who chooses the lifetime, and a kept answer is narrowed to what a yes in that directory could
+only mean (TRUST-23).
 
 `verified-by: bravebot_session::sessions::a_record_resumes_its_rules_under_the_directory_it_is_read_in`
 `verified-by: bravebot_tui::app::a_fresh_session_is_asked_rather_than_inheriting_a_map`
+`verified-by: bravebot_tui::app::a_remembered_answer_settles_a_fresh_session`
 `verified-by: bravebot_tui::app::a_resume_starts_with_the_map_its_own_record_kept`
 `verified-by: bravebot_tui::app::a_record_from_before_maps_were_kept_is_asked_about`
 `verified-by: bravebot_session::sessions::a_record_that_predates_the_map_has_none_rather_than_an_empty_one`
@@ -249,7 +261,9 @@ somebody read, which is the property this answer cannot have.
 
 At startup the user is asked whether they trust the working directory. Yes writes a rule covering
 the tree. Declining writes nothing, so every write is shown. Leaving at the question starts no
-session.
+session. Where the answer may be kept ([TRUST-23](#TRUST-23)), a third key, `r`, writes the same rule
+as yes and keeps the answer for later sessions; where it may not, `r` is neither shown nor answers.
+It is held to the rule the other keys are, so an `r` arriving with other bytes answers nothing.
 
 A session running in the mode that asks about nothing is the one exception: the question is not put,
 and the map is the one a yes would have written. That mode approves vouching for every quarantined
@@ -260,7 +274,9 @@ other mode may answer this question.
 
 **Why the exception goes no further.** A resumed session takes the map from its own record even
 there, since the question is not being put in that case either and the answer its user gave is the
-more specific record.
+more specific record. And the mode answers before a kept answer is read, so a session bypassing
+every permission says the flag answered, which is what is in force, and never writes one
+([permission-modes.md](permission-modes.md#MODE-4)).
 
 `verified-by: bravebot_tui::trust_prompt::trusting_covers_the_whole_workspace`
 `verified-by: bravebot_tui::trust_prompt::only_y_trusts_and_enter_answers_nothing`
@@ -272,6 +288,11 @@ more specific record.
 `verified-by: bravebot_tui::trust_prompt::bypassing_trusts_the_workspace_instead_of_asking`
 `verified-by: bravebot_tui::trust_prompt::every_other_mode_leaves_the_question_to_the_person`
 `verified-by: bravebot_tui::app::a_resume_keeps_its_own_map_even_where_the_mode_would_answer`
+`verified-by: bravebot_tui::app::bypass_answers_before_a_remembered_answer_is_read`
+`verified-by: bravebot_tui::trust_prompt::r_remembers_only_at_a_question_that_offers_it`
+`verified-by: bravebot_tui::trust_prompt::an_r_nobody_pressed_on_its_own_remembers_nothing`
+`verified-by: bravebot_tui::trust_prompt::remembering_trusts_exactly_what_yes_trusts`
+`verified-by: bravebot_tui::trust_prompt::the_prompt_not_offering_to_remember_says_nothing_of_it`
 
 ## The ways a rule is written
 
@@ -438,9 +459,10 @@ the workspace. Asking it about one would be laundering.
 ### TRUST-12: `/status` lists the rules in force
 
 Every rule the session holds is readable back, so what a line vouched for does not have to be
-remembered.
+remembered. So is a kept answer about the working directory ([TRUST-24](#TRUST-24)).
 
 `verified-by: bravebot_tui::status::an_added_directory_is_reported`
+`verified-by: bravebot_tui::status::the_report_says_a_directory_is_trusted_by_a_remembered_answer`
 `verified-by: bravebot_tui::status::every_trust_rule_is_listed_however_many_there_are`
 
 ## Moving the working directory
@@ -910,6 +932,116 @@ edited themselves is theirs, and a turn reading it later is a read like any othe
 
 `verified-by: by-construction (the helper is a process of its own that runs no command and speaks to no turn, so a byte it read reaches a screen and has no road into a turn's context: it holds no labelled value, mints no witness, and writes nothing the map is consulted about)`
 
+## Keeping the answer to the startup question
+
+The one record under `~/.bravebot` that decides what is trusted rather than whether somebody is
+asked. Every other one ([tools/run.md](tools/run.md#RUN-19), [permissions.md](permissions.md#PERM-15))
+stops a prompt appearing and leaves the labels alone. This one sets the label of every file in a
+tree, which is why it is narrower than the answer it keeps.
+
+<a id="TRUST-23"></a>
+### TRUST-23: a remembered yes answers for later sessions started in exactly that directory
+
+**Offered.** `r` is offered at the question about the working directory, in the terminal interface,
+and nowhere else: not at a directory a settings file named, not at the rules a checkout proposed.
+A session in lines puts its question every time and reads no record, since it offers no answer that
+outlives the session ([cli.md](cli.md#CLI-14)), and the desktop interface puts its own every time
+too. Neither has been given the record yet.
+It is offered only where the answer may be kept and later honoured: there is a state directory, the
+working directory is not a filesystem root, not the user's home and not a directory holding it
+(compared both as named and with links resolved, since `$HOME` is often named through a link the
+working directory is resolved past), the filesystem says when the directory was made, and the
+session is not incognito. The question says
+what `r` does, that the directory has to be this one exactly, how to take it back, and the file it
+writes, since nobody can endorse a record they were not shown.
+
+**Kept.** Pressing it writes the rule a yes writes, for this session, and appends one line to
+`~/.bravebot/trusted/<key>.jsonl`, keyed as the other per-directory records are. The line names the
+directory in full, which directory is at that path (when it was made and, where the platform has one,
+its number on the volume), the session and when. A line that cannot be written leaves the answer as
+a yes for this session, and the session says so and names the file.
+
+**Honoured.** A later session started in that directory, fresh, by `/clear`, or by a resume whose
+record keeps no map, is not asked. It starts from the rule a yes writes and from nothing else
+([TRUST-6](#TRUST-6)), and says as it opens that it is trusting the directory because the person
+said to remember it, when, and how to be asked again. Only the directory itself: a session
+started in a directory inside it or above it is asked, since a tree rule covers everything below it
+and an answer kept about `~/projects` would otherwise answer for a session started in every
+repository cloned under it later. A session started in the remembered directory still trusts
+everything below it, what arrived since included, as a yes there does. Only the directory that was
+answered about: one deleted and made again at the same path is asked about, since a different clone
+at the same name is not what the person vouched for.
+
+**Asked instead, whenever in doubt.** No state directory, a record that cannot be read, no line
+about this directory, lines only about an earlier directory at this path, and a line about this
+directory that this build cannot read all mean the question is put. The last is stricter than the
+other records, which skip such a line: a later build narrows an entry by adding a field, and an older
+one answering from it would be honouring an answer the newer one withdrew. A half-written line names
+no directory and is skipped, a line cut inside a character included, so an answer written before it
+still stands, and one kept after it starts a line of its own. The same refusals of a
+root and of the home directory apply when reading, so a line written by hand is no way around them.
+
+**What answers first.** A resume that brought its own map takes it (TRUST-6), and the mode that
+asks about nothing answers before the record is read and never writes it (TRUST-7). A one-shot run
+reads no record and writes none: it asks no question to keep an answer to, and a run nobody is
+watching has answered nothing. In an incognito session the record is read, as the other records are
+([incognito.md](incognito.md#INCOG-5)), and `r` is not offered.
+
+**Why.** See TRUST-6: a fresh yes already trusts whatever arrived since the last session, so asking
+again only protects a person who reads the tree before pressing `y`, and a question answered daily
+is not read. The narrowing is to what a yes could mean in that directory and not what it would
+grant elsewhere: this directory, this one of the directories that has had that name, and the rule a
+yes writes rather than everything the session went on to record.
+
+`verified-by: bravebot_agent::trusted::a_kept_answer_is_read_back_by_the_next_session_there`
+`verified-by: bravebot_agent::trusted::an_answer_kept_about_one_directory_answers_for_no_other`
+`verified-by: bravebot_agent::trusted::a_directory_sharing_a_key_with_another_is_not_answered_by_its_lines`
+`verified-by: bravebot_agent::trusted::another_directory_at_the_same_path_is_asked_about`
+`verified-by: bravebot_agent::trusted::a_directory_removed_and_made_again_has_another_identity`
+`verified-by: bravebot_agent::trusted::nothing_is_kept_about_a_directory_that_cannot_be_told_apart`
+`verified-by: bravebot_agent::trusted::home_and_what_holds_it_are_never_remembered`
+`verified-by: bravebot_agent::trusted::a_home_reached_through_a_link_is_still_never_remembered`
+`verified-by: bravebot_agent::trusted::a_record_that_cannot_be_read_keeps_no_answer`
+`verified-by: bravebot_agent::trusted::a_line_about_this_directory_this_build_cannot_read_stops_the_answer`
+`verified-by: bravebot_agent::trusted::a_half_written_line_leaves_the_answer_before_it`
+`verified-by: bravebot_agent::trusted::an_answer_kept_after_a_half_written_line_is_read_back`
+`verified-by: bravebot_agent::trusted::a_line_cut_inside_a_character_is_skipped_like_any_half_written_line`
+`verified-by: bravebot_tui::app::no_remembered_answer_is_read_about_the_home_or_what_holds_it`
+`verified-by: bravebot_agent::incognito::no_trusted_directory_is_written_down`
+`verified-by: bravebot_agent::incognito::a_directory_an_earlier_session_kept_is_still_trusted`
+`verified-by: bravebot_tui::app::a_remembered_answer_settles_a_fresh_session`
+`verified-by: bravebot_tui::app::bypass_answers_before_a_remembered_answer_is_read`
+`verified-by: bravebot_tui::app::a_resume_starts_with_the_map_its_own_record_kept`
+`verified-by: bravebot_tui::trust_prompt::the_prompt_offering_to_remember_names_the_record_it_writes`
+`verified-by: bravebot_tui::trust_prompt::the_keys_stay_on_screen_when_the_offer_lengthens_the_question`
+`verified-by: bravebot_tui::trust_prompt::a_tiny_terminal_offering_to_remember_still_renders`
+
+<a id="TRUST-24"></a>
+### TRUST-24: a kept answer is shown by `/status` and taken back by `/forget-trust`
+
+`/status` says, under the working directory, that a later session started there will trust it
+without asking, when the person said to remember it, the file it is kept in and the command that
+withdraws it. The record is read when the report is drawn rather than when the session began, since
+it belongs to every session in the directory. Nothing is said where nothing is kept.
+
+`/forget-trust` removes every line kept about the working directory, whichever directory was at the
+path when each was written and whether or not this build can read the rest of it, and leaves every
+line about another directory as it found it. A file left empty is removed. The next session started
+there asks; this one keeps the map it has, and `/clear` starts one that asks. With nothing kept it
+says so rather than claiming to have withdrawn anything. In an incognito session it writes nothing,
+and names the file so the person can remove it themselves.
+
+**Why every line, and not only the one that answers now.** A person taking the answer back means
+the name. A line left about an earlier directory at the path would be read by nothing today, and
+the file would still say they had vouched for it.
+
+`verified-by: bravebot_tui::status::the_report_says_a_directory_is_trusted_by_a_remembered_answer`
+`verified-by: bravebot_tui::app::forgetting_trust_makes_the_next_session_here_ask`
+`verified-by: bravebot_tui::app::forgetting_trust_where_nothing_is_kept_says_so`
+`verified-by: bravebot_agent::trusted::forgetting_removes_this_directorys_answers_and_keeps_the_rest`
+`verified-by: bravebot_agent::trusted::forgetting_the_last_answer_removes_the_file`
+`verified-by: bravebot_agent::trusted::a_line_cut_inside_a_character_is_skipped_like_any_half_written_line`
+
 ## Known costs
 
 Accepted deliberately. Do not "fix" one without changing this spec first.
@@ -947,6 +1079,25 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   second paragraph covers less of the traffic than it does elsewhere. No rule about that would
   help, since the same writes to the same effect are available one directory up: it is the standing
   statement about the place, met more often.
+- **A kept answer vouches for what arrived while nobody was asked.** A session started from a
+  remembered answer trusts its directory as a yes given at its start would (TRUST-23), so both costs
+  above apply to it: what landed in the tree since is trusted, and what an earlier session marked
+  untrusted is forgotten. What it loses beyond a yes is the question itself, the moment a person who
+  has just pulled a branch or added a dependency might have answered `n`. The line the session opens
+  with, `/status` and `/forget-trust` are what is left of it. Keeping the paths earlier sessions
+  marked untrusted beside the answer would close the second half, and is not built.
+- **A directory is told from the one before it at the same path by what the filesystem keeps.**
+  Where the filesystem does not say when a directory was made, `r` is not offered and every session
+  there is asked, as before. Linux gives a freed number to the next directory made, so there the
+  time alone tells a replacement apart, which holds because it was made after the answer and
+  nobody can set it. Where the platform gives a directory no number on the volume, which is Windows,
+  the time is all there is, and it is one the owner can set and NTFS can carry over (tunnelling) to
+  a name made again within seconds of being removed, so a clone deleted and replaced that quickly
+  there is taken for the one answered about.
+- **Withdrawing can lose an answer being kept at the same moment.** `/forget-trust` reads the record
+  and writes back what is left, so a line another session appends to the same file in between goes
+  with the lines withdrawn. That directory is asked about next time, which is the direction every
+  other failure of the record takes.
 - **Intermediate files stay until the session ends.** Scratch writes record incomplete undo
   coverage (TRUST-19); later turns can read those files under the current file decisions. Keeping their
   bytes for undo would spend the budget intended for project files.

@@ -145,6 +145,18 @@ pub struct Facts<'a> {
     /// adds nothing to one. Nothing is said in that case, for the reason the loop says nothing when
     /// there is none.
     pub remembered: Option<Remembered<'a>>,
+    /// The answer about this directory a session was told to remember, where one is kept and
+    /// would settle the next session started here (TRUST-23).
+    pub kept_trust: Option<KeptTrust<'a>>,
+}
+
+/// A remembered yes about the working directory, as the report needs it: when it was given, and
+/// the file that holds it.
+#[derive(Debug, Clone, Copy)]
+pub struct KeptTrust<'a> {
+    /// How long ago, already worded.
+    pub when: &'a str,
+    pub path: &'a Path,
 }
 
 /// The record of lines remembered past a session, as the report needs it.
@@ -194,6 +206,20 @@ pub fn report(facts: &Facts<'_>) -> Report {
             t!(status_directory_untrusted)
         }),
     );
+
+    // Under the directory it is about, since it is the answer the next session here starts from
+    // and nothing else on the screen will ever say so: the question it stops is the only place a
+    // person would have seen it.
+    if let Some(kept) = facts.kept_trust {
+        lines.push(
+            Line::new("", t!(status_directory_kept, when = kept.when))
+                .with_note(t!(status_directory_kept_note)),
+        );
+        lines.push(Line::new(
+            "",
+            t!(status_directory_kept_where, path = kept.path.display()),
+        ));
+    }
 
     for added in facts.added_directories {
         lines.push(
@@ -724,6 +750,8 @@ mod tests {
             // Nothing remembered past a session, which is what a fresh directory looks like. Tests
             // about that line build their own record and set it.
             remembered: None,
+            // No answer about the directory kept past a session, on the same footing.
+            kept_trust: None,
         }
     }
 
@@ -1067,6 +1095,31 @@ mod tests {
                 },
             })
             .collect()
+    }
+
+    /// TRUST-12: a yes kept past a session stops the only screen that would have shown it, so the
+    /// report says it is held, when it was given, where it is written and how to take it back.
+    /// Nothing is said where none is kept, which is every directory nobody said to remember.
+    #[test]
+    fn the_report_says_a_directory_is_trusted_by_a_remembered_answer() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let quiet = rendered(&report(&facts(&config, &trust)));
+        assert!(!quiet.contains("/forget-trust"), "{quiet}");
+
+        let mut facts = facts(&config, &trust);
+        facts.kept_trust = Some(KeptTrust {
+            when: "3 days ago",
+            path: Path::new("/home/someone/.bravebot/trusted/-tmp-project.jsonl"),
+        });
+        let shown = rendered(&report(&facts));
+        assert!(shown.contains("without asking"), "{shown}");
+        assert!(shown.contains("3 days ago"), "{shown}");
+        assert!(
+            shown.contains("/home/someone/.bravebot/trusted/-tmp-project.jsonl"),
+            "{shown}"
+        );
+        assert!(shown.contains("/forget-trust"), "{shown}");
     }
 
     /// RUN-19: the answer that outlives the session is the one a person can least account for from

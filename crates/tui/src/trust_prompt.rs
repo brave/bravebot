@@ -45,34 +45,43 @@ use crate::theme;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Answer {
     Trust,
+    /// Trust, and keep the answer for later sessions started in exactly this directory (TRUST-23).
+    ///
+    /// Grants this session what [`Answer::Trust`] grants and nothing more; what differs is that the
+    /// caller writes it down. Only ever the answer at the working directory's own question, and only
+    /// where the caller offered it: a directory a settings file named and the rules a checkout
+    /// proposed are requests from the tree, and a standing answer to one would be the tree's.
+    Remember,
     Decline,
     /// Leave without starting a session at all.
     Leave,
 }
 
-/// Ask about `directory`, returning the trust map the session should start with.
+/// Ask about `directory`, returning the trust map the session should start with and the answer that
+/// made it.
 ///
 /// Trusting records the workspace root, which covers everything beneath it. Declining records
 /// nothing, leaving an empty map in which no path is trusted.
 ///
-/// Asked afresh every time a session begins. The answer is standing permission for as long as
-/// that session lasts and no longer: it is not written down anywhere a later launch will read it,
-/// so nothing this grants can be inherited by a session whose user was never asked. A resumed
-/// session is the one exception, and it inherits the answer its own user gave rather than
-/// skipping the question, which is why this is not called at all in that case.
+/// Asked afresh every time a session begins unless an earlier one here was told to remember
+/// (TRUST-23), in which case this is not called. `keeping` is where that answer would be written, or
+/// `None` where it may not be: the answer is offered only with somewhere to put it, since a key that
+/// said it remembered and wrote nothing would be the next session asking somebody who was told it
+/// would not. Writing it is the caller's, which holds the session it is recorded against.
 ///
 /// `None` is the third answer: the user pressed Ctrl-C, which is neither trusting nor declining
 /// but a request to leave, so no session begins at all.
 pub fn ask<B: Backend>(
     terminal: &mut Terminal<B>,
     directory: &Path,
+    keeping: Option<&Path>,
     carried: &mut String,
-) -> Option<TrustStore> {
-    let answer = ask_one(terminal, carried, |frame, offered| {
-        draw(frame, directory, offered)
+) -> Option<(TrustStore, Answer)> {
+    let answer = ask_one(terminal, carried, keeping.is_some(), |frame, offered| {
+        draw(frame, directory, keeping, offered)
     });
 
-    trust_for(answer, directory)
+    trust_for(answer, directory).map(|trust| (trust, answer))
 }
 
 /// Ask about each directory a settings file named, returning the ones to open.
@@ -90,7 +99,7 @@ pub fn ask_named<B: Backend>(
     carried: &mut String,
 ) -> Option<Vec<String>> {
     accepted(directories, |directory| {
-        ask_one(terminal, carried, |frame, offered| {
+        ask_one(terminal, carried, false, |frame, offered| {
             draw_named(frame, directory, offered)
         })
     })
@@ -119,7 +128,7 @@ pub fn ask_granted<B: Backend>(
     carried: &mut String,
 ) -> Option<bool> {
     granting(rules, || {
-        ask_one(terminal, carried, |frame, offered| {
+        ask_one(terminal, carried, false, |frame, offered| {
             draw_granted(frame, rules, offered)
         })
     })
@@ -137,7 +146,8 @@ fn granting(rules: &[Proposed], answer: impl FnOnce() -> Answer) -> Option<bool>
         return Some(false);
     }
     match answer() {
-        Answer::Trust => Some(true),
+        // Never put here, since this question does not offer it; a yes is what it would have been.
+        Answer::Trust | Answer::Remember => Some(true),
         Answer::Decline => Some(false),
         Answer::Leave => None,
     }
@@ -152,7 +162,7 @@ fn accepted(directories: &[String], mut answer: impl FnMut(&str) -> Answer) -> O
     let mut opening = Vec::new();
     for directory in directories {
         match answer(directory) {
-            Answer::Trust => opening.push(directory.clone()),
+            Answer::Trust | Answer::Remember => opening.push(directory.clone()),
             Answer::Decline => continue,
             Answer::Leave => return None,
         }
@@ -186,10 +196,13 @@ pub fn answered_by(mode: PermissionMode, directory: &Path) -> Option<TrustStore>
 /// lines (CLI-14) asks it as a line rather than as a panel, and what a yes grants there has to be
 /// what a yes grants here: two functions writing the map would be two readings of TRUST-7, and the
 /// one the tests pin is this one.
+///
+/// Remembering grants what trusting does, so what a later session is spared asking is what this one
+/// was granted, and nothing the record could come to mean is a rule a yes never writes.
 pub fn trust_for(answer: Answer, directory: &Path) -> Option<TrustStore> {
     match answer {
         Answer::Leave => None,
-        Answer::Trust => Some(trusting_the_workspace(directory)),
+        Answer::Trust | Answer::Remember => Some(trusting_the_workspace(directory)),
         Answer::Decline => Some(TrustStore::new(key_of(directory))),
     }
 }
@@ -197,16 +210,19 @@ pub fn trust_for(answer: Answer, directory: &Path) -> Option<TrustStore> {
 /// The rule trusting the workspace records: the root, which covers everything beneath it.
 ///
 /// One place, so the map reached without the question is the map a yes would have written.
-fn trusting_the_workspace(directory: &Path) -> TrustStore {
+pub fn trusting_the_workspace(directory: &Path) -> TrustStore {
     let mut trust = TrustStore::new(key_of(directory));
     trust.trust(".");
     trust
 }
 
 /// Block until the user answers.
+///
+/// `keeping` is whether remembering is on offer at this question.
 fn ask_one<B: Backend>(
     terminal: &mut Terminal<B>,
     carried: &mut String,
+    keeping: bool,
     mut draw_it: impl FnMut(&mut ratatui::Frame, bool),
 ) -> Answer {
     let mut offered_to_leave = false;
@@ -237,7 +253,7 @@ fn ask_one<B: Backend>(
                     // Presses only: the interface asks for disambiguated keys, so a release arrives
                     // too, and answering twice grants standing permission on one keystroke.
                     Some(key) if key.kind != event::KeyEventKind::Press => continue,
-                    Some(key) => match answer_for(key, offered_to_leave, arrived_alone) {
+                    Some(key) => match answer_for(key, offered_to_leave, arrived_alone, keeping) {
                         Response::Answer(answer) => return answer,
                         // Kept rather than dropped. What this refused to answer on was a run of keys
                         // another program wrote, and words that vanish leave a person with no account
@@ -289,8 +305,15 @@ fn withdraws_the_offer(taken: &event::Event) -> bool {
 
 /// Interpret one key press, or `None` for a key that answers nothing.
 ///
+/// `keeping` is whether remembering is on offer; where it is not, `r` is a key like any other.
+///
 /// Separated from the loop so it can be tested without a terminal.
-fn answer_for(key: KeyEvent, offered_to_leave: bool, arrived_alone: bool) -> Response {
+fn answer_for(
+    key: KeyEvent,
+    offered_to_leave: bool,
+    arrived_alone: bool,
+    keeping: bool,
+) -> Response {
     // Raw mode delivers Ctrl-C as a key rather than as a signal, so a prompt that ignored it would
     // be a screen with no way out: the interrupt everyone reaches for would do nothing. It is not an
     // answer to the question, so it starts nothing rather than declining.
@@ -324,6 +347,7 @@ fn answer_for(key: KeyEvent, offered_to_leave: bool, arrived_alone: bool) -> Res
 
     match key.code {
         KeyCode::Char('y' | 'Y') => Response::Answer(Answer::Trust),
+        KeyCode::Char('r' | 'R') if keeping => Response::Answer(Answer::Remember),
         KeyCode::Char('n' | 'N') | KeyCode::Esc => Response::Answer(Answer::Decline),
         // Enter is deliberately not a yes: it is the key most likely to be pressed
         // out of habit, and this question grants standing permission.
@@ -344,8 +368,15 @@ enum Response {
 }
 
 /// Draw the question about the working directory.
-fn draw(frame: &mut ratatui::Frame, directory: &Path, offered_to_leave: bool) {
-    let lines = vec![
+///
+/// `keeping` is where remembering would write the answer, or `None` where it is not offered.
+fn draw(
+    frame: &mut ratatui::Frame,
+    directory: &Path,
+    keeping: Option<&Path>,
+    offered_to_leave: bool,
+) {
+    let mut lines = vec![
         asking(
             t!(trust_directory_question),
             &directory.display().to_string(),
@@ -359,13 +390,44 @@ fn draw(frame: &mut ratatui::Frame, directory: &Path, offered_to_leave: bool) {
             t!(trust_directory_regardless),
             Style::default().fg(theme::muted()),
         )),
+    ];
+
+    // What `r` would do, where it is offered (RUN-19). What its one word cannot say: that later
+    // sessions read it, that the directory has to be this one exactly, and where it is written,
+    // which is part of the grant rather than a footnote because nobody can endorse a record they
+    // were not shown. Not indented, as the command prompt's are: these lines are long enough to
+    // wrap, and a wrapped line starts again at the left edge, under nothing.
+    if let Some(path) = keeping {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            t!(trust_directory_remember_explained),
+            Style::default().fg(theme::muted()),
+        )));
+        // The half a person is most likely to assume the other way, since a remembered answer
+        // elsewhere in this program is kept per directory name, so it is the half that is coloured.
+        lines.push(Line::from(Span::styled(
+            t!(trust_directory_remember_exact),
+            Style::default().fg(theme::running()),
+        )));
+        lines.push(Line::from(Span::styled(
+            t!(trust_directory_remember_where),
+            Style::default().fg(theme::muted()),
+        )));
+        lines.push(Line::from(Span::styled(
+            path.display().to_string(),
+            Style::default().add_modifier(Modifier::BOLD),
+        )));
+    }
+
+    lines.extend([
         Line::raw(""),
         keys(
             t!(trust_directory_yes),
             t!(trust_directory_no),
+            keeping.map(|_| t!(trust_directory_remember)),
             offered_to_leave,
         ),
-    ];
+    ]);
 
     panel(frame, t!(trust_directory_title), lines);
 }
@@ -385,6 +447,7 @@ fn draw_named(frame: &mut ratatui::Frame, directory: &str, offered_to_leave: boo
         keys(
             t!(named_directory_yes),
             t!(named_directory_no),
+            None,
             offered_to_leave,
         ),
     ];
@@ -432,6 +495,7 @@ fn draw_granted(frame: &mut ratatui::Frame, rules: &[Proposed], offered_to_leave
         keys(
             t!(granted_rules_yes),
             t!(granted_rules_no),
+            None,
             offered_to_leave,
         ),
     ]);
@@ -458,9 +522,10 @@ fn asking(question: &str, directory: &str) -> Line<'static> {
     ])
 }
 
-/// The answers on offer: the same two keys and the same way out at either question.
-fn keys(yes: &str, no: &str, offered_to_leave: bool) -> Line<'static> {
-    Line::from(vec![
+/// The answers on offer: the same two keys and the same way out at every question, and `r` between
+/// them where `remember` names it.
+fn keys(yes: &str, no: &str, remember: Option<&str>, offered_to_leave: bool) -> Line<'static> {
+    let mut spans = vec![
         Span::styled(
             "  y",
             Style::default()
@@ -468,6 +533,17 @@ fn keys(yes: &str, no: &str, offered_to_leave: bool) -> Line<'static> {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(format!(" {yes}    ")),
+    ];
+    if let Some(remember) = remember {
+        spans.push(Span::styled(
+            "r",
+            Style::default()
+                .fg(theme::running())
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::raw(format!(" {remember}    ")));
+    }
+    spans.extend([
         Span::styled(
             "n",
             Style::default()
@@ -494,7 +570,8 @@ fn keys(yes: &str, no: &str, offered_to_leave: bool) -> Line<'static> {
             ),
             Style::default().fg(theme::muted()),
         ),
-    ])
+    ]);
+    Line::from(spans)
 }
 
 /// Draw one question, in a box whose every cell the theme paints.
@@ -503,22 +580,36 @@ fn keys(yes: &str, no: &str, offered_to_leave: bool) -> Line<'static> {
 /// system's own: `Clear` empties the cells under the panel without colouring them, so the
 /// background and text colour are set for the block rather than for the border alone.
 fn panel(frame: &mut ratatui::Frame, title: &str, lines: Vec<Line<'static>>) {
-    let area = centred(frame.area());
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(theme::brand_primary()))
+                .title(format!(" {title} "))
+                .style(Style::default().bg(theme::background()).fg(theme::text())),
+        )
+        .wrap(Wrap { trim: false });
+    let area = fitted(frame.area(), &paragraph);
     frame.render_widget(Clear, area);
+    frame.render_widget(paragraph, area);
+}
 
-    frame.render_widget(
-        Paragraph::new(lines)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(theme::brand_primary()))
-                    .title(format!(" {title} "))
-                    .style(Style::default().bg(theme::background()).fg(theme::text())),
-            )
-            .wrap(Wrap { trim: false }),
-        area,
-    );
+/// The centred box, made taller where what it says does not fit, up to the whole screen.
+///
+/// The keys are the last line, so a box that clipped its content would lose them first and leave a
+/// question with no way to answer it on the screen.
+fn fitted(screen: Rect, paragraph: &Paragraph) -> Rect {
+    let share = centred(screen);
+    let needed = paragraph.line_count(share.width.saturating_sub(2));
+    let height = u16::try_from(needed)
+        .unwrap_or(u16::MAX)
+        .clamp(share.height, screen.height);
+    Rect {
+        y: screen.y + (screen.height - height) / 2,
+        height,
+        ..share
+    }
 }
 
 /// A centred box, sized to the terminal but never larger than it.
@@ -561,7 +652,7 @@ mod tests {
             };
             // Arriving with the rest of the line, which is what one read of a write looks like.
             assert_eq!(
-                answer_for(key, false, false),
+                answer_for(key, false, false, false),
                 Response::Nothing,
                 "{c:?} out of a written line answered the question"
             );
@@ -575,7 +666,8 @@ mod tests {
             answer_for(
                 KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
                 false,
-                true
+                true,
+                false
             ),
             Response::Answer(Answer::Trust)
         );
@@ -583,7 +675,8 @@ mod tests {
             answer_for(
                 KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
                 false,
-                true
+                true,
+                false
             ),
             Response::Answer(Answer::Decline)
         );
@@ -597,7 +690,7 @@ mod tests {
         for c in " source /tmp/x/env/bin/activate".chars() {
             let key = KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
             // Arriving with the rest of the line, so the question answers nothing on it.
-            assert_eq!(answer_for(key, false, false), Response::Nothing);
+            assert_eq!(answer_for(key, false, false, false), Response::Nothing);
             carried.extend(crate::input::text_of(&key));
         }
         assert_eq!(carried, " source /tmp/x/env/bin/activate");
@@ -613,7 +706,7 @@ mod tests {
 
     /// One key pressed at a question with nothing offered, arriving on its own.
     fn pressing(code: KeyCode) -> Response {
-        answer_for(KeyEvent::new(code, KeyModifiers::NONE), false, true)
+        answer_for(KeyEvent::new(code, KeyModifiers::NONE), false, true, false)
     }
 
     /// The rules question as it is first drawn, with no interrupt pressed yet.
@@ -623,7 +716,7 @@ mod tests {
 
     /// The question as it is first drawn, with no interrupt pressed yet.
     fn draw_at_rest(frame: &mut ratatui::Frame, directory: &Path) {
-        draw(frame, directory, false);
+        draw(frame, directory, None, false);
     }
 
     /// The same for a directory a settings file named.
@@ -635,7 +728,7 @@ mod tests {
     /// answering, so the keys line says which press leaves once the first has been made.
     #[test]
     fn the_question_says_which_press_leaves_once_one_has_been_made() {
-        let at_rest = rendered(|frame| draw(frame, Path::new("/tmp/x"), false));
+        let at_rest = rendered(|frame| draw(frame, Path::new("/tmp/x"), None, false));
         assert!(
             at_rest.contains("ctrl-c quit"),
             "the way out was not named at all: {at_rest}"
@@ -643,7 +736,7 @@ mod tests {
 
         // Short enough to sit on the keys line at the narrow width this renders at, since a hint
         // that wrapped across the border would say it worse than not saying it.
-        let offered = rendered(|frame| draw(frame, Path::new("/tmp/x"), true));
+        let offered = rendered(|frame| draw(frame, Path::new("/tmp/x"), None, true));
         assert!(
             offered.contains("ctrl-c again"),
             "the press that offered the way out said nothing: {offered}"
@@ -686,7 +779,7 @@ mod tests {
         let buffer = terminal.backend().buffer().clone();
         theme::apply_brave();
 
-        let inside = centred(*buffer.area());
+        let inside = drawn_box(&buffer);
         // Every cell the border encloses, including the rows the prose did not reach: an unpainted
         // row below the keys is the same hole as an unpainted one beside them.
         for y in 1..inside.height - 1 {
@@ -703,6 +796,21 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Where the panel's rounded border was drawn, since a box that grew to fit is not the share
+    /// [`centred`] gives it.
+    fn drawn_box(buffer: &ratatui::buffer::Buffer) -> Rect {
+        let area = buffer.area;
+        let at = |symbol: &str| {
+            (area.top()..area.bottom())
+                .flat_map(|y| (area.left()..area.right()).map(move |x| (x, y)))
+                .find(|&(x, y)| buffer[(x, y)].symbol() == symbol)
+                .expect("the panel's border")
+        };
+        let (left, top) = at("╭");
+        let (right, bottom) = at("╯");
+        Rect::new(left, top, right - left + 1, bottom - top + 1)
     }
 
     fn names(directories: &[&str]) -> Vec<String> {
@@ -1046,14 +1154,156 @@ mod tests {
         assert_eq!(pressing(KeyCode::Enter), Response::Nothing);
     }
 
+    /// `r` answers only where the question offered it (TRUST-23): at a question that did not, it
+    /// is a key nobody was told about, and a yes that outlives the session is not one to take from
+    /// a key the person was never shown.
+    #[test]
+    fn r_remembers_only_at_a_question_that_offers_it() {
+        let remember = |code, keeping| {
+            answer_for(
+                KeyEvent::new(code, KeyModifiers::NONE),
+                false,
+                true,
+                keeping,
+            )
+        };
+        assert_eq!(
+            remember(KeyCode::Char('r'), true),
+            Response::Answer(Answer::Remember)
+        );
+        assert_eq!(
+            remember(KeyCode::Char('R'), true),
+            Response::Answer(Answer::Remember)
+        );
+        assert_eq!(remember(KeyCode::Char('r'), false), Response::Nothing);
+        assert_eq!(remember(KeyCode::Char('R'), false), Response::Nothing);
+    }
+
+    /// The answer that lasts longest is held to the rule the others are: an `r` in a line another
+    /// program wrote answers nothing, and neither does a chord.
+    #[test]
+    fn an_r_nobody_pressed_on_its_own_remembers_nothing() {
+        let r = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE);
+        assert_eq!(answer_for(r, false, false, true), Response::Nothing);
+        let chord = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
+        assert_eq!(answer_for(chord, false, true, true), Response::Nothing);
+    }
+
+    /// Remembering grants what yes grants and nothing more (TRUST-23): the record says the question
+    /// need not be put again, not that the answer grew.
+    #[test]
+    fn remembering_trusts_exactly_what_yes_trusts() {
+        let remembered = trust_for(Answer::Remember, here()).expect("remembering starts a session");
+        assert_eq!(
+            Some(remembered),
+            trust_for(Answer::Trust, here()),
+            "remembering granted a different map from yes"
+        );
+    }
+
+    /// The record is written where the person can see it and read it before agreeing, so the
+    /// question says what `r` does, that the directory has to be this one, and names the file.
+    #[test]
+    fn the_prompt_offering_to_remember_names_the_record_it_writes() {
+        let record = Path::new("/home/me/.bravebot/trusted/work-1a2b.jsonl");
+        let output = rendered(|frame| draw(frame, here(), Some(record), false));
+
+        assert!(
+            output.contains("trust and remember"),
+            "the key was not named: {output}"
+        );
+        assert!(
+            output.contains("exactly this directory"),
+            "nothing said the answer is about this directory alone: {output}"
+        );
+        assert!(
+            output.contains("work-1a2b.jsonl"),
+            "the record was not named: {output}"
+        );
+        assert!(
+            output.contains("/forget-trust"),
+            "nothing said how to take it back: {output}"
+        );
+    }
+
+    /// And where it is not offered, nothing on the screen says it is.
+    #[test]
+    fn the_prompt_not_offering_to_remember_says_nothing_of_it() {
+        let output = rendered(|frame| draw_at_rest(frame, here()));
+        assert!(
+            !output.contains("remember"),
+            "a key that answers nothing was shown: {output}"
+        );
+        assert!(!output.contains("/forget-trust"), "{output}");
+    }
+
+    /// The offer makes the question longer than the share of the screen the others take, and the
+    /// keys are its last line, so at a common terminal size the box grows to hold them rather than
+    /// clipping the one line that says how to answer.
+    #[test]
+    fn the_keys_stay_on_screen_when_the_offer_lengthens_the_question() {
+        let directory = Path::new("/Users/somebody/projects/a-long-project-name/checkout");
+        let store =
+            bravebot_agent::trusted::Store::new(Path::new("/Users/somebody/.bravebot"), directory);
+        let record = store.path();
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+        terminal
+            .draw(|frame| draw(frame, directory, Some(record), false))
+            .expect("draw");
+        let output = inside(terminal.backend().buffer());
+
+        assert!(output.contains("ctrl-c"), "the keys were clipped: {output}");
+        assert!(
+            output.contains("trust and remember"),
+            "the remember key was clipped: {output}"
+        );
+        assert!(
+            output.contains(&record.display().to_string()),
+            "the record was clipped: {output}"
+        );
+        paints_the_themes_chrome(|frame| draw(frame, directory, Some(record), false));
+    }
+
+    /// What the panel says, its rows run together, so a path wrapped across two of them reads as
+    /// one.
+    fn inside(buffer: &ratatui::buffer::Buffer) -> String {
+        let panel = drawn_box(buffer);
+        (panel.top() + 1..panel.bottom() - 1)
+            .map(|y| {
+                let row: String = (panel.left() + 1..panel.right() - 1)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect();
+                row.trim_end().to_string()
+            })
+            .collect()
+    }
+
+    /// A terminal too small for all of it still shows what is being asked.
+    #[test]
+    fn a_tiny_terminal_offering_to_remember_still_renders() {
+        let record = Path::new("/home/me/.bravebot/trusted/x-1.jsonl");
+        let mut terminal = Terminal::new(TestBackend::new(24, 8)).expect("terminal");
+        terminal
+            .draw(|frame| draw(frame, Path::new("/tmp/x"), Some(record), false))
+            .expect("must not panic on a small area");
+        assert!(
+            drawn_on(&terminal).contains("Trust /tmp/x?"),
+            "the question was drawn out of view: {}",
+            drawn_on(&terminal)
+        );
+    }
+
     /// Ctrl-C is the interrupt everyone reaches for, and raw mode turns it into an ordinary key
     /// press. A prompt that ignored it would be a screen with no way out, so it still leaves; what
     /// it takes is a second press.
     #[test]
     fn ctrl_c_leaves_on_the_second_press() {
         let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-        assert_eq!(answer_for(key, false, true), Response::Offer);
-        assert_eq!(answer_for(key, true, true), Response::Answer(Answer::Leave));
+        assert_eq!(answer_for(key, false, true, false), Response::Offer);
+        assert_eq!(
+            answer_for(key, true, true, false),
+            Response::Answer(Answer::Leave)
+        );
     }
 
     /// The reported case at the question nobody had answered yet. VS Code writes one interrupt ahead
@@ -1063,7 +1313,7 @@ mod tests {
     fn one_interrupt_another_program_wrote_closes_nothing() {
         let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         assert_ne!(
-            answer_for(key, false, true),
+            answer_for(key, false, true, false),
             Response::Answer(Answer::Leave),
             "one byte ended the session before it began"
         );
@@ -1074,8 +1324,8 @@ mod tests {
     #[test]
     fn two_interrupts_that_arrived_together_close_nothing() {
         let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-        assert_eq!(answer_for(key, false, false), Response::Nothing);
-        assert_eq!(answer_for(key, true, false), Response::Nothing);
+        assert_eq!(answer_for(key, false, false, false), Response::Nothing);
+        assert_eq!(answer_for(key, true, false, false), Response::Nothing);
     }
 
     /// And an offer does not stand about waiting to be taken. The interrupt an editor writes arrives
@@ -1138,7 +1388,8 @@ mod tests {
             answer_for(
                 KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
                 false,
-                true
+                true,
+                false
             ),
             Response::Nothing
         );
@@ -1146,7 +1397,8 @@ mod tests {
             answer_for(
                 KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL),
                 false,
-                true
+                true,
+                false
             ),
             Response::Nothing
         );

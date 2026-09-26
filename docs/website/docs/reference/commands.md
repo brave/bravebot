@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: Slash commands
-description: The twenty-one commands the interface acts on itself, and the rules every one of them shares.
+description: The twenty-two commands the interface acts on itself, and the rules every one of them shares.
 ---
 
 # Slash commands
@@ -22,6 +22,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/compact` | | Summarise the conversation so far, keeping the recent part |
 | `/btw` | `<question>` | Ask something beside the work, without putting it in the conversation |
 | `/clear` | | Start a new session here, keeping this one resumable |
+| `/forget-trust` | | Stop remembering that this directory is trusted, so later sessions here ask |
 | `/loop` | `[[interval] <prompt> \| stop]` | Send a prompt again and again, say what is repeating, or stop it |
 | `/goal` | `[<condition> \| clear]` | Keep working until a condition you set is judged met |
 | `/watch` | `[stop <n>]` | List the files this session is watching, and stop one by its number |
@@ -33,14 +34,15 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/exit` | | Leave |
 
 Typing `/` offers the list in that order, and Tab completes. The list is one row per command, and a
-terminal without the room for all twenty-one drops the last of them: every command is still typeable in
+terminal without the room for all twenty-two drops the last of them: every command is still typeable in
 full, but a short terminal costs you the discovery the list is there for.
 
 ## `/status`
 
 Reports everything the session knows about itself:
 
-- the working directory, and anything opened with `/add-dir`;
+- the working directory, and anything opened with `/add-dir`, and whether a later session started
+  there will trust it without asking because you [said to remember](#forget-trust);
 - the model in force, and whether it was chosen or defaulted. Where the server substituted a
   different one, the model that actually answered is shown beside it;
 - the [effort level](#effort-level), and whether this model reads one;
@@ -167,6 +169,17 @@ Your permission rules do not come with you. The new directory's rules are read, 
 checkout proposes is put to you in the box a session opening there would show, so a rule you granted
 for the directory you left answers nothing here. See
 [Rules you write down in advance](../security/permissions.md#rules-you-write-down-in-advance).
+
+## `/forget-trust`
+
+Takes back the answer you gave with `r` at the question a session asks about its directory, so the
+next session started in this directory asks again. This session keeps the answer it already has;
+[`/clear`](#clear) starts one that asks.
+
+It removes every answer kept about the path, including one given about a directory that was deleted
+and made again there. In an incognito session it changes nothing, since nothing is written there
+either, and it names the file so you can remove it yourself. See
+[Remembering the answer](../security/trust.md#remembering-the-answer).
 
 ## `/loop [interval] <prompt>`
 

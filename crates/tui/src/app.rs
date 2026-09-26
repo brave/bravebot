@@ -97,6 +97,10 @@ const ADD_DIR_COMMAND: &str = "/add-dir";
 /// The line that moves the session to another working directory, taking the path as its argument.
 const CD_COMMAND: &str = "/cd";
 
+/// The line that withdraws the answer an earlier session was told to remember about the working
+/// directory, so the next session begun there is asked (TRUST-24).
+const FORGET_TRUST_COMMAND: &str = "/forget-trust";
+
 /// The line that reports what this session is and what it may touch.
 const STATUS_COMMAND: &str = "/status";
 
@@ -179,7 +183,7 @@ pub struct Command {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 21] {
+pub fn commands() -> [Command; 22] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -240,6 +244,11 @@ pub fn commands() -> [Command; 21] {
             name: CLEAR_COMMAND,
             argument: "",
             description: t!(command_clear),
+        },
+        Command {
+            name: FORGET_TRUST_COMMAND,
+            argument: "",
+            description: t!(command_forget_trust),
         },
         Command {
             name: LOOP_COMMAND,
@@ -415,6 +424,9 @@ pub enum Action {
     Rename(String),
     /// Report what this session is. Needs the workspace and the trust map, which the loop owns.
     Status,
+    /// Withdraw the remembered answer about the working directory. Needs the workspace, which the
+    /// loop owns, and leaves this session's map as it is.
+    ForgetTrust,
     /// Report what each turn has spent. Reads nothing the session does not already hold.
     Cost,
     /// Run a command the user typed in shell mode. Needs the workspace and the conversation.
@@ -1329,6 +1341,9 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     }
     if line.trim() == STATUS_COMMAND {
         return Action::Status;
+    }
+    if line.trim() == FORGET_TRUST_COMMAND {
+        return Action::ForgetTrust;
     }
     if line.trim() == COST_COMMAND {
         return Action::Cost;
@@ -2748,9 +2763,13 @@ fn event_loop(
 
     // Settled once, before any turn. Nothing means the user left at the question, and a session
     // they never agreed to have must not begin behind it.
-    let Some((mut trust, whence)) =
-        opening_trust(terminal, &mut session, workspace.root(), beginning)
-    else {
+    let Some((mut trust, whence)) = opening_trust(
+        terminal,
+        &mut session,
+        workspace.root(),
+        beginning,
+        stored.id(),
+    ) else {
         return Ok(left_behind(&stored));
     };
 
@@ -3094,6 +3113,14 @@ fn event_loop(
                 // draw: the file belongs to every session begun in this directory, so a person
                 // asking what they are carrying should be told what the file says now.
                 let record = remembered_record(&workspace);
+                // Read now for the same reason: another session here may have kept or withdrawn it.
+                let kept = remembering(workspace.root()).and_then(|(store, identity)| {
+                    let kept = store.kept(&identity)?;
+                    Some((
+                        bravebot_session::sessions::how_long_ago(kept.at),
+                        store.path().to_path_buf(),
+                    ))
+                });
                 let report = crate::status::report(&crate::status::Facts {
                     session_name: stored.title(),
                     session_id: stored.id(),
@@ -3127,8 +3154,20 @@ fn event_loop(
                             lines,
                             path: store.path(),
                         }),
+                    kept_trust: kept
+                        .as_ref()
+                        .map(|(when, path)| crate::status::KeptTrust { when, path }),
                 });
                 session.report(report);
+                needs_draw = true;
+            }
+            Action::ForgetTrust => {
+                // This session's map is left as it is: the answer it began with was given, and
+                // what is withdrawn is the next session's. /clear begins one now, and it asks.
+                session.note(forget_trust(
+                    bravebot_agent::home::directory().as_deref(),
+                    workspace.root(),
+                ));
                 needs_draw = true;
             }
             Action::Cost => {
@@ -3305,9 +3344,13 @@ fn event_loop(
                 // Where this map came from decides nothing further: a directory a settings file
                 // named was opened by an answer the cleared session's user gave, and it closed
                 // with that session rather than carrying into this one.
-                let Some((fresh, whence)) =
-                    opening_trust(terminal, &mut session, workspace.root(), Beginning::New)
-                else {
+                let Some((fresh, whence)) = opening_trust(
+                    terminal,
+                    &mut session,
+                    workspace.root(),
+                    Beginning::New,
+                    stored.id(),
+                ) else {
                     return Ok(left_behind(&stored));
                 };
                 trust = fresh;
@@ -4181,7 +4224,9 @@ fn set_theme(session: &mut Session, name: &str) {
 /// Where a session's opening trust map came from, which is what it says about it.
 #[derive(Debug, Clone, Copy)]
 enum Whence {
-    /// The person answered the startup question just now.
+    /// The person answered the startup question just now, or answered it in an earlier session
+    /// here and said to remember it (TRUST-23). Either way they are here, and are asked about
+    /// whatever else the tree proposes: what they said to remember was that question and no other.
     Asked,
     /// The record of the session being picked up, so the answer is that session's user's own.
     Resumed,
@@ -4552,6 +4597,9 @@ fn beginning_of(start: &Start, root: &std::path::Path) -> Beginning {
 enum Opening {
     /// Settled without asking, and what that says about where it came from.
     Settled(TrustStore, Whence),
+    /// Settled by the answer an earlier session here was told to remember (TRUST-23), which is
+    /// what the session says it started from.
+    Remembered(TrustStore, bravebot_agent::trusted::Kept),
     /// Nothing has answered, so the person is.
     Ask,
 }
@@ -4559,11 +4607,13 @@ enum Opening {
 /// Where the map comes from for a session that began this way, under this mode.
 ///
 /// Everything about the answer bar the terminal it is put on, separated from [`opening_trust`] so
-/// it can be decided without one, the way [`crate::trust_prompt::answered_by`] is.
+/// it can be decided without one, the way [`crate::trust_prompt::answered_by`] is. `kept` reads the
+/// remembered answer, and is called only where nothing more specific has answered.
 fn opening_for(
     beginning: Beginning,
     mode: bravebot_agent::PermissionMode,
     root: &std::path::Path,
+    kept: impl FnOnce() -> Option<bravebot_agent::trusted::Kept>,
 ) -> Opening {
     match beginning {
         // Before the mode is consulted, because the question is not being put in either case and
@@ -4572,44 +4622,164 @@ fn opening_for(
         Beginning::New | Beginning::Resumed(None) => {
             match crate::trust_prompt::answered_by(mode, root) {
                 Some(trust) => Opening::Settled(trust, Whence::Unasked),
-                None => Opening::Ask,
+                // After the mode, so a session bypassing every permission says the flag answered:
+                // the map is the same either way, and the flag is what is in force.
+                None => match kept() {
+                    Some(kept) => {
+                        Opening::Remembered(crate::trust_prompt::trusting_the_workspace(root), kept)
+                    }
+                    None => Opening::Ask,
+                },
             }
         }
     }
 }
 
+/// The record of a remembered answer about `root`, and which directory is at `root` now.
+///
+/// `None` where no answer about it may be kept or honoured (TRUST-23): no state directory, a root,
+/// the user's home or anything holding it, or a filesystem that cannot tell this directory from the
+/// next one made at the same path. Read in an incognito session too, as the other records are
+/// (INCOG-5); what it may not do there is write.
+fn remembering(
+    root: &std::path::Path,
+) -> Option<(
+    bravebot_agent::trusted::Store,
+    bravebot_agent::trusted::Identity,
+)> {
+    remembering_in(
+        bravebot_agent::home::directory(),
+        bravebot_agent::home::profile().as_deref(),
+        root,
+    )
+}
+
+/// [`remembering`], given the state directory and the user's home rather than reading them.
+fn remembering_in(
+    home: Option<std::path::PathBuf>,
+    profile: Option<&std::path::Path>,
+    root: &std::path::Path,
+) -> Option<(
+    bravebot_agent::trusted::Store,
+    bravebot_agent::trusted::Identity,
+)> {
+    use bravebot_agent::trusted;
+    let home = home?;
+    if !trusted::may_be_remembered(root, profile) {
+        return None;
+    }
+    let identity = trusted::Identity::of(root)?;
+    Some((trusted::Store::new(&home, root), identity))
+}
+
+/// Seconds since the epoch, which is how a kept answer says when it was given.
+fn seconds_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs())
+}
+
+/// Withdraw every answer kept about `root` inside `home`, and say what became of it (TRUST-24).
+///
+/// Whichever directory was at the path when each was given: a person taking the answer back means
+/// the name, and a line left about an earlier directory there would still be read as theirs.
+/// Refused in an incognito session, which writes nothing, and the line names the file so the person
+/// can remove it by hand.
+fn forget_trust(home: Option<&std::path::Path>, root: &std::path::Path) -> String {
+    use bravebot_agent::trusted;
+    let directory = root.display();
+    let Some(home) = home else {
+        return t!(session_trust_nothing_to_forget, directory = directory);
+    };
+    let store = trusted::Store::new(home, root);
+    if !trusted::may_be_written() {
+        return t!(
+            session_trust_forget_incognito,
+            path = store.path().display()
+        );
+    }
+    match store.forget() {
+        Ok(true) => t!(session_trust_forgotten, directory = directory),
+        Ok(false) => t!(session_trust_nothing_to_forget, directory = directory),
+        Err(error) => t!(
+            session_trust_not_forgotten,
+            path = store.path().display(),
+            error = error
+        ),
+    }
+}
+
 /// The trust map the session starts with, or nothing if the user asked to leave.
 ///
-/// A fresh session asks, whatever any session in this directory answered before. The
-/// question grants standing permission, and a launch that skipped it because someone said yes
-/// last week would be granting that permission on behalf of a user who was never asked, which is
-/// trust assumed from silence rather than granted.
+/// A fresh session asks, unless the person said to remember the answer in an earlier session begun
+/// in this exact directory (TRUST-23). The question grants standing permission, and a launch that
+/// skipped it because someone said yes last week would be granting that permission on behalf of a
+/// user who was never asked; a person who pressed the key that says "and remember" was asked, and
+/// was told what it keeps and where.
 ///
-/// Resuming is the one case that does not ask, and it is not an exception to that: the map comes
-/// out of the record of the very session being picked up, so the answer being honoured is the one
-/// its own user gave. It carries the rules that session's writes recorded too, which is what stops
-/// a resumed turn reading back a file an earlier turn poisoned. A record from before the map was
-/// kept has none, and is asked about.
+/// Resuming does not ask either, and it is not an exception to that: the map comes out of the record
+/// of the very session being picked up, so the answer being honoured is the one its own user gave.
+/// It carries the rules that session's writes recorded too, which is what stops a resumed turn
+/// reading back a file an earlier turn poisoned. A record from before the map was kept has none, and
+/// is asked about.
 ///
 /// A session bypassing every permission is not asked either, and takes the map a yes would have
 /// written. Resuming still wins over that: the question is not being put in either case, so there
 /// is nothing for the mode to answer, and the map its own user gave is the more specific record.
+/// Nothing is written in that mode (MODE-4), since the question is never put to anyone.
 fn opening_trust(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     session: &mut Session,
     root: &std::path::Path,
     beginning: Beginning,
+    id: &str,
 ) -> Option<(TrustStore, Whence)> {
-    let (trust, whence) = match opening_for(beginning, session.permission_mode(), root) {
+    let record = remembering(root);
+    let where_it_is = root.display();
+    let kept = || {
+        record
+            .as_ref()
+            .and_then(|(store, identity)| store.kept(identity))
+    };
+    let (trust, whence) = match opening_for(beginning, session.permission_mode(), root, kept) {
         Opening::Settled(trust, whence) => (trust, whence),
+        // Asked as a session asked just now would be about what else the tree proposes: the person
+        // is here, and what they said to remember was this question and no other.
+        Opening::Remembered(trust, kept) => {
+            session.note(t!(
+                session_trusting_kept,
+                directory = where_it_is,
+                when = bravebot_session::sessions::how_long_ago(kept.at)
+            ));
+            return Some((trust, Whence::Asked));
+        }
         Opening::Ask => {
+            // Offered only where it can be written, so a key that says it remembers never writes
+            // nothing: an incognito session reads the record and adds nothing to it.
+            let keeping = record
+                .as_ref()
+                .filter(|_| bravebot_agent::trusted::may_be_written())
+                .map(|(store, _)| store.path());
             // What the question refused to answer on, which is words another program typed at the
             // terminal while it was up. Put in the box rather than dropped, so a person who came back
             // to a question still waiting and a virtualenv activated can see what did it (#403).
             let mut carried = String::new();
-            let trust = crate::trust_prompt::ask(terminal, root, &mut carried)?;
+            let (trust, answer) = crate::trust_prompt::ask(terminal, root, keeping, &mut carried)?;
             if !carried.is_empty() {
                 session.paste_text(&carried);
+            }
+            if let (crate::trust_prompt::Answer::Remember, Some((store, identity))) =
+                (answer, &record)
+            {
+                session.note(match store.keep(identity, id, seconds_now()) {
+                    true => t!(session_trust_kept, directory = where_it_is),
+                    false => t!(
+                        session_trust_not_kept,
+                        directory = where_it_is,
+                        path = store.path().display()
+                    ),
+                });
+                return Some((trust, Whence::Asked));
             }
             (trust, Whence::Asked)
         }
@@ -4619,7 +4789,6 @@ fn opening_trust(
         session.note(t!(session_not_trusting));
         return Some((trust, whence));
     }
-    let where_it_is = root.display();
     // Named, because two of the three are a grant nobody made just now, and this line is the only
     // place that says where it came from.
     session.note(match whence {
@@ -15813,11 +15982,11 @@ mod tests {
         )
     }
 
-    /// The opening map comes from how this session was started and from nowhere else. A fresh
-    /// start brings no record, so the question is put: reading back the yes somebody gave in this
-    /// directory last week would grant standing permission over the tree on behalf of a user
-    /// nobody asked. `/clear` begins a session too, and reaches this with the same
-    /// `Beginning::New`.
+    /// The opening map comes from how this session was started and from what the person said to
+    /// remember, and from nowhere else. A fresh start brings no record, so without a kept answer
+    /// the question is put: reading back the yes somebody gave in this directory last week would
+    /// grant standing permission over the tree on behalf of a user nobody asked. `/clear` begins a
+    /// session too, and reaches this with the same `Beginning::New`.
     #[test]
     fn a_fresh_session_is_asked_rather_than_inheriting_a_map() {
         use bravebot_agent::PermissionMode;
@@ -15828,11 +15997,132 @@ mod tests {
                     beginning_of(&Start::Fresh, here()),
                     PermissionMode::Ask,
                     here(),
+                    || None,
                 ),
                 Opening::Ask
             ),
             "a session started fresh took an answer its own user never gave",
         );
+    }
+
+    /// What an earlier session was told to remember settles a fresh one, and `/clear` too, and the
+    /// map it settles is the one `y` would have given: the tree trusted, nothing more.
+    #[test]
+    fn a_remembered_answer_settles_a_fresh_session() {
+        use bravebot_agent::PermissionMode;
+
+        let kept = bravebot_agent::trusted::Kept {
+            session: "1-2".to_string(),
+            at: 7,
+        };
+        for beginning in [Beginning::New, Beginning::Resumed(None)] {
+            match opening_for(beginning, PermissionMode::Ask, here(), || {
+                Some(kept.clone())
+            }) {
+                Opening::Remembered(trust, from) => {
+                    assert_eq!(from, kept, "the session named another answer");
+                    assert!(trust.is_trusted("."));
+                    assert!(trust.is_trusted("src/main.rs"), "the rule covers the tree");
+                    assert!(
+                        !trust.is_trusted("/etc/passwd"),
+                        "a remembered answer reached outside the directory",
+                    );
+                }
+                opening => panic!("a remembered answer was not honoured: {opening:?}"),
+            }
+        }
+    }
+
+    /// Bypassing every permission answers before the kept record is read, so the session says the
+    /// flag answered, which is what is in force, and never touches the record (MODE-4).
+    #[test]
+    fn bypass_answers_before_a_remembered_answer_is_read() {
+        use bravebot_agent::PermissionMode;
+
+        match opening_for(
+            beginning_of(&Start::Fresh, here()),
+            PermissionMode::Bypass,
+            here(),
+            || panic!("bypass read the kept answer"),
+        ) {
+            Opening::Settled(_, Whence::Unasked) => {}
+            opening => panic!("bypass did not answer: {opening:?}"),
+        }
+    }
+
+    /// TRUST-23: the refusals hold where a session reads the record, not only where `r` is
+    /// offered, so a line written by hand about the home directory or what holds it answers nothing.
+    #[test]
+    fn no_remembered_answer_is_read_about_the_home_or_what_holds_it() {
+        let scratch = crate::testutil::scratch_dir("bravebot-app-remembering-home");
+        let _ = std::fs::remove_dir_all(&scratch);
+        let state = scratch.join("state");
+        let me = scratch.join("me");
+        let project = me.join("project");
+        std::fs::create_dir_all(&project).expect("create");
+        if bravebot_agent::trusted::Identity::of(&project).is_none() {
+            // A filesystem with no birth time keeps nothing, which a sibling test covers.
+            return;
+        }
+
+        assert!(remembering_in(Some(state.clone()), Some(&me), &me).is_none());
+        assert!(remembering_in(Some(state.clone()), Some(&me), &scratch).is_none());
+        assert!(
+            remembering_in(None, Some(&me), &project).is_none(),
+            "a record was read with no state directory"
+        );
+        let (store, _) = remembering_in(Some(state.clone()), Some(&me), &project)
+            .expect("a directory inside the home is the ordinary case");
+        assert!(store.path().starts_with(state.join("trusted")));
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// `/forget-trust` takes the kept answer back, so the next session started there asks, and
+    /// says so; this session keeps the map it already has.
+    #[test]
+    fn forgetting_trust_makes_the_next_session_here_ask() {
+        use bravebot_agent::trusted::{Identity, Store};
+
+        let scratch = crate::testutil::scratch_dir("bravebot-app-forget-trust");
+        let _ = std::fs::remove_dir_all(&scratch);
+        let home = scratch.join("home");
+        let root = scratch.join("work");
+        std::fs::create_dir_all(&root).expect("create");
+        let Some(identity) = Identity::of(&root) else {
+            // A filesystem with no birth time keeps nothing, which a sibling test covers.
+            return;
+        };
+        let store = Store::new(&home, &root);
+        assert!(store.keep(&identity, "1-2", 7), "the answer was not kept");
+
+        let said = forget_trust(Some(&home), &root);
+
+        assert_eq!(
+            store.kept(&identity),
+            None,
+            "the answer outlived /forget-trust"
+        );
+        assert_eq!(
+            said,
+            t!(session_trust_forgotten, directory = root.display()),
+            "the line did not say the next session will ask",
+        );
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// With nothing kept there is nothing to take back, and the line says that rather than
+    /// claiming to have forgotten something.
+    #[test]
+    fn forgetting_trust_where_nothing_is_kept_says_so() {
+        let scratch = crate::testutil::scratch_dir("bravebot-app-forget-nothing");
+        let _ = std::fs::remove_dir_all(&scratch);
+        let root = scratch.join("work");
+        std::fs::create_dir_all(&root).expect("create");
+        let nothing = t!(session_trust_nothing_to_forget, directory = root.display());
+
+        assert_eq!(forget_trust(Some(&scratch.join("home")), &root), nothing);
+        assert_eq!(forget_trust(None, &root), nothing, "no state directory");
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 
     /// A resume is not an exception to that: the answer it honours is the one its own user gave,
@@ -15847,6 +16137,7 @@ mod tests {
             beginning_of(&Start::Resuming(record), here()),
             PermissionMode::Ask,
             here(),
+            || panic!("a resume read the kept answer over its own record's map"),
         ) {
             Opening::Settled(trust, Whence::Resumed) => {
                 assert!(trust.is_trusted("."));
@@ -15871,6 +16162,7 @@ mod tests {
                     beginning_of(&Start::Resuming(record), here()),
                     PermissionMode::Ask,
                     here(),
+                    || None,
                 ),
                 Opening::Ask
             ),
@@ -15901,6 +16193,7 @@ mod tests {
             beginning_of(&Start::Resuming(record), here()),
             PermissionMode::Bypass,
             here(),
+            || panic!("a resume read the kept answer over its own record's map"),
         ) {
             Opening::Settled(trust, Whence::Resumed) => assert!(
                 !trust.is_trusted("vendor/lib.js"),

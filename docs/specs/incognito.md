@@ -6,6 +6,7 @@ governs:
   - crates/core/src/incognito.rs
   - crates/agent/src/home.rs
   - crates/agent/src/remembered.rs
+  - crates/agent/src/trusted.rs
   - crates/agent/src/subscription.rs
   - crates/session/src/store.rs
   - crates/session/src/sessions.rs
@@ -91,7 +92,10 @@ the skills and the imported credentials, exactly as an ordinary one does. What i
 writing, apart from the one file [INCOG-8](#INCOG-8) names, and one read, named below. The record of
 command lines somebody asked to be remembered past a session, which [tools/run.md](tools/run.md)
 governs, is read here on the same terms: a line already in it stops the asking as it does anywhere,
-and the key that would add one is not offered.
+and the key that would add one is not offered. So is the record of answers to the startup question
+somebody asked to be kept, which [trust-map.md](trust-map.md#TRUST-23) governs: a kept answer settles
+the question here as anywhere, the session says so as it opens, the key that would keep one is not
+offered, and `/forget-trust` writes nothing and names the file.
 
 **The one read refused is the standing answer about whether a check answers in somebody's place.**
 The word a person's own directory holds about that is not read in this mode, so a session here asks

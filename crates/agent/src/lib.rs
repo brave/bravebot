@@ -48,6 +48,7 @@ pub mod subscription;
 mod testutil;
 pub mod timing;
 pub mod tools;
+pub mod trusted;
 pub mod turn;
 pub mod vet;
 pub mod watch;
