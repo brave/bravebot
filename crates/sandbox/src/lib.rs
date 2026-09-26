@@ -37,6 +37,7 @@ pub mod swap;
 // exist.
 #[cfg(test)]
 mod testutil;
+pub mod toolchain;
 #[cfg(any(windows, test))]
 pub mod windows;
 

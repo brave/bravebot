@@ -11,6 +11,7 @@ governs:
   - crates/sandbox/src/windows.rs
   - crates/sandbox/src/windows/appcontainer.rs
   - crates/sandbox/src/process.rs
+  - crates/sandbox/src/toolchain.rs
 documented-by: docs/website/docs/security/security.md
 ---
 
@@ -482,6 +483,44 @@ the case of the name does not matter.
 
 `verified-by: bravebot_sandbox::macos::a_write_row_does_not_reach_a_git_directory_beneath_it`
 
+<a id="SANDBOX-15"></a>
+### SANDBOX-15: a toolchain's list is keyed on the file its program resolved to, and names a cache and never the token beside it
+
+A stage whose program resolved to a file one of the toolchain lists below knows gets that
+toolchain's rows, and a stage whose program no list knows gets none. The key is the name of the file
+the plan resolved, after its links are followed, so rustup's `cargo`, npm's own scripts and a
+versioned `python3.12` are each known, and a name that only resembles one, `pnpm`,
+`python3-config` or `cargo-deny`, is not. An install and a configuration file are read and never
+written. A cache is read and written, and is named as the directory or file it is rather than
+through the directory holding it, so no list reaches the file a tool keeps its token in, the home
+directory, `~/.config`, `~/.cache`, `~/Library` or `~/Library/Caches`. Each write row says what it
+names, so a backend that cannot name an absent path has the cache created as the directory or file
+the toolchain expects there. A list is added to the policy it is given and takes nothing from it.
+What decides a row is the table and the platform: nothing on the machine is read, so `CARGO_HOME`,
+`GOCACHE` and `XDG_CACHE_HOME` move no row. No stage is started with a list yet, since `run` builds
+no profile; this is the list one adds.
+
+**Why.** The paths a build resolves through belong to that build and not to every program that runs,
+and the file a stage resolved to is the part of the plan a person read, where a name the model wrote
+or a configuration file's contents is not. One list shared by every toolchain lets a postinstall
+script leave something in `~/.cargo/registry` for a later `cargo build` to read. A package manager
+keeps its token beside its cache, so a row naming the directory holding the cache hands the token to
+every build in that ecosystem. An install written by a confined stage is the `cargo` a later stage
+resolves to, and a configuration file written by one is a `build.rustc-wrapper` every later build
+runs. Cargo's configuration is read at all because cargo fails every invocation on a configuration
+file it cannot open, which a machine with a `~/.cargo/config.toml` otherwise meets on every build.
+
+`verified-by: bravebot_sandbox::toolchain::a_list_is_keyed_on_the_file_a_program_resolved_to`
+`verified-by: bravebot_sandbox::toolchain::a_program_no_list_knows_brings_none`
+`verified-by: bravebot_sandbox::toolchain::a_list_names_a_cache_and_never_the_directory_holding_it`
+`verified-by: bravebot_sandbox::toolchain::an_install_is_read_and_never_written`
+`verified-by: bravebot_sandbox::toolchain::a_cargo_list_reads_the_configuration_cargo_cannot_start_without`
+`verified-by: bravebot_sandbox::toolchain::a_list_writes_its_own_ecosystems_cache_and_no_other`
+`verified-by: bravebot_sandbox::toolchain::each_platform_writes_the_cache_its_toolchain_uses_there`
+`verified-by: bravebot_sandbox::toolchain::no_list_names_a_directory_that_holds_other_programs_files`
+`verified-by: bravebot_sandbox::toolchain::a_missing_cache_is_created_as_what_the_toolchain_expects_there`
+`verified-by: bravebot_sandbox::toolchain::a_list_leaves_the_policy_it_is_added_to_as_it_was`
+`verified-by: bravebot_sandbox::macos::a_cargo_stage_writes_its_registry_and_reaches_neither_its_token_nor_its_install`
 ## Programs a person asked for
 
 A program `run` ([tools/run.md](tools/run.md)) starts is unconfined: it gets the access the user's
@@ -560,13 +599,16 @@ never a value a configuration file holds.
 
 | The list for | Read | Read and write |
 |---|---|---|
-| `cargo` | `~/.rustup`, `~/.cargo/bin`, `~/.asdf` | `~/.cargo/registry`, `~/.cargo/git`, `~/.cargo/.package-cache` |
-| `node`, `npm`, `npx` | `~/.nvm`, `~/.asdf` | `~/.npm/_cacache` |
-| `python`, `pip` | `~/.pyenv`, `~/.asdf` | `~/.cache/pip` |
-| `go` | `~/.asdf` | `~/.cache/go-build`, `~/go/pkg/mod` |
+| `cargo`, `rustup` | `~/.rustup`, `~/.cargo/bin`, `~/.cargo/config.toml`, `~/.cargo/config`, `~/.asdf` | `~/.cargo/registry`, `~/.cargo/git`, `~/.cargo/.package-cache` |
+| `node`, `npm`, `npx`, `npm-cli.js`, `npx-cli.js` | `~/.nvm`, `~/.asdf` | `~/.npm/_cacache` |
+| `python`, `pip`, and either followed by a version | `~/.pyenv`, `~/.asdf` | `~/.cache/pip`, which on macOS is `~/Library/Caches/pip` |
+| `go` | `~/.asdf` | `~/.cache/go-build`, which on macOS is `~/Library/Caches/go-build`, `~/go/pkg/mod` and `~/go/pkg/sumdb` |
 | `mvn` | `~/.asdf` | `~/.m2/repository` |
 | `gradle` | `~/.asdf` | `~/.gradle/caches`, `~/.gradle/wrapper`, `~/.gradle/native` |
-| `git` | the configuration directory of each editor this row names, which is what the editor `git commit` opens reads | that editor's own state directory |
+
+The first column is the name of the file a stage resolved to once its links are followed, which is
+why rustup's proxy and npm's own scripts are in it: a `cargo` rustup installed resolves to `rustup`,
+and an `npm` a version manager installed resolves to `npm-cli.js`.
 
 A cache is writable because a build that cannot write one fetches everything again or fails
 outright, and the price is a write no plan accounted for: a program can leave something in its own
@@ -574,7 +616,15 @@ ecosystem's cache for a later build in that ecosystem to read. Holding that to o
 keying on the binary buys, since the write a `cargo build` is trusted with is one an `npm ci` never
 receives. An install is read-only for the opposite reason. A build that would install a toolchain
 fails, and a line somebody then runs unconfined costs less than letting a confined stage replace the
-`cargo` or the `node` a later stage in the same pipeline resolves to.
+`cargo` or the `node` a later stage in the same pipeline resolves to. `npx` meets that rule: a
+package the project does not hold is installed under `~/.npm/_npx`, which is an install and not a
+cache, so an `npx` that would fetch one fails.
+
+On macOS a cache is granted where it will be rather than created first
+([SANDBOX-11](#SANDBOX-11)), and the grant is the cache and not the directory above it. So the first
+build of an ecosystem on a machine, one whose cache's parent is not there yet, fails: an `npm ci` on
+an account that never ran npm is refused `~/.npm`. Linux creates the row before the run, so a first
+build there starts with its cache in place.
 
 **A list names a cache, never the directory holding it.** A package manager keeps its token beside
 its cache, so naming the parent would grant the token with it: `~/.cargo/credentials.toml` sits in
@@ -583,14 +633,25 @@ signing key. Each row above names the subdirectory a build reads, and a token fi
 list by never being named. Where a tool keeps state at the top of its home directory rather than in
 a subdirectory, that file is named on its own, which is why the cargo lock `~/.cargo/.package-cache`
 is in a row beside the registry and the token file next to it is not. The same rule keeps
-`~/.config` out, since `~/.config/gh` is a credential store the remote scope below grants, so the
-XDG git configuration and an editor's configuration are named one directory at a time rather than
-through the directory they sit in. Which editors the `git` row knows is in that row and is not read
-from `core.editor`, since no configuration file's contents decide what a list holds. `$HOME` itself
-is in no row, so a file in it that no row names, `~/.npmrc` and `~/.pypirc` among them, is
-unreachable. What this costs is an editor no row names and an editor installed outside the system
-binary directories: the first opens without its configuration, the second cannot start at all, and
-naming the directory is a person's to do in either case.
+`~/.config` and `~/Library/Caches` out, since `~/.config/gh` is a credential store the remote scope
+below grants, so the XDG git configuration and a cache on macOS are named one directory at a time
+rather than through the directory they sit in. `$HOME` itself is in no row, so a file in it that no
+row names, `~/.npmrc` and `~/.pypirc` among them, is unreachable. What this costs is what those
+files say: npm passes over a configuration file it cannot read, so a registry or a proxy set in
+`~/.npmrc` is not in force for a confined stage, and naming the file is a person's to do. The same
+holds for `~/.m2/settings.xml` and `~/.gradle/gradle.properties`, which hold a credential of their
+own. Nor is Gradle's `~/.gradle/daemon` in a row: the registry there is how a client finds a daemon
+already running, and a build handed to one the person's own shell started runs unconfined. Cargo's
+configuration is the one a list names, because cargo fails every invocation on a configuration file
+it cannot open, and it is read and never written, since a `build.rustc-wrapper` written there is a
+program every later build runs. What reading it costs is a token kept in it: cargo takes
+`registry.token` from that file as well as from `credentials.toml`, so a person who wrote one there
+has it read by every cargo stage.
+
+No list serves the editor `git commit` opens when it is given no message. A stage's standard input
+is never the terminal ([tools/run.md](tools/run.md)), so a terminal editor has nobody to read from,
+confined or not. A graphical one such as `code --wait` needs no terminal, and it is a program the
+plan never showed, so no list is keyed on it.
 
 **A command no list knows is asked about, and the answer lasts the session.** A wrapper is the
 common case rather than the edge one: `make check` here, a `just` recipe or an `npm run` target
@@ -739,8 +800,11 @@ reported as what it is.
 - The cold path of a macOS developer shim has not been exercised. With the lookup cache the shims
   keep empty, a shim asks `xcodebuild`, which refuses every invocation until the Xcode licence
   is accepted, confined or not, so a machine in that state cannot show whether that path starts,
-  and the kernel test runs with the cache the account already has. On Linux the kernel tests start
-  `true`, `id` and `cat` under the base, and no TLS program or compiler.
+  and the kernel test runs with the cache the account already has. That cache is kept in the
+  account's own temporary directory, which is the session's only while `TMPDIR` names it. On Linux
+  the kernel tests start `true`, `id` and `cat` under the base, and no TLS program or compiler.
+- No Maven or Gradle build has been run under its list. Each reads a settings file no list names,
+  and whether a build on a machine that holds one runs without it or stops is not settled.
 - The suite does not run on Windows. The decisions this backend makes before a process starts are
   pure and are run by every job that runs the suite: which capability a policy asks for, what each
   grant permits, which policies are refused, and how an argument is written onto a command line.

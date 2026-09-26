@@ -1394,6 +1394,9 @@ int main(void) {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// cat or ls reporting that what it was asked for could not be read.
+    const READ_FAILED: i32 = 1;
+
     /// A scratch directory holding a home and a temporary directory, with the two returned as
     /// their links are followed, since that is the path Seatbelt matches a grant against. They are
     /// apart because the base grants its temporary directory whole, and a home inside it would
@@ -1541,5 +1544,64 @@ int main(void) {
         }
 
         let _ = std::fs::remove_dir_all(repository);
+    }
+
+    /// The cargo list as the kernel holds it: the registry is written, the configuration cargo
+    /// fails without is read, and the token beside both, the install, and the configuration
+    /// itself are out of reach for writing or reading as the list says.
+    #[test]
+    fn a_cargo_stage_writes_its_registry_and_reaches_neither_its_token_nor_its_install() {
+        let (scratch, home, temporary) =
+            a_home_and_a_temporary_directory("bravebot-sandbox-a-cargo-stage");
+        let cargo = home.join(".cargo");
+        std::fs::create_dir_all(cargo.join("registry").join("index"))
+            .expect("the scratch registry is creatable");
+        std::fs::create_dir_all(cargo.join("bin")).expect("the scratch install is creatable");
+        std::fs::write(cargo.join("config.toml"), "[net]\n").expect("the scratch home is writable");
+        std::fs::write(cargo.join("credentials.toml"), "token = \"a token\"\n")
+            .expect("the scratch home is writable");
+        std::fs::write(cargo.join("bin").join("cargo"), "").expect("the scratch home is writable");
+        let policy = crate::toolchain::Toolchain::Cargo.grant(
+            crate::base::base(crate::base::Prelude::MacOs, &temporary, None, Some(&home)),
+            crate::base::Prelude::MacOs,
+            &home,
+        );
+        let at = |path: PathBuf| path.display().to_string();
+        let code = |program: &str, path: PathBuf| {
+            exit_code_under(&policy, a_stage_for(&home), program, &[&at(path)])
+        };
+
+        assert_eq!(
+            code("/bin/cat", cargo.join("config.toml")),
+            Some(0),
+            "the configuration cargo fails without was not read"
+        );
+        assert_eq!(
+            code(
+                "/usr/bin/touch",
+                cargo.join("registry").join("index").join("an-entry")
+            ),
+            Some(0),
+            "the registry was not written"
+        );
+        assert_eq!(
+            code("/bin/cat", cargo.join("credentials.toml")),
+            Some(READ_FAILED),
+            "the token beside the registry was read"
+        );
+        for not_written in [
+            cargo.join("config.toml"),
+            cargo.join("credentials.toml"),
+            cargo.join("bin").join("cargo"),
+        ] {
+            assert_eq!(
+                code("/usr/bin/touch", not_written.clone()),
+                Some(TOUCH_FAILED),
+                "{} was written",
+                not_written.display()
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 }

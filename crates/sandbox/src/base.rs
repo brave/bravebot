@@ -250,6 +250,12 @@ fn git_configuration(home: &Path) -> [PathBuf; 2] {
     ]
 }
 
+/// `row`, written with `/` between its components, under `home`.
+pub(crate) fn under(home: &Path, row: &str) -> PathBuf {
+    row.split('/')
+        .fold(home.to_path_buf(), |path, component| path.join(component))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
