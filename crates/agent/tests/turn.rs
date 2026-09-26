@@ -14112,20 +14112,21 @@ fn asking_to_read_more_than_one_result_may_hold_hands_back_the_reference_and_say
         !after_the_run.contains("SENTINEL-XYZZY"),
         "output past the cap came back in the result: {after_the_run}"
     );
+    // The run tool's description says some of this too, so only the result is read.
+    let result = tool_results(after_the_run);
     assert!(
-        after_the_run.contains("longer than a run's result may hold"),
-        "the planner was not told why what it asked to read is not here: {after_the_run}"
+        result.contains("longer than a run's result may hold"),
+        "the planner was not told why what it asked to read is not here: {result}"
     );
     // Told only that it was too long, a planner took read_output to be held to the same size and
     // ran the whole command again to grep it.
     assert!(
-        after_the_run.contains("read_output is not held to that size"),
-        "the planner was not told read_output hands back the whole of it: {after_the_run}"
+        result.contains("read_output is not held to that size"),
+        "the planner was not told read_output hands back the whole of it: {result}"
     );
     assert!(
-        after_the_run.contains("stdin_ref set to the reference"),
-        "the planner was not told how to read part of it without running it again: \
-         {after_the_run}"
+        result.contains("stdin_ref set to the reference"),
+        "the planner was not told how to read part of it without running it again: {result}"
     );
     assert!(
         !after_the_run.contains("call run with read: true"),
