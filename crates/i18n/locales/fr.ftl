@@ -608,6 +608,12 @@ trust-directory-regardless =
     montré avant d'être écrit.
 trust-directory-yes = lui faire confiance
 trust-directory-no = me demander à chaque écriture
+trust-directory-remember = faire confiance et retenir
+trust-directory-remember-explained =
+    r : lui faire confiance, et ne plus poser cette question aux sessions démarrées plus tard exactement dans ce répertoire
+trust-directory-remember-exact =
+    La question reste posée à une session démarrée dans un répertoire qu'il contient ou qui le contient, ou dans un répertoire supprimé puis recréé ici.
+trust-directory-remember-where = /forget-trust revient dessus, et c'est noté ici :
 quit = quitter
 trust-quit-again = encore
 
@@ -979,6 +985,9 @@ status-session-id = Id de session
 status-directory = Répertoire
 status-directory-trusted = fiable
 status-directory-untrusted = non fiable, chaque écriture vous est donc montrée
+status-directory-kept = retenu { $when }
+status-directory-kept-note = les sessions démarrées ici plus tard l'approuvent sans demander
+status-directory-kept-where = /forget-trust pour que la question soit reposée ; la réponse est retenue dans { $path }
 status-also-open = Aussi ouvert
 status-added-directory = ajouté avec /add-dir
 status-scratch = Temporaire
@@ -1203,6 +1212,7 @@ command-rename = Appeler cette conversation autrement
 command-compact = Résumer la conversation jusqu'ici, en gardant la partie récente
 command-btw = Demander quelque chose à côté du travail, sans le mettre dans la conversation
 command-clear = Démarrer une nouvelle session ici, celle-ci restant reprenable
+command-forget-trust = Ne plus retenir que ce répertoire est approuvé, pour que les sessions suivantes ici demandent
 command-loop = Renvoyer une consigne encore et encore, dire ce qui se répète, ou l'arrêter
 command-goal = Continuer à travailler jusqu'à ce qu'une condition que vous fixez soit jugée remplie
 command-watch = Lister les fichiers que cette session surveille, et en arrêter un par son numéro
@@ -1277,6 +1287,18 @@ session-trusting = { $directory } approuvé
 session-trusting-as-left = { $directory } approuvé (comme cette session l'avait laissé)
 session-trusting-unasked =
     { $directory } approuvé (--dangerously-skip-permissions, la question ne vous a pas été posée)
+session-trusting-kept =
+    { $directory } approuvé (vous avez demandé de le retenir { $when } ; /forget-trust pour que la question soit reposée)
+session-trust-kept =
+    { $directory } approuvé, et les sessions démarrées ici plus tard ne demanderont plus ; /forget-trust revient dessus
+session-trust-not-kept =
+    { $directory } approuvé pour cette session seulement : la réponse n'a pas pu être écrite dans { $path }, la prochaine session ici demandera donc
+session-trust-forgotten =
+    la prochaine session démarrée dans { $directory } demandera s'il faut l'approuver ; celle-ci garde sa réponse, et /clear en démarre une qui demande
+session-trust-nothing-to-forget = aucune réponse n'est retenue pour { $directory }, il n'y a donc rien à oublier
+session-trust-not-forgotten = la réponse retenue dans { $path } n'a pas pu être supprimée : { $error }
+session-trust-forget-incognito =
+    une session incognito ne change rien sur le disque, toute réponse retenue pour ce répertoire reste donc dans { $path }
 session-not-trusting =
     ce répertoire n'est pas approuvé ; chaque écriture vous sera montrée
 session-vouched-for = { $path } approuvé pour cette session

@@ -15,12 +15,12 @@ A line beginning with `/` that this program acts on itself, in place of sending 
 every one of them shares: where such a line may come from, when a line is one, and what happens to
 the line once it is.
 
-Not what any particular command then does. `/add-dir`, `/cd` and `/status` are the trust map's, in
-[trust-map.md](trust-map.md); `/compact` is [compaction.md](compaction.md)'s; `/clear` begins a
-session, which is [sessions.md](sessions.md)'s; `/btw` asks something the conversation never sees,
-and where its answer is drawn is [watching.md](watching.md)'s; `/manifest` starts the other kind of
-run, which is [manifest.md](manifest.md)'s. The `!` prompt is a different surface entirely and is
-[shell-mode.md](shell-mode.md).
+Not what any particular command then does. `/add-dir`, `/cd`, `/forget-trust` and `/status` are the
+trust map's, in [trust-map.md](trust-map.md); `/compact` is [compaction.md](compaction.md)'s;
+`/clear` begins a session, which is [sessions.md](sessions.md)'s; `/btw` asks something the
+conversation never sees, and where its answer is drawn is [watching.md](watching.md)'s;
+`/manifest` starts the other kind of run, which is [manifest.md](manifest.md)'s. The `!` prompt is
+a different surface entirely and is [shell-mode.md](shell-mode.md).
 
 **Skills are not on this surface.** Other agents let a person type a skill's name after a slash,
 and this one does not: a skill is advertised to the planner by name and description, and its body

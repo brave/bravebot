@@ -11,6 +11,9 @@ At startup you are asked whether you trust the working directory.
 - **Trust it** and a rule covering the whole tree is written, so ordinary work proceeds without a
   prompt for every edit.
 - **Decline** and nothing is written, so nothing is trusted and every write is shown to you first.
+- **Trust and remember** (`r`, in the terminal interface) trusts it as a yes does and writes the
+  answer down, so later sessions started in exactly that directory are not asked. See
+  [Remembering the answer](#remembering-the-answer).
 - **Leaving at the question starts no session.**
 
 That record is the **trust map**, and it is the thing every read and every write consults.
@@ -110,6 +113,7 @@ inspected content.
 | Gesture | What it grants |
 |---|---|
 | yes at the startup question | the whole working directory, for this session |
+| `r` at the startup question | the whole working directory, for this session and every later one started in exactly that directory, until [`/forget-trust`](../reference/commands.md#forget-trust) |
 | [`@path`](../using/context.md#naming-a-file-path) or `--file` | that one file, for the rest of the session |
 | [dropping a file](../using/context.md#dropping-a-file) | that one file, wherever on disk it is, plus reach to it |
 | `/add-dir <path>` | that directory: reachable **and** trusted, for this session |
@@ -292,7 +296,8 @@ does.
 ## How long an answer lasts
 
 **The map belongs to the session, not the directory.** Every session start asks, whatever any earlier
-session in that directory answered. `/clear` begins a session and therefore asks.
+session in that directory answered, unless you pressed `r` there
+([below](#remembering-the-answer)). `/clear` begins a session and therefore asks, on the same terms.
 
 `--resume` does not ask: it restores the map from the record of the session you chose, because the
 answer honoured is the one that session's own user gave. It also carries the rules that session's
@@ -305,8 +310,50 @@ back on the relative ones. That is what keeps a record about the same files afte
 the checkout: full paths on disk would each name somewhere that is no longer there, nothing would
 match, and the session would resume as though nobody had vouched for anything.
 
-The question grants standing permission. Honouring last week's answer would grant it on behalf of a
-user who was never asked, and trust assumed from silence is not trust granted.
+The question grants standing permission. Honouring last week's yes would grant it on behalf of a user
+who was never asked, and trust assumed from silence is not trust granted. `r` is the one answer that
+says it is meant to last, and it is honoured on narrower terms than a yes is given on.
+
+### Remembering the answer
+
+In the terminal interface the startup question offers a third key, `r`. It trusts the directory
+exactly as `y` does and writes the answer down, one file per directory under `~/.bravebot/trusted`.
+The question says what the key covers, how to take it back and the file it writes before you press
+it.
+
+A later session started in that directory is not asked, and says so as it opens:
+
+```
+trusting /home/me/projects/app (you said to remember it 3 days ago; /forget-trust to be asked again)
+```
+
+It covers less than a yes does:
+
+- **Exactly that directory.** A session started in a directory inside it or above it is asked. A
+  rule about a directory covers everything below it, so an answer kept about `~/projects` would
+  otherwise answer for a session started in any repository cloned there afterwards. A session
+  started in the remembered directory itself trusts everything below it, as a yes there does.
+- **That directory, not its name.** The answer records which directory was at the path, by when it
+  was made and, except on Windows, its number on the disk. One deleted and made again at the same
+  path, such as a fresh clone, is asked about. On Windows the time is all there is to go on, and a
+  clone deleted and replaced within seconds can be given the old one's time, so it is taken for it.
+- **The rule a yes writes, and nothing else.** What the earlier session went on to record, a file it
+  marked untrusted included, is not carried. That is the [first cost below](#known-costs), and a
+  kept answer does not close it.
+- **Not everywhere.** `r` is not offered at your home directory, a directory holding it or a
+  filesystem root, where the filesystem cannot say when the directory was made, at a directory your
+  settings file named, with `--dangerously-skip-permissions` (which asks nothing and writes nothing),
+  or in an [incognito session](../using/sessions.md#a-session-that-leaves-nothing-behind). An
+  incognito session still honours an answer an ordinary one kept.
+
+Whenever it is in doubt it asks: a missing or unreadable record, one about an earlier directory at
+the path, or a line about this directory that this build cannot read all mean the question is put.
+
+`bravebot --plain` and the desktop app ask in every session for now and do not read the record.
+
+[`/status`](#reading-the-map-back) says when a kept answer is in force and names its file.
+[`/forget-trust`](../reference/commands.md#forget-trust) removes it: the session you type it in
+keeps the map it has, and the next one started there asks.
 
 ## Reading the map back
 
@@ -316,7 +363,9 @@ user who was never asked, and trust assumed from silence is not trust granted.
 
 lists every rule in force, however many there are, so what a line vouched for does not have to be
 remembered. The [session's own directory](#a-directory-of-the-sessions-own) gets a line of its own
-there, since it holds no rule to list.
+there, since it holds no rule to list. Where a [kept answer](#remembering-the-answer) will trust the
+working directory in later sessions, the line under it says so, when you gave it, and which file
+holds it.
 
 ## `~/.bravebot` is not governed by this
 
@@ -352,6 +401,12 @@ All of these are deliberate.
   purpose of that directory, and `cmd -o` into it is the ordinary case there rather than the odd one,
   so the redirection exception covers less of the traffic. No rule about that would help, since the
   same writes are available one directory up.
+
+- **A kept answer trusts what arrived while nobody was asked.** A session started from `r` trusts its
+  directory as a yes given at its start would, so both costs above apply to it. What it loses beyond a
+  yes is the question itself: the moment after pulling a branch or adding a dependency when you might
+  have answered `n`. The line the session opens with, `/status` and `/forget-trust` are what is left
+  of it.
 
 - **A symlink inside the project gives one file two names, and each name is its own rule.** A rule is
   keyed on the path an operation spelled, while confinement resolves where that path lands, and the

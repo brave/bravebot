@@ -80,6 +80,7 @@ Everything that should outlive a session lives here:
 | `~/.bravebot/sessions/<directory>/` | session records and audit trails |
 | `~/.bravebot/lsp/<workspace>/` | a language server's index, one per workspace ([`lsp`](../reference/tools.md#the-index-is-cached-and-it-is-not-small)) |
 | `~/.bravebot/findings/<workspace>.jsonl` | the credentials a turn's own writes were found to hold, one per workspace |
+| `~/.bravebot/trusted/<directory>.jsonl` | the answer to the startup question you pressed `r` for, one per directory ([remembering the answer](../security/trust.md#remembering-the-answer)) |
 | `~/.bravebot/history` | prompts you have sent |
 | `~/.bravebot/model` | the model chosen with `/model` |
 | `~/.bravebot/effort` | the effort level chosen with `/effort` |

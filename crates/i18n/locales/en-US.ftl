@@ -687,6 +687,15 @@ trust-directory-regardless =
     before it is written.
 trust-directory-yes = trust it
 trust-directory-no = ask me about every write
+# The key that keeps the answer for later sessions (TRUST-23). Offered only where it can be written
+# down, and its lines say what it covers and where it goes, since nobody can endorse a record they
+# were not shown.
+trust-directory-remember = trust and remember
+trust-directory-remember-explained =
+    r: trust it, and skip this question in later sessions started in exactly this directory
+trust-directory-remember-exact =
+    A session started inside or above this directory is still asked, and so is one started in a directory deleted and made again here.
+trust-directory-remember-where = /forget-trust takes it back, and it is written down here:
 quit = quit
 trust-quit-again = again
 
@@ -1079,6 +1088,9 @@ status-session-id = Session id
 status-directory = Directory
 status-directory-trusted = trusted
 status-directory-untrusted = not trusted, so every write is shown to you
+status-directory-kept = remembered { $when }
+status-directory-kept-note = later sessions started here trust it without asking
+status-directory-kept-where = /forget-trust to be asked again; the answer is kept in { $path }
 status-also-open = Also open
 status-added-directory = added with /add-dir
 status-scratch = Scratch
@@ -1370,6 +1382,7 @@ command-rename = Call this conversation something else
 command-compact = Summarise the conversation so far, keeping the recent part
 command-btw = Ask something beside the work, without putting it in the conversation
 command-clear = Start a new session here, keeping this one resumable
+command-forget-trust = Stop remembering that this directory is trusted, so later sessions here ask
 command-loop = Send a prompt again and again, say what is repeating, or stop it
 command-goal = Keep working until a condition you set is judged met
 command-watch = List the files this session is watching, and stop one by its number
@@ -1473,6 +1486,23 @@ session-trusting-as-left = trusting { $directory } (as this session left it)
 # what made it.
 session-trusting-unasked =
     trusting { $directory } (--dangerously-skip-permissions, so you were not asked)
+# Said where the question was not put because an earlier session here was told to remember the
+# answer (TRUST-23). When it was given and how to take it back, because this is a grant nobody made
+# in this session and the line is the only thing on the screen that says where it came from.
+session-trusting-kept =
+    trusting { $directory } (you said to remember it { $when }; /forget-trust to be asked again)
+session-trust-kept =
+    trusting { $directory }, and later sessions started here will not ask; /forget-trust takes it back
+# The answer was given, but writing it down failed, so the next session will ask after all.
+session-trust-not-kept =
+    trusting { $directory } for this session only: the answer could not be written to { $path }, so the next session here will ask
+session-trust-forgotten =
+    the next session started in { $directory } will ask whether to trust it; this one keeps its answer, and /clear starts one that asks
+session-trust-nothing-to-forget = no answer about { $directory } is kept, so there is nothing to forget
+session-trust-not-forgotten = the answer kept in { $path } could not be removed: { $error }
+# Incognito writes nothing, and removing a line is a write.
+session-trust-forget-incognito =
+    an incognito session changes nothing on disk, so any answer kept about this directory stays in { $path }
 session-not-trusting = this directory is not trusted; every write will be shown to you
 session-vouched-for = trusting { $path } for this session
 # Said when a person agrees that a file the scan found a credential in may reach the model.
