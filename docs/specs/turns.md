@@ -14,7 +14,7 @@ documented-by:
 
 How long a turn may go on, what happens when it does not stop, and what is said when it goes on
 without producing anything or ends without checking anything. What completed requests cost survives
-a later failure or stop.
+a later failure or stop. What happens when the model's reply says nothing at all.
 
 ## Clauses
 
@@ -164,3 +164,35 @@ Raw backend errors remain outside planner context and user-facing history.
 `verified-by: bravebot_agent::turn::rejected_compaction_keeps_completed_usage_when_the_parent_fails`
 `verified-by: bravebot_agent::turn::completed_stream_keeps_usage_when_cancelled_before_socket_closes`
 `verified-by: bravebot_tui::sessions::malformed_completed_usage_survives_turn_storage_and_resume`
+
+<a id="TURN-6"></a>
+### TURN-6: an empty reply is asked about once before it ends a turn
+
+When the planner finishes a reply with no text and no calls, the driver adds a line to the
+conversation saying so and asks again, and the person is told nothing. A second empty reply in a
+row ends the turn as a failure. An answered request in between starts the count again, so a long
+turn can come back from more than one.
+
+**Asked with a line, not sent again unchanged.** An empty reply comes from the conversation rather
+than the connection: the model read the request and ended its reply without writing anything, which
+is seen most often after tool results with text following them. The same request sent again tends
+to come back empty too, and a line saying so gives the model something to answer. The line is marked
+as the system's, like every other line the driver adds, so it does not read as the person changing
+the task.
+
+**Once, because twice is an answer.** A model that says nothing when asked to carry on has nothing
+to say here, and asking a third time would spend a request per round finding that out.
+
+**Only a finished reply with nothing in it.** A reply that was cut off, could not be decoded, or
+was refused is not this. Each has its own ending, and asking a model to carry on from something it
+never finished saying would answer the wrong failure.
+
+**Deciding on it reads nothing untrusted.** The reply is the planner's own output, and the
+planner's context holds nothing untrusted, so what it produced is trusted
+([LABEL-8](labels.md#LABEL-8)). The driver already decides from that reply whether the turn goes
+on, by whether it asked for a call, and whether it said anything at all is the same kind of fact.
+
+`verified-by: bravebot_agent::turn::an_empty_reply_is_asked_about_and_the_turn_carries_on`
+`verified-by: bravebot_agent::turn::two_empty_replies_in_a_row_end_the_turn`
+`verified-by: bravebot_agent::turn::completed_empty_reply_keeps_reported_usage_on_failure`
+`verified-by: bravebot_agent::backend::only_a_finished_reply_with_nothing_in_it_is_an_empty_reply`
