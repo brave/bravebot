@@ -63,8 +63,8 @@ key vi would give it: `"`, `q`, `@`, `m`, `'`, `` ` ``, `z`, `Z`, `[`, `]`, `R`,
 each take one more key, so `ma` sets no mark and opens no INSERT mode. `R` takes one key rather
 than replacing until Escape. `g?`, `gq`, `gw` and `g@` take the stretch they would act on, so `g?iw`
 changes nothing. After an operator only `'`, `` ` ``, `[`, `]` and `z` take their key, as in vi, so
-`dm` ends the `d` and the key after it is read on its own. In VISUAL mode those four and `R` take no
-key, since the selection is the stretch.
+`dm` ends the `d` and the key after it is read on its own. In VISUAL mode those four take no key,
+since the selection is the stretch, and `R` changes the rows the selection crosses.
 
 **Escape enters NORMAL mode and leaves the line exactly as it was.** It also abandons an instruction
 still waiting for a key, so `d`, Escape, `w` moves a word rather than deleting one, and so does any
@@ -174,12 +174,13 @@ word before, and the character the caret was on.
 `p` and `P` put the register back after and before the caret, and a stretch that was whole lines comes
 back as a line of its own. `J` makes this line and the one below into one, with a single space where
 the newline was. `u` puts back what the last change took, **one step and no further**. `.` does the
-last change again at the caret.
+last change again at the caret, except after a put, a join, or `r` or a case change over a selection,
+where it does nothing.
 
 The register is vi's unnamed one and the only one. It is not the system clipboard, which Ctrl-V owns
 and which you share with every other window you have open, so a yank here does not travel out of the
-box. Only `d`, `c`, `y` and the keys spelled from them fill it: a shift, a case change and `r` leave
-what you yanked there to put back.
+box. Only `d`, `c`, `y`, the keys spelled from them and `p` over a selection fill it: a shift, a case
+change and `r` leave what you yanked there to put back.
 
 ### Text objects
 
@@ -202,8 +203,16 @@ choose it**, on every row it crosses. That is the point of having both this and 
 for a motion: the stretch is on the screen while it is being chosen, and the next key acts on it.
 
 An operator here needs no extent: `x` is `d` and `s` is `c`, `r` replaces every selected character
-with one, and `~`, `u` and `U` change the case, as do `g~`, `gu` and `gU`. Motions move the end the
-caret is at, `o` puts the caret at the other end, and a text object becomes the selection.
+with one, and `~`, `u` and `U` change the case, as do `g~`, `gu` and `gU`. The capitals act on every
+row the selection crosses, whole: `D` and `X` take them, `Y` keeps them, and `C`, `S` and `R` change
+them. After any of those but `Y`, or after `d`, `c`, `>` or `<` over a line-wise selection, `.` does
+it again to as many rows from the caret. Motions move the end the caret is at, and a count moves it
+further, so `v2j` marks three rows. `o` puts the caret at the other end, and a text object becomes
+the selection.
+
+`p` puts what you yanked where the selection is and keeps what the selection held, so pressing `p`
+over another stretch swaps the two. `P` does the same and keeps what you yanked, to put one yank over
+several stretches. A yanked row stays a row, splitting the line when you put it over part of one.
 
 The key that opened the mode closes it, the other of the two changes which kind is in force, and
 Escape abandons the selection. Every operator ends it, so nothing acts on a stretch that is no longer

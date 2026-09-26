@@ -112,6 +112,9 @@ pub enum Command {
     Again,
     /// Put the register into the line, before or after the caret: `P` and `p`.
     Paste { before: bool },
+    /// Put the register where the selection is, which is `p` there, and `P` keeping the register as
+    /// it was rather than filling it with what the selection held.
+    PutOver { keep: bool },
     /// Join this line and the one below into one, which is `J`.
     Join,
     /// Mark out a stretch for the next instruction, character-wise or line-wise: `v` and `V`.
@@ -263,6 +266,9 @@ pub enum Extent {
     Object(Object),
     /// What VISUAL mode has marked out, which is the whole of what an operator there acts on.
     Selection,
+    /// Every row the selection crosses, whole, whichever kind of selection it is: `D`, `X`, `Y`,
+    /// `C`, `S` and `R` there.
+    SelectedRows,
 }
 
 /// A stretch named by what it is rather than by how far away its end is.
@@ -819,9 +825,15 @@ pub fn visual_command(c: char) -> Command {
         'd' | 'x' => Command::Change(Operator::Delete, Extent::Selection),
         'c' | 's' => Command::Change(Operator::Change, Extent::Selection),
         'y' => Command::Change(Operator::Yank, Extent::Selection),
+        // The capitals are the same operators over every row the selection crosses, as they are in
+        // vi. `R` is one of them: vi's replace mode has no meaning over a stretch already marked out.
+        'D' | 'X' => Command::Change(Operator::Delete, Extent::SelectedRows),
+        'C' | 'S' | 'R' => Command::Change(Operator::Change, Extent::SelectedRows),
+        'Y' => Command::Change(Operator::Yank, Extent::SelectedRows),
         '>' => Command::Change(Operator::Indent, Extent::Selection),
         '<' => Command::Change(Operator::Dedent, Extent::Selection),
-        'p' => Command::Paste { before: false },
+        'p' => Command::PutOver { keep: false },
+        'P' => Command::PutOver { keep: true },
         'J' => Command::Join,
         'r' => Command::Wait(Pending::ReplaceWith),
         '~' => Command::Case(Case::Swapped),
@@ -840,9 +852,6 @@ pub fn visual_command(c: char) -> Command {
         'v' => Command::Select { lines: false },
         'V' => Command::Select { lines: true },
         'g' => Command::Wait(Pending::VisualG),
-        // vi's `R` over a selection changes its lines and takes no key, so the key after it is the
-        // next instruction rather than one for `R` to swallow.
-        'R' => Command::Nothing,
         // Everything else means what it means in NORMAL mode, which is nearly all of the motions. A key
         // that is not a motion there is not one here either, and the `Nothing` it returns is the answer.
         _ => match command(c) {
@@ -1126,12 +1135,11 @@ mod tests {
         }
     }
 
-    /// A selection is already the stretch, so in VISUAL mode an operator under `g` is whole and `R`
-    /// takes no key: the key after either is the next instruction, as it is in vi. The case changes
-    /// under `g` act on the selection there as `u`, `U` and `~` do, and the operators this box has
-    /// none of change nothing.
+    /// A selection is already the stretch, so in VISUAL mode an operator under `g` is whole: the key
+    /// after it is the next instruction, as it is in vi. The case changes under `g` act on the
+    /// selection there as `u`, `U` and `~` do, and the operators this box has none of change nothing.
     #[test]
-    fn visual_mode_gives_an_operator_under_g_no_stretch_and_capital_r_no_key() {
+    fn visual_mode_gives_an_operator_under_g_no_stretch() {
         assert_eq!(visual_command('g'), Command::Wait(Pending::VisualG));
         for c in ['u', 'U', '~'] {
             assert_eq!(Pending::VisualG.then(c), visual_command(c), "vg{c}");
@@ -1151,7 +1159,6 @@ mod tests {
             Pending::VisualG.then('\''),
             Command::Wait(Pending::Unclaimed)
         );
-        assert_eq!(visual_command('R'), Command::Nothing);
     }
 
     /// Any motion at all names a stretch, which is what makes `dw`, `d$` and `dG` one idea rather than
@@ -1398,6 +1405,37 @@ mod tests {
         // draw in NORMAL mode has nothing left to draw.
         assert_eq!(visual_command('x'), visual_command('d'));
         assert_eq!(visual_command('s'), visual_command('c'));
+    }
+
+    /// The capitals are the operators over every row the selection crosses, whichever kind it is,
+    /// which is what they are in vi. `R` is one of them and takes no key: replace mode over a
+    /// stretch already marked out has nothing to replace that `c` would not.
+    #[test]
+    fn a_capital_in_visual_mode_acts_on_the_rows_the_selection_crosses() {
+        for (c, operator) in [
+            ('D', Operator::Delete),
+            ('X', Operator::Delete),
+            ('Y', Operator::Yank),
+            ('C', Operator::Change),
+            ('S', Operator::Change),
+            ('R', Operator::Change),
+        ] {
+            assert_eq!(
+                visual_command(c),
+                Command::Change(operator, Extent::SelectedRows),
+                "v{c}"
+            );
+        }
+    }
+
+    /// `p` and `P` put the register where the selection is rather than beside the caret, and differ
+    /// in what the register holds afterwards rather than in which side they put it: with the stretch
+    /// already named, there is no side left to choose.
+    #[test]
+    fn putting_in_visual_mode_goes_over_the_selection() {
+        assert_eq!(command('p'), Command::Paste { before: false });
+        assert_eq!(visual_command('p'), Command::PutOver { keep: false });
+        assert_eq!(visual_command('P'), Command::PutOver { keep: true });
     }
 
     /// The two modes disagree about what several letters mean, which is why each reads its own table.
