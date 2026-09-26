@@ -18,7 +18,7 @@ that is merely carried.
 | [`lsp`](#lsp) | `operation`, `path`, `line`, `character`, `query` | none | **yes, to start a language server** |
 | [`write_file`](#write_file) | `path`, `path_ref`, `contents_ref` | `contents` | **yes, every time** |
 | [`edit_file`](#edit_file) | `path`, `path_ref`, `replace_all` | `old_text`, `new_text` | **yes, every time** |
-| [`run`](#run) | the compiled plan, `directory`, `background`, `deadline_seconds`, `stdin_ref` | stdin | **yes, unless vouched for, remembered, ruled on or proven** |
+| [`run`](#run) | the compiled plan, `directory`, `background`, `deadline_seconds`, `stdin_ref`, `read` | stdin | **yes, unless vouched for, remembered, ruled on or proven** |
 | [`read_output`](#read_output) | `ref` | none | **yes** |
 | [`vet_content`](#vet_content) | `ref` | none | **yes, that is what it is for** |
 | [`job_output`](#job_output) | `job`, `kill`, `wait_seconds` | none | no |
@@ -366,6 +366,7 @@ Runs a command line. **You approve the compiled plan before anything runs.**
 | `deadline_seconds` | how long to wait, defaulting to 300 ([below](#a-line-has-a-deadline)) |
 | `background` | start the line and hand back a job name instead of waiting ([below](#leaving-a-pipeline-running)) |
 | `stdin_ref` | a reference whose contents are fed to the first program ([below](#filtering-something-the-agent-may-not-read)) |
+| `read` | ask for the output in this result; honoured only when [bypassing with no screening](#reading-the-output-in-the-same-result) |
 
 ```
 git log --oneline -50 | head -20
@@ -614,6 +615,10 @@ vouched for every stage of the exact command, and a file through `read_file`. On
 produced it, so a quarantined *read* carries no advice about vouching for a command nobody ran.
 Without those a planner reads one quarantined result as proof that programs are unreadable and stops
 running them, which is not what happened: the label is about who answered for the command.
+[Bypassing with no screening](../security/permissions.md#bypassing) changes the advice, since nobody is
+shown the output and a run the mode approved vouches for nothing: the planner is told that
+`read_output` hands it back as text it can read, and, on a run's result, that `read: true` returns it
+in the same result. The advice does not name the mode, which the planner is told only in plan mode.
 
 **Every result says how the run ended**, in front of what the program printed: that every step
 exited zero, which step did not and with what code, or that the line outstayed
@@ -627,6 +632,24 @@ Output the planner **may** read comes back as text, capped at 16 KiB unless
 head and the tail are kept and the middle dropped, with a line in between saying how much went. The
 cap is on what enters the conversation rather than on what the command printed, and the whole of it
 stays available as a reference.
+
+### Reading the output in the same result
+
+`read: true` asks for what the line printed in the result that ran it. When you
+[bypass permissions](../security/permissions.md#bypassing) and have not asked for screening,
+`read_output` is always answered yes and nobody is shown anything, so the answer is given at once: the
+output comes back as text the planner may read, with the same label and the same entry in the audit
+trail that `read_output` would have written, and the reference it was kept under beside it. That saves
+the model round a `read_output` call would have cost. Output longer than the
+[`run.maxOutput`](../customize/configuration.md#runmaxoutput) cap is the exception: the planner asked
+before it could see the size, so it gets the reference, which states the size, and is told the output
+was too long for one result.
+
+In every other mode `read` changes nothing: the output is quarantined as usual, and you are asked, or
+a check reads it, only when the planner calls `read_output`. The same holds for an
+[agent definition](../customize/agents.md) whose `tools` leave out `read_output`. `read` must be
+`true` or `false`, and it is refused beside `background: true`, since the result that starts a job
+holds nothing the job has printed.
 
 ### Filtering something the agent may not read
 
@@ -725,7 +748,9 @@ the planner as text.
 | `ref` | the reference a `run` handed back |
 
 It works only for output from `run`. A quarantined *file* is not readable this way. This is why
-`which`, `find` and `uname` tell the planner nothing until it asks.
+`which`, `find` and `uname` tell the planner nothing until it asks. When you bypass permissions with no
+screening, nobody is shown it and it comes back at once, and [`read` on `run`](#reading-the-output-in-the-same-result)
+makes the same release without the extra call.
 
 **A confined check reads the output before you are asked**, and the word it gave and the sentence it
 wrote are on the screen beside the bytes. The check runs before the question rather than after your

@@ -703,6 +703,19 @@ pub fn available(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<To
                                         Must be one pipeline with no redirection, and \
                                         it is killed when this turn ends. Defaults to false, \
                                         which waits and hands back the output."
+                    },
+                    "read": {
+                        "type": "boolean",
+                        "description": "Ask to read what the command prints in this result. \
+                                        Where read_output would hand it to you without asking \
+                                        the user or checking it, it comes back here as text you \
+                                        can read, and there is no read_output call to make. \
+                                        Output too long for one result still comes back as a \
+                                        reference, with its size. \
+                                        Everywhere else this changes nothing, and output you \
+                                        may not read still comes back as a reference. Defaults \
+                                        to false. Not with background: true, which has printed \
+                                        nothing yet."
                     }
                 },
                 "required": ["command"]
@@ -1164,6 +1177,11 @@ pub struct Output {
     /// vouching is advice about a prompt, and no prompt will return here for this line until
     /// somebody deletes the entry.
     pub covered_by_record: bool,
+    /// Whether the planner asked to read what the line printed in this result.
+    ///
+    /// Acted on by the turn loop, after the slot is minted, and only where nobody would be asked
+    /// before `read_output` handed it over.
+    pub read_asked: bool,
     /// The media type, where what this produced is a picture.
     ///
     /// Recorded on the slot by the turn loop, and what makes a picture reach a processor as a part
@@ -1619,6 +1637,8 @@ struct Produced {
     /// vouching for every stage would make the output visible is advice about a prompt, and no
     /// prompt will be drawn for this line again until somebody deletes the entry.
     covered_by_record: bool,
+    /// Whether the planner asked to read what the line printed in this result.
+    read_asked: bool,
     /// When the planner asked for the next tick of a self-paced loop.
     wakeup: Option<crate::turn::Wakeup>,
     /// The path the planner asked to have a standing watch armed on.
@@ -1664,6 +1684,7 @@ impl Produced {
             inference_interval: None,
             printed_by: None,
             covered_by_record: false,
+            read_asked: false,
             picture: None,
             wakeup: None,
             watch: None,
@@ -1702,6 +1723,7 @@ impl Produced {
             inference_interval: None,
             printed_by: None,
             covered_by_record: false,
+            read_asked: false,
             picture: None,
             delegate: Vec::new(),
         }
@@ -2188,6 +2210,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
                 inference_interval: produced.inference_interval,
                 printed_by: produced.printed_by,
                 covered_by_record: produced.covered_by_record,
+                read_asked: produced.read_asked,
                 picture: produced.picture,
                 wakeup: produced.wakeup,
                 watch: produced.watch,
@@ -2336,6 +2359,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         inference_interval: produced.inference_interval,
         printed_by: produced.printed_by,
         covered_by_record: produced.covered_by_record,
+        read_asked: produced.read_asked,
         picture: produced.picture,
         wakeup: produced.wakeup,
         watch: produced.watch,
@@ -4203,15 +4227,86 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
         }
     };
 
+    // How many lines to tell the planner it got: the check's count where one was made, and what was
+    // actually drawn where somebody was asked. The two are the same slot and agree.
+    let counted = spec.as_ref().map_or(0, |spec| spec.lines());
+
+    match release_output(
+        policy,
+        tools.slots,
+        tools.permission_mode,
+        tools.auto_vetting,
+        confirmer,
+        &slot,
+        verdict,
+        reason,
+        counted,
+    ) {
+        Ok((text, counted)) => {
+            let lines = tally(counted, "line", "lines");
+            Produced::new(text, format!("what {slot} held"), format!("{lines}, read"))
+                .of_content()
+                .costing(spent)
+                .waiting(waited)
+        }
+        Err(refused) => (*refused).costing(spent).waiting(waited),
+    }
+}
+
+/// What a run that asked to read what it printed is handed in the same result, where the answer
+/// `read_output` would get is already given: bypassing permissions with no screening asked for.
+///
+/// The release is `read_output`'s own, down to the confirmer the mode answers and the trail entry
+/// crediting the mode, so the label and the record cannot differ between the two routes and only
+/// the round between them is gone. Only for that mode: in any other this would put a prompt or a
+/// check to somebody about output nobody called `read_output` for. `None` where the release was
+/// refused, which leaves the slot quarantined, as it would have been had the planner not asked.
+pub(crate) fn read_in_the_result<S: Sink, C: Confirmer>(
+    policy: &mut Policy<'_, S>,
+    slots: &SlotStore,
+    mode: crate::PermissionMode,
+    auto_vetting: bool,
+    confirmer: &mut C,
+    slot: &SlotId,
+) -> Option<Labelled<String>> {
+    release_output(
+        policy,
+        slots,
+        mode,
+        auto_vetting,
+        confirmer,
+        slot,
+        Verdict::Inconclusive("the check was not made"),
+        None,
+        0,
+    )
+    .ok()
+    .map(|(text, _)| text)
+}
+
+/// Put one slot a program printed to whoever answers for reading it, and hand the planner a new
+/// value if they agree. The half of `read_output` that comes after the reference is accepted and
+/// any check has spoken, returning the text and how many lines it holds, or the result to hand
+/// back instead.
+#[allow(clippy::too_many_arguments)]
+fn release_output<S: Sink, C: Confirmer>(
+    policy: &mut Policy<'_, S>,
+    slots: &SlotStore,
+    mode: crate::PermissionMode,
+    auto_vetting: bool,
+    confirmer: &mut C,
+    slot: &SlotId,
+    verdict: Verdict,
+    reason: Option<String>,
+    mut counted: usize,
+) -> Result<(Labelled<String>, usize), Box<Produced>> {
     // Who the trail is credited to, which the mode decides along with the verdict. The one branch
     // on a verdict that decides more than which sentence a person reads first is inside it, and it
     // is reachable only where somebody turned auto-vetting on: `Safe` is the only word that answers
     // there, and unsafe, and every way a check can fail to complete, fall through to the prompt
     // with the banner they would have carried anyway. As `vet_content`, because the grant is the
     // same shape on both routes: one slot, once, with no rule written.
-    let endorsed = tools
-        .permission_mode
-        .released_by(tools.auto_vetting, verdict);
+    let endorsed = mode.released_by(auto_vetting, verdict);
 
     // A `match` rather than an `if`, so a fourth way of endorsing cannot be added and default to
     // skipping the prompt: a new variant stops compiling here until somebody says which it is.
@@ -4221,10 +4316,6 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
         Endorsed::ByAPerson | Endorsed::ByBypassing => true,
         Endorsed::ByASafeVerdict => false,
     };
-
-    // How many lines to tell the planner it got: the check's count where one was made, and what was
-    // actually drawn where somebody was asked. The two are the same slot and agree.
-    let mut counted = spec.as_ref().map_or(0, |spec| spec.lines());
 
     if ask {
         // Released for the person to read, which is the whole of what a prompt here is for. A
@@ -4239,9 +4330,11 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
         // Counting released bytes is the read LABEL-6 refuses, and it is the same question the
         // kernel already answers for a slot: how much there is, not what it says.
         let (shown, lines) = {
-            let content = match policy.resolve("read_output", &slot, tools.slots) {
+            let content = match policy.resolve("read_output", slot, slots) {
                 Ok(content) => content,
-                Err(denial) => return Produced::problem(format!("refused: {denial}")),
+                Err(denial) => {
+                    return Err(Box::new(Produced::problem(format!("refused: {denial}"))));
+                }
             };
             let measured = policy.render_in_place("read_output", &content, |text| {
                 let lines = text.lines().count();
@@ -4255,11 +4348,7 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
         counted = lines;
 
         let request = crate::confirm::OutputRequest {
-            command: tools
-                .slots
-                .command_of(&slot)
-                .unwrap_or("a command")
-                .to_string(),
+            command: slots.command_of(slot).unwrap_or("a command").to_string(),
             output: shown,
             lines,
             reference: slot.to_string(),
@@ -4271,12 +4360,10 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
         // for, nobody was asked and a check answered in their place, so naming the user would be a
         // false claim and naming the check would hand the planner the word it must not read.
         if confirmer.confirm_read_output(&request) == Decision::Reject {
-            return Produced::problem(format!(
+            return Err(Box::new(Produced::problem(format!(
                 "refused: {slot} was kept back from you. Do not ask for it again. Work with what \
                  you have, or say in your reply what you needed from it."
-            ))
-            .costing(spent)
-            .waiting(waited);
+            ))));
         }
     }
 
@@ -4284,15 +4371,9 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
     // whichever of the two answered.
     policy.issue_grant("read_output", "ref", slot.to_string());
 
-    match policy.read_output(&slot, tools.slots, endorsed) {
-        Ok(text) => {
-            let lines = tally(counted, "line", "lines");
-            Produced::new(text, format!("what {slot} held"), format!("{lines}, read"))
-                .of_content()
-                .costing(spent)
-                .waiting(waited)
-        }
-        Err(denial) => Produced::problem(format!("refused: {denial}")),
+    match policy.read_output(slot, slots, endorsed) {
+        Ok(text) => Ok((text, counted)),
+        Err(denial) => Err(Box::new(Produced::problem(format!("refused: {denial}")))),
     }
 }
 
@@ -4805,6 +4886,23 @@ fn run<S: Sink, C: Confirmer>(
         return Produced::problem(
             "error: a background command cannot be fed a reference. Run it in the foreground, \
              which waits for the program and hands back what it printed.",
+        );
+    }
+
+    // Absent means no, which leaves the result exactly as it would be without the field. Present but
+    // not a boolean is refused, as a mistyped `stdin_ref` is: a planner that believed it had asked
+    // would be handed a reference instead, and the way it would ask again is to run the line again.
+    // Refused beside a background line for the reason a reference is: nothing is waited for there,
+    // so this result holds nothing the line printed to read.
+    let read_asked = match arguments.get("read") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(read)) => *read,
+        Some(_) => return Produced::problem("error: 'read' must be true or false"),
+    };
+    if read_asked && in_the_background {
+        return Produced::problem(
+            "error: a background command has printed nothing into this result, so there is \
+             nothing in it to read. Leave 'read' out, or run it in the foreground.",
         );
     }
 
@@ -5355,6 +5453,7 @@ fn run<S: Sink, C: Confirmer>(
                 outcome,
             });
             produced.covered_by_record = covered_by_record;
+            produced.read_asked = read_asked;
             produced.ran_a_program = true;
             produced
         }
@@ -7225,11 +7324,12 @@ mod tests {
     /// `run` has exactly one field saying what to run. The line is compiled here rather than handed
     /// anywhere, so a second way to say what to run would be a second thing to keep honest.
     /// `background` says what to do with the line rather than what it is, `deadline_seconds` says
-    /// how long to wait for it, `directory` names where to run it, and `stdin_ref` names a
+    /// how long to wait for it, `directory` names where to run it, `stdin_ref` names a
     /// reference to feed it ([RUN-3]), which is a source rather than a second way to say what
-    /// runs.
+    /// runs, and `read` asks for what it printed in the same result ([RUN-22]).
     ///
     /// [RUN-3]: ../../../docs/specs/tools/run.md
+    /// [RUN-22]: ../../../docs/specs/tools/run.md
     #[test]
     fn run_takes_one_command_line_and_nothing_else() {
         let tool = available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 })
@@ -7246,15 +7346,17 @@ mod tests {
                 "command",
                 "deadline_seconds",
                 "directory",
+                "read",
                 "stdin_ref"
             ],
             "run gained a field beside the command line, whether to wait for it, how long, \
-             where, and what to feed it"
+             where, what to feed it, and whether to read it"
         );
         assert_eq!(properties["command"]["type"], "string");
         assert_eq!(properties["background"]["type"], "boolean");
         assert_eq!(properties["deadline_seconds"]["type"], "integer");
         assert_eq!(properties["directory"]["type"], "string");
+        assert_eq!(properties["read"]["type"], "boolean");
         assert_eq!(properties["stdin_ref"]["type"], "string");
         assert_eq!(
             tool.function.parameters["required"]

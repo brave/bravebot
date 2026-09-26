@@ -1986,6 +1986,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
 fn collect_jobs<S: Sink, R: Reporter>(
     jobs: &mut tools::Jobs,
     output_cap: usize,
+    reads_unasked: bool,
     policy: &mut Policy<'_, S>,
     conversation: &mut Conversation,
     reporter: &mut R,
@@ -2093,10 +2094,17 @@ fn collect_jobs<S: Sink, R: Reporter>(
             }
             Some(Presentation::Quarantined(reference)) => {
                 policy.came_from_command(&reference.slot, &ended.line, conversation.quarantine());
+                // Where nobody is asked, nobody is shown it either, and the mode goes unnamed for
+                // the reason a run's result leaves it out.
+                let then = if reads_unasked {
+                    " and it comes back as text you can read"
+                } else {
+                    ": the user is shown it and decides"
+                };
                 format!(
                     "{told} What it printed could not be shown to you: {}\n\nThis is about who \
                      answered for the command rather than about what it printed. To see it, call \
-                     read_output with the reference: the user is shown it and decides.",
+                     read_output with the reference{then}.",
                     reference.describe()
                 )
             }
@@ -2479,6 +2487,16 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         }
     };
 
+    // Whether what a run printed can be read with nobody asked: bypassing with no screening, in a
+    // turn offered read_output at all. A definition or a delegate left without it has no release
+    // for `read` to make a round early, and making one would widen what it was confined to.
+    let reads_unasked = !task
+        .permission_mode
+        .checks_before_promoting(task.auto_vetting)
+        && offered
+            .iter()
+            .any(|tool| tool.function.name == "read_output");
+
     // The definition's model where an addressed one named a model, and no turn at all where that
     // model needs a sign-in this machine has not made. Running it on the session's model instead
     // would spend past a boundary the definition drew (ADDRESS-11).
@@ -2860,6 +2878,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                 collect_jobs(
                     &mut jobs,
                     task.output_cap.unwrap_or(tools::OUTPUT_CAP),
+                    reads_unasked,
                     &mut policy,
                     conversation,
                     &mut reporter,
@@ -3516,6 +3535,66 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         }
                         .map_err(|d| TurnError::Precommit(d.to_string()))?;
 
+                        // Only a slot a program printed may be offered to the user for reading, so
+                        // the provenance is recorded here, where the slot is minted, together with
+                        // the command as the person approved it.
+                        if let (Presentation::Quarantined(reference), Some(command)) =
+                            (&presented, &output.printed_by)
+                        {
+                            policy.came_from_command(
+                                &reference.slot,
+                                &command.line,
+                                conversation.quarantine(),
+                            );
+                        }
+
+                        // A run that asked to read what it printed, where the answer read_output
+                        // would get is already given. Released by read_output's own path and then
+                        // presented as its result would be, so the label, the trail and what the
+                        // planner reads are that call's, a round early. The slot keeps its label
+                        // and its name, and the name goes with the text so the bytes can still be
+                        // handed on by reference.
+                        //
+                        // Not past the cap, which bounds what a run's result may spend of the
+                        // conversation. A read_output call is made by a planner that has seen the
+                        // size; this ask was made before there was one to see. The size is the
+                        // slot's, as the reference states it, so no byte is read to decide.
+                        let output_cap = task.output_cap.unwrap_or(tools::OUTPUT_CAP);
+                        let read_from = match &presented {
+                            Presentation::Quarantined(reference)
+                                if output.read_asked
+                                    && reads_unasked
+                                    && reference.bytes.is_some_and(|bytes| bytes <= output_cap) =>
+                            {
+                                tools::read_in_the_result(
+                                    &mut policy,
+                                    conversation.quarantine(),
+                                    task.permission_mode,
+                                    task.auto_vetting,
+                                    &mut confirmer,
+                                    &reference.slot,
+                                )
+                                .map(|released| {
+                                    policy
+                                        .present(
+                                            "tool_result",
+                                            reference.slot.clone(),
+                                            &origin,
+                                            &released,
+                                            conversation.quarantine(),
+                                        )
+                                        .map(|shown| (shown, reference.slot.clone()))
+                                })
+                                .transpose()
+                                .map_err(|d| TurnError::Precommit(d.to_string()))?
+                            }
+                            _ => None,
+                        };
+                        let (presented, read_from) = match read_from {
+                            Some((shown, slot)) => (shown, Some(slot)),
+                            None => (presented, None),
+                        };
+
                         // A cap bounds what the conversation holds, not what the command printed, so
                         // the whole of it goes into the slot this result reserved and a visible one
                         // leaves unused. Without this the one case where the cap bites is the one case
@@ -3597,13 +3676,17 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 // After the sample rather than in the middle of it, where the
                                 // notice naming what went is: what wrote that notice dropped the
                                 // bytes and does not know the slot they were kept in.
-                                let rest = match &whole {
-                                    Some(reference) => format!(
+                                let rest = match (&whole, &read_from) {
+                                    (Some(reference), _) => format!(
                                         "\n\nThe whole of this output, middle included, is a \
                                      reference:\n{}",
                                         reference.describe()
                                     ),
-                                    None => String::new(),
+                                    (None, Some(slot)) => format!(
+                                        "\n\nThe same output is {slot}, to name wherever a tool \
+                                         takes a reference."
+                                    ),
+                                    (None, None) => String::new(),
                                 };
                                 // Workspace content only, as with the landing above: the driver's
                                 // own sentence about a call is already its note.
@@ -3629,16 +3712,6 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 )
                             }
                             Presentation::Quarantined(reference) => {
-                                // Only a slot a program printed may be offered to the user for reading,
-                                // so the provenance is recorded here, where the slot is minted, together
-                                // with the command as the person approved it.
-                                if let Some(command) = &output.printed_by {
-                                    policy.came_from_command(
-                                        &reference.slot,
-                                        &command.line,
-                                        conversation.quarantine(),
-                                    );
-                                }
                                 // Recorded here, where the slot is minted, so a processor given this
                                 // reference is handed a picture rather than a wall of base64. The media
                                 // type is the driver's, from a table of extensions.
@@ -3745,30 +3818,70 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 // to answer, so advice about what to press at one is advice about
                                 // something that will not happen, and `read_output` is then the whole
                                 // of what can be said.
-                                let vouching = match (
+                                //
+                                // Neither half holds where what a run printed is read with nobody
+                                // asked: nobody is shown what read_output releases, and a run
+                                // approved by the mode vouches for nothing. What holds there is that
+                                // read_output is a yes, and it is said without naming the mode: only
+                                // plan mode tells the planner which one it is in, since a model told
+                                // nobody is watching has been handed a reason to be bolder.
+                                //
+                                // `read` is an argument of run alone, so it is offered on a run's
+                                // result and not on a job's. It is not offered again where it was
+                                // asked for: the output was then too long for one result, which is
+                                // said, or its release was refused, which read_output reports.
+                                let advice = match (
                                     output.printed_by.is_some(),
                                     output.covered_by_record,
+                                    reads_unasked,
                                 ) {
-                                    (false, _) => "",
-                                    (true, true) => {
-                                        "\n\nThis is about the command rather than about what it \
-                                     printed, and it is not the end of the road. To see this one, \
-                                     call read_output with the reference: the user is shown it and \
-                                     decides, and if they agree it comes back as text you can read. \
-                                     To read a file, use read_file."
+                                    (false, _, _) => String::new(),
+                                    (true, _, true) => {
+                                        let in_the_result =
+                                            match (output.tool == "run", output.read_asked) {
+                                                (false, _) => "",
+                                                (true, false) => {
+                                                    " To have what a command prints come back in \
+                                                     the result that ran it, call run with read: \
+                                                     true."
+                                                }
+                                                (true, true)
+                                                    if reference
+                                                        .bytes
+                                                        .is_none_or(|bytes| bytes > output_cap) =>
+                                                {
+                                                    " It is longer than one result may hold, so it \
+                                                     was left out of this one."
+                                                }
+                                                (true, true) => "",
+                                            };
+                                        format!(
+                                            "\n\nThis is about the command rather than about what \
+                                             it printed, and it is not the end of the road. To see \
+                                             this one, call read_output with the reference and it \
+                                             comes back as text you can read.{in_the_result} To \
+                                             read a file, use read_file."
+                                        )
                                     }
-                                    (true, false) => {
-                                        "\n\nThis is about the command rather than about what it \
-                                     printed, and it is not the end of the road. To see this one, \
-                                     call read_output with the reference: the user is shown it and \
-                                     decides, and if they agree it comes back as text you can read. \
-                                     To stop being asked, a person vouching for every stage of the \
-                                     exact command makes what it prints visible from then on. To \
-                                     read a file, use read_file."
-                                    }
+                                    (true, true, false) => "\n\nThis is about the command rather \
+                                         than about what it printed, and it is not the end of the \
+                                         road. To see this one, call read_output with the \
+                                         reference: the user is shown it and decides, and if they \
+                                         agree it comes back as text you can read. To read a file, \
+                                         use read_file."
+                                        .to_string(),
+                                    (true, false, false) => "\n\nThis is about the command rather \
+                                         than about what it printed, and it is not the end of the \
+                                         road. To see this one, call read_output with the \
+                                         reference: the user is shown it and decides, and if they \
+                                         agree it comes back as text you can read. To stop being \
+                                         asked, a person vouching for every stage of the exact \
+                                         command makes what it prints visible from then on. To \
+                                         read a file, use read_file."
+                                        .to_string(),
                                 };
                                 format!(
-                                    "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{}{capped}{vouching}",
+                                    "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{}{capped}{advice}",
                                     output.tool,
                                     reference.describe()
                                 )

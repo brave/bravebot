@@ -538,6 +538,16 @@ a file. Only where a command produced the result: a quarantined read carries no 
 a record already stops the asking for that exact line ([RUN-19](#RUN-19)), since no prompt will
 return there for a person to answer, and `read_output` is then the whole of what is said.
 
+Where permissions are bypassed with no screening asked for, neither half is true: nobody is shown
+what `read_output` releases ([MODE-4](../permission-modes.md#MODE-4)), and a run the mode approved
+vouches for no program, so no vouch stops an asking that does not happen. The planner is told
+instead that `read_output` hands the output back as text it can read, and, on a run's result, that
+`read: true` returns it in the result that ran it ([RUN-22](#RUN-22)). A job's result and the account
+the turn gives of an ended job say the same of `read_output` and nothing of `read`, which is an
+argument of `run` alone. None of it names the mode, as no mode but plan mode is named to the planner
+([MODE-3](../permission-modes.md#MODE-3)): a model told nobody is watching has been handed a reason
+to be bolder.
+
 **Why.** [RUN-4](#RUN-4) is about who answered for the command, not about programs being
 unreadable, and a planner that reads it the second way stops running them. One did: told once that
 `sed` on a source file could not be shown to it, it spent the rest of a session reading files
@@ -552,6 +562,9 @@ is not inferring it: the planner still cannot vouch for anything, and a person s
 `verified-by: bravebot_agent::turn::a_quarantined_run_says_what_would_make_it_visible`
 `verified-by: bravebot_agent::turn::a_quarantined_read_says_nothing_about_vouching_for_a_command`
 `verified-by: bravebot_agent::turn::a_quarantined_result_from_a_remembered_line_says_nothing_about_vouching`
+`verified-by: bravebot_agent::turn::an_unscreened_unattended_run_that_does_not_ask_to_read_hands_back_a_reference_and_says_how_to`
+`verified-by: bravebot_agent::turn::what_a_job_printed_says_how_to_read_it_where_nobody_is_asked`
+`verified-by: bravebot_agent::turn::what_an_ended_job_printed_says_how_to_read_it_where_nobody_is_asked`
 
 <a id="RUN-15"></a>
 ### RUN-15: a pipeline may be left running, and the turn that started it ends it
@@ -1131,7 +1144,8 @@ conversation. It may be raised as well as lowered, and a key nobody set leaves t
 force. One key covers a foreground run, a `job_output` page, and the account a finished background
 job gives of itself, because those are the same bytes reaching the same context by three routes. It
 does not bound `read_output`, which hands over the whole of the slot it was endorsed for
-([OUTPUT-1](read-output.md#OUTPUT-1)).
+([OUTPUT-1](read-output.md#OUTPUT-1)). It does bound the same release made in a run's own result
+([RUN-22](#RUN-22)), which is asked for before the size is known.
 
 A cap of zero is absence rather than a program permitted to say nothing, as is any value that is not
 a whole count. Absence leaves the built-in cap in force, which is what a layer setting the key gets
@@ -1165,6 +1179,56 @@ worth and does not stop being theirs because the work moved ([DELEGATE-1](../del
 `verified-by: bravebot_agent::tools::output_is_cut_to_the_cap_it_was_given`
 `verified-by: bravebot_agent::turn::a_configured_output_cap_is_what_a_run_is_cut_to`
 `verified-by: bravebot_agent::turn::a_delegate_runs_under_the_output_cap_of_the_turn_that_spawned_it`
+
+<a id="RUN-22"></a>
+### RUN-22: a run may ask to read what it printed, and gets it in the same result where nobody would be asked
+
+`read: true` asks for what the line printed in the result that ran it. Where permissions are
+bypassed with no screening asked for ([MODE-4](../permission-modes.md#MODE-4)), in a turn offered
+`read_output`, that is what the planner gets. The output is quarantined as [RUN-4](#RUN-4) has it
+and then released by `read_output`'s own path, so the value is `(T,priv)`, the trail credits the
+mode in the entry [OUTPUT-1](read-output.md#OUTPUT-1) writes, and nobody is shown anything. The slot
+keeps its name, and the result gives the name beside the text, so the same bytes can still be fed to
+a line or written by reference.
+
+[RUN-21](#RUN-21)'s cap bounds the release, where it does not bound `read_output`. A `read_output`
+call is made by a planner that has seen the reference and the size it states, and `read` is asked
+before there is a size to see. Output longer than the cap stays behind its reference, and the
+result says it was too long for one result rather than pointing at `read` again. The size is the
+slot's, as its reference states it, so no byte the program printed is read to decide.
+
+Everywhere else `read` changes nothing. Where a person or a check answers `read_output`, the output
+is quarantined, nobody is asked and no check is made, since a prompt or a check made here would be
+spent on output the planner has not called `read_output` for. Where the turn was not offered
+`read_output`, as a definition may leave it ([ADDRESS-7](../addressing-a-definition.md#ADDRESS-7),
+[DELEGATE-4](../delegation.md#DELEGATE-4)), `read` would widen what it was confined to, so it is not
+a release there either. A `read` that is absent or null is a call without it, and one that is
+neither `true` nor `false` is refused before the line runs, as a mistyped `stdin_ref` is: a planner
+that believed it had asked would be handed a reference, and would ask again by running the line
+again. `read` beside `background: true` is refused, as `stdin_ref` is ([RUN-3](#RUN-3)): the result
+that starts a job holds nothing the job printed.
+
+**Why.** Under unscreened bypass `read_output` has one answer, so a round spent calling it buys
+nothing but the round: a model call, and the whole conversation sent again. Doing it on request
+rather than for every run keeps output the planner does not want out of its context, where a build
+or test log is often the largest thing a turn produces and is often read only for how it ended,
+which [RUN-13](#RUN-13) already says.
+
+**This changes no label.** The value and the trail entry are the ones `read_output` makes, a round
+early. What decides whether the release happens is the mode, the tools the turn was offered, the
+slot's size and the planner's own argument. The mode is the person's answer given before the session
+started, and a planner offered `read_output` may call it on any reference it holds, so asking with
+`read` gives it nothing it could not already have. No byte the program printed is read to decide it.
+
+`verified-by: bravebot_agent::tools::run_takes_one_command_line_and_nothing_else`
+`verified-by: bravebot_agent::turn::an_unscreened_unattended_run_that_asks_to_read_is_handed_its_output_in_the_same_result`
+`verified-by: bravebot_agent::turn::an_unscreened_unattended_run_that_does_not_ask_to_read_hands_back_a_reference_and_says_how_to`
+`verified-by: bravebot_agent::turn::asking_to_read_a_runs_output_changes_nothing_where_anybody_still_answers_for_it`
+`verified-by: bravebot_agent::turn::a_background_line_cannot_ask_to_read_what_it_printed`
+`verified-by: bravebot_agent::turn::asking_to_read_does_not_hand_output_to_a_definition_left_without_read_output`
+`verified-by: bravebot_agent::turn::asking_to_read_more_than_one_result_may_hold_hands_back_the_reference_and_says_why`
+`verified-by: bravebot_agent::turn::a_read_that_was_refused_is_not_asked_for_again`
+`verified-by: bravebot_agent::turn::a_read_that_is_not_true_or_false_is_refused_before_the_line_runs`
 
 ## Open questions
 
