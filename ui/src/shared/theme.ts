@@ -88,8 +88,8 @@ const MAX_THEME_BYTES = 64
  * inherit from the first. A pair of literals cannot drift silently either:
  * `scripts/drive-theme.mjs` asserts they still match what the stylesheet computes.
  *
- * `note` and `primary` are the same orange in both, because the accent is the one thing the dark
- * block in `globals.css` deliberately does not override.
+ * `note` and `primary` follow shadcn's stock neutral primary: near-black in light, near-white in
+ * dark. Named themes still override both through the role bridge in `globals.css`.
  */
 export const BRAVE_LIGHT: Palette = {
   background: '#ffffff',
@@ -99,8 +99,8 @@ export const BRAVE_LIGHT: Palette = {
   fail: '#e7000b',
   running: '#9a6700',
   accent: '#6f42c1',
-  note: '#f2600c',
-  primary: '#f2600c',
+  note: '#171717',
+  primary: '#171717',
 }
 
 export const BRAVE_DARK: Palette = {
@@ -111,8 +111,8 @@ export const BRAVE_DARK: Palette = {
   fail: '#ff6467',
   running: '#d4a72c',
   accent: '#b392f0',
-  note: '#f2600c',
-  primary: '#f2600c',
+  note: '#fafafa',
+  primary: '#fafafa',
 }
 
 /** Every role inherited: `brave` paints nothing of its own, which is what makes it the default. */

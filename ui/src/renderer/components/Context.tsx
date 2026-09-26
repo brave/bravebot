@@ -194,7 +194,7 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
               value={name}
               // On, in the accent and on a ground of its own. Two differences rather than one:
               // colour alone would leave the state invisible to anybody who cannot see this
-              // particular orange, and `aria-pressed` is what says it to a screen reader anyway.
+              // particular primary, and `aria-pressed` is what says it to a screen reader anyway.
               className={cn(
                 'panel-pick h-[26px] flex-1 rounded-none border-0 border-l border-border first:border-l-0',
                 'text-muted-foreground/70 hover:bg-foreground/12 hover:text-muted-foreground',

@@ -236,7 +236,7 @@ function Group({
 
             Louder than the muted ink the context panels' headings use, because these carry more
             weight — those name a section of one session, these name the checkout every row beneath
-            them belongs to. The accent proper would be too much: full orange is what a pressed
+            them belongs to. The accent proper would be too much: full primary is what a pressed
             control and the open row wear, and a dozen headings in it would drown both. */}
         <CollapsibleTrigger
           className="session-group-fold flex min-w-0 flex-1 items-center gap-1.5 border-0 bg-transparent pt-2 pr-1 pb-1.5 pl-2.5 text-left text-[11px] font-semibold tracking-[0.05em] text-primary/75 uppercase focus-visible:outline focus-visible:outline-primary focus-visible:-outline-offset-2"
