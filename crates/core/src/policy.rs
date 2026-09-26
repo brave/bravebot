@@ -1406,6 +1406,60 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         Ok(label)
     }
 
+    /// Whether the map trusts `path` and every path beneath it.
+    ///
+    /// What a repository's `.git` has to be before anything in it is decoded: reading history
+    /// means following ids the files hold, a commit naming its parent and a tree its entries, and
+    /// doing that over bytes nobody vouched for is the driver branching on them. A question about
+    /// the rules alone, keyed by a path the planner wrote; no file's contents reach it.
+    pub fn trusts_beneath(&self, path: &str) -> bool {
+        self.integrity_beneath_in_force(path) == Some(Integrity::Trusted)
+    }
+
+    /// Record an observation of a repository's history, labelled by the whole of `git_dir` and by
+    /// each working-tree path the answer showed.
+    ///
+    /// An answer is a function of every object it followed, not only of the files one question
+    /// opened, so `git_dir` is asked about as a subtree. A path it showed answers too, since a file
+    /// the map distrusts in the working tree holds the same bytes as the blob that committed it.
+    pub fn observe_repository<'p>(
+        &mut self,
+        capability: Capability,
+        git_dir: &str,
+        shown: impl IntoIterator<Item = &'p str>,
+    ) -> Gated<Label> {
+        let base = capability.output_label().ok_or_else(|| Denial {
+            principle: Principle::Capability,
+            message: format!("'{capability}' produces no observation to label"),
+        })?;
+
+        let mut integrity = self
+            .integrity_beneath_in_force(git_dir)
+            .unwrap_or(Integrity::Untrusted);
+        let mut visited = 0usize;
+        for path in shown {
+            visited += 1;
+            let this = self
+                .integrity_in_force(path)
+                .unwrap_or(Integrity::Untrusted);
+            integrity = integrity.meet(this);
+        }
+
+        let label = Label::new(integrity, base.confidentiality);
+        self.sink.emit(Event::Observed { capability, label });
+        self.allow(
+            "trust",
+            format!(
+                "{git_dir} and {visited} path(s) it showed observed together, {}",
+                match integrity {
+                    Integrity::Trusted => "all trusted",
+                    Integrity::Untrusted => "at least one untrusted",
+                }
+            ),
+        );
+        Ok(label)
+    }
+
     /// Label text the model produced, at the integrity of the context it came from.
     ///
     /// **This is not a relabel and never upgrades anything.** The model's output is a function
@@ -11067,6 +11121,96 @@ five
             .observe_paths(Capability::FileRead, Vec::<&str>::new())
             .expect("observes");
         assert_eq!(nothing_at_all, Label::trusted_private());
+    }
+
+    /// A repository is decoded only where every file under its `.git` is vouched for, so one rule
+    /// distrusting a path deep inside it, a pack or a ref somebody else wrote, stops the whole
+    /// read. Asking about `.git` alone would let the rule on that one file go unconsulted.
+    #[test]
+    fn a_repository_is_trusted_beneath_only_where_nothing_inside_it_is_distrusted() {
+        let mut sink = RecordingSink::new();
+        let mut store = TrustStore::new("/work");
+        store.trust(".");
+        store.distrust(".git/objects/pack/fetched.pack");
+        let policy = Policy::begin(
+            routing_with("task", "edit"),
+            ReleasePlan::new(),
+            all_capabilities(),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_trust(store);
+
+        assert!(policy.trusts_beneath(".git/refs"));
+        assert!(!policy.trusts_beneath(".git"));
+    }
+
+    /// Nobody having said anything about a repository is not trust in it, however clean its files.
+    #[test]
+    fn a_repository_nobody_vouched_for_is_not_trusted_beneath() {
+        let mut sink = RecordingSink::new();
+        let policy = policy_trusting(&mut sink, &["vouched"]);
+
+        assert!(policy.trusts_beneath("vouched/.git"));
+        assert!(!policy.trusts_beneath("elsewhere/.git"));
+    }
+
+    /// An answer out of a repository is untrusted where a path it showed is, even though every
+    /// byte came out of a trusted `.git`: the blob that committed a distrusted file holds that
+    /// file's bytes, and labelling it by where it was stored would launder them.
+    #[test]
+    fn a_repository_answer_is_untrusted_where_a_path_it_showed_is() {
+        let mut sink = RecordingSink::new();
+        let mut store = TrustStore::new("/work");
+        store.trust(".");
+        store.distrust("vendor");
+        let mut policy = Policy::begin(
+            routing_with("task", "edit"),
+            ReleasePlan::new(),
+            all_capabilities(),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_trust(store);
+
+        let ours = policy
+            .observe_repository(Capability::FileRead, ".git", ["src/a.rs"])
+            .expect("observes");
+        assert_eq!(ours, Label::trusted_private());
+
+        let theirs = policy
+            .observe_repository(Capability::FileRead, ".git", ["src/a.rs", "vendor/b.js"])
+            .expect("observes");
+        assert_eq!(theirs, Label::untrusted_private());
+
+        // Showing no path at all, a log with no filter, still read the whole of `.git`.
+        let history = policy
+            .observe_repository(Capability::FileRead, ".git", Vec::<&str>::new())
+            .expect("observes");
+        assert_eq!(history, Label::trusted_private());
+    }
+
+    /// The repository is asked about as a subtree when it is labelled, not only when it is opened,
+    /// so an answer out of one the map distrusts part of is untrusted whatever paths it showed.
+    #[test]
+    fn a_repository_answer_is_untrusted_where_anything_under_git_is() {
+        let mut sink = RecordingSink::new();
+        let mut store = TrustStore::new("/work");
+        store.trust(".");
+        store.distrust(".git/refs/remotes");
+        let mut policy = Policy::begin(
+            routing_with("task", "edit"),
+            ReleasePlan::new(),
+            all_capabilities(),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_trust(store);
+
+        let label = policy
+            .observe_repository(Capability::FileRead, ".git", Vec::<&str>::new())
+            .expect("observes");
+        assert_eq!(label, Label::untrusted_private());
     }
 
     /// LSP-3, the half that makes the tool useful. A language server's answer about a file nobody

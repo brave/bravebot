@@ -20,6 +20,16 @@ bravebot-sandbox = { path = "../sandbox" }
 bravebot-skus = { path = "../skus" }
 # An attachment reaches the endpoint as a data URI, which is base64 by specification.
 base64 = { workspace = true }
+# gitoxide's plumbing, so `read_git` reads a repository's objects and refs in-process instead of
+# starting git, which runs whatever `.git/config` names. Loose objects, pack indexes, packs and
+# their deltas, packed refs and the ref lookup order are what these carry; the object finder over
+# them is `crate::git`'s own and reads no alternates. The history walk, the tree diff and the line
+# diff (`crate::diff`, over raw blob bytes) are written here. None of these starts a process, and
+# `deny.toml` bans the gix crates that do.
+gix-hash = { version = "0.27", features = ["sha1"] }
+gix-object = { version = "0.65", features = ["sha1"] }
+gix-odb = { version = "0.85", features = ["sha1"] }
+gix-ref = { version = "0.68", features = ["sha1"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

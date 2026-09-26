@@ -13,8 +13,8 @@ guards:
       - crates/agent/src/lsp.rs: 4
       - crates/agent/src/manifest.rs: 3
       - crates/agent/src/mcp.rs: 1
-      - crates/agent/src/tools.rs: 22
-      - crates/agent/src/workspace.rs: 7
+      - crates/agent/src/tools.rs: 23
+      - crates/agent/src/workspace.rs: 8
       - crates/agent/tests/workspace.rs: 28
       - crates/aichat/src/lib.rs: 4
       - crates/bedrock/src/lib.rs: 5
@@ -32,7 +32,7 @@ guards:
       - crates/agent/src/manifest.rs: 5
       - crates/agent/src/mcp.rs: 2
       - crates/agent/src/processor.rs: 1
-      - crates/agent/src/tools.rs: 30
+      - crates/agent/src/tools.rs: 31
       - crates/agent/src/turn.rs: 4
       - crates/agent/src/vet.rs: 1
       - crates/agent/src/workspace.rs: 1
@@ -55,7 +55,7 @@ guards:
       - crates/agent/src/turn.rs: 5
       - crates/agent/src/workspace.rs: 9
       - crates/tui/tests/sessions.rs: 4
-      - crates/agent/tests/workspace.rs: 160
+      - crates/agent/tests/workspace.rs: 162
       - crates/core/src/policy.rs: 23
       - crates/core/src/value.rs: 3
       - crates/ui-bridge/tests/workspace.rs: 2
@@ -111,7 +111,7 @@ guards:
       - crates/agent/src/manifest.rs: 7
       - crates/agent/src/mcp.rs: 1
       - crates/agent/src/skills.rs: 2
-      - crates/agent/src/tools.rs: 20
+      - crates/agent/src/tools.rs: 23
       - crates/agent/src/turn.rs: 1
       - crates/core/src/policy.rs: 6
   - symbol: Policy::render_pair_in_place
@@ -120,7 +120,7 @@ guards:
       - crates/core/src/policy.rs: 1
   - symbol: note_for
     sites:
-      - crates/agent/src/tools.rs: 9
+      - crates/agent/src/tools.rs: 10
   - symbol: Policy::label_model_output
     sites:
       - crates/agent/src/mcp.rs: 1
@@ -138,7 +138,7 @@ guards:
   - symbol: Policy::read_planner_argument
     sites:
       - crates/agent/src/mcp.rs: 1
-      - crates/agent/src/tools.rs: 9
+      - crates/agent/src/tools.rs: 11
       - crates/agent/src/workspace.rs: 1
       - crates/core/src/policy.rs: 5
   - symbol: Policy::decode_transport

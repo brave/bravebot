@@ -1,5 +1,7 @@
 //! Tests for the label-aware file tools, exercised against a real temporary directory.
 
+mod repository;
+
 use bravebot_agent::SessionScratch;
 use bravebot_agent::workspace::{Paging, Workspace, WorkspaceError};
 use bravebot_core::capability::{Capability, CapabilitySet};
@@ -5199,4 +5201,99 @@ fn shared_file_authority_preserves_aliases_scratch_added_paths_and_independent_w
         );
         assert!(b.trust().is_trusted("independent.txt"));
     }
+}
+
+/// A log of the repository the planner called `repository`, as read_git asks for one.
+fn log_of(repository: &Labelled<String>) -> bravebot_agent::workspace::GitQuestion<'_> {
+    bravebot_agent::workspace::GitQuestion {
+        repository,
+        revision: None,
+        path: None,
+        query: bravebot_agent::git::Query::Log,
+        count: bravebot_agent::git::DEFAULT_COUNT,
+        since: None,
+        until: None,
+    }
+}
+
+/// GIT-4. A rule over `.git` itself is a rule over every file there, however the rule was
+/// written, so the repository is not opened. Asked about only file by file, a rule naming the
+/// directory would cover none of the files a read goes through.
+#[test]
+fn a_repository_a_deny_rule_names_is_not_opened() {
+    let scratch = Scratch::new("git-denied-directory");
+    repository::commit_files(&scratch.path, &[("README", "hello\n")], "first");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut trust = TrustStore::new(workspace.root());
+    trust.trust(".");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust)
+    .with_permissions(denying(&["Read(./.git)"]));
+
+    let repository = Labelled::trusted(".".to_string());
+    let refused = workspace.read_git(&mut policy, &log_of(&repository));
+    assert!(
+        matches!(
+            refused,
+            Err(WorkspaceError::Git {
+                declined: bravebot_agent::git::Declined::Fenced,
+                ..
+            })
+        ),
+        "a repository whose .git a rule denies was read: {:?}",
+        refused.map(|answer| answer.label())
+    );
+}
+
+/// A repository in a subdirectory answers to the rules on its own path: `sub/.git` is what the map
+/// is asked about, and a file a commit there showed is `sub/<path>`. Asked about under the root's
+/// spelling instead, a map trusting `sub` alone would refuse the repository, and a rule
+/// distrusting `sub/vendor` would not reach the blob that committed a file there.
+#[test]
+fn a_repository_below_the_root_is_read_under_the_rules_on_its_own_path() {
+    let scratch = Scratch::new("git-below-the-root");
+    let sub = scratch.path.join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    repository::commit_files(&sub, &[("vendor/b.js", "theirs\n")], "vendored");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut trust = TrustStore::new(workspace.root());
+    trust.trust("sub");
+    trust.distrust("sub/vendor");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust);
+
+    let repository = Labelled::trusted("sub".to_string());
+    let log = workspace
+        .read_git(&mut policy, &log_of(&repository))
+        .expect("the repository is read under the rule trusting sub");
+    assert_eq!(log.label(), Label::trusted_private());
+
+    let shown = workspace
+        .read_git(
+            &mut policy,
+            &bravebot_agent::workspace::GitQuestion {
+                query: bravebot_agent::git::Query::Show,
+                ..log_of(&repository)
+            },
+        )
+        .expect("the commit is shown");
+    assert_eq!(
+        shown.label(),
+        Label::untrusted_private(),
+        "a commit showing a file under sub/vendor was not labelled by the rule on it"
+    );
 }

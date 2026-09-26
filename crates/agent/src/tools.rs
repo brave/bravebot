@@ -400,6 +400,60 @@ pub fn available(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<To
             }),
         ),
         Tool::function(
+            "read_git",
+            "Read a repository's history from its .git directory without starting git: log lists \
+             commits one per line, show prints a commit with its diff or a file or directory at \
+             a revision, and diff compares two commits. Works only where the whole of .git is \
+             trusted; elsewhere it says so and you use run. Nothing git's configuration names is \
+             applied: no diff drivers, textconv, filters or signature checks, and no remote URL \
+             is ever returned. It does not read the index or the working tree, so for status, \
+             staged or uncommitted changes, --follow, blame or anything else use run.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "enum": ["log", "show", "diff"],
+                        "description": "log, show or diff."
+                    },
+                    "repository": {
+                        "type": "string",
+                        "description": "Workspace-relative directory holding the .git \
+                                        directory. Defaults to \".\"."
+                    },
+                    "revision": {
+                        "type": "string",
+                        "description": "In git's syntax: a branch, tag, HEAD or an id or its \
+                                        prefix, followed by ~N, ^N or ^{commit}. log takes one \
+                                        revision or a range A..B and defaults to HEAD. show takes \
+                                        one and defaults to HEAD; <revision>:<path> shows a file \
+                                        or directory as it was. diff needs two, written A..B or \
+                                        \"A B\"."
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Relative to the repository's root. Limits log to commits \
+                                        that changed it, and show and diff to changes under it."
+                    },
+                    "count": {
+                        "type": "integer",
+                        "description": "Commits a log lists. Defaults to 20, at most 200."
+                    },
+                    "since": {
+                        "type": "string",
+                        "description": "log only: skip commits made before this day, YYYY-MM-DD, \
+                                        in UTC."
+                    },
+                    "until": {
+                        "type": "string",
+                        "description": "log only: skip commits made after this day, YYYY-MM-DD, \
+                                        in UTC."
+                    }
+                },
+                "required": ["query"]
+            }),
+        ),
+        Tool::function(
             "lsp",
             "Ask a language server about a symbol: where it is defined, what refers to it, what \
              implements it, what calls it. Use this instead of search when the question is about \
@@ -1182,6 +1236,9 @@ pub struct Output {
     /// Read beside `changed_a_file` and the outcome for the same reason: a run the person
     /// declined leaves the change as unbuilt as it was before.
     pub ran_a_program: bool,
+    /// Whether a stage of the command was git, so a result sealed from the planner can name the
+    /// tool that reads history without a prompt.
+    pub ran_git: bool,
     /// What the call spent at the model, where it called one.
     ///
     /// Zero for every tool but the processor. A turn that reported only its own rounds would
@@ -1628,6 +1685,8 @@ struct Produced {
     /// happen, and a turn that counted it would say a change had been built when nothing had
     /// compiled it.
     ran_a_program: bool,
+    /// Whether a stage of the command was git.
+    ran_git: bool,
     /// Which document a processor's answer is about, where it produced one.
     ///
     /// `Some(None)` is a processor that was given several documents and told which of them it
@@ -1701,6 +1760,7 @@ impl Produced {
             untrusted: false,
             changed_a_file: false,
             ran_a_program: false,
+            ran_git: false,
             answers_for: None,
             said: None,
             glimpsed: None,
@@ -1738,6 +1798,7 @@ impl Produced {
             untrusted: false,
             changed_a_file: false,
             ran_a_program: false,
+            ran_git: false,
             answers_for: None,
             said: None,
             glimpsed: None,
@@ -1957,6 +2018,7 @@ fn target_key(tool: &str) -> Option<&'static str> {
         "read_file" | "write_file" | "edit_file" => Some("path"),
         "list_files" => Some("directory"),
         "search" => Some("pattern"),
+        "read_git" => Some("query"),
         "lsp" => Some("path"),
         "load_skill" => Some("name"),
         "fetch_url" => Some("url"),
@@ -2231,6 +2293,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
                 content: produced.content,
                 changed_a_file: produced.changed_a_file,
                 ran_a_program: produced.ran_a_program,
+                ran_git: produced.ran_git,
                 usage: produced.usage,
                 inference_interval: produced.inference_interval,
                 printed_by: produced.printed_by,
@@ -2281,6 +2344,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         "read_file" => read_file(policy, tools, confirmer, reporter, &arguments),
         "list_files" => list_files(policy, tools.workspace, &arguments),
         "search" => search(policy, tools.workspace, &arguments),
+        "read_git" => read_git(policy, tools, confirmer, &arguments),
         "lsp" => lsp(policy, tools, confirmer, &arguments),
         "write_file" => write_file(policy, tools, confirmer, &arguments),
         "edit_file" => edit_file(
@@ -2381,6 +2445,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         content: produced.content,
         changed_a_file: produced.changed_a_file,
         ran_a_program: produced.ran_a_program,
+        ran_git: produced.ran_git,
         usage: produced.usage,
         inference_interval: produced.inference_interval,
         printed_by: produced.printed_by,
@@ -5481,6 +5546,10 @@ fn run<S: Sink, C: Confirmer>(
             produced.covered_by_record = covered_by_record;
             produced.read_asked = read_asked;
             produced.ran_a_program = true;
+            produced.ran_git = plan
+                .steps()
+                .iter()
+                .any(|step| step.resolved.file_stem().is_some_and(|stem| stem == "git"));
             produced
         }
         // A run that produced nothing still says what happened. The plan is safe to repeat back:
@@ -6812,6 +6881,224 @@ fn search<S: Sink>(
     }
 }
 
+/// A `read_git` argument the planner wrote as text, promoted as routing: `None` when it was not
+/// given, and the refusal to hand back when it could not be promoted.
+fn git_argument<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    arguments: &Value,
+    field: &'static str,
+) -> Result<Option<Labelled<String>>, String> {
+    match argument(arguments, field) {
+        Some(proposed) => match policy.promote_confined_read("read_git", field, &proposed) {
+            Ok(promoted) => Ok(Some(promoted)),
+            Err(denial) => Err(format!("refused: {denial}")),
+        },
+        None => Ok(None),
+    }
+}
+
+/// A `since` or `until` day, as the seconds since the epoch its start or its end falls at.
+fn git_day(
+    value: Option<&Labelled<String>>,
+    field: &str,
+    end: bool,
+) -> Result<Option<i64>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let Ok(text) = value.clone().into_trusted() else {
+        return Err(format!("refused: the {field} was not trusted"));
+    };
+    match crate::git::parse_day(text.trim()) {
+        Some(start) => Ok(Some(if end { start + 86_399 } else { start })),
+        None => Err(format!(
+            "error: '{field}' must be a day written YYYY-MM-DD, such as 2026-01-31"
+        )),
+    }
+}
+
+fn read_git<S: Sink, C: Confirmer>(
+    policy: &mut Policy<'_, S>,
+    tools: &mut Tools<'_>,
+    confirmer: &mut C,
+    arguments: &Value,
+) -> Produced {
+    let workspace = tools.workspace;
+    let Some(named) = argument(arguments, "query") else {
+        return Produced::problem("error: 'query' is required: one of log, show or diff");
+    };
+    // The question is routing, promoted like any other proposal and then matched against the
+    // closed set, so a name off the list is refused rather than guessed at.
+    let query = match policy.promote_confined_read("read_git", "query", &named) {
+        Ok(promoted) => match promoted.into_trusted() {
+            Ok(name) => match crate::git::Query::named(name.trim()) {
+                Some(query) => query,
+                None if name.trim() == "status" => {
+                    return Produced::problem(
+                        "error: read_git does not answer status. Use run with git status \
+                         --short for it.",
+                    );
+                }
+                None => {
+                    return Produced::problem(format!(
+                        "error: read_git answers log, show and diff, not {}. Use run to ask git \
+                         for anything else.",
+                        name.trim()
+                    ));
+                }
+            },
+            Err(_) => return Produced::problem("refused: the query was not trusted"),
+        },
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
+    };
+
+    let proposed = argument(arguments, "repository").unwrap_or_else(|| {
+        Labelled::new(
+            ".".to_string(),
+            bravebot_core::label::Label::untrusted_public(),
+        )
+    });
+    let repository = match policy.promote_confined_read("read_git", "repository", &proposed) {
+        Ok(repository) => repository,
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
+    };
+    let shown = match policy.read_planner_argument("read_git", "repository", &proposed) {
+        Ok(shown) => shown,
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
+    };
+    let revision = match git_argument(policy, arguments, "revision") {
+        Ok(revision) => revision,
+        Err(refused) => return Produced::problem(refused),
+    };
+    let path = match git_argument(policy, arguments, "path") {
+        Ok(path) => path,
+        Err(refused) => return Produced::problem(refused),
+    };
+    let since = match git_argument(policy, arguments, "since")
+        .and_then(|since| git_day(since.as_ref(), "since", false))
+    {
+        Ok(since) => since,
+        Err(refused) => return Produced::problem(refused),
+    };
+    let until = match git_argument(policy, arguments, "until")
+        .and_then(|until| git_day(until.as_ref(), "until", true))
+    {
+        Ok(until) => until,
+        Err(refused) => return Produced::problem(refused),
+    };
+
+    // A literal, like a search's offset: it names nothing, so there is no destination for it to
+    // decide.
+    let count = arguments
+        .get("count")
+        .and_then(Value::as_u64)
+        .map_or(crate::git::DEFAULT_COUNT, |n| {
+            n.clamp(1, crate::git::MAX_COUNT as u64) as usize
+        });
+
+    // A deny rule over the file a question names covers asking about its history too, and is said
+    // the way every other read says it, before anything under `.git` is opened.
+    let inside = |relative: &str| crate::workspace::in_repository(&shown, relative);
+    let git_shown = inside(".git");
+    let mut named_paths = vec![shown.clone(), git_shown.clone()];
+    for (field, value) in [("path", path.as_ref()), ("revision", revision.as_ref())] {
+        let Some(value) = value else { continue };
+        let written = match policy.read_planner_argument("read_git", field, value) {
+            Ok(written) => written,
+            Err(denial) => return Produced::problem(format!("refused: {denial}")),
+        };
+        let relative = match field {
+            "path" => Some(written.as_str()),
+            _ => crate::git::path_in(&written),
+        };
+        if let Some(relative) = relative
+            .map(str::trim)
+            .filter(|r| !r.is_empty() && *r != ".")
+        {
+            named_paths.push(inside(relative));
+        }
+    }
+    for named in &named_paths {
+        if let Err(refusal) = refuse_denied_path(policy, Purpose::Read, named) {
+            return Produced::problem(refusal);
+        }
+    }
+
+    let question = crate::workspace::GitQuestion {
+        repository: &repository,
+        revision: revision.as_ref(),
+        path: path.as_ref(),
+        query,
+        count,
+        since,
+        until,
+    };
+    let answer = match workspace.read_git(policy, &question) {
+        Ok(answer) => answer,
+        Err(e) => return Produced::problem(format!("error: {}", e.describe(&shown))),
+    };
+
+    // Scanned before the planner is given it, as a file read is (CRED-15): a commit that added a
+    // key puts the key in the diff. Keyed by `.git`, which is what the trust map answered for.
+    let keyed = workspace.git_dir_key(&shown);
+    let body = policy.render_in_place("read_git", &answer, |a| a.text);
+    let found = policy.scan_a_read("read_git", &shown, 1, &body);
+    if !found.is_empty() && !policy.read_exposure_is_allowed(&keyed) {
+        tools
+            .recording()
+            .record(workspace.root(), &found.iter().collect::<Vec<_>>());
+        let request = crate::confirm::ExposureRequest {
+            path: git_shown.clone(),
+            credentials: described(&found),
+        };
+        if confirmer.confirm_exposing_read(&request) != Decision::Approve {
+            return Produced::refused_with_a_note(
+                format!(
+                    "refused: what read_git would show from {git_shown} holds what looks like a \
+                     credential, and the user did not agree to you being shown it. Do not try to \
+                     read it another way: work without it, or say in your reply what you needed \
+                     from it."
+                ),
+                format!("not shown, it holds {}", exposure_note(&found)),
+            );
+        }
+        policy.allow_exposing_read(&keyed);
+    }
+
+    let incomplete = {
+        let shaped = policy.render_in_place("read_git", &answer, |a| a.cut || a.timed_out);
+        let proof = policy.authorise_display_release("whether a read of history hit a cap");
+        shaped.declassify(&proof)
+    };
+    let note = note_for(policy, "read_git", &answer, |a| {
+        tally(a.text.lines().count(), "line", "lines")
+    });
+    let rendered = policy.render_in_place("read_git", &answer, |a| {
+        let mut body = a.text.trim_end_matches('\n').to_owned();
+        if a.withheld {
+            body.push_str(
+                "\n\n(a path a deny rule covers, or one whose name is not UTF-8, was left out of \
+                 this answer)",
+            );
+        }
+        if a.timed_out {
+            body.push_str(
+                "\n\n(read_git ran out of time and this answer is partial; narrow it with a \
+                 path, a range or a smaller count)",
+            );
+        } else if a.cut {
+            body.push_str(
+                "\n\n(this answer stopped at read_git's cap and is incomplete; narrow it with a \
+                 path, a range or a smaller count)",
+            );
+        }
+        body
+    });
+    Produced::new(rendered, shown, exposed_note(note, &found))
+        .of_content()
+        .capped(incomplete)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::watch::Arming;
@@ -7025,6 +7312,7 @@ mod tests {
                 "edit_file",
                 "todo_write",
                 "search",
+                "read_git",
                 "lsp",
                 "spawn_processor",
                 "load_skill",
@@ -7304,6 +7592,7 @@ mod tests {
             "read_file",
             "list_files",
             "search",
+            "read_git",
             "spawn_processor",
             "load_skill",
             "write_file",
