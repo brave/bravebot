@@ -429,7 +429,9 @@ tree it reads is not the tree the read set names.
 alias that runs a command and a pager that runs a command, so `git log` is an interpreter whose
 program is a file in the tree being inspected. It stays on the assertion road, where a person
 vouches for it. Recognising a safe git invocation means reading `.git/config`, which is content, to
-decide routing, and that is the thing that is never allowed.
+decide routing, and that is the thing that is never allowed. History is read with nobody asked by
+[read_git](read-git.md#GIT-1) instead, which starts no program and reads nothing under `.git` until
+the trust map vouches for all of it.
 
 `sed` and `awk` never enter the table, for the reason they are excluded today: they are
 interpreters, and `awk`'s `system()` reaches the shell this repository excludes.

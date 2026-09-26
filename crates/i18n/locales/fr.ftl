@@ -1567,6 +1567,7 @@ opening-invitation = Posez une question sur cet espace de travail.
 verb-read-file = Lire
 verb-list-files = Lister
 verb-search = Chercher
+verb-read-git = Historique
 verb-lsp = Consulter
 verb-write-file = Écrire
 verb-edit-file = Modifier

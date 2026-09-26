@@ -1787,6 +1787,8 @@ opening-invitation = Ask a question about this workspace.
 verb-read-file = Read
 verb-list-files = List
 verb-search = Search
+# The history of a repository, read without starting git.
+verb-read-git = History
 # A question put to a language server rather than to the files: "Look up" reads as asking
 # something that knows the code, where "Search" reads as looking through it.
 verb-lsp = Look up

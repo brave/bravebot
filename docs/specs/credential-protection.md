@@ -567,6 +567,7 @@ owns the tree and is the one who can say which it is.
 `verified-by: bravebot_agent::turn::a_file_agreed_to_in_an_earlier_turn_is_not_asked_about_again`
 `verified-by: bravebot_agent::turn::a_read_of_a_file_nobody_vouched_for_is_not_scanned`
 `verified-by: bravebot_agent::turn::a_read_of_a_file_holding_no_credential_is_not_asked_about`
+`verified-by: bravebot_agent::turn::a_credential_in_history_is_held_back_until_the_person_agrees`
 
 <a id="CRED-16"></a>
 ### CRED-16: what a turn writes to the tree is scanned before the change is recorded as complete
