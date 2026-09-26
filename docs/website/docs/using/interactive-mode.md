@@ -219,7 +219,7 @@ action the way `env` does, so a project file moving one action says nothing abou
 ```json
 {
   "keybindings": {
-    "scroller": "ctrl-p",
+    "scroller": "ctrl-x",
     "stash": "alt-s"
   }
 }

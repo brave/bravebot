@@ -1165,7 +1165,7 @@ transcript-waited = { $elapsed } auprès du modèle
 
 scroller-title = défilement
 scroller-key-line = ligne haut/bas
-scroller-key-half-page = demi-page
+scroller-key-half-page = demi-page   (aussi u / d)
 scroller-key-full-page = page entière   (aussi ctrl-f / ctrl-b)
 scroller-key-ends = début / fin   (aussi home / end)
 scroller-key-prompts = invite précédente / suivante

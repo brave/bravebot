@@ -1302,7 +1302,7 @@ transcript-waited = { $elapsed } at the model
 
 scroller-title = scroller
 scroller-key-line = line up/down
-scroller-key-half-page = half page
+scroller-key-half-page = half page   (also u / d)
 scroller-key-full-page = full page   (also ctrl-f / ctrl-b)
 scroller-key-ends = top / bottom   (also home / end)
 scroller-key-prompts = previous / next prompt

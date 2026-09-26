@@ -202,15 +202,16 @@ footer says how much has arrived below, and that a turn is still running; `G` re
 
 | Keys | Where the view goes |
 |---|---|
-| Up / Down, `k` / `j` | one line back / on |
-| Ctrl-U / Ctrl-D | half a screen back / on |
-| Space / `b`, Ctrl-F / Ctrl-B | a whole screen on / back |
-| `g` / `G`, Home / End | the first row / the last |
+| Up / Down, `k` / `j`, `y` / `e`, Ctrl-Y / Ctrl-E, Ctrl-P / Ctrl-N | one line back / on |
+| Ctrl-U / Ctrl-D, `u` / `d` | half a screen back / on |
+| Space or `f` / `b`, Ctrl-F / Ctrl-B | a whole screen on / back |
+| `g` / `G`, `<` / `>`, Home / End | the first row / the last |
 | `{` / `}` | the prompt before this one / the prompt after |
 | the wheel | as it does at rest |
 
-Both the `less` and the `vi` dialects are there. Each end is a stop rather than a count that keeps
-going, so a held key comes to rest somewhere the next press can move away from.
+Both the `less` and the `vi` dialects are there. Ctrl-N is a line on, and `n` alone is the next
+match. Each end is a stop rather than a count that keeps going, so a held key comes to rest
+somewhere the next press can move away from.
 
 `{` and `}` land on the row a turn begins at, which is a prompt you typed.
 
