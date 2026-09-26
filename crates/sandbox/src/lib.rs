@@ -28,6 +28,7 @@ pub mod linux;
 pub mod macos;
 pub mod policy;
 pub mod process;
+pub mod scope;
 pub mod swap;
 // Compiled under test on every platform as well as on the one it confines, so what this
 // backend decides before a process starts is pinned by every job that runs the suite

@@ -1604,4 +1604,88 @@ int main(void) {
 
         let _ = std::fs::remove_dir_all(&scratch);
     }
+
+    /// The remote scope as the kernel holds it: what ssh reads to verify a host and offer a key
+    /// is read, a host it has verified is added, to a `known_hosts` there or to one made in a
+    /// `~/.ssh` that has none, and the private key beside them is not read,
+    /// nor the directory holding it listed, nor a file written there that ssh or sshd later reads.
+    #[test]
+    fn a_remote_stage_reads_what_ssh_reads_and_never_a_private_key() {
+        let (scratch, home, temporary) =
+            a_home_and_a_temporary_directory("bravebot-sandbox-a-remote-stage");
+        let ssh = home.join(".ssh");
+        std::fs::create_dir_all(&ssh).expect("the scratch home is creatable");
+        std::fs::write(ssh.join("config"), "Host *\n").expect("the scratch home is writable");
+        std::fs::write(ssh.join("known_hosts"), "github.com ssh-ed25519 AAAA\n")
+            .expect("the scratch home is writable");
+        std::fs::write(ssh.join("id_ed25519"), "a private key")
+            .expect("the scratch home is writable");
+        std::fs::write(ssh.join("id_ed25519.pub"), "ssh-ed25519 AAAA")
+            .expect("the scratch home is writable");
+        let policy = crate::scope::Scope::Remote.grant(
+            crate::base::base(crate::base::Prelude::MacOs, &temporary, None, Some(&home)),
+            &home,
+        );
+        let at = |path: PathBuf| path.display().to_string();
+        let code = |program: &str, path: PathBuf| {
+            exit_code_under(&policy, a_stage_for(&home), program, &[&at(path)])
+        };
+
+        for read in ["config", "known_hosts", "id_ed25519.pub"] {
+            assert_eq!(
+                code("/bin/cat", ssh.join(read)),
+                Some(0),
+                "{read} was not read"
+            );
+        }
+        assert_eq!(
+            exit_code_under(
+                &policy,
+                a_stage_for(&home),
+                "/bin/sh",
+                &[
+                    "-c",
+                    r#"printf 'a-host ssh-ed25519 AAAA\n' >> "$1""#,
+                    "sh",
+                    &at(ssh.join("known_hosts")),
+                ],
+            ),
+            Some(0),
+            "a verified host could not be added"
+        );
+        assert!(
+            std::fs::read_to_string(ssh.join("known_hosts"))
+                .expect("the scratch file is readable")
+                .contains("a-host"),
+            "the added host is not in the file"
+        );
+        assert_eq!(
+            code("/bin/cat", ssh.join("id_ed25519")),
+            Some(READ_FAILED),
+            "the private key was read"
+        );
+        assert_eq!(
+            code("/bin/ls", ssh.clone()),
+            Some(READ_FAILED),
+            "the directory holding the private key was listed"
+        );
+        for not_written in ["config", "authorized_keys"] {
+            assert_eq!(
+                code("/usr/bin/touch", ssh.join(not_written)),
+                Some(TOUCH_FAILED),
+                "{not_written} was written"
+            );
+        }
+        assert!(!ssh.join("authorized_keys").exists());
+
+        std::fs::remove_file(ssh.join("known_hosts")).expect("the scratch file is removable");
+        assert_eq!(
+            code("/usr/bin/touch", ssh.join("known_hosts")),
+            Some(0),
+            "an account with no known_hosts could not have one made"
+        );
+        assert!(ssh.join("known_hosts").is_file());
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
 }

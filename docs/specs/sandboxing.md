@@ -12,6 +12,7 @@ governs:
   - crates/sandbox/src/windows/appcontainer.rs
   - crates/sandbox/src/process.rs
   - crates/sandbox/src/toolchain.rs
+  - crates/sandbox/src/scope.rs
 documented-by: docs/website/docs/security/security.md
 ---
 
@@ -521,6 +522,60 @@ file it cannot open, which a machine with a `~/.cargo/config.toml` otherwise mee
 `verified-by: bravebot_sandbox::toolchain::a_missing_cache_is_created_as_what_the_toolchain_expects_there`
 `verified-by: bravebot_sandbox::toolchain::a_list_leaves_the_policy_it_is_added_to_as_it_was`
 `verified-by: bravebot_sandbox::macos::a_cargo_stage_writes_its_registry_and_reaches_neither_its_token_nor_its_install`
+
+<a id="SANDBOX-16"></a>
+### SANDBOX-16: a credential scope follows the operation the argv names, and reaches no private key
+
+A stage carries the remote scope where its program resolved to `git` and its argv is `push`,
+`fetch`, `pull`, `clone` or `ls-remote` with nothing in front of the operation but `-C <directory>`,
+and where its program resolved to `gh` and its argv starts with one of the commands gh has that
+talk to the host: `api`, `attestation`, `auth`, `cache`, `gist`, `gpg-key`, `issue`, `label`,
+`org`, `pr`, `project`, `release`, `repo`, `ruleset`, `run`, `search`, `secret`, `ssh-key`,
+`status`, `variable` or `workflow`. It carries `~/.aws`, `~/.kube` or `~/.docker` where its
+program resolved to `aws`, `kubectl` or `docker`. It carries none where a `NAME=value` assignment is
+written in front of it; where a `git` argv names a program for git to run, which is any abbreviation
+git accepts of `--upload-pack`, `--receive-pack`, `--exec`, `--template`, `--config` or
+`--strategy`, a `-u` or `-c` to `clone`, a `-s` to `pull`, an address holding `::`, or one written
+`<scheme>://` whose scheme is not `ssh`, `git`, `file`, `http`, `https`, `ftp`, `ftps`, `git+ssh`
+or `ssh+git`, before a `--` or after one; where a `gh` argv holds `--`; and where `kubectl` is
+given `--kubeconfig` or `docker` is given `--config`. A stage reaches its own scope and no other.
+No scope names a private key or `~/.ssh` as a directory. The remote scope reads `~/.ssh/config`,
+`~/.ssh/known_hosts`, the public key at each name ssh looks for by default, `~/.gitconfig`,
+`~/.git-credentials`, `~/.config/git/credentials`, `~/.netrc` and `~/.config/gh`, and writes
+`~/.ssh/known_hosts` alone, as a file. A tool's directory is read and never written. A scope is
+added to the policy it is given and takes nothing from it. No stage is started with a scope yet,
+since `run` builds no profile; this is the scope one adds.
+
+**Why.** A push is how most sessions end, so a profile that refuses one is one somebody turns off.
+`git` runs whatever its argv or its environment names, so a scope granted on the first word of a
+line is a credential lent to a program the plan never showed: `--upload-pack=` runs one, `ext::` or
+`a-helper://` an address, `GIT_SSH_COMMAND=` a variable. `gh` hands what follows `--` to `git`
+unread. The operation is matched exactly for `git` and for `gh`, and each runs a command of its own
+ahead of an alias or an extension of the same name, so an alias or an extension carries nothing
+whatever the configuration says it runs. `aws`, `kubectl` and `docker` carry their scope on the
+program alone, so it reaches what one of them hands a command to: a `kubectl` plugin found on the
+search path, a docker CLI plugin, an `aws` alias beginning `!`, and the credential plugin a
+kubeconfig names, each able to read that tool's directory. A push signs through the agent and ssh
+reads the public half of a key to name an identity to it, so the private half is never needed. A
+write to a tool's directory is a program the person's own shell runs later: a `credential_process`,
+an exec plugin, a `credsStore` helper.
+
+`verified-by: bravebot_sandbox::scope::an_operation_that_talks_to_a_remote_carries_the_remote_scope`
+`verified-by: bravebot_sandbox::scope::a_git_operation_that_talks_to_no_remote_carries_none`
+`verified-by: bravebot_sandbox::scope::a_gh_argv_that_runs_a_program_gh_did_not_write_carries_none`
+`verified-by: bravebot_sandbox::scope::an_option_in_front_of_the_operation_carries_none`
+`verified-by: bravebot_sandbox::scope::an_operation_option_naming_a_program_carries_none`
+`verified-by: bravebot_sandbox::scope::a_stage_with_an_assignment_in_front_of_it_carries_none`
+`verified-by: bravebot_sandbox::scope::an_option_that_runs_nothing_keeps_the_scope`
+`verified-by: bravebot_sandbox::scope::a_tool_pointed_at_another_configuration_file_carries_none`
+`verified-by: bravebot_sandbox::scope::a_program_no_scope_knows_carries_none`
+`verified-by: bravebot_sandbox::scope::a_stage_reaches_its_own_scope_and_no_other`
+`verified-by: bravebot_sandbox::scope::no_scope_reaches_a_private_key_or_the_directory_holding_one`
+`verified-by: bravebot_sandbox::scope::the_one_row_a_scope_writes_is_the_hosts_ssh_has_verified`
+`verified-by: bravebot_sandbox::scope::the_remote_scope_reaches_both_transports`
+`verified-by: bravebot_sandbox::scope::a_scope_leaves_the_policy_it_is_added_to_as_it_was`
+`verified-by: bravebot_sandbox::macos::a_remote_stage_reads_what_ssh_reads_and_never_a_private_key`
+
 ## Programs a person asked for
 
 A program `run` ([tools/run.md](tools/run.md)) starts is unconfined: it gets the access the user's
@@ -685,38 +740,58 @@ put it there or can take it away.
 
 | A stage whose operation | Reaches |
 |---|---|
-| is `git push`, `fetch`, `pull`, `clone` or `ls-remote`, or is `gh` | the remote scope below |
+| is `git push`, `fetch`, `pull`, `clone` or `ls-remote`, with no option in front of it but `-C`, or is one of `gh`'s own commands | the remote scope below |
 | is `aws`, `kubectl` or `docker` | that one tool's credential directory |
 | is anything else, a build or a test in the same pipeline included | none of it |
 
 A stage reaches its own row and no other: a `docker` stage reaches neither the remote scope nor
 `~/.aws`, and no row reaches a private key, `~/.ssh` as a directory, or the keychain database on
-disk. The remote scope is the agent socket `$SSH_AUTH_SOCK`, `~/.ssh/config` and
-`~/.ssh/known_hosts` to read with `known_hosts` also to write, that write row naming a file rather
-than a directory so that an account with no `known_hosts` gets one rather than a push that fails
-([SANDBOX-11](#SANDBOX-11)), the public keys in that directory,
-`~/.gitconfig`, and the stores an https helper reads: `~/.git-credentials`, `~/.netrc`,
-`~/.config/gh`, and the login keychain through the system service that holds it. A push signs
-through the agent and needs no private key, and the public half is in the scope because that is what
-ssh reads to name an identity to the agent where a configuration file pins one. It does need
-`known_hosts`, since a host it cannot verify is a push that fails. Both transports are in one scope
-because which one a remote uses is written in a configuration file, and no file's contents decide a
-scope.
+disk. The remote scope is `~/.ssh/config` and `~/.ssh/known_hosts` to read with `known_hosts` also
+to write, that write row naming a file rather than a directory so that an account with no
+`known_hosts` gets one rather than a push that fails ([SANDBOX-11](#SANDBOX-11)), the public key at
+each name ssh looks for by default, `~/.gitconfig`, and the stores an https helper reads:
+`~/.git-credentials`, `~/.config/git/credentials`, `~/.netrc` and `~/.config/gh`. The agent socket
+`$SSH_AUTH_SOCK` and the login keychain are in no row: a stage reaches the socket while its profile
+leaves egress open and the keychain through the system service that holds it, whatever scope it
+carries (the last section's list of what has to exist first). On macOS, where the backend creates
+nothing, the file is made by ssh, which can do so only into a `~/.ssh` already there, so an account
+without one records no host a confined push meets. A push signs through the agent and needs no
+private key, and the public half is in the scope because that is what ssh reads to name an identity
+to the agent where a configuration file pins one. What that costs is a key kept at a name of a
+person's own: ssh without `IdentitiesOnly` offers every key the agent holds and signs anyway, and a
+host pinned with `IdentitiesOnly` to such a key leaves ssh neither half to name it by. A push does
+need `known_hosts`, since a host it cannot verify is a push that fails. Both transports are in one
+scope because which one a remote uses is written in a configuration file, and no file's contents
+decide a scope.
 
-What the scope costs is that a repository's own hooks run under `git`, so a push somebody asked for
-can read a token store while it runs. The agent socket is the narrower shape of the same thing, and
-is why the ssh half of the scope names no private key: a hook that reaches the socket can sign with
-the key for as long as the push lasts, and cannot take it.
+What the scope costs is that a repository's own hooks and its own `.git/config` are read by the
+`git` it is lent to, so a push somebody asked for can read a token store while it runs, and a
+`core.sshCommand` or a `url.<base>.insteadOf` a clone wrote there decides what runs and where it
+goes. A push to a path on disk carries the scope too, since the operation is what is matched, and
+runs the other repository's receiving hooks under it. The agent socket is the narrower shape of the
+same thing, and is why the ssh half of the scope names no private key: a hook that reaches the
+socket can sign with the key for as long as the push lasts, and cannot take it.
 
 **A scope is keyed to the operation, and to no file's contents.** `git` is an arbitrary command
 runner given the right argv, since `-c core.sshCommand=`, `-c alias.x=!`, `-c credential.helper=`
 and `--exec-path` each turn it into a way to run something else. A scope therefore follows the
 operation the endorsed argv names rather than the first word of it: `git status` in a pipeline gets
-none, and an argv carrying one of those overrides gets none either, because what would run is not
-what the plan says would run. Deriving a scope from a configuration file instead would let a cloned
+none, and so does an argv with any option in front of the operation but `-C`, an operation given a
+program of its own to run, and a stage with an environment assignment in front of it, because what
+would run is not what the plan says would run ([SANDBOX-16](#SANDBOX-16)). A variable the session
+inherited, a `GIT_SSH_COMMAND` exported in the person's own shell, is theirs as `~/.gitconfig` is
+and keeps the scope. A `kubectl --kubeconfig`
+and a `docker --config` get none on the same ground, since the file each is pointed at can name a
+program to run. Deriving a scope from a configuration file instead would let a cloned
 repository's own `.git/config` choose which secret becomes reachable. The price of reading none of
 them is a scope naming stores a given machine does not use, and an `include.path` in `~/.gitconfig`
-naming a file no scope covers.
+naming a file no row covers, which git treats as fatal: every `git` a confined stage runs then exits
+128, scope or none, since the base names `~/.gitconfig` and nothing it includes.
+
+A tool's directory is read and never written, because a write there is a program the person's own
+shell runs later: a `credential_process`, an exec plugin, a `credsStore` helper. What that costs is
+every command that writes its own directory, `docker login` storing a token and `aws sso login`
+filling its cache among them, which fails under the scope and is a person's to run unconfined.
 
 **Widening happens before the run, and nothing widens after a refusal.** The compiler adds the
 scope, a person sees it in the plan they endorse, and there is nothing new to trust, because the
@@ -797,6 +872,15 @@ reported as what it is.
   under the home or in a folder inside `/Applications`, is in no row, so on that machine every
   `/usr/bin` developer shim is refused under the base. A row for it names a directory of the
   person's on the word of a setting, and nothing has decided that yet.
+- A program installed outside the system binary directories cannot start under the base, and
+  that is where many of the programs a list or a scope exists for are: `gh`, `aws`, `go` and a
+  Homebrew `python3` are commonly under `/opt/homebrew` or `/usr/local`, and Docker's `docker` and
+  `kubectl` are inside its application bundle. A list or a scope for one of them can apply only
+  once the base or the stage's own list names where it is installed, and which of the two that
+  should be is not settled.
+- Seatbelt profiles here allow every `mach-lookup`, so the keychain service is reachable from every
+  stage and not only from one carrying the remote scope. A profile holding the keychain to that
+  scope has to name the service instead, the same step the socket above needs.
 - The cold path of a macOS developer shim has not been exercised. With the lookup cache the shims
   keep empty, a shim asks `xcodebuild`, which refuses every invocation until the Xcode licence
   is accepted, confined or not, so a machine in that state cannot show whether that path starts,
