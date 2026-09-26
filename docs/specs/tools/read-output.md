@@ -49,6 +49,10 @@ an entry crediting a person who was never shown the bytes is the one a reader ca
 crediting a check names a call that was never placed. Whichever it was it covers one result, needs a
 single-use endorsement naming that slot, and the next run asks again.
 
+A release the mode makes may come in the result of the run itself, where that run asked with `read`
+([RUN-22](run.md#RUN-22)). It is this release, through the same path: the same endorsement, the
+same new value and the same trail entry, a round before a `read_output` call would have made it.
+
 Only output from `run` can be read this way. A file's worth is the trust map's answer, and a second
 route to it would be a way to disagree with the first.
 
@@ -65,6 +69,7 @@ stderr, and a planner that cannot see it will report that the command worked.
 `verified-by: bravebot_core::policy::the_trail_says_which_of_the_three_released_the_output`
 `verified-by: bravebot_agent::permission_mode::an_unscreened_unattended_release_is_credited_to_the_mode`
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_credits_the_mode_for_the_output`
+`verified-by: bravebot_agent::turn::an_unscreened_unattended_run_that_asks_to_read_is_handed_its_output_in_the_same_result`
 `verified-by: bravebot_agent::turn::output_a_person_reads_and_approves_reaches_the_planner`
 `verified-by: bravebot_agent::turn::output_a_person_refuses_stays_out_of_the_planner`
 

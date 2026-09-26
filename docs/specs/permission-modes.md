@@ -144,7 +144,9 @@ check about today's contents came out.
 The two about trust are the ones that cost the most. Vouching is what lets a file's contents be
 shown to the planner rather than held behind a reference, so in this mode every file the planner
 asks to read is shown to it, and the startup question grants that over the whole tree at once
-rather than a file at a time.
+rather than a file at a time. A command's output still goes behind a reference, since a run approved
+here vouches for nothing, and where no screening was asked for a run that asks with `read` has it
+released in its own result ([RUN-22](tools/run.md#RUN-22)).
 
 A run approved this way vouches for no program. The list of commands a person said to stop asking
 about is written into the session record and outlives the mode, and a record claiming somebody
@@ -170,6 +172,7 @@ the wrong mode everywhere else, and it is named `--dangerously-skip-permissions`
 `verified-by: bravebot_agent::permission_mode::an_unscreened_unattended_release_is_credited_to_the_mode`
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_credits_the_mode_for_the_output`
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_credits_the_mode_for_a_promoted_slot`
+`verified-by: bravebot_agent::turn::an_unscreened_unattended_run_that_asks_to_read_is_handed_its_output_in_the_same_result`
 `verified-by: bravebot_agent::permission_mode::screening_under_bypass_refuses_what_a_check_would_not_pass`
 `verified-by: bravebot_agent::permission_mode::screening_under_bypass_still_promotes_what_a_check_found_nothing_in`
 `verified-by: bravebot_agent::permission_mode::screening_does_not_reach_the_vouch_offer`
