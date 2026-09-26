@@ -8,5 +8,9 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+# Holds a credential in pages the kernel keeps out of swap, a platform call this crate forbids
+# itself. It brings libc, landlock and windows-sys with it, and adds no crate to the lockfile:
+# every binary that ships this one links it already.
+bravebot-sandbox = { path = "../sandbox" }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

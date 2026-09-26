@@ -8,6 +8,7 @@
 
 #![forbid(unsafe_code)]
 
+use bravebot_sandbox::swap::LockedText;
 use std::env;
 use std::fmt;
 use std::time::Duration;
@@ -212,37 +213,42 @@ const _: () = assert!(DEFAULT_CONTEXT_BUDGET < SMALLEST_USEFUL_WINDOW);
 /// let _ = Secret::new("a") == Secret::new("a");
 /// ```
 ///
-/// Dropping one overwrites its buffer, so a credential is not handed back to the allocator
-/// intact ([CRED-23](../../../docs/specs/credential-protection.md#CRED-23)). Cloning makes a
-/// second buffer that is cleared the same way when it goes.
+/// The value is held in pages of its own, which the kernel is asked to keep out of swap and which
+/// are overwritten before they are handed back
+/// ([CRED-23](../../../docs/specs/credential-protection.md#CRED-23)). The `String` it was made from
+/// is overwritten once the value has been copied out of it. Cloning makes a second copy, held and
+/// cleared the same way.
+///
+/// What this reaches is the value this type holds and a `String` it was handed, which is what
+/// CRED-23 promises and all it promises. Handed a `&str`, it copies it into a `String` of its own
+/// first, so the buffer that borrow points into is the caller's to clear. A value that was copied
+/// on its way in, by an allocator growing a `String` or by a library between here and a socket,
+/// left a copy nothing here holds a pointer to.
 #[derive(Clone)]
-pub struct Secret(String);
+pub struct Secret(LockedText);
 
 impl Secret {
     pub fn new(value: impl Into<String>) -> Self {
-        Self(value.into())
+        let mut value = value.into();
+        Self(hold(&mut value))
     }
 
     /// Read the secret. Call sites should be rare and obvious.
     pub fn expose(&self) -> &str {
-        &self.0
+        self.0.as_str()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.0.as_str().is_empty()
     }
 }
 
-/// Clear the buffer rather than return it to the allocator holding a credential.
-///
-/// What this reaches is the buffer this type owns, which is what
-/// [CRED-23](../../../docs/specs/credential-protection.md#CRED-23) promises and all it promises.
-/// A value that was copied on its way in, by an allocator growing a `String` or by a library
-/// between here and a socket, left a copy nothing here holds a pointer to.
-impl Drop for Secret {
-    fn drop(&mut self) {
-        scrub(&mut self.0);
-    }
+/// Copy a credential into pages of its own and overwrite the string it arrived in, which would
+/// otherwise go back to the allocator holding it on the heap the lock was taken to keep it off.
+fn hold(value: &mut String) -> LockedText {
+    let held = LockedText::new(value);
+    scrub(value);
+    held
 }
 
 /// Overwrite a string's bytes where they lie, leaving the buffer as many zero bytes long as the
@@ -2998,6 +3004,25 @@ mod tests {
         assert_eq!(format!("{secret:?}"), "Secret(<redacted>)");
         assert_eq!(format!("{secret}"), "<redacted>");
         assert!(!format!("{secret:?}").contains("live-credential"));
+    }
+
+    /// A credential is handed over in a `String` the caller made, and copying it into locked pages
+    /// protects nothing while that string goes back to the allocator holding it. The value held
+    /// has to read back as what was handed over, so that a hold which cleared the string first is
+    /// not taken for one that cleared it after.
+    #[test]
+    fn the_string_a_secret_is_made_from_is_overwritten_once_it_is_held() {
+        let mut value = String::from("sk-live-0123456789abcdef");
+        let length = value.len();
+
+        let held = hold(&mut value);
+
+        assert_eq!(held.as_str(), "sk-live-0123456789abcdef");
+        assert_eq!(
+            value.as_bytes(),
+            vec![0u8; length],
+            "the string the credential arrived in still holds it"
+        );
     }
 
     /// The credential has to be gone from the allocation, not just from the length.

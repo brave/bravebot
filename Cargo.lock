@@ -161,6 +161,7 @@ dependencies = [
 name = "bravebot-config"
 version = "0.10.0"
 dependencies = [
+ "bravebot-sandbox",
  "serde_json",
  "sha2",
 ]

@@ -6,9 +6,10 @@
 //! the process dies.
 //!
 //! It lives here rather than beside the credential it protects because it is a platform call and
-//! nothing else. `bravebot-config`, which owns the type a credential is held in, depends on
-//! nothing and forbids `unsafe`, so it can clear its own buffers and cannot tell the kernel
-//! anything. See [CRED-23](../../../docs/specs/credential-protection.md#CRED-23).
+//! nothing else. `bravebot-config`, which owns the type a credential is held in, forbids `unsafe`,
+//! so what it has the kernel do about the pages one sits in goes through [`crate::swap`], and what
+//! a crash may write out is decided here, once, for the whole process. See
+//! [CRED-23](../../../docs/specs/credential-protection.md#CRED-23).
 
 /// What this platform did about the memory image a crash would write.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
