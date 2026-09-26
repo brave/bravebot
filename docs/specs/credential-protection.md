@@ -551,8 +551,10 @@ reference falls under, and the Known costs record both.
 rule, moves no credential between tiers and grants nothing a gate reads: the read was already
 allowed by the trust map before the scan ran, which is what CRED-17 means by a finding deciding
 nothing. Remembering it per path is what stops a planner reading the same `.env` on round after
-round putting the same question up each time. It does not outlive the session, and the Known costs
-say what that rests on.
+round putting the same question up each time. A file's history is that file's: a key a commit
+shows is asked about under the path it was committed at, so agreeing to one file's key agrees to
+nothing about another's. It does not outlive the session, and the Known costs say what that rests
+on.
 
 **Why the person is asked rather than the read refused.** The rarity layer is a guess, and a tree
 holds development passwords, test fixtures and inline manifests as readily as it holds keys. A gate
@@ -567,6 +569,10 @@ owns the tree and is the one who can say which it is.
 `verified-by: bravebot_agent::turn::a_file_agreed_to_in_an_earlier_turn_is_not_asked_about_again`
 `verified-by: bravebot_agent::turn::a_read_of_a_file_nobody_vouched_for_is_not_scanned`
 `verified-by: bravebot_agent::turn::a_read_of_a_file_holding_no_credential_is_not_asked_about`
+`verified-by: bravebot_agent::turn::a_credential_in_history_is_held_back_until_the_person_agrees`
+`verified-by: bravebot_agent::turn::agreeing_to_one_files_key_in_history_is_not_agreeing_to_anothers`
+`verified-by: bravebot_agent::turn::a_key_that_is_the_whole_of_a_file_is_caught_in_the_commit_that_added_it`
+`verified-by: bravebot_agent::git::each_file_an_answer_shows_is_kept_with_the_line_it_starts_at`
 
 <a id="CRED-16"></a>
 ### CRED-16: what a turn writes to the tree is scanned before the change is recorded as complete
@@ -1070,8 +1076,9 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   it needs the durable salt and the store above, so this is the cost of not having them yet rather
   than a separate gap.
 
-- **`read_file` is the only read that is scanned.** CRED-15 runs at the tool whose whole purpose
-  is putting a file's text in front of the planner. Three other results carry a vouched file's
+- **`read_file` and `read_git` are the only reads that are scanned.** CRED-15 runs at the tools
+  whose whole purpose is putting a file's text in front of the planner, now or as it stood in a
+  commit. Three other results carry a vouched file's
   bytes there and are not scanned: `search` quotes the lines it matched, `load_skill` carries the
   body of a skill, and `read_output` hands over what a program printed. Each needs its own answer
   rather than the same one. A search walks many files at once and mixes vouched ones with

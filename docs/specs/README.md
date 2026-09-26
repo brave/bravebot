@@ -70,6 +70,7 @@ the routing-versus-content split they share.
 | [tools/read-file.md](tools/read-file.md) | `READ` | 7 | `read_file` |
 | [tools/list-files.md](tools/list-files.md) | `LIST` | 5 | `list_files` |
 | [tools/search.md](tools/search.md) | `SEARCH` | 9 | `search` |
+| [tools/read-git.md](tools/read-git.md) | `GIT` | 9 | `read_git` |
 | [tools/lsp.md](tools/lsp.md) | `LSP` | 10 | `lsp` |
 | [tools/write-file.md](tools/write-file.md) | `WRITE` | 4 | `write_file` |
 | [tools/edit-file.md](tools/edit-file.md) | `EDIT` | 4 | `edit_file` |
