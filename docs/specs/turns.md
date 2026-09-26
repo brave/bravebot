@@ -192,6 +192,18 @@ planner's context holds nothing untrusted, so what it produced is trusted
 ([LABEL-8](labels.md#LABEL-8)). The driver already decides from that reply whether the turn goes
 on, by whether it asked for a call, and whether it said anything at all is the same kind of fact.
 
+An ordinary ending does not discard session decisions. After child cleanup, the engine returns
+current file decisions, exact command approvals, live command advice and live credential-exposure
+answers alongside either an outcome or an error. The plain CLI, terminal worker and desktop bridge
+adopt these before handling the ending. Early context-loading errors follow the same rule.
+Cancellation before effects keeps existing decisions. Delegates return exact command approvals
+on ordinary endings; file authority remains shared and child advice remains local.
+
+`verified-by: bravebot_agent::turn::retention::early_loading_errors_return_current_decisions`
+`verified-by: bravebot_agent::turn::retention::cancellation_before_effect_keeps_existing_decisions`
+`verified-by: bravebot_agent::turn::ordinary_parent_endings_retain_delegate_file_and_program_decisions`
+`verified-by: bravebot_tui::undo_tests::ordinary_tui_endings_keep_exact_approvals_advice_and_exposure`
+
 `verified-by: bravebot_agent::turn::an_empty_reply_is_asked_about_and_the_turn_carries_on`
 `verified-by: bravebot_agent::turn::two_empty_replies_in_a_row_end_the_turn`
 `verified-by: bravebot_agent::turn::completed_empty_reply_keeps_reported_usage_on_failure`

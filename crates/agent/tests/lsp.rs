@@ -301,6 +301,7 @@ fn a_server_approved_in_one_turn_answers_the_next() {
             Some(&mut servers),
             &Cancel::new(),
         )
+        .outcome
         .expect("the turn runs");
         assert!(points.iter().all(|point| !point.is_complete()));
         assert!(
@@ -401,6 +402,7 @@ fn a_turn_that_is_handed_no_set_starts_a_server_of_its_own() {
             None,
             &Cancel::new(),
         )
+        .outcome
         .expect("the turn runs");
         assert!(points.iter().all(|point| !point.is_complete()));
         assert!(
@@ -606,6 +608,7 @@ fn a_name_the_server_reported_cannot_forge_a_line_in_the_planners_context() {
         None,
         &Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let _first = received.recv().expect("the question");
@@ -683,6 +686,7 @@ fn a_declined_language_server_preserves_rewind_coverage() {
         None,
         &Cancel::new(),
     )
+    .outcome
     .expect("the refusal still lets the turn answer");
     assert_eq!(asking.asked, 1);
     assert_eq!(starts(&recorded), 0);

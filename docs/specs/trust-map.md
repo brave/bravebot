@@ -210,6 +210,16 @@ said to remember the answer there ([TRUST-23](#TRUST-23)). `/clear` begins a ses
 asks, on the same terms. `--resume` does not ask, and restores the map from the record of the session
 chosen; a record from before maps were kept has none, and is asked about.
 
+A continuing caller keeps the current map after success, returned error or cancellation, after
+joining the turn's children. This includes grants made while loading context before a later load
+fails and downgrades recorded by effects. The caller adopts that map before saving or starting
+another turn; a pre-turn copy cannot replace it.
+
+`verified-by: bravebot_cli::plain_retention_tests::failed_plain_turn_excludes_replacement_from_the_next_request`
+`verified-by: bravebot_agent::turn::retention::early_loading_errors_return_current_decisions`
+`verified-by: bravebot_agent::turn::ordinary_parent_endings_retain_delegate_file_and_program_decisions`
+`verified-by: bravebot_ui_bridge::retention::worker::bridge_ordinary_endings_keep_decisions_live_and_resumed`
+
 A remembered answer is the answer and nothing else the session held. The session it settles starts
 from the rule a yes writes and from no other: a path an earlier session's writes marked untrusted, a
 directory it opened, a file it vouched for, and a no given inside the tree are all left behind with

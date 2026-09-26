@@ -6206,6 +6206,7 @@ fn take_a_turn(
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
 }
 
 /// The point of a session. Asked to try something again, the model has to know what it was
@@ -7077,6 +7078,7 @@ fn a_file_nobody_may_name_is_fixed_through_its_reference() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
     assert!(outcome.clean, "no gate should have refused");
 
@@ -7141,6 +7143,7 @@ fn every_write_through_a_reference_is_shown() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     assert_eq!(
@@ -7382,6 +7385,7 @@ fn quarantined_content_reaches_the_person_and_not_the_planner() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     let shown: String = reporter
@@ -7463,6 +7467,7 @@ fn the_terminal_names_the_file_and_says_who_read_it() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     let read = reporter
@@ -7540,6 +7545,7 @@ fn a_file_a_processor_left_alone_stays_exactly_as_it_was() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     assert_eq!(
@@ -7610,6 +7616,7 @@ fn each_result_says_whether_the_model_can_read_it() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     use bravebot_agent::report::Landing;
@@ -7643,6 +7650,7 @@ fn each_result_says_whether_the_model_can_read_it() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     assert_eq!(
@@ -7701,6 +7709,7 @@ fn a_result_the_planner_read_is_glimpsed_under_its_call() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     let [glimpse] = reporter.returned.as_slice() else {
@@ -7752,6 +7761,7 @@ fn a_sentence_the_driver_wrote_about_a_call_is_not_glimpsed() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     let [glimpse] = reporter.returned.as_slice() else {
@@ -7805,6 +7815,7 @@ fn a_command_the_planner_read_is_glimpsed_from_its_end() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let [glimpse] = reporter.returned.as_slice() else {
@@ -7880,6 +7891,7 @@ fn what_a_processor_says_reaches_the_person_and_no_model() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     // The person is shown it, and told it is the processor speaking.
@@ -7968,6 +7980,7 @@ fn what_a_processor_said_is_put_beside_the_write_it_describes() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     let asked = confirmer
@@ -8034,6 +8047,7 @@ fn a_write_the_planner_wrote_itself_carries_no_claim() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     let asked = confirmer
@@ -8092,6 +8106,7 @@ fn an_answer_about_nothing_in_particular_can_be_written_nowhere() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     assert_eq!(
@@ -8189,6 +8204,7 @@ fn an_answer_that_names_no_document_is_written_nowhere() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     assert_eq!(
@@ -8244,6 +8260,7 @@ fn a_processors_output_cannot_be_a_destination() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     assert!(
@@ -8428,6 +8445,7 @@ fn a_turn_that_wrote_and_ran_is_not_asked_about_it() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn finishes");
 
     let bodies: Vec<String> = received.try_iter().collect();
@@ -8490,6 +8508,7 @@ fn spending_an_ambient_authority_is_recorded_in_the_trail_and_an_ordinary_line_i
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn finishes");
 
     let recorded: Vec<&String> = sink
@@ -8719,6 +8738,7 @@ fn a_run_the_person_refused_leaves_the_change_reported_as_never_built() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn finishes");
 
     assert!(
@@ -10169,6 +10189,7 @@ fn the_preamble_is_not_stored_in_the_conversation() {
             None,
             &bravebot_core::cancel::Cancel::new(),
         )
+        .outcome
         .expect("turn runs");
     }
 
@@ -11109,6 +11130,7 @@ fn a_run_turn_with_trust(
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
 }
 
 /// The same, for a session that keeps the record of lines somebody asked to be remembered past it.
@@ -11144,6 +11166,7 @@ fn a_run_turn_remembering(
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
 }
 
 /// The record for a workspace, as the turn resolves it.
@@ -11256,6 +11279,7 @@ fn a_run_turn_carrying(
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs")
     .asked_about
 }
@@ -11520,6 +11544,7 @@ fn a_quarantined_result_from_a_remembered_line_says_nothing_about_vouching() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert!(
@@ -11621,6 +11646,7 @@ fn an_unattended_turn_runs_no_program() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn completes");
 
     assert!(
@@ -11959,6 +11985,7 @@ fn what_a_program_printed_does_not_reach_the_planner() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     // The first request is the one that asked for the call; the second carries its result.
@@ -12086,6 +12113,7 @@ fn a_quarantined_reference_is_fed_to_a_program_the_planner_may_not_read() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert_eq!(
@@ -12151,6 +12179,7 @@ fn a_private_reference_fed_to_a_vouched_line_is_still_put_to_a_person() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let asked = seen.lock().unwrap();
@@ -12199,6 +12228,7 @@ fn a_background_line_cannot_be_fed_a_reference() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let _first = received.recv().expect("the first round");
@@ -12249,6 +12279,7 @@ fn a_line_naming_a_file_for_standard_input_cannot_also_name_a_reference() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let _first = received.recv().expect("the first round");
@@ -12297,6 +12328,7 @@ fn a_quarantined_run_says_what_would_make_it_visible() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let _first = received.recv().expect("first request");
@@ -12354,6 +12386,7 @@ fn a_line_that_only_reads_vouched_for_files_needs_no_prompt() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert!(
@@ -12440,6 +12473,7 @@ fn a_run_turn_from_a_home(
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
 }
 
 /// CMDLINE-4: a `~` the planner writes stands for the person's home directory, not for the state
@@ -12589,6 +12623,7 @@ fn a_vouched_commands_output_reaches_the_planner() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let _first = received.recv().expect("first request");
@@ -12637,6 +12672,7 @@ fn the_planner_is_told_how_a_run_it_may_read_ended() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let _first = received.recv().expect("first request");
@@ -12677,6 +12713,7 @@ fn the_planner_is_told_how_a_run_it_may_not_read_ended() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let _first = received.recv().expect("first request");
@@ -12728,6 +12765,7 @@ fn vouching_for_one_command_does_not_trust_another_of_the_same_program() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let _first = received.recv().expect("first request");
@@ -12896,6 +12934,7 @@ fn content_a_person_reads_after_a_check_reaches_the_planner() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let asked = shown.lock().unwrap();
@@ -12965,6 +13004,7 @@ fn the_prompt_says_where_a_checked_slots_bytes_came_from() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let asked = shown.lock().unwrap();
@@ -13019,6 +13059,7 @@ fn content_a_person_refuses_after_a_check_stays_out_of_the_planner() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let asked = shown.lock().unwrap();
@@ -13082,6 +13123,7 @@ fn a_check_that_could_not_be_made_falls_back_to_the_question() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let asked = shown.lock().unwrap();
@@ -13147,6 +13189,7 @@ fn with_auto_vetting_a_safe_verdict_reaches_the_planner_unasked() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert!(
@@ -13213,6 +13256,7 @@ fn with_auto_vetting_an_unsafe_verdict_still_asks() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let asked = shown.lock().unwrap();
@@ -13271,6 +13315,7 @@ fn with_auto_vetting_a_check_that_could_not_be_made_still_asks() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let asked = shown.lock().unwrap();
@@ -13335,6 +13380,7 @@ fn bypassing_makes_no_check_before_promoting_content() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let sent: Vec<String> = received.try_iter().collect();
@@ -13402,6 +13448,7 @@ fn bypassing_fills_in_a_verdict_that_claims_nothing() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let sent: Vec<String> = received.try_iter().collect();
@@ -13469,6 +13516,7 @@ fn bypassing_with_no_screening_still_refuses_to_promote_a_picture() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let wait = std::time::Duration::from_secs(5);
@@ -13577,6 +13625,7 @@ fn an_unscreened_unattended_run_credits_the_mode_for_the_output() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert!(
@@ -13649,6 +13698,7 @@ fn an_unscreened_unattended_run_credits_the_mode_for_a_promoted_slot() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert!(
@@ -13738,6 +13788,7 @@ fn an_unscreened_unattended_run_that_asks_to_read_is_handed_its_output_in_the_sa
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let sent: Vec<String> = received.try_iter().collect();
@@ -13822,6 +13873,7 @@ fn an_unscreened_unattended_run_that_does_not_ask_to_read_hands_back_a_reference
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let sent: Vec<String> = received.try_iter().collect();
@@ -13913,6 +13965,7 @@ fn asking_to_read_a_runs_output_changes_nothing_where_anybody_still_answers_for_
             None,
             &bravebot_core::cancel::Cancel::new(),
         )
+        .outcome
         .expect("the turn runs");
 
         let sent: Vec<String> = received.try_iter().collect();
@@ -13985,6 +14038,7 @@ fn a_background_line_cannot_ask_to_read_what_it_printed() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let sent: Vec<String> = received.try_iter().collect();
@@ -14037,6 +14091,7 @@ fn asking_to_read_does_not_hand_output_to_a_definition_left_without_read_output(
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let sent: Vec<String> = received.try_iter().collect();
@@ -14106,6 +14161,7 @@ fn asking_to_read_more_than_one_result_may_hold_hands_back_the_reference_and_say
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let sent: Vec<String> = received.try_iter().collect();
@@ -14184,6 +14240,7 @@ fn output_too_long_for_its_result_is_read_in_part_by_a_filter_fed_its_reference(
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let sent: Vec<String> = received.try_iter().collect();
@@ -14260,6 +14317,7 @@ fn what_a_job_printed_says_how_to_read_it_where_nobody_is_asked() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let sent: Vec<String> = received.try_iter().collect();
@@ -14319,6 +14377,7 @@ fn what_an_ended_job_printed_says_how_to_read_it_where_nobody_is_asked() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let sent: Vec<String> = received.try_iter().collect();
@@ -14374,6 +14433,7 @@ fn a_read_that_was_refused_is_not_asked_for_again() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert!(
@@ -14425,6 +14485,7 @@ fn a_read_that_is_not_true_or_false_is_refused_before_the_line_runs() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let sent: Vec<String> = received.try_iter().collect();
@@ -14494,6 +14555,7 @@ fn screening_an_unattended_run_keeps_back_content_a_check_objected_to() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert!(
@@ -14563,6 +14625,7 @@ fn the_trail_records_the_verdict_of_a_check_that_could_not_be_made() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert!(
@@ -14626,6 +14689,7 @@ fn screening_an_unattended_run_promotes_content_a_check_found_nothing_in() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert!(
@@ -14687,6 +14751,7 @@ fn screening_an_unattended_run_keeps_back_output_a_check_objected_to() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert!(
@@ -14750,6 +14815,7 @@ fn screening_an_unattended_run_keeps_back_output_no_check_could_be_made_about() 
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let sent: Vec<String> = received.try_iter().collect();
@@ -14825,6 +14891,7 @@ fn screening_reaches_a_delegate_of_an_unattended_run() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert!(
@@ -14889,6 +14956,7 @@ fn with_auto_vetting_a_safe_verdict_releases_command_output_unasked() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert!(
@@ -14951,6 +15019,7 @@ fn a_check_says_how_many_lines_it_is_reading_and_then_that_it_is_over() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert_eq!(
@@ -15004,6 +15073,7 @@ fn what_a_check_cost_reaches_the_row_the_call_drew() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let row = |tool: &str| {
@@ -15063,6 +15133,7 @@ fn a_check_whose_call_fails_still_says_it_is_over() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert!(
@@ -15122,6 +15193,7 @@ fn with_auto_vetting_an_unsafe_verdict_still_asks_about_command_output() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let asked = shown.lock().unwrap();
@@ -15177,6 +15249,7 @@ fn with_auto_vetting_a_broken_check_still_asks_about_command_output() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let asked = shown.lock().unwrap();
@@ -15342,6 +15415,7 @@ fn output_a_person_reads_and_approves_reaches_the_planner() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     // The person was shown the bytes themselves, and which command printed them.
@@ -15401,6 +15475,7 @@ fn output_a_person_refuses_stays_out_of_the_planner() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let _first = received.recv().expect("first request");
@@ -15460,6 +15535,7 @@ fn an_output_offer_carries_what_a_check_said() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let asked = shown.lock().unwrap();
@@ -15527,6 +15603,7 @@ fn a_quarantined_file_cannot_be_read_through_the_output_route() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert!(
@@ -15798,6 +15875,7 @@ fn a_quarantined_read_offers_the_user_the_chance_to_vouch() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     // The person was shown the path and enough of the file to know what it is.
@@ -15870,6 +15948,7 @@ fn a_vouch_offer_carries_what_a_check_said_about_the_whole_file() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     let asked = offered.lock().unwrap();
@@ -15943,6 +16022,7 @@ fn auto_vetting_does_not_answer_the_vouch_offer() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     let asked = offered.lock().unwrap();
@@ -15995,6 +16075,7 @@ fn vouching_for_a_project_file_named_absolutely_records_its_relative_rule() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     let rules: Vec<(&str, Option<bravebot_core::label::Integrity>)> =
@@ -16035,6 +16116,7 @@ fn declining_to_vouch_leaves_the_file_quarantined() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     assert!(
@@ -16084,6 +16166,7 @@ fn a_trusted_file_is_not_offered_for_vouching() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     assert!(
@@ -16125,6 +16208,7 @@ fn the_same_file_is_offered_once_per_turn() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     assert_eq!(
@@ -16168,6 +16252,7 @@ fn a_quarantined_file_with_nothing_in_it_is_still_offered_for_vouching() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     let asked = offered.lock().unwrap();
@@ -16223,6 +16308,7 @@ fn a_path_that_names_no_file_is_not_offered_for_vouching() {
             None,
             &bravebot_core::cancel::Cancel::new(),
         )
+        .outcome
         .expect("turn runs");
 
         assert!(
@@ -16290,6 +16376,7 @@ fn a_picture_is_not_offered_for_vouching() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     assert!(
@@ -17392,6 +17479,7 @@ fn the_trail_says_which_round_a_compaction_landed_on() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     let recorded: Vec<String> = sink
@@ -18921,6 +19009,7 @@ fn a_configured_output_cap_is_what_a_run_is_cut_to() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn finishes");
 
     let bodies: Vec<String> = received.try_iter().collect();
@@ -18985,6 +19074,7 @@ fn a_delegate_runs_under_the_output_cap_of_the_turn_that_spawned_it() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     let bodies: Vec<String> = received.try_iter().collect();
@@ -20470,6 +20560,7 @@ fn what_a_command_printed_reaches_the_person_watching() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let printed = reporter
@@ -20531,6 +20622,7 @@ fn what_is_reported_about_a_line_says_which_directory_it_ran_in() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn completes");
 
     let printed = &reporter.printed;
@@ -20597,6 +20689,7 @@ fn the_middle_of_a_capped_output_stays_reachable() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
@@ -21430,6 +21523,7 @@ fn a_background_server_is_still_running_when_the_next_call_is_made() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
     assert!(outcome.clean, "no gate should have refused");
 
@@ -21500,6 +21594,7 @@ fn a_program_a_turn_runs_is_told_where_the_sessions_directory_is() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert_eq!(
@@ -21549,6 +21644,7 @@ fn what_a_background_job_printed_is_quarantined_like_any_other_output() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
@@ -21623,6 +21719,7 @@ fn the_middle_of_a_capped_job_output_stays_reachable() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
@@ -21692,6 +21789,7 @@ fn one_job_output_call_that_waits_is_handed_output_arriving_after_it_was_made() 
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
@@ -21755,6 +21853,7 @@ fn a_job_output_call_reports_the_code_a_finished_job_exited_with() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
@@ -21817,6 +21916,7 @@ fn a_background_jobs_finish_reaches_the_turn_without_the_planner_asking() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
@@ -21874,6 +21974,7 @@ fn a_silent_background_jobs_exit_code_reaches_the_turn_by_itself() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
@@ -21935,6 +22036,7 @@ fn what_an_ended_job_printed_is_quarantined_where_nobody_vouched_for_the_line() 
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
@@ -22009,6 +22111,7 @@ fn what_an_ended_job_printed_is_capped_with_the_whole_of_it_kept() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
@@ -22209,6 +22312,7 @@ fn a_command_line_and_its_directory_are_read_through_the_argument_gate() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
     assert!(outcome.clean, "no gate should have refused");
 
@@ -22266,6 +22370,7 @@ fn a_background_command_must_be_one_pipeline() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let _first = received.recv().expect("first request");
@@ -22309,6 +22414,7 @@ fn a_background_line_is_refused_for_any_redirection_it_carries() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let _first = received.recv().expect("first request");
@@ -22362,6 +22468,7 @@ fn a_refused_background_run_starts_nothing() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert_eq!(seen.lock().unwrap().len(), 1, "the user was not asked");
@@ -22507,6 +22614,7 @@ fn the_outcome_of_a_run(scratch: &Scratch, arguments: &str) -> bravebot_agent::r
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn completes");
 
     reporter
@@ -22601,6 +22709,7 @@ fn a_non_integer_deadline_is_refused() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn completes");
 
     // The command was never asked about because the deadline was refused before compilation.
@@ -22665,6 +22774,7 @@ fn the_working_directory_persists_across_calls() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn completes");
 
     let asked = seen.lock().unwrap();
@@ -22745,6 +22855,7 @@ fn the_working_directory_can_be_an_added_directory() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn completes");
 
     let asked = seen.lock().unwrap();
@@ -22798,6 +22909,7 @@ fn a_directory_escaping_the_workspace_is_refused() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn completes");
 
     // Only the second run was valid and asked about.
@@ -22855,6 +22967,7 @@ fn a_nonexistent_directory_is_an_error_and_does_not_mutate() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn completes");
 
     let asked = seen.lock().unwrap();
@@ -22908,6 +23021,7 @@ fn a_directory_that_is_not_a_string_is_refused() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn completes");
 
     let asked = seen.lock().unwrap();
@@ -22966,6 +23080,7 @@ fn a_refused_run_directory_does_not_persist() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn completes");
 
     let asked = seen.lock().unwrap();
@@ -23018,6 +23133,7 @@ fn a_vouched_line_is_asked_about_again_when_a_directory_is_named() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn completes");
 
     let asked = seen.lock().unwrap();
@@ -23099,6 +23215,7 @@ fn a_line_vouched_for_outside_the_root_is_asked_about_again_at_the_root() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn completes");
 
     assert!(
@@ -23170,6 +23287,7 @@ fn a_symlinked_spelling_of_the_vouched_tree_is_the_same_entry() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn completes");
 
     let asked = seen.lock().unwrap();
@@ -23222,6 +23340,7 @@ fn a_second_spelling_of_the_vouched_tree_is_the_same_entry() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn completes");
 
     let asked = seen.lock().unwrap();
@@ -23382,6 +23501,7 @@ fn take_a_turn_reporting(
         None,
         cancel,
     )
+    .outcome
 }
 
 fn why_it_failed(error: &turn::TurnError) -> bravebot_agent::Diagnosis {
@@ -23725,6 +23845,7 @@ fn a_failed_processor_reports_a_category_and_nothing_the_service_or_the_setting_
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .unwrap();
     let requests: Vec<_> = received.try_iter().collect();
     assert_eq!(
@@ -23785,6 +23906,7 @@ fn a_stop_counts_the_requests_that_were_sent_and_no_others() {
         None,
         &cancel,
     )
+    .outcome
     .unwrap_err();
     assert_eq!(received.try_iter().count(), 1);
     let ending = error.ending();
@@ -23804,6 +23926,7 @@ fn a_stop_counts_the_requests_that_were_sent_and_no_others() {
         None,
         &cancelled_before_request,
     )
+    .outcome
     .unwrap_err();
     assert_eq!(received.try_iter().count(), 0);
     let before_ending = before.ending();
@@ -23857,6 +23980,7 @@ fn a_stop_while_a_processor_runs_is_reported_as_a_stop_with_what_it_sent() {
         None,
         &cancel,
     )
+    .outcome
     .unwrap_err();
     waiter.join().unwrap();
     assert_eq!(
@@ -24478,7 +24602,8 @@ mod usage {
                     bravebot_core::programs::TrustedPrograms::new(),
                     None,
                     &token,
-                );
+                )
+                .outcome;
                 drop(_scratch);
                 let _ = tx.send((
                     result,
@@ -24564,7 +24689,8 @@ mod usage {
                     bravebot_core::programs::TrustedPrograms::new(),
                     None,
                     &bravebot_core::cancel::Cancel::new(),
-                );
+                )
+                .outcome;
                 finished_tx.send(result).unwrap();
             });
             let request = || {
@@ -24720,7 +24846,8 @@ mod usage {
                     bravebot_core::programs::TrustedPrograms::new(),
                     None,
                     &stop,
-                );
+                )
+                .outcome;
                 finished_tx.send(result).unwrap();
             });
             let request = || {
@@ -24936,6 +25063,144 @@ mod usage {
     #[test]
     fn compaction_progress_survives_cancellation() {
         compaction_usage(true);
+    }
+
+    /// Decisions made by an outstanding child survive every ordinary parent ending.
+    #[test]
+    fn ordinary_parent_endings_retain_delegate_file_and_program_decisions() {
+        for ending in ["success", "failure", "cancel"] {
+            let scratch = Scratch::new(&format!("retained-delegate-{ending}"));
+            const SENTINEL: &str = "UNTRUSTED_DELEGATE_INTERRUPTION_85119";
+            std::fs::write(scratch.path.join("source.txt"), SENTINEL).unwrap();
+            std::fs::write(scratch.path.join("target.txt"), "original").unwrap();
+            let workspace = Workspace::new(&scratch.path).unwrap();
+            let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+            trust.trust(".");
+            trust.distrust("source.txt");
+            let (endpoint, pending) = controlled_server();
+            let cancel = bravebot_core::cancel::Cancel::new();
+            let (tx, done) = mpsc::channel();
+            let token = cancel.clone();
+            let (completed, mut conversation) = thread::scope(|scope| {
+                struct StopOnExit(bravebot_core::cancel::Cancel);
+                impl Drop for StopOnExit {
+                    fn drop(&mut self) {
+                        self.0.cancel();
+                    }
+                }
+                let _stop_on_exit = StopOnExit(cancel.clone());
+                let worker = scope.spawn(|| {
+                    let mut conversation = bravebot_agent::Conversation::new();
+                    let completed = turn::resume(
+                        &config_for(&endpoint),
+                        &bravebot_net::Egress::new(),
+                        &workspace,
+                        &Task::new("PARENT-RETENTION"),
+                        &mut conversation,
+                        &mut retention_answers::Answers::new(
+                            bravebot_agent::RunDecision::approve_always(),
+                        ),
+                        &mut bravebot_agent::IgnoreReports,
+                        &mut RecordingSink::new(),
+                        trust,
+                        bravebot_core::programs::TrustedPrograms::new(),
+                        None,
+                        &token,
+                    );
+                    tx.send((completed, conversation)).unwrap();
+                });
+                let request = || pending.recv_timeout(WAIT).expect("next request");
+                request().answer(&tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"CHILD-RETENTION"}"#,
+                ));
+                let first = request();
+                let second = request();
+                let (parent, child) = if first.body.contains("PARENT-RETENTION") {
+                    (first, second)
+                } else {
+                    (second, first)
+                };
+                assert!(parent.body.contains("PARENT-RETENTION"));
+                assert!(child.body.contains("CHILD-RETENTION"));
+                child.answer(&tool_request("read_file", r#"{"path":"source.txt"}"#));
+                request().answer(&tool_request(
+                    "write_file",
+                    r#"{"path":"target.txt","contents_ref":"ref:1"}"#,
+                ));
+                request().answer(&tool_request(
+                    "run",
+                    r#"{"command":"touch child-approved.txt"}"#,
+                ));
+                let child_done = request();
+                assert_eq!(
+                    std::fs::read_to_string(scratch.path.join("target.txt")).unwrap(),
+                    SENTINEL
+                );
+                assert!(scratch.path.join("child-approved.txt").exists());
+                match ending {
+                    "success" => {
+                        parent.answer(&reply_with("collect"));
+                        child_done.answer(&reply_with("done"));
+                        request().answer(&reply_with("done"));
+                    }
+                    "failure" => {
+                        parent.refuse();
+                        child_done.refuse();
+                    }
+                    _ => {
+                        cancel.cancel();
+                        parent.interrupted_stream();
+                        child_done.interrupted_stream();
+                    }
+                }
+                let completed = done
+                    .recv_timeout(WAIT)
+                    .expect("parent must join child and end");
+                worker.join().unwrap();
+                completed
+            });
+            if ending == "cancel" {
+                assert!(matches!(
+                    completed.outcome,
+                    Err(turn::TurnError::Cancelled { .. })
+                ));
+            } else {
+                assert_eq!(completed.outcome.is_ok(), ending == "success");
+            }
+            assert_eq!(completed.decisions.programs.len(), 1);
+            assert_eq!(
+                completed.decisions.asked_about,
+                bravebot_core::programs::AskedAbout::new(),
+                "child advice must not enter parent history"
+            );
+            let (endpoint, requests) = serve_sequence(vec![
+                tool_request("read_file", r#"{"path":"target.txt"}"#),
+                reply_with("done"),
+            ]);
+            turn::resume(
+                &config_for(&endpoint),
+                &bravebot_net::Egress::new(),
+                &workspace,
+                &Task::new("continue"),
+                &mut conversation,
+                &mut bravebot_agent::confirm::ApproveWrites,
+                &mut bravebot_agent::IgnoreReports,
+                &mut RecordingSink::new(),
+                completed.decisions.trust,
+                completed.decisions.programs,
+                None,
+                &bravebot_core::cancel::Cancel::new(),
+            )
+            .outcome
+            .unwrap();
+            let planner: Vec<_> = requests
+                .try_iter()
+                .filter(|body| !body.contains(A_CHECK_ASKING))
+                .collect();
+            assert_eq!(planner.len(), 2);
+            assert!(!planner[1].contains(SENTINEL));
+        }
     }
 
     fn outstanding_delegate_usage(ending: &str) {
@@ -25725,6 +25990,7 @@ fn rejected_processor_keeps_completed_usage_when_the_parent_fails() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .unwrap_err();
     let requests: Vec<_> = received.try_iter().collect();
     assert_eq!(
@@ -25827,7 +26093,8 @@ fn completed_stream_keeps_usage_when_cancelled_before_socket_closes() {
             bravebot_core::programs::TrustedPrograms::new(),
             None,
             &cancel,
-        );
+        )
+        .outcome;
         drop(release);
         server.join().unwrap();
         assert!(matches!(
@@ -25899,6 +26166,7 @@ fn rejected_subrequests_are_counted_once_when_the_parent_succeeds() {
             None,
             &bravebot_core::cancel::Cancel::new(),
         )
+        .outcome
         .unwrap();
         let expected = (if processor { 173 } else { 118 }) + if retry { 45 } else { 0 };
         assert_eq!(outcome.tokens, expected);
@@ -27036,6 +27304,7 @@ fn a_run_turn_scanning(
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
     let _first = received.recv().expect("first request");
     let second = received.recv().expect("second request");
@@ -27582,6 +27851,7 @@ fn the_lines_an_output_prompt_states_are_counted_inside_the_kernel() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let asked = shown.lock().unwrap();
@@ -27652,6 +27922,7 @@ fn the_lines_a_vetting_prompt_states_are_counted_inside_the_kernel() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let asked = shown.lock().unwrap();
@@ -28353,6 +28624,7 @@ fn a_sealed_git_run_names_read_git_and_another_programs_does_not() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let _first = received.recv().expect("first request");
@@ -28368,3 +28640,9 @@ fn a_sealed_git_run_names_read_git_and_another_programs_does_not() {
         "another program's sealed run named read_git: {both}"
     );
 }
+
+#[path = "turn/retention.rs"]
+mod retention;
+
+#[path = "../test-support/answers.rs"]
+mod retention_answers;

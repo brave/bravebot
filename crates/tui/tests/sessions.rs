@@ -2391,6 +2391,7 @@ mod completed_usage {
                 None,
                 &bravebot_core::cancel::Cancel::new(),
             )
+            .outcome
             .unwrap_err();
             for at in reporter.prompts {
                 session.prompt_recorded(at);
@@ -3570,7 +3571,8 @@ mod preserved_history {
             TrustedPrograms::new(),
             None,
             cancel,
-        );
+        )
+        .outcome;
         for message in inbound.try_iter() {
             match message {
                 ToMain::PromptRecorded(at) => session.prompt_recorded(at),

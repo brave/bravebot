@@ -5912,6 +5912,7 @@ struct Continued {
 
 /// What the joined worker returns, including an ordinary error or cancellation.
 struct FinishedTurn {
+    decisions: Option<turn::Decisions>,
     outcome: Result<turn::Outcome, turn::TurnError>,
     conversation: Conversation,
     sink: Trail,
@@ -6120,7 +6121,7 @@ fn run_turn_animated(
             // cached where the rest of this session's state goes.
             LanguageServers::new(worker_workspace.root().to_path_buf(), task.home.clone())
         });
-        let outcome = turn::resume(
+        let completed = turn::resume(
             &worker_config,
             &egress,
             &worker_workspace,
@@ -6135,7 +6136,8 @@ fn run_turn_animated(
             &worker_cancel,
         );
         FinishedTurn {
-            outcome,
+            decisions: Some(completed.decisions),
+            outcome: completed.outcome,
             conversation,
             sink,
             servers: Some(servers),
@@ -6430,6 +6432,7 @@ fn run_turn_animated(
         // servers: they went down with the thread that owned them, so the next turn starts and
         // is asked about a fresh one.
         FinishedTurn {
+            decisions: None,
             outcome: Err(turn::TurnError::Precommit(
                 t!(turn_ended_unexpectedly).to_string(),
             )),
@@ -6463,16 +6466,26 @@ fn finish_turn(
     retained: RetainedTurn,
 ) -> Continued {
     let FinishedTurn {
+        decisions,
         outcome,
         conversation,
         sink,
         servers,
     } = finished;
-    let carried = Carried {
-        trust: retained.files.snapshot(),
-        programs: retained.programs,
-        asked: retained.asked,
-        exposed: retained.exposed,
+    let carried = match decisions {
+        Some(decisions) => Carried {
+            trust: decisions.trust,
+            programs: decisions.programs,
+            asked: decisions.asked_about,
+            exposed: decisions.exposed,
+        },
+        // Preserve the existing unwind fallback; ordinary endings always carry current decisions.
+        None => Carried {
+            trust: retained.files.snapshot(),
+            programs: retained.programs,
+            asked: retained.asked,
+            exposed: retained.exposed,
+        },
     };
     // Record cancellation separately from failure, then restore the prompt when possible.
     let events = sink.events().to_vec();
@@ -12660,6 +12673,7 @@ mod tests {
                 addressed: addressed.as_ref(),
             },
             FinishedTurn {
+                decisions: None,
                 outcome: Err(turn::TurnError::Cancelled { attempts: Some(0) }),
                 conversation: Conversation::new(),
                 sink: Trail::new(),

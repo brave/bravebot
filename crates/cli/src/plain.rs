@@ -450,7 +450,7 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
             )
         });
 
-        let outcome = turn::resume(
+        let completed = turn::resume(
             self.config,
             &self.egress,
             self.workspace,
@@ -471,23 +471,18 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
         // index of the same tree.
         self.servers = Some(servers);
 
-        let mut said = match outcome {
-            Ok(outcome) => {
-                // What the turn changed about what the session carries. Taken back from the
-                // outcome rather than recorded by whoever drew the prompt, so there is one copy of
-                // each answer and nothing to disagree with it.
-                self.trust = outcome.trust.clone();
-                self.programs = outcome.programs.clone();
-                self.asked_about = outcome.asked_about.clone();
-                self.exposed = outcome.exposed.clone();
-                Said {
-                    reply: outcome.reply_for_display().to_string(),
-                    failure: None,
-                    notices: outcome.notices.clone(),
-                    clean: outcome.clean,
-                    not_served: self.substituted(&outcome.model),
-                }
-            }
+        self.trust = completed.decisions.trust;
+        self.programs = completed.decisions.programs;
+        self.asked_about = completed.decisions.asked_about;
+        self.exposed = completed.decisions.exposed;
+        let mut said = match completed.outcome {
+            Ok(outcome) => Said {
+                reply: outcome.reply_for_display().to_string(),
+                failure: None,
+                notices: outcome.notices.clone(),
+                clean: outcome.clean,
+                not_served: self.substituted(&outcome.model),
+            },
             // From the reporter rather than the outcome, there being no outcome: a turn that could
             // not run still said what its hooks did, and those sentences are the person's own to
             // hear (HOOK-7).
@@ -1473,3 +1468,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "plain_retention_tests.rs"]
+mod retention_tests;

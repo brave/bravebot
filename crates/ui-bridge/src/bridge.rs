@@ -1260,6 +1260,8 @@ fn work(work: Work) {
     let history =
         bravebot_session::store::Entry::sent(&prompt, Some(project.display().to_string()));
     let mut task = Task::new(&prompt)
+        .already_asked_about(state.asked_about.clone())
+        .already_exposed(state.exposed.clone())
         .with_home(bravebot_agent::home::directory())
         // No bound on the rounds, as the terminal passes: there is a person in front of this
         // window, they see what the turn is doing, and `turn.cancel` reaches it mid-round. A
@@ -1300,7 +1302,7 @@ fn work(work: Work) {
     let file_authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
     let task = task.with_file_authority(file_authority.clone());
     let programs = state.programs.clone();
-    let outcome = agent_turn::resume(
+    let completed = agent_turn::resume(
         &config,
         &egress,
         &workspace,
@@ -1316,7 +1318,11 @@ fn work(work: Work) {
     );
 
     // Cleanup has finished on every return, including cancellation and request errors.
-    state.trust = file_authority.snapshot();
+    state.trust = completed.decisions.trust;
+    state.programs = completed.decisions.programs;
+    state.asked_about = completed.decisions.asked_about;
+    state.exposed = completed.decisions.exposed;
+    let outcome = completed.outcome;
 
     // The prompt joins the history the terminal also reads, so recall works across both
     // front-ends. Best-effort by design upstream, and nothing here depends on it.
@@ -1348,15 +1354,6 @@ fn work(work: Work) {
                     }
                 }
             }
-            // The map after the turn, which may differ from the one it started with: a
-            // turn that writes untrusted data into a trusted path records that path as
-            // untrusted, and the next turn must inherit that or it would read the data
-            // back as trusted.
-            state.trust = outcome.trust.clone();
-            // Taken from the outcome rather than from whatever asked, so there is one copy
-            // of the answer. Nothing is added while this front-end refuses every vouch, but
-            // a set that came back smaller than it went in would be a lost permission.
-            state.programs = outcome.programs.clone();
             state.tokens += outcome.tokens;
             // Added to rather than set: a turn that compacted part way through has already put
             // that cost here under the same number, and the breakdown has to add up to the total.
@@ -1861,3 +1858,7 @@ mod watch_tests {
 #[cfg(test)]
 #[path = "completion_tests.rs"]
 mod completion_tests;
+
+#[cfg(test)]
+#[path = "../tests/retention/worker.rs"]
+mod retention_tests;
