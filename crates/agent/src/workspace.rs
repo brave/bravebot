@@ -1939,6 +1939,30 @@ impl Collected<'_> {
     }
 }
 
+/// Which files a walk reports: a glob already expanded, read from the workspace root and from the
+/// directory the call named.
+///
+/// Both, because a caller that names a directory writes the rest of the path from there, and one
+/// that names none writes it from the root. Read from the root alone, `directory: "projects"` with
+/// `*/profile.json` selects nothing, and a result saying the glob matched no files sends the
+/// planner to guess another glob for a tree that had the file all along.
+#[derive(Clone, Copy)]
+struct Wanted<'a> {
+    patterns: &'a [String],
+    /// The walked directory as [`Workspace::relative_display`] spells it: empty for the root.
+    under: &'a str,
+}
+
+impl Wanted<'_> {
+    fn admits(&self, relative: &str) -> bool {
+        crate::glob::matches_any(self.patterns, relative)
+            || relative
+                .strip_prefix(self.under)
+                .and_then(|rest| rest.strip_prefix('/'))
+                .is_some_and(|rest| crate::glob::matches_any(self.patterns, rest))
+    }
+}
+
 impl Workspace {
     /// List files under a workspace-relative directory.
     ///
@@ -1991,10 +2015,15 @@ impl Workspace {
             // Ignored here: what a listing left out is the entry it drops below, which the count
             // answers exactly.
             let patterns = glob.as_deref().map(crate::glob::expand);
+            let under = self.relative_display(&root);
+            let wanted = patterns.as_deref().map(|patterns| Wanted {
+                patterns,
+                under: &under,
+            });
             let denied = |path: &str| policy.read_is_denied(path);
             let _ = self.walk_filtered(
                 &root,
-                patterns.as_deref(),
+                wanted,
                 depth,
                 MAX_ENTRIES,
                 &denied,
@@ -2146,6 +2175,11 @@ impl Workspace {
             let mut ignored = Vec::new();
             // Expanded once for the whole walk, not once per path.
             let expanded = glob.as_deref().map(crate::glob::expand);
+            let under = self.relative_display(&root);
+            let wanted = expanded.as_deref().map(|patterns| Wanted {
+                patterns,
+                under: &under,
+            });
             let denied = |path: &str| policy.read_is_denied(path);
             let mut collected = Collected {
                 files: &mut paths,
@@ -2154,7 +2188,7 @@ impl Workspace {
             };
             let unvisited = self.walk_filtered(
                 &root,
-                expanded.as_deref(),
+                wanted,
                 None,
                 self.search_files,
                 &denied,
@@ -2249,7 +2283,7 @@ impl Workspace {
     /// caller distinguish a tree that exactly fills the cap from one that overflows it, so
     /// truncation can be reported rather than guessed at.
     ///
-    /// `patterns`, when given, keeps only paths matching at least one of them. They arrive
+    /// `wanted`, when given, keeps only paths it admits. Its patterns arrive
     /// already expanded by [`crate::glob::expand`], because one walk applies the same pattern
     /// to every path it sees and expanding per path would allocate once per file. The filter
     /// is applied before the cap, so the cap bounds *matches* rather than files examined.
@@ -2269,7 +2303,7 @@ impl Workspace {
     ///
     /// `remaining`, when given, is how many more levels may be descended. A directory at the
     /// boundary is collected as one the walk stopped at instead of being walked, so the caller can
-    /// say the tree continues there. The filter does not apply to those: `patterns` narrows which
+    /// say the tree continues there. The filter does not apply to those: `wanted` narrows which
     /// files are reported, and the shape of the tree is not a file.
     ///
     /// Entries are sorted within each directory, and a directory's own files are taken before
@@ -2283,7 +2317,7 @@ impl Workspace {
     fn walk_filtered(
         &self,
         directory: &Path,
-        patterns: Option<&[String]>,
+        wanted: Option<Wanted<'_>>,
         remaining: Option<usize>,
         limit: usize,
         denied: &dyn Fn(&str) -> bool,
@@ -2336,8 +2370,8 @@ impl Workspace {
                 collected.withheld = true;
                 continue;
             }
-            match patterns {
-                Some(patterns) if !crate::glob::matches_any(patterns, &relative) => continue,
+            match wanted {
+                Some(wanted) if !wanted.admits(&relative) => continue,
                 _ => collected.files.push(relative),
             }
         }
@@ -2362,7 +2396,7 @@ impl Workspace {
             // with nothing after it never reaches.
             if self.walk_filtered(
                 &path,
-                patterns,
+                wanted,
                 remaining.map(|left| left - 1),
                 limit,
                 denied,
