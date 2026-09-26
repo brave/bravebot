@@ -731,8 +731,8 @@ longer matches is a new finding rather than a renewed acceptance.
 
 A buffer this program owns a credential in is cleared when it is dropped rather than returned to the
 allocator intact, and the process excludes credentials from the artifacts a crash leaves behind:
-core dumps disabled or the pages excluded from them, and those pages kept off swap where the
-platform allows it.
+core dumps disabled or the pages excluded from them, and the pages `bravebot-config`'s `Secret`
+holds a credential in kept off swap by a Unix kernel that grants the lock.
 
 **Why.** The inventory lists core dumps, the swap and hibernation files, and crash reports as places
 credentials end up, and every one of them is written by the operating system rather than by anything
@@ -745,8 +745,9 @@ program does not own and cannot clear, so what is promised is the buffers it doe
 defend against a debugger attached to a live process, which is the same account and is answered by
 the authority holding the value instead.
 
-**What holds today.** The core dumps, the buffers a `Secret` owns, the buffers reading a settings
-file makes on the way to one, and the buffers an imported subscription's credentials pass through.
+**What holds today.** The core dumps, the pages a `Secret` is held in, the buffers reading a
+settings file makes on the way to one, and the buffers an imported subscription's credentials pass
+through.
 The process lowers its core dump limit to nothing before it reads the first credential, and every
 credential the backend configuration resolves is kept in a `Secret`, the gateway token in a settings
 file included. Reading that file fills buffers of its own: the text it was read into, the document
@@ -771,6 +772,16 @@ carries a region and a model name, and what a person may put in it is anything. 
 to, the list of variables a subprocess is not handed, keeps the names it read out of one rather than
 the settings themselves, and a name is not a credential.
 
+A `Secret` holds its value in pages of its own, locked out of swap. `bravebot-config` forbids
+`unsafe`, so the mapping and the lock are `bravebot-sandbox`'s: the value is copied into an
+anonymous mapping nothing else is placed in, locked before the copy is written, overwritten where it
+lies when it goes, and unmapped, which releases the lock with the pages. A mapping per value rather
+than a lock on the heap, because a lock is on a page and a heap page is shared: locking a value in
+place would lock its neighbours, and unlocking it would unlock a second credential that happened to
+share the page. The string a `Secret` is made from is overwritten once the value is copied out of
+it, so the credential does not stay on the heap it was moved off, and a clone is a second mapping
+locked the same way.
+
 The AWS credential the CLI resolves is held the same way, and so is every buffer it passes through.
 The bytes the CLI wrote are cleared as the read is answered for, whatever it answered, because a
 reply that could not be parsed holds the credential just as a good one does. The document that read
@@ -782,14 +793,30 @@ buffer is overwritten where it lies once the first step has read it. `bravebot-s
 overwriting out itself, for the reason `bravebot-skus` does, since
 [LAYER-1](layering.md#LAYER-1) gives it no dependency on another crate here.
 
-**What does not, and why.** Two things.
+**What does not, and why.** Three things.
 
-The pages are not kept off swap. Locking the buffers themselves needs the allocator that hands
-them out, which this program does not own, and the process-wide form, `mlockall` with
-`MCL_FUTURE`, is worse than the thing it prevents: where the memory lock limit allows it at all,
-every later allocation becomes unswappable, so an agent asked to read a large file fails to
-allocate rather than being paged out. Doing this properly means an allocator for credential
-buffers, which is a decision rather than an omission.
+Only a `Secret`'s pages are kept off swap. What holds a credential on its way into one is on the
+ordinary heap: the text of a settings file and the document parsed from it, the bytes the AWS CLI
+replied with, and the SigV4 seed. Each is overwritten once it has been read, and locking it would
+take an allocator for everything the parse allocates, which this program does not own. A
+credential exported into the environment stays in the process's environment block, which the C
+library owns and nothing here overwrites. The process-wide form, `mlockall` with `MCL_FUTURE`, is
+worse than the thing it prevents: where the memory lock limit allows it at all, every later
+allocation becomes unswappable, so an agent asked to read a large file fails to allocate rather than
+being paged out. `bravebot-skus` keeps its own `Secret` on the heap as well:
+[LAYER-1](layering.md#LAYER-1) gives that crate no dependency to take a lock through, and a Leo
+batch of 576 credentials, read and dropped together, would want one mapping for the batch rather
+than a page for each.
+
+Where no lock is granted the value is held anyway, and nothing reports it. `RLIMIT_MEMLOCK` is one
+limit for every `Secret` the process holds at once, each rounded up to whole pages, and an import
+holds the settings file it rewrites twice: as read, at most sixteen pages of four kilobytes, and as
+rewritten, whose size is checked only once it is held. A value held once the limit is spent is held
+in an unlocked mapping. A Windows build holds it on the heap, since `VirtualLock` is not
+among the bindings this build compiles and no suite runs there to check one.
+Refusing to hold a credential would protect it by making the product unusable. A hibernation image
+is written from resident memory and includes locked pages, so what the lock keeps out of swap it
+does not keep out of that file.
 
 What the cryptography turns a credential into is not cleared. The token values the library hands
 back from unblinding a subscription credential are its buffers rather than this program's, and the
@@ -801,6 +828,12 @@ region on one day, so what each step hands back is not the access key it started
 `verified-by: bravebot_config::lib::scrubbing_overwrites_the_bytes_where_they_lie`
 `verified-by: bravebot_config::lib::scrubbing_counts_the_bytes_rather_than_the_characters`
 `verified-by: bravebot_config::lib::scrubbing_a_document_reaches_a_token_inside_the_blocks_it_was_written_in`
+`verified-by: bravebot_config::lib::the_string_a_secret_is_made_from_is_overwritten_once_it_is_held`
+`verified-by: bravebot_sandbox::swap::held_text_is_in_pages_the_kernel_keeps_resident`
+`verified-by: bravebot_sandbox::swap::a_copy_is_held_in_locked_pages_of_its_own`
+`verified-by: bravebot_sandbox::swap::a_value_that_goes_gives_its_locked_pages_back`
+`verified-by: bravebot_sandbox::swap::a_refused_lock_still_holds_the_value_and_says_so`
+`verified-by: bravebot_sandbox::swap::clearing_overwrites_the_bytes_where_they_lie`
 `verified-by: bravebot_config::settings::the_text_a_layer_was_parsed_from_is_cleared`
 `verified-by: bravebot_config::settings::a_merge_keeps_the_entry_a_stronger_layer_displaced`
 `verified-by: bravebot_config::settings::what_the_env_block_was_set_to_is_overwritten_where_it_lies`
@@ -815,7 +848,8 @@ region on one day, so what each step hands back is not the access key it started
 `verified-by: bravebot_signing::sigv4::scrubbing_the_signing_seed_overwrites_the_key_where_it_lies`
 `verified-by: bravebot_sandbox::crash::disabling_core_dumps_leaves_the_kernel_unable_to_write_one`
 `verified-by: bravebot_sandbox::crash::disabling_core_dumps_does_not_lower_the_hard_limit`
-`verified-by: by-construction (the buffer a Secret owns is unreachable once the Secret is gone, so what a test can run is the scrub rather than the drop; the drop body is one call to the scrub the two tests above pin and does nothing else)`
+`verified-by: by-construction (the pages a Secret holds its value in are unmapped once it is gone, so what a test can run is the clearing rather than the drop; the drop body is one call to the clearing the test above pins and then the unmapping, after which the test above finds the lock gone, and does nothing else)`
+`verified-by: by-construction (a Secret is one field, the held text, made only by the hold the test above pins, so its value is reachable only in that text's pages, which the tests above find locked where the kernel grants the lock, and its clone is that text's clone)`
 `verified-by: by-construction (the text a subscription batch is read from, the document it is parsed into and the document it is written back as are each held in a guard for the whole of the call that makes one, so every way out clears it; each guard's drop body is one call to a scrub the tests above pin and does nothing else)`
 `verified-by: by-construction (both entry points that hold a credential, the terminal binary and the graphical front end's transport, call the core dump limit down as their first statement, before the argument vector is read and so before the signing key is unmasked)`
 `verified-by: by-construction (a parsed settings document clears itself when it goes, its drop being one call to each of the two scrubs the tests above pin and nothing else; the four readers of a settings file, the layered read, the single-file parse, the managed layer and the front end's check of a chosen file, each hold one of these and so clear what they parsed by going out of scope)`
