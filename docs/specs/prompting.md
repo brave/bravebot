@@ -35,6 +35,12 @@ command that printed them; a vetting prompt shows the bytes, where they came fro
 check said about them rather than the word alone; the prompt about a directory a settings file
 asked for shows the path it would open. A person cannot endorse a routing field they were not shown.
 
+A vetting prompt about a picture, which [VET-4](tools/vet-content.md#VET-4) specifies and nothing
+builds yet, names a path for the person to open the picture at rather than drawing it, because
+neither front end draws a picture. What is at stake is still shown rather than summarised: the file
+at that path is a copy of the slot's bytes, one step away, and
+[VET-4](tools/vet-content.md#VET-4) says why it is not the path they were read from.
+
 Every prompt a check was run for shows what it said, and the three are drawn out of one row builder
 rather than three, so a prompt cannot carry a verdict and forget to say what it was. Which prompts
 those are is [CHECK-10](vetting.md#CHECK-10).
@@ -210,7 +216,9 @@ the rule that a run releasing private data offers no standing permission at all.
 where it is not drawn, since a key granting something the same screen does not offer is worse than
 an unbound one, and this key's grant outlives the session that could have corrected it. What that
 costs is on [labels.md](labels.md)'s list: an attacker who can force a safe verdict can put the key
-on the screen, and a person still has to press it with the bytes in front of them.
+on the screen, and a person still has to press it with the bytes in front of them. At a prompt
+about a picture, which [VET-4](tools/vet-content.md#VET-4) specifies and nothing builds yet, the
+bytes are a path away instead.
 
 `verified-by: bravebot_tui::confirm::the_run_keys_separate_running_once_from_running_always`
 `verified-by: bravebot_tui::confirm::the_run_keys_separate_this_session_from_every_session`

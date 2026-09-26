@@ -98,6 +98,21 @@ pictures a person put there themselves. That clause names the case directly: nev
 in model output named. This is that path, so the picture goes where untrusted content goes, and the
 one component that may read untrusted content is the one that looks at it.
 
+**A way out through `vet_content` is specified for one picture, and is not built.**
+[VET-4](vet-content.md#VET-4) gives the planner one picture it read, once, where a check looked at
+it and a person shown its path said yes, or where auto-vetting took the check's safe verdict as the
+answer. Until something builds it, the planner is shown no picture a tool read, and this clause is
+the whole of what happens to one. Built, three things here change. The title ends "and leaves
+quarantine only through `vet_content`" rather than "and only a processor looks at it". "The planner
+is never shown one" becomes "The planner is shown one only where `vet_content` let it through". And
+the reason above no longer reads [PASTE-2](../pasting.md#PASTE-2) as the only way a picture reaches
+a planner, nor a processor as the only thing that looks at one: a picture a person put there,
+pasted or dropped, is one way, and an endorsement of one read is the other, after a check has
+looked at it. The rest stands. The trust map decides nothing about a picture, nothing offers to
+vouch for one, and the read quarantines it. Unlike a promotion of text, a run bypassing permissions
+with no screening asked for does not promote a picture, and it does not pass through the gate a
+paste does.
+
 **The media type is the driver's.** From a closed table of extensions, shared with the one a drop
 uses, never sniffed from the bytes. It ends up in the `data:` URI where it is routing, so deciding
 it from content would be deciding a destination from content. A file cannot become a picture by

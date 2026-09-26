@@ -82,6 +82,14 @@ output named. Each of those is content, and routing it here would launder it.
 **Why.** The justification cannot be checked from the bytes, so it lives at the call site. Today
 that is the TUI's Ctrl-V and nothing else.
 
+A picture a tool read has no way into the planner's context today.
+[VET-4](tools/vet-content.md#VET-4) specifies one, and nothing builds it yet: `vet_content` lets
+one picture through where a person shown its path said yes, or where auto-vetting took a check's
+safe verdict as the answer. That route does not come through here and widens nothing here. What it
+rests on is an endorsement of one slot, recorded as that, and the picture never joins the person's
+own message. Built, nothing in this clause changes: this gate still admits a paste and nothing
+else.
+
 `verified-by: bravebot_tui::app::a_picture_off_the_clipboard_becomes_a_marker_in_the_line`
 
 

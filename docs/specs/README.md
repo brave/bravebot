@@ -18,7 +18,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [trust-map.md](trust-map.md) | `TRUST` | 21 | which paths the user vouched for, what a write does to that record, and how long an answer lasts |
 | [permissions.md](permissions.md) | `PERM` | 15 | rules written in advance about what to ask about and what to refuse |
 | [processors.md](processors.md) | `PROC` | 12 | the one component that reads untrusted content, and what it may do with it |
-| [vetting.md](vetting.md) | `CHECK` | 14 | checking quarantined content for an injection attempt before every prompt that would promote it, so a person deciding has a second opinion |
+| [vetting.md](vetting.md) | `CHECK` | 15 | checking quarantined content for an injection attempt before every prompt that would promote it, so a person deciding has a second opinion |
 | [delegation.md](delegation.md) | `DELEGATE` | 22 | a second planner, narrower than the first, and what crosses back from one |
 | [addressing-a-definition.md](addressing-a-definition.md) | `ADDRESS` | 12 | running one of those definitions yourself, in place of describing the work and hoping the planner picks it |
 | [turns.md](turns.md) | `TURN` | 5 | how long a turn may go on, what happens when it does not stop, and what is said when it produces nothing or checks nothing |
@@ -78,7 +78,7 @@ the routing-versus-content split they share.
 | [tools/run.md](tools/run.md) | `RUN` | 21 | `run` |
 | [tools/command-line.md](tools/command-line.md) | `CMDLINE` | 16 | `run`'s command line, compiled rather than interpreted |
 | [tools/read-output.md](tools/read-output.md) | `OUTPUT` | 3 | `read_output` |
-| [tools/vet-content.md](tools/vet-content.md) | `VET` | 3 | `vet_content` |
+| [tools/vet-content.md](tools/vet-content.md) | `VET` | 4 | `vet_content` |
 | [tools/fetch-url.md](tools/fetch-url.md) | `FETCH` | 6 | `fetch_url` |
 | [tools/load-skill.md](tools/load-skill.md) | `LOAD` | 3 | `load_skill` |
 | [tools/todo-write.md](tools/todo-write.md) | `TODO` | 2 | `todo_write` |
