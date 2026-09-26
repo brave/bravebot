@@ -145,13 +145,14 @@ impl std::fmt::Display for Kind {
 /// The tools no delegate is ever offered, whatever it holds.
 ///
 /// Named rather than derived, because each is left out for a reason of its own rather than for
-/// want of a capability: `spawn_agent` because a delegate cannot delegate, `fetch_url` because
-/// every kind holds the capability for reaching the network so the driver can make its model
-/// call, and the rest because their audience is the person watching the turn. The list is here
-/// rather than beside the tool table so that a definition naming one of them is answered by the
-/// same set the tool list is built from.
-pub const NEVER_DELEGATED: [&str; 6] = [
-    "spawn_agent",
+/// want of a capability: `fetch_url` because every kind holds the capability for reaching the
+/// network so the driver can make its model call, and the rest because their audience is the
+/// person watching the turn. The list is here rather than beside the tool table so that a
+/// definition naming one of them is answered by the same set the tool list is built from.
+///
+/// `spawn_agent` is not here. Whether a delegate may delegate is a question about where it sits,
+/// not about what it is, so it is answered by [`MAX_DEPTH`] rather than by name.
+pub const NEVER_DELEGATED: [&str; 5] = [
     "ask_user",
     "todo_write",
     "schedule_next",
@@ -181,6 +182,9 @@ pub fn gating_capability(tool: &str) -> Option<Capability> {
         "read_file" | "list_files" | "search" | "spawn_processor" | "load_skill" => {
             Some(Capability::FileRead)
         }
+        // A delegate is a model call, and every kind holds this so it can make its own. What a
+        // delegate it spawns may hold is its own set narrowed again, so this adds nothing to it.
+        "spawn_agent" => Some(Capability::WebFetch),
         _ => None,
     }
 }
@@ -565,27 +569,72 @@ impl Definitions {
     }
 }
 
+/// How far below the turn a delegate may sit.
+///
+/// A delegate this deep is offered no way to delegate, and the kernel refuses one that asks
+/// anyway. Three because that is as deep as a sub-task of a sub-task needs to go to fan out its
+/// reads.
+pub const MAX_DEPTH: usize = 3;
+
+/// How many delegates one turn's whole tree may hold, however they are arranged.
+///
+/// On the tree rather than on each node, so the bound on a turn's delegated work is this many
+/// delegates at their kinds' rounds and not a product of fan-outs at every level. Four full
+/// fan-outs of a single call.
+pub const MAX_DELEGATES: u32 = 32;
+
 /// Which delegate a record is about.
 ///
-/// Minted by the driver, one per delegate, counting from one in the order they were spawned. It
-/// is the driver's own number and nothing a model wrote: several delegates run at once, and an
-/// interface or a trail working out whose line it was holding would be taking that decision from
-/// prose.
+/// Minted by the kernel, one per delegate, counting from one in the order its parent spawned
+/// them. It is the driver's own number and nothing a model wrote: several delegates run at once,
+/// and an interface or a trail working out whose line it was holding would be taking that
+/// decision from prose.
+///
+/// A path rather than a count, so a delegate's number says where it sits: `d2.1` is the first
+/// delegate the turn's second spawned. Two nested delegates with one count each would both be
+/// `d1`.
 ///
 /// Small and copyable because everything carrying one is on a hot path, and ordered because the
-/// order they were spawned in is the order anything showing them uses.
+/// order they were spawned in is the order anything showing them uses. A position counts from
+/// one, so the zeros past a path's end sort a parent before its children.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct DelegateId(u32);
+pub struct DelegateId {
+    path: [u32; MAX_DEPTH],
+    depth: u8,
+}
 
 impl DelegateId {
     /// The `n`th delegate of a turn, counting from one.
     pub fn nth(n: u32) -> Self {
-        Self(n)
+        let mut path = [0; MAX_DEPTH];
+        path[0] = n;
+        Self { path, depth: 1 }
     }
 
-    /// Its position, counting from one.
+    /// The `n`th delegate this one spawned, or nothing where this one sits at [`MAX_DEPTH`].
+    pub fn child(self, n: u32) -> Option<Self> {
+        let at = usize::from(self.depth);
+        let mut path = self.path;
+        *path.get_mut(at)? = n;
+        Some(Self {
+            path,
+            depth: self.depth + 1,
+        })
+    }
+
+    /// How far below the turn it sits: one for a delegate the turn itself spawned.
+    pub fn depth(self) -> usize {
+        usize::from(self.depth)
+    }
+
+    /// Its position among the delegates its parent spawned, counting from one.
     pub fn position(self) -> u32 {
-        self.0
+        self.path[self.depth() - 1]
+    }
+
+    /// Whether this one was spawned by `other`, or by a delegate beneath it.
+    pub fn is_beneath(self, other: Self) -> bool {
+        self.depth > other.depth && self.path[..other.depth()] == other.path[..other.depth()]
     }
 }
 
@@ -596,7 +645,47 @@ impl DelegateId {
 /// argument reads as a count of something.
 impl std::fmt::Display for DelegateId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "d{}", self.0)
+        write!(f, "d{}", self.path[0])?;
+        for position in &self.path[1..self.depth()] {
+            write!(f, ".{position}")?;
+        }
+        Ok(())
+    }
+}
+
+/// The places left in one turn's tree of delegates.
+///
+/// One count, shared by every run in the tree, so siblings running at once draw on the same
+/// [`MAX_DELEGATES`] rather than each on its own. Carried in a [`DelegateSpec`] and nowhere
+/// else, so a run can only reach its tree's count through the kernel that spawned it.
+#[derive(Clone, Default)]
+pub(crate) struct Tree(std::sync::Arc<std::sync::atomic::AtomicU32>);
+
+impl Tree {
+    /// Take one place, or nothing where the tree is full.
+    pub(crate) fn claim(&self) -> bool {
+        use std::sync::atomic::Ordering;
+        self.0
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |held| {
+                (held < MAX_DELEGATES).then_some(held + 1)
+            })
+            .is_ok()
+    }
+}
+
+/// The same tree, not the same count: two turns that each spawned one hold different trees.
+impl PartialEq for Tree {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for Tree {}
+
+impl std::fmt::Debug for Tree {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let held = self.0.load(std::sync::atomic::Ordering::SeqCst);
+        write!(f, "Tree({held} of {MAX_DELEGATES})")
     }
 }
 
@@ -626,6 +715,8 @@ pub struct DelegateSpec {
     task: String,
     capabilities: CapabilitySet,
     rounds: usize,
+    /// The tree it belongs to, which is the one the delegates it spawns draw on.
+    tree: Tree,
 }
 
 impl DelegateSpec {
@@ -635,6 +726,7 @@ impl DelegateSpec {
         task: impl Into<String>,
         capabilities: CapabilitySet,
         rounds: usize,
+        tree: Tree,
     ) -> Self {
         let kind = definition.kind();
         let tools = definition.tools().map(|named| {
@@ -657,7 +749,28 @@ impl DelegateSpec {
             task: task.into(),
             capabilities,
             rounds,
+            tree,
         }
+    }
+
+    /// Whether it may spawn a delegate of its own: it sits above [`MAX_DEPTH`], and a definition
+    /// that named its tools named `spawn_agent` among them.
+    ///
+    /// Where it may not, it is offered no way to, and [`crate::policy::Policy::before_delegate`]
+    /// refuses the call anyway.
+    pub fn may_delegate(&self) -> bool {
+        self.id.depth() < MAX_DEPTH && !self.named_out_delegating()
+    }
+
+    /// Whether its definition named the tools it may use and left `spawn_agent` out.
+    pub(crate) fn named_out_delegating(&self) -> bool {
+        self.tools
+            .as_ref()
+            .is_some_and(|named| !named.iter().any(|tool| tool == "spawn_agent"))
+    }
+
+    pub(crate) fn tree(&self) -> &Tree {
+        &self.tree
     }
 
     /// What the planner named to get this, and what the person watching is shown.
@@ -1430,6 +1543,7 @@ mod tests {
             "find out whether the tests pass",
             Kind::Checker.capabilities(),
             80,
+            Tree::default(),
         );
 
         let described = spec.describe();
@@ -1461,6 +1575,7 @@ mod tests {
             "check the diff",
             Kind::Reader.capabilities(),
             60,
+            Tree::default(),
         );
 
         let described = spec.describe();
@@ -1496,6 +1611,7 @@ mod tests {
             "check the diff",
             Kind::Reader.capabilities(),
             60,
+            Tree::default(),
         );
 
         assert_eq!(spec.tools(), Some(["read_file".to_string()].as_slice()));
@@ -1522,6 +1638,7 @@ mod tests {
             "read something",
             Kind::Reader.capabilities(),
             60,
+            Tree::default(),
         );
         assert_eq!(spec.model(), Some("haiku"));
     }
@@ -1543,6 +1660,7 @@ mod tests {
                 "review something",
                 Kind::Reader.capabilities(),
                 60,
+                Tree::default(),
             )
         };
 
@@ -1586,6 +1704,90 @@ mod tests {
         assert_eq!(
             definitions.get("reviewer").expect("selectable").skills(),
             None
+        );
+    }
+
+    /// A number says where its delegate sits, so a trail and a screen can name a grandchild
+    /// without reading anything it wrote, and two delegates at different depths with the same
+    /// position are never one run.
+    #[test]
+    fn a_delegates_number_is_its_path_from_the_turn() {
+        let second = DelegateId::nth(2);
+        let beneath = second.child(1).expect("one below the turn may delegate");
+        let deepest = beneath.child(3).expect("two below the turn may delegate");
+
+        assert_eq!(
+            [second, beneath, deepest].map(|id| id.to_string()),
+            ["d2", "d2.1", "d2.1.3"]
+        );
+        assert_eq!([second, beneath, deepest].map(DelegateId::depth), [1, 2, 3]);
+        assert_eq!(deepest.position(), 3);
+        assert_eq!(
+            deepest.child(1),
+            None,
+            "a delegate {MAX_DEPTH} below the turn was given a number for a child"
+        );
+
+        assert_ne!(beneath, DelegateId::nth(1), "d2.1 and d1 are one number");
+        assert_ne!(
+            deepest,
+            DelegateId::nth(2).child(3).expect("in range"),
+            "d2.1.3 and d2.3 are one number"
+        );
+        assert!(second < beneath && beneath < DelegateId::nth(3));
+    }
+
+    /// Beneath means spawned by, at any distance. A sibling, the run itself and anything above
+    /// it are not, and those are the three a handle relaying attribution must refuse to name.
+    #[test]
+    fn only_a_descendant_is_beneath_a_delegate() {
+        let first = DelegateId::nth(1);
+        let child = first.child(2).expect("in range");
+        let grandchild = child.child(1).expect("in range");
+
+        assert!(child.is_beneath(first));
+        assert!(grandchild.is_beneath(first));
+        assert!(grandchild.is_beneath(child));
+
+        assert!(!first.is_beneath(first), "a delegate is beneath itself");
+        assert!(!first.is_beneath(child), "a parent is beneath its child");
+        assert!(
+            !DelegateId::nth(2).is_beneath(first),
+            "a sibling is beneath"
+        );
+        assert!(
+            !DelegateId::nth(2)
+                .child(2)
+                .expect("in range")
+                .is_beneath(first),
+            "a sibling's child is beneath"
+        );
+        assert!(
+            !first.child(1).expect("in range").is_beneath(child),
+            "a sibling at the same depth is beneath"
+        );
+    }
+
+    /// One count for the tree, shared by every handle on it, and it stops at the bound rather
+    /// than wrapping or going over.
+    #[test]
+    fn a_tree_holds_at_most_its_bound_across_every_handle() {
+        let tree = Tree::default();
+        let sibling = tree.clone();
+        let claimed = (0..MAX_DELEGATES * 2)
+            .filter(|n| {
+                if n % 2 == 0 {
+                    tree.claim()
+                } else {
+                    sibling.claim()
+                }
+            })
+            .count();
+        assert_eq!(claimed, MAX_DELEGATES as usize);
+        assert!(!tree.claim() && !sibling.claim());
+        assert!(
+            Tree::default().claim(),
+            "another turn's tree shared this one's count"
         );
     }
 }

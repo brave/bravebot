@@ -19315,7 +19315,6 @@ fn seeded_reader(task: &str) -> bravebot_agent::delegate::Seeded {
     // kind's capabilities narrowed by the run's, and its kind's bound.
     let spec = policy
         .before_delegate(
-            bravebot_core::delegate::DelegateId::nth(1),
             &bravebot_core::value::Labelled::new("reader".to_string(), Label::untrusted_public()),
             &bravebot_core::value::Labelled::new(task.to_string(), Label::untrusted_public()),
         )
@@ -19694,18 +19693,21 @@ fn what_a_delegate_could_not_read_is_quarantined_from_it_too() {
     );
 }
 
-/// The depth is what bounds a tree of delegates. The tool is not offered inside one, and a call
-/// to it anyway is answered as an unknown name rather than quietly starting a second level.
+/// DELEGATE-7: a delegate above the bottom of the tree is offered `spawn_agent`, the one it starts
+/// runs, and the trail names it by its place beneath the delegate that asked for it.
 #[test]
-fn a_call_to_spawn_agent_from_inside_a_delegate_does_nothing() {
-    let scratch = Scratch::new("delegate-depth");
+fn a_delegate_can_spawn_its_own_delegate_and_the_trail_names_it() {
+    let scratch = Scratch::new("delegate-nesting");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
+    // Each level's marker is in its own requests and never in a level beneath it, because a
+    // delegate's conversation begins with its own task. A parent's requests do replay the task
+    // it handed down, so the parent's rule comes first.
     let (endpoint, received) = serve_by_marker(vec![
         (
             "DELEGATE-THE-WORK",
             vec![
-                tool_request("spawn_agent", r#"{"kind":"worker","task":"DO-THE-WORK"}"#),
+                tool_request("spawn_agent", r#"{"kind":"reader","task":"DO-THE-WORK"}"#),
                 reply_with("waiting"),
                 reply_with("done"),
             ],
@@ -19713,14 +19715,12 @@ fn a_call_to_spawn_agent_from_inside_a_delegate_does_nothing() {
         (
             "DO-THE-WORK",
             vec![
-                // The delegate asks for one of its own.
-                tool_request(
-                    "spawn_agent",
-                    r#"{"kind":"worker","task":"do it for me instead"}"#,
-                ),
-                reply_with("I could not delegate"),
+                tool_request("spawn_agent", r#"{"kind":"reader","task":"READ-DEEPER"}"#),
+                reply_with("waiting"),
+                reply_with("relayed"),
             ],
         ),
+        ("READ-DEEPER", vec![reply_with("DEEPER-REPORT")]),
     ]);
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
@@ -19737,29 +19737,50 @@ fn a_call_to_spawn_agent_from_inside_a_delegate_does_nothing() {
     .expect("turn runs");
 
     let asked = every_request(&received);
-    let delegates: Vec<&String> = asked
+    let first: Vec<&String> = asked
         .iter()
-        .filter(|body| !body.contains("DELEGATE-THE-WORK"))
+        .filter(|body| body.contains("DO-THE-WORK") && !body.contains("DELEGATE-THE-WORK"))
         .collect();
-    // A second level would be a run holding that task and not the one this delegate was given:
-    // a delegate's conversation begins with its own task and holds no other.
+    // Its own first request, before it had called anything: what is under test is the tool list.
+    let offered = first.first().expect("the delegate asked for nothing");
     assert!(
-        !asked
+        offered.contains("\"spawn_agent\""),
+        "a delegate above the bottom of the tree was not offered a way to delegate"
+    );
+    assert!(
+        asked
             .iter()
-            .any(|body| body.contains("do it for me instead") && !body.contains("DO-THE-WORK")),
-        "a second level of delegation ran"
+            .any(|body| body.contains("READ-DEEPER") && !body.contains("DO-THE-WORK")),
+        "the delegate's own delegate never ran"
+    );
+    assert!(
+        first.iter().any(|body| body.contains("DEEPER-REPORT")),
+        "the nested delegate's report did not reach the delegate that asked for it"
     );
 
-    // The delegate's own first request, before it had called anything: the tool list is what is
-    // under test, and every request after this one replays the call it made and the refusal.
-    let offered = delegates.first().expect("the delegate asked for nothing");
+    let approved: Vec<String> = sink
+        .events()
+        .iter()
+        .filter_map(|e| match e {
+            Event::GatePassed { gate, detail } if *gate == "delegate" => Some(detail.clone()),
+            _ => None,
+        })
+        .collect();
     assert!(
-        !offered.contains("spawn_agent"),
-        "a delegate was offered a way to delegate"
+        approved.iter().any(|d| d.starts_with("d1.1 ")),
+        "the trail does not number the nested delegate beneath the one that asked: {approved:?}"
+    );
+    let whose: Vec<String> = sink
+        .recorded()
+        .filter_map(|(from, _)| from.map(|id| id.to_string()))
+        .collect();
+    assert!(
+        whose.iter().any(|id| id == "d1.1"),
+        "nothing the nested delegate did was recorded as its own: {whose:?}"
     );
     assert!(
-        delegates.iter().any(|body| body.contains("no such tool")),
-        "a delegate's call to spawn_agent was not refused: {delegates:?}"
+        !whose.iter().any(|id| id == "d2"),
+        "the nested delegate was numbered as the turn's second: {whose:?}"
     );
 }
 
@@ -20249,6 +20270,86 @@ fn a_fan_out_past_the_ceiling_is_refused_and_starts_nothing() {
         reporter.position("delegate d1 finished").is_none(),
         "a refused fan-out started a delegate anyway: {:?}",
         reporter.lines()
+    );
+}
+
+/// DELEGATE-7: a fan-out that reaches the turn's ceiling part-way starts the delegates that fit,
+/// and the planner is told how many did not start and why, rather than losing the ones that did.
+#[test]
+fn a_fan_out_that_meets_the_turns_ceiling_starts_what_fits_and_says_what_did_not() {
+    use bravebot_core::delegate::MAX_DELEGATES;
+
+    let scratch = Scratch::new("delegate-tree-ceiling");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let fan_out = |n: u32| {
+        let each: Vec<String> = (1..=n).map(|i| format!("\"{i}\"")).collect();
+        tool_request(
+            "spawn_agent",
+            &format!(
+                r#"{{"kind":"reader","task":"FILL-SHARED","each":[{}]}}"#,
+                each.join(",")
+            ),
+        )
+    };
+    // Two short of the ceiling, eight at a time, then a call for four.
+    let mut asked = Vec::new();
+    let mut left = MAX_DELEGATES - 2;
+    while left > 0 {
+        asked.push(fan_out(left.min(8)));
+        left -= left.min(8);
+    }
+    asked.push(fan_out(4));
+    asked.push(reply_with("waiting"));
+    asked.push(reply_with("done"));
+
+    let (endpoint, received) = serve_by_marker(vec![
+        ("FILL-THE-TREE", asked),
+        (
+            "FILL-SHARED",
+            (0..MAX_DELEGATES).map(|_| reply_with("ok")).collect(),
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = Watched::default();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("FILL-THE-TREE"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert!(
+        reporter
+            .position(&format!("delegate d{MAX_DELEGATES} finished failed=false"))
+            .is_some(),
+        "the delegates that fit under the ceiling were not all started: {:?}",
+        reporter.lines()
+    );
+    let past = MAX_DELEGATES + 1;
+    assert!(
+        reporter
+            .position(&format!("delegate d{past} finished"))
+            .is_none(),
+        "a delegate past the turn's ceiling ran: {:?}",
+        reporter.lines()
+    );
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert!(
+        bodies
+            .iter()
+            .any(|body| body.contains("The other 2 were not started")
+                && body.contains(&format!("already started {MAX_DELEGATES} delegates"))),
+        "the planner was not told which of its delegates did not start, or why"
     );
 }
 

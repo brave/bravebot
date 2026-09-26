@@ -361,7 +361,6 @@ fn a_delegate_does_not_open_a_wallet_of_its_own() {
         .expect("a policy");
         let spec = policy
             .before_delegate(
-                bravebot_core::delegate::DelegateId::nth(1),
                 &bravebot_core::value::Labelled::new(
                     "reader".to_string(),
                     bravebot_core::label::Label::untrusted_public(),

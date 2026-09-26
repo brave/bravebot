@@ -2361,6 +2361,12 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         policy = policy.with_file_authority(authority.clone());
     }
 
+    // Where a delegate sits, which is what the kernel numbers its own delegates beneath, and the
+    // tree they would join, which is what it counts them against (DELEGATE-7).
+    if let Some(spec) = &task.delegate {
+        policy = policy.within(spec);
+    }
+
     // Read once. A turn nobody is looping arranges its own later look, which is what a request to
     // report a change needs; a tick of a self-paced loop sets the pace of the next one; and a tick
     // the person gave an interval for decides nothing, because their interval already did.
@@ -2454,15 +2460,23 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     // The tool that says when this turn is asked again is offered to every turn except a tick the
     // person timed, and describes a different job on either side of that. Nothing else changes.
     //
-    // A delegate is offered what its capabilities reach, minus the six no delegate ever gets.
-    // Derived from the set rather than named per kind, so a tool cannot be offered to a run whose
-    // gates would refuse it on every call.
+    // A delegate is offered what its capabilities reach, minus the five no delegate ever gets, and
+    // a way to delegate while it sits above the bottom of the tree. Derived from the set rather
+    // than named per kind, so a tool cannot be offered to a run whose gates would refuse it on
+    // every call.
     //
     // A turn the person addressed to a definition is offered the planner's list less what the
     // kernel narrowed away. Decided here, before the prompt is composed and before anything is
     // sent, so a name matching nothing ends the turn having spent nothing (ADDRESS-5).
     let (addressed, mut offered) = match &task.delegate {
-        Some(spec) => (None, tools::for_delegate(spec.capabilities(), spec.tools())),
+        Some(spec) => (
+            None,
+            tools::for_delegate(
+                spec.capabilities(),
+                spec.tools(),
+                spec.may_delegate().then_some(&delegates),
+            ),
+        ),
         None => {
             let mut offered = tools::for_planner(scheduling, arming, &delegates);
             let names: Vec<&str> = offered
@@ -2534,7 +2548,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     let system = match &task.delegate {
         Some(spec) => format!(
             "{}{}{mode}",
-            crate::delegate::prompt_for(spec.capabilities(), spec.prompt()),
+            crate::delegate::prompt_for(spec.capabilities(), spec.prompt(), spec.may_delegate()),
             preamble.text
         ),
         // `for_a_person` names tools only this side is offered, so it sits with the rest of what
@@ -2813,10 +2827,6 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     // about several files.
     let mut watches: Vec<String> = Vec::new();
     let mut armed = 0usize;
-    // How many delegates this turn has spawned, which is what numbers each one. Counted for the
-    // turn rather than for the round: two delegates spawned in different rounds are still two
-    // delegates, and everything reported about either is tagged with its number.
-    let mut spawned = 0u32;
     // The pipelines this turn leaves running. Held here so they end here: dropping this kills
     // whatever is still going, which is what keeps a background job from outliving the turn that
     // started it and becoming an effect nobody is watching.
@@ -3267,12 +3277,10 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                             home: task.home.as_deref(),
                             profile: task.profile.as_deref(),
                             remembering: task.remembering.as_deref(),
-                            // A delegate is offered no way to delegate, and dispatch refuses one anyway.
                             delegated: task.delegate.is_some(),
                             confined_to: addressed.as_ref().map(|addressed| addressed.tools()),
                             servers: servers.as_deref_mut(),
                             mcp: mcp.as_ref().map(|(offer, _)| offer),
-                            spawned: &mut spawned,
                             jobs: &mut jobs,
                             permission_mode: task.permission_mode,
                             auto_vetting: task.auto_vetting,
@@ -4253,7 +4261,6 @@ mod tests {
         let mut policy = Policy::begin(routing, ReleasePlan::new(), held, &mut sink).unwrap();
         let spec = policy
             .before_delegate(
-                bravebot_core::delegate::DelegateId::nth(1),
                 &Labelled::trusted("worker".to_string()),
                 &Labelled::trusted("look it up".to_string()),
             )

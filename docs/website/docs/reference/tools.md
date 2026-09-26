@@ -941,7 +941,8 @@ what it is doing.
 path per entry, say) is repeated. Every delegate it starts is one like any other: it is approved on
 its own, takes its own number, and holds its own copy of what you vouched for, so a fan-out is
 several runs rather than one run several times. A call naming more than eight, or naming none, is
-refused and starts nothing.
+refused and starts nothing. A call that reaches the turn's ceiling of 32 delegates part-way starts
+the ones that fit and says how many did not start, and why.
 
 The delegate cannot see the conversation the task came from, so a task that leaves something out is a
 delegate that never learns it. It cannot come back for more, since there is no channel to ask
@@ -954,10 +955,15 @@ than about the run that happened to be going.
 
 Nothing but the report crosses back: the exchange, the tool results and the quarantine end with the
 delegate, and a reference minted inside one names nothing afterwards. A delegate is offered none of
-this tool, [`ask_user`](#ask_user), a task list, or [`fetch_url`](#fetch_url), so it cannot delegate
-again, puts no question of its own to you, replaces nothing on your screen, and reaches no host.
+[`ask_user`](#ask_user), a task list, or [`fetch_url`](#fetch_url), so it puts no question of its own
+to you, replaces nothing on your screen, and reaches no host.
 Naming one of them anyway is refused rather than run, since a model naming a tool it was never offered
 is ordinary. What it could not settle goes in the report, and the planner asks.
+
+A delegate is offered this tool itself, down to three levels below the turn. One at the bottom is
+not offered it, and nor is one whose [definition](../customize/agents.md) names its tools and
+leaves this one out. A call from either anyway is refused. Every delegate in the tree counts against the
+turn's one ceiling, and each is approved and narrowed by the run that started it.
 
 Fetching is out because a delegate reaching a website would stop you to approve a host for a sub-task
 you never set up. Every kind does reach the network, since a planner is a model call and that request

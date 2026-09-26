@@ -844,7 +844,7 @@ mod tests {
         for name in bravebot_core::delegate::Kind::NAMES {
             let kind = bravebot_core::delegate::Kind::from_name(name).expect("enumerated");
             let granted = kind.capabilities();
-            let offered: Vec<String> = crate::tools::for_delegate(&granted, None)
+            let offered: Vec<String> = crate::tools::for_delegate(&granted, None, None)
                 .iter()
                 .map(|tool| tool.function.name.clone())
                 .collect();

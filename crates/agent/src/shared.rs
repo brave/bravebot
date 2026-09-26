@@ -56,6 +56,7 @@ impl<'a, T: ?Sized> Lent<'a, T> {
         Borrowed {
             lent: self,
             from: None,
+            relayed: None,
             spent: Default::default(),
             inference: Vec::new(),
         }
@@ -66,6 +67,7 @@ impl<'a, T: ?Sized> Lent<'a, T> {
         Borrowed {
             lent: self,
             from: Some(id),
+            relayed: None,
             spent: Default::default(),
             inference: Vec::new(),
         }
@@ -143,6 +145,9 @@ pub struct Borrowed<'m, 'a, T: ?Sized> {
     lent: &'m Lent<'a, T>,
     /// Whose work goes through this handle, where it is a delegate's.
     from: Option<DelegateId>,
+    /// A delegate beneath `from` whose work the next call forwards, as the handle that call came
+    /// through said. Only ever one of `from`'s own descendants, and spent by the call it names.
+    relayed: Option<DelegateId>,
     spent: crate::outcome::Spent,
     inference: Vec<crate::timing::Interval>,
 }
@@ -151,15 +156,20 @@ impl<T: Sink + ?Sized> Sink for Borrowed<'_, '_, T> {
     /// Both under one lock, so a record and the run it belongs to cannot be separated by another
     /// run recording in between. The same reason the reports below announce whose they are.
     fn emit(&mut self, event: Event) {
+        let whose = self.whose();
         let mut held = self.lent.hold();
-        held.recording_for(self.from);
+        held.recording_for(whose);
         held.emit(event);
     }
 
-    /// Passed on rather than remembered, so a handle for a delegate cannot be talked into
-    /// recording as the turn. A delegate's own turn lends this handle onward and hands its own
-    /// work a handle for the turn, which is that turn rather than this one.
-    fn recording_for(&mut self, _delegate: Option<DelegateId>) {}
+    /// Kept for one call only where it names a delegate beneath this handle's own, so a handle
+    /// for a delegate cannot be talked into recording as the turn or as a sibling. A delegate's
+    /// own turn lends this handle onward and hands its own work a handle for the turn, which says
+    /// `None` here and so records as this delegate; a delegate that turn spawned says its own
+    /// number, and the trail names it rather than the delegate above it.
+    fn recording_for(&mut self, delegate: Option<DelegateId>) {
+        self.relay(delegate);
+    }
 }
 
 /// Forward one report, saying whose it is first.
@@ -170,8 +180,9 @@ macro_rules! reports {
     ($( fn $name:ident(&mut self $(, $arg:ident: $ty:ty)* $(,)?); )*) => {
         $(
             fn $name(&mut self $(, $arg: $ty)*) {
+                let whose = self.whose();
                 let mut held = self.lent.hold();
-                held.reporting_for(self.from);
+                held.reporting_for(whose);
                 held.$name($($arg),*);
             }
         )*
@@ -183,8 +194,9 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
         if self.from.is_some() {
             self.inference.push(interval);
         }
+        let whose = self.whose();
         let mut held = self.lent.hold();
-        held.reporting_for(self.from);
+        held.reporting_for(whose);
         held.inference_interval(interval);
     }
 
@@ -241,9 +253,12 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
         held.delegate_finished(delegate, note, failed, reported);
     }
 
-    /// Passed on rather than remembered, so a handle for a delegate cannot be talked into
-    /// reporting as the turn.
-    fn reporting_for(&mut self, _delegate: Option<DelegateId>) {}
+    /// Kept for one call only where it names a delegate beneath this handle's own, so a handle
+    /// for a delegate cannot be talked into reporting as the turn or as a sibling. See
+    /// [`Borrowed::recording_for`](Sink::recording_for).
+    fn reporting_for(&mut self, delegate: Option<DelegateId>) {
+        self.relay(delegate);
+    }
 }
 
 impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
@@ -314,6 +329,20 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
 }
 
 impl<T: ?Sized> Borrowed<'_, '_, T> {
+    /// Remember whose the next call is, where the handle it came through named one of this
+    /// handle's descendants, and forget any earlier one either way.
+    ///
+    /// The numbers are the kernel's, so a descendant's is this handle's own with more after it
+    /// and nothing a model wrote reaches the comparison.
+    fn relay(&mut self, delegate: Option<DelegateId>) {
+        self.relayed = delegate.filter(|id| self.from.is_some_and(|from| id.is_beneath(from)));
+    }
+
+    /// Whose the call being forwarded is: the descendant it was relayed for, or this handle's own.
+    fn whose(&mut self) -> Option<DelegateId> {
+        self.relayed.take().or(self.from)
+    }
+
     /// Keep request intervals available on successful, failed and cancelled returns alike.
     pub fn take_inference(&mut self) -> Vec<crate::timing::Interval> {
         std::mem::take(&mut self.inference)
@@ -415,5 +444,188 @@ mod tests {
             nested.turn().prompt_recorded(2);
         }
         assert_eq!(recording.prompts, [7]);
+    }
+
+    fn a_gate(gate: &'static str) -> Event {
+        Event::GatePassed {
+            gate,
+            detail: String::new(),
+        }
+    }
+
+    fn named(sink: &bravebot_core::event::RecordingSink) -> Vec<Option<String>> {
+        sink.recorded()
+            .map(|(from, _)| from.map(|id| id.to_string()))
+            .collect()
+    }
+
+    fn d(path: &[u32]) -> DelegateId {
+        path[1..].iter().fold(DelegateId::nth(path[0]), |at, &n| {
+            at.child(n).expect("within the depth")
+        })
+    }
+
+    /// A delegate's own turn lends the handle it was given onward, so every record its delegates
+    /// make passes through two handles, and the trail has to name the run that took the decision
+    /// rather than the delegate above it. Otherwise a grandchild's approvals read as its parent's,
+    /// and two grandchildren of one delegate read as one run.
+    #[test]
+    fn a_nested_delegates_records_name_it_rather_than_the_delegate_above_it() {
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        {
+            let lent = Lent::new(&mut sink);
+            lent.turn().emit(a_gate("the turn's"));
+            let mut first = lent.delegate(d(&[1]));
+            {
+                let within = Lent::new(&mut first);
+                within.turn().emit(a_gate("the first delegate's"));
+                let mut nested = within.delegate(d(&[1, 2]));
+                nested.emit(a_gate("its second delegate's"));
+                {
+                    let deeper = Lent::new(&mut nested);
+                    deeper
+                        .delegate(d(&[1, 2, 1]))
+                        .emit(a_gate("that one's first"));
+                    deeper.turn().emit(a_gate("its second delegate's again"));
+                }
+                within.turn().emit(a_gate("the first delegate's again"));
+            }
+        }
+        let expected = ["", "d1", "d1.2", "d1.2.1", "d1.2", "d1"];
+        assert_eq!(
+            named(&sink),
+            expected
+                .iter()
+                .map(|name| (!name.is_empty()).then(|| name.to_string()))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// The relay takes only a number beneath the handle's own, and only for the next call. A
+    /// handle that could be told it was the turn, itself, or a sibling would let one run's records
+    /// be written down as another's, which is the whole of what attribution is for.
+    #[test]
+    fn a_handle_relays_only_its_own_descendants_and_only_once() {
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        {
+            let lent = Lent::new(&mut sink);
+            let mut turn = lent.turn();
+            turn.recording_for(Some(d(&[1])));
+            turn.emit(a_gate("the turn claimed by a delegate"));
+
+            let mut first = lent.delegate(d(&[1]));
+            for claimed in [None, Some(d(&[1])), Some(d(&[2])), Some(d(&[2, 1]))] {
+                first.recording_for(claimed);
+                first.emit(a_gate("a claim that is not a descendant"));
+            }
+            first.recording_for(Some(d(&[1, 3])));
+            first.emit(a_gate("a descendant's"));
+            first.emit(a_gate("the delegate's own after it"));
+        }
+        let expected = [
+            None,
+            Some("d1"),
+            Some("d1"),
+            Some("d1"),
+            Some("d1"),
+            Some("d1.3"),
+            Some("d1"),
+        ];
+        assert_eq!(
+            named(&sink),
+            expected
+                .iter()
+                .map(|name| name.map(str::to_string))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// Lines, and what each was attributed to when it arrived.
+    #[derive(Default)]
+    struct Lines {
+        attributed_to: Option<DelegateId>,
+        lines: Vec<(Option<String>, String)>,
+        requests: usize,
+    }
+
+    impl Reporter for Lines {
+        fn reporting_for(&mut self, delegate: Option<DelegateId>) {
+            self.attributed_to = delegate;
+        }
+
+        fn narration(&mut self, text: String) {
+            self.lines
+                .push((self.attributed_to.map(|id| id.to_string()), text));
+        }
+
+        fn inference_interval(&mut self, _interval: crate::timing::Interval) {
+            self.requests += 1;
+        }
+
+        fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+    }
+
+    /// A screen puts a line under the block of the run whose it is, by the number it was told,
+    /// so a grandchild's lines have to arrive under the grandchild's number or they land in its
+    /// parent's block.
+    #[test]
+    fn a_nested_delegates_lines_are_reported_as_its_own() {
+        let mut screen = Lines::default();
+        {
+            let lent = Lent::new(&mut screen);
+            let mut first = lent.delegate(d(&[1]));
+            let within = Lent::new(&mut first);
+            within.turn().narration("the first delegate's".to_string());
+            within
+                .delegate(d(&[1, 1]))
+                .narration("its first delegate's".to_string());
+            within
+                .turn()
+                .narration("the first delegate's again".to_string());
+        }
+        assert_eq!(
+            screen.lines,
+            [
+                (Some("d1".to_string()), "the first delegate's".to_string()),
+                (Some("d1.1".to_string()), "its first delegate's".to_string()),
+                (
+                    Some("d1".to_string()),
+                    "the first delegate's again".to_string()
+                ),
+            ]
+        );
+    }
+
+    /// The turn above a delegate counts the requests made inside its wait on that delegate, and a
+    /// request a grandchild made is one of them: the time went on the person's model whichever run
+    /// asked. Kept by every handle on the way up, not only the one it was made through.
+    #[test]
+    fn a_nested_delegates_requests_reach_every_delegate_above_it() {
+        let interval = crate::timing::Interval::since(std::time::Instant::now());
+        let mut screen = Lines::default();
+        let (kept_by_first, kept_by_nested) = {
+            let lent = Lent::new(&mut screen);
+            let mut first = lent.delegate(d(&[1]));
+            let kept_by_nested = {
+                let within = Lent::new(&mut first);
+                let mut nested = within.delegate(d(&[1, 1]));
+                nested.inference_interval(interval);
+                within.turn().inference_interval(interval);
+                nested.take_inference().len()
+            };
+            (first.take_inference().len(), kept_by_nested)
+        };
+        assert_eq!(
+            kept_by_nested, 1,
+            "the nested delegate lost its own request"
+        );
+        assert_eq!(
+            kept_by_first, 2,
+            "the delegate above lost its own request or its delegate's"
+        );
+        assert_eq!(
+            screen.requests, 2,
+            "the screen was not told of both requests"
+        );
     }
 }

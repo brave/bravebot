@@ -43,7 +43,7 @@ lands.
 
 | | |
 |---|---|
-| Tools | its kind's, which are what its capabilities reach, and never a way to delegate |
+| Tools | its kind's, which are what its capabilities reach, and a way to delegate only above the bottom of the tree |
 | Memory | none of its parent's exchange: it begins with the task it was given |
 | Conversation | a loop of its own, bounded |
 | Reads | whatever its capabilities and the paths a person vouched for allow |
@@ -187,18 +187,57 @@ them is making progress.
 `verified-by: bravebot_core::policy::a_delegates_bound_comes_from_its_kind`
 
 <a id="DELEGATE-7"></a>
-### DELEGATE-7: a delegate cannot delegate
+### DELEGATE-7: a delegate may delegate, to a fixed depth and under one ceiling for the turn
 
-No kind is offered the tool, and a call to it from inside a delegate is answered the way any
-other unknown name is. Two refusals rather than one, because the depth is what bounds the whole
-tree and a bound resting on the tool list alone rests on the model reading it.
+A delegate is offered `spawn_agent` and may start delegates of its own, and those theirs, down to
+three levels below the turn. Two bounds hold the tree, and both are the kernel's:
 
-**Why.** The bound on a tree of delegates is the product of the bounds, which is a number nobody
-chose. And a person approving a write at the third level has no way to see which task it belongs
-to.
+- **Depth.** A delegate three levels below the turn is not offered the tool and is told it cannot
+  delegate. A call to it there anyway is refused by the kernel. Two refusals rather than one,
+  because a bound resting on the tool list alone rests on the model reading it.
+- **One ceiling for the whole tree.** At most 32 delegates start in one turn, counted across every
+  level and every branch, not per node. A refused request takes no place under it: only a
+  delegate that started is counted, and the trail records a refused one only as refused. A
+  fan-out ([AGENT-5](tools/spawn-agent.md#AGENT-5)) that meets the ceiling part-way starts the
+  ones that fit, and the run that asked is told how many did not start and why.
 
-`verified-by: bravebot_agent::tools::a_delegate_is_never_offered_a_way_to_delegate`
-`verified-by: bravebot_agent::turn::a_call_to_spawn_agent_from_inside_a_delegate_does_nothing`
+A definition can take the tool away as well. One that names its `tools:`
+([DELEGATE-19](#DELEGATE-19)) and leaves `spawn_agent` out is not offered it, is told it cannot
+delegate, and is refused by the kernel if it calls it anyway, at whatever depth it sits. One that
+names no tools keeps it, as it keeps the rest of its kind's set.
+
+The tool's description names neither bound. Delegates read it too, and a model told how many it
+has left spends them.
+
+Every level is gated as the first is. [DELEGATE-2](#DELEGATE-2) refuses a run whose own context
+has met something untrusted, at whatever depth it sits, and [DELEGATE-4](#DELEGATE-4) narrows
+each delegate by the run that spawned it, so a nested delegate holds nothing its parent did not.
+
+**Why nesting.** A delegate handed a task that needs five files read reads them one after another
+in its own context, which is the cost delegation exists to avoid, paid again one level down.
+
+**Why these bounds.** A ceiling per node makes the bound on the tree the product of the ceilings,
+a number nobody chose. One count shared by the whole tree is chosen directly, however the tree
+is arranged. Rounds do not multiply either: a nested delegate keeps its own kind's limit
+([DELEGATE-6](#DELEGATE-6)), so the rounds one turn's delegates spend are at most 32 of those
+limits, at any depth. The depth keeps each number short enough to read: a delegate's number is
+its path from the turn ([DELEGATE-13](#DELEGATE-13)).
+
+**Why a definition's list decides it.** A child is narrowed by its parent's capabilities, not by
+the tools its parent's file named. A definition naming `read_file` alone would otherwise start a
+reader holding every tool a reader has, and the narrowing a person wrote would last one level.
+
+`verified-by: bravebot_agent::tools::a_delegate_is_offered_a_way_to_delegate_only_above_the_bottom_of_the_tree`
+`verified-by: bravebot_agent::tools::the_way_to_delegate_is_described_without_the_numbers_that_bound_it`
+`verified-by: bravebot_core::policy::a_definition_that_names_its_tools_without_spawn_agent_cannot_delegate`
+`verified-by: bravebot_core::policy::a_delegate_refused_at_the_ceiling_is_recorded_only_as_refused`
+`verified-by: bravebot_agent::delegate::a_delegate_is_told_whether_it_may_delegate_by_where_it_sits`
+`verified-by: bravebot_core::policy::a_delegate_at_the_bottom_of_the_tree_cannot_delegate`
+`verified-by: bravebot_core::policy::a_turns_tree_holds_at_most_its_bound_however_it_is_arranged`
+`verified-by: bravebot_core::policy::a_refused_delegate_takes_no_place_in_the_tree`
+`verified-by: bravebot_core::delegate::a_tree_holds_at_most_its_bound_across_every_handle`
+`verified-by: bravebot_agent::turn::a_delegate_can_spawn_its_own_delegate_and_the_trail_names_it`
+`verified-by: bravebot_agent::turn::a_fan_out_that_meets_the_turns_ceiling_starts_what_fits_and_says_what_did_not`
 
 ## What comes back
 
@@ -287,7 +326,7 @@ a rule resting on the tool list alone rests on the model reading it.
 What it could not settle goes in the report, and the parent asks.
 
 `verified-by: bravebot_agent::tools::a_delegate_is_offered_no_task_list_and_no_way_to_ask`
-`verified-by: bravebot_agent::delegate::no_kind_is_told_it_may_ask_a_person_or_delegate`
+`verified-by: bravebot_agent::delegate::no_kind_is_told_it_may_ask_a_person`
 `verified-by: bravebot_agent::turn::a_delegate_naming_ask_user_or_todo_write_reaches_neither_the_person_nor_the_screen`
 
 <a id="DELEGATE-13"></a>
@@ -297,20 +336,29 @@ A delegate's gates report into the same audit trail as the turn that spawned it,
 can be told apart. A nested run recording somewhere else would leave a hole in the record exactly
 over the part of the turn nobody watched.
 
-The name is the delegate's number, minted by the driver in the order the turn spawned them. A
-record says which run took the decision it holds, and the turn's own records are left unnamed.
+The name is the delegate's number, minted by the kernel when it approves the delegate. The number
+is its path from the turn: `d1.2` is the second delegate that `d1` started. A record says which
+run took the decision it holds, and the turn's own records are left unnamed. A nested delegate's
+records reach the trail through every run above it and carry its own number, not the number of
+a run they passed through.
 
 `verified-by: bravebot_agent::turn::one_trail_records_the_delegate_and_the_turn_that_spawned_it`
 `verified-by: bravebot_core::delegate::a_description_names_what_it_holds_but_never_the_task`
 `verified-by: bravebot_core::event::a_record_says_which_run_took_the_decision`
 `verified-by: bravebot_session::audit::a_delegates_records_are_named_and_the_turns_own_are_not`
 `verified-by: bravebot_session::audit::the_written_record_names_the_delegate_that_took_the_decision`
+`verified-by: bravebot_core::delegate::a_delegates_number_is_its_path_from_the_turn`
+`verified-by: bravebot_core::policy::a_delegate_numbers_its_own_delegates_beneath_it`
+`verified-by: bravebot_agent::shared::a_nested_delegates_records_name_it_rather_than_the_delegate_above_it`
+`verified-by: bravebot_agent::shared::a_handle_relays_only_its_own_descendants_and_only_once`
+`verified-by: bravebot_agent::turn::a_delegate_can_spawn_its_own_delegate_and_the_trail_names_it`
 
 <a id="DELEGATE-14"></a>
 ### DELEGATE-14: each delegate is numbered, and every report about one says which
 
-The driver numbers them in the order the turn spawned them and says, before each report, whose
-work it describes: one delegate, or the turn itself. Nothing works it out from the report.
+The kernel numbers each in the order the run above it spawned them
+([DELEGATE-13](#DELEGATE-13)), and the driver says, before each report, whose work it describes:
+one delegate, or the turn itself. Nothing works it out from the report.
 
 A number rather than a position in the sequence. Reports arrive in the order the work happened,
 which is not the order it was asked for, and two delegates of the same kind produce lines that
@@ -330,13 +378,15 @@ holds.
 `verified-by: bravebot_agent::turn::a_delegates_work_is_bracketed_by_the_announcements_the_interface_reads`
 `verified-by: bravebot_agent::turn::a_definition_names_the_delegate_a_turn_runs_and_says_what_it_is_for`
 `verified-by: bravebot_core::delegate::a_description_names_the_definition_and_the_kind_behind_it`
+`verified-by: bravebot_agent::shared::a_nested_delegates_lines_are_reported_as_its_own`
 
 <a id="DELEGATE-15"></a>
 ### DELEGATE-15: delegates run alongside the turn and alongside each other
 
 Starting one does not stop the turn. The call answers as soon as the kernel has approved the
-delegate, the planner has its round back, and the work goes on behind it. A turn may have any
-number going at once, and what one is doing has no bearing on what another may do.
+delegate, the planner has its round back, and the work goes on behind it. A turn may have as
+many going at once as [DELEGATE-7](#DELEGATE-7)'s ceiling allows, and what one is doing has no
+bearing on what another may do.
 
 Each holds its own conversation, quarantine, capabilities, routing grants and prompt history.
 They share live file authority because their effects touch the same filesystem. A capture boundary
@@ -396,7 +446,8 @@ Request intervals span whole planner, processor, vetting and compaction calls, i
 calls. Planner calls include retries and retry waits. Durations are rounded once when the turn
 reports milliseconds. Tokens, cache usage and request counts describe all work performed;
 elapsed time does not change their additive accounting.
-Nested delegates are refused by [DELEGATE-7](#DELEGATE-7).
+A nested delegate's request intervals reach every run above it, so each parent's waits are
+measured against the requests of everything beneath it and not only its own delegates'.
 
 **Why.** Adding concurrent request durations would report time the parent did not spend waiting.
 A delegate's final duration alone cannot say which part fell inside a wait. Retaining intervals
@@ -404,6 +455,7 @@ also lets a later collection account for its requests during earlier joins witho
 again.
 
 `verified-by: bravebot_agent::timing::delegate_requests_cover_only_their_union_inside_a_wait`
+`verified-by: bravebot_agent::shared::a_nested_delegates_requests_reach_every_delegate_above_it`
 `verified-by: bravebot_agent::timing::successive_collections_charge_each_covered_instant_once`
 `verified-by: bravebot_agent::turn::overlapping_delegate_requests_charge_one_elapsed_wait`
 `verified-by: bravebot_agent::turn::failed_parent_keeps_overlapping_delegate_retry_waits`
@@ -436,7 +488,8 @@ A definition may then name `tools:`, and that is a narrowing and only a narrowin
 is intersected with its kind's reach and with the parent's own set, so the intersection
 [DELEGATE-4](#DELEGATE-4) takes gains a third term and keeps its direction: a definition naming a
 tool its kind does not reach is a definition loaded without it, and the trail says what was
-dropped.
+dropped. `spawn_agent` is one of the tools a list may leave out, and a delegate whose list leaves it
+out cannot delegate ([DELEGATE-7](#DELEGATE-7)).
 
 A name that is not a tool selects **nothing**, and is reported dropped like any other. `*` is such
 a name rather than a way to ask for all of them, and so is every name in another agent's
