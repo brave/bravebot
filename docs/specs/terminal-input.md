@@ -161,6 +161,10 @@ and a byte written later are not the two halves of one gesture.
 The reply stops arriving. When no work followed the prompt, no prompts are queued, and the box is
 empty, the prompt returns for editing. The status identifies a deliberate cancellation rather than
 a failure or a completed answer.
+Dropped files and pasted pictures return with their markers, keeping their identities and order
+within each attachment store. Resubmitting includes each once in the new submission, in the
+request order described by [dropping.md](dropping.md). Editor attachment stores remain in memory
+only.
 
 The prompt stays sent, marked stopped, where any of three things is true: the turn had already
 done something that is on the screen, there are prompts waiting behind it, or the box is not empty.
@@ -230,6 +234,9 @@ the exit. One way out, and it is the one people already reach for.
 `verified-by: bravebot_aichat::client::a_stop_does_not_wait_for_the_model_to_start_writing`
 `verified-by: bravebot_aichat::client::a_stop_does_not_wait_for_an_endpoint_that_has_not_answered`
 `verified-by: bravebot_tui::state::cancelling_before_anything_happens_still_un_sends_the_prompt`
+`verified-by: bravebot_tui::sessions::cancelled_attachments_return_to_the_editor_and_the_next_request`
+`verified-by: bravebot_tui::sessions::cancelled_attachments_preserve_a_stashed_draft`
+`verified-by: bravebot_tui::sessions::cancellation_keeps_attachment_ownership_when_the_prompt_stays_sent`
 `verified-by: bravebot_tui::state::a_turn_stopped_over_a_typed_line_keeps_the_line_and_the_prompt`
 `verified-by: bravebot_tui::app::a_key_that_would_stop_a_turn_is_answered_during_a_summary`
 `verified-by: bravebot_tui::app::escape_stops_the_turn_without_ending_the_session`
@@ -462,6 +469,7 @@ while the first is in flight, and the queue is what makes that refusal visible i
 `verified-by: bravebot_tui::state::a_stopped_prompt_stays_sent_where_others_are_waiting`
 `verified-by: bravebot_tui::state::a_stopped_prompt_comes_back_where_nothing_is_waiting`
 `verified-by: bravebot_tui::state::a_stopped_turn_that_took_an_interjection_leaves_both_prompts_where_they_are`
+`verified-by: bravebot_tui::sessions::accepted_corrections_survive_cancellation_storage_export_and_the_next_turn`
 `verified-by: bravebot_tui::app::stopping_a_turn_that_took_a_prompt_mid_turn_hands_nothing_back`
 `verified-by: bravebot_tui::state::a_waiting_prompt_is_in_the_history_already`
 `verified-by: bravebot_tui::state::there_is_nothing_to_queue_when_the_line_is_blank_or_nothing_is_running`
@@ -720,6 +728,7 @@ person back in the middle of a sentence they have not looked at since.
 `verified-by: bravebot_tui::state::a_command_comes_back_as_words_and_not_as_a_command`
 `verified-by: bravebot_tui::state::a_line_can_be_stashed_while_a_turn_runs`
 `verified-by: bravebot_tui::state::what_a_stashed_line_named_is_still_named_when_it_comes_back`
+`verified-by: bravebot_tui::sessions::cancelled_attachments_preserve_a_stashed_draft`
 `verified-by: bravebot_tui::render::a_stashed_line_is_named_under_the_box`
 `verified-by: bravebot_tui::render::the_row_goes_when_the_stashed_line_comes_back`
 `verified-by: bravebot_tui::render::a_stashed_paragraph_is_one_row`

@@ -154,6 +154,7 @@ size.
 `verified-by: bravebot_tui::loops::a_pasted_picture_goes_to_one_tick_and_the_settled_line_to_every_other`
 `verified-by: bravebot_tui::state::a_recalled_prompt_does_not_name_a_picture_that_went_with_the_line`
 `verified-by: bravebot_tui::state::settling_a_marker_for_the_history_does_not_take_the_picture_off_the_turn`
+`verified-by: bravebot_tui::sessions::cancelled_attachments_return_to_the_editor_and_the_next_request`
 `verified-by: bravebot_agent::turn::a_picture_pasted_into_a_question_reaches_the_model_with_it`
 `verified-by: bravebot_agent::manifest::a_picture_pasted_into_the_task_reaches_the_planner`
 
