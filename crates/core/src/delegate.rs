@@ -249,6 +249,12 @@ pub struct Definition {
     /// is intersected with the kind's, so a name the kind does not reach is a name this
     /// definition loaded without.
     tools: Option<Vec<String>>,
+    /// The skills the definition asked to be offered, where it asked for any.
+    ///
+    /// `None` is every skill the turn found. `Some` selects out of those by name, so a name the
+    /// turn did not find selects nothing: a skill is guidance a planner may load, and a list of
+    /// them chooses what a delegate is told about rather than anything it may do.
+    skills: Option<Vec<String>>,
     /// The standing part of what a delegate of this name is told about itself.
     ///
     /// Empty where the file had no body. Carried rather than read: the kernel never branches on
@@ -268,6 +274,7 @@ impl Definition {
             kind,
             model: None,
             tools: None,
+            skills: None,
             prompt: String::new(),
             origin: "built-in".to_string(),
         }
@@ -288,6 +295,7 @@ impl Definition {
             kind,
             model: None,
             tools,
+            skills: None,
             prompt: prompt.into(),
             origin: origin.into(),
         }
@@ -321,6 +329,17 @@ impl Definition {
     /// Request a particular model for this delegate.
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
         self.model = Some(model.into());
+        self
+    }
+
+    /// The skills it asked to be offered, before the turn's own catalogue narrows them.
+    pub fn skills(&self) -> Option<&[String]> {
+        self.skills.as_deref()
+    }
+
+    /// Offer this delegate only the skills of these names that the turn found.
+    pub fn with_skills(mut self, skills: Vec<String>) -> Self {
+        self.skills = Some(skills);
         self
     }
 
@@ -445,14 +464,18 @@ impl Definitions {
     /// [INSTR-4]: https://github.com/brave/bravebot/blob/main/docs/specs/instructions.md
     ///
     /// **Last word about what a name is for, and never about what it may do.** A replacement
-    /// takes over the description, the body and the model, and is cut down on the two fields
-    /// that decide what it may do: it is loaded as the narrower of the two kinds, and its
+    /// takes over the description, the body, the model and the skills, and is cut down on the two
+    /// fields that decide what it may do: it is loaded as the narrower of the two kinds, and its
     /// `tools:` line is met with the one it replaced. So a project cannot turn a `reader` a
     /// person wrote into a `worker`, and cannot hand back a tool that person's own `tools:` line
     /// had taken away. Widening it would make the checked-in file the author of authority rather
     /// than the person who vouched for the checkout, which is the sentence [`Definition`] is
     /// built around, and the vouch that let the file be read at all is a decision about the
     /// project rather than about this name.
+    ///
+    /// The skills are taken over rather than met because a skill is guidance, as the body is: a
+    /// list of them chooses which of the turn's own skills a delegate is told about, and the turn
+    /// found every one of those whichever file named them.
     ///
     /// **Both fields rather than a ceiling beside them**, so that what a definition holds is
     /// still read off the definition, and the trail a delegate leaves names the kind and the
@@ -596,6 +619,8 @@ pub struct DelegateSpec {
     /// The tools its definition named, where it named any, already without the ones its kind
     /// does not reach.
     tools: Option<Vec<String>>,
+    /// The skills its definition named, where it named any, not yet met with what the turn found.
+    skills: Option<Vec<String>>,
     /// The standing part of what it is told about itself, from the definition that selected it.
     prompt: String,
     task: String,
@@ -627,6 +652,7 @@ impl DelegateSpec {
             definition: definition.name().to_string(),
             model: definition.model().map(str::to_string),
             tools,
+            skills: definition.skills().map(<[String]>::to_vec),
             prompt: definition.prompt().to_string(),
             task: task.into(),
             capabilities,
@@ -654,6 +680,12 @@ impl DelegateSpec {
     /// what a caller reads is a decision the kernel took.
     pub fn tools(&self) -> Option<&[String]> {
         self.tools.as_deref()
+    }
+
+    /// The skills its definition named, where it named any, and `None` where every skill the
+    /// turn found is offered.
+    pub fn skills(&self) -> Option<&[String]> {
+        self.skills.as_deref()
     }
 
     /// The standing instruction its definition carried, empty where there was none.
@@ -1492,5 +1524,68 @@ mod tests {
             60,
         );
         assert_eq!(spec.model(), Some("haiku"));
+    }
+
+    /// A definition may name the skills its delegate is offered, and the spec carries the list
+    /// as written: which of them exist is the turn's to answer, since the turn found them.
+    #[test]
+    fn a_definition_may_name_skills_and_the_spec_carries_them() {
+        let named = |skills: Option<Vec<String>>| {
+            let definition =
+                Definition::from_file("reviewer", "reviews", Kind::Reader, None, "", "test");
+            let definition = match skills {
+                Some(skills) => definition.with_skills(skills),
+                None => definition,
+            };
+            DelegateSpec::new(
+                DelegateId::nth(1),
+                &definition,
+                "review something",
+                Kind::Reader.capabilities(),
+                60,
+            )
+        };
+
+        let listed = vec!["review-style".to_string(), "no-such-skill".to_string()];
+        assert_eq!(
+            named(Some(listed.clone())).skills(),
+            Some(listed.as_slice())
+        );
+        assert_eq!(named(Some(Vec::new())).skills(), Some([].as_slice()));
+        assert_eq!(named(None).skills(), None);
+    }
+
+    /// A skill is guidance, as the body is, so a replacement's own `skills:` line is the one in
+    /// force, and one that names none offers every skill the turn found. Nothing it names can be
+    /// something the turn did not find, so taking it over hands back no authority.
+    #[test]
+    fn a_later_definition_takes_over_the_skills_the_one_it_replaces_named() {
+        let mut definitions = Definitions::default();
+        definitions.insert(
+            Definition::from_file("reviewer", "global", Kind::Reader, None, "", "home")
+                .with_skills(vec!["review-style".to_string()]),
+        );
+        let admitted = definitions.insert(
+            Definition::from_file("reviewer", "project", Kind::Reader, None, "", "project")
+                .with_skills(vec!["commit-style".to_string()]),
+        );
+        assert_eq!(admitted, Admitted::AsWritten);
+        assert_eq!(
+            definitions.get("reviewer").expect("selectable").skills(),
+            Some(["commit-style".to_string()].as_slice())
+        );
+
+        definitions.insert(Definition::from_file(
+            "reviewer",
+            "again",
+            Kind::Reader,
+            None,
+            "",
+            "again",
+        ));
+        assert_eq!(
+            definitions.get("reviewer").expect("selectable").skills(),
+            None
+        );
     }
 }

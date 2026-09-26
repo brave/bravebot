@@ -1787,6 +1787,13 @@ delegate-model-needs-sign-in =
 # The endpoint substitutes a model it will not serve rather than refusing. The name it answered
 # with is left out, because a notice is the driver's own words.
 delegate-model-substituted = { $definition } asked for { $model } and was answered by a different model
+# A definition's skills line named skills this session did not find. The definition is its file's
+# path and the skills are that file's own words, joined with a comma, both from a vouched-for file.
+delegate-skills-not-found =
+    { $count ->
+        [one] { $definition } names a skill this session did not find, so its delegate is offered without it: { $skills }
+       *[other] { $definition } names skills this session did not find, so its delegate is offered without them: { $skills }
+    }
 
 # Advisory checks shown only in a Bravebot source checkout.
 doctor-development = development environment { $path }

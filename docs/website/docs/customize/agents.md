@@ -44,6 +44,7 @@ ask you questions and what it reads stays in the conversation.
 | `kind` | yes | `reader`, `checker` or `worker` |
 | `model` | no | the model this delegate runs on (`haiku`, `sonnet`, `opus`, or an explicit model identifier); absent or `inherit` means the spawning turn's |
 | `tools` | no | fewer tools than the kind's; absent means the kind's own |
+| `skills` | no | the [skills](skills.md) this delegate is offered, out of the ones the turn found; absent means all of them, and an empty line none |
 | body | no | the standing instruction |
 
 Keys other than these are ignored rather than refused, so a definition written for another agent
@@ -73,6 +74,16 @@ Name bravebot's own tools here. A definition ported from another agent usually n
 (`Read`, `Grep`, `Bash(...)`), and none of those is a tool here, so the delegate starts with no
 tools at all. It says which names it dropped, so the fix is to rename them.
 
+**`skills` chooses which of your skills the delegate is told about.** A delegate given one job needs
+the skill for that job, not the whole list the turn found. Name them the way `tools` names tools, on
+one line or as a list. The delegate is listed those and can load no others. A name only picks
+from skills the turn already found, so it cannot load a skill from a directory you did not vouch
+for. A name no skill goes by picks nothing, and the turn says so:
+
+```
+~/.bravebot/agents/rule-reviewer.md names a skill this session did not find, so its delegate is offered without it: rule-reveiw
+```
+
 A name may not open with `-`, may not contain a colon, which stays reserved for naming things
 inside a namespace, and may not be `reader`, `checker` or `worker`: those belong to the kinds, so
 that `reader` means the same thing in every project.
@@ -84,13 +95,13 @@ replaces yours, which is the same "most specific wins" the trust map uses for pa
 directory resolve by file name, so which is live is the same on every machine.
 
 **It wins about what the definition is for, and never about what it may do.** The project's file
-takes over the description, the body and the model. The kind is the narrower of the two, and the
-`tools` lists are met name by name, so a checkout you vouched for cannot turn a `reader` you wrote
-into a `worker`, and cannot hand back a tool your own `tools` line took away. Vouching for a
-project is a decision about the project, not one about a name you had already defined. The same
-holds for two files of one name in one directory, since which of those is live is only a matter of
-file name. Whatever the later file asked for and did not get is said, with the one that cut it
-down beside it:
+takes over the description, the body, the model and the skills. The kind is the narrower of the
+two, and the `tools` lists are met name by name, so a checkout you vouched for cannot turn a
+`reader` you wrote into a `worker`, and cannot hand back a tool your own `tools` line took away.
+Vouching for a project is a decision about the project, not one about a name you had already
+defined. The same holds for two files of one name in one directory, since which of those is live
+is only a matter of file name. Whatever the later file asked for and did not get is said, with the
+one that cut it down beside it:
 
 ```
 .bravebot/agents/rule-reviewer.md does not widen ~/.bravebot/agents/rule-reviewer.md: it names kind worker and is loaded as a reader

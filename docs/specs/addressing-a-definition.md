@@ -33,10 +33,10 @@ that file too, and nothing below relaxes any of it. The `/` surface every comman
 
 ## What exists today
 
-A definition is a file naming a kind, narrowing that kind's tools and optionally naming a model; it
-is resolved before every turn from the person's own directory and from a checkout they vouched for,
-and a source nobody vouched for is counted rather than named. All of that is
-[delegation.md](delegation.md)'s and holds whoever selects from the set.
+A definition is a file naming a kind, narrowing that kind's tools and optionally naming a model and
+the skills it is offered; it is resolved before every turn from the person's own directory and from
+a checkout they vouched for, and a source nobody vouched for is counted rather than named. All of
+that is [delegation.md](delegation.md)'s and holds whoever selects from the set.
 
 The interactive session selects from it with `/agent <name> <task>`. The interface resolves the set
 when the line is submitted, and a name matching nothing, a missing task or a model needing a sign-in
@@ -69,10 +69,11 @@ the three clauses standing in the way is about a run nobody is watching. That is
 <a id="ADDRESS-1"></a>
 ### ADDRESS-1: what a person addresses is a run of their own, and never a delegate
 
-A definition supplies three things to the run a person addresses: the prompt, the narrowing, and
-the model. It supplies nothing else, and in particular it does not make the run a delegate. The
-person is at the keyboard, so the run holds the screen, the confirmer, the task list and the way to
-ask a question, exactly as any turn of theirs does.
+A definition supplies four things to the run a person addresses: the prompt, the narrowing, the
+model, and the skills it names ([DELEGATE-23](delegation.md#DELEGATE-23)). It supplies nothing
+else, and in particular it does not make the run a delegate. The person is at the keyboard, so the
+run holds the screen, the confirmer, the task list and the way to ask a question, exactly as any
+turn of theirs does.
 
 **Why.** The clauses in [delegation.md](delegation.md) that would forbid this are each about a run
 nobody is looking at. A delegate puts no question to a person because its task came from a planner
@@ -333,7 +334,7 @@ the one that matched the name.
 
 - **Whether a definition may say that it is meant to be addressed.** Nothing above lets a file
   exclude itself from what a planner may select, or from what a person may address. A field saying
-  which is a fourth thing a definition means, and the argument for it is that a helper written for
+  which is a fifth thing a definition means, and the argument for it is that a helper written for
   one planner to call is noise in the list a person reads. The argument against is that the set is
   small and a person reading a name they do not recognise loses nothing by it.
 

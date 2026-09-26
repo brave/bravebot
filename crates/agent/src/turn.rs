@@ -2391,7 +2391,16 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     let (delegates, delegate_notices) =
         crate::agents::discover(&mut policy, workspace, task.home.as_deref());
     notices.extend(delegate_notices);
+    notices.extend(crate::agents::skills_not_found(&delegates, &catalogue));
     policy.install_delegates(delegates.clone());
+
+    // A delegate whose definition named skills is offered those of them this turn found, and is
+    // listed and can load no others. Taken after discovery rather than instead of it, so a name
+    // can only choose among skills that passed the same gates they pass for the turn.
+    let catalogue = match task.delegate.as_ref().and_then(|spec| spec.skills()) {
+        Some(named) => catalogue.only(named),
+        None => catalogue,
+    };
 
     // Nothing is started here: LSP-8 starts a server on the first question that needs one, and
     // LSP-5 asks the person before it does, so a session that never asks about a symbol never

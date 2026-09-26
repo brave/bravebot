@@ -282,6 +282,15 @@ impl Catalogue {
         self.entries.iter().find(|s| s.name == name)
     }
 
+    /// The skills of these names and no others, in the order they were found.
+    ///
+    /// A selection out of what was already found, so a name matching none of it adds nothing:
+    /// what this can leave a planner with is a shorter list of the same skills.
+    pub fn only(mut self, names: &[String]) -> Self {
+        self.entries.retain(|skill| names.contains(&skill.name));
+        self
+    }
+
     /// Add a skill, replacing one of the same name.
     ///
     /// Later wins, and discovery visits the home directory before the workspace, so a project's

@@ -33,13 +33,14 @@
 //! against it, which decides nothing an attacker steers only because nothing an attacker wrote
 //! ever entered the set.
 
-use crate::skills::Notice;
+use crate::skills::{Catalogue, Notice};
 use crate::workspace::Workspace;
 use bravebot_core::capability::Capability;
 use bravebot_core::delegate::{Admitted, Definition, Definitions, Kind, Narrowing};
 use bravebot_core::event::Sink;
 use bravebot_core::policy::Policy;
 use bravebot_core::value::Labelled;
+use bravebot_i18n::t;
 use std::path::Path;
 
 /// The directory holding definitions, inside the user's own directory and inside a project.
@@ -95,7 +96,7 @@ fn read_definition(text: &str, origin: &str) -> Read {
         name,
         description,
         kind,
-        declared.get("tools").map(|named| tools_in(named)),
+        declared.get("tools").map(|named| names_in(named)),
         crate::skills::body_after_frontmatter(text),
         origin,
     );
@@ -108,6 +109,10 @@ fn read_definition(text: &str, origin: &str) -> Read {
         .filter(|m| !m.is_empty() && !m.eq_ignore_ascii_case("inherit"))
     {
         definition = definition.with_model(model);
+    }
+
+    if let Some(skills) = declared.get("skills") {
+        definition = definition.with_skills(names_in(skills));
     }
 
     Read::Definition(Box::new(definition))
@@ -141,7 +146,7 @@ const FOLDS_TO_A_COLON: [char; 5] = [
     '\u{ff1a}', // FULLWIDTH COLON
 ];
 
-/// The tool names a `tools:` value lists.
+/// The names a `tools:` or a `skills:` value lists.
 ///
 /// A comma and a space both separate, so a YAML scalar (`read_file, list_files`) and a YAML
 /// sequence (`- read_file` on its own line) both arrive here as something this splits the same
@@ -150,9 +155,9 @@ const FOLDS_TO_A_COLON: [char; 5] = [
 /// match nothing.
 ///
 /// `*` is not special. It is a widening spelling, and a definition may not widen anything, so it
-/// is a name matching no tool like any other.
-fn tools_in(value: &str) -> Vec<String> {
-    let mut tools = Vec::new();
+/// is a name matching nothing like any other.
+fn names_in(value: &str) -> Vec<String> {
+    let mut names = Vec::new();
     let mut current = String::new();
     let mut depth = 0usize;
 
@@ -168,21 +173,21 @@ fn tools_in(value: &str) -> Vec<String> {
             }
             ',' | ' ' | '\t' | '\n' if depth == 0 => {
                 if !current.is_empty() {
-                    tools.push(std::mem::take(&mut current));
+                    names.push(std::mem::take(&mut current));
                 }
             }
             _ => current.push(c),
         }
     }
     if !current.is_empty() {
-        tools.push(current);
+        names.push(current);
     }
 
     // The bullet of a YAML sequence, which the one dialect joins into the value along with the
     // entry it introduces. Dropped here rather than in the parser, where a `-` opening a line is
     // not always a bullet.
-    tools.retain(|tool| tool != "-");
-    tools
+    names.retain(|name| name != "-");
+    names
 }
 
 /// Find the kinds of delegate available to this turn.
@@ -378,6 +383,35 @@ fn narrowed(origin: &str, narrowing: &Narrowing) -> String {
     )
 }
 
+/// What to tell whoever wrote a definition naming a skill this turn did not find.
+///
+/// Such a name selects nothing, as a `tools:` name that is not a tool does, and silence would
+/// leave a misspelt one reading to its author as a skill the delegate is offered. Named, because
+/// the name is the definition's own words and the definition came from a source somebody vouched
+/// for.
+pub fn skills_not_found(definitions: &Definitions, skills: &Catalogue) -> Vec<Notice> {
+    definitions
+        .iter()
+        .filter_map(|definition| {
+            let mut missing: Vec<&str> = Vec::new();
+            for name in definition.skills()? {
+                if skills.get(name).is_none() && !missing.contains(&name.as_str()) {
+                    missing.push(name);
+                }
+            }
+            if missing.is_empty() {
+                return None;
+            }
+            Some(Notice::from_message(t!(
+                delegate_skills_not_found,
+                definition = definition.origin(),
+                count = missing.len(),
+                skills = missing.join(", ")
+            )))
+        })
+        .collect()
+}
+
 /// A count of definitions, and the verb that agrees with it.
 fn counted(n: usize) -> (String, &'static str) {
     if n == 1 {
@@ -531,7 +565,7 @@ mod tests {
             "- read_file\n- list_files",
         ] {
             assert_eq!(
-                tools_in(value),
+                names_in(value),
                 ["read_file", "list_files"],
                 "'{value}' did not read as two tools"
             );
@@ -545,10 +579,10 @@ mod tests {
     #[test]
     fn a_parenthesised_argument_stays_one_token() {
         assert_eq!(
-            tools_in("read_file, Bash(git log --oneline), list_files"),
+            names_in("read_file, Bash(git log --oneline), list_files"),
             ["read_file", "Bash(git log --oneline)", "list_files"]
         );
-        assert_eq!(tools_in("Bash(a(b) c)"), ["Bash(a(b) c)"]);
+        assert_eq!(names_in("Bash(a(b) c)"), ["Bash(a(b) c)"]);
     }
 
     /// `*` is a widening spelling and a definition may not widen anything, so it is a name
@@ -619,6 +653,54 @@ mod tests {
 
         assert_eq!(definition.name(), "default-reader");
         assert_eq!(definition.model(), None);
+    }
+
+    /// `skills:` is read the way `tools:` is, so both spellings of a list arrive as the same
+    /// names. An empty line names none, which is a delegate offered no skills, and an absent one
+    /// is every skill the turn found: the two have to stay apart, or a definition written to be
+    /// told nothing would be told everything.
+    #[test]
+    fn a_definition_reads_the_skills_it_names() {
+        let skills_of = |line: &str| {
+            definition_of(&format!(
+                "---\nname: reviewer\ndescription: reviews\nkind: reader\n{line}---\n\nbody\n"
+            ))
+            .skills()
+            .map(<[String]>::to_vec)
+        };
+        let both = Some(vec!["review-style".to_string(), "commit-style".to_string()]);
+
+        assert_eq!(skills_of("skills: review-style, commit-style\n"), both);
+        assert_eq!(
+            skills_of("skills:\n  - review-style\n  - commit-style\n"),
+            both
+        );
+        assert_eq!(skills_of("skills:\n"), Some(Vec::new()));
+        assert_eq!(skills_of(""), None);
+    }
+
+    /// One misspelt name written twice is one name nothing found, so it is said once and in the
+    /// singular rather than as two skills.
+    #[test]
+    fn a_skill_named_twice_and_found_nowhere_is_said_once() {
+        let mut definitions = Definitions::default();
+        definitions.insert(definition_of(
+            "---\nname: reviewer\ndescription: reviews\nkind: reader\nskills: rule-reveiw, \
+             rule-reveiw\n---\n\nbody\n",
+        ));
+
+        let said: Vec<String> = skills_not_found(&definitions, &Catalogue::default())
+            .into_iter()
+            .map(|notice| notice.message)
+            .collect();
+
+        assert_eq!(
+            said,
+            [
+                "test names a skill this session did not find, so its delegate is offered without \
+              it: rule-reveiw"
+            ]
+        );
     }
 
     #[test]
