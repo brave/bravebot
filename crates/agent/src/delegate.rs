@@ -70,7 +70,7 @@ You cannot fetch a URL either. Anything you need from the network has to be in a
 already, so where a task turns on something only a fetch would settle, say so in the answer and \
 leave it to whoever asked.";
 
-/// What a delegate is told it may not do.
+/// What a run held to less than everything is told it may and may not do.
 ///
 /// Said although the tools are simply absent, and for the reason [`crate::processor`] gives for
 /// telling a processor what it is: a model that knows the shape of its situation does better work
@@ -85,7 +85,7 @@ leave it to whoever asked.";
 /// offered and could not make, and never told it cannot run one, which is the opposite of what
 /// saying this is for. So reading, running and writing are asked about separately and a set that
 /// is no kind's own is described as it is.
-fn limits(held: &CapabilitySet) -> String {
+fn holding(held: &CapabilitySet) -> Vec<String> {
     let reads = held.contains(&Capability::FileRead);
     let runs = held.contains(&Capability::ShellExec);
     let writes = held.contains(&Capability::FileWrite);
@@ -153,7 +153,13 @@ fn limits(held: &CapabilitySet) -> String {
         ),
         (true, true) => {}
     }
-    if writes {
+    sentences
+}
+
+/// What a delegate is told it holds, and that its writes are a person's to approve all the same.
+fn limits(held: &CapabilitySet) -> String {
+    let mut sentences = holding(held);
+    if held.contains(&Capability::FileWrite) {
         sentences.push(
             "Every write is still shown to a person for approval before it happens, exactly as \
              it would be for the agent that asked you, so say what you intend to change before \
@@ -195,6 +201,24 @@ pub fn prompt_for(held: &CapabilitySet, standing_instruction: &str) -> String {
         turn::PLANNING,
         standing(standing_instruction),
         limits(held)
+    )
+}
+
+/// What a turn a person addressed to a definition is told about it.
+///
+/// A sentence of the driver's naming the definition and saying who chose it, the body as a
+/// delegate's is carried, and then what the turn holds, said as a delegate is told it.
+///
+/// The last because the paragraphs ahead of all three are the planner's, written for a turn that
+/// can edit and run: a reader told only that the change is its answer spends its rounds reaching
+/// for tools it is not offered. The gates hold whether it reads this or not.
+pub(crate) fn addressed_prompt(addressed: &bravebot_core::delegate::Addressed) -> String {
+    format!(
+        "\n\nThe person addressed this turn to {}, a definition of theirs, so do what they ask \
+         in the way it describes.{}\n\n{}",
+        addressed.name(),
+        standing(addressed.prompt()),
+        holding(addressed.capabilities()).join(" ")
     )
 }
 

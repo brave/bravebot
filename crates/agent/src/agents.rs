@@ -210,6 +210,35 @@ pub fn discover<S: Sink>(
     (definitions, notices)
 }
 
+/// The set a turn starting now would resolve, for an interface about to start one.
+///
+/// Read the way a turn reads it, through a policy holding only the read, so a name a person
+/// typed is compared against the set the turn will compare it against. The turn resolves the set
+/// again and its kernel decides; this is what lets a miss be said before anything starts, where a
+/// turn refused later is drawn as a failure whose reason nobody is shown.
+pub fn resolved<S: Sink>(
+    workspace: &Workspace,
+    home: Option<&Path>,
+    trust: bravebot_core::trust::TrustStore,
+    sink: &mut S,
+) -> Definitions {
+    let mut routing = bravebot_core::policy::Routing::new();
+    routing.insert_trusted("agents", WORKSPACE_AGENTS);
+    let Ok(policy) = Policy::begin(
+        routing,
+        bravebot_core::policy::ReleasePlan::new(),
+        bravebot_core::capability::CapabilitySet::from_iter([Capability::FileRead]),
+        sink,
+    ) else {
+        return Definitions::default();
+    };
+    let mut policy = policy
+        .with_trust(trust)
+        .with_root(workspace.root())
+        .with_backslash_separates(crate::workspace::BACKSLASH_SEPARATES);
+    discover(&mut policy, workspace, home).0
+}
+
 /// Definitions from `~/.bravebot/agents`, labelled from where they sit.
 fn discover_home<S: Sink>(
     policy: &mut Policy<'_, S>,

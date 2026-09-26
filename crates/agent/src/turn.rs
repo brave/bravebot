@@ -739,6 +739,13 @@ pub struct Task {
     /// the prompt in front of it, and its round bound. Nothing widens it, because the kernel
     /// built it before this turn existed and there is no method here that could.
     pub delegate: Option<bravebot_core::delegate::DelegateSpec>,
+    /// The definition the person's line addressed, by the name they typed, where it addressed
+    /// one.
+    ///
+    /// Only a caller holding a line off the input box sets this (ADDRESS-3). It goes into the
+    /// routing table, and the kernel matches it against the set this turn resolves, so a name
+    /// matching nothing ends the turn before anything is sent.
+    pub addressing: Option<String>,
     /// The MCP servers this session reached at its start, each by the alias it was declared
     /// under.
     ///
@@ -847,6 +854,7 @@ impl Task {
             // file. Empty is a value the block can carry and this is not it.
             attribution: bravebot_config::Attribution::default(),
             delegate: None,
+            addressing: None,
             servers: Vec::new(),
             mcp: None,
         }
@@ -951,6 +959,12 @@ impl Task {
     /// record of remembered lines nor writes one, and every run asks.
     pub fn remembering(mut self, session: Option<String>) -> Self {
         self.remembering = session;
+        self
+    }
+
+    /// Address a definition by the name a person typed, or `None` for the session's own planner.
+    pub fn addressing(mut self, name: Option<String>) -> Self {
+        self.addressing = name;
         self
     }
 
@@ -1240,6 +1254,11 @@ pub struct Outcome {
     ///
     /// Absent for a turn. On failure the same value is on [`TurnError::Manifest`].
     pub attempt: Option<crate::manifest::Attempt>,
+    /// The definition this turn ran under, where the person's line addressed one.
+    ///
+    /// The kernel's match rather than anything the reply says about itself, so an interface
+    /// drawing the reply under a name is drawing the driver's word for it (ADDRESS-12).
+    pub addressed: Option<bravebot_core::delegate::Addressed>,
 }
 
 impl Outcome {
@@ -2300,6 +2319,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     for (index, attachment) in task.attachments.iter().enumerate() {
         routing.insert_trusted(format!("attachment_{index}"), attachment.path.clone());
     }
+    if let Some(name) = &task.addressing {
+        routing.insert_trusted(bravebot_core::delegate::ADDRESSED, name.clone());
+    }
 
     let capabilities = held(task);
 
@@ -2339,11 +2361,20 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     // one-shot run and the desktop bridge each take one turn and exit, and a session running a
     // line this program wrote keeps no loop over it. A wait asked for there is discarded, so the
     // turn is offered no way to ask for one rather than told a watch it cannot have now exists.
+    //
+    // A turn addressed to a definition arranges nothing later either, and arms no watch: what
+    // either starts is a turn of the session's planner, holding what the definition took away
+    // (ADDRESS-8).
     let scheduling = match task.tick {
+        _ if task.addressing.is_some() => tools::Scheduling::NoLaterLook,
         Some(tick) if tick.self_paced => tools::Scheduling::PacingALoop,
         Some(_) => tools::Scheduling::TheirInterval,
         None if task.looking_again => tools::Scheduling::ArrangingALook,
         None => tools::Scheduling::NoLaterLook,
+    };
+    let arming = match task.addressing {
+        Some(_) => crate::watch::Arming::Unavailable,
+        None => task.arming,
     };
 
     // Found once per turn and reused for every round. Per turn rather than per session so a
@@ -2403,6 +2434,66 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         }
     }
 
+    // The tool that says when this turn is asked again is offered to every turn except a tick the
+    // person timed, and describes a different job on either side of that. Nothing else changes.
+    //
+    // A delegate is offered what its capabilities reach, minus the six no delegate ever gets.
+    // Derived from the set rather than named per kind, so a tool cannot be offered to a run whose
+    // gates would refuse it on every call.
+    //
+    // A turn the person addressed to a definition is offered the planner's list less what the
+    // kernel narrowed away. Decided here, before the prompt is composed and before anything is
+    // sent, so a name matching nothing ends the turn having spent nothing (ADDRESS-5).
+    let (addressed, mut offered) = match &task.delegate {
+        Some(spec) => (None, tools::for_delegate(spec.capabilities(), spec.tools())),
+        None => {
+            let mut offered = tools::for_planner(scheduling, arming, &delegates);
+            let names: Vec<&str> = offered
+                .iter()
+                .map(|tool| tool.function.name.as_str())
+                .collect();
+            let addressed = match policy.address(&names) {
+                Ok(addressed) => addressed,
+                Err(denial) => {
+                    reporter.notice(t!(
+                        agent_no_such_definition,
+                        name = task.addressing.as_deref().unwrap_or_default(),
+                        names = delegates.names().join(", ")
+                    ));
+                    return Err(TurnError::Precommit(denial.to_string()));
+                }
+            };
+            if let Some(addressed) = &addressed {
+                offered.retain(|tool| addressed.tools().contains(&tool.function.name));
+            }
+            (addressed, offered)
+        }
+    };
+
+    // The definition's model where an addressed one named a model, and no turn at all where that
+    // model needs a sign-in this machine has not made. Running it on the session's model instead
+    // would spend past a boundary the definition drew (ADDRESS-11).
+    let definition_model = addressed
+        .as_ref()
+        .and_then(|addressed| addressed.model())
+        .map(|written| (written.to_string(), config.model_named(written)));
+    if let (Some(addressed), Some((written, resolved))) = (&addressed, &definition_model)
+        && crate::backend::Backend::needs_sign_in(config, resolved)
+    {
+        reporter.notice(t!(
+            delegate_model_needs_sign_in,
+            definition = addressed.name(),
+            model = written
+        ));
+        return Err(TurnError::Precommit(
+            "the addressed definition's model needs a sign-in first".to_string(),
+        ));
+    }
+    let turn_model = definition_model
+        .as_ref()
+        .map(|(_, resolved)| resolved.clone())
+        .or_else(|| task.model.clone());
+
     // A delegate's is its kind's, and the planner cannot write a word of it: what it chose was a
     // name out of an enumerated set, and the set is the driver's. What both prompts share is the
     // middle of them, which is `PLANNING`.
@@ -2422,9 +2513,18 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // `for_a_person` names tools only this side is offered, so it sits with the rest of what
         // only this side reads and ahead of `text`: the user's own instructions end that string and
         // have the last word over anything this program says about a machine.
+        //
+        // An addressed definition's words go after this program's and ahead of the user's own, for
+        // the same reason: its file says what this turn is for, and their instructions still have
+        // the last word.
         None => format!(
-            "{OPENING}{PLANNING}{FOR_A_PERSON}{}{}{mode}",
-            preamble.for_a_person, preamble.text
+            "{OPENING}{PLANNING}{FOR_A_PERSON}{}{}{}{mode}",
+            preamble.for_a_person,
+            addressed
+                .as_ref()
+                .map(crate::delegate::addressed_prompt)
+                .unwrap_or_default(),
+            preamble.text
         ),
     };
 
@@ -2582,7 +2682,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     // repeating it would say it again for every delegate the turn started.
     let mut discovered = match task.delegate.is_some() {
         true => None,
-        false => discover_subscription(config, egress, task.model.as_deref(), &mut reporter),
+        false => discover_subscription(config, egress, turn_model.as_deref(), &mut reporter),
     };
 
     // Lent for the same reason the confirmer, the reporter and the trail above are, and it is the
@@ -2599,9 +2699,10 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     // The lists of the servers this session reached, settled at the start of a turn somebody asked
     // for, a tick of their loop included, which is where there is a person to put a list to
     // (SERVERS-8). A delegate is offered no tool of theirs, and its capabilities name no server to
-    // call one with.
-    let mcp = match (&task.delegate, &task.mcp) {
-        (None, Some(session)) => {
+    // call one with. Nor is a turn addressed to a definition: no kind holds a server, so what the
+    // session and the kind both hold names none either (ADDRESS-7).
+    let mcp = match (&task.delegate, &addressed, &task.mcp) {
+        (None, None, Some(session)) => {
             let settled = session.settle(
                 &mut policy,
                 &mut crate::processor::Chat {
@@ -2626,17 +2727,6 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             Some((session.offer(), settled.usage))
         }
         _ => None,
-    };
-
-    // The tool that says when this turn is asked again is offered to every turn except a tick the
-    // person timed, and describes a different job on either side of that. Nothing else changes.
-    //
-    // A delegate is offered what its capabilities reach, minus the four no delegate ever gets.
-    // Derived from the set rather than named per kind, so a tool cannot be offered to a run whose
-    // gates would refuse it on every call.
-    let mut offered = match &task.delegate {
-        Some(spec) => tools::for_delegate(spec.capabilities(), spec.tools()),
-        None => tools::for_planner(scheduling, task.arming, &delegates),
     };
     if let Some((offer, _)) = &mcp {
         offered.extend(offer.functions());
@@ -2777,7 +2867,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         subscription: subscription
                             .as_mut()
                             .map(|s| s as &mut dyn bravebot_aichat::Subscription),
-                        model: task.model.as_deref(),
+                        model: turn_model.as_deref(),
                         cancel: Some(cancel),
                     };
                     // A summary is a model call, so it belongs in the inference figure for the same reason
@@ -2853,7 +2943,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                 let round = Phase::of_round(steps);
                 reporter.phase(round);
 
-                let model = task.model.as_deref().unwrap_or(&config.default_model);
+                let model = turn_model.as_deref().unwrap_or(&config.default_model);
                 let request = ChatRequest::new(model, conversation.with_system(&system))
                     .with_effort(task.effort);
                 let request = if may_call_tools {
@@ -3139,18 +3229,19 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 subscription: subscription
                                     .as_mut()
                                     .map(|s| s as &mut dyn bravebot_aichat::Subscription),
-                                model: task.model.as_deref(),
+                                model: turn_model.as_deref(),
                                 cancel: Some(cancel),
                             },
                             cancel,
                             scheduling,
-                            arming: task.arming,
+                            arming,
                             armed: &mut armed,
                             home: task.home.as_deref(),
                             profile: task.profile.as_deref(),
                             remembering: task.remembering.as_deref(),
                             // A delegate is offered no way to delegate, and dispatch refuses one anyway.
                             delegated: task.delegate.is_some(),
+                            confined_to: addressed.as_ref().map(|addressed| addressed.tools()),
                             servers: servers.as_deref_mut(),
                             mcp: mcp.as_ref().map(|(offer, _)| offer),
                             spawned: &mut spawned,
@@ -3193,6 +3284,8 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     // Started here rather than inside the call. A delegate outlives the call that asked
                     // for one: that call has already answered, and what is still here when the work
                     // finishes is the turn.
+                    // The turn's, not the session's: an addressed turn runs on its definition's.
+                    let spawning_model = turn_model.as_deref();
                     for (id, seeded) in std::mem::take(&mut output.delegate) {
                         let vouched = seeded.vouched.clone();
                         let handle = scope.spawn(move || {
@@ -3206,7 +3299,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 workspace,
                                 task.home.as_deref(),
                                 task.profile.as_deref(),
-                                task.model.as_deref(),
+                                spawning_model,
                                 task.permission_mode,
                                 task.auto_vetting,
                                 &task.attribution,
@@ -3822,6 +3915,25 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
 
     let completion = completion?;
 
+    // Compared the way a delegate's model is, because the endpoint substitutes rather than refuses
+    // a name it will not serve. The sentence names the definition and the model it named, and
+    // never the one that answered (ADDRESS-11).
+    if let (Some(addressed), Some((written, resolved))) = (&addressed, &definition_model) {
+        let asked = crate::backend::Backend::name_as_asked(config, resolved);
+        if crate::backend::Backend::reports_the_model_it_was_asked_for(config, resolved)
+            && asked != bravebot_config::DEFAULT_MODEL
+            && asked != completion.model
+        {
+            let said = t!(
+                delegate_model_substituted,
+                definition = addressed.name(),
+                model = written
+            );
+            reporter.notice(said.clone());
+            notices.push(crate::skills::Notice::from_message(said));
+        }
+    }
+
     // Released while the policy is open, so the audit trail records that the reply was
     // shown rather than leaving the release invisible.
     let proof = policy.authorise_display_release("assistant reply");
@@ -3887,6 +3999,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // it belongs to the moments around this turn as much as to the rounds inside it.
         notices: notices.into_iter().map(|n| n.message).collect(),
         attempt: None,
+        addressed,
     })
 }
 

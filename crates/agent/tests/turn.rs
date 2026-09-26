@@ -17383,6 +17383,571 @@ fn a_delegate_whose_model_needs_a_sign_in_does_not_run_and_says_so() {
     );
 }
 
+/// Writes one definition into a home directory's `agents/`, as a person keeps one.
+fn define(home: &Scratch, name: &str, fields: &str, body: &str) {
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join(format!("{name}.md")),
+        format!("---\nname: {name}\ndescription: Checks a diff.\n{fields}---\n\n{body}\n"),
+    )
+    .expect("write the definition");
+}
+
+/// A turn addressed to one of the person's definitions, with everything else as a session sets it.
+fn addressed(prompt: &str, home: &Scratch, name: &str) -> Task {
+    Task::new(prompt)
+        .with_home(Some(home.path.clone()))
+        .with_model(Some("custom-parent-model".to_string()))
+        .addressing(Some(name.to_string()))
+}
+
+/// ADDRESS-1, ADDRESS-7 and ADDRESS-8 as one request shows them. The definition supplies the
+/// prompt, the model and the narrowing, and nothing that makes the turn a delegate: a reader holds
+/// no write and no shell, and still holds the question, the task list and the spawn the person's
+/// own turn holds.
+#[test]
+fn an_addressed_turn_runs_under_its_definitions_prompt_model_and_kind() {
+    let scratch = Scratch::new("address-runs");
+    let home = Scratch::new("address-runs-home");
+    define(
+        &home,
+        "rule-reviewer",
+        "kind: reader\nmodel: haiku\n",
+        "REVIEW-BY-THE-RULES",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) =
+        serve_by_marker(vec![("ADDRESSED-TASK", vec![reply_with("reviewed")])]);
+    let config = config_for(&endpoint);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let outcome = turn::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &addressed("ADDRESSED-TASK", &home, "rule-reviewer"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        outcome.addressed.as_ref().map(|addressed| addressed.name()),
+        Some("rule-reviewer"),
+        "the outcome does not say which definition answered"
+    );
+    let requests: Vec<String> = received.try_iter().collect();
+    let [request] = requests.as_slice() else {
+        panic!("one request, for one round: {requests:?}");
+    };
+    let haiku = config.model_named("haiku");
+    assert!(
+        request.contains(&format!(r#""model":"{haiku}""#)),
+        "the turn did not run on the definition's model: {request}"
+    );
+    assert!(
+        request.contains("REVIEW-BY-THE-RULES")
+            && request.contains("addressed this turn to rule-reviewer"),
+        "the turn was not told what its definition is for: {request}"
+    );
+    let offered = |tool: &str| request.contains(&format!(r#""name":"{tool}""#));
+    for tool in [
+        "read_file",
+        "list_files",
+        "ask_user",
+        "todo_write",
+        "spawn_agent",
+    ] {
+        assert!(offered(tool), "a reader addressed by a person lost {tool}");
+    }
+    for tool in ["write_file", "edit_file", "run"] {
+        assert!(!offered(tool), "a reader was offered {tool}: {request}");
+    }
+}
+
+/// ADDRESS-8's exception. A later look and a watch each start a turn of the session's planner,
+/// which holds what the definition took away, so an addressed turn is offered neither and its
+/// other tools do not tell it to use them. The first turn is the control: the same line with
+/// nobody addressed is offered both.
+#[test]
+fn an_addressed_turn_arranges_no_later_look_and_arms_no_watch() {
+    let scratch = Scratch::new("address-no-later");
+    let home = Scratch::new("address-no-later-home");
+    define(&home, "rule-reviewer", "kind: reader\n", "REVIEW");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        ("UNADDRESSED-TASK", vec![reply_with("looked")]),
+        ("ADDRESSED-TASK", vec![reply_with("reviewed")]),
+    ]);
+    let config = config_for(&endpoint);
+    let free = bravebot_agent::watch::Arming::Allowed { free: 8 };
+    for task in [
+        Task::new("UNADDRESSED-TASK").with_home(Some(home.path.clone())),
+        addressed("ADDRESSED-TASK", &home, "rule-reviewer"),
+    ] {
+        turn::run_cancellable(
+            &config,
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &task.looking_again(true).arming(free),
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut RecordingSink::new(),
+            trusting_the_workspace(),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("turn runs");
+    }
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let [open, confined] = requests.as_slice() else {
+        panic!("one request a turn: {requests:?}");
+    };
+    let tools = ["schedule_next", "watch_file"];
+    for tool in tools {
+        assert!(
+            open.contains(&format!(r#""name":"{tool}""#)),
+            "the unaddressed turn was not offered {tool}, so this says nothing: {open}"
+        );
+    }
+    let leaked: Vec<&str> = tools
+        .into_iter()
+        .filter(|tool| confined.contains(tool))
+        .collect();
+    assert!(
+        leaked.is_empty(),
+        "an addressed turn was offered or told of {leaked:?}: {confined}"
+    );
+}
+
+/// ADDRESS-7 as the turn is told it. The planner's own paragraphs are written for a turn that
+/// can edit and run, so an addressed one is told what its definition left it, as a delegate is,
+/// and not the sentence about an agent that asked it, since a person did. The same line with
+/// nobody addressed is the control.
+#[test]
+fn an_addressed_turn_is_told_what_its_definition_left_it() {
+    let scratch = Scratch::new("address-told");
+    let home = Scratch::new("address-told-home");
+    define(
+        &home,
+        "rule-fixer",
+        "kind: worker\ntools: read_file, edit_file\n",
+        "FIX",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        ("UNADDRESSED-TASK", vec![reply_with("looked")]),
+        ("ADDRESSED-TASK", vec![reply_with("fixed")]),
+    ]);
+    let config = config_for(&endpoint);
+    for task in [
+        Task::new("UNADDRESSED-TASK").with_home(Some(home.path.clone())),
+        addressed("ADDRESSED-TASK", &home, "rule-fixer"),
+    ] {
+        turn::run_cancellable(
+            &config,
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &task,
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut RecordingSink::new(),
+            trusting_the_workspace(),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("turn runs");
+    }
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let [open, confined] = requests.as_slice() else {
+        panic!("one request a turn: {requests:?}");
+    };
+    let told = "You cannot run a program.";
+    assert!(
+        !open.contains(told),
+        "the unaddressed turn was told it cannot run, so this says nothing: {open}"
+    );
+    assert!(
+        confined.contains(told),
+        "an addressed turn holding no shell was not told so: {confined}"
+    );
+    assert!(
+        !confined.contains("the agent that asked you"),
+        "an addressed turn was told a delegate's sentence: {confined}"
+    );
+}
+
+/// ADDRESS-11 one level down. A delegate whose definition names no model inherits the model of
+/// the turn that spawned it, and an addressed turn's is its definition's, so the cost boundary
+/// the definition drew holds for what it delegates too.
+#[test]
+fn a_delegate_an_addressed_turn_spawns_inherits_the_definitions_model() {
+    let scratch = Scratch::new("address-delegate-model");
+    let home = Scratch::new("address-delegate-model-home");
+    define(
+        &home,
+        "rule-reviewer",
+        "kind: reader\nmodel: haiku\n",
+        "REVIEW",
+    );
+    define(&home, "plain-reader", "kind: reader\n", "READ-PLAIN");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "ADDRESSED-TASK",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"plain-reader","task":"CHECK-ONE-LEVEL-DOWN"}"#,
+                ),
+                reply_with("nothing to add while it works"),
+                reply_with("reviewed"),
+            ],
+        ),
+        ("CHECK-ONE-LEVEL-DOWN", vec![reply_with("clear")]),
+    ]);
+    let config = config_for(&endpoint);
+
+    turn::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &addressed("ADDRESSED-TASK", &home, "rule-reviewer"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let delegate = requests
+        .iter()
+        .find(|body| body.contains("CHECK-ONE-LEVEL-DOWN") && !body.contains("ADDRESSED-TASK"))
+        .expect("the delegate sent a request");
+    let haiku = config.model_named("haiku");
+    assert!(
+        delegate.contains(&format!(r#""model":"{haiku}""#)),
+        "the delegate did not inherit the addressed definition's model: {delegate}"
+    );
+}
+
+/// ADDRESS-9 and ADDRESS-10. The addressed exchange is the session's own, so the next turn is
+/// answered from a context holding it whole rather than a report of it. And the definition lasted
+/// the one turn: the next is the session's planner on the session's model, with no word of the body.
+#[test]
+fn the_turn_after_an_addressed_one_holds_the_exchange_and_not_the_definition() {
+    let scratch = Scratch::new("address-then-not");
+    let home = Scratch::new("address-then-not-home");
+    define(
+        &home,
+        "rule-reviewer",
+        "kind: reader\nmodel: haiku\n",
+        "REVIEW-BY-THE-RULES",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        reply_with("THE-DIFF-HAS-TWO-FAULTS"),
+        reply_with("fixed"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        trusting_the_workspace(),
+        addressed("ADDRESSED-TASK", &home, "rule-reviewer"),
+    )
+    .expect("the addressed turn runs");
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        trusting_the_workspace(),
+        Task::new("NEXT-TASK")
+            .with_home(Some(home.path.clone()))
+            .with_model(Some("custom-parent-model".to_string())),
+    )
+    .expect("the next turn runs");
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let [_, next] = requests.as_slice() else {
+        panic!("one request a turn: {requests:?}");
+    };
+    assert!(
+        next.contains("ADDRESSED-TASK") && next.contains("THE-DIFF-HAS-TWO-FAULTS"),
+        "the next turn was not answered from the addressed exchange: {next}"
+    );
+    assert!(
+        !next.contains("REVIEW-BY-THE-RULES") && !next.contains("addressed this turn to"),
+        "the definition outlived the turn it was addressed in: {next}"
+    );
+    assert!(
+        next.contains(r#""model":"custom-parent-model""#),
+        "the next turn stayed on the definition's model: {next}"
+    );
+}
+
+/// ADDRESS-5. A name matching nothing this session resolved spends nothing and says what it did
+/// resolve, and a definition in a checkout nobody vouched for is not reached by naming it: it
+/// never entered the set, so it is neither run nor listed.
+#[test]
+fn a_name_this_session_did_not_resolve_sends_nothing_and_lists_what_it_did() {
+    let scratch = Scratch::new("address-miss");
+    let home = Scratch::new("address-miss-home");
+    define(&home, "rule-reviewer", "kind: reader\n", "REVIEW");
+    let project = scratch.path.join(".bravebot").join("agents");
+    std::fs::create_dir_all(&project).expect("create the project's definitions");
+    std::fs::write(
+        project.join("auditor.md"),
+        "---\nname: auditor\ndescription: Audits.\nkind: worker\n---\n\nAUDIT\n",
+    )
+    .expect("write the project's definition");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) =
+        serve_by_marker(vec![("ADDRESSED-TASK", vec![reply_with("audited")])]);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let ran = turn::run_cancellable(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &addressed("ADDRESSED-TASK", &home, "auditor"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    );
+
+    assert!(
+        matches!(ran, Err(bravebot_agent::turn::TurnError::Precommit(_))),
+        "a name matching nothing ran a turn"
+    );
+    assert_eq!(
+        received.try_iter().count(),
+        0,
+        "a name matching nothing spent a request"
+    );
+    let said = "there is no definition called auditor; this session resolved reader, checker, \
+                worker, rule-reviewer";
+    assert!(
+        reporter.notices.iter().any(|notice| notice == said),
+        "the person was not told what they could have typed: {:?}",
+        reporter.notices
+    );
+}
+
+/// ADDRESS-11. A definition's model needing a sign-in is not swapped for the session's, which
+/// would spend past a boundary the definition drew: nothing is sent and the person is told which
+/// definition asked for which model.
+#[test]
+fn an_addressed_definition_whose_model_needs_a_sign_in_sends_nothing_and_says_so() {
+    let scratch = Scratch::new("address-sign-in");
+    let home = Scratch::new("address-sign-in-home");
+    define(
+        &home,
+        "bedrock-reviewer",
+        "kind: reader\nmodel: haiku\n",
+        "REVIEW",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) =
+        serve_by_marker(vec![("ADDRESSED-TASK", vec![reply_with("reviewed")])]);
+    let config = Config::from_lookup(|key| match key {
+        "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+        "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+        "BRAVE_AI_CHAT_ENDPOINT" => Some(endpoint.clone()),
+        bravebot_config::env_var::USE_BEDROCK => Some("1".into()),
+        bravebot_config::env_var::AWS_REGION => Some("us-west-2".into()),
+        bravebot_config::env_var::BEDROCK_HAIKU_MODEL => Some("haiku-arn".into()),
+        // A profile no machine has, so no session exists whoever runs this.
+        bravebot_config::env_var::AWS_PROFILE => Some("a-profile-no-machine-has".into()),
+        _ => None,
+    })
+    .expect("config");
+    assert!(
+        bravebot_agent::backend::Backend::needs_sign_in(&config, &config.model_named("haiku")),
+        "the definition's model would not have needed a sign-in"
+    );
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let ran = turn::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &addressed("ADDRESSED-TASK", &home, "bedrock-reviewer"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    );
+
+    assert!(
+        matches!(ran, Err(bravebot_agent::turn::TurnError::Precommit(_))),
+        "the definition ran on some other model"
+    );
+    assert_eq!(
+        received.try_iter().count(),
+        0,
+        "a request was sent on the session's model instead"
+    );
+    let said = "bedrock-reviewer asked for haiku, which needs a sign-in first, so it did not run";
+    assert!(
+        reporter.notices.iter().any(|notice| notice == said),
+        "nobody watching was told why nothing ran: {:?}",
+        reporter.notices
+    );
+}
+
+/// ADDRESS-7's second term, held where the call arrives rather than only in the offer. A worker
+/// naming `edit_file` holds the capability to write, so the only thing standing between a model
+/// that names `write_file` anyway and the file is the list its definition wrote. The first turn is
+/// the control: the same kind with no list writes the file, so the refusal is the list's.
+#[test]
+fn a_tool_an_addressed_definition_left_out_is_refused_when_the_model_calls_it() {
+    let scratch = Scratch::new("address-confined");
+    let home = Scratch::new("address-confined-home");
+    define(&home, "writer", "kind: worker\n", "WRITE");
+    define(
+        &home,
+        "confined",
+        "kind: worker\ntools: read_file, edit_file\n",
+        "READ",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "WRITE-OPEN",
+            vec![
+                tool_request("write_file", r#"{"path":"open.txt","contents":"written"}"#),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "WRITE-CONFINED",
+            vec![
+                tool_request(
+                    "write_file",
+                    r#"{"path":"confined.txt","contents":"written"}"#,
+                ),
+                reply_with("done"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    for (prompt, name) in [("WRITE-OPEN", "writer"), ("WRITE-CONFINED", "confined")] {
+        turn::run_cancellable(
+            &config,
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &addressed(prompt, &home, name),
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut RecordingSink::new(),
+            trusting_the_workspace(),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("turn runs");
+    }
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("open.txt")).ok(),
+        Some("written".to_string()),
+        "a worker with no list could not write, so this says nothing about the list"
+    );
+    assert!(
+        !scratch.path.join("confined.txt").exists(),
+        "a definition naming only read_file wrote a file"
+    );
+    let requests: Vec<String> = received.try_iter().collect();
+    assert!(
+        requests
+            .iter()
+            .any(|body| body.contains("WRITE-CONFINED")
+                && body.contains("no such tool 'write_file'")),
+        "the model was not told the tool is not there: {requests:?}"
+    );
+}
+
+/// ADDRESS-11's second half. The endpoint substitutes a model it will not serve rather than
+/// refusing, so a definition naming one is told so, by the definition's name and the model it
+/// named. The first turn is the control: a reply from the model that was asked for says nothing.
+#[test]
+fn an_addressed_definition_answered_by_another_model_says_so() {
+    let scratch = Scratch::new("address-substituted");
+    let home = Scratch::new("address-substituted-home");
+    define(
+        &home,
+        "haiku-reviewer",
+        "kind: reader\nmodel: haiku\n",
+        "REVIEW",
+    );
+    define(
+        &home,
+        "typo-reviewer",
+        "kind: reader\nmodel: a-model-the-service-does-not-hold\n",
+        "REVIEW",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let haiku = config_for("http://unused.invalid").model_named("haiku");
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "ON-HAIKU",
+            vec![reply_with("clear").replace("test-model", &haiku)],
+        ),
+        ("ON-TYPO", vec![reply_with("clear")]),
+    ]);
+    let config = config_for(&endpoint);
+
+    let mut said = Vec::new();
+    for (prompt, name) in [("ON-HAIKU", "haiku-reviewer"), ("ON-TYPO", "typo-reviewer")] {
+        let mut reporter = bravebot_agent::report::RecordingReporter::default();
+        let outcome = turn::run_cancellable(
+            &config,
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &addressed(prompt, &home, name),
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut reporter,
+            &mut RecordingSink::new(),
+            trusting_the_workspace(),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("turn runs");
+        let about_models = |notices: &[String]| -> Vec<String> {
+            notices
+                .iter()
+                .filter(|notice| notice.contains("asked for"))
+                .cloned()
+                .collect()
+        };
+        assert_eq!(
+            about_models(&reporter.notices),
+            about_models(&outcome.notices),
+            "the turn's account and the screen disagree"
+        );
+        said.extend(about_models(&reporter.notices));
+    }
+
+    assert_eq!(
+        said,
+        vec![
+            "typo-reviewer asked for a-model-the-service-does-not-hold and was answered by a \
+             different model"
+                .to_string()
+        ],
+        "what the person watching was told"
+    );
+}
+
 /// The figure a settings file named is the one a run is cut to, rather than the one compiled in.
 /// Only a turn shows this: the key can parse, `doctor` can report it, and the output still be cut
 /// where it always was, because the cap is spent three call sites away from where it is read.

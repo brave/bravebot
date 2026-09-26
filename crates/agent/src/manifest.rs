@@ -1184,6 +1184,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
         answer: reply.clone(),
         reply,
         attempt: Some(attempt.clone()),
+        addressed: None,
         model,
         steps: plan.len(),
         clean: planning_was_clean && policy.finish(),

@@ -229,6 +229,13 @@ pub struct Entry {
     /// once, so lines interleaved with the turn's could not be read in either direction: whose
     /// each one was would be a guess from the words, and the words are prose a model wrote.
     pub delegate: Option<Delegate>,
+    /// The definition a person addressed the turn this reply ends, for a [`Speaker::Assistant`]
+    /// entry.
+    ///
+    /// The name the driver matched against the set it resolved, never anything read out of the
+    /// reply: which definition answered is a fact the driver holds, and the reply is model output
+    /// that could claim to be any of them (ADDRESS-12).
+    pub answered_as: Option<String>,
 }
 
 impl Entry {
@@ -243,6 +250,7 @@ impl Entry {
             returned: None,
             activity: None,
             delegate: None,
+            answered_as: None,
         }
     }
 
@@ -257,6 +265,7 @@ impl Entry {
             returned: None,
             activity: None,
             delegate: None,
+            answered_as: None,
         }
     }
 
@@ -286,6 +295,7 @@ impl Entry {
             returned: None,
             activity: None,
             delegate: None,
+            answered_as: None,
         }
     }
 
@@ -301,6 +311,7 @@ impl Entry {
             returned: None,
             activity: None,
             delegate: None,
+            answered_as: None,
         }
     }
 
@@ -316,6 +327,7 @@ impl Entry {
             returned: None,
             activity: None,
             delegate: None,
+            answered_as: None,
         }
     }
 
@@ -334,6 +346,7 @@ impl Entry {
             returned: None,
             activity: Some(activity),
             delegate: None,
+            answered_as: None,
         }
     }
 
@@ -354,12 +367,19 @@ impl Entry {
             returned: None,
             activity: None,
             delegate: None,
+            answered_as: None,
         }
     }
 
     /// Attach the task list the turn finished with.
     pub fn with_todos(mut self, todos: Vec<bravebot_core::todo::Row>) -> Self {
         self.todos = todos;
+        self
+    }
+
+    /// Say which definition answered, where a person addressed one.
+    pub fn answered_as(mut self, name: Option<String>) -> Self {
+        self.answered_as = name;
         self
     }
 }
@@ -887,6 +907,18 @@ pub struct TurnStart {
     pub transcript_len: usize,
 }
 
+/// The definition a person's `/agent` line named, and the model its turn will ask for.
+///
+/// The model travels with the name because the session's is the wrong one for everything asked
+/// about the turn before and after it: a sign-in for a model nothing will use, and a reply from the
+/// definition's model read as the session's substituted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Addressed {
+    pub name: String,
+    /// Resolved as the driver resolves it, or `None` where the definition names no model.
+    pub model: Option<String>,
+}
+
 /// What the rewind points are holding in memory, which is what the budget is spent on.
 fn held_bytes(points: &[RewindPoint]) -> usize {
     points
@@ -1272,6 +1304,12 @@ pub struct Session {
     /// conversation somebody resumed to read and keep working it, with nothing in the transcript
     /// to say why.
     goal: Option<crate::goals::Running>,
+    /// The definition the turn about to start was addressed to, from a `/agent` line a person typed.
+    ///
+    /// Taken by the one turn it was set for, so the next line is the session's own planner again
+    /// with no mode to leave (ADDRESS-10). Private, because only [`Session::address`] may set it:
+    /// that is what keeps a loop's tick, a goal or a watch from ever carrying one (ADDRESS-3).
+    addressing: Option<Addressed>,
     /// The standing watches this session holds, where a turn armed any.
     ///
     /// Private for the reason the loop and the goal are: a watch is looked at, fires, and has the
@@ -1493,6 +1531,7 @@ impl Session {
             looping: None,
             watches: watch::Watches::new(),
             goal: None,
+            addressing: None,
             rewind_points: Vec::new(),
             turn_start: TurnStart::default(),
             pending: crate::remote_confirm::Interjections::new(),
@@ -5783,6 +5822,27 @@ impl Session {
         self.dispatch_tick()
     }
 
+    /// Start a turn on a person's task, addressed to the definition they named.
+    ///
+    /// The task is the prompt and goes into the transcript and the conversation like any other,
+    /// because the exchange is the session's own rather than a delegate's to report on
+    /// (ADDRESS-9). Only the name is held apart, for the one turn that takes it.
+    pub fn address(
+        &mut self,
+        addressed: Addressed,
+        task: &str,
+        pasted: Vec<AttachedImage>,
+        attached: Vec<Attached>,
+    ) -> String {
+        self.addressing = Some(addressed);
+        self.begin_turn(task.to_string(), (attached, pasted), Vec::new())
+    }
+
+    /// The definition the turn starting now was addressed to, taken so no later turn inherits it.
+    pub fn take_addressing(&mut self) -> Option<Addressed> {
+        self.addressing.take()
+    }
+
     /// Start looking again because the turn that just ended asked to, repeating the person's line.
     ///
     /// Nothing is sent now. The turn that asked has just taken the look it is reporting, so the
@@ -6366,12 +6426,27 @@ impl Session {
         trail: Vec<bravebot_session::audit::TrailLine>,
         tokens: u64,
     ) {
+        self.complete_as(reply, trail, tokens, None);
+    }
+
+    /// Record a completed turn, what it cost, and which definition answered where a person
+    /// addressed one.
+    pub fn complete_as(
+        &mut self,
+        reply: impl Into<String>,
+        trail: Vec<bravebot_session::audit::TrailLine>,
+        tokens: u64,
+        answered_as: Option<String>,
+    ) {
         // The list moves onto the entry rather than being dropped, so what the turn set out to do
         // stays in the scrollback next to the answer it produced.
         let todos = std::mem::take(&mut self.todos);
         let reply = reply.into();
-        self.transcript
-            .push(Entry::assistant(crate::reasoning::spoken(&reply), trail).with_todos(todos));
+        self.transcript.push(
+            Entry::assistant(crate::reasoning::spoken(&reply), trail)
+                .with_todos(todos)
+                .answered_as(answered_as),
+        );
         self.status = Status::Idle;
         self.finish_turn(tokens, bravebot_agent::Ending::Done);
         // Accumulated across the session: the figure answers "what has this cost me", which is

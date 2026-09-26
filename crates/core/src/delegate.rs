@@ -719,6 +719,71 @@ impl DelegateSpec {
     }
 }
 
+/// The routing field a person's line names a definition under, where the line addressed one.
+///
+/// A routing field because routing is fixed before a turn observes anything, from what the
+/// person submitted, and a keystroke is the only thing that may name a definition to address
+/// (ADDRESS-3). No tool and no reply writes to the routing table.
+pub const ADDRESSED: &str = "addressed";
+
+/// What the kernel fixed about a turn a person addressed to a definition, before it ran.
+///
+/// Only [`crate::policy::Policy::address`] constructs one. It describes the person's own turn
+/// working under a definition's prompt, narrowing and model, and not a second run: there is no
+/// id, no task and no bound here, because the turn keeps its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Addressed {
+    name: String,
+    kind: Kind,
+    model: Option<String>,
+    prompt: String,
+    held: CapabilitySet,
+    tools: Vec<String>,
+}
+
+impl Addressed {
+    pub(crate) fn new(definition: &Definition, held: CapabilitySet, tools: Vec<String>) -> Self {
+        Self {
+            name: definition.name().to_string(),
+            kind: definition.kind(),
+            model: definition.model().map(str::to_string),
+            prompt: definition.prompt().to_string(),
+            held,
+            tools,
+        }
+    }
+
+    /// What this turn holds once the definition has narrowed it.
+    pub fn capabilities(&self) -> &CapabilitySet {
+        &self.held
+    }
+
+    /// The name the kernel matched, which is what the reply is drawn under (ADDRESS-12).
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn kind(&self) -> Kind {
+        self.kind
+    }
+
+    /// The model the definition named, where it named one.
+    pub fn model(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
+
+    /// The definition's standing instruction, empty where its file had no body.
+    pub fn prompt(&self) -> &str {
+        &self.prompt
+    }
+
+    /// Every tool this turn is offered, already narrowed by what it holds and by what the
+    /// definition named.
+    pub fn tools(&self) -> &[String] {
+        &self.tools
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

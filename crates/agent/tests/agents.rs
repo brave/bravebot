@@ -445,3 +445,53 @@ fn a_file_that_claims_to_be_a_definition_and_is_not_says_so() {
         notices[0].message
     );
 }
+
+/// ADDRESS-5 from the interface's side. A name a person types is compared, before anything
+/// starts, against the set the interface resolved, so that set has to be the one a turn would
+/// resolve: a definition the turn would run is found, and one in a checkout nobody vouched for is
+/// missing from both. The first case is the control, since a set missing everything would pass
+/// the second.
+#[test]
+fn the_set_an_interface_resolves_is_the_one_a_turn_would() {
+    let scratch = Scratch::new("resolved");
+    let home = scratch.home();
+    let project = scratch.workspace();
+    write_definition(
+        &home,
+        "rule-reviewer",
+        &frontmatter("rule-reviewer", "checks a diff", "reader"),
+        "read the diff",
+    );
+    write_definition(
+        &project.join(".bravebot"),
+        "auditor",
+        &frontmatter("auditor", "audits", "worker"),
+        "audit it",
+    );
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    for trusted in [&["."][..], &[]] {
+        let mut sink = RecordingSink::new();
+        let (turn, _) = {
+            let mut policy = policy(&mut sink, trusted);
+            agents::discover(&mut policy, &workspace, Some(&home))
+        };
+        let mut store = TrustStore::new("/work");
+        for path in trusted {
+            store.trust(path);
+        }
+        let interface = agents::resolved(&workspace, Some(&home), store, &mut sink);
+
+        assert_eq!(
+            interface.names(),
+            turn.names(),
+            "the interface and the turn resolved different sets, trusting {trusted:?}"
+        );
+        let expected: &[&str] = if trusted.is_empty() {
+            &["rule-reviewer"]
+        } else {
+            &["rule-reviewer", "auditor"]
+        };
+        assert_eq!(from_disk(&interface), expected, "trusting {trusted:?}");
+    }
+}

@@ -1205,6 +1205,7 @@ command-loop = Renvoyer une consigne encore et encore, dire ce qui se répète, 
 command-goal = Continuer à travailler jusqu'à ce qu'une condition que vous fixez soit jugée remplie
 command-watch = Lister les fichiers que cette session surveille, et en arrêter un par son numéro
 command-manifest = Planifier une tâche en entier, vous montrer le plan, puis l'exécuter sans rien replanifier
+command-agent = Exécuter l'une de vos définitions sur une tâche, par son nom
 command-export = Exporter la transcription de la session vers un fichier markdown
 command-undo = Rembobiner d'un tour et restaurer les fichiers qu'il a écrits
 command-rewind = Lister les tours qu'un rembobinage peut atteindre, ou reculer d'autant
@@ -1507,6 +1508,16 @@ manifest-began = la tâche entière est planifiée d'abord ; la session attend i
 manifest-ended-unexpectedly = l'exécution s'est terminée de façon inattendue
 manifest-failed = l'exécution s'est arrêtée : { $problem }
 manifest-recorded = enregistré sous { $id } ; à relire avec bravebot --resume { $id }
+
+# Ce que la session dit d'une définition qu'une personne a désignée avec /agent. Chaque nom ici a
+# été résolu par la session depuis une source que quelqu'un a approuvée ; il peut donc être affiché,
+# mais n'est jamais proposé en complétion.
+agent-needs-a-task = /agent { $name } prend la tâche à faire, comme /agent { $name } relis le diff
+agent-resolved = cette session a résolu { $names } ; désignez-en une avec /agent <nom> <tâche>
+agent-no-such-definition = aucune définition ne s'appelle { $name } ; cette session a résolu { $names }
+# Affiché au-dessus d'une réponse d'un tour désigné. Le nom est celui que le pilote a trouvé, jamais
+# ce que la réponse dit d'elle-même.
+agent-answered = { $name } a répondu
 
 
 ## L'écran d'accueil

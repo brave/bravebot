@@ -30,6 +30,11 @@ delegate is told about itself is the body of your file. Without one, the standin
 instruction, the part that is the same every run, has nowhere to live: it has to be written into
 the task afresh every time.
 
+You can also run one yourself, without the planner choosing it:
+[`/agent rule-reviewer check this branch`](../reference/commands.md#agent-name-task). That is a turn
+of your own under the definition's body, model and narrowing rather than a delegate, so it can still
+ask you questions and what it reads stays in the conversation.
+
 ## The keys
 
 | Key | Required | Meaning |

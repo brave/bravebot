@@ -129,6 +129,7 @@ fn oversized_undo(ending: &str, resumed: bool) {
         Line {
             text: "copy",
             wrote: Wrote::ThePerson,
+            addressed: None,
         },
         FinishedTurn {
             outcome: result,

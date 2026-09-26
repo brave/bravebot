@@ -226,6 +226,11 @@ nothing about either came from a directory. A skill somebody installs still has 
 whatever it is called, and installing one called `loop` shadows the built-in body without
 touching this table.
 
+`/agent` is the same answer for definitions. The word is a literal in this table, and the
+definition it runs is an argument on the line, compared against the set the session resolved and
+never added here, however many definitions a machine holds
+([addressing-a-definition.md](addressing-a-definition.md)).
+
 `verified-by: by-construction (the table is an array of string literals fixed at compile time, and no directory listing, configuration value or turn output reaches it)`
 
 
