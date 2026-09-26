@@ -823,7 +823,20 @@ pub fn available(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<To
         ),
         Tool::function(
             "spawn_agent",
-            "Hand a whole sub-task to a second agent and get back one report. It has its own              context, so everything it reads stays with it and only what it says at the end              reaches you. That is what this is for: running a build reads the whole log, and              asking a delegate to run the build tells you what failed. Use it when finding              something out would cost you more context than the answer is worth, or when a              sub-task is separable enough to describe in a paragraph. It cannot ask the user              anything and it cannot spawn one of its own, so give it everything it needs in the              task. Its writes and its runs are still shown to the user for approval, so this              saves you context and never an approval. Do not use it for something one read would              answer: it is a whole second agent and costs like one.",
+            // No numbers for the depth or the ceiling, which delegates read here too: a model
+            // told how many it has left spends them.
+            "Hand a whole sub-task to a second agent and get back one report. It has its own \
+             context, so everything it reads stays with it and only what it says at the end \
+             reaches you. That is what this is for: running a build reads the whole log, and \
+             asking a delegate to run the build tells you what failed. Use it when finding \
+             something out would cost you more context than the answer is worth, or when a \
+             sub-task is separable enough to describe in a paragraph. It cannot ask the user \
+             anything, so give it everything it needs in the task. It may hand parts of that \
+             task to delegates of its own, though not without end: the tree stops a few levels \
+             down, and one turn starts only so many however they are arranged. Its writes and \
+             its runs are still shown to the user for approval, so this saves you context and \
+             never an approval. Do not use it for something one read would answer: it is a \
+             whole second agent and costs like one.",
             json!({
                 "type": "object",
                 "properties": {
@@ -965,11 +978,8 @@ pub fn available(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<To
 /// offered to a run whose gates refuse it on every call is a tool the model has to be told to
 /// ignore.
 ///
-/// Six are left out by name, each for its own reason:
+/// Five are left out by name, each for its own reason:
 ///
-/// - `spawn_agent`, because a delegate cannot delegate. The bound on a tree of them is the
-///   product of the bounds, which is a number nobody chose, and a person approving a write at
-///   the third level has no way to see which task it belongs to.
 /// - `ask_user`, because a delegate's task came from a planner rather than from the person, so a
 ///   question about it asks somebody to arbitrate something they never set up.
 /// - `todo_write`, because the list on the screen belongs to the turn the person is watching, and
@@ -989,17 +999,25 @@ pub fn available(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<To
 ///   person shown the host would be answering for a task they never set. The capability being
 ///   held is what makes this one a name and not a capability check: no gate would refuse it.
 ///
+/// `spawn_agent` is offered by where the delegate sits rather than by what it is: `delegating` is
+/// the kinds it may start, and `None` is a delegate already [`MAX_DEPTH`] below the turn. The
+/// kernel refuses one that asks there anyway, so this only spares the model a tool that cannot
+/// work.
+///
 /// Two terms rather than one, and they are visible as two: the capability is the gate, and the
 /// definition's list is a confinement inside it that can only ever remove a name. `None` is a
 /// definition that named no tools, which is the kind's own set and is what every delegate had
 /// before definitions existed.
+///
+/// [`MAX_DEPTH`]: bravebot_core::delegate::MAX_DEPTH
 pub fn for_delegate(
     capabilities: &bravebot_core::capability::CapabilitySet,
     confined_to: Option<&[String]>,
+    delegating: Option<&bravebot_core::delegate::Definitions>,
 ) -> Vec<Tool> {
     use bravebot_core::delegate::{NEVER_DELEGATED, gating_capability};
 
-    available(
+    let mut tools: Vec<Tool> = available(
         Scheduling::ArrangingALook,
         crate::watch::Arming::Unavailable,
     )
@@ -1007,6 +1025,9 @@ pub fn for_delegate(
     .filter(|tool| {
         let name = tool.function.name.as_str();
         if NEVER_DELEGATED.contains(&name) {
+            return false;
+        }
+        if name == "spawn_agent" && delegating.is_none() {
             return false;
         }
         if !gating_capability(name).is_some_and(|needs| capabilities.contains(&needs)) {
@@ -1017,7 +1038,11 @@ pub fn for_delegate(
         // name this delegate loaded without.
         confined_to.is_none_or(|named| named.iter().any(|tool| tool == name))
     })
-    .collect()
+    .collect();
+    if let Some(delegates) = delegating {
+        offer_kinds(&mut tools, delegates);
+    }
+    tools
 }
 
 /// The tools a turn offers its planner, with the kinds of delegate this turn resolved.
@@ -1031,11 +1056,18 @@ pub fn for_planner(
     delegates: &bravebot_core::delegate::Definitions,
 ) -> Vec<Tool> {
     let mut tools = available(scheduling, arming);
+    offer_kinds(&mut tools, delegates);
+    tools
+}
+
+/// Replace which names `spawn_agent` accepts, and what each is for, with the kinds this turn
+/// resolved. Nothing where the list does not offer the tool.
+fn offer_kinds(tools: &mut [Tool], delegates: &bravebot_core::delegate::Definitions) {
     let Some(spawn) = tools
         .iter_mut()
         .find(|tool| tool.function.name == "spawn_agent")
     else {
-        return tools;
+        return;
     };
     let Some(kind) = spawn
         .function
@@ -1043,7 +1075,7 @@ pub fn for_planner(
         .get_mut("properties")
         .and_then(|properties| properties.get_mut("kind"))
     else {
-        return tools;
+        return;
     };
 
     // Name and description together, because a name on its own says nothing about when to pick
@@ -1058,7 +1090,6 @@ pub fn for_planner(
          narrowest first.{described}"
     ));
     kind["enum"] = json!(delegates.names());
-    tools
 }
 
 /// A read a tool decided not to perform yet.
@@ -1267,11 +1298,11 @@ pub struct Tools<'a> {
     /// `home` would put every home-relative path the planner writes inside `~/.bravebot`
     /// (CMDLINE-4).
     pub profile: Option<&'a std::path::Path>,
-    /// Whether this turn is itself a delegate's, and so may not spawn one, ask a person, write
-    /// the task list on their screen, or reach a host.
+    /// Whether this turn is itself a delegate's, and so may not ask a person, write the task
+    /// list on their screen, or reach a host.
     ///
     /// Read by dispatch as well as by the tool table, for the reason `self_paced` is: a delegate
-    /// is offered none of those four, and a call it makes anyway has to be answered the way any
+    /// is offered none of those three, and a call it makes anyway has to be answered the way any
     /// other unknown name is rather than quietly working. Two refusals rather than one, because a
     /// rule resting on the tool list alone rests on the model reading it, and a model naming a
     /// tool it was never offered is ordinary.
@@ -1294,12 +1325,6 @@ pub struct Tools<'a> {
     /// the session they are called through. `None` for a delegate and for a session that reached
     /// no server.
     pub mcp: Option<&'a crate::mcp::Offer>,
-    /// How many delegates this turn has spawned, which is what numbers the next one.
-    ///
-    /// Held by the turn rather than counted here, because a delegate is numbered once for the
-    /// whole turn and a call is one round of it. The number is the driver's own and nothing a
-    /// model wrote reaches it, which is what makes it usable for saying whose reports are whose.
-    pub spawned: &'a mut u32,
     /// The pipelines this turn left running, by the reference each was given.
     ///
     /// Held by the turn so they end with it: a background job outliving the turn that started one
@@ -2271,9 +2296,10 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         // they were reading with the steps of a sub-task they did not ask about.
         "todo_write" if !tools.delegated => todo_write(policy, reporter, tools.slots, &arguments),
         "spawn_processor" => spawn_processor(policy, tools, &arguments),
-        // A delegate is never offered this, so a call to it from one is answered the way any
-        // other unknown name is rather than quietly starting a second level.
-        "spawn_agent" if !tools.delegated => spawn_agent(policy, tools, reporter, &arguments),
+        // Offered to a delegate by where it sits, and dispatched whoever asks: a delegate at the
+        // bottom of the tree that calls it anyway is refused by the kernel, which is the check
+        // that holds whatever the list said, and the trail then says why.
+        "spawn_agent" => spawn_agent(policy, tools, reporter, &arguments),
         "load_skill" => load_skill(policy, tools.skills, &arguments),
         // A delegate's task came from a planner, so the question would ask the person to
         // arbitrate something they never set up. Refused here as well as absent from the list.
@@ -5992,26 +6018,36 @@ fn spawn_agent<S: Sink, R: Reporter>(
     );
     let mut started = Vec::new();
     let mut kind_name = String::new();
+    let mut rest_refused = None;
 
     for task in &tasks {
-        // Numbered by the driver, in the order this turn spawned them, and numbered before the
-        // gate rather than after it so that the record of the gate names the delegate it
-        // approved. Everything recorded or reported about this delegate carries the number, which
-        // is the only thing saying whose a line is: the alternative is reading the line, which is
-        // prose a model wrote. A fan-out is exactly where two of them read alike, and a refusal
-        // is numbered for the same reason a permission is.
+        // Numbered by the kernel, beneath this run's own number in the order this run spawned
+        // them, and numbered before the gate decides rather than after so that the record of the
+        // gate names the delegate it approved. Everything recorded or reported about this
+        // delegate carries the number, which is the only thing saying whose a line is: the
+        // alternative is reading the line, which is prose a model wrote. A fan-out is exactly
+        // where two of them read alike, and a refusal is numbered for the same reason a
+        // permission is.
         //
         // The trail's name for it is that number, not the task: a task is a paragraph, and it
         // would be in every line of the trail that mentions this run.
         //
         // Gated once per delegate rather than once per call. A fan-out is several runs, and a
         // gate that saw one of them would be approving the others on the strength of a sibling.
-        *tools.spawned += 1;
-        let id = crate::report::DelegateId::nth(*tools.spawned);
-        let spec = match policy.before_delegate(id, &kind, task) {
+        let spec = match policy.before_delegate(&kind, task) {
             Ok(spec) => spec,
-            Err(denial) => return Produced::problem(format!("refused: {denial}")),
+            Err(denial) if started.is_empty() => {
+                return Produced::problem(format!("refused: {denial}"));
+            }
+            // The tree filling up is the one refusal that can land partway through a fan-out.
+            // The ones before it are started and on the screen, so they run and the planner is
+            // told the rest did not.
+            Err(denial) => {
+                rest_refused = Some(denial);
+                break;
+            }
         };
+        let id = spec.id();
 
         // The task is released for a screen the way the target of any other call is. A person
         // watching several delegates has nothing else to tell them apart by.
@@ -6056,6 +6092,13 @@ fn spawn_agent<S: Sink, R: Reporter>(
              they said before you are asked to answer.",
             started.len()
         )
+    };
+    let body = match (rest_refused, tasks.len() - started.len()) {
+        (Some(denial), 1) => format!("{body} The last one was not started, refused: {denial}"),
+        (Some(denial), left) => {
+            format!("{body} The other {left} were not started, refused: {denial}")
+        }
+        (None, _) => body,
     };
     let note = if started.len() == 1 {
         format!("a {kind_name} delegate started")
@@ -6998,22 +7041,66 @@ mod tests {
         );
     }
 
-    /// The depth is what bounds a whole tree of delegates, and a bound resting on the tool list
-    /// alone rests on the model reading it. This pins half of it; the other half is dispatch,
-    /// which answers the call as an unknown name.
+    /// Every kind above the bottom of the tree is offered the way to delegate, with the kinds this
+    /// session resolved, and none at the bottom is. This is the offer; the kernel refusing a call
+    /// from the bottom anyway is `policy::tests`' half.
     #[test]
-    fn a_delegate_is_never_offered_a_way_to_delegate() {
-        for name in bravebot_core::delegate::Kind::NAMES {
-            let kind = bravebot_core::delegate::Kind::from_name(name).expect("enumerated");
-            let offered: Vec<String> = for_delegate(&kind.capabilities(), None)
+    fn a_delegate_is_offered_a_way_to_delegate_only_above_the_bottom_of_the_tree() {
+        use bravebot_core::delegate::{Definition, Definitions, Kind};
+
+        let mut delegates = Definitions::default();
+        delegates.insert(Definition::from_file(
+            "rule-reviewer",
+            "Checks a diff against the rule.",
+            Kind::Reader,
+            None,
+            "",
+            ".bravebot/agents/rule-reviewer.md",
+        ));
+        for name in Kind::NAMES {
+            let kind = Kind::from_name(name).expect("enumerated");
+            let above = for_delegate(&kind.capabilities(), None, Some(&delegates));
+            let spawn = above
+                .iter()
+                .find(|t| t.function.name == "spawn_agent")
+                .unwrap_or_else(|| {
+                    panic!("a {name} above the bottom was offered no way to delegate")
+                });
+            assert_eq!(
+                spawn.function.parameters["properties"]["kind"]["enum"],
+                json!(["reader", "checker", "worker", "rule-reviewer"]),
+                "a {name} was offered kinds other than the ones this session resolved"
+            );
+
+            let bottom: Vec<String> = for_delegate(&kind.capabilities(), None, None)
                 .iter()
                 .map(|t| t.function.name.clone())
                 .collect();
             assert!(
-                !offered.iter().any(|t| t == "spawn_agent"),
-                "a {name} was offered a way to delegate"
+                !bottom.iter().any(|t| t == "spawn_agent"),
+                "a {name} at the bottom of the tree was offered a way to delegate"
             );
         }
+    }
+
+    /// Delegates read this description as well as the turn does, and a model told how many
+    /// delegates it has left spends them. The depth and the ceiling are the kernel's to keep, so
+    /// the description says they exist and not what they are.
+    #[test]
+    fn the_way_to_delegate_is_described_without_the_numbers_that_bound_it() {
+        let offered = available(
+            Scheduling::ArrangingALook,
+            crate::watch::Arming::Unavailable,
+        );
+        let spawn = offered
+            .iter()
+            .find(|t| t.function.name == "spawn_agent")
+            .expect("the turn is offered a way to delegate");
+        let description = &spawn.function.description;
+        assert!(
+            !description.chars().any(|c| c.is_ascii_digit()),
+            "the description told the model how many it may start: {description}"
+        );
     }
 
     /// The prompt this tool draws belongs to the person who set the sub-task going, about content
@@ -7024,10 +7111,14 @@ mod tests {
     fn a_delegate_is_never_offered_a_way_to_promote_a_slot() {
         for name in bravebot_core::delegate::Kind::NAMES {
             let kind = bravebot_core::delegate::Kind::from_name(name).expect("enumerated");
-            let offered: Vec<String> = for_delegate(&kind.capabilities(), None)
-                .iter()
-                .map(|t| t.function.name.clone())
-                .collect();
+            let offered: Vec<String> = for_delegate(
+                &kind.capabilities(),
+                None,
+                Some(&bravebot_core::delegate::Definitions::default()),
+            )
+            .iter()
+            .map(|t| t.function.name.clone())
+            .collect();
             assert!(
                 !offered.iter().any(|t| t == "vet_content"),
                 "a {name} was offered a way to put quarantined bytes into its own context"
@@ -7042,7 +7133,7 @@ mod tests {
         use bravebot_core::delegate::Kind;
 
         let names = |kind: Kind| -> Vec<String> {
-            for_delegate(&kind.capabilities(), None)
+            for_delegate(&kind.capabilities(), None, None)
                 .iter()
                 .map(|t| t.function.name.clone())
                 .collect()
@@ -7075,10 +7166,14 @@ mod tests {
     fn a_delegate_is_offered_no_task_list_and_no_way_to_ask() {
         for name in bravebot_core::delegate::Kind::NAMES {
             let kind = bravebot_core::delegate::Kind::from_name(name).expect("enumerated");
-            let offered: Vec<String> = for_delegate(&kind.capabilities(), None)
-                .iter()
-                .map(|t| t.function.name.clone())
-                .collect();
+            let offered: Vec<String> = for_delegate(
+                &kind.capabilities(),
+                None,
+                Some(&bravebot_core::delegate::Definitions::default()),
+            )
+            .iter()
+            .map(|t| t.function.name.clone())
+            .collect();
             assert!(
                 !offered.iter().any(|t| t == "ask_user"),
                 "a {name} was offered a question to put to somebody"
@@ -7108,10 +7203,14 @@ mod tests {
                 capabilities.contains(&bravebot_core::capability::Capability::WebFetch),
                 "a {name} could not have made its own requests"
             );
-            let offered: Vec<String> = for_delegate(&capabilities, None)
-                .iter()
-                .map(|t| t.function.name.clone())
-                .collect();
+            let offered: Vec<String> = for_delegate(
+                &capabilities,
+                None,
+                Some(&bravebot_core::delegate::Definitions::default()),
+            )
+            .iter()
+            .map(|t| t.function.name.clone())
+            .collect();
             assert!(
                 !offered.iter().any(|t| t == "fetch_url"),
                 "a {name} was offered a way to reach a host of its own"
@@ -7127,14 +7226,14 @@ mod tests {
         use bravebot_core::delegate::Kind;
 
         let named = ["read_file".to_string()];
-        let offered: Vec<String> = for_delegate(&Kind::Worker.capabilities(), Some(&named))
+        let offered: Vec<String> = for_delegate(&Kind::Worker.capabilities(), Some(&named), None)
             .iter()
             .map(|t| t.function.name.clone())
             .collect();
 
         assert_eq!(offered, ["read_file"]);
 
-        let all: Vec<String> = for_delegate(&Kind::Worker.capabilities(), None)
+        let all: Vec<String> = for_delegate(&Kind::Worker.capabilities(), None, None)
             .iter()
             .map(|t| t.function.name.clone())
             .collect();
@@ -7173,9 +7272,13 @@ mod tests {
             let without: CapabilitySet = everything.iter().filter(|held| *held != needs).collect();
 
             let offered = |set: &CapabilitySet| {
-                for_delegate(set, None)
-                    .iter()
-                    .any(|t| t.function.name == name)
+                for_delegate(
+                    set,
+                    None,
+                    Some(&bravebot_core::delegate::Definitions::default()),
+                )
+                .iter()
+                .any(|t| t.function.name == name)
             };
             assert!(
                 offered(&everything),
@@ -7209,6 +7312,7 @@ mod tests {
             "read_output",
             "job_output",
             "lsp",
+            "spawn_agent",
         ] {
             assert!(
                 gating_capability(name).is_some(),
@@ -7309,7 +7413,11 @@ mod tests {
         let held: Vec<&str> = turn.iter().map(|t| t.function.name.as_str()).collect();
         for name in bravebot_core::delegate::Kind::NAMES {
             let kind = bravebot_core::delegate::Kind::from_name(name).expect("enumerated");
-            let offered = for_delegate(&kind.capabilities(), None);
+            let offered = for_delegate(
+                &kind.capabilities(),
+                None,
+                Some(&bravebot_core::delegate::Definitions::default()),
+            );
             shell_free(name, &offered);
             for tool in &offered {
                 assert!(
@@ -9513,9 +9621,13 @@ mod tests {
                 "the tool was offered to a caller that keeps no watches"
             );
             assert!(
-                !for_delegate(&CapabilitySet::from_iter([Capability::FileRead]), None)
-                    .iter()
-                    .any(|t| t.function.name == "watch_file"),
+                !for_delegate(
+                    &CapabilitySet::from_iter([Capability::FileRead]),
+                    None,
+                    None
+                )
+                .iter()
+                .any(|t| t.function.name == "watch_file"),
                 "a delegate was offered a way to arm a watch"
             );
         }
@@ -9964,7 +10076,6 @@ mod tests {
             let mut slots = SlotStore::new();
             let cancel = bravebot_core::cancel::Cancel::new();
             let mut armed = 0usize;
-            let mut spawned = 0u32;
             let mut jobs = Jobs::default();
             let mut run_directory = workspace.root().to_path_buf();
             body(&mut Tools {
@@ -9989,7 +10100,6 @@ mod tests {
                 confined_to: None,
                 servers: None,
                 mcp: None,
-                spawned: &mut spawned,
                 jobs: &mut jobs,
                 permission_mode: crate::PermissionMode::default(),
                 auto_vetting: false,

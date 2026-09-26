@@ -70,6 +70,10 @@ that adds a capability, including `*`, which is read as a tool name matching not
 "all of them". That is the deliberate difference from tools where the same key *is* the permission
 list: a file in a repository you cloned cannot hand an agent a shell it was never granted.
 
+That includes `spawn_agent`, the tool a delegate starts delegates of its own with. A definition
+that names its tools and leaves it out, like `rule-reviewer` above, does its work itself and hands
+none of it on. Name `spawn_agent` in the list if it should be able to.
+
 Name bravebot's own tools here. A definition ported from another agent usually names that agent's
 (`Read`, `Grep`, `Bash(...)`), and none of those is a tool here, so the delegate starts with no
 tools at all. It says which names it dropped, so the fix is to rename them.

@@ -299,6 +299,17 @@ pub struct Policy<'sink, S: Sink> {
     /// comparison decides nothing an attacker steers only because the enumeration does not
     /// either.
     delegates: crate::delegate::Definitions,
+    /// Which delegate this run is, where it is one, which is what the ones it spawns are
+    /// numbered beneath.
+    at: Option<crate::delegate::DelegateId>,
+    /// Whether this run's definition named its tools and left `spawn_agent` out, which refuses
+    /// every delegate it asks for wherever it sits.
+    named_out_delegating: bool,
+    /// How many delegates this run has asked for, refused ones included, which is what numbers
+    /// the next.
+    spawned: u32,
+    /// The places left in the tree this run belongs to, shared with every run in it.
+    tree: crate::delegate::Tree,
     /// Paths this turn has already offered to the user to vouch for.
     ///
     /// Turn-scoped, and deliberately not recorded anywhere longer-lived. A yes goes into the trust
@@ -423,6 +434,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             // resolved set with `with_delegates`; one that found none is in exactly the state
             // every session was in before there were files to find.
             delegates: crate::delegate::Definitions::default(),
+            // The turn's own, and a fresh tree for it. A delegate's run takes its place and its
+            // tree from its spec with `within`.
+            at: None,
+            named_out_delegating: false,
+            spawned: 0,
+            tree: crate::delegate::Tree::default(),
             vouch_asked: std::collections::BTreeSet::new(),
             exposed: crate::credentials::Exposed::new(),
             fetching: None,
@@ -1138,6 +1155,18 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// The kinds of delegate a name may select.
     pub fn delegates(&self) -> &crate::delegate::Definitions {
         &self.delegates
+    }
+
+    /// Run as the delegate this spec describes: numbering what it spawns beneath it, and
+    /// drawing on the tree it was spawned into rather than starting one.
+    ///
+    /// A spec only [`Policy::before_delegate`] builds, so where a run sits and which tree it
+    /// counts against are both the kernel's word.
+    pub fn within(mut self, spec: &crate::delegate::DelegateSpec) -> Self {
+        self.at = Some(spec.id());
+        self.named_out_delegating = spec.named_out_delegating();
+        self.tree = spec.tree().clone();
+        self
     }
 
     /// Refuse an action a `deny` rule covers, before anything is opened or started.
@@ -2734,12 +2763,50 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// authority and never creates it, so the intersection is taken here rather than trusted to
     /// be empty: a kind asking for something the parent lacks gets a delegate without it, and the
     /// trail says what was dropped.
+    ///
+    /// The number is minted here, beneath this run's own, and a refusal spends one as a delegate
+    /// would. Two bounds are this call's to keep: a run at [`MAX_DEPTH`] spawns nothing, and a
+    /// tree holding [`MAX_DELEGATES`] takes no more, whichever run in it asks. A run whose
+    /// definition named its tools without `spawn_agent` spawns nothing either, wherever it sits.
+    /// Only a delegate that passed everything else takes a place in the tree, and the trail
+    /// records what it was delegated without only once it has one.
+    ///
+    /// [`MAX_DEPTH`]: crate::delegate::MAX_DEPTH
+    /// [`MAX_DELEGATES`]: crate::delegate::MAX_DELEGATES
     pub fn before_delegate(
         &mut self,
-        id: crate::delegate::DelegateId,
         kind: &Labelled<String>,
         task: &Labelled<String>,
     ) -> Gated<crate::delegate::DelegateSpec> {
+        self.spawned += 1;
+        let minted = match self.at {
+            None => Some(crate::delegate::DelegateId::nth(self.spawned)),
+            Some(at) => at.child(self.spawned),
+        };
+        let Some(id) = minted else {
+            let at = self.at.map(|at| at.to_string()).unwrap_or_default();
+            return Err(self.deny(
+                "delegate",
+                Principle::Capability,
+                format!(
+                    "{at}: a delegate {} levels below the turn may not delegate again; do the \
+                     work yourself or say in the report what is left",
+                    crate::delegate::MAX_DEPTH
+                ),
+            ));
+        };
+
+        if self.named_out_delegating {
+            return Err(self.deny(
+                "delegate",
+                Principle::Capability,
+                format!(
+                    "{id}: this run's definition names the tools it may use and spawn_agent is \
+                     not one of them; do the work yourself or say in the report what is left"
+                ),
+            ));
+        }
+
         if self.context != Integrity::Trusted {
             return Err(self.deny(
                 "delegate",
@@ -2780,6 +2847,18 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 ),
             ));
         };
+
+        if !self.tree.claim() {
+            return Err(self.deny(
+                "delegate",
+                Principle::Capability,
+                format!(
+                    "{id}: this turn has already started {} delegates, which is as many as one \
+                     turn may; do the work yourself or say what is left",
+                    crate::delegate::MAX_DELEGATES
+                ),
+            ));
+        }
 
         // The definition's tools are the second term and the parent's set is the third, so the
         // intersection still only ever narrows. Taken here rather than where the file was read,
@@ -2824,13 +2903,25 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let proof = Declassification::authorise("a delegate's prompt, carried not read");
         let task = task.clone().declassify(&proof);
         let rounds = selected.kind().rounds();
-        let spec = crate::delegate::DelegateSpec::new(id, &selected, task, held, rounds);
+        let spec = crate::delegate::DelegateSpec::new(
+            id,
+            &selected,
+            task,
+            held,
+            rounds,
+            self.tree.clone(),
+        );
 
+        let beneath = if spec.may_delegate() {
+            "and a place in this turn's tree of delegates"
+        } else {
+            "and no way to delegate again"
+        };
         self.allow(
             "delegate",
             format!(
                 "{}, from a context that has met nothing untrusted, with a prompt it cannot \
-                 choose and no way to delegate again",
+                 choose {beneath}",
                 spec.describe()
             ),
         );
@@ -12343,7 +12434,7 @@ five
 
     mod delegates {
         use super::*;
-        use crate::delegate::{DelegateId, Kind};
+        use crate::delegate::{DelegateId, Kind, MAX_DELEGATES, MAX_DEPTH};
 
         /// What a planner's own words look like by the time a tool hands them over: the tool layer
         /// labels every argument pessimistically, because it cannot know where one came from.
@@ -12368,11 +12459,7 @@ five
             .resuming(Integrity::Untrusted);
 
             let err = policy
-                .before_delegate(
-                    DelegateId::nth(1),
-                    &argument("reader"),
-                    &argument("find the bug"),
-                )
+                .before_delegate(&argument("reader"), &argument("find the bug"))
                 .expect_err("a fallen context must not steer a second planner");
             assert_eq!(err.principle, Principle::IntegrityGate);
             assert!(!policy.finish());
@@ -12386,11 +12473,7 @@ five
             let mut policy = open_policy(&mut sink);
 
             let spec = policy
-                .before_delegate(
-                    DelegateId::nth(1),
-                    &argument("reader"),
-                    &argument("find the bug"),
-                )
+                .before_delegate(&argument("reader"), &argument("find the bug"))
                 .expect("a clean context may delegate");
             assert_eq!(spec.kind(), Kind::Reader);
             assert_eq!(spec.task(), "find the bug");
@@ -12408,7 +12491,7 @@ five
                 Label::untrusted_private(),
             );
             let err = policy
-                .before_delegate(DelegateId::nth(1), &argument("reader"), &private)
+                .before_delegate(&argument("reader"), &private)
                 .expect_err("private content must not become a prompt");
             assert_eq!(err.principle, Principle::Confinement);
             assert!(!policy.finish());
@@ -12424,7 +12507,7 @@ five
                 let mut policy = open_policy(&mut sink);
 
                 let err = policy
-                    .before_delegate(DelegateId::nth(1), &argument(name), &argument("do it"))
+                    .before_delegate(&argument(name), &argument("do it"))
                     .expect_err("a name nobody enumerated must reach no capability set");
                 assert_eq!(err.principle, Principle::Capability, "for '{name}'");
                 assert!(!policy.finish());
@@ -12451,7 +12534,7 @@ five
             policy.install_delegates(definitions);
 
             let err = policy
-                .before_delegate(DelegateId::nth(1), &argument("auditor"), &argument("do it"))
+                .before_delegate(&argument("auditor"), &argument("do it"))
                 .expect_err("a name nobody resolved must reach no capability set");
             assert!(
                 err.to_string().contains("rule-reviewer"),
@@ -12478,11 +12561,7 @@ five
             policy.install_delegates(definitions);
 
             let spec = policy
-                .before_delegate(
-                    DelegateId::nth(1),
-                    &argument("rule-reviewer"),
-                    &argument("check it"),
-                )
+                .before_delegate(&argument("rule-reviewer"), &argument("check it"))
                 .expect("a resolved definition may be selected");
 
             assert_eq!(spec.definition(), "rule-reviewer");
@@ -12515,11 +12594,7 @@ five
             policy.install_delegates(definitions);
 
             let spec = policy
-                .before_delegate(
-                    DelegateId::nth(1),
-                    &argument("rule-reviewer"),
-                    &argument("check it"),
-                )
+                .before_delegate(&argument("rule-reviewer"), &argument("check it"))
                 .expect("a resolved definition may be selected");
 
             assert_eq!(spec.tools(), Some(["read_file".to_string()].as_slice()));
@@ -12564,7 +12639,7 @@ five
             policy.install_delegates(definitions);
 
             let spec = policy
-                .before_delegate(DelegateId::nth(1), &argument("fixer"), &argument("fix it"))
+                .before_delegate(&argument("fixer"), &argument("fix it"))
                 .expect("a narrow run may still delegate");
 
             assert!(spec.capabilities().contains(&Capability::FileRead));
@@ -12593,7 +12668,7 @@ five
             .unwrap();
 
             let spec = policy
-                .before_delegate(DelegateId::nth(1), &argument("worker"), &argument("fix it"))
+                .before_delegate(&argument("worker"), &argument("fix it"))
                 .expect("a narrow run may still delegate");
 
             assert!(spec.capabilities().contains(&Capability::FileRead));
@@ -12616,11 +12691,237 @@ five
                 let mut policy = open_policy(&mut sink);
 
                 let spec = policy
-                    .before_delegate(DelegateId::nth(1), &argument(name), &argument("do it"))
+                    .before_delegate(&argument(name), &argument("do it"))
                     .expect("an enumerated kind");
                 let kind = Kind::from_name(name).expect("enumerated");
                 assert_eq!(spec.rounds(), kind.rounds(), "{name} was bounded elsewhere");
             }
+        }
+
+        /// A delegate's delegates are numbered beneath it, so the trail names a grandchild by
+        /// where it sits. Numbered by the policy of the run that spawned them, from the place that
+        /// run's spec gave it: a delegate numbering its own from one would mint `d1` twice.
+        #[test]
+        fn a_delegate_numbers_its_own_delegates_beneath_it() {
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            let first = turn
+                .before_delegate(&argument("reader"), &argument("look"))
+                .expect("a clean context may delegate");
+            assert_eq!(first.id(), DelegateId::nth(1));
+
+            let mut within_sink = RecordingSink::new();
+            let mut within = open_policy(&mut within_sink).within(&first);
+            let numbered = [(); 2].map(|()| {
+                within
+                    .before_delegate(&argument("reader"), &argument("look closer"))
+                    .expect("a delegate above the bottom may delegate")
+                    .id()
+                    .to_string()
+            });
+            assert_eq!(numbered, ["d1.1", "d1.2"]);
+        }
+
+        /// The depth is what the bound on a chain of delegates is, and the kernel keeps it: a
+        /// delegate at the bottom that names the tool anyway is refused, with nothing minted for
+        /// the child it asked for and the trail saying which run asked.
+        #[test]
+        fn a_delegate_at_the_bottom_of_the_tree_cannot_delegate() {
+            let mut sinks: Vec<RecordingSink> = std::iter::repeat_with(RecordingSink::new)
+                .take(MAX_DEPTH + 1)
+                .collect();
+            let (turn_sink, rest) = sinks.split_first_mut().expect("one for the turn");
+            let mut spec = open_policy(turn_sink)
+                .before_delegate(&argument("reader"), &argument("look"))
+                .expect("the turn may delegate");
+            let mut rest = rest.iter_mut();
+            while spec.may_delegate() {
+                spec = open_policy(rest.next().expect("one per level"))
+                    .within(&spec)
+                    .before_delegate(&argument("reader"), &argument("look"))
+                    .expect("a delegate above the bottom may delegate");
+            }
+            assert_eq!(spec.id().depth(), MAX_DEPTH);
+            assert_eq!(spec.id().to_string(), "d1.1.1");
+
+            let bottom_sink = rest.next().expect("one for the bottom");
+            let mut bottom = open_policy(bottom_sink).within(&spec);
+            let err = bottom
+                .before_delegate(&argument("reader"), &argument("look"))
+                .expect_err("a delegate at the bottom was allowed to delegate");
+            assert_eq!(err.principle, Principle::Capability);
+            assert!(
+                err.to_string().contains("d1.1.1:"),
+                "the refusal did not name the run that asked: {err}"
+            );
+            assert!(!bottom.finish());
+        }
+
+        /// The ceiling is on the tree rather than on each run, so siblings running at once draw
+        /// on one count and no arrangement of fan-outs gets past it. A second turn's tree is its
+        /// own.
+        #[test]
+        fn a_turns_tree_holds_at_most_its_bound_however_it_is_arranged() {
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            let siblings = [(); 2].map(|()| {
+                turn.before_delegate(&argument("reader"), &argument("look"))
+                    .expect("the turn may delegate")
+            });
+
+            let mut sinks = [RecordingSink::new(), RecordingSink::new()];
+            let [left, right] = &mut sinks;
+            let mut beneath = [
+                open_policy(left).within(&siblings[0]),
+                open_policy(right).within(&siblings[1]),
+            ];
+            let mut started = siblings.len();
+            let mut refused = None;
+            for n in 0..MAX_DELEGATES {
+                match beneath[n as usize % 2]
+                    .before_delegate(&argument("reader"), &argument("look closer"))
+                {
+                    Ok(_) => started += 1,
+                    Err(denial) => {
+                        refused = Some(denial);
+                        break;
+                    }
+                }
+            }
+            assert_eq!(started, MAX_DELEGATES as usize);
+            let refused = refused.expect("the tree took more than its bound");
+            assert_eq!(refused.principle, Principle::Capability);
+            assert!(
+                turn.before_delegate(&argument("reader"), &argument("look"))
+                    .is_err(),
+                "the turn was not held to the places its delegates had taken"
+            );
+
+            let mut other_sink = RecordingSink::new();
+            assert!(
+                open_policy(&mut other_sink)
+                    .before_delegate(&argument("reader"), &argument("look"))
+                    .is_ok(),
+                "another turn's tree shared this one's count"
+            );
+        }
+
+        /// A place in the tree is taken by a delegate that exists. A refusal still spends a
+        /// number, so the trail names the call it refused, but a planner that asked badly
+        /// several times has not used up what the turn may start.
+        #[test]
+        fn a_refused_delegate_takes_no_place_in_the_tree() {
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            for _ in 0..MAX_DELEGATES {
+                turn.before_delegate(&argument("auditor"), &argument("look"))
+                    .expect_err("no kind is called that");
+            }
+            let first = turn
+                .before_delegate(&argument("reader"), &argument("look"))
+                .expect("refusals took places in the tree");
+            assert_eq!(first.id(), DelegateId::nth(MAX_DELEGATES + 1));
+            let started = 1
+                + (1..MAX_DELEGATES)
+                    .filter(|_| {
+                        turn.before_delegate(&argument("reader"), &argument("look"))
+                            .is_ok()
+                    })
+                    .count();
+            assert_eq!(started, MAX_DELEGATES as usize);
+        }
+
+        /// A refusal at the ceiling is all the trail says about that call. What a delegate is
+        /// delegated without is recorded once it has its place, so no record allows a delegate
+        /// that the next line refuses.
+        #[test]
+        fn a_delegate_refused_at_the_ceiling_is_recorded_only_as_refused() {
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing_with("task", "look into it"),
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::WebFetch, Capability::FileRead]),
+                &mut sink,
+            )
+            .unwrap();
+            for _ in 0..MAX_DELEGATES {
+                policy
+                    .before_delegate(&argument("worker"), &argument("fix it"))
+                    .expect("the tree has room");
+            }
+            policy
+                .before_delegate(&argument("worker"), &argument("fix it"))
+                .expect_err("the tree took more than its bound");
+
+            let passed_for = |id: DelegateId| {
+                let about = format!("{id}:");
+                sink.events().iter().any(|event| {
+                    matches!(event, Event::GatePassed { detail, .. } if detail.starts_with(&about))
+                })
+            };
+            assert!(
+                passed_for(DelegateId::nth(1)),
+                "a delegate that started did not say what it went without"
+            );
+            assert!(
+                !passed_for(DelegateId::nth(MAX_DELEGATES + 1)),
+                "the trail allowed a delegate the ceiling then refused"
+            );
+        }
+
+        /// A definition's tools are the whole of what its delegate may use, and a way to delegate
+        /// is one of them. Left out, it is left out wherever the delegate sits: offered no way to,
+        /// and refused by the kernel if it asks anyway. Named, it stands as any other tool does.
+        #[test]
+        fn a_definition_that_names_its_tools_without_spawn_agent_cannot_delegate() {
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            let mut definitions = crate::delegate::Definitions::default();
+            for (name, tools) in [
+                ("narrow", ["read_file"].as_slice()),
+                ("fanning", ["read_file", "spawn_agent"].as_slice()),
+            ] {
+                definitions.insert(crate::delegate::Definition::from_file(
+                    name,
+                    "reads what it is pointed at",
+                    Kind::Reader,
+                    Some(tools.iter().map(|tool| tool.to_string()).collect()),
+                    "",
+                    ".bravebot/agents/reads.md",
+                ));
+            }
+            turn.install_delegates(definitions);
+
+            let narrow = turn
+                .before_delegate(&argument("narrow"), &argument("look"))
+                .expect("the turn may delegate");
+            assert!(
+                !narrow.may_delegate(),
+                "a definition without spawn_agent was offered a way to delegate"
+            );
+            let mut narrow_sink = RecordingSink::new();
+            let err = open_policy(&mut narrow_sink)
+                .within(&narrow)
+                .before_delegate(&argument("reader"), &argument("look closer"))
+                .expect_err("a definition without spawn_agent was allowed to delegate");
+            assert_eq!(err.principle, Principle::Capability);
+            assert!(
+                err.to_string().contains("spawn_agent"),
+                "the refusal did not say why: {err}"
+            );
+
+            let fanning = turn
+                .before_delegate(&argument("fanning"), &argument("look"))
+                .expect("the turn may delegate");
+            assert!(
+                fanning.may_delegate(),
+                "a definition naming spawn_agent was told it could not delegate"
+            );
+            let mut fanning_sink = RecordingSink::new();
+            open_policy(&mut fanning_sink)
+                .within(&fanning)
+                .before_delegate(&argument("reader"), &argument("look closer"))
+                .expect("a definition naming spawn_agent was refused a delegate");
         }
 
         /// A person answering about their own machine has answered for the session, not for
@@ -12966,7 +13267,6 @@ five
 
             let spec = policy
                 .before_delegate(
-                    crate::delegate::DelegateId::nth(1),
                     &super::delegates::argument("worker"),
                     &super::delegates::argument("fix it"),
                 )
