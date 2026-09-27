@@ -20,9 +20,13 @@
 //! # What the fetched number decides
 //!
 //! Whether one line is printed, and nothing else. It reaches no request field, no turn and no
-//! planner's context. The version in that line is composed from the three numbers parsed out of
-//! the answer rather than from the answer's own bytes, so nothing a registry says is quoted back
-//! onto somebody's screen.
+//! planner's context, and it is not in the line either: the line names the version that is
+//! running, never the one a registry answered with.
+//!
+//! That is for accuracy as much as containment. The answer on disk is as old as the last launch
+//! that asked, which can be weeks, while the command installs whatever is newest when it runs. A
+//! copy on 0.9.0 that last asked while 0.10.0 was newest would be told 0.10.0 is out, and updating
+//! would install 0.11.0.
 
 use bravebot_core::capability::{Capability, CapabilitySet};
 use bravebot_core::label::Label;
@@ -162,14 +166,13 @@ pub fn at_startup() -> Option<String> {
     line(install, running_version()?, stored?.latest?)
 }
 
-/// What to say about a version that is out, or nothing when this copy is not behind it.
+/// What to say when a newer version is out, or nothing when this copy is not behind it.
 ///
 /// Separated from the files and the clock so what is said can be tested without either.
 fn line(install: Install, running: Version, latest: Version) -> Option<String> {
     (latest > running).then(|| {
         t!(
             update_available,
-            version = latest,
             running = running,
             command = install.update_command()
         )
@@ -464,12 +467,8 @@ mod tests {
     /// The whole point of the line is the command, and a person reading it should not have to work
     /// out which of the two installations they have.
     #[test]
-    fn a_newer_version_is_named_along_with_the_command_that_installs_it() {
+    fn a_newer_version_is_announced_along_with_the_command_that_installs_it() {
         let said = line(Install::Npm, version(0, 5, 0), version(0, 6, 1)).expect("a newer version");
-        assert!(
-            said.contains("0.6.1"),
-            "the newer version is missing: {said}"
-        );
         assert!(
             said.contains("0.5.0"),
             "the running version is missing: {said}"
@@ -477,6 +476,23 @@ mod tests {
         assert!(
             said.contains("npm install -g @brave/bravebot@latest"),
             "the command is missing: {said}"
+        );
+    }
+
+    /// The recorded version is whatever was newest at the last launch that asked, and the command
+    /// installs whatever is newest now. Naming the recorded one told somebody on 0.9.0 that 0.10.0
+    /// was out when updating installed 0.11.0.
+    #[test]
+    fn the_line_names_the_running_version_and_not_the_recorded_one() {
+        let said =
+            line(Install::Npm, version(0, 9, 0), version(0, 10, 0)).expect("a newer version");
+        assert!(
+            said.contains("0.9.0"),
+            "the running version is missing: {said}"
+        );
+        assert!(
+            !said.contains("0.10"),
+            "the recorded version, which may not be the newest, was named: {said}"
         );
     }
 
@@ -563,16 +579,19 @@ mod tests {
         );
     }
 
-    /// The line is composed from the three numbers that were read, so nothing a registry sends is
-    /// quoted back onto somebody's screen.
+    /// What a registry sends decides whether the line is said and is not part of it, so nothing a
+    /// registry sends reaches somebody's screen, as text or as the numbers read out of it.
     #[test]
-    fn a_version_is_said_as_the_numbers_read_rather_than_as_the_text_that_arrived() {
+    fn nothing_a_registry_answered_reaches_the_line() {
         let latest = version_in(Install::Npm, br#"{"version":"v0.06.0"}"#).expect("a version");
         let said = line(Install::Npm, version(0, 5, 0), latest).expect("a newer version");
-        assert!(said.contains("0.6.0"), "{said}");
         assert!(
             !said.contains("0.06.0"),
             "the answer was quoted back: {said}"
+        );
+        assert!(
+            !said.contains("0.6.0"),
+            "the version read from the answer was named: {said}"
         );
     }
 

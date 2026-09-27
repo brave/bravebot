@@ -63,7 +63,7 @@ not from the environment.
 value arrives from. Offering the wrong one of the two is its own harm and not a smaller one: the
 npm command against a script install puts a second copy on the machine and updates neither.
 
-`verified-by: bravebot_tui::update::a_newer_version_is_named_along_with_the_command_that_installs_it`
+`verified-by: bravebot_tui::update::a_newer_version_is_announced_along_with_the_command_that_installs_it`
 `verified-by: bravebot_tui::update::a_script_install_is_given_the_script_again`
 `verified-by: by-construction (each command is one of two literals chosen by matching on the installation, so no value composes one)`
 
@@ -71,7 +71,7 @@ npm command against a script install puts a second copy on the machine and updat
 ### UPDATE-4: a version is three numbers, compared as numbers
 
 Anything else is no answer, the `v` a tag is published under included and disregarded. Only a
-version strictly greater than the one compiled in is said.
+version strictly greater than the one compiled in is announced.
 
 **Why.** Compared as text, 10 sorts before 9 and a release goes unannounced for as long as the
 numbering stays in that decade. A prerelease is not three numbers, so a startup line never sends
@@ -87,20 +87,27 @@ withdrawn release looks like, does not send them backwards.
 `verified-by: bravebot_tui::update::the_version_this_was_built_as_is_three_numbers`
 
 <a id="UPDATE-5"></a>
-### UPDATE-5: what comes back decides one line and is not quoted into it
+### UPDATE-5: what comes back decides one line and is not part of it
 
-The answer is read for three numbers. The version shown is written from those numbers, so no byte
-of the response reaches the screen, and none of it reaches a conversation, a request field, or a
+The answer is read for three numbers, and what they decide is whether the line is said. The line
+names the version that is running and not the one read, so no byte of the response reaches the
+screen, as text or as those numbers, and none of it reaches a conversation, a request field, or a
 tool result.
 
 **Why.** The bytes are somebody else's, and the rule that untrusted content never steers this
 program applies to the one request it makes for itself. What they decide here is whether a line is
 printed, which is the same standing the model listing has: fetched before any session, read for
-the shape the endpoint documents, and reaching a person rather than a planner. Composing the line
-from the parsed numbers is what keeps the response out of the system's own voice, which is drawn
-without the margin that marks quarantined content.
+the shape the endpoint documents, and reaching a person rather than a planner. Keeping them out of
+the line keeps the response out of the system's own voice, which is drawn without the margin that
+marks quarantined content.
 
-`verified-by: bravebot_tui::update::a_version_is_said_as_the_numbers_read_rather_than_as_the_text_that_arrived`
+The number read is also not one the line could stand behind. It is what was newest when a launch
+last asked, and by UPDATE-1 that can be as long ago as the last session, which can be weeks, while
+the command installs whatever is newest when it runs. Naming it told somebody on 0.9.0 that 0.10.0
+was out, and the update they ran installed 0.11.0.
+
+`verified-by: bravebot_tui::update::the_line_names_the_running_version_and_not_the_recorded_one`
+`verified-by: bravebot_tui::update::nothing_a_registry_answered_reaches_the_line`
 `verified-by: bravebot_tui::update::the_registry_states_a_version_and_the_release_listing_states_a_tag`
 `verified-by: by-construction (the request is made outside any turn, and the only value returned from it is a version of three numbers)`
 
@@ -189,12 +196,17 @@ while a copy the record does not name is one this program will not offer a comma
   told about a release is its second launch. The alternative is a round trip in front of the first
   frame, which UPDATE-1 exists to refuse.
 
-- **An answer is up to a day out of date.** A release published this morning is announced
-  tomorrow to somebody whose last launch was last night.
+- **An answer is as old as the last launch that asked.** A release published this morning is
+  announced tomorrow to somebody whose last launch was last night, and a week late to somebody who
+  last opened a session a week ago.
+
+- **The line does not say which version the update installs.** By UPDATE-5 it names only the
+  running version, so somebody who wants the number has to update and ask the binary for it.
 
 - **A version outlives the ask that learned it.** A registry unreachable for a week leaves the
-  line naming what it said before that, since nothing here withdraws a version that was once
-  published. A release taken down is therefore offered until that registry answers again.
+  line said on the strength of what it answered before that, since nothing here withdraws a
+  version that was once published. A release taken down is therefore offered until that registry
+  answers again.
 
 - **What names the installation is a word and a path, not proof.** A binary moved out from under
   the record is told nothing, and a process started with the launcher's variable set is offered

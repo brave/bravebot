@@ -1328,8 +1328,8 @@ session-vetting-on =
 session-vetting-in-force =
     une vérification qui ne trouve rien donne le contenu au modèle sans vous demander
 update-available =
-    bravebot { $version } est disponible (celle-ci est { $running }) ; pour la mettre à jour :
-    { $command }
+    une version plus récente de bravebot est disponible (celle-ci est { $running }) ; pour la
+    mettre à jour : { $command }
 session-started-server = serveur de langage { $language } actif pour cette session ({ $program })
 session-offered-tools =
     { $count ->
