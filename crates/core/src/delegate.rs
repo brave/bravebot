@@ -1093,7 +1093,18 @@ mod tests {
         assert!(Kind::Checker.most_rounds() < Kind::Worker.most_rounds());
     }
 
-    /// A definition that asks for nothing is bounded as it was before it could ask.
+    /// The figures the specification and the page on definitions give, so a change to one is a
+    /// change to what a person was told they may write.
+    #[test]
+    fn each_kinds_bound_and_ceiling_are_the_figures_a_person_is_told() {
+        let bounds = Kind::NAMES.map(|name| {
+            let kind = Kind::from_name(name).expect("advertised");
+            (kind.rounds(), kind.most_rounds())
+        });
+        assert_eq!(bounds, [(60, 120), (80, 160), (120, 200)]);
+    }
+
+    /// A definition that asks for nothing is bounded as its kind is.
     #[test]
     fn a_definition_naming_no_rounds_keeps_its_kinds_own() {
         for name in Kind::NAMES {

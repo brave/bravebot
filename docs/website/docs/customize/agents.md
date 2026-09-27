@@ -45,7 +45,7 @@ ask you questions and what it reads stays in the conversation.
 | `model` | no | the model this delegate runs on (`haiku`, `sonnet`, `opus`, or an explicit model identifier); absent or `inherit` means the spawning turn's |
 | `tools` | no | fewer tools than the kind's; absent means the kind's own |
 | `skills` | no | the [skills](skills.md) this delegate is offered, out of the ones the turn found; absent means all of them, and an empty line none |
-| `rounds` | no | how many rounds of tools this delegate may take before it has to answer, up to its kind's ceiling; absent means the kind's own |
+| `rounds` | no | how many rounds of tools this delegate may take before it has to answer, up to its kind's ceiling; absent or empty means the kind's own |
 | body | no | the standing instruction |
 
 Keys other than these are ignored rather than refused, so a definition written for another agent
@@ -93,16 +93,20 @@ for. A name no skill goes by picks nothing, and the turn says so:
 **`rounds` sets how long the delegate may work.** Nobody is watching a delegate, so each kind stops
 one after a set number of rounds and makes it answer with what it has: 60 for a `reader`, 80 for a
 `checker` and 120 for a `worker`. A definition written for a long job, a staged refactor say, can
-ask for more, up to a ceiling of twice its kind's: 120, 160 and 200. Asking for more than that gives
+ask for more, up to its kind's ceiling: 120 for a `reader`, 160 for a `checker` and 200 for a
+`worker`, which is the bound on a one-shot run nobody is watching. Asking for more than that gives
 the delegate the ceiling, and the turn says so:
 
 ```
 ~/.bravebot/agents/migrator.md asks for 500 rounds, more than the 200 a worker may make, so its delegate is given 200
 ```
 
-The value is a whole number above zero. Anything else, `0` or `lots` or `1.5`, means the file does
-not load, and the turn names it. The planner cannot set a bound when it starts a delegate: only the
-definition can.
+The value is a whole number above zero. An empty line is the same as none. Anything else, `0` or
+`lots` or `1.5`, means the file does not load, and the turn names it. The planner cannot set a
+bound when it starts a delegate: only the definition can.
+
+`rounds` bounds the definition only when the planner starts it as a delegate. A turn you run
+yourself with `/agent` is yours, and carries no bound, as any turn you are watching does.
 
 A name may not open with `-`, may not contain a colon, which stays reserved for naming things
 inside a namespace, and may not be `reader`, `checker` or `worker`: those belong to the kinds, so

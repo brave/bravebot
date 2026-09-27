@@ -4248,17 +4248,20 @@ mod tests {
     use std::time::Duration;
 
     /// A delegate is a turn nobody is watching, so no definition may give one longer than such a
-    /// turn may run. The ceilings live in the kernel and this bound here, so it is checked here.
+    /// turn may run, and the widest kind may give it that long. The ceilings live in the kernel
+    /// and this bound here, so the two are held together here.
     #[test]
     fn no_kind_lets_a_definition_run_longer_than_an_unwatched_turn() {
         use bravebot_core::delegate::Kind;
-        for kind in [Kind::Reader, Kind::Checker, Kind::Worker] {
+        for name in Kind::NAMES {
+            let kind = Kind::from_name(name).expect("advertised");
             assert!(
                 kind.most_rounds() <= MAX_TOOL_ROUNDS,
-                "a {kind} may be given {} rounds, more than an unwatched turn's {MAX_TOOL_ROUNDS}",
+                "a {name} may be given {} rounds, more than an unwatched turn's {MAX_TOOL_ROUNDS}",
                 kind.most_rounds()
             );
         }
+        assert_eq!(Kind::Worker.most_rounds(), MAX_TOOL_ROUNDS);
     }
 
     /// Cleanup entered after cancellation must still charge requests that overlap its join.

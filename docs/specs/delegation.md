@@ -177,15 +177,17 @@ are asked about separately, and what a delegate is told it can do is what it is 
 
 Every kind carries a round limit: 60 for a `reader`, 80 for a `checker` and 120 for a `worker`. A
 definition may name its own with `rounds:`, a whole number above zero, and its delegate runs to
-that number instead. Each kind also carries a ceiling no definition passes, twice its own limit:
-120, 160 and 200. The call sets no bound at all. On the limiting round the delegate loses its
-tools rather than its run, and answers with what it has.
+that number instead. Each kind also carries a ceiling no definition passes: 120 for a `reader`
+and 160 for a `checker`, twice their own, and 200 for a `worker`, the bound on a turn nobody is
+watching. The call sets no bound at all. On the limiting round the delegate loses its tools rather
+than its run, and answers with what it has.
 
 A definition asking for more than its kind's ceiling is loaded with the ceiling, and the turn
-says so, naming the definition, the number it asked for and the number it is given. A `rounds:`
-line that is not a whole number above zero is a definition that does not load, and the notice
-names its file, as [DELEGATE-20](#DELEGATE-20) does for any file that claims to be a definition
-and is not.
+says so, naming the definition, the number it asked for and the number it is given. An empty
+`rounds:` line names no number, as an empty `model:` line names no model
+([DELEGATE-22](#DELEGATE-22)), so its delegate runs to its kind's own. One whose value is not a
+whole number above zero is a definition that does not load, and the notice names its file, as [DELEGATE-20](#DELEGATE-20) does for any
+file that claims to be a definition and is not.
 
 **Not a safety property.** A gate refuses on the last round what it refuses on the first. It
 bounds futility, and it applies here because nobody is coming to stop a delegate: the person is
@@ -200,8 +202,8 @@ planner's call, which nobody vouched for, still sets nothing.
 
 **Why a ceiling.** A delegate is a run nobody is watching, which is why each kind is bounded at
 all, and a number with no ceiling would hand that bound to the file at whatever figure it wrote.
-A `worker`'s ceiling is the bound an unwatched turn carries ([TURN-2](turns.md#TURN-2)), since a
-delegate is one.
+Twice a kind's own leaves room for a long sub-task, and no kind passes the bound an unwatched turn
+carries ([TURN-2](turns.md#TURN-2)), since a delegate is one: a `worker`'s ceiling is that bound.
 
 **Why hold the number rather than refuse the file.** A number past the ceiling says the task is
 long, which the ceiling can honour as far as it goes, and refusing the file would lose the
@@ -210,6 +212,7 @@ one in force. A value that is no number has nothing in it to hold, so its file d
 Zero goes with it: the bound is checked after a round, so zero would run as one.
 
 `verified-by: bravebot_core::delegate::every_kind_carries_a_bound`
+`verified-by: bravebot_core::delegate::each_kinds_bound_and_ceiling_are_the_figures_a_person_is_told`
 `verified-by: bravebot_core::delegate::a_definition_may_ask_its_kind_for_more_rounds_than_its_own`
 `verified-by: bravebot_core::delegate::a_definition_naming_no_rounds_keeps_its_kinds_own`
 `verified-by: bravebot_core::delegate::a_definition_may_set_its_own_bound_beneath_its_kinds_ceiling`
