@@ -93,10 +93,12 @@ class CheckTargets(unittest.TestCase):
         scanner.write_text('#!/bin/sh\nprintf "scan %s\\n" "$*" >> "$CALL_LOG"\n')
         scanner.chmod(0o755)
         command = "python3 contrib/check-reviewdog-selftest.py"
-        for target, arguments in (("check-reviewdog", ""), ("check-reviewdog-full", "--full")):
+        for target, arguments, base in (("check-reviewdog", "", ""),
+                                        ("check-reviewdog", "--base v1.0", "v1.0"),
+                                        ("check-reviewdog-full", "--full", "")):
             for failing in ("", command):
-                with self.subTest(target=target, failing=failing):
-                    result = self.run_make(target, FAIL_COMMAND=failing)
+                with self.subTest(target=target, base=base, failing=failing):
+                    result = self.run_make(target, FAIL_COMMAND=failing, BASE=base)
                     self.assertEqual(result.returncode != 0, bool(failing), result.stderr)
                     expected = [command] if failing else [command, f"scan {arguments}"]
                     self.assertEqual(self.log.read_text().splitlines(), expected)

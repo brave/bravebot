@@ -61,7 +61,7 @@ help:
 	@echo "  make docs-updated-to-sha   The commit the documentation site is current as of"
 	@echo "  make write-unverified      Write agents/unverified-clauses.txt, which check-spec holds it to"
 	@echo "  make write-untranslated    Write contrib/untranslated-messages.txt, which check-locales holds it to"
-	@echo "  make check-reviewdog       The PR security scan, on this branch's changes"
+	@echo "  make check-reviewdog       The PR security scan, on this branch's changes [BASE=ref]"
 	@echo "  make check-reviewdog-full  The same scan, over the whole tree"
 	@echo "  make check-npm             The installer test, the lockfile install and its lint"
 	@echo "  make check-deps            Advisories, licences, duplicate versions, and sources"
@@ -229,7 +229,7 @@ write-untranslated:
 # No model is involved, so both are deterministic.
 .PHONY: check-reviewdog
 check-reviewdog: check-reviewdog-selftest
-	@contrib/check-reviewdog.sh
+	@contrib/check-reviewdog.sh $(if $(BASE),--base '$(BASE)')
 
 .PHONY: check-reviewdog-full
 check-reviewdog-full: check-reviewdog-selftest

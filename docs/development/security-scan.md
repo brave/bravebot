@@ -20,7 +20,8 @@ The branch is measured against `upstream/main` where a checkout has one, and `or
 otherwise. In a fork checkout `origin` is the fork, whose `main` moves only when somebody
 updates it, so a base taken from there is a commit the branch is not based on: the scan then
 covers every commit the fork is behind and reports whatever it finds in them against the
-branch. `--base` takes any ref, a sha or a tag included.
+branch. `--base` takes any ref, a sha or a tag included, and `make check-reviewdog BASE=<ref>`
+passes it.
 
 The first run downloads opengrep, reviewdog and the rules into `~/.cache`; later runs re-use them
 and take about half a minute. No model is involved, so both are deterministic.
