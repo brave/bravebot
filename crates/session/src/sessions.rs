@@ -3103,6 +3103,7 @@ mod tests {
                 references: 0,
                 archive: Vec::new(),
                 measured: 0,
+                asked_to_write: false,
             },
             manifest: None,
             rewind: Vec::new(),

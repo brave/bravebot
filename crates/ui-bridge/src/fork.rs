@@ -119,6 +119,10 @@ pub fn cut(snapshot: &Snapshot, said: &[Said], ordinal: usize) -> Option<Cut> {
             // conversation that no longer exists, and a child that inherited it would open by
             // trying to compact a history it has not sent yet.
             measured: 0,
+            // Dropped as well: it says whether the parent's last turns asked to write, and the
+            // child ends earlier than they did. False costs at most one needless line to the
+            // planner, where true could withhold one a turn needed.
+            asked_to_write: false,
         },
         prompt: wanted,
     })
@@ -145,6 +149,7 @@ mod tests {
             references: 3,
             archive: Vec::new(),
             measured: 4096,
+            asked_to_write: true,
         }
     }
 
@@ -342,6 +347,19 @@ mod tests {
         assert_eq!(
             cut.before.references, 3,
             "but the names handed out are remembered"
+        );
+    }
+
+    /// The parent's record of a write says what its last turns did, and a fork ends before them.
+    /// Carried over, it would keep a child that never asked to write from being told so.
+    #[test]
+    fn a_write_the_parent_asked_for_does_not_survive_a_cut() {
+        let before = snapshot(vec![Message::user("first"), Message::user("second")]);
+        let cut = cut(&before, &drawn(&before), 1).expect("a second prompt");
+
+        assert!(
+            !cut.before.asked_to_write,
+            "the child inherited a write it never asked for"
         );
     }
 

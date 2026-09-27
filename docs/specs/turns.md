@@ -60,10 +60,10 @@ silence is the answer for a caller nobody is watching, and a watched turn takes 
 <a id="TURN-3"></a>
 ### TURN-3: a turn that has written nothing for long enough is told so
 
-Where a write is possible and none has been asked for after a set number of rounds, the driver
-says so once, at the end of a round, and the turn carries on with its tools. The line is a nudge,
-not a bound: nothing is taken away, nothing is refused, and a planner that keeps reading keeps
-reading.
+Where a write is possible, a turn has gone a set number of rounds, and no write has been asked for
+since a turn last ended with an answer, the driver says so once, at the end of a round, and the
+turn carries on with its tools. The line is a nudge, not a bound: nothing is taken away, nothing is
+refused, and a planner that keeps reading keeps reading.
 
 **The number is measured, not chosen.** It was fifteen, and a run with the prompt and the line
 together wrote its first file on round sixteen: the line working, and the paragraph asking for the
@@ -83,8 +83,20 @@ so the line says what to do if a change was wanted and to carry on if it was not
 **A requested write counts, not a completed one.** A write the user refused is a planner that
 tried to deliver, and telling it to start delivering would answer something nobody asked.
 
+**Counted since the last answer, not since the turn began.** A stop is usually not the end of a
+task: the next prompt is `continue`, and a change the stopped turn asked to write is the change
+being continued. An answer usually is the end of one, so the turn after it starts from nothing
+written. The count belongs to the conversation, so a session resumed after a stop keeps it. A
+fork cut in front of one of the parent's prompts starts from nothing written, because the count
+describes the parent's last turns rather than the ones in front of the cut: starting clear costs
+at most a nudge the kept turns did not need, where starting set could withhold one they did.
+
 `verified-by: bravebot_agent::turn::a_turn_that_writes_nothing_for_long_enough_is_told_so`
 `verified-by: bravebot_agent::turn::a_turn_that_has_written_is_not_told_to_write`
+`verified-by: bravebot_agent::turn::a_turn_after_a_stopped_turn_that_wrote_is_not_told_to_write`
+`verified-by: bravebot_agent::turn::a_turn_after_a_completed_turn_that_wrote_is_still_told_to_write`
+`verified-by: bravebot_agent::conversation::a_restored_conversation_remembers_a_write_asked_for_since_the_last_answer`
+`verified-by: bravebot_ui_bridge::fork::a_write_the_parent_asked_for_does_not_survive_a_cut`
 
 <a id="TURN-4"></a>
 ### TURN-4: a turn that changed files and ran nothing says so, to both parties

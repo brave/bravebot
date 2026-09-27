@@ -132,6 +132,15 @@ pub struct Conversation {
     ///
     /// Trusted metadata: a count the server reported, never anything anyone wrote.
     measured: u64,
+    /// Whether the planner has asked for a write since a turn last ended with an answer.
+    ///
+    /// Kept here rather than in the turn because a stopped turn is usually continued rather than
+    /// replaced: the next prompt is `continue`, and the change the stopped turn wrote is still
+    /// the task's change. An answer is where one task usually ends, so that is where it clears.
+    ///
+    /// Trusted metadata: from the names of the functions the planner called, never their
+    /// arguments or anything a tool returned.
+    asked_to_write: bool,
 }
 
 impl Default for Conversation {
@@ -152,6 +161,7 @@ impl Conversation {
             context: Integrity::Trusted,
             archive: Vec::new(),
             measured: 0,
+            asked_to_write: false,
         }
     }
 
@@ -257,6 +267,21 @@ impl Conversation {
     /// purpose here.
     pub fn last_request_tokens(&self) -> u64 {
         self.measured
+    }
+
+    /// Record that the planner has asked for a write.
+    pub fn write_requested(&mut self) {
+        self.asked_to_write = true;
+    }
+
+    /// Record that a turn ended with an answer, so the next prompt starts from nothing written.
+    pub fn turn_answered(&mut self) {
+        self.asked_to_write = false;
+    }
+
+    /// Whether a write has been asked for since a turn last ended with an answer.
+    pub fn asked_to_write(&self) -> bool {
+        self.asked_to_write
     }
 
     /// Where compaction would cut, or `None` when there is nothing worth summarising.
@@ -497,6 +522,13 @@ pub struct Snapshot {
     /// resume sends the whole conversation again to find out what it already knew.
     #[serde(default)]
     pub measured: u64,
+    /// Whether a write had been asked for since a turn last ended with an answer.
+    ///
+    /// Stored so a stopped turn resumed in a later process is continued the way it would have
+    /// been in this one. Defaulted to false, which costs a record written without it at most one
+    /// needless line to the planner.
+    #[serde(default)]
+    pub asked_to_write: bool,
 }
 
 /// The word for an integrity, as it is written down.
@@ -531,6 +563,7 @@ impl Conversation {
             references: self.references,
             archive: self.archive.clone(),
             measured: self.measured,
+            asked_to_write: self.asked_to_write,
         }
     }
 
@@ -562,6 +595,7 @@ impl Conversation {
             },
             archive: snapshot.archive,
             measured: snapshot.measured,
+            asked_to_write: snapshot.asked_to_write,
         }
     }
 
@@ -1367,6 +1401,24 @@ mod tests {
         assert_eq!(restored.last_request_tokens(), 90_000);
     }
 
+    /// A stopped turn is as likely to be continued from a later process as from this one, and the
+    /// change it asked to write is still the task's. Dropped on the way to disk, a `continue` after
+    /// a resume would be told nothing is written yet about a change that is on disk.
+    #[test]
+    fn a_restored_conversation_remembers_a_write_asked_for_since_the_last_answer() {
+        let mut conversation = four_exchanges();
+        conversation.write_requested();
+
+        let written = serde_json::to_string(&conversation.snapshot()).expect("a record");
+        let restored =
+            Conversation::restored(serde_json::from_str(&written).expect("the record back"));
+
+        assert!(
+            restored.asked_to_write(),
+            "a write asked for before the record was written came back unasked"
+        );
+    }
+
     /// The figure said how large the conversation was before it was shortened. Kept, it would
     /// have the next turn open by trying to compact again on the strength of a measurement of
     /// something that no longer exists.
@@ -1671,6 +1723,7 @@ mod tests {
                 references: 0,
                 archive: Vec::new(),
                 measured: 0,
+                asked_to_write: false,
             });
             assert_eq!(
                 restored.context(),

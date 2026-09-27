@@ -9078,6 +9078,178 @@ fn a_turn_that_has_written_is_not_told_to_write() {
     );
 }
 
+/// A turn continuing one that was stopped after a write is not told that nothing is written yet.
+///
+/// A stop is usually not the end of the task. The next prompt is `continue`, and the change the
+/// stopped turn wrote is the change being continued, so telling the planner to start delivering
+/// would answer something nobody asked. Two turns over one conversation, which is how every front
+/// end holds a session, and the second reads past the threshold without writing.
+#[test]
+fn a_turn_after_a_stopped_turn_that_wrote_is_not_told_to_write() {
+    /// Stops the turn once its write has finished, standing in for Escape pressed after it.
+    struct StopAfterTheWrite(bravebot_core::cancel::Cancel);
+
+    impl bravebot_agent::report::Reporter for StopAfterTheWrite {
+        fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+        fn tool_finished(&mut self, activity: bravebot_agent::report::Activity) {
+            if activity.tool == "write_file" {
+                self.0.cancel();
+            }
+        }
+    }
+
+    let scratch = Scratch::new("stopped-after-writing");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request(
+            "write_file",
+            r#"{"path":"notes.txt","contents":"first slice"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let cancel = bravebot_core::cancel::Cancel::new();
+    let stopped = turn::resume(
+        &config_for(&endpoint),
+        &egress,
+        &workspace,
+        &Task::new("add a toggle"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut StopAfterTheWrite(cancel.clone()),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &cancel,
+    )
+    .outcome
+    .expect_err("a stopped turn must not succeed");
+    assert!(
+        matches!(stopped, turn::TurnError::Cancelled { .. }),
+        "the first turn ended some other way, so this says nothing about a stop: {stopped:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("notes.txt")).unwrap(),
+        "first slice",
+        "the first turn wrote nothing, so this says nothing about continuing one that did"
+    );
+
+    let mut replies: Vec<String> = (0..ROUNDS_BEFORE_WRITING + 1)
+        .map(|_| tool_request("list_files", r#"{"directory":"."}"#))
+        .collect();
+    replies.push(reply_with("done"));
+    let (endpoint, received) = serve_sequence(replies);
+    turn::resume(
+        &config_for(&endpoint),
+        &egress,
+        &workspace,
+        &Task::new("continue"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the second turn finishes");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(
+        bodies.len(),
+        ROUNDS_BEFORE_WRITING + 2,
+        "the second turn never read past the threshold, so it could not have been told"
+    );
+    assert!(
+        !bodies
+            .iter()
+            .any(|body| body.contains("nothing written yet")),
+        "a turn continuing a stopped one that wrote was told it had written nothing"
+    );
+}
+
+/// A turn after one that wrote and answered starts from nothing written.
+///
+/// The converse, and the reason the count does not simply run for the whole session. An answer is
+/// where a task usually ends, so the next prompt is usually a new task, and a planner reading its
+/// way through that one without writing is in exactly the state the line is for.
+#[test]
+fn a_turn_after_a_completed_turn_that_wrote_is_still_told_to_write() {
+    let scratch = Scratch::new("answered-after-writing");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request(
+            "write_file",
+            r#"{"path":"notes.txt","contents":"first slice"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    turn::resume(
+        &config_for(&endpoint),
+        &egress,
+        &workspace,
+        &Task::new("add a toggle"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the first turn finishes");
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("notes.txt")).unwrap(),
+        "first slice",
+        "the first turn wrote nothing, so this says nothing about a turn after one that did"
+    );
+
+    let mut replies: Vec<String> = (0..ROUNDS_BEFORE_WRITING + 1)
+        .map(|_| tool_request("list_files", r#"{"directory":"."}"#))
+        .collect();
+    replies.push(reply_with("here is what I found"));
+    let (endpoint, received) = serve_sequence(replies);
+    turn::resume(
+        &config_for(&endpoint),
+        &egress,
+        &workspace,
+        &Task::new("add a second toggle"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the second turn finishes");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    let fired = bodies
+        .iter()
+        .position(|body| body.contains("nothing written yet"))
+        .expect("a new task after an answered one was never told it had written nothing");
+    assert_eq!(
+        fired, ROUNDS_BEFORE_WRITING,
+        "the line came on the wrong round"
+    );
+}
+
 /// A turn that never stops asking for tools is stopped, and stopped with an answer.
 ///
 /// What produced this was a directory nobody had vouched for: every listing came back as a
