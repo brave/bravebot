@@ -77,15 +77,18 @@ pub const MAX_ATTACHMENT_BYTES: usize = 8 * 1024 * 1024;
 /// the budget is what is held at once, not what each turn may add.
 pub const MAX_REWIND_BYTES: usize = 32 * 1024 * 1024;
 
-/// A `read_git` call's arguments: the three the planner spells as text, which are gated as
+/// A `read_git` call's arguments: the four the planner spells as text, which are gated as
 /// routing, and the literals the tool already parsed.
 #[derive(Clone, Copy)]
 pub struct GitQuestion<'a> {
     pub repository: &'a Labelled<String>,
     pub revision: Option<&'a Labelled<String>>,
     pub path: Option<&'a Labelled<String>>,
+    pub pattern: Option<&'a Labelled<String>>,
     pub query: crate::git::Query,
     pub count: usize,
+    pub skip: usize,
+    pub messages: bool,
     pub since: Option<i64>,
     pub until: Option<i64>,
 }
@@ -2330,8 +2333,11 @@ impl Workspace {
             repository,
             revision,
             path,
+            pattern,
             query,
             count,
+            skip,
+            messages,
             since,
             until,
         } = *question;
@@ -2347,6 +2353,7 @@ impl Workspace {
                         reason: match field {
                             "revision" => "the revision was not trusted",
                             "path" => "the path was not trusted",
+                            "pattern" => "the pattern was not trusted",
                             _ => "the repository was not trusted",
                         },
                     })
@@ -2363,6 +2370,26 @@ impl Workspace {
                 Some(path) => {
                     policy.before_action("read_git", "path", Role::Routing, path)?;
                     Some(trusted("path", path)?)
+                }
+                None => None,
+            };
+            // Compiled before anything under `.git` is opened, so an unusable pattern is reported
+            // as itself rather than as a search that found nothing.
+            let pattern = match pattern {
+                Some(pattern) => {
+                    policy.before_action("read_git", "pattern", Role::Routing, pattern)?;
+                    let needle = trusted("pattern", pattern)?;
+                    if needle.is_empty() {
+                        return Err(WorkspaceError::Invalid {
+                            path: named.clone(),
+                            reason: "the search pattern was empty",
+                        });
+                    }
+                    Some(crate::regex::Regex::compile(&needle).map_err(|e| {
+                        WorkspaceError::Pattern {
+                            detail: e.to_string(),
+                        }
+                    })?)
                 }
                 None => None,
             };
@@ -2412,6 +2439,9 @@ impl Workspace {
                 revision: revision.as_deref(),
                 path: path.as_deref(),
                 count,
+                skip,
+                messages,
+                pattern: pattern.as_ref(),
                 since,
                 until,
                 deadline,

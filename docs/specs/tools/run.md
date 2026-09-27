@@ -1141,11 +1141,13 @@ the alternative of withholding it from the case it exists for.
 
 `run.maxOutput`, in the settings files, names how many bytes of what a program printed may enter the
 conversation. It may be raised as well as lowered, and a key nobody set leaves the built-in cap in
-force. One key covers a foreground run, a `job_output` page, and the account a finished background
-job gives of itself, because those are the same bytes reaching the same context by three routes. It
-does not bound `read_output`, which hands over the whole of the slot it was endorsed for
-([OUTPUT-1](read-output.md#OUTPUT-1)). It does bound the same release made in a run's own result
-([RUN-22](#RUN-22)), which is asked for before the size is known.
+force. One key covers a foreground run, a `job_output` page, the account a finished background job
+gives of itself, and a `read_output` page of output the planner may read
+([OUTPUT-4](read-output.md#OUTPUT-4)), because those are the same bytes reaching the same context by
+four routes. It does not bound `read_output`'s release of output nobody vouched for, which hands over
+the whole of the slot it was endorsed for ([OUTPUT-1](read-output.md#OUTPUT-1)). It does bound the
+same release made in a run's own result ([RUN-22](#RUN-22)), which is asked for before the size is
+known.
 
 A cap of zero is absence rather than a program permitted to say nothing, as is any value that is not
 a whole count. Absence leaves the built-in cap in force, which is what a layer setting the key gets
@@ -1159,8 +1161,9 @@ away from a gate: output nobody vouched for is quarantined whole either way, and
 how much of what the planner may read reaches it.
 
 **It bounds the conversation and never the run.** What was printed is kept whole beside the sample
-whatever the cap is, so the middle is still there to hand to a processor or write to a file, and a
-raised cap does not mean a command is run twice to see it.
+whatever the cap is, so the middle is still there to hand to a processor, write to a file, or read a
+page at a time where the planner may read it ([OUTPUT-4](read-output.md#OUTPUT-4)). Neither a raised
+cap nor a lowered one means a command is run twice to see its middle.
 
 **The figure is in bytes.** Cutting on characters would make one number mean a different amount of
 context per language, and a cap is spent in tokens rather than in glyphs. The cut still lands on a
@@ -1179,6 +1182,7 @@ worth and does not stop being theirs because the work moved ([DELEGATE-1](../del
 `verified-by: bravebot_agent::tools::output_is_cut_to_the_cap_it_was_given`
 `verified-by: bravebot_agent::turn::a_configured_output_cap_is_what_a_run_is_cut_to`
 `verified-by: bravebot_agent::turn::a_delegate_runs_under_the_output_cap_of_the_turn_that_spawned_it`
+`verified-by: bravebot_agent::turn::output_too_long_for_its_result_is_read_page_by_page_with_nobody_asked`
 
 <a id="RUN-22"></a>
 ### RUN-22: a run may ask to read what it printed, and gets it in the same result where nobody would be asked

@@ -608,13 +608,14 @@ That is a budget rather than a rule about what is allowed, which is why you can 
 it when a long test run is worth the room, lower it when you would rather the agent read a summary
 and ask.
 
-One number covers a command's output, a `job_output` page of a background job's output, and the
-account a background job gives when it finishes. Output released with `read_output` is not cut by
-it: that reaches the agent whole.
+One number covers a command's output, a `job_output` page of a background job's output, the account
+a background job gives when it finishes, and a `read_output` page of output the agent was shown the
+beginning and end of. Output you release with `read_output` after being asked is not cut by it: that
+reaches the agent whole.
 
 **What was printed is never lost.** Only what reaches the conversation is cut. The whole output stays
-beside the sample, so the agent can still hand it to a check or write it to a file without running
-the command again.
+beside the sample, so the agent can read the middle a page at a time, hand it to a check or write it
+to a file without running the command again.
 
 **Bytes, not characters**, and a cut always lands between characters rather than inside one.
 

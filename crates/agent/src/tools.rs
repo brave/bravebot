@@ -414,9 +414,13 @@ fn table(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<Tool> {
         Tool::function(
             "read_git",
             "Read a repository's history from its .git directory without starting git: log lists \
-             commits one per line, show prints a commit with its diff or a file or directory at \
+             commits one per line, or each with its whole message, a page at a time; show \
+             prints a commit with its diff or a file or directory at \
              a revision, diff compares two commits, and status lists staged, unstaged and \
-             untracked paths as git status --short does. Works only where the whole of .git is \
+             untracked paths as git status --short does. tags lists tags newest version first, \
+             as git tag --sort=-v:refname does, and with a revision only those it reaches, as \
+             --merged does; search finds the lines matching a regular expression in the files \
+             at a revision, as git grep does. Works only where the whole of .git is \
              trusted, and for status the whole working tree; elsewhere it says so and you use \
              run. Nothing git's configuration names is applied: no diff drivers, textconv, \
              filters or signature checks, and no remote URL is ever returned. Status detects no \
@@ -427,8 +431,8 @@ fn table(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<Tool> {
                 "properties": {
                     "query": {
                         "type": "string",
-                        "enum": ["log", "show", "diff", "status"],
-                        "description": "log, show, diff or status."
+                        "enum": ["log", "show", "diff", "status", "tags", "search"],
+                        "description": "log, show, diff, status, tags or search."
                     },
                     "repository": {
                         "type": "string",
@@ -442,17 +446,37 @@ fn table(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<Tool> {
                                         revision or a range A..B and defaults to HEAD. show takes \
                                         one and defaults to HEAD; <revision>:<path> shows a file \
                                         or directory as it was. diff needs two, written A..B or \
-                                        \"A B\"."
+                                        \"A B\". tags takes none, or one to list only the tags \
+                                        it reaches. search takes one and defaults to HEAD."
                     },
                     "path": {
                         "type": "string",
                         "description": "Relative to the repository's root. Limits log to commits \
-                                        that changed it, and show, diff and status to changes \
-                                        under it."
+                                        that changed it, show, diff and status to changes \
+                                        under it, and search to files under it."
+                    },
+                    "pattern": {
+                        "type": "string",
+                        "description": "search only, and required there: the regular expression \
+                                        to look for, matched against each line."
                     },
                     "count": {
                         "type": "integer",
-                        "description": "Commits a log lists. Defaults to 20, at most 200."
+                        "description": "Commits a log lists, tags a list of tags shows, or lines \
+                                        a search prints. Defaults to 20, at most 200."
+                    },
+                    "skip": {
+                        "type": "integer",
+                        "description": "log, tags and search: how many to pass over before \
+                                        listing, as git log --skip does. An answer that stopped \
+                                        with more left gives the skip that lists the next of \
+                                        them."
+                    },
+                    "messages": {
+                        "type": "boolean",
+                        "description": "log only: print each commit's whole message beneath its \
+                                        line, which is where a commit says why it was made and \
+                                        what it closes. Defaults to false."
                     },
                     "since": {
                         "type": "string",
@@ -842,13 +866,24 @@ fn table(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<Tool> {
              the like tell you nothing until you ask for the result. Ask for the errors too when \
              a run fails, or you will not know why it failed and must not claim it succeeded. \
              Only for output from run; a quarantined file is not readable this way. For \
-             anything else you are holding a reference to, vet_content is the question to ask.",
+             anything else you are holding a reference to, vet_content is the question to ask. \
+             \
+             Output you were shown the beginning and end of, because the whole was too long for \
+             one result, is the exception: you may read all of it, so nobody is asked, and it \
+             comes back a page at a time from the offset you give.",
             json!({
                 "type": "object",
                 "properties": {
                     "ref": {
                         "type": "string",
                         "description": "The reference a run gave you, e.g. \"ref:5\"."
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": "For output too long for one result, the byte to start \
+                                        from: the sample you were shown says where its middle \
+                                        begins, and each page names the offset of the next. \
+                                        Defaults to 0. Not for output you were not shown."
                     }
                 },
                 "required": ["ref"]
@@ -4357,6 +4392,33 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
         ));
     }
 
+    // A literal, like a log's skip: it names nothing, so there is no destination for it to decide.
+    let offset = match arguments.get("offset") {
+        None | Some(Value::Null) => None,
+        Some(offset) => match offset.as_u64() {
+            Some(offset) => Some(usize::try_from(offset).unwrap_or(usize::MAX)),
+            None => {
+                return Produced::problem(
+                    "error: 'offset' must be a whole number of bytes, e.g. 16384",
+                );
+            }
+        },
+    };
+
+    // Output whose label already lets the planner read it, kept out of a result by a cap on the
+    // room it takes. Nobody is asked and nothing is endorsed: a yes here would be a person
+    // answering for bytes the label had already answered for, and the trail would credit them
+    // with a release that was never theirs to make.
+    if tools.slots.label_of(&slot).is_some_and(Label::is_trusted) {
+        return read_a_page(policy, tools, &slot, offset.unwrap_or(0));
+    }
+    if offset.is_some() {
+        return Produced::problem(format!(
+            "refused: an offset pages through output you may already read, and {slot} is \
+             quarantined. Without one, read_output asks the user to show you the whole of it."
+        ));
+    }
+
     // The second opinion, before the question rather than after it. No `expects`: the planner asked
     // for the output to be read, not for it to be checked, and it has said nothing about what the
     // command printed.
@@ -4415,6 +4477,66 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
         }
         Err(refused) => (*refused).costing(spent).waiting(waited),
     }
+}
+
+/// One page of output the planner may already read, from `offset` and no longer than a run's
+/// result may be.
+///
+/// The page keeps the slot's label on the way back, so what puts it in the planner's context is the
+/// kernel's `present`, deciding from that label as it would have had the cap not cut it.
+fn read_a_page<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    tools: &Tools<'_>,
+    slot: &SlotId,
+    offset: usize,
+) -> Produced {
+    let content = match policy.resolve("read_output", slot, tools.slots) {
+        Ok(content) => content,
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
+    };
+    let cap = tools.output_cap;
+    let page = policy.render_in_place("read_output", &content, |text| {
+        page_of(&text, slot, offset, cap)
+    });
+    Produced::new(
+        page,
+        format!("what {slot} held"),
+        format!("from byte {offset}"),
+    )
+    .of_content()
+}
+
+/// `text` from `offset`, at most `cap` bytes of it, with a line saying where it stopped.
+///
+/// Both ends land on a character boundary, as a sample's cut does, and a page holds at least one
+/// character so a cap smaller than one cannot stop every page where it began.
+fn page_of(text: &str, slot: &SlotId, offset: usize, cap: usize) -> String {
+    let total = text.len();
+    if offset >= total {
+        return format!("({slot} holds {total} bytes, so nothing starts at byte {offset}.)");
+    }
+    let before = |mut at: usize| {
+        while !text.is_char_boundary(at) {
+            at -= 1;
+        }
+        at
+    };
+    let start = before(offset);
+    let mut end = before(start.saturating_add(cap).min(total));
+    if end == start {
+        end = (start + 1..=total)
+            .find(|at| text.is_char_boundary(*at))
+            .unwrap_or(total);
+    }
+    let rest = if end == total {
+        "which is the end of it".to_owned()
+    } else {
+        format!("read_output with offset {end} gives the next part")
+    };
+    format!(
+        "{}\n\n(bytes {start} to {end} of {total} in {slot}; {rest}.)",
+        &text[start..end]
+    )
 }
 
 /// What a run that asked to read what it printed is handed in the same result, where the answer
@@ -5560,8 +5682,8 @@ fn run<S: Sink, C: Confirmer>(
             };
             let (text, whole) = match sample {
                 // The cap bounds the conversation, not the run. What was printed is kept whole
-                // beside the sample, so the middle is still there to hand to a processor or write
-                // to a file, and nothing has to be run twice to see it.
+                // beside the sample, so the middle is still there to read a page at a time, hand to
+                // a processor or write to a file, and nothing has to be run twice to see it.
                 Some(sample) => (sample, Some(Labelled::new(text, label))),
                 None => (text, None),
             };
@@ -5953,7 +6075,7 @@ fn bounded(text: &str, cap: usize) -> Option<String> {
     let dropped_lines = text[head_end..tail_start].lines().count();
     Some(format!(
         "{}\n\n(the middle of this output was dropped: {dropped_bytes} bytes, \
-         about {dropped_lines} lines.)\n\n{}",
+         about {dropped_lines} lines, from byte {head_end}.)\n\n{}",
         &text[..head_end],
         &text[tail_start..]
     ))
@@ -6999,7 +7121,9 @@ fn read_git<S: Sink, C: Confirmer>(
 ) -> Produced {
     let workspace = tools.workspace;
     let Some(named) = argument(arguments, "query") else {
-        return Produced::problem("error: 'query' is required: one of log, show, diff or status");
+        return Produced::problem(
+            "error: 'query' is required: one of log, show, diff, status, tags or search",
+        );
     };
     // The question is routing, promoted like any other proposal and then matched against the
     // closed set, so a name off the list is refused rather than guessed at.
@@ -7009,8 +7133,8 @@ fn read_git<S: Sink, C: Confirmer>(
                 Some(query) => query,
                 None => {
                     return Produced::problem(format!(
-                        "error: read_git answers log, show, diff and status, not {}. Use run to \
-                         ask git for anything else.",
+                        "error: read_git answers log, show, diff, status, tags and search, not \
+                         {}. Use run to ask git for anything else.",
                         name.trim()
                     ));
                 }
@@ -7042,6 +7166,10 @@ fn read_git<S: Sink, C: Confirmer>(
         Ok(path) => path,
         Err(refused) => return Produced::problem(refused),
     };
+    let pattern = match git_argument(policy, arguments, "pattern") {
+        Ok(pattern) => pattern,
+        Err(refused) => return Produced::problem(refused),
+    };
     let since = match git_argument(policy, arguments, "since")
         .and_then(|since| git_day(since.as_ref(), "since", false))
     {
@@ -7063,6 +7191,14 @@ fn read_git<S: Sink, C: Confirmer>(
         .map_or(crate::git::DEFAULT_COUNT, |n| {
             n.clamp(1, crate::git::MAX_COUNT as u64) as usize
         });
+    let skip = arguments
+        .get("skip")
+        .and_then(Value::as_u64)
+        .map_or(0, |n| usize::try_from(n).unwrap_or(usize::MAX));
+    let messages = arguments
+        .get("messages")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
 
     // A deny rule over the file a question names covers asking about its history too, and is said
     // the way every other read says it, before anything under `.git` is opened.
@@ -7093,8 +7229,11 @@ fn read_git<S: Sink, C: Confirmer>(
         repository: &repository,
         revision: revision.as_ref(),
         path: path.as_ref(),
+        pattern: pattern.as_ref(),
         query,
         count,
+        skip,
+        messages,
         since,
         until,
     };
@@ -7186,6 +7325,16 @@ fn read_git<S: Sink, C: Confirmer>(
                 "\n\n(read_git ran out of time and this answer is partial; narrow it with a \
                  path, a range or a smaller count)",
             );
+        } else if let Some(next) = a.next {
+            let (answer, more) = match query {
+                crate::git::Query::Tags => ("list of tags", "tags"),
+                crate::git::Query::Search => ("search", "matching lines"),
+                _ => ("log", "commits"),
+            };
+            body.push_str(&format!(
+                "\n\n(this {answer} stopped with more {more} to list; ask again with skip {next} \
+                 for the next of them)"
+            ));
         } else if a.cut {
             body.push_str(
                 "\n\n(this answer stopped at read_git's cap and is incomplete; narrow it with a \
@@ -8606,6 +8755,39 @@ mod tests {
         let wide = "\u{3053}\u{3093}\u{306b}\u{3061}\u{306f}".repeat(100);
         let cut = bounded(&wide, 101).expect("an output past a narrow cap is cut");
         assert!(cut.contains("the middle of this output was dropped"));
+    }
+
+    /// A page of kept output starts and stops on a character, even where the offset or the cap
+    /// lands inside one, and says where the next page begins. A cap narrower than a character
+    /// still moves forward, or a planner paging by the offset it was given would never finish.
+    #[test]
+    fn a_page_starts_and_stops_on_a_character_and_names_the_next() {
+        let slot = SlotId::new("ref:3");
+        // Boundaries at 0, 1, 2, 5, 6 and 7.
+        let text = "ab\u{3053}cd";
+        let page = |offset, cap| page_of(text, &slot, offset, cap);
+        assert_eq!(
+            page(0, 3),
+            "ab\n\n(bytes 0 to 2 of 7 in ref:3; read_output with offset 2 gives the next part.)"
+        );
+        assert_eq!(
+            page(3, 4),
+            "\u{3053}c\n\n(bytes 2 to 6 of 7 in ref:3; read_output with offset 6 gives the next \
+             part.)"
+        );
+        assert_eq!(
+            page(2, 1),
+            "\u{3053}\n\n(bytes 2 to 5 of 7 in ref:3; read_output with offset 5 gives the next \
+             part.)"
+        );
+        assert_eq!(
+            page(5, 100),
+            "cd\n\n(bytes 5 to 7 of 7 in ref:3; which is the end of it.)"
+        );
+        assert_eq!(
+            page(7, 100),
+            "(ref:3 holds 7 bytes, so nothing starts at byte 7.)"
+        );
     }
 
     mod activity {

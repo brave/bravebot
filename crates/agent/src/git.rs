@@ -74,6 +74,8 @@ pub enum Query {
     Show,
     Diff,
     Status,
+    Tags,
+    Search,
 }
 
 impl Query {
@@ -83,7 +85,20 @@ impl Query {
             "show" => Some(Query::Show),
             "diff" => Some(Query::Diff),
             "status" => Some(Query::Status),
+            "tags" => Some(Query::Tags),
+            "search" => Some(Query::Search),
             _ => None,
+        }
+    }
+
+    pub fn word(self) -> &'static str {
+        match self {
+            Query::Log => "log",
+            Query::Show => "show",
+            Query::Diff => "diff",
+            Query::Status => "status",
+            Query::Tags => "tags",
+            Query::Search => "search",
         }
     }
 }
@@ -95,6 +110,12 @@ pub struct Request<'a> {
     /// Relative to the repository's root, not the workspace's.
     pub path: Option<&'a str>,
     pub count: usize,
+    /// Commits a log matches and passes over before it lists any, as `git log --skip` does.
+    pub skip: usize,
+    /// Whether a log prints each commit's whole message beneath its line.
+    pub messages: bool,
+    /// What a search looks for, compiled before the repository was opened.
+    pub pattern: Option<&'a crate::regex::Regex>,
     /// Seconds since the epoch; a commit older than this is not shown and not walked past.
     pub since: Option<i64>,
     /// Seconds since the epoch; a commit newer than this is not shown but is walked past.
@@ -112,6 +133,9 @@ pub struct Answer {
     pub withheld: bool,
     /// Whether the text stops short of everything the question matched.
     pub cut: bool,
+    /// Where a log, a list of tags or a search stopped with more to list, the `skip` that lists
+    /// the next of them.
+    pub next: Option<usize>,
     pub timed_out: bool,
     /// Each run of a file's lines the text printed, so each is scanned as a read of that file.
     pub printed: Vec<Printed>,
@@ -162,8 +186,11 @@ pub enum Declined {
     PathInvalid(String),
     Withheld(String),
     ShowNeedsPath(String),
-    ShowTakesOne(String),
+    TakesOne(Query, String),
     DiffNeedsTwo,
+    SearchNeedsPattern,
+    PatternIsForSearch(Query),
+    TagsTakeNoPath,
     PairIsForDiff(String),
     UntrustedTree,
     StatusTakesNoRevision,
@@ -258,13 +285,25 @@ impl Declined {
                  is unknown and cannot be checked against what may be read. Name it as \
                  <commit>:<path>."
             ),
-            Declined::ShowTakesOne(revision) => format!(
-                "show takes one revision and {revision} is a range; use log to list its commits \
-                 or diff to compare its ends."
+            Declined::TakesOne(query, revision) => format!(
+                "{} takes one revision and {revision} is a range; use log to list its commits \
+                 or diff to compare its ends.",
+                query.word()
             ),
             Declined::DiffNeedsTwo => "diff compares two commits, written as A..B or as \"A B\". \
                  To see what one commit changed, use show; to compare with the working tree, use \
                  run."
+                .to_owned(),
+            Declined::SearchNeedsPattern => "search needs a pattern: the regular expression to \
+                 look for in the files at the revision."
+                .to_owned(),
+            Declined::PatternIsForSearch(query) => format!(
+                "a pattern is what search looks for in the files at a revision, and {} takes \
+                 none.",
+                query.word()
+            ),
+            Declined::TagsTakeNoPath => "tags lists the repository's tags and takes no path; to \
+                 find the commits that changed a file, use log with the path."
                 .to_owned(),
             Declined::PairIsForDiff(revision) => format!(
                 "{revision} names two revisions, which only diff takes; for a range of commits \
@@ -1043,6 +1082,14 @@ impl Repository {
         if request.query == Query::Status && request.revision.is_some() {
             return Err(Declined::StatusTakesNoRevision);
         }
+        match (request.query, request.pattern) {
+            (Query::Search, None) => return Err(Declined::SearchNeedsPattern),
+            (Query::Search, Some(_)) | (_, None) => {}
+            (query, Some(_)) => return Err(Declined::PatternIsForSearch(query)),
+        }
+        if request.query == Query::Tags && request.path.is_some() {
+            return Err(Declined::TagsTakeNoPath);
+        }
         let mut out = Out {
             text: Text::default(),
             shown: Vec::new(),
@@ -1065,12 +1112,14 @@ impl Repository {
                 }
             }
         };
-        let mut cut = false;
+        let mut next = None;
         match request.query {
-            Query::Log => cut = self.log(&mut out, request, filter.as_deref())?,
+            Query::Log => next = self.log(&mut out, request, filter.as_deref())?,
             Query::Show => self.show(&mut out, request, filter.as_deref())?,
             Query::Diff => self.diff(&mut out, request, filter.as_deref())?,
             Query::Status => status::answer(self, &mut out, filter.as_deref())?,
+            Query::Tags => next = self.tags(&mut out, request)?,
+            Query::Search => next = self.search(&mut out, request, filter.as_deref())?,
         }
         let mut shown = out.shown;
         shown.sort();
@@ -1079,7 +1128,8 @@ impl Repository {
             text: out.text.body,
             shown,
             withheld: out.withheld_any,
-            cut: cut || out.text.cut,
+            cut: next.is_some() || out.text.cut,
+            next,
             timed_out: out.timed_out,
             printed: out.printed,
             around: out.text.around,
@@ -1396,12 +1446,13 @@ impl Repository {
         Ok(entries)
     }
 
+    /// `Some` with the skip that lists the rest, where commits were left for another page.
     fn log(
         &self,
         out: &mut Out<'_>,
         request: &Request<'_>,
         filter: Option<&str>,
-    ) -> Result<bool, Declined> {
+    ) -> Result<Option<usize>, Declined> {
         let (tips, hidden_tips) = match spec(request.revision.unwrap_or("HEAD"))? {
             Spec::One(one) => (vec![self.commit_of(one, out)?], Vec::new()),
             Spec::Range(a, b) => (vec![self.commit_of(b, out)?], vec![self.commit_of(a, out)?]),
@@ -1427,9 +1478,8 @@ impl Repository {
         // A range is walked to its end before any of it is listed, because a commit is known to
         // be reachable from the range's start only once everything newer has been read.
         let limited = !hidden_tips.is_empty();
-        let count = request.count.min(MAX_COUNT);
         let mut listed = Vec::new();
-        let mut shown = 0;
+        let mut page = Page::default();
         let mut date = i64::MAX;
         let mut slop = SLOP;
         while let Some(next) = walk.queue.pop() {
@@ -1468,11 +1518,9 @@ impl Repository {
             if walk.treesame.contains(&id) {
                 continue;
             }
-            if shown == count {
-                return Ok(true);
+            if let Some(next) = self.list(out, request, &id, &mut page)? {
+                return Ok(Some(next));
             }
-            out.text.line(&self.log_line(&id)?);
-            shown += 1;
         }
         // A range cut off by the deadline lists nothing: a commit its start reaches is known to
         // be one only once the walk is done.
@@ -1481,20 +1529,56 @@ impl Repository {
                 if walk.hidden.contains(&id) || walk.treesame.contains(&id) {
                     continue;
                 }
-                if shown == count {
-                    return Ok(true);
+                if let Some(next) = self.list(out, request, &id, &mut page)? {
+                    return Ok(Some(next));
                 }
-                out.text.line(&self.log_line(&id)?);
-                shown += 1;
             }
         }
-        if shown == 0 && !out.timed_out {
-            out.text.line("(no commits match)");
+        if page.shown == 0 && !out.timed_out {
+            out.text.line(&match request.skip {
+                0 => "(no commits match)".to_owned(),
+                skip => format!("(no commits match past the first {skip})"),
+            });
         }
-        Ok(false)
+        Ok(None)
     }
 
-    fn log_line(&self, id: &oid) -> Result<String, Declined> {
+    /// List `id`, a commit the log matched, unless it is among the first `skip`. `Some` with the
+    /// skip that lists it, where the page is already full by its count or by its lines.
+    fn list(
+        &self,
+        out: &mut Out<'_>,
+        request: &Request<'_>,
+        id: &oid,
+        page: &mut Page,
+    ) -> Result<Option<usize>, Declined> {
+        if page.passed < request.skip {
+            page.passed += 1;
+            return Ok(None);
+        }
+        let next = request.skip + page.shown;
+        if page.shown == request.count.min(MAX_COUNT) {
+            return Ok(Some(next));
+        }
+        let lines = self.log_entry(id, request.messages)?;
+        // A commit goes on a page whole or waits for the next one, except the first: a message
+        // longer than a whole answer would otherwise wait forever.
+        if page.shown > 0 && out.text.lines + lines.len() > MAX_LINES {
+            out.text.cut = true;
+            return Ok(Some(next));
+        }
+        for line in &lines {
+            if !out.text.line(line) {
+                break;
+            }
+        }
+        page.shown += 1;
+        Ok(None)
+    }
+
+    /// A commit's line in a log, then with `messages` the rest of its message, indented as `git
+    /// show` indents it.
+    fn log_entry(&self, id: &oid, messages: bool) -> Result<Vec<String>, Declined> {
         let data = self.object(id, Kind::Commit)?;
         let commit =
             CommitRef::from_bytes(&data, HashKind::Sha1).map_err(|_| Declined::Unreadable)?;
@@ -1505,11 +1589,296 @@ impl Repository {
             }
             Err(_) => (String::new(), String::new()),
         };
-        let summary = one_line(commit.message().summary().as_ref());
-        Ok(format!(
+        let message = commit.message();
+        let summary = one_line(message.summary().as_ref());
+        let mut lines = vec![format!(
             "{} {day} {name} {summary}",
             id.to_hex_with_len(SHORT)
-        ))
+        )];
+        if let Some(body) = message.body.filter(|_| messages) {
+            let body = String::from_utf8_lossy(body);
+            lines.extend(body.trim_end().lines().map(|line| format!("    {line}")));
+        }
+        Ok(lines)
+    }
+
+    /// The repository's tags, newest version first as `git tag --sort=-v:refname` lists them, and
+    /// with a revision only those whose commit it reaches, as `--merged` does. `Some` with the skip
+    /// that lists the rest, where tags were left for another page.
+    fn tags(&self, out: &mut Out<'_>, request: &Request<'_>) -> Result<Option<usize>, Declined> {
+        let tip = match request.revision {
+            None => None,
+            Some(text) => match spec(text)? {
+                Spec::One(one) => Some(self.commit_of(one, out)?),
+                Spec::Range(..) => {
+                    return Err(Declined::TakesOne(Query::Tags, text.trim().to_owned()));
+                }
+                Spec::Pair(..) => return Err(Declined::PairIsForDiff(text.trim().to_owned())),
+            },
+        };
+        let mut tags = Vec::new();
+        for name in self.tag_names(out.deadline)? {
+            let Some(Some(id)) = self.follow(&name)? else {
+                continue;
+            };
+            let (target, kind, _) = self.peel(id, None, &name)?;
+            tags.push((name, target, kind));
+        }
+        if let Some(tip) = tip {
+            let wanted: HashSet<ObjectId> = tags
+                .iter()
+                .filter(|(_, _, kind)| *kind == Kind::Commit)
+                .map(|(_, target, _)| *target)
+                .collect();
+            let reached = self.reaches(out, tip, &wanted)?;
+            // Cut off by the deadline, a tag is known to be outside the revision's history only
+            // once all of it is read, so none is listed.
+            if out.timed_out {
+                return Ok(None);
+            }
+            tags.retain(|(_, target, kind)| *kind == Kind::Commit && reached.contains(target));
+        }
+        tags.sort_by(|a, b| version_order(&b.0, &a.0).then_with(|| a.0.cmp(&b.0)));
+        let total = tags.len();
+        let start = request.skip.min(total);
+        let end = start
+            .saturating_add(request.count.min(MAX_COUNT))
+            .min(total);
+        for (name, target, kind) in &tags[start..end] {
+            let short = name.strip_prefix("refs/tags/").unwrap_or(name);
+            let line = match kind {
+                Kind::Commit => format!("{short} {}", self.log_entry(target, false)?.remove(0)),
+                other => format!(
+                    "{short} {} ({})",
+                    target.to_hex_with_len(SHORT),
+                    kind_word(*other)
+                ),
+            };
+            out.text.line(&line);
+        }
+        if start == end {
+            out.text.line(&match request.skip {
+                0 => "(no tags match)".to_owned(),
+                skip => format!("(no tags match past the first {skip})"),
+            });
+        }
+        Ok((end < total).then_some(end))
+    }
+
+    /// Every tag's full name, loose or packed, spelled as the ref store finds it.
+    fn tag_names(&self, deadline: Instant) -> Result<BTreeSet<String>, Declined> {
+        let mut names = BTreeSet::new();
+        let root = self.git_dir.join("refs").join("tags");
+        let mut files = Vec::new();
+        walk(&root, &mut files, deadline)?;
+        for file in files {
+            let Ok(below) = file.strip_prefix(&root) else {
+                continue;
+            };
+            let parts: Option<Vec<&str>> = below.iter().map(|part| part.to_str()).collect();
+            let Some(parts) = parts else {
+                continue;
+            };
+            let name = format!("refs/tags/{}", parts.join("/"));
+            if plausible_ref(&name) {
+                names.insert(name);
+            }
+        }
+        let packed = self
+            .refs
+            .open_packed_buffer()
+            .map_err(|_| Declined::Unreadable)?;
+        if let Some(packed) = packed {
+            for reference in packed.iter().map_err(|_| Declined::Unreadable)? {
+                let reference = reference.map_err(|_| Declined::Unreadable)?;
+                let name: &[u8] = reference.name.as_bstr();
+                if let Ok(name) = std::str::from_utf8(name)
+                    && name.starts_with("refs/tags/")
+                    && plausible_ref(name)
+                {
+                    names.insert(name.to_owned());
+                }
+            }
+        }
+        Ok(names)
+    }
+
+    /// Which of `wanted` the history of `tip` holds, walked no further than finding them all takes.
+    fn reaches(
+        &self,
+        out: &mut Out<'_>,
+        tip: ObjectId,
+        wanted: &HashSet<ObjectId>,
+    ) -> Result<HashSet<ObjectId>, Declined> {
+        let mut found = HashSet::new();
+        let mut seen = HashSet::from([tip]);
+        let mut pending = vec![tip];
+        while let Some(id) = pending.pop() {
+            if found.len() == wanted.len() || out.late() {
+                break;
+            }
+            if wanted.contains(&id) {
+                found.insert(id);
+            }
+            for parent in self.info(&id)?.parents {
+                if seen.insert(parent) {
+                    pending.push(parent);
+                }
+            }
+        }
+        Ok(found)
+    }
+
+    /// The lines of the files at one revision that `pattern` matches, in the order `git grep`
+    /// lists them. `Some` with the skip that lists the rest, where lines were left for another
+    /// page.
+    fn search(
+        &self,
+        out: &mut Out<'_>,
+        request: &Request<'_>,
+        filter: Option<&str>,
+    ) -> Result<Option<usize>, Declined> {
+        let Some(pattern) = request.pattern else {
+            return Err(Declined::SearchNeedsPattern);
+        };
+        let text = request.revision.unwrap_or("HEAD");
+        let one = match spec(text)? {
+            Spec::One(one) => one,
+            Spec::Range(..) => {
+                return Err(Declined::TakesOne(Query::Search, text.trim().to_owned()));
+            }
+            Spec::Pair(..) => return Err(Declined::PairIsForDiff(text.trim().to_owned())),
+        };
+        let commit = self.commit_of(one, out)?;
+        let tree = self.info(&commit)?.tree;
+        let mut search = Search {
+            pattern,
+            filter,
+            page: Page::default(),
+        };
+        let next = self.search_tree(out, request, &mut search, tree, "", 0)?;
+        if search.page.shown == 0 && next.is_none() && !out.timed_out {
+            out.text.line(&match request.skip {
+                0 => "(no matches)".to_owned(),
+                skip => format!("(no matches past the first {skip})"),
+            });
+        }
+        Ok(next)
+    }
+
+    fn search_tree(
+        &self,
+        out: &mut Out<'_>,
+        request: &Request<'_>,
+        search: &mut Search<'_>,
+        tree: ObjectId,
+        prefix: &str,
+        depth: usize,
+    ) -> Result<Option<usize>, Declined> {
+        if depth > TREE_DEPTH {
+            return Err(Declined::Unreadable);
+        }
+        for entry in self.entries(Some(tree))?.into_values() {
+            if out.late() {
+                return Ok(None);
+            }
+            let Some(name) = entry.name else {
+                out.withheld_any = true;
+                continue;
+            };
+            let path = join(prefix, &name);
+            if !in_scope(&path, search.filter) {
+                continue;
+            }
+            if (out.withheld)(&path) {
+                out.withheld_any = true;
+                continue;
+            }
+            let next = match entry.kind {
+                EntryKind::Tree => {
+                    self.search_tree(out, request, search, entry.id, &path, depth + 1)?
+                }
+                // A link's target and a submodule's commit are not a file's lines, and `git grep`
+                // over a tree searches neither.
+                EntryKind::Blob | EntryKind::BlobExecutable
+                    if search.filter.is_none_or(|filter| {
+                        path == filter
+                            || path
+                                .strip_prefix(filter)
+                                .is_some_and(|rest| rest.starts_with('/'))
+                    }) =>
+                {
+                    self.search_blob(out, request, search, entry.id, &path)?
+                }
+                _ => None,
+            };
+            if next.is_some() {
+                return Ok(next);
+            }
+        }
+        Ok(None)
+    }
+
+    fn search_blob(
+        &self,
+        out: &mut Out<'_>,
+        request: &Request<'_>,
+        search: &mut Search<'_>,
+        id: ObjectId,
+        path: &str,
+    ) -> Result<Option<usize>, Declined> {
+        // Shown whether or not anything in it matches: finding nothing says something about what
+        // a file holds too.
+        out.shown.push(path.to_owned());
+        let (_, size) = self.objects.header(&id)?.ok_or(Declined::Unreadable)?;
+        if size > MAX_BLOB {
+            return Ok(match search.page.place(request) {
+                Place::Passed => None,
+                Place::Next(next) => Some(next),
+                Place::Here => {
+                    out.text.line(&format!(
+                        "({path} is {size} bytes, more than read_git searches)"
+                    ));
+                    None
+                }
+            });
+        }
+        let data = self.object(&id, Kind::Blob)?;
+        let text = escaped(&data);
+        if is_binary(&data) {
+            if !text.lines().any(|line| search.pattern.matches(line)) {
+                return Ok(None);
+            }
+            return Ok(match search.page.place(request) {
+                Place::Passed => None,
+                Place::Next(next) => Some(next),
+                Place::Here => {
+                    out.text.line(&format!("Binary file {path} matches"));
+                    None
+                }
+            });
+        }
+        for (index, line) in text.lines().enumerate() {
+            if !search.pattern.matches(line) {
+                continue;
+            }
+            match search.page.place(request) {
+                Place::Passed => continue,
+                Place::Next(next) => return Ok(Some(next)),
+                Place::Here => {}
+            }
+            let hit = format!("{path}:{}: {line}", index + 1);
+            let start = hit.len() - line.len();
+            let Some(end) = out.text.add(&hit, true) else {
+                return Ok(None);
+            };
+            out.printed.push(Printed {
+                path: path.to_owned(),
+                first_line: index + 1,
+                text: format!("{}\n", &hit[start.min(end)..end]),
+            });
+        }
+        Ok(None)
     }
 
     fn show(
@@ -1521,7 +1890,9 @@ impl Repository {
         let text = request.revision.unwrap_or("HEAD");
         let one = match spec(text)? {
             Spec::One(one) => one,
-            Spec::Range(..) => return Err(Declined::ShowTakesOne(text.trim().to_owned())),
+            Spec::Range(..) => {
+                return Err(Declined::TakesOne(Query::Show, text.trim().to_owned()));
+            }
             Spec::Pair(..) => return Err(Declined::PairIsForDiff(text.trim().to_owned())),
         };
         let resolved = self.resolve(one, out.deadline, out.withheld)?;
@@ -2060,6 +2431,75 @@ impl Walk {
     }
 }
 
+/// How far a log has got: the matching commits it passed over for `skip`, then those it listed.
+#[derive(Default)]
+struct Page {
+    passed: usize,
+    shown: usize,
+}
+
+/// Where the next line a search prints goes.
+enum Place {
+    Passed,
+    Here,
+    /// The page is full, and this skip starts the next one with it.
+    Next(usize),
+}
+
+impl Page {
+    fn place(&mut self, request: &Request<'_>) -> Place {
+        if self.passed < request.skip {
+            self.passed += 1;
+            return Place::Passed;
+        }
+        if self.shown == request.count.min(MAX_COUNT) {
+            return Place::Next(request.skip + self.shown);
+        }
+        self.shown += 1;
+        Place::Here
+    }
+}
+
+/// What one search looks for, and how far down its pages it has got.
+struct Search<'a> {
+    pattern: &'a crate::regex::Regex,
+    filter: Option<&'a str>,
+    page: Page,
+}
+
+/// Orders names as `git tag --sort=v:refname` does: a run of digits by the number it spells,
+/// everything else byte by byte.
+fn version_order(a: &str, b: &str) -> Ordering {
+    let digits = |s: &[u8]| s.iter().take_while(|c| c.is_ascii_digit()).count();
+    let (mut a, mut b) = (a.as_bytes(), b.as_bytes());
+    loop {
+        match (a.first(), b.first()) {
+            (None, None) => return Ordering::Equal,
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(x), Some(y)) if x.is_ascii_digit() && y.is_ascii_digit() => {
+                let (da, db) = (digits(a), digits(b));
+                let trim = |run: &[u8]| -> usize { run.iter().take_while(|c| **c == b'0').count() };
+                let na = &a[trim(&a[..da])..da];
+                let nb = &b[trim(&b[..db])..db];
+                let order = na.len().cmp(&nb.len()).then_with(|| na.cmp(nb));
+                if order != Ordering::Equal {
+                    return order;
+                }
+                a = &a[da..];
+                b = &b[db..];
+            }
+            (Some(x), Some(y)) => {
+                if x != y {
+                    return x.cmp(y);
+                }
+                a = &a[1..];
+                b = &b[1..];
+            }
+        }
+    }
+}
+
 struct Out<'w> {
     text: Text,
     shown: Vec<String>,
@@ -2518,6 +2958,9 @@ mod tests {
             revision,
             path,
             count: DEFAULT_COUNT,
+            skip: 0,
+            messages: false,
+            pattern: None,
             since: None,
             until: None,
             deadline: later(),
@@ -3238,6 +3681,181 @@ mod tests {
         assert!(!answer.cut, "every commit was shown");
     }
 
+    /// A commit says why it was made and what it closes in the body a log's one line leaves out.
+    /// Asked for, the body follows its commit's line indented as `git show` indents it, so a line
+    /// that is not indented always starts a commit, and a commit with no body is its line alone.
+    #[test]
+    fn a_log_with_messages_prints_each_commit_whole_beneath_its_line() {
+        let repo = Repo::new("log-messages");
+        let tree = repo.tree(&[("100644", "README", repo.blob("hello\n"))]);
+        let first = repo.commit(tree, &[], T1, "first");
+        let second = repo.commit(
+            tree,
+            &[first],
+            T1 + DAY,
+            "second\nwrapped\n\nWhy it was made.\n\nCloses #84\n\n",
+        );
+        repo.point("refs/heads/main", second);
+        let repository = repo.opened().expect("opened");
+        let mut asked = request(Query::Log, None, None);
+        let lines = format!(
+            "{} 2023-11-15 A U Thor second wrapped\n{} 2023-11-14 A U Thor first\n",
+            short(second, 10),
+            short(first, 10)
+        );
+        assert_eq!(
+            repository
+                .answer(&asked, &|_| false)
+                .expect("answered")
+                .text,
+            lines,
+            "a log not asked for messages printed more than a line per commit"
+        );
+
+        asked.messages = true;
+        assert_eq!(
+            repository
+                .answer(&asked, &|_| false)
+                .expect("answered")
+                .text,
+            format!(
+                "{} 2023-11-15 A U Thor second wrapped\n    Why it was made.\n    \n    Closes \
+                 #84\n{} 2023-11-14 A U Thor first\n",
+                short(second, 10),
+                short(first, 10)
+            )
+        );
+    }
+
+    /// `skip` passes over the commits a log matched, as `git log --skip` does, so it counts only
+    /// those the log would list: a path's log passes over the commits that changed the path, not
+    /// every commit walked on the way. A log that stopped with commits left says which skip lists
+    /// the next of them, and one that reached the end says nothing of the kind.
+    #[test]
+    fn skip_passes_over_the_commits_a_log_already_listed() {
+        let (h, side, merge, _) = branchy("skip");
+        let repository = h.repo.opened().expect("opened");
+        let page = |revision: Option<&str>, path: Option<&str>, skip: usize, count: usize| {
+            let mut asked = request(Query::Log, revision, path);
+            asked.skip = skip;
+            asked.count = count;
+            let answer = repository.answer(&asked, &|_| false).expect("answered");
+            let listed: Vec<String> = answer
+                .text
+                .lines()
+                .filter(|line| !line.starts_with('('))
+                .map(|line| line[..10].to_owned())
+                .collect();
+            (listed, answer.next, answer.cut)
+        };
+        let ids = |ids: &[ObjectId]| ids.iter().map(|&id| short(id, 10)).collect::<Vec<_>>();
+
+        assert_eq!(
+            page(None, None, 0, 2),
+            (ids(&[merge, h.third]), Some(2), true)
+        );
+        assert_eq!(
+            page(None, None, 2, 2),
+            (ids(&[side, h.second]), Some(4), true)
+        );
+        assert_eq!(page(None, None, 4, 2), (ids(&[h.first]), None, false));
+        assert_eq!(page(None, None, 5, 2), (ids(&[]), None, false));
+
+        let range = format!("{}..HEAD", h.first.to_hex());
+        assert_eq!(
+            page(Some(&range), None, 1, 2),
+            (ids(&[h.third, side]), Some(3), true)
+        );
+        assert_eq!(
+            page(Some(&range), None, 3, 2),
+            (ids(&[h.second]), None, false)
+        );
+
+        // README changed in first, third, side and merge; second only added src.
+        assert_eq!(
+            page(None, Some("README"), 2, 1),
+            (ids(&[side]), Some(3), true)
+        );
+        assert_eq!(
+            page(None, Some("README"), 3, 2),
+            (ids(&[h.first]), None, false)
+        );
+        assert_eq!(
+            page(None, Some("README"), 4, 1),
+            (ids(&[]), None, false),
+            "the commit that left README alone was counted toward the skip"
+        );
+
+        let mut asked = request(Query::Log, None, None);
+        asked.skip = 5;
+        assert_eq!(
+            repository
+                .answer(&asked, &|_| false)
+                .expect("answered")
+                .text,
+            "(no commits match past the first 5)\n"
+        );
+    }
+
+    /// A page of messages holds whole commits: one that would not fit waits for the next page,
+    /// which the skip names, rather than being cut short where the planner would take its message
+    /// for the whole of it. A single message longer than a page is the exception, shown as far as
+    /// it fits so that the next skip moves past it.
+    #[test]
+    fn a_page_of_messages_ends_at_a_whole_commit() {
+        let repo = Repo::new("log-message-pages");
+        let tree = repo.tree(&[("100644", "README", repo.blob("hello\n"))]);
+        let body = |lines: usize| {
+            (0..lines)
+                .map(|i| format!("line {i}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let mut parent = Vec::new();
+        let mut made = Vec::new();
+        for (day, lines) in [(0, 300), (1, 900), (2, 900), (3, 2500)] {
+            let id = repo.commit(
+                tree,
+                &parent,
+                T1 + day * DAY,
+                &format!("subject {day}\n\n{}", body(lines)),
+            );
+            parent = vec![id];
+            made.push(id);
+        }
+        repo.point("refs/heads/main", made[3]);
+        let repository = repo.opened().expect("opened");
+        let page = |skip: usize| {
+            let mut asked = request(Query::Log, None, None);
+            asked.messages = true;
+            asked.skip = skip;
+            repository.answer(&asked, &|_| false).expect("answered")
+        };
+
+        let first = page(0);
+        assert!(first.text.starts_with(&short(made[3], 10)));
+        assert_eq!(first.text.lines().count(), MAX_LINES);
+        assert!(!first.text.contains(&short(made[2], 10)));
+        assert_eq!(
+            (first.next, first.cut),
+            (Some(1), true),
+            "a message longer than a page was not moved past"
+        );
+
+        let second = page(1);
+        assert_eq!(second.text.lines().count(), 2 * 901);
+        assert!(second.text.ends_with("    line 899\n"));
+        assert!(
+            !second.text.contains(&short(made[0], 10)),
+            "a commit that did not fit was started on the page anyway"
+        );
+        assert_eq!((second.next, second.cut), (Some(3), true));
+
+        let third = page(3);
+        assert_eq!(third.text.lines().count(), 301);
+        assert_eq!((third.next, third.cut), (None, false));
+    }
+
     /// `show` is how a planner reads what one commit did, so it prints the commit and its
     /// change in the shape `git show` does, a root commit as files added.
     #[test]
@@ -3504,13 +4122,359 @@ mod tests {
             h.repo
                 .ask(Query::Show, Some("HEAD~1..HEAD"), None)
                 .map(|a| a.text),
-            Err(Declined::ShowTakesOne("HEAD~1..HEAD".to_owned()))
+            Err(Declined::TakesOne(Query::Show, "HEAD~1..HEAD".to_owned()))
         );
         assert_eq!(
             h.repo
                 .ask(Query::Log, Some("HEAD~1 HEAD"), None)
                 .map(|a| a.text),
             Err(Declined::PairIsForDiff("HEAD~1 HEAD".to_owned()))
+        );
+        assert_eq!(
+            h.repo
+                .ask(Query::Tags, Some("HEAD~1..HEAD"), None)
+                .map(|a| a.text),
+            Err(Declined::TakesOne(Query::Tags, "HEAD~1..HEAD".to_owned()))
+        );
+        let pattern = crate::regex::Regex::compile("hello").expect("compiled");
+        let repository = h.repo.opened().expect("opened");
+        let search = |revision| {
+            let mut asked = request(Query::Search, Some(revision), None);
+            asked.pattern = Some(&pattern);
+            repository.answer(&asked, &|_| false).map(|a| a.text)
+        };
+        assert_eq!(
+            search("HEAD~1..HEAD"),
+            Err(Declined::TakesOne(Query::Search, "HEAD~1..HEAD".to_owned()))
+        );
+        assert_eq!(
+            search("HEAD~1 HEAD"),
+            Err(Declined::PairIsForDiff("HEAD~1 HEAD".to_owned()))
+        );
+    }
+
+    /// A pattern is what a search looks for and nothing else takes one, and a list of tags names
+    /// no file, so each is refused where it would otherwise be dropped without a word and the
+    /// planner would take the answer for the one it asked.
+    #[test]
+    fn a_pattern_is_for_search_alone_and_tags_take_no_path() {
+        let h = history("pattern-and-path");
+        let pattern = crate::regex::Regex::compile("hello").expect("compiled");
+        let repository = h.repo.opened().expect("opened");
+        let ask = |query, path, pattern| {
+            let mut asked = request(query, None, path);
+            asked.pattern = pattern;
+            repository.answer(&asked, &|_| false).map(|a| a.text)
+        };
+        assert_eq!(
+            ask(Query::Search, None, None),
+            Err(Declined::SearchNeedsPattern)
+        );
+        for query in [Query::Log, Query::Show, Query::Tags] {
+            assert_eq!(
+                ask(query, None, Some(&pattern)),
+                Err(Declined::PatternIsForSearch(query))
+            );
+        }
+        assert_eq!(
+            ask(Query::Tags, Some("README"), None),
+            Err(Declined::TagsTakeNoPath)
+        );
+    }
+
+    /// Which release came last is the newest version, where 0.10 follows 0.9, so tags are listed
+    /// as `git tag --sort=-v:refname` lists them rather than as their names sort. A tag is read
+    /// wherever git reads one: loose, packed, or loose over a packed one of the same name.
+    #[test]
+    fn tags_are_listed_newest_version_first_loose_and_packed_alike() {
+        let (h, _, _, _) = branchy("tags");
+        h.repo.point("refs/tags/v0.9.0", h.first);
+        h.repo.point("refs/tags/v0.10.0", h.second);
+        h.repo.point("refs/tags/v0.10.0-rc1", h.first);
+        h.repo.point("refs/tags/v2", h.src);
+        h.repo.point("refs/tags/v3.lock", h.third);
+        h.repo.put(
+            "packed-refs",
+            &format!(
+                "# pack-refs with: peeled fully-peeled \n{first} refs/heads/old\n{first} \
+                 refs/tags/v0.10.0\n{first} refs/tags/v0.2.0\n",
+                first = h.first.to_hex()
+            ),
+        );
+        let commit = |name: &str, id: ObjectId, day: &str, subject: &str| {
+            format!("{name} {} {day} A U Thor {subject}\n", short(id, 10))
+        };
+        let answer = h.repo.ask(Query::Tags, None, None).expect("answered");
+        assert_eq!(
+            answer.text,
+            [
+                format!("v2 {} (tree)\n", short(h.src, 10)),
+                commit("v1", h.third, "2023-11-16", "third"),
+                commit("v0.10.0-rc1", h.first, "2023-11-14", "first"),
+                commit("v0.10.0", h.second, "2023-11-15", "second"),
+                commit("v0.9.0", h.first, "2023-11-14", "first"),
+                commit("v0.2.0", h.first, "2023-11-14", "first"),
+            ]
+            .concat()
+        );
+        assert_eq!((answer.next, answer.cut), (None, false));
+        assert!(answer.shown.is_empty(), "{:?}", answer.shown);
+        assert_eq!(answer.around, answer.text);
+    }
+
+    /// With a revision, only the tags whose commit it reaches are listed, as `git tag --merged`
+    /// lists them: the release before a version is the newest tag its history holds, not the
+    /// newest in the repository.
+    #[test]
+    fn tags_given_a_revision_are_only_those_its_history_holds() {
+        let (h, side, _, _) = branchy("tags-merged");
+        h.repo.point("refs/tags/v0", h.first);
+        h.repo.point("refs/tags/v-side", side);
+        h.repo.point("refs/tags/tree", h.src);
+        let names = |revision: Option<&str>| {
+            h.repo
+                .ask(Query::Tags, revision, None)
+                .expect("answered")
+                .text
+                .lines()
+                .map(|line| line.split(' ').next().unwrap_or_default().to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(None), ["v1", "v0", "v-side", "tree"]);
+        assert_eq!(names(Some("HEAD")), ["v1", "v0", "v-side"]);
+        assert_eq!(names(Some("HEAD^1")), ["v1", "v0"]);
+        assert_eq!(names(Some(&side.to_hex().to_string())), ["v0", "v-side"]);
+        assert_eq!(names(Some("v1~2")), ["v0"]);
+    }
+
+    /// A list of tags pages as a log does: `count` at a time, the answer naming the skip that
+    /// lists the next of them, and a skip past the end saying there is nothing there.
+    #[test]
+    fn tags_page_by_count_and_skip() {
+        let (h, _, _, _) = branchy("tags-pages");
+        for n in 2..=5 {
+            h.repo.point(&format!("refs/tags/v{n}"), h.first);
+        }
+        let repository = h.repo.opened().expect("opened");
+        let page = |skip: usize| {
+            let mut asked = request(Query::Tags, None, None);
+            asked.skip = skip;
+            asked.count = 2;
+            let answer = repository.answer(&asked, &|_| false).expect("answered");
+            let names: Vec<String> = answer
+                .text
+                .lines()
+                .map(|line| line.split(' ').next().unwrap_or_default().to_owned())
+                .collect();
+            (names.join(" "), answer.next, answer.cut)
+        };
+        assert_eq!(page(0), ("v5 v4".to_owned(), Some(2), true));
+        assert_eq!(page(2), ("v3 v2".to_owned(), Some(4), true));
+        assert_eq!(page(4), ("v1".to_owned(), None, false));
+        let mut asked = request(Query::Tags, None, None);
+        asked.skip = 5;
+        assert_eq!(
+            repository.answer(&asked, &|_| false).map(|a| a.text),
+            Ok("(no tags match past the first 5)\n".to_owned())
+        );
+    }
+
+    /// Five files and what does not get searched: a link and a submodule, which are not a file's
+    /// lines, as `git grep` over a tree leaves them. HEAD's tree holds `extra` too.
+    fn searchable(name: &str, extra: Option<(&str, &str)>) -> (Repo, ObjectId) {
+        let repo = Repo::new(name);
+        let lib_before = repo.blob("fn needle() {}\nfn other() {}\n");
+        let lib = repo.blob("fn needle() {}\nfn other() {}\nlet needle = 1;\n");
+        let deep = repo.tree(&[("100644", "deep.rs", repo.blob("no match here\n"))]);
+        let tree = |lib, extra: Option<(&str, &str)>| {
+            let src = repo.tree(&[("100644", "lib.rs", lib), ("40000", "sub", deep)]);
+            let mut entries = vec![
+                ("100644", "a.txt", repo.blob("needle one\nhay\n")),
+                ("100644", "img.bin", repo.object(Kind::Blob, b"\x00needle")),
+                ("120000", "link", repo.blob("needle")),
+                ("100644", "src.txt", repo.blob("a needle in src.txt\n")),
+                ("40000", "src", src),
+                ("160000", "vendored", repo.blob("needle\n")),
+            ];
+            if let Some((name, text)) = extra {
+                entries.push(("100644", name, repo.blob(text)));
+            }
+            repo.tree(&entries)
+        };
+        let first = repo.commit(tree(lib_before, None), &[], T1, "one");
+        let second = repo.commit(tree(lib, extra), &[first], T1 + DAY, "two");
+        repo.point("refs/heads/main", second);
+        (repo, first)
+    }
+
+    fn compiled(pattern: &str) -> crate::regex::Regex {
+        crate::regex::Regex::compile(pattern).expect("a test's pattern compiles")
+    }
+
+    fn searched(
+        repo: &Repo,
+        revision: Option<&str>,
+        path: Option<&str>,
+        pattern: &str,
+        withheld: &dyn Fn(&str) -> bool,
+    ) -> Result<Answer, Declined> {
+        let pattern = compiled(pattern);
+        let mut asked = request(Query::Search, revision, path);
+        asked.pattern = Some(&pattern);
+        repo.opened()?.answer(&asked, withheld)
+    }
+
+    /// A search is `git grep` over the files at one revision, HEAD unless another is named: each
+    /// matching line as `path:line: text` in the order git lists the tree, a binary file that
+    /// matches named rather than printed, and a path narrowing it to the files beneath it.
+    #[test]
+    fn search_lists_the_lines_a_pattern_matches_at_a_revision_as_git_grep_does() {
+        let (repo, first) = searchable("search", None);
+        let answer = searched(&repo, None, None, "needle", &|_| false).expect("answered");
+        assert_eq!(
+            answer.text,
+            "a.txt:1: needle one\nBinary file img.bin matches\nsrc.txt:1: a needle in \
+             src.txt\nsrc/lib.rs:1: fn needle() {}\nsrc/lib.rs:3: let needle = 1;\n"
+        );
+        assert_eq!(
+            (answer.next, answer.cut, answer.withheld),
+            (None, false, false)
+        );
+        let printed = |path: &str, first_line, text: &str| Printed {
+            path: path.to_owned(),
+            first_line,
+            text: text.to_owned(),
+        };
+        assert_eq!(
+            answer.printed,
+            [
+                printed("a.txt", 1, "needle one\n"),
+                printed("src.txt", 1, "a needle in src.txt\n"),
+                printed("src/lib.rs", 1, "fn needle() {}\n"),
+                printed("src/lib.rs", 3, "let needle = 1;\n"),
+            ]
+        );
+        assert_eq!(answer.around, "\nBinary file img.bin matches\n\n\n\n");
+
+        let older = searched(
+            &repo,
+            Some(&first.to_hex().to_string()),
+            Some("src"),
+            "needle",
+            &|_| false,
+        )
+        .expect("answered");
+        assert_eq!(older.text, "src/lib.rs:1: fn needle() {}\n");
+        assert_eq!(older.shown, ["src/lib.rs", "src/sub/deep.rs"]);
+        let inside =
+            searched(&repo, None, Some("a.txt/inside"), "needle", &|_| false).expect("answered");
+        assert_eq!(inside.text, "(no matches)\n");
+        assert!(inside.shown.is_empty(), "{:?}", inside.shown);
+
+        let expression = searched(&repo, None, None, r"^fn \w+\(\)", &|_| false).expect("answered");
+        assert_eq!(
+            expression.text,
+            "src/lib.rs:1: fn needle() {}\nsrc/lib.rs:2: fn other() {}\n"
+        );
+    }
+
+    /// A search that found nothing in a file still read it, and says something about what it
+    /// holds, so every file a search opened labels the answer, matched or not. One labelled by
+    /// its matches alone would come back trusted from a file the map distrusts whenever that file
+    /// happened not to match.
+    #[test]
+    fn a_search_shows_every_file_it_read_whether_or_not_it_matched() {
+        let (repo, _) = searchable("search-shown", None);
+        let every = [
+            "a.txt",
+            "img.bin",
+            "src.txt",
+            "src/lib.rs",
+            "src/sub/deep.rs",
+        ];
+        let matched = searched(&repo, None, None, "needle", &|_| false).expect("answered");
+        assert_eq!(matched.shown, every);
+        let nothing = searched(&repo, None, None, "absent", &|_| false).expect("answered");
+        assert_eq!(nothing.text, "(no matches)\n");
+        assert_eq!(nothing.shown, every);
+        assert!(nothing.printed.is_empty());
+    }
+
+    /// A path the trust map withholds is neither searched nor shown, and the answer says one was
+    /// left out, but only where it was inside what the search was asked to cover.
+    #[test]
+    fn a_search_leaves_out_a_withheld_file_and_says_so() {
+        let (repo, _) = searchable("search-withheld", None);
+        let lib = |path: &str| path == "src/lib.rs";
+        let answer = searched(&repo, None, None, "needle", &lib).expect("answered");
+        assert!(!answer.text.contains("src/lib.rs"), "{}", answer.text);
+        assert!(!answer.shown.iter().any(|p| p == "src/lib.rs"));
+        assert!(answer.withheld);
+        let elsewhere = searched(&repo, None, Some("a.txt"), "needle", &lib).expect("answered");
+        assert_eq!(elsewhere.text, "a.txt:1: needle one\n");
+        assert_eq!(elsewhere.shown, ["a.txt"]);
+        assert!(
+            !elsewhere.withheld,
+            "a file outside the path was counted as left out"
+        );
+        let sibling = |path: &str| path == "src.txt";
+        let beside = searched(&repo, None, Some("src"), "needle", &sibling).expect("answered");
+        assert_eq!(beside.shown, ["src/lib.rs", "src/sub/deep.rs"]);
+        assert!(
+            !beside.withheld,
+            "a withheld file beside the path was counted as left out"
+        );
+        assert_eq!(
+            searched(&repo, None, Some("src/lib.rs"), "needle", &lib).map(|a| a.text),
+            Err(Declined::Withheld("src/lib.rs".to_owned()))
+        );
+    }
+
+    /// A search pages by the lines it prints, as a log does by commits: a matching line, a binary
+    /// file that matches and a file too large to search are each one, so a skip starts the next
+    /// page exactly where the last one stopped.
+    #[test]
+    fn a_search_pages_by_the_lines_it_prints() {
+        let large = "needle\n".repeat((MAX_BLOB as usize) / 7 + 1);
+        let size = large.len();
+        let (repo, _) = searchable("search-pages", Some(("zz.log", &large)));
+        let pattern = crate::regex::Regex::compile("needle").expect("compiled");
+        let repository = repo.opened().expect("opened");
+        let page = |skip: usize| {
+            let mut asked = request(Query::Search, None, None);
+            asked.pattern = Some(&pattern);
+            asked.skip = skip;
+            asked.count = 2;
+            let answer = repository.answer(&asked, &|_| false).expect("answered");
+            (answer.text, answer.next)
+        };
+        assert_eq!(
+            page(0),
+            (
+                "a.txt:1: needle one\nBinary file img.bin matches\n".to_owned(),
+                Some(2)
+            )
+        );
+        assert_eq!(
+            page(2),
+            (
+                "src.txt:1: a needle in src.txt\nsrc/lib.rs:1: fn needle() {}\n".to_owned(),
+                Some(4)
+            )
+        );
+        assert_eq!(
+            page(4),
+            (
+                format!(
+                    "src/lib.rs:3: let needle = 1;\n(zz.log is {size} bytes, more than read_git \
+                     searches)\n"
+                ),
+                None
+            )
+        );
+        assert_eq!(
+            page(6),
+            ("(no matches past the first 6)\n".to_owned(), None)
         );
     }
 

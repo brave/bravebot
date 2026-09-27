@@ -21009,6 +21009,182 @@ fn the_middle_of_a_capped_output_stays_reachable() {
     );
 }
 
+/// OUTPUT-4. Output the planner may read is kept out of a result by its length alone, so the rest
+/// of it comes back a page at a time from any offset, each page no longer than a run's result, and
+/// nobody is asked. The confirmer here refuses every request to read output, so a page reaching
+/// the planner is one no prompt was drawn for.
+#[test]
+fn output_too_long_for_its_result_is_read_page_by_page_with_nobody_asked() {
+    let scratch = Scratch::new("run-paged");
+    let mut log = String::new();
+    for line in 0..2000 {
+        if line == 1000 {
+            log.push_str("MIDDLE-MARKER-XYZZY\n");
+        }
+        log.push_str(&format!("line {line} of a long build log\n"));
+    }
+    std::fs::write(scratch.path.join("build.log"), &log).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let total = log.len();
+    let start = log.find("MIDDLE-MARKER-XYZZY").expect("marker") - 7;
+    let cap = 4096;
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cat build.log"}"#),
+        tool_request(
+            "read_output",
+            &format!(r#"{{"ref":"ref:1","offset":{start}}}"#),
+        ),
+        tool_request(
+            "read_output",
+            &format!(r#"{{"ref":"ref:1","offset":{}}}"#, total - 20),
+        ),
+        tool_request(
+            "read_output",
+            &format!(r#"{{"ref":"ref:1","offset":{total}}}"#),
+        ),
+        tool_request("read_output", r#"{"ref":"ref:1","offset":-1}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("build it").with_output_cap(Some(cap)),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let results: Vec<String> = std::iter::from_fn(|| received.try_recv().ok())
+        .skip(1)
+        .map(newest_tool_result)
+        .collect();
+    let [sample, middle, end, past, unusable] = &results[..] else {
+        panic!("the turn made {} rounds after the first", results.len());
+    };
+    assert!(
+        sample.contains(&format!("from byte {}", cap / 2)),
+        "the sample does not say where its middle begins: {sample}"
+    );
+    assert!(
+        sample.contains("read_output with ref:1 and an offset"),
+        "the planner was not told how to read the rest: {sample}"
+    );
+    assert!(!sample.contains("Quarantined"), "{sample}");
+    assert!(!sample.contains("MIDDLE-MARKER-XYZZY"));
+
+    assert!(
+        middle.contains("MIDDLE-MARKER-XYZZY"),
+        "the page from the offset did not reach the planner: {middle}"
+    );
+    let next = start + cap;
+    assert!(
+        middle.contains(&format!(
+            "(bytes {start} to {next} of {total} in ref:1; read_output with offset {next} gives \
+             the next part.)"
+        )),
+        "{middle}"
+    );
+    let page = &log[start..next];
+    assert!(
+        middle.contains(
+            &serde_json::to_string(page)
+                .unwrap()
+                .trim_matches('"')
+                .to_owned()
+        ),
+        "the page is not the bytes from the offset to the cap"
+    );
+    assert!(
+        !middle.contains(&log[next..next + 40]),
+        "a page ran past the cap"
+    );
+    assert!(!middle.contains("kept back"), "{middle}");
+
+    assert!(
+        end.contains(&format!(
+            "(bytes {} to {total} of {total} in ref:1; which is the end of it.)",
+            total - 20
+        )),
+        "{end}"
+    );
+    assert!(
+        past.contains(&format!(
+            "(ref:1 holds {total} bytes, so nothing starts at byte {total}.)"
+        )),
+        "{past}"
+    );
+    assert!(
+        unusable.contains("'offset' must be a whole number of bytes"),
+        "{unusable}"
+    );
+}
+
+/// OUTPUT-4. An offset is for output the planner may already read. On output nobody vouched for it
+/// is refused before anybody is asked or any check is made, since the page it expects is not what
+/// read_output would hand it.
+#[test]
+fn an_offset_into_output_nobody_vouched_for_is_refused_and_nobody_is_asked() {
+    let scratch = Scratch::new("read-output-offset");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cat where.txt"}"#),
+        tool_request("read_output", r#"{"ref":"ref:1","offset":0}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ReadsWhatItRan::new(true);
+    let shown = confirmer.shown.clone();
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    assert!(
+        shown.lock().unwrap().is_empty(),
+        "the user was asked about output the planner asked to page through"
+    );
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    assert_eq!(bodies.len(), 3, "a check was made about the output");
+    let refused = newest_tool_result(bodies[2].clone());
+    assert!(
+        refused.contains(
+            "an offset pages through output you may already read, and ref:1 is \
+                          quarantined"
+        ),
+        "{refused}"
+    );
+    assert!(!refused.contains("SENTINEL-XYZZY"));
+}
+
 /// A page server, for the fetch tests. Answers each request with the next reply it was given and
 /// reports the request lines it was sent, so a test can tell what actually went out.
 ///
@@ -22425,6 +22601,10 @@ fn what_an_ended_job_printed_is_capped_with_the_whole_of_it_kept() {
     assert!(
         told.contains("The whole of this output, middle included, is a reference"),
         "the middle of what the job printed exists nowhere but the sample: {told}"
+    );
+    assert!(
+        told.contains("and an offset in bytes"),
+        "the planner was not told it may page through the rest: {told}"
     );
 }
 
@@ -28840,7 +29020,7 @@ fn read_git_answers_status_and_refuses_a_query_off_the_list() {
     );
     let blame = tool_results(&received.recv().expect("third request"));
     assert!(
-        blame.contains("answers log, show, diff and status, not blame"),
+        blame.contains("answers log, show, diff, status, tags and search, not blame"),
         "a query off the list was not refused by name: {blame}"
     );
 }
@@ -28936,6 +29116,264 @@ fn since_and_until_are_whole_days_and_anything_else_is_refused() {
     assert!(
         invalid.contains("'since' must be a day written YYYY-MM-DD"),
         "a day that is not on the calendar was not refused: {invalid}"
+    );
+}
+
+/// GIT-12. A log that stopped with commits left tells the planner the skip that lists the next of
+/// them, and asking with it lists them rather than the same page again. Asked for messages, a
+/// commit's body reaches the planner beneath its line, which is where a commit says what it closes.
+#[test]
+fn read_git_pages_through_a_log_and_shows_whole_messages_when_asked() {
+    const BODY: &str = "BODY-OF-THE-OLDER-COMMIT Closes #84";
+    let scratch = Scratch::new("read-git-pages");
+    repository::commit_files(
+        &scratch.path,
+        &[("README", "hello\n")],
+        &format!("OLDER\n\n{BODY}"),
+    );
+    repository::commit_files(&scratch.path, &[("README", "hello\nworld\n")], "NEWER");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_git", r#"{"query":"log","count":1}"#),
+        tool_request_2("read_git", r#"{"query":"log","count":1,"skip":1}"#),
+        tool_request_2("read_git", r#"{"query":"log","skip":1,"messages":true}"#),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what changed"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let newest = newest_tool_result;
+    let _first = received.recv().expect("first request");
+    let first = newest(received.recv().expect("second request"));
+    assert!(
+        first.contains("NEWER") && !first.contains("OLDER"),
+        "the first page was not the newest commit alone: {first}"
+    );
+    assert!(
+        first.contains("ask again with skip 1"),
+        "a log that stopped with a commit left did not say how to list it: {first}"
+    );
+    let second = newest(received.recv().expect("third request"));
+    assert!(
+        second.contains("OLDER") && !second.contains("NEWER"),
+        "the skip did not move the log on to the next commit: {second}"
+    );
+    assert!(
+        !second.contains("ask again with skip") && !second.contains(BODY),
+        "a log that reached its end, or was not asked for messages, said otherwise: {second}"
+    );
+    let third = newest(received.recv().expect("fourth request"));
+    assert!(
+        third.contains(&format!("    {BODY}")),
+        "the message asked for did not reach the planner: {third}"
+    );
+}
+
+/// The newest tool result in one request the planner was sent.
+fn newest_tool_result(request: String) -> String {
+    let parsed: serde_json::Value = serde_json::from_str(&request).expect("a request");
+    parsed["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .rev()
+        .find(|message| message["role"] == "tool")
+        .map(|message| message["content"].to_string())
+        .expect("a tool result")
+}
+
+/// GIT-13. Which release came last is the newest version a revision's history holds, so tags reach
+/// the planner newest version first, only those the revision reaches when one is named, and paged
+/// as a log is.
+#[test]
+fn read_git_lists_the_tags_a_revision_reaches_newest_version_first() {
+    let scratch = Scratch::new("read-git-tags");
+    let git = scratch.path.join(".git");
+    repository::commit_files(&scratch.path, &[("README", "hello\n")], "OLDER");
+    std::fs::create_dir_all(git.join("refs/tags")).expect("tags");
+    std::fs::copy(git.join("refs/heads/main"), git.join("refs/tags/v0.9.0")).expect("tag");
+    repository::commit_files(&scratch.path, &[("README", "hello\nworld\n")], "NEWER");
+    std::fs::copy(git.join("refs/heads/main"), git.join("refs/tags/v0.10.0")).expect("tag");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_git", r#"{"query":"tags","count":1}"#),
+        tool_request_2("read_git", r#"{"query":"tags","revision":"HEAD~1"}"#),
+        tool_request_2("read_git", r#"{"query":"tags","path":"README"}"#),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("which release came last"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let newest = newest_tool_result(received.recv().expect("second request"));
+    assert!(
+        newest.contains("v0.10.0 ") && newest.contains("NEWER") && !newest.contains("v0.9.0"),
+        "the first tag listed was not the newest version alone: {newest}"
+    );
+    assert!(
+        newest.contains("this list of tags stopped with more tags to list; ask again with skip 1"),
+        "a list of tags that stopped with one left did not say how to list it: {newest}"
+    );
+    let merged = newest_tool_result(received.recv().expect("third request"));
+    assert!(
+        merged.contains("v0.9.0 ") && !merged.contains("v0.10.0"),
+        "a tag the revision does not reach was listed, or one it does was not: {merged}"
+    );
+    let refused = newest_tool_result(received.recv().expect("fourth request"));
+    assert!(
+        refused.contains("tags lists the repository's tags and takes no path"),
+        "a path on a list of tags was not refused: {refused}"
+    );
+}
+
+/// GIT-14. A search reaches the planner as `git grep` prints it, paged by its lines, and a pattern
+/// that is missing, empty or not a regular expression is refused rather than searched for.
+#[test]
+fn read_git_searches_the_files_at_a_revision_and_pages_the_lines() {
+    let scratch = Scratch::new("read-git-search");
+    repository::commit_files(
+        &scratch.path,
+        &[
+            ("README", "hello NEEDLE\n"),
+            ("src/lib.rs", "fn f() {}\nlet NEEDLE = 1;\n"),
+        ],
+        "add both",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "read_git",
+            r#"{"query":"search","pattern":"NEEDLE","count":1}"#,
+        ),
+        tool_request_2(
+            "read_git",
+            r#"{"query":"search","pattern":"NEEDLE","skip":1}"#,
+        ),
+        tool_request_2("read_git", r#"{"query":"search"}"#),
+        tool_request_2("read_git", r#"{"query":"search","pattern":""}"#),
+        tool_request_2("read_git", r#"{"query":"search","pattern":"("}"#),
+        tool_request_2("read_git", r#"{"query":"log","pattern":"NEEDLE"}"#),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("where is NEEDLE"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let first = newest_tool_result(received.recv().expect("second request"));
+    assert!(
+        first.contains("README:1: hello NEEDLE") && !first.contains("src/lib.rs"),
+        "the first page was not the first matching line alone: {first}"
+    );
+    assert!(
+        first.contains(
+            "this search stopped with more matching lines to list; ask again with skip 1"
+        ),
+        "a search that stopped with a line left did not say how to list it: {first}"
+    );
+    let second = newest_tool_result(received.recv().expect("third request"));
+    assert!(
+        second.contains("src/lib.rs:2: let NEEDLE = 1;")
+            && !second.contains("README")
+            && !second.contains("ask again with skip"),
+        "the skip did not move the search on to the next line: {second}"
+    );
+    for (request, refusal) in [
+        ("fourth", "search needs a pattern"),
+        ("fifth", "the search pattern was empty"),
+        ("sixth", "the search pattern is not usable"),
+        ("seventh", "a pattern is what search looks for"),
+    ] {
+        let refused = newest_tool_result(received.recv().expect(request));
+        assert!(
+            refused.contains(refusal),
+            "the {request} question was not refused with {refusal:?}: {refused}"
+        );
+    }
+}
+
+/// GIT-14. A search that found nothing in a file still read it, so a file the map distrusts makes
+/// the whole answer untrusted whether or not it matched. Narrowed to a trusted path, the same
+/// search is shown.
+#[test]
+fn a_search_that_read_a_distrusted_file_is_quarantined_matched_or_not() {
+    const OURS: &str = "LINE-FROM-A-TRUSTED-FILE";
+    let scratch = Scratch::new("read-git-search-distrusted");
+    repository::commit_files(
+        &scratch.path,
+        &[
+            ("README", &format!("{OURS}\n")),
+            ("vendor/b.js", "nothing here\n"),
+        ],
+        "add both",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "read_git",
+            &format!(r#"{{"query":"search","pattern":"{OURS}"}}"#),
+        ),
+        tool_request_2(
+            "read_git",
+            &format!(r#"{{"query":"search","pattern":"{OURS}","path":"README"}}"#),
+        ),
+        reply_with("understood"),
+    ]);
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    trust.distrust("vendor");
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("where is it"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let whole = newest_tool_result(received.recv().expect("second request"));
+    assert!(
+        !whole.contains(&format!("README:1: {OURS}")),
+        "a search that read a distrusted file reached the planner: {whole}"
+    );
+    assert!(
+        whole.contains("could not be shown to you"),
+        "the planner was not told the answer was withheld: {whole}"
+    );
+    let narrowed = newest_tool_result(received.recv().expect("third request"));
+    assert!(
+        narrowed.contains(&format!("README:1: {OURS}")),
+        "the search narrowed to a trusted path was not shown: {narrowed}"
     );
 }
 

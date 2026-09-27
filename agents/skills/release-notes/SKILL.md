@@ -66,6 +66,16 @@ Exactly that, clause by clause:
 
 The notes cover everything between the last release and the version in the tree.
 
+Where there is a `read_git` tool, use it:
+
+- `$current` is what a `search` for `^version = ` with `path` set to `Cargo.toml` prints first.
+- `tags` with `revision` set to `HEAD` lists the tags HEAD's history holds, newest version first.
+  The base is the first `v` tag there that is not `v$current`.
+- With no such tag, a `log` with `path` set to `Cargo.toml` lists the commits that changed it. The
+  base is the newest whose subject bumps the version to anything but `$current`.
+
+Without one, git gives the same:
+
 ```sh
 current="$(sed -nE 's/^version[[:space:]]*=[[:space:]]*"([0-9]+\.[0-9]+\.[0-9]+)".*/\1/p' Cargo.toml | head -n 1)"
 
@@ -92,6 +102,13 @@ Print the range you settled on (`v0.1.1..HEAD`, 35 commits) before going further
 it wrong silently is how a bullet from a shipped release ends up in the next one.
 
 ## Step 2: read the commits
+
+Where there is a `read_git` tool, use it: a `log` with `revision` set to the range,
+`messages` set to true and `count` at 200. A log that stopped with commits left names the
+`skip` that lists the next page, so ask again with that until one names none. It lists
+merges too, and a merge carries no change of its own, so pass over any it shows.
+
+Without one, git prints the same:
 
 ```sh
 git log --no-merges --format='%h%n%s%n%b%n---' "$base..HEAD"
