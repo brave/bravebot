@@ -11,9 +11,9 @@ At startup you are asked whether you trust the working directory.
 - **Trust it** and a rule covering the whole tree is written, so ordinary work proceeds without a
   prompt for every edit.
 - **Decline** and nothing is written, so nothing is trusted and every write is shown to you first.
-- **Trust and remember** (`r`, in the terminal interface) trusts it as a yes does and writes the
-  answer down, so later sessions started in exactly that directory are not asked. See
-  [Remembering the answer](#remembering-the-answer).
+- **Trust and remember** (`r` in the terminal interface, a third button in the desktop app) trusts it
+  as a yes does and writes the answer down, so later sessions started in exactly that directory are
+  not asked. See [Remembering the answer](#remembering-the-answer).
 - **Leaving at the question starts no session.**
 
 That record is the **trust map**, and it is the thing every read and every write consults.
@@ -113,7 +113,7 @@ inspected content.
 | Gesture | What it grants |
 |---|---|
 | yes at the startup question | the whole working directory, for this session |
-| `r` at the startup question | the whole working directory, for this session and every later one started in exactly that directory, until [`/forget-trust`](../reference/commands.md#forget-trust) |
+| `r`, or **Trust and remember**, at the startup question | the whole working directory, for this session and every later one started in exactly that directory, until [`/forget-trust`](../reference/commands.md#forget-trust) or **Forget** in the desktop app's permissions |
 | [`@path`](../using/context.md#naming-a-file-path) or `--file` | that one file, for the rest of the session |
 | [dropping a file](../using/context.md#dropping-a-file) | that one file, wherever on disk it is, plus reach to it |
 | `/add-dir <path>` | that directory: reachable **and** trusted, for this session |
@@ -296,7 +296,7 @@ does.
 ## How long an answer lasts
 
 **The map belongs to the session, not the directory.** Every session start asks, whatever any earlier
-session in that directory answered, unless you pressed `r` there
+session in that directory answered, unless you said to remember the answer there
 ([below](#remembering-the-answer)). `/clear` begins a session and therefore asks, on the same terms.
 
 `--resume` does not ask: it restores the map from the record of the session you chose, because the
@@ -311,21 +311,24 @@ the checkout: full paths on disk would each name somewhere that is no longer the
 match, and the session would resume as though nobody had vouched for anything.
 
 The question grants standing permission. Honouring last week's yes would grant it on behalf of a user
-who was never asked, and trust assumed from silence is not trust granted. `r` is the one answer that
-says it is meant to last, and it is honoured on narrower terms than a yes is given on.
+who was never asked, and trust assumed from silence is not trust granted. Remembering is the one
+answer that says it is meant to last, and it is honoured on narrower terms than a yes is given on.
 
 ### Remembering the answer
 
-In the terminal interface the startup question offers a third key, `r`. It trusts the directory
-exactly as `y` does and writes the answer down, one file per directory under `~/.bravebot/trusted`.
-The question says what the key covers, how to take it back and the file it writes before you press
-it.
+The startup question offers a third answer: `r` in the terminal interface, and **Trust and
+remember** in the desktop app. It trusts the directory exactly as a yes does and writes the answer
+down, one file per directory under `~/.bravebot/trusted`. The question says what it covers, how to
+take it back and the file it writes before you choose it. Both read and write the same file, so an
+answer kept in one is honoured by the other.
 
-A later session started in that directory is not asked, and says so as it opens:
+A later session started in that directory is not asked, and says so as it opens. In the terminal:
 
 ```
 trusting /home/me/projects/app (you said to remember it 3 days ago; /forget-trust to be asked again)
 ```
+
+The desktop app says the same at the top of the conversation, and points to its permissions.
 
 It covers less than a yes does:
 
@@ -340,7 +343,7 @@ It covers less than a yes does:
 - **The rule a yes writes, and nothing else.** What the earlier session went on to record, a file it
   marked untrusted included, is not carried. That is the [first cost below](#known-costs), and a
   kept answer does not close it.
-- **Not everywhere.** `r` is not offered at your home directory, a directory holding it or a
+- **Not everywhere.** It is not offered at your home directory, a directory holding it or a
   filesystem root, where the filesystem cannot say when the directory was made, at a directory your
   settings file named, with `--dangerously-skip-permissions` (which asks nothing and writes nothing),
   or in an [incognito session](../using/sessions.md#a-session-that-leaves-nothing-behind). An
@@ -349,11 +352,12 @@ It covers less than a yes does:
 Whenever it is in doubt it asks: a missing or unreadable record, one about an earlier directory at
 the path, or a line about this directory that this build cannot read all mean the question is put.
 
-`bravebot --plain` and the desktop app ask in every session for now and do not read the record.
+`bravebot --plain` asks in every session for now and does not read the record.
 
 [`/status`](#reading-the-map-back) says when a kept answer is in force and names its file.
 [`/forget-trust`](../reference/commands.md#forget-trust) removes it: the session you type it in
-keeps the map it has, and the next one started there asks.
+keeps the map it has, and the next one started there asks. In the desktop app the session's
+permissions show the kept answer, and **Forget** there does the same.
 
 ## Reading the map back
 

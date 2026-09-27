@@ -118,6 +118,12 @@ export interface SessionRecord {
   front: string | null
 }
 
+/** A yes kept about a directory: when it was given, in seconds since the epoch, and the file it is kept in. */
+export interface KeptTrust {
+  at: number
+  path: string
+}
+
 export interface OpenedSession {
   contextTokens?: number
   session: string
@@ -127,6 +133,10 @@ export interface OpenedSession {
   context: string
   todos: Record<string, TodoRow[]>
   trust: { known: boolean; rules: { path: string; integrity: string }[] | null }
+  /** The yes an earlier session here was told to remember, where it and not `trust` settled the question (TRUST-23). */
+  remembered?: KeptTrust | null
+  /** Where a remembered yes would be written, where the question is asked and remembering is offered. */
+  keeping?: string | null
   branchNote: string | null
   buildNote: string | null
   /** Said when the other front end wrote the transcript above: it drew it, and this one will not draw it the same way. */
@@ -185,6 +195,8 @@ export interface ForkedSession {
   turns: number
   todos: Record<string, TodoRow[]>
   trust: { known: boolean; rules: { path: string; integrity: string }[] | null }
+  remembered?: KeptTrust | null
+  keeping?: string | null
   /** The parent's, as it opened: the child carries on its conversation. */
   autoVetting: boolean
   parent: {
@@ -405,7 +417,7 @@ export type AskAnswer = { chosen?: number[]; typed?: string }
 /** Every event the bridge emits, keyed by name. */
 export interface EventMap {
   'agent.ready': { build: string; version: string; home: string | null }
-  'trust.request': { directory: string }
+  'trust.request': { directory: string; keeping?: string | null }
   'turn.started': { turn: number }
   'watch.fired': { number: number; path: string }
   'watch.ended': { number: number; reason: string; message?: string }

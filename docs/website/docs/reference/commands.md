@@ -172,8 +172,9 @@ for the directory you left answers nothing here. See
 
 ## `/forget-trust`
 
-Takes back the answer you gave with `r` at the question a session asks about its directory, so the
-next session started in this directory asks again. This session keeps the answer it already has;
+Takes back the answer you said to remember at the question a session asks about its directory, with
+`r` here or **Trust and remember** in the desktop app, which keep it in one place. The next session
+started in this directory asks again, in either. This session keeps the answer it already has;
 [`/clear`](#clear) starts one that asks.
 
 It removes every answer kept about the path, including one given about a directory that was deleted
