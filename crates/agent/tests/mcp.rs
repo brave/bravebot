@@ -9,7 +9,9 @@
 use bravebot_agent::confirm::{CallDecision, McpCallRequest, ToolListRequest};
 use bravebot_agent::mcp::{Connection, Offering, Reached, Session};
 use bravebot_agent::turn::{self, Task};
-use bravebot_agent::{Confirmer, Decision, IgnoreReports, PermissionMode, Unattended, Workspace};
+use bravebot_agent::{
+    Confirmer, Decision, IgnoreReports, PermissionMode, SessionScratch, Unattended, Workspace,
+};
 use bravebot_config::Config;
 use bravebot_config::mcp::{Approvals, Digest, Standing, approvals_file, tools_file};
 use bravebot_core::cancel::Cancel;
@@ -1204,4 +1206,25 @@ fn an_addressed_turn_is_offered_no_servers_tool_and_asks_about_no_list() {
         open.contains(FORECAST),
         "the control was not offered the tool, so this says nothing: {open}"
     );
+}
+
+/// A home handed to a server in a session that keeps nothing lasts as long as the session holding
+/// the server, and not beyond it.
+#[test]
+fn a_servers_throwaway_home_lasts_as_long_as_the_session_holding_it() {
+    let scratch = Scratch::new("throwaway-home");
+    let (url, _bodies) = serve_weather();
+    let home = SessionScratch::for_a_server().expect("a home");
+    let path = home.path().to_path_buf();
+
+    let session = Session::new(
+        vec![reach(&url).holding(home)],
+        scratch.project(),
+        Some(scratch.state()),
+        false,
+    );
+
+    assert!(path.is_dir(), "gone while its server was still there");
+    drop(session);
+    assert!(!path.exists(), "{} outlived the session", path.display());
 }

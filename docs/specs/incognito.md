@@ -161,7 +161,7 @@ mode points.
 <a id="INCOG-8"></a>
 ### INCOG-8: what the mode does not cover, and says so
 
-Six things still reach the filesystem in an incognito session, each because refusing it would cost
+Seven things still reach the filesystem in an incognito session, each because refusing it would cost
 more than what it leaves behind:
 
 - **The workspace.** `write_file` and `edit_file` go on editing the project. Those edits are the
@@ -185,6 +185,10 @@ more than what it leaves behind:
   terms as the two above, and goes with the session, so the next one indexes again. What it must
   not do instead is land in the workspace, which is [LSP-10](tools/lsp.md#LSP-10)'s rule and holds
   in this mode as in any other.
+- **A local MCP server's home.** A runner keeps its cache under `HOME`, and one with nowhere to
+  write it does not start. It is not kept: it goes to a directory of its own in the system temporary
+  directory, on the same terms as the three above, and goes once the server has stopped, so a runner
+  fetches its package again each session. [SERVERS-10](mcp-servers.md#SERVERS-10) governs it.
 - **A credential that was spent.** An imported subscription is read and spent as in any session, and
   the spent markers reach the file the import created under `~/.bravebot` when the session ends. A
   credential is single use and presenting one to the service spends it there, so a marker that never
@@ -197,7 +201,7 @@ more than what it leaves behind:
   one, which [INCOG-7](#INCOG-7) refuses outright, and the file itself is governed by
   [premium-credentials.md](premium-credentials.md).
 
-A built [VET-4](tools/vet-content.md#VET-4) would add a seventh, which nothing writes yet: the copy
+A built [VET-4](tools/vet-content.md#VET-4) would add an eighth, which nothing writes yet: the copy
 of a picture a person is asked to open, in a directory of its own under their cache directory and
 removed when the prompt closes.
 
@@ -208,3 +212,4 @@ own tool.
 `verified-by: bravebot_tui::editor::the_scratch_file_does_not_outlive_the_edit`
 `verified-by: bravebot_lsp::server::an_index_a_session_keeps_nothing_of_goes_with_the_session`
 `verified-by: bravebot_agent::incognito_credentials::a_spent_credential_is_written_back_in_a_private_session`
+`verified-by: bravebot_cli::servers::a_started_server_in_a_session_that_keeps_nothing_has_a_home_that_goes_with_it`

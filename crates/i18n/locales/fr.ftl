@@ -556,6 +556,8 @@ servers-project-not-kept = { $path } n'a pas été enregistré comme un projet d
 servers-not-confined = { $alias } n'a pas été démarré, rien ici ne pouvant le confiner : { $reason }
 servers-no-confinement-here =
     { $alias } n'a pas été démarré : cette plateforme n'a pas encore de confinement pour un serveur MCP local
+servers-no-home =
+    { $alias } n'a pas été démarré : aucun répertoire à lui n'a pu être créé dans { $path } : { $reason }
 servers-no-handshake = { $alias } a été démarré et n'a pas terminé sa poignée de main : { $reason }
 servers-too-slow = { $alias } n'a pas terminé sa poignée de main en { $seconds } secondes
 

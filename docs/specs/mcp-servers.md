@@ -203,6 +203,7 @@ was recorded, and leaves every other project's as it was. An incognito session w
 | The list of tools a person vouched for, a `tools` line holding the declaration's digest and the list's | `~/.bravebot/mcp-approved` | the person's own directory | until another list is vouched for under that declaration, or no declaration resolves to it |
 | "use all future servers in this project", one project path per line | `~/.bravebot/mcp-projects` | the person's own directory | until `mcp forget` |
 | "stop asking for this tool here", one alias, tool and project path per line | `~/.bravebot/mcp-tools` | the person's own directory | until `mcp forget` |
+| What a local server writes in its own home, such as a runner's cache ([SERVERS-10](#SERVERS-10)) | `~/.bravebot/mcp-home/<digest>` | one declaration | until somebody removes it |
 | A request for an alias, `"mcp": { "request": ["weather"] }` | `.bravebot/settings.json` beside the work | that checkout | that checkout |
 | What may start, `"mcp": { "allow": [{ "host": "*.corp.example" }], "deny": [{ "command": ["/opt/weather-mcp"] }] }` | the managed layer | the machine | as long as it is pinned |
 | A declaration, an argv, a url, or a variable's value | `.bravebot/settings.json` or `.bravebot/settings.local.json` | **nothing.** [SERVERS-1](#SERVERS-1) | n/a |
@@ -721,7 +722,8 @@ no other.
 [MCP-9](mcp.md#MCP-9) empties the environment before a stdio server starts, on every platform, and
 its known cost is that a server needing a variable to work at all does not work. This is that cost
 paid: the declaration lists variable **names**, those names are read from this process's environment
-at launch, and the resulting environment of the server is those values and nothing else.
+at launch, and the resulting environment of the server is those values and nothing else, beside
+the `HOME` described below.
 
 No value is stored. A settings layer supplies none of them, and neither does the declaration: a
 declaration that wrote a value in place of a name is a parse error. `PATH` is a name like any other,
@@ -756,6 +758,13 @@ The process is confined under [MCP-3](mcp.md#MCP-3), and what it may reach is bu
   is left out, and so is a `bin` directory's parent inside it, since `~/.cargo` keeps a registry
   token beside `~/.cargo/bin`. A `PATH` entry inside it, such as `~/.local/bin`, is read, as the
   place the person put programs.
+- The installation the program came from, which is the directory above the `bin` directory the
+  program resolved into, with its links followed, where that sits deeper in the home directory than
+  a directory directly inside it. `nvm` installs `npx` as a link into
+  `~/.nvm/versions/node/<version>/lib/node_modules/npm/bin`, and the script there loads the rest of
+  npm from beside it. A `bin` directory directly inside a directory at the top of the home, such as
+  `~/.cargo/bin`, brings nothing, for the reason above.
+- The server's own directory, below, which it may read and write.
 - The declared directory, which the server may read and write and starts in. Without one it starts
   in the system temporary directory, and reads nothing of the workspace.
 - A look at any path, and no read or listing beyond the rows above, which is
@@ -765,6 +774,29 @@ The process is confined under [MCP-3](mcp.md#MCP-3), and what it may reach is bu
 The home these rows keep out is the person's profile directory, and not the state directory inside
 it that bravebot keeps its own files in. It is compared with its links followed, as the rows are,
 so a home reached through a link is kept out as well.
+
+**A server has a home directory of its own**, and `HOME` names it unless the declaration names
+`HOME`, in which case the person's value is handed over as any other named variable is. A runner
+keeps its cache and a server its settings under `HOME`, and with the person's own home out of reach
+and no `HOME` at all, `npx` cannot start. The directory is
+`~/.bravebot/mcp-home/<digest>`, keyed by the declaration's digest rather than its alias, so what a
+runner fetched is there on the next launch and a declaration edited to run another program starts
+with nothing the one before it wrote. It is created by this process before the server starts, at
+the modes [state-directory.md](state-directory.md#STATE-1) gives them, and a server whose directory
+cannot be created is not started, and the line says where it was to be made and why.
+
+It is not trusted, and `~/.bravebot` is exactly why somebody will think it is, as with
+[LSP-10](tools/lsp.md#LSP-10)'s cache. [TRUST-11](trust-map.md#TRUST-11) makes that directory
+trusted because the person wrote what is in it, and this directory is written by a server, which is
+code we did not write. The driver never opens it: what it reads under `~/.bravebot` is what
+[instructions.md](instructions.md) and [skills.md](skills.md) name, and this is none of it. A read
+the planner asks for reaches it only where [TRUST-10](trust-map.md#TRUST-10) lets one, which is a
+workspace holding it, and is read through the map like any other file there.
+
+**A session that keeps nothing** hands the server a directory of its own in the system temporary
+directory instead, on the terms [incognito.md](incognito.md#INCOG-8) states for it: created rather
+than adopted, readable by nobody else, and removed once the server has stopped. A runner there
+fetches its package again each session, which is the trade incognito already makes.
 
 A platform with no confinement for this, which is Windows today, starts no stdio server and says
 so, and asks nobody about one it could not start. Where the sandbox cannot be built, the server is
@@ -780,6 +812,13 @@ not started either, and the line says why.
 `verified-by: bravebot_cli::servers::a_servers_confinement_reaches_its_installation_and_nothing_of_the_home_directory`
 `verified-by: bravebot_cli::servers::the_home_kept_out_of_a_launched_server_is_the_persons_and_not_the_state_directory`
 `verified-by: bravebot_cli::servers::a_home_reached_through_a_link_is_kept_out_of_a_servers_confinement`
+`verified-by: bravebot_cli::servers::a_programs_own_installation_deep_in_the_home_directory_is_read`
+`verified-by: bravebot_cli::servers::a_server_is_handed_its_own_home_unless_the_declaration_names_one`
+`verified-by: bravebot_cli::servers::a_server_keeps_a_home_of_its_own_under_the_state_directory`
+`verified-by: bravebot_cli::servers::a_started_server_writes_its_own_files_in_the_home_kept_for_it`
+`verified-by: bravebot_cli::servers::a_server_in_a_session_that_keeps_nothing_is_given_a_home_that_goes_with_it`
+`verified-by: bravebot_cli::servers::a_started_server_in_a_session_that_keeps_nothing_has_a_home_that_goes_with_it`
+`verified-by: bravebot_agent::mcp::a_servers_throwaway_home_lasts_as_long_as_the_session_holding_it`
 `verified-by: bravebot_mcp::stdio::a_server_receives_the_variables_it_was_handed_and_no_others`
 
 <a id="SERVERS-11"></a>
@@ -1209,11 +1248,13 @@ This spec cannot land without these. Each is named by what the clause says rathe
   on the plain terminal before that interface takes the screen, and the question about trusting the
   directory is asked inside it. A server can therefore start for a session whose directory is then
   declined, and it runs until the process exits.
-- **A runner's cache is not writable.** The home directory is not in a server's policy, so `npx` or
-  `uvx` cannot fill the cache they keep under it. Naming a cache variable with `--env`, pointed into
-  `--dir` or the temporary directory, is the road around it. A toolchain installed under the home
-  directory, as `nvm` installs one, has its `bin` directories readable and not the directory beside
-  them its programs load from, so a runner from one does not start confined.
+- **Nothing removes a server's old home.** A declaration that changes leaves the directory the one
+  before it wrote under `~/.bravebot/mcp-home`, a runner's whole cache among it, until somebody
+  removes it.
+- **A toolchain is found through its own installation and nowhere else in the home directory.** A
+  runner whose program loads from somewhere other than the installation it came from, such as a
+  version manager's shim that hands over to a program elsewhere in the home, is not given that
+  somewhere, and does not start confined.
 - **The full-screen interface discards a server's stderr.** It owns the screen, and a server's
   diagnostics drawn over it would be a server's bytes where the interface draws. A one-shot run and
   the plain interface pass it through to their own stderr.

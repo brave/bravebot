@@ -578,6 +578,10 @@ a directory anybody on the machine can list.
 Saying so rather than refusing to open the session, because a session with nowhere to put an
 intermediate file can still do everything else.
 
+A local MCP server in a session that keeps nothing is given a directory on the same terms, as its
+home ([SERVERS-10](mcp-servers.md#SERVERS-10)). That one is the server's and not the session's: it
+is not opened beside the working directory, and its name says it was made for a server.
+
 `verified-by: bravebot_agent::scratch::a_session_is_given_a_directory_of_its_own`
 `verified-by: bravebot_agent::scratch::a_name_something_else_holds_is_refused`
 `verified-by: bravebot_agent::scratch::nobody_else_may_read_what_a_session_writes_there`

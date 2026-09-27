@@ -13,6 +13,7 @@
 //! (SERVERS-8). A session holds the servers it started, their lists, and a grant naming each.
 
 use crate::mcp::{self as command, Home, Person, say, shown};
+use bravebot_agent::SessionScratch;
 use bravebot_agent::mcp::{Connection, Session};
 use bravebot_config::mcp::{self, Approvals, Declaration, Declarations, Digest, Projects};
 use bravebot_config::{Managed, Refusal, Rule, Server};
@@ -153,7 +154,7 @@ pub(crate) fn reach<R: BufRead, W: Write>(
         Prelude::current(),
         &mut notes,
     );
-    let started = start(plans, diagnostics, &mut notes);
+    let started = start(plans, home, diagnostics, &mut notes);
     let session = (!started.is_empty()).then(|| {
         Session::new(
             started,
@@ -808,6 +809,7 @@ fn package(arguments: &[String], ecosystem: Ecosystem) -> Result<Option<String>,
 /// Start every planned server, and wait for their handshakes until [`HANDSHAKE`] has passed.
 fn start(
     plans: Vec<(String, Plan)>,
+    home: &Home,
     diagnostics: Stream,
     notes: &mut Vec<String>,
 ) -> Vec<bravebot_agent::mcp::Reached> {
@@ -847,7 +849,23 @@ fn start(
                     }
                     None => unreachable!("a sandbox is looked for wherever a local server is"),
                 };
-                let Some(policy) = confinement_here(&program, &searched, directory.as_deref())
+                let (own, throwaway) = match own_home(home, &declared) {
+                    Ok(made) => made,
+                    Err((place, error)) => {
+                        notes.push(
+                            t!(
+                                servers_no_home,
+                                alias = alias,
+                                path = place.display().to_string(),
+                                reason = error.to_string()
+                            )
+                            .to_string(),
+                        );
+                        continue;
+                    }
+                };
+                let Some(policy) =
+                    confinement_here(&program, &searched, directory.as_deref(), &own)
                 else {
                     notes.push(t!(servers_no_confinement_here, alias = alias).to_string());
                     continue;
@@ -857,7 +875,7 @@ fn start(
                     alias.as_str(),
                     program.to_str().unwrap_or_default(),
                     &arguments,
-                    variables,
+                    at_home(variables, &own),
                     sandbox.as_ref(),
                     &policy,
                     diagnostics,
@@ -878,7 +896,13 @@ fn start(
                 };
                 waiting.push(alias.clone());
                 std::thread::spawn(move || {
-                    let outcome = handshake_local(server, declared);
+                    // Held apart from the handshake, so a server that fails one has been stopped
+                    // by the time its home is removed.
+                    let outcome =
+                        handshake_local(server, declared).map(|reached| match throwaway {
+                            Some(throwaway) => reached.holding(throwaway),
+                            None => reached,
+                        });
                     let _ = sender.send((alias, outcome));
                 });
             }
@@ -991,15 +1015,50 @@ fn confinement_here(
     program: &Path,
     searched: &[PathBuf],
     directory: Option<&Path>,
+    own: &Path,
 ) -> Option<SandboxPolicy> {
     confinement(
         Prelude::current(),
         program,
         searched,
         directory,
+        own,
         &temporary_directory(),
         bravebot_agent::home::profile().as_deref(),
     )
+}
+
+/// The directory a local server is handed as its home, made before it starts, with what keeps a
+/// throwaway one for as long as the server runs.
+///
+/// Under the state directory and keyed by the declaration where anything may be written there, so
+/// what a runner fetched on one launch is there on the next. Otherwise one of its own in the system
+/// temporary directory. The error names the directory it was to be made in.
+fn own_home(
+    home: &Home,
+    declared: &Digest,
+) -> Result<(PathBuf, Option<SessionScratch>), (PathBuf, std::io::Error)> {
+    let Some(state) = home.directory.as_deref().filter(|_| home.writable) else {
+        return SessionScratch::for_a_server()
+            .map(|made| (made.path().to_path_buf(), Some(made)))
+            .map_err(|error| (temporary_directory(), error));
+    };
+    let own = mcp::server_home(state, declared);
+    let made = bravebot_agent::home::create_directory(&own).and_then(|()| own.canonicalize());
+    match made {
+        Ok(made) => Ok((made, None)),
+        Err(error) => Err((own.parent().map(Path::to_path_buf).unwrap_or(own), error)),
+    }
+}
+
+/// `variables` with `HOME` naming the server's own directory, unless the declaration named `HOME`
+/// itself, which is the person's word and is kept.
+fn at_home(variables: Variables, own: &Path) -> Variables {
+    let declared = variables.names().any(|name| name == "HOME");
+    match declared {
+        true => variables,
+        false => variables.with("HOME", own),
+    }
 }
 
 /// What a local server may reach, or `None` on a platform with no base to build it on.
@@ -1010,14 +1069,18 @@ fn confinement_here(
 /// `PATH` and whose code sits beside where it was installed. A `bin` directory brings its parent,
 /// where an installation keeps what its programs load, and none of these reaches the home
 /// directory: a `PATH` naming it, or a directory above it, is left out, and so is a parent inside
-/// it, since `~/.cargo` holds a registry token beside `~/.cargo/bin`. The declared directory is the
-/// one the server may write, and where it starts; without one it starts in the temporary
-/// directory, and reads nothing of the workspace.
+/// it, since `~/.cargo` holds a registry token beside `~/.cargo/bin`. The program's own `bin`
+/// directory is the exception where it sits deeper in the home than that, as `nvm` installs one,
+/// since that parent is the installation the program came from. `own` is the server's own
+/// directory, which it may read and write. The declared directory may be written too, and is where
+/// it starts; without one it starts in the temporary directory, and reads nothing of the workspace.
+#[allow(clippy::too_many_arguments)]
 fn confinement(
     prelude: Option<Prelude>,
     program: &Path,
     searched: &[PathBuf],
     directory: Option<&Path>,
+    own: &Path,
     temporary: &Path,
     home: Option<&Path>,
 ) -> Option<SandboxPolicy> {
@@ -1031,7 +1094,23 @@ fn confinement(
             && outside_home(path)
             && home.as_ref().is_none_or(|home| !path.starts_with(home))
     };
+    let below_the_top_of_home = |path: &Path| {
+        home.as_ref().is_some_and(|home| {
+            path.strip_prefix(home)
+                .is_ok_and(|below| below.components().count() > 1)
+        })
+    };
     let program = canonical(program);
+    if let Some(installation) = program
+        .parent()
+        .filter(|directory| directory.file_name() == Some(OsStr::new("bin")))
+        .and_then(Path::parent)
+        .filter(|installation| below_the_top_of_home(installation))
+    {
+        policy = policy.allow_read(installation);
+    }
+    let own = canonical(own);
+    policy = policy.allow_read(&own).allow_write(&own);
     let readable = searched
         .iter()
         .map(|directory| canonical(directory))
@@ -1870,6 +1949,8 @@ mod tests {
         std::fs::create_dir_all(&own).expect("own bin");
         let work = root.join("work");
         std::fs::create_dir_all(&work).expect("work");
+        let kept = root.join("kept");
+        std::fs::create_dir_all(&kept).expect("the server's own directory");
         let temporary = root.join("tmp");
 
         let policy = confinement(
@@ -1882,6 +1963,7 @@ mod tests {
                 root.clone(),
             ],
             Some(&work),
+            &kept,
             &temporary,
             Some(&home),
         )
@@ -1908,18 +1990,23 @@ mod tests {
         assert!(reads(&policy, &work) && writes(&policy, &work));
         assert_eq!(policy.starting_in.as_deref(), Some(work.as_path()));
         assert!(!writes(&policy, &installation));
+        assert!(
+            reads(&policy, &kept) && writes(&policy, &kept),
+            "a server keeps its own files in the directory it was given"
+        );
 
         let undirected = confinement(
             Some(Prelude::MacOs),
             &program,
             &[],
             None,
+            &kept,
             &temporary,
             Some(&home),
         )
         .expect("a policy");
         assert_eq!(undirected.starting_in.as_deref(), Some(temporary.as_path()));
-        assert!(confinement(None, &program, &[], None, &temporary, Some(&home)).is_none());
+        assert!(confinement(None, &program, &[], None, &kept, &temporary, Some(&home)).is_none());
     }
 
     /// `/tmp` is a link to `/private/tmp` on macOS, and a home under it was named as given while
@@ -1939,6 +2026,7 @@ mod tests {
             &program,
             &[linked.join(".cargo/bin"), linked.clone()],
             None,
+            &root.join("kept"),
             &root.join("tmp"),
             Some(&linked),
         )
@@ -1960,7 +2048,8 @@ mod tests {
         let profile = bravebot_agent::home::profile().expect("a test runs with a home directory");
         let own = profile.join(".cargo").join("bin");
 
-        let policy = confinement_here(&own.join("server"), std::slice::from_ref(&own), None)
+        let kept = scratch("cli-servers-kept-here");
+        let policy = confinement_here(&own.join("server"), std::slice::from_ref(&own), None, &kept)
             .expect("a policy");
 
         let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
@@ -1968,5 +2057,231 @@ mod tests {
             !reads(&policy, &canonical(&profile.join(".cargo"))),
             "a bin directory's parent in the home directory is the person's own"
         );
+    }
+
+    /// `nvm` installs a runner as a link from a `bin` directory deep in the home directory to a
+    /// script inside the package it loads the rest of itself from.
+    #[cfg(unix)]
+    #[test]
+    fn a_programs_own_installation_deep_in_the_home_directory_is_read() {
+        let root = scratch("cli-servers-installation-in-home");
+        let home = root.join("home");
+        let node = home.join(".nvm/versions/node/v24");
+        let npm = node.join("lib/node_modules/npm");
+        let script = installed(&npm.join("bin"), "npx-cli.js");
+        std::fs::create_dir_all(node.join("bin")).expect("node's bin");
+        let program = node.join("bin/npx");
+        std::os::unix::fs::symlink(&script, &program).expect("link the runner");
+
+        let policy = confinement(
+            Some(Prelude::MacOs),
+            &program,
+            &[node.join("bin")],
+            None,
+            &root.join("kept"),
+            &root.join("tmp"),
+            Some(&home),
+        )
+        .expect("a policy");
+
+        assert!(
+            reads(&policy, &npm),
+            "the installation the program came from is read"
+        );
+        assert!(reads(&policy, &node.join("bin")));
+        assert!(
+            !reads(&policy, &node),
+            "a searched bin directory's parent in the home directory is the person's own"
+        );
+        assert!(!reads(&policy, &home.join(".nvm")));
+        assert!(!reads(&policy, &home));
+    }
+
+    fn digested(argv: &[&str]) -> Digest {
+        Declaration::stdio(words(argv), vec!["PATH".to_string()], None)
+            .expect("declaration")
+            .digest()
+    }
+
+    /// One per declaration, so what a runner fetched is there on its next launch and a declaration
+    /// edited to run something else starts with nothing the one before it wrote.
+    #[test]
+    fn a_server_keeps_a_home_of_its_own_under_the_state_directory() {
+        let state = scratch("cli-servers-own-home");
+        let home = Home {
+            directory: Some(state.clone()),
+            writable: true,
+        };
+        let weather = digested(&["weather-mcp"]);
+
+        let (own, throwaway) = own_home(&home, &weather).expect("a home");
+
+        assert!(throwaway.is_none(), "a kept home is not removed");
+        assert_eq!(own, mcp::server_home(&state, &weather));
+        assert!(own.is_dir());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&own)
+                .expect("its metadata")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o700, "mode was {:o}", mode & 0o777);
+        }
+        assert_eq!(own_home(&home, &weather).expect("again").0, own);
+        assert_ne!(
+            own_home(&home, &digested(&["other-mcp"]))
+                .expect("another")
+                .0,
+            own
+        );
+    }
+
+    #[test]
+    fn a_server_in_a_session_that_keeps_nothing_is_given_a_home_that_goes_with_it() {
+        let state = scratch("cli-servers-throwaway-home");
+        let home = Home {
+            directory: Some(state.clone()),
+            writable: false,
+        };
+
+        let (own, throwaway) = own_home(&home, &digested(&["weather-mcp"])).expect("a home");
+        let throwaway = throwaway.expect("a home that goes");
+
+        assert_eq!(own, throwaway.path());
+        assert!(own.is_dir());
+        assert!(own.starts_with(temporary_directory()));
+        assert_eq!(
+            std::fs::read_dir(&state)
+                .expect("the state directory")
+                .count(),
+            0,
+            "a session that keeps nothing wrote under the state directory"
+        );
+        drop(throwaway);
+        assert!(!own.exists(), "{} outlived its server", own.display());
+    }
+
+    #[test]
+    fn a_server_is_handed_its_own_home_unless_the_declaration_names_one() {
+        let own = Path::new("/state/mcp-home/weather");
+
+        assert_eq!(
+            at_home(Variables::new().with("PATH", "/usr/bin"), own),
+            Variables::new().with("PATH", "/usr/bin").with("HOME", own)
+        );
+        let declared = Variables::new().with("HOME", "/somewhere/else");
+        assert_eq!(at_home(declared.clone(), own), declared);
+    }
+
+    /// Says where its home is in the directory it starts in, and answers only once it has written
+    /// a file there.
+    #[cfg(unix)]
+    const HOME_WRITING_SERVER: &str = r#"#!/bin/sh
+printf '%s' "$HOME" > home-was
+touch "$HOME/was-here" || exit 1
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"fake","version":"1"}}}\n' "$id"
+      ;;
+    *'"tools/list"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[]}}\n' "$id"
+      ;;
+  esac
+done
+"#;
+
+    /// Start [`HOME_WRITING_SERVER`] from `work` under this machine's confinement, or `None` where
+    /// there is none to start it under.
+    #[cfg(unix)]
+    fn started_writing_home(
+        root: &Path,
+        work: &Path,
+        home: &Home,
+        notes: &mut Vec<String>,
+    ) -> Option<Vec<bravebot_agent::mcp::Reached>> {
+        if Prelude::current().is_none() || bravebot_sandbox::for_current_platform().is_err() {
+            eprintln!("SKIPPED (no confinement here)");
+            return None;
+        }
+        let program = installed(&root.join("bin"), "weather-mcp");
+        std::fs::write(&program, HOME_WRITING_SERVER).expect("write the server");
+        std::fs::create_dir_all(work).expect("work");
+        let plan = Plan::Stdio {
+            program,
+            arguments: Vec::new(),
+            variables: Variables::new(),
+            searched: Vec::new(),
+            directory: Some(work.to_path_buf()),
+            declared: digested(&["weather-mcp"]),
+        };
+        Some(start(
+            vec![("weather".to_string(), plan)],
+            home,
+            Stream::Null,
+            notes,
+        ))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_started_server_writes_its_own_files_in_the_home_kept_for_it() {
+        let root = scratch("cli-servers-started-kept-home");
+        let state = root.join("state");
+        std::fs::create_dir_all(&state).expect("state");
+        let work = root.join("work");
+        let home = Home {
+            directory: Some(state.clone()),
+            writable: true,
+        };
+        let mut notes = Vec::new();
+
+        let Some(started) = started_writing_home(&root, &work, &home, &mut notes) else {
+            return;
+        };
+
+        assert_eq!(notes, Vec::<String>::new());
+        assert_eq!(started.len(), 1);
+        let own = mcp::server_home(&state, &digested(&["weather-mcp"]));
+        assert_eq!(
+            std::fs::read_to_string(work.join("home-was")).expect("where its home was"),
+            own.display().to_string()
+        );
+        drop(started);
+        assert!(
+            own.join("was-here").exists(),
+            "what a server wrote is there for its next launch"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_started_server_in_a_session_that_keeps_nothing_has_a_home_that_goes_with_it() {
+        let root = scratch("cli-servers-started-throwaway-home");
+        let state = root.join("state");
+        std::fs::create_dir_all(&state).expect("state");
+        let work = root.join("work");
+        let home = Home {
+            directory: Some(state.clone()),
+            writable: false,
+        };
+        let mut notes = Vec::new();
+
+        let Some(started) = started_writing_home(&root, &work, &home, &mut notes) else {
+            return;
+        };
+
+        assert_eq!(notes, Vec::<String>::new());
+        assert_eq!(started.len(), 1);
+        let own = PathBuf::from(
+            std::fs::read_to_string(work.join("home-was")).expect("where its home was"),
+        );
+        assert!(own.join("was-here").exists());
+        assert!(own.starts_with(temporary_directory()));
+        assert_eq!(std::fs::read_dir(&state).expect("state").count(), 0);
+        drop(started);
+        assert!(!own.exists(), "{} outlived its server", own.display());
     }
 }

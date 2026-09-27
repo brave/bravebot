@@ -341,16 +341,20 @@ A program server is started confined, and on a platform with no confinement for 
 Windows today, it is not started. It gets:
 
 - the variables you named with `--env`, read from your environment as it starts, and no others;
+- a home directory of its own, which `HOME` names unless you named `HOME` yourself, to read and
+  write: `~/.bravebot/mcp-home/<digest>`, one for each declaration, where a runner such as `npx`
+  keeps its cache between sessions;
 - read access to the directories the `PATH` you named lists and the one its program is in, and for a
-  `bin` directory the installation around it;
+  `bin` directory the installation around it, including one deep in your home directory as `nvm`
+  installs one;
 - the directory you gave with `--dir`, to read and write and start in, or the temporary directory
   if you gave none;
 - the network, and the machine's own system directories;
 - a look at any path, which says whether something is there and what kind of thing it is, and
   not what a file holds or what a directory lists.
 
-It does not get your home directory, other than a `PATH` entry inside it such as `~/.local/bin`, and
-it does not get the workspace unless `--dir` names it. A program named without a path is looked for
+It does not get your home directory, other than a `PATH` entry inside it such as `~/.local/bin` and
+the installation its program came from, and it does not get the workspace unless `--dir` names it. A program named without a path is looked for
 only in the `PATH` you named: without `--env PATH` it is not found, and the session says to name it
 or give the program's full path.
 
@@ -465,16 +469,20 @@ to be rid of a server yourself, [remove it](#removing-one).
 ## Where nothing is written
 
 An [incognito session](../using/sessions.md#a-session-that-leaves-nothing-behind) writes nothing
-under `~/.bravebot`, so `add`, `approve` and `remove` are refused in one. On a machine that names no
+under `~/.bravebot`, so `add`, `approve` and `remove` are refused in one. A server started in one is
+given a home directory in the temporary directory instead, removed once it stops, so a runner
+fetches its package again each session. On a machine that names no
 profile directory there is no `~/.bravebot` at all: nothing is declared there, and nothing can be.
 
 ## Known costs
 
 - **The full-screen interface asks before it asks about the directory.** A server you approve can
   start for a session whose directory you then decline, and runs until bravebot exits.
-- **A runner cannot write its cache in your home directory.** Pass a cache variable with `--env` and
-  point it into `--dir` or the temporary directory. A runner from a toolchain installed under your
-  home directory, as `nvm` installs one, does not start confined.
+- **Nothing removes a server's old home.** Changing a declaration leaves the directory the one
+  before it wrote under `~/.bravebot/mcp-home` until you remove it.
+- **A toolchain that loads from elsewhere in your home directory does not start.** A version
+  manager's shim that hands over to a program somewhere else in your home is not given that
+  somewhere.
 - **The full-screen interface does not show a server's own error output.** `--plain` and a one-shot
   run pass it through to stderr.
 - **No local server starts on Windows yet.** There is no confinement for one there, so the session
