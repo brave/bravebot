@@ -4557,14 +4557,20 @@ mod tests {
             write(&repo, "na\u{ef}ve.txt", "x\n");
             write(&repo, "bel\u{7}", "x\n");
             std::fs::create_dir_all(repo.root.join("empty/.git")).expect("empty .git");
+            let other = Repo::new("status-quoting-linked");
+            std::fs::create_dir_all(repo.root.join("linked")).expect("linked");
+            std::os::unix::fs::symlink(&other.git, repo.root.join("linked/.git")).expect("link");
             index(&repo, &[]);
             assert_eq!(
                 text(&repo),
-                "D  f\n?? \"bel\\a\"\n?? \"na\\303\\257ve.txt\"\n"
+                "D  f\n?? \"bel\\a\"\n?? linked/\n?? \"na\\303\\257ve.txt\"\n"
             );
             assert_eq!(status(&repo, Some("f/sub")).expect("answered").text, CLEAN);
             repo.put("config", "[core]\n\tquotePath = false\n");
-            assert_eq!(text(&repo), "D  f\n?? \"bel\\a\"\n?? na\u{ef}ve.txt\n");
+            assert_eq!(
+                text(&repo),
+                "D  f\n?? \"bel\\a\"\n?? linked/\n?? na\u{ef}ve.txt\n"
+            );
         }
 
         /// A v3 index of one entry `git add -N` wrote.
@@ -4598,6 +4604,8 @@ mod tests {
             assert_eq!(text(&repo), " A ita.txt\n");
             std::fs::remove_file(repo.root.join("ita.txt")).expect("removed");
             assert_eq!(text(&repo), " D ita.txt\n");
+            write(&repo, "ita.txt/in", "y\n");
+            assert_eq!(text(&repo), " D ita.txt\n");
         }
 
         #[test]
@@ -4607,6 +4615,8 @@ mod tests {
             commit(&repo, &[("f.txt", one)]);
             write(&repo, "f.txt", "");
             write(&repo, "mod", "a file where a submodule was\n");
+            // A socket path must fit in sun_path, which the scratch directory's path does not.
+            // nosemgrep: rust.lang.security.temp-dir.temp-dir
             let short = std::env::temp_dir().join(format!("bb{}.sock", std::process::id()));
             let _ = std::fs::remove_file(&short);
             let listener = std::os::unix::net::UnixListener::bind(&short).expect("socket");
@@ -4662,6 +4672,7 @@ mod tests {
             write(&repo, "sub/b.txt", "one\n");
             write(&repo, "sub/out.o", "x\n");
             write(&repo, "top.o", "x\n");
+            write(&repo, "fresh/.gitignore", "*\n");
             index(
                 &repo,
                 &[
@@ -4673,15 +4684,53 @@ mod tests {
                 .opened()
                 .expect("opened")
                 .answer(&request(Query::Status, None, None), &|path| {
-                    path.starts_with("sub/.git")
+                    path.starts_with("sub/.git") || path == "fresh/.gitignore"
                 })
                 .expect("answered");
             assert!(answer.withheld);
             assert!(
-                answer.text.starts_with("?? top.o\nNot compared, ")
-                    && answer.text.ends_with(":\n   a.txt\n   sub/b.txt\n"),
+                answer
+                    .text
+                    .starts_with(" M a.txt\n?? fresh/\n?? top.o\nNot compared, ")
+                    && answer.text.ends_with(":\n   sub/b.txt\n"),
                 "{}",
                 answer.text
+            );
+        }
+
+        #[test]
+        fn a_withheld_rule_counts_only_where_a_file_it_withholds_is_read() {
+            let repo = Repo::new("status-withheld-absent");
+            let one = repo.blob("one\n");
+            commit(&repo, &[("a.txt", one), ("b.txt", one)]);
+            write(&repo, "a.txt", "one\n");
+            write(&repo, "b.txt", "one\n");
+            write(&repo, ".gitignore", "*.o\n");
+            write(&repo, "secret.txt", "x\n");
+            index(
+                &repo,
+                &[
+                    ("a.txt", FILE, one, 0, false),
+                    ("b.txt", FILE, one, 0, false),
+                ],
+            );
+            repo.put("config", "[status]\n\tshowUntrackedFiles = no\n");
+            let ask = |withheld: &dyn Fn(&str) -> bool| {
+                repo.opened()
+                    .expect("opened")
+                    .answer(&request(Query::Status, None, None), withheld)
+                    .expect("answered")
+            };
+            let rules =
+                |path: &str| path.ends_with(".gitignore") || path.ends_with(".gitattributes");
+            let answer = ask(&|path| rules(path) || path == "secret.txt");
+            assert!(!answer.withheld);
+            assert_eq!(answer.text, CLEAN);
+            let answer = ask(&|path| rules(path) || path == "b.txt");
+            assert!(answer.withheld);
+            assert_eq!(
+                answer.text,
+                "Nothing to commit among the paths this answer could read.\n"
             );
         }
     }

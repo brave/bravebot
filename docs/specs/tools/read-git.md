@@ -247,14 +247,15 @@ though it were the whole draws conclusions from what is missing.
 Staged changes compare the index with the tree at HEAD, unstaged ones the working tree with the
 index, and untracked paths follow, sorted, each as `XY path` the way git prints them. A conflict is
 coded by the stages the index holds (`UU`, `AA`, `DU` and the rest), a file added with intent is
-` A`, or ` D` once its file is gone, and a directory holding nothing tracked is one line, `dir/`, or
+` A`, or ` D` once its file is gone or a directory stands in its place, and a directory holding nothing tracked is one line, `dir/`, or
 none where everything in it is ignored. A nested repository, a directory whose `.git` is a file or
-holds a `HEAD`, is one line too. Only files and symbolic links are listed, never a fifo or a
+holds a `HEAD`, reached through a symbolic link or not, is one line too. Only files and symbolic links are listed, never a fifo or a
 socket, and `status.showUntrackedFiles` is read: `no` lists nothing untracked, and `all` lists each
 file rather than its directory. A path filter lists that path and what is beneath it, not the
 directories above it. A path holding a space, a quote, a backslash, a control character or, with
 `core.quotePath` on as it is by default, a byte past ASCII is quoted as git quotes it. A tree where
-nothing changed says so.
+nothing changed says so, and where the trust map withheld a path, says only that nothing changed
+among the paths it could read.
 
 A file whose stat data matches the index is taken as unchanged unless the index was written no
 later than the file last changed, or the entry records a size of zero for content that is not
@@ -265,8 +266,12 @@ than followed. Ignore files are read as git reads them, per directory with `info
 them, and so are attributes files. A file an attribute or `core.autocrlf` would convert on its way
 into the index, and a submodule, is listed under a heading as not compared rather than guessed at.
 An ignore or attributes file the trust map withholds is not guessed at either: nothing untracked
-beneath a withheld ignore file is listed, and a withheld attributes file leaves every file whose
-stat data changed not compared. Renames are not detected. Nothing is written, the index included.
+beneath a withheld ignore file is listed, though an untracked directory holding one is, as git lists
+it for the ignore file itself, and a withheld attributes file leaves every file beneath its
+directory whose stat data changed not compared. A rule withholding a name counts only where a file
+stands at it, and a withheld ignore file counts only where untracked files are listed. A file
+replaced between being looked at and being read is not compared either, and is never followed
+through a link or waited on as a fifo. Renames are not detected. Nothing is written, the index included.
 
 Declined, with a sentence pointing at `run`: a split or sparse index, one holding an extension
 this reader does not know that git would need, one whose checksum does not match, one naming a
@@ -296,6 +301,7 @@ and an index this reader does not parse in full lists entries it cannot see.
 `verified-by: bravebot_agent::git::a_replaced_submodule_a_smudged_entry_and_a_socket_read_as_git_reads_them`
 `verified-by: bravebot_agent::git::status_show_untracked_files_is_read_from_the_config`
 `verified-by: bravebot_agent::git::a_withheld_attributes_or_ignore_file_is_not_guessed_at`
+`verified-by: bravebot_agent::git::a_withheld_rule_counts_only_where_a_file_it_withholds_is_read`
 `verified-by: bravebot_agent::turn::read_git_answers_status_and_refuses_a_query_off_the_list`
 
 <a id="GIT-11"></a>

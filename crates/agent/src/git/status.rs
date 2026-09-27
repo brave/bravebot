@@ -332,6 +332,8 @@ struct Attributes {
     /// Each pattern naming a conversion, with the directory of the file it came from.
     patterns: Vec<(String, gix_glob::Pattern)>,
     read_from: HashSet<String>,
+    /// Directories whose attributes file is withheld, so any file beneath may be one git converts.
+    withheld: Vec<String>,
 }
 
 impl Attributes {
@@ -378,6 +380,12 @@ impl Attributes {
 
     fn converts(&self, path: &str, case: Case) -> bool {
         self.all
+            || self.withheld.iter().any(|dir| {
+                dir.is_empty()
+                    || path
+                        .strip_prefix(dir.as_str())
+                        .is_some_and(|rest| rest.starts_with('/'))
+            })
             || self.patterns.iter().any(|(dir, pattern)| {
                 let relative = if dir.is_empty() {
                     Some(path)
@@ -435,16 +443,22 @@ impl Walk<'_> {
             .is_some_and(|found| !found.pattern.is_negative())
     }
 
+    /// Whether a regular file the deny rules withhold stands at `path`.
+    fn withheld_file(&self, out: &Out<'_>, path: &str) -> bool {
+        (out.withheld)(path)
+            && std::fs::symlink_metadata(self.root.join(path))
+                .is_ok_and(|meta| meta.file_type().is_file())
+    }
+
     /// A regular file in the working tree, as long as it is one and not a link or a directory.
     fn regular(&self, out: &mut Out<'_>, path: &str) -> Result<Option<Vec<u8>>, Declined> {
         if (out.withheld)(path) {
-            out.withheld_any = true;
             return Ok(None);
         }
         let full = self.root.join(path);
         match std::fs::symlink_metadata(&full) {
             Ok(meta) if meta.file_type().is_file() => {
-                let mut file = open_as_seen(&full, &meta)?;
+                let mut file = open_as_seen(&full, &meta)?.ok_or(Declined::Unreadable)?;
                 let mut bytes = Vec::new();
                 std::io::Read::read_to_end(&mut file, &mut bytes)
                     .map_err(|_| Declined::Unreadable)?;
@@ -468,19 +482,21 @@ impl Walk<'_> {
             return Ok(false);
         }
         let attributes = join(dir, ".gitattributes");
-        if !probe && (out.withheld)(&attributes) {
-            // What it says is unknown, so any file may be one git converts.
-            self.attributes.all = true;
-        }
-        if !probe && let Some(bytes) = self.regular(out, &attributes)? {
+        if !probe && self.withheld_file(out, &attributes) {
+            out.withheld_any = true;
+            self.attributes.withheld.push(dir.to_owned());
+        } else if !probe && let Some(bytes) = self.regular(out, &attributes)? {
             self.attributes.add(dir, &bytes);
         }
         let ignore = join(dir, ".gitignore");
-        // Without the patterns, nothing beneath is listed rather than what they would hide.
-        let ignored_above = ignored_above || (out.withheld)(&ignore);
-        if ignored_above {
-            out.withheld_any |= (out.withheld)(&ignore);
+        let withheld_ignore = self.withheld_file(out, &ignore);
+        if probe && withheld_ignore && !ignored_above && !self.ignored(&ignore, false) {
+            // The ignore file is itself untracked here, so git lists the directory.
+            return Ok(true);
         }
+        // Without the patterns, nothing beneath is listed rather than what they would hide.
+        out.withheld_any |= withheld_ignore && !probe && self.mode != Untracked::No;
+        let ignored_above = ignored_above || withheld_ignore;
         let mut pushed = false;
         if !ignored_above && let Some(bytes) = self.regular(out, &ignore)? {
             self.ignore.add_patterns_buffer(
@@ -529,16 +545,17 @@ impl Walk<'_> {
             if !in_scope(&child, self.filter) {
                 continue;
             }
-            if (out.withheld)(&child) {
-                out.withheld_any = true;
-                continue;
-            }
+            let withheld = (out.withheld)(&child);
             let key = self.key(child.as_bytes());
             if self.mode == Untracked::No {
-                if kind.is_dir() && self.tracked_dirs.contains(&key) {
+                if !withheld && kind.is_dir() && self.tracked_dirs.contains(&key) {
                     let ignored = ignored_above || self.ignored(&child, true);
                     self.dir(out, &child, ignored, false)?;
                 }
+                continue;
+            }
+            if withheld {
+                out.withheld_any = true;
                 continue;
             }
             if kind.is_dir() {
@@ -668,23 +685,14 @@ impl Compare<'_> {
         Ok(true)
     }
 
-    /// Whether anything stands at `path`, reached through real directories.
-    fn present(&mut self, path: &str) -> Result<bool, Declined> {
-        if !self.leading_dirs_real(path)? {
-            return Ok(false);
-        }
-        match std::fs::symlink_metadata(self.root.join(path)) {
-            Ok(_) => Ok(true),
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-                ) =>
-            {
-                Ok(false)
-            }
-            Err(_) => Err(Declined::Unreadable),
-        }
+    /// Whether an intent-to-add path still holds what git would add, reached through real
+    /// directories: git counts a directory there as the file gone unless it is a repository.
+    fn still_there(&mut self, path: &str) -> Result<bool, Declined> {
+        let full = self.root.join(path);
+        Ok(self.leading_dirs_real(path)?
+            && super::present(&full)?
+            && !std::fs::symlink_metadata(&full)
+                .is_ok_and(|meta| meta.is_dir() && !is_repository(&full)))
     }
 
     fn worktree(
@@ -762,7 +770,9 @@ impl Compare<'_> {
         if self.settings.autocrlf || self.attributes.converts(path, self.case) {
             return Ok(Some(Worktree::NotCompared));
         }
-        let mut file = open_as_seen(&full, &meta)?;
+        let Some(mut file) = open_as_seen(&full, &meta)? else {
+            return Ok(Some(Worktree::NotCompared));
+        };
         Ok(hash_blob(&mut file, meta.len(), out)?.map(|id| {
             if id == entry.id {
                 Worktree::Same
@@ -886,33 +896,43 @@ fn within(path: &str, filter: Option<&str>) -> bool {
 }
 
 /// Whether `dir` holds a repository of its own: a `.git` file pointing at one, or a `.git`
-/// directory with a HEAD.
+/// directory with a HEAD, either one reached through a link as git reaches it.
 fn is_repository(dir: &Path) -> bool {
     let git = dir.join(".git");
-    match std::fs::symlink_metadata(&git) {
-        Ok(meta) if meta.file_type().is_file() => true,
-        Ok(meta) if meta.file_type().is_dir() => {
-            std::fs::symlink_metadata(git.join("HEAD")).is_ok()
-        }
+    match std::fs::metadata(&git) {
+        Ok(meta) if meta.is_file() => true,
+        Ok(meta) if meta.is_dir() => std::fs::symlink_metadata(git.join("HEAD")).is_ok(),
         _ => false,
     }
 }
 
-/// Open the file `seen` describes, declining if what opens is another file: one swapped for a
-/// link since it was looked at would otherwise be read wherever the link points.
-fn open_as_seen(full: &Path, seen: &std::fs::Metadata) -> Result<std::fs::File, Declined> {
-    let file = std::fs::File::open(full).map_err(|_| Declined::Unreadable)?;
+/// Open the file `seen` describes, or `None` if what stands there now is another file: one
+/// swapped for a link since it was looked at would otherwise be read wherever the link points, and
+/// one swapped for a fifo would hold the open until a writer came.
+fn open_as_seen(full: &Path, seen: &std::fs::Metadata) -> Result<Option<std::fs::File>, Declined> {
     #[cfg(unix)]
     {
+        use rustix::fs::{Mode, OFlags};
         use std::os::unix::fs::MetadataExt;
+        let flags = OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK;
+        let file = match rustix::fs::open(full, flags, Mode::empty()) {
+            Ok(fd) => std::fs::File::from(fd),
+            Err(rustix::io::Errno::LOOP | rustix::io::Errno::NOENT) => return Ok(None),
+            Err(_) => return Err(Declined::Unreadable),
+        };
         let opened = file.metadata().map_err(|_| Declined::Unreadable)?;
-        if (opened.dev(), opened.ino()) != (seen.dev(), seen.ino()) {
-            return Err(Declined::Unreadable);
+        if !opened.is_file() || (opened.dev(), opened.ino()) != (seen.dev(), seen.ino()) {
+            return Ok(None);
         }
+        Ok(Some(file))
     }
     #[cfg(not(unix))]
-    let _ = seen;
-    Ok(file)
+    {
+        let _ = seen;
+        std::fs::File::open(full)
+            .map(Some)
+            .map_err(|_| Declined::Unreadable)
+    }
 }
 
 #[derive(Default)]
@@ -1010,10 +1030,15 @@ pub(super) fn answer(
         if name == ".gitattributes"
             && (dir.is_empty() || in_scope(dir, filter))
             && !walk.attributes.read_from.contains(dir)
-            && !(out.withheld)(path)
+            && !walk.attributes.withheld.iter().any(|d| d == dir)
         {
-            let bytes = repo.object(&entry.id, Kind::Blob)?;
-            walk.attributes.add(dir, &bytes);
+            if (out.withheld)(path) {
+                out.withheld_any = true;
+                walk.attributes.withheld.push(dir.to_owned());
+            } else {
+                let bytes = repo.object(&entry.id, Kind::Blob)?;
+                walk.attributes.add(dir, &bytes);
+            }
         }
     }
 
@@ -1068,7 +1093,7 @@ pub(super) fn answer(
         };
         let unstaged = match entry {
             None => ' ',
-            Some(e) if e.intent_to_add => match compare.present(path)? {
+            Some(e) if e.intent_to_add => match compare.still_there(path)? {
                 true => 'A',
                 false => 'D',
             },
@@ -1090,9 +1115,11 @@ pub(super) fn answer(
     let mut untracked = std::mem::take(&mut walk.untracked);
     untracked.sort();
     if rows.is_empty() && untracked.is_empty() && not_compared.is_empty() && !out.timed_out {
-        out.text.line(
-            "Nothing to commit: the index matches HEAD and the working tree matches the index.",
-        );
+        out.text.line(if out.withheld_any {
+            "Nothing to commit among the paths this answer could read."
+        } else {
+            "Nothing to commit: the index matches HEAD and the working tree matches the index."
+        });
         return Ok(());
     }
     for (code, path) in rows {
@@ -1114,8 +1141,9 @@ pub(super) fn answer(
     if !not_compared.is_empty() && out.room() {
         out.text.line(
             "Not compared, since git would convert them on the way into the index (an attribute \
-             or core.autocrlf asks for a filter or line-ending conversion) or they are submodules; \
-             use run with git status for these:",
+             or core.autocrlf asks for a filter or line-ending conversion, or an attributes file \
+             above them is withheld), they are submodules, or they changed while being read; use \
+             run with git status for these:",
         );
         for path in not_compared {
             if !out.room() {
