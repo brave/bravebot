@@ -119,7 +119,9 @@ dependencies = [
  "bravebot-net",
  "bravebot-sandbox",
  "bravebot-skus",
+ "gix-glob",
  "gix-hash",
+ "gix-ignore",
  "gix-object",
  "gix-odb",
  "gix-ref",
@@ -920,6 +922,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "gix-glob"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bba50803dea16646cafb9a2d67e95b8cdf5b21c7e8c45bcd18f38bafe02fb81f"
+dependencies = [
+ "bitflags 2.13.1",
+ "bstr",
+ "gix-features",
+ "gix-path",
+ "gix-utils",
+]
+
+[[package]]
 name = "gix-hash"
 version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -940,6 +955,19 @@ dependencies = [
  "gix-hash",
  "hashbrown 0.17.1",
  "parking_lot",
+]
+
+[[package]]
+name = "gix-ignore"
+version = "0.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5bfd910e271ecd1a20e4df4009a0d9d844a0c51ee5444aaa3fadd1b1b077930b"
+dependencies = [
+ "bstr",
+ "gix-glob",
+ "gix-path",
+ "gix-trace",
+ "unicode-bom",
 ]
 
 [[package]]
@@ -2376,6 +2404,12 @@ name = "ucd-trie"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2896d95c02a80c6d6a5d6e953d479f5ddf2dfdb6a244441010e373ac0fb88971"
+
+[[package]]
+name = "unicode-bom"
+version = "2.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7eec5d1121208364f6793f7d2e222bf75a915c19557537745b195b253dd64217"
 
 [[package]]
 name = "unicode-ident"

@@ -407,18 +407,20 @@ pub fn available(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<To
             "read_git",
             "Read a repository's history from its .git directory without starting git: log lists \
              commits one per line, show prints a commit with its diff or a file or directory at \
-             a revision, and diff compares two commits. Works only where the whole of .git is \
-             trusted; elsewhere it says so and you use run. Nothing git's configuration names is \
-             applied: no diff drivers, textconv, filters or signature checks, and no remote URL \
-             is ever returned. It does not read the index or the working tree, so for status, \
-             staged or uncommitted changes, --follow, blame or anything else use run.",
+             a revision, diff compares two commits, and status lists staged, unstaged and \
+             untracked paths as git status --short does. Works only where the whole of .git is \
+             trusted, and for status the whole working tree; elsewhere it says so and you use \
+             run. Nothing git's configuration names is applied: no diff drivers, textconv, \
+             filters or signature checks, and no remote URL is ever returned. Status detects no \
+             renames and lists a file an attribute would convert as not compared. For --follow, \
+             blame or anything else use run.",
             json!({
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "enum": ["log", "show", "diff"],
-                        "description": "log, show or diff."
+                        "enum": ["log", "show", "diff", "status"],
+                        "description": "log, show, diff or status."
                     },
                     "repository": {
                         "type": "string",
@@ -437,7 +439,8 @@ pub fn available(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<To
                     "path": {
                         "type": "string",
                         "description": "Relative to the repository's root. Limits log to commits \
-                                        that changed it, and show and diff to changes under it."
+                                        that changed it, and show, diff and status to changes \
+                                        under it."
                     },
                     "count": {
                         "type": "integer",
@@ -6931,7 +6934,7 @@ fn read_git<S: Sink, C: Confirmer>(
 ) -> Produced {
     let workspace = tools.workspace;
     let Some(named) = argument(arguments, "query") else {
-        return Produced::problem("error: 'query' is required: one of log, show or diff");
+        return Produced::problem("error: 'query' is required: one of log, show, diff or status");
     };
     // The question is routing, promoted like any other proposal and then matched against the
     // closed set, so a name off the list is refused rather than guessed at.
@@ -6939,16 +6942,10 @@ fn read_git<S: Sink, C: Confirmer>(
         Ok(promoted) => match promoted.into_trusted() {
             Ok(name) => match crate::git::Query::named(name.trim()) {
                 Some(query) => query,
-                None if name.trim() == "status" => {
-                    return Produced::problem(
-                        "error: read_git does not answer status. Use run with git status \
-                         --short for it.",
-                    );
-                }
                 None => {
                     return Produced::problem(format!(
-                        "error: read_git answers log, show and diff, not {}. Use run to ask git \
-                         for anything else.",
+                        "error: read_git answers log, show, diff and status, not {}. Use run to \
+                         ask git for anything else.",
                         name.trim()
                     ));
                 }

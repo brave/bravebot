@@ -5395,3 +5395,71 @@ fn a_repository_below_the_root_is_read_under_the_rules_on_its_own_path() {
         "a commit showing a file under sub/vendor was not labelled by the rule on it"
     );
 }
+
+/// GIT-11. A status in a repository below the root asks the map about that repository's own
+/// directory: a rule trusting `sub` alone answers it, and one distrusting a directory inside `sub`
+/// declines it. Asked about the root instead, the first would refuse and the second would not.
+#[test]
+fn a_status_below_the_root_is_asked_about_its_own_directory() {
+    let scratch = Scratch::new("git-status-below-the-root");
+    let sub = scratch.path.join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    repository::commit_files(&sub, &[("a.txt", "one\n")], "first");
+    repository::check_out(&sub, &[("a.txt", "one\n")]);
+    std::fs::write(sub.join("a.txt"), "two\n").unwrap();
+    std::fs::create_dir_all(sub.join("vendor")).unwrap();
+    std::fs::write(sub.join("vendor/b.js"), "theirs\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let repository = Labelled::trusted("sub".to_string());
+    let status = bravebot_agent::workspace::GitQuestion {
+        query: bravebot_agent::git::Query::Status,
+        ..log_of(&repository)
+    };
+    let trusting = |distrusted: Option<&str>| {
+        let mut trust = TrustStore::new(workspace.root());
+        trust.trust("sub");
+        if let Some(path) = distrusted {
+            trust.distrust(path);
+        }
+        trust
+    };
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trusting(None));
+    let answer = workspace
+        .read_git(&mut policy, &status)
+        .expect("the status is read under the rule trusting sub");
+    assert_eq!(answer.label(), Label::trusted_private());
+    let proof = policy.authorise_content_release("test", "status");
+    let text = answer.declassify(&proof).text;
+    assert_eq!(text, " M a.txt\n?? vendor/\n");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trusting(Some("sub/vendor")));
+    let refused = workspace.read_git(&mut policy, &status);
+    assert!(
+        matches!(
+            refused,
+            Err(WorkspaceError::Git {
+                declined: bravebot_agent::git::Declined::UntrustedTree,
+                ..
+            })
+        ),
+        "a status read a working tree with a distrusted directory in it: {:?}",
+        refused.map(|answer| answer.label())
+    );
+}

@@ -2381,8 +2381,18 @@ impl Workspace {
             if policy.read_is_denied(&git_key) {
                 return Err(declined(crate::git::Declined::Fenced));
             }
+            // Status compares every file in the working tree, so all of it is its read set.
+            let read_set = if query == crate::git::Query::Status {
+                let tree_key = self.trust_key(&named);
+                if !policy.trusts_beneath(&tree_key) {
+                    return Err(declined(crate::git::Declined::UntrustedTree));
+                }
+                tree_key
+            } else {
+                git_key.clone()
+            };
             let deadline = Instant::now() + self.search_time;
-            let files = crate::git::survey(&git_dir, deadline).map_err(declined)?;
+            let files = crate::git::survey(&git_dir, query, deadline).map_err(declined)?;
             let fenced = files.iter().any(|file| {
                 let below = file.strip_prefix(&root).unwrap_or(file);
                 let below = bravebot_core::spelling::to_slash(
@@ -2415,7 +2425,7 @@ impl Workspace {
                 .collect();
             let label = policy.observe_repository(
                 Capability::FileRead,
-                &git_key,
+                &read_set,
                 shown.iter().map(String::as_str),
             )?;
             Ok(Labelled::new(answer, label))

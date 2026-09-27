@@ -26,6 +26,8 @@ use gix_odb::pack::data::decode::header::ResolvedBase;
 
 use crate::diff::{Change, Diff};
 
+mod status;
+
 /// Commits a log shows when the planner names no count.
 pub const DEFAULT_COUNT: usize = 20;
 
@@ -71,6 +73,7 @@ pub enum Query {
     Log,
     Show,
     Diff,
+    Status,
 }
 
 impl Query {
@@ -79,6 +82,7 @@ impl Query {
             "log" => Some(Query::Log),
             "show" => Some(Query::Show),
             "diff" => Some(Query::Diff),
+            "status" => Some(Query::Status),
             _ => None,
         }
     }
@@ -161,6 +165,12 @@ pub enum Declined {
     ShowTakesOne(String),
     DiffNeedsTwo,
     PairIsForDiff(String),
+    UntrustedTree,
+    StatusTakesNoRevision,
+    SplitIndex,
+    SparseIndex,
+    Bare,
+    Elsewhere,
 }
 
 impl Declined {
@@ -260,6 +270,29 @@ impl Declined {
                 "{revision} names two revisions, which only diff takes; for a range of commits \
                  write A..B."
             ),
+            Declined::UntrustedTree => format!(
+                "{named} is not a working tree this session trusts in full, so read_git does not \
+                 read its status: status compares every file there with the index. {fallback}"
+            ),
+            Declined::StatusTakesNoRevision => "status compares the index and the working tree \
+                 with HEAD and takes no revision; to compare commits, use diff."
+                .to_owned(),
+            Declined::SplitIndex => format!(
+                "{named}/.git/index is split into a shared index, which read_git does not read. \
+                 {fallback}"
+            ),
+            Declined::SparseIndex => format!(
+                "{named}/.git/index is a sparse index, which read_git does not read. {fallback}"
+            ),
+            Declined::Bare => format!(
+                "{named}/.git/config sets core.bare, so the repository has no working tree to \
+                 read a status from. {fallback}"
+            ),
+            Declined::Elsewhere => format!(
+                "{named}/.git/config names an ignore or attributes file outside the repository, \
+                 through core.excludesFile, core.attributesFile or attr.tree, which read_git does \
+                 not read. {fallback}"
+            ),
         }
     }
 }
@@ -272,9 +305,9 @@ impl Declined {
 /// covers what the ref store and the object finder read: `HEAD`, the configuration, `packed-refs`,
 /// `shallow`, the pseudo refs at the top (`FETCH_HEAD`, `ORIG_HEAD`) a revision may name, every
 /// file under `refs` a ref name can reach, and the loose objects and paired packs under `objects`.
-/// A name is matched as a file system that ignores case would open it, and listed as the reader
-/// spells it.
-pub fn survey(git_dir: &Path, deadline: Instant) -> Result<Vec<PathBuf>, Declined> {
+/// A status reads the `index`, `info/exclude` and `info/attributes` as well. A name is matched as a
+/// file system that ignores case would open it, and listed as the reader spells it.
+pub fn survey(git_dir: &Path, query: Query, deadline: Instant) -> Result<Vec<PathBuf>, Declined> {
     let meta = match std::fs::symlink_metadata(git_dir) {
         Ok(meta) => meta,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(Declined::NoRepository),
@@ -311,7 +344,8 @@ pub fn survey(git_dir: &Path, deadline: Instant) -> Result<Vec<PathBuf>, Decline
         let spelled = if matches!(
             lower.as_str(),
             "config" | "config.worktree" | "packed-refs" | "shallow"
-        ) {
+        ) || (query == Query::Status && lower == "index")
+        {
             lower
         } else if is_pseudo_ref(name) {
             name.to_owned()
@@ -331,6 +365,35 @@ pub fn survey(git_dir: &Path, deadline: Instant) -> Result<Vec<PathBuf>, Decline
         .any(|f| f.file_name().is_some_and(|n| n == "HEAD"))
     {
         return Err(Declined::NoRepository);
+    }
+    if query == Query::Status {
+        let info = git_dir.join("info");
+        match std::fs::symlink_metadata(&info) {
+            Ok(meta) if meta.file_type().is_symlink() => return Err(Declined::Linked),
+            Ok(meta) if meta.is_dir() => {
+                let entries = std::fs::read_dir(&info).map_err(|_| Declined::Unreadable)?;
+                for entry in entries {
+                    let entry = entry.map_err(|_| Declined::Unreadable)?;
+                    let name = entry.file_name();
+                    let Some(lower) = name.to_str().map(str::to_ascii_lowercase) else {
+                        continue;
+                    };
+                    if !matches!(lower.as_str(), "exclude" | "attributes") {
+                        continue;
+                    }
+                    let kind = entry.file_type().map_err(|_| Declined::Unreadable)?;
+                    if kind.is_symlink() {
+                        return Err(Declined::Linked);
+                    }
+                    if kind.is_file() {
+                        files.push(info.join(lower));
+                    }
+                }
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(Declined::Unreadable),
+        }
     }
 
     let refs = git_dir.join("refs");
@@ -931,6 +994,7 @@ type Side = Option<(EntryKind, ObjectId)>;
 
 /// A repository opened for reading, once [`survey`] has passed it.
 pub struct Repository {
+    git_dir: PathBuf,
     refs: gix_ref::file::Store,
     objects: Objects,
     shallow: HashSet<ObjectId>,
@@ -962,6 +1026,7 @@ impl Repository {
             }
         }
         Ok(Repository {
+            git_dir: git_dir.to_path_buf(),
             refs,
             objects,
             shallow,
@@ -975,6 +1040,9 @@ impl Repository {
         request: &Request<'_>,
         withheld: &dyn Fn(&str) -> bool,
     ) -> Result<Answer, Declined> {
+        if request.query == Query::Status && request.revision.is_some() {
+            return Err(Declined::StatusTakesNoRevision);
+        }
         let mut out = Out {
             text: Text::default(),
             shown: Vec::new(),
@@ -1002,6 +1070,7 @@ impl Repository {
             Query::Log => cut = self.log(&mut out, request, filter.as_deref())?,
             Query::Show => self.show(&mut out, request, filter.as_deref())?,
             Query::Diff => self.diff(&mut out, request, filter.as_deref())?,
+            Query::Status => status::answer(self, &mut out, filter.as_deref())?,
         }
         let mut shown = out.shown;
         shown.sort();
@@ -2412,7 +2481,7 @@ mod tests {
         }
 
         fn opened(&self) -> Result<Repository, Declined> {
-            survey(&self.git, later())?;
+            survey(&self.git, Query::Log, later())?;
             Repository::open(&self.git)
         }
 
@@ -2584,7 +2653,7 @@ mod tests {
 
         let listed = relative(
             &h.repo.git,
-            &survey(&h.repo.git, later()).expect("surveyed"),
+            &survey(&h.repo.git, Query::Log, later()).expect("surveyed"),
         );
 
         for read in [
@@ -2614,7 +2683,10 @@ mod tests {
             );
         }
         // A tree of refs too large to list in time is declined rather than listed in part.
-        assert_eq!(survey(&h.repo.git, Instant::now()), Err(Declined::TooSlow));
+        assert_eq!(
+            survey(&h.repo.git, Query::Log, Instant::now()),
+            Err(Declined::TooSlow)
+        );
     }
 
     /// Each of these sends a read to files outside the ones [`survey`] listed, or answers with
@@ -2625,7 +2697,10 @@ mod tests {
         let file = Repo::new("declined-git-file");
         std::fs::remove_dir_all(&file.git).expect("removed");
         std::fs::write(&file.git, "gitdir: /elsewhere/.git\n").expect("git file");
-        assert_eq!(survey(&file.git, later()), Err(Declined::LinkedGitDir));
+        assert_eq!(
+            survey(&file.git, Query::Log, later()),
+            Err(Declined::LinkedGitDir)
+        );
 
         let cases: [(&str, &str, Declined); 4] = [
             ("commondir", "../other/.git\n", Declined::CommonDir),
@@ -2681,18 +2756,27 @@ mod tests {
             h.repo.git.join("refs/heads/alias"),
         )
         .expect("link");
-        assert_eq!(survey(&h.repo.git, later()), Err(Declined::Linked));
+        assert_eq!(
+            survey(&h.repo.git, Query::Log, later()),
+            Err(Declined::Linked)
+        );
 
         let top = history("linked-top");
         std::os::unix::fs::symlink(top.repo.git.join("HEAD"), top.repo.git.join("ORIG_HEAD"))
             .expect("link");
-        assert_eq!(survey(&top.repo.git, later()), Err(Declined::Linked));
+        assert_eq!(
+            survey(&top.repo.git, Query::Log, later()),
+            Err(Declined::Linked)
+        );
 
         let whole = history("linked-whole");
         let moved = whole.repo.root.join("real-git");
         std::fs::rename(&whole.repo.git, &moved).expect("moved");
         std::os::unix::fs::symlink(&moved, &whole.repo.git).expect("link");
-        assert_eq!(survey(&whole.repo.git, later()), Err(Declined::Linked));
+        assert_eq!(
+            survey(&whole.repo.git, Query::Log, later()),
+            Err(Declined::Linked)
+        );
     }
 
     /// git reads these keys to decide what a repository means: another file's configuration, a
@@ -3957,5 +4041,511 @@ mod tests {
             repo.text(Query::Show, "HEAD")
                 .ends_with("@@ -0,0 +1,4 @@\n+one\n+two\n+three\n+four\n")
         );
+    }
+
+    #[cfg(unix)]
+    mod status {
+        use std::os::unix::fs::MetadataExt;
+
+        use super::*;
+
+        const FILE: u32 = 0o100644;
+        const EXECUTABLE: u32 = 0o100755;
+
+        /// One index entry: path, mode, blob, stage, and whether to record the working-tree
+        /// file's stat data rather than zeros, which make git and this reader hash the file.
+        type Staged<'a> = (&'a str, u32, ObjectId, u8, bool);
+
+        fn write(repo: &Repo, path: &str, text: &str) {
+            let path = repo.root.join(path);
+            std::fs::create_dir_all(path.parent().expect("parent")).expect("directory");
+            std::fs::write(path, text).expect("written");
+        }
+
+        fn encode_varint(mut value: usize, out: &mut Vec<u8>) {
+            let mut bytes = vec![(value & 0x7f) as u8];
+            while value >= 0x80 {
+                value = (value >> 7) - 1;
+                bytes.push(0x80 | (value & 0x7f) as u8);
+            }
+            bytes.reverse();
+            out.extend_from_slice(&bytes);
+        }
+
+        fn index_bytes(
+            repo: &Repo,
+            version: u32,
+            entries: &[Staged<'_>],
+            extension: &[u8],
+        ) -> Vec<u8> {
+            let mut sorted = entries.to_vec();
+            sorted.sort_by(|a, b| (a.0.as_bytes(), a.3).cmp(&(b.0.as_bytes(), b.3)));
+            let mut bytes = b"DIRC".to_vec();
+            bytes.extend_from_slice(&version.to_be_bytes());
+            bytes.extend_from_slice(&(sorted.len() as u32).to_be_bytes());
+            let mut previous: &str = "";
+            for (path, mode, id, stage, stat) in &sorted {
+                let start = bytes.len();
+                let meta = std::fs::symlink_metadata(repo.root.join(path))
+                    .ok()
+                    .filter(|_| *stat);
+                let words: [u32; 10] = match meta {
+                    Some(m) => [
+                        m.ctime() as u32,
+                        m.ctime_nsec() as u32,
+                        m.mtime() as u32,
+                        m.mtime_nsec() as u32,
+                        m.dev() as u32,
+                        m.ino() as u32,
+                        *mode,
+                        m.uid(),
+                        m.gid(),
+                        m.len() as u32,
+                    ],
+                    None => [0, 0, 0, 0, 0, 0, *mode, 0, 0, 0],
+                };
+                for word in words {
+                    bytes.extend_from_slice(&word.to_be_bytes());
+                }
+                bytes.extend_from_slice(id.as_bytes());
+                let flags = (u16::from(*stage) << 12) | (path.len().min(0xfff) as u16);
+                bytes.extend_from_slice(&flags.to_be_bytes());
+                if version == 4 {
+                    let common = previous
+                        .bytes()
+                        .zip(path.bytes())
+                        .take_while(|(a, b)| a == b)
+                        .count();
+                    encode_varint(previous.len() - common, &mut bytes);
+                    bytes.extend_from_slice(&path.as_bytes()[common..]);
+                    bytes.push(0);
+                } else {
+                    bytes.extend_from_slice(path.as_bytes());
+                    let len = bytes.len() - start;
+                    bytes.resize(start + ((len + 8) & !7), 0);
+                }
+                previous = path;
+            }
+            bytes.extend_from_slice(extension);
+            let mut hasher = gix_hash::hasher(HashKind::Sha1);
+            hasher.update(&bytes);
+            let checksum = hasher.try_finalize().expect("hashed");
+            bytes.extend_from_slice(checksum.as_bytes());
+            bytes
+        }
+
+        fn index(repo: &Repo, entries: &[Staged<'_>]) {
+            std::fs::write(repo.git.join("index"), index_bytes(repo, 2, entries, b""))
+                .expect("index");
+        }
+
+        /// HEAD at a commit of `files` at the top of the tree, or in one directory below it.
+        fn commit(repo: &Repo, files: &[(&str, ObjectId)]) {
+            let mut top = Vec::new();
+            let mut below: BTreeMap<&str, Vec<(&str, &str, ObjectId)>> = BTreeMap::new();
+            for (path, id) in files {
+                match path.split_once('/') {
+                    Some((dir, name)) => below.entry(dir).or_default().push(("100644", name, *id)),
+                    None => top.push(("100644", *path, *id)),
+                }
+            }
+            for (dir, entries) in &below {
+                top.push(("40000", dir, repo.tree(entries)));
+            }
+            let head = repo.commit(repo.tree(&top), &[], T1, "first");
+            repo.point("refs/heads/main", head);
+        }
+
+        fn status(repo: &Repo, path: Option<&str>) -> Result<Answer, Declined> {
+            repo.opened()?
+                .answer(&request(Query::Status, None, path), &|_| false)
+        }
+
+        fn text(repo: &Repo) -> String {
+            status(repo, None).expect("answered").text
+        }
+
+        const CLEAN: &str =
+            "Nothing to commit: the index matches HEAD and the working tree matches the index.\n";
+
+        #[test]
+        fn status_lists_staged_unstaged_and_untracked_as_git_status_short_does() {
+            let repo = Repo::new("status-short");
+            let one = repo.blob("one\n");
+            let two = repo.blob("two\n");
+            let three = repo.blob("three\n");
+            let four = repo.blob("four\n");
+            commit(
+                &repo,
+                &[
+                    ("a.txt", one),
+                    ("b.txt", two),
+                    ("c.txt", three),
+                    ("dir/d.txt", four),
+                ],
+            );
+            let edited = repo.blob("one edited\n");
+            let new = repo.blob("new\n");
+            write(&repo, "a.txt", "one edited\n");
+            write(&repo, "b.txt", "two edited\n");
+            write(&repo, "new.txt", "new\n");
+            write(&repo, "notes.txt", "mine\n");
+            write(&repo, ".gitignore", "build/\n*.log\n");
+            write(&repo, "build/out.o", "binary\n");
+            write(&repo, "x.log", "log\n");
+            write(&repo, "fresh/one.txt", "fresh\n");
+            write(&repo, "quiet/only.log", "log\n");
+            std::fs::create_dir_all(repo.root.join("dir")).expect("dir");
+            index(
+                &repo,
+                &[
+                    ("a.txt", FILE, edited, 0, false),
+                    ("b.txt", FILE, two, 0, false),
+                    ("dir/d.txt", FILE, four, 0, false),
+                    ("new.txt", FILE, new, 0, false),
+                ],
+            );
+
+            let answer = status(&repo, None).expect("answered");
+            assert_eq!(
+                answer.text,
+                "M  a.txt\n M b.txt\nD  c.txt\n D dir/d.txt\nA  new.txt\n?? .gitignore\n\
+                 ?? fresh/\n?? notes.txt\n"
+            );
+            assert!(!answer.withheld && !answer.cut && !answer.timed_out);
+            assert_eq!(
+                answer.shown,
+                [
+                    ".gitignore",
+                    "a.txt",
+                    "b.txt",
+                    "c.txt",
+                    "dir/d.txt",
+                    "fresh",
+                    "new.txt",
+                    "notes.txt"
+                ]
+            );
+
+            let under = status(&repo, Some("dir")).expect("answered");
+            assert_eq!(under.text, " D dir/d.txt\n");
+        }
+
+        #[test]
+        fn a_clean_tree_says_so_and_a_version_four_index_reads_the_same() {
+            let repo = Repo::new("status-clean");
+            let one = repo.blob("one\n");
+            let two = repo.blob("two\n");
+            commit(&repo, &[("src/lib.rs", one), ("src/main.rs", two)]);
+            write(&repo, "src/lib.rs", "one\n");
+            write(&repo, "src/main.rs", "two\n");
+            let entries = [
+                ("src/lib.rs", FILE, one, 0, false),
+                ("src/main.rs", FILE, two, 0, false),
+            ];
+            index(&repo, &entries);
+            assert_eq!(text(&repo), CLEAN);
+            std::fs::write(repo.git.join("index"), index_bytes(&repo, 4, &entries, b""))
+                .expect("index");
+            assert_eq!(text(&repo), CLEAN);
+            write(&repo, "src/main.rs", "two!\n");
+            assert_eq!(text(&repo), " M src/main.rs\n");
+        }
+
+        /// Stat data that matches is trusted, as git trusts it, unless the file may have changed
+        /// in the same moment the index was written.
+        #[test]
+        fn matching_stat_data_is_trusted_unless_the_index_is_as_new_as_the_file() {
+            let repo = Repo::new("status-stat");
+            let old = repo.blob("aaaa\n");
+            commit(&repo, &[("f.txt", old)]);
+            write(&repo, "f.txt", "bbbb\n");
+            index(&repo, &[("f.txt", FILE, old, 0, true)]);
+            let file_time = std::fs::metadata(repo.root.join("f.txt"))
+                .and_then(|m| m.modified())
+                .expect("mtime");
+            let set = |when: std::time::SystemTime| {
+                std::fs::File::options()
+                    .write(true)
+                    .open(repo.git.join("index"))
+                    .and_then(|f| f.set_modified(when))
+                    .expect("index time");
+            };
+            set(file_time + Duration::from_secs(10));
+            assert_eq!(text(&repo), CLEAN);
+            set(file_time);
+            assert_eq!(text(&repo), " M f.txt\n");
+        }
+
+        #[test]
+        fn a_merge_conflict_is_coded_by_the_stages_the_index_holds() {
+            let repo = Repo::new("status-conflict");
+            let base = repo.blob("base\n");
+            let ours = repo.blob("ours\n");
+            let theirs = repo.blob("theirs\n");
+            commit(
+                &repo,
+                &[
+                    ("both.txt", base),
+                    ("deleted.txt", base),
+                    ("gone.txt", base),
+                    ("left.txt", base),
+                ],
+            );
+            write(&repo, "both.txt", "<<<<<<<\n");
+            write(&repo, "added.txt", "<<<<<<<\n");
+            index(
+                &repo,
+                &[
+                    ("added.txt", FILE, ours, 2, false),
+                    ("added.txt", FILE, theirs, 3, false),
+                    ("both.txt", FILE, base, 1, false),
+                    ("both.txt", FILE, ours, 2, false),
+                    ("both.txt", FILE, theirs, 3, false),
+                    ("deleted.txt", FILE, base, 1, false),
+                    ("gone.txt", FILE, base, 1, false),
+                    ("gone.txt", FILE, ours, 2, false),
+                    ("left.txt", FILE, base, 1, false),
+                    ("left.txt", FILE, theirs, 3, false),
+                    ("ours.txt", FILE, ours, 2, false),
+                    ("theirs.txt", FILE, theirs, 3, false),
+                ],
+            );
+            assert_eq!(
+                text(&repo),
+                "AA added.txt\nUU both.txt\nDD deleted.txt\nUD gone.txt\nDU left.txt\n\
+                 AU ours.txt\nUA theirs.txt\n"
+            );
+        }
+
+        #[test]
+        fn a_file_an_attribute_converts_is_not_compared() {
+            let repo = Repo::new("status-attributes");
+            let text_blob = repo.blob("line\n");
+            let attributes = repo.blob("*.txt text=auto\n*.bin -text\n");
+            commit(
+                &repo,
+                &[
+                    (".gitattributes", attributes),
+                    ("a.txt", text_blob),
+                    ("b.bin", text_blob),
+                ],
+            );
+            write(&repo, ".gitattributes", "*.txt text=auto\n*.bin -text\n");
+            write(&repo, "a.txt", "LINE\n");
+            write(&repo, "b.bin", "LINE\n");
+            index(
+                &repo,
+                &[
+                    (".gitattributes", FILE, attributes, 0, false),
+                    ("a.txt", FILE, text_blob, 0, false),
+                    ("b.bin", FILE, text_blob, 0, false),
+                ],
+            );
+            let answer = status(&repo, None).expect("answered");
+            assert!(
+                answer.text.starts_with(" M b.bin\nNot compared, "),
+                "{}",
+                answer.text
+            );
+            assert!(answer.text.ends_with("\n   a.txt\n"), "{}", answer.text);
+
+            std::fs::remove_file(repo.root.join(".gitattributes")).expect("removed");
+            let answer = text(&repo);
+            assert!(
+                answer.ends_with("\n   a.txt\n"),
+                "the index's copy was not read: {answer}"
+            );
+
+            repo.put("config", "[core]\n\tautocrlf = true\n");
+            write(&repo, ".gitattributes", "");
+            let answer = text(&repo);
+            assert!(
+                answer.contains("\n   b.bin\n"),
+                "core.autocrlf was not read: {answer}"
+            );
+        }
+
+        #[test]
+        fn a_withheld_path_is_neither_read_nor_listed() {
+            let repo = Repo::new("status-withheld");
+            let one = repo.blob("one\n");
+            commit(&repo, &[("private/key", one), ("public.txt", one)]);
+            write(&repo, "private/key", "changed\n");
+            write(&repo, "public.txt", "changed\n");
+            write(&repo, "secret.txt", "untracked\n");
+            index(
+                &repo,
+                &[
+                    ("private/key", FILE, one, 0, false),
+                    ("public.txt", FILE, one, 0, false),
+                ],
+            );
+            let answer = repo
+                .opened()
+                .expect("opened")
+                .answer(&request(Query::Status, None, None), &|path| {
+                    path.starts_with("private") || path == "secret.txt"
+                })
+                .expect("answered");
+            assert_eq!(answer.text, " M public.txt\n");
+            assert!(answer.withheld);
+        }
+
+        #[test]
+        fn a_link_above_a_tracked_file_is_not_followed() {
+            let repo = Repo::new("status-link");
+            let one = repo.blob("one\n");
+            commit(&repo, &[("dir/f.txt", one)]);
+            let outside = crate::testutil::scratch_dir(&format!(
+                "bravebot-git-status-outside-{}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&outside).expect("outside");
+            std::fs::write(outside.join("f.txt"), "one\n").expect("outside file");
+            std::os::unix::fs::symlink(&outside, repo.root.join("dir")).expect("link");
+            index(&repo, &[("dir/f.txt", FILE, one, 0, false)]);
+            let answer = text(&repo);
+            let _ = std::fs::remove_dir_all(&outside);
+            assert_eq!(answer, " D dir/f.txt\n?? dir\n");
+        }
+
+        #[test]
+        fn an_untracked_directory_is_one_line_and_one_of_only_ignored_files_is_none() {
+            let repo = Repo::new("status-untracked");
+            let one = repo.blob("one\n");
+            commit(&repo, &[("kept.txt", one)]);
+            write(&repo, "kept.txt", "one\n");
+            write(&repo, ".git/info/exclude", "*.tmp\n");
+            write(&repo, "scratch/a.tmp", "x\n");
+            write(&repo, "scratch/deeper/b.tmp", "x\n");
+            write(&repo, "notes/a.md", "x\n");
+            write(&repo, "notes/.gitignore", "*\n!keep.md\n");
+            write(&repo, "notes/keep.md", "x\n");
+            write(&repo, "vendor/lib/.git/HEAD", "ref: refs/heads/main\n");
+            index(&repo, &[("kept.txt", FILE, one, 0, false)]);
+            assert_eq!(text(&repo), "?? notes/\n?? vendor/\n");
+        }
+
+        #[test]
+        fn a_changed_executable_bit_is_a_change() {
+            use std::os::unix::fs::PermissionsExt;
+            let repo = Repo::new("status-mode");
+            let one = repo.blob("one\n");
+            commit(&repo, &[("run.sh", one)]);
+            write(&repo, "run.sh", "one\n");
+            index(&repo, &[("run.sh", FILE, one, 0, false)]);
+            assert_eq!(text(&repo), CLEAN);
+            std::fs::set_permissions(
+                repo.root.join("run.sh"),
+                std::fs::Permissions::from_mode(0o755),
+            )
+            .expect("chmod");
+            assert_eq!(text(&repo), " M run.sh\n");
+            index(&repo, &[("run.sh", EXECUTABLE, one, 0, false)]);
+            assert_eq!(text(&repo), "M  run.sh\n");
+            repo.put("config", "[core]\n\tfilemode = false\n");
+            index(&repo, &[("run.sh", FILE, one, 0, false)]);
+            assert_eq!(text(&repo), CLEAN);
+        }
+
+        #[test]
+        fn a_layout_status_cannot_read_as_git_would_is_declined() {
+            let repo = Repo::new("status-declined");
+            let one = repo.blob("one\n");
+            commit(&repo, &[("a.txt", one)]);
+            write(&repo, "a.txt", "one\n");
+            let entry = [("a.txt", FILE, one, 0, false)];
+
+            assert_eq!(
+                repo.opened()
+                    .expect("opened")
+                    .answer(&request(Query::Status, Some("HEAD"), None), &|_| false)
+                    .err(),
+                Some(Declined::StatusTakesNoRevision)
+            );
+
+            let mut split = b"link".to_vec();
+            split.extend_from_slice(&20u32.to_be_bytes());
+            split.extend_from_slice(&[0; 20]);
+            std::fs::write(
+                repo.git.join("index"),
+                index_bytes(&repo, 2, &entry, &split),
+            )
+            .expect("index");
+            assert_eq!(status(&repo, None).err(), Some(Declined::SplitIndex));
+            let mut sparse = b"sdir".to_vec();
+            sparse.extend_from_slice(&0u32.to_be_bytes());
+            std::fs::write(
+                repo.git.join("index"),
+                index_bytes(&repo, 2, &entry, &sparse),
+            )
+            .expect("index");
+            assert_eq!(status(&repo, None).err(), Some(Declined::SparseIndex));
+            let mut unknown = b"zzzz".to_vec();
+            unknown.extend_from_slice(&0u32.to_be_bytes());
+            std::fs::write(
+                repo.git.join("index"),
+                index_bytes(&repo, 2, &entry, &unknown),
+            )
+            .expect("index");
+            assert_eq!(status(&repo, None).err(), Some(Declined::Format));
+
+            index(&repo, &[("../outside", FILE, one, 0, false)]);
+            assert_eq!(status(&repo, None).err(), Some(Declined::Unreadable));
+            index(&repo, &[(".git/config", FILE, one, 0, false)]);
+            assert_eq!(status(&repo, None).err(), Some(Declined::Unreadable));
+            let mut damaged = index_bytes(&repo, 2, &entry, b"");
+            let last = damaged.len() - 1;
+            damaged[last] ^= 1;
+            std::fs::write(repo.git.join("index"), damaged).expect("index");
+            assert_eq!(status(&repo, None).err(), Some(Declined::Unreadable));
+
+            index(&repo, &entry);
+            for (config, declined) in [
+                ("[core]\n\tbare = true\n", Declined::Bare),
+                (
+                    "[core]\n\texcludesFile = /tmp/ignore\n",
+                    Declined::Elsewhere,
+                ),
+                (
+                    "[core]\n\tattributesFile = /tmp/attributes\n",
+                    Declined::Elsewhere,
+                ),
+                ("[attr]\n\ttree = HEAD\n", Declined::Elsewhere),
+            ] {
+                repo.put("config", config);
+                assert_eq!(status(&repo, None).err(), Some(declined), "{config}");
+            }
+            repo.put("config", "[core]\n\tbare = false\n");
+            assert_eq!(text(&repo), CLEAN);
+        }
+
+        #[test]
+        fn status_surveys_the_index_and_the_info_files_it_reads() {
+            let repo = Repo::new("status-survey");
+            repo.put("index", "");
+            repo.put("info/exclude", "");
+            repo.put("info/attributes", "");
+            let files = |query| {
+                relative(
+                    &repo.git,
+                    &survey(&repo.git, query, later()).expect("surveyed"),
+                )
+            };
+            for name in ["index", "info/exclude", "info/attributes"] {
+                assert!(files(Query::Status).iter().any(|f| f == name), "{name}");
+                assert!(!files(Query::Log).iter().any(|f| f == name), "{name}");
+            }
+        }
+
+        #[test]
+        fn a_path_with_a_space_is_quoted_as_git_quotes_it() {
+            let repo = Repo::new("status-quoted");
+            commit(&repo, &[]);
+            write(&repo, "a b.txt", "x\n");
+            index(&repo, &[]);
+            assert_eq!(text(&repo), "?? \"a b.txt\"\n");
+        }
     }
 }
