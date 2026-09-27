@@ -153,13 +153,13 @@ const CARDS = {
   attached: { entry: () => ({ kind: 'attached', id: 'a1', path: FORGED_CHROME }), marks: null, why: 'the path somebody named, never the file’s bytes' },
   watch: { entry: () => t.watchFired(1, FORGED_CHROME), marks: null, why: 'the watch’s own line: a number and a path' },
   error: { entry: () => t.errored(FORGED_CHROME), marks: null, why: 'a diagnostic from the service the agent spoke to' },
-  'replayed-tool': { entry: () => ({ kind: 'replayed-tool', id: 'r1', text: FORGED_CHROME }), marks: null, why: 'the line a record kept of a call, with no result in it' },
+  'replayed-tool': { entry: () => ({ kind: 'replayed-tool', id: 'r1', text: FORGED_CHROME, why: FORGED_CHROME }), marks: null, why: 'the line a record kept of a call and the planner’s reason for it, with no result in it' },
   tool: {
     // `Activity.changes` and `Activity.untrusted` are on the wire already and this card draws
     // neither. The day it does it needs a `marks`, which is the case this table exists for.
-    entry: () => t.started({ verb: 'write', target: 'notes.md', note: FORGED_CHROME, failed: false, untrusted: false, changes: [] }),
+    entry: () => t.started({ verb: 'write', target: 'notes.md', why: FORGED_CHROME, note: FORGED_CHROME, failed: false, untrusted: false, changes: [] }),
     marks: null,
-    why: 'the driver’s verb and the model’s own naming of its target',
+    why: 'the driver’s verb, the model’s own naming of its target, and the model’s own reason for the call',
   },
   run: {
     entry: () => t.askedRun({

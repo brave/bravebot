@@ -1090,7 +1090,12 @@ function Card({
       // No outcome, because the record does not keep one. Drawn quietly for the same
       // reason: a call the agent could not even name reads as "Tool", and giving that
       // the prominence of a real line would be worse than the gap.
-      return <div className="tool replayed">{entry.text}</div>
+      return (
+        <div className="tool replayed">
+          {entry.text}
+          {entry.why && <span className="why">{entry.why}</span>}
+        </div>
+      )
 
     case 'tool': {
       const { activity, landing } = entry
@@ -1099,6 +1104,7 @@ function Card({
         <div className={`tool ${activity.failed ? 'failed' : ''} ${running ? 'running' : ''}`}>
           <span className="verb">{activity.verb}</span>
           {activity.target && <span className="target">({activity.target})</span>}
+          {activity.why && <span className="why">{activity.why}</span>}
           {running ? (
             <span className="ellipsis">…</span>
           ) : (

@@ -16,7 +16,8 @@ documented-by: docs/website/docs/reference/tools.md
 
 ## Scope
 
-Fetching an http or https URL. `url` is routing; there are no content arguments. The result is a
+Fetching an http or https URL. `url` is routing; the only content argument is the `why` every tool takes
+([TOOL-5](tool-surface.md#TOOL-5)). The result is a
 reference. Where a rule about a host is written and how one is matched is
 [permissions.md](../permissions.md); what a label means is [labels.md](../labels.md).
 

@@ -3583,6 +3583,87 @@ fn each_tool_call_is_announced_before_it_runs_and_summarised_after() {
     assert!(!finished.failed);
 }
 
+/// A round of calls made for different reasons used to be explained by one line that fitted
+/// only one of them. Each call carries its own reason to its own line, from the moment it starts
+/// to the moment it is summarised, refused or not: the finished line replaces the running one,
+/// so a reason on only one of them is a reason that vanishes as the call ends.
+#[test]
+fn each_call_is_announced_and_summarised_with_its_own_reason() {
+    let scratch = Scratch::new("announced-why");
+    std::fs::write(scratch.path.join("target.txt"), "one\ntwo\nthree\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        two_tool_requests(
+            (
+                "read_file",
+                r#"{"path":"target.txt","why":"see what the file holds"}"#,
+            ),
+            (
+                "read_file",
+                r#"{"path":"../outside.txt","why":"compare it with the copy outside"}"#,
+            ),
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read them"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let reasons = |lines: &[bravebot_agent::report::Activity]| {
+        lines
+            .iter()
+            .map(|activity| (activity.line(), activity.why.clone()))
+            .collect::<Vec<_>>()
+    };
+    let expected = vec![
+        (
+            "Read(target.txt)".to_string(),
+            "see what the file holds".to_string(),
+        ),
+        (
+            "Read(../outside.txt)".to_string(),
+            "compare it with the copy outside".to_string(),
+        ),
+    ];
+    assert_eq!(reasons(&reporter.started), expected);
+    assert_eq!(reasons(&reporter.finished), expected);
+    assert!(
+        reporter.finished[1].failed,
+        "the read outside the workspace was not refused"
+    );
+
+    let body = received.recv().expect("request body");
+    let request: serde_json::Value = serde_json::from_str(&body).expect("json");
+    let read = request["tools"]
+        .as_array()
+        .expect("tools offered")
+        .iter()
+        .find(|tool| tool["function"]["name"] == "read_file")
+        .expect("read_file offered");
+    assert!(
+        read["function"]["parameters"]["required"]
+            .as_array()
+            .expect("required")
+            .contains(&serde_json::json!("why")),
+        "the planner was offered a read it could make without saying why"
+    );
+}
+
 /// A refused call has to read as a refusal, or the transcript shows work that never happened.
 #[test]
 fn a_refused_call_is_reported_as_one() {
@@ -10256,6 +10337,48 @@ fn the_planner_is_told_to_build_and_test_what_it_changed() {
     assert!(
         body.contains("A warning counts"),
         "the planner was not told a warning counts"
+    );
+}
+
+/// The screen shows every call a turn makes and nothing of why it made it, so a session reads as
+/// a list of commands. What the model writes before a round of calls is already drawn; a model
+/// that is never asked for it mostly sends the calls bare.
+#[test]
+fn the_planner_is_told_to_say_why_before_each_round_of_calls() {
+    let scratch = Scratch::new("say-why-before-calls");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(&reply_with("the answer"));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("do the work"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let body = received.recv().expect("request body");
+    assert!(
+        body.contains("Before each round of tool calls, write one short line saying why"),
+        "the planner was not told to say why before its calls"
+    );
+    // Kept to a line so it costs a few tokens a round rather than a paragraph.
+    assert!(
+        body.contains("One line, not a plan"),
+        "the planner was not told to keep the reason to one line"
+    );
+    // Each call says its own reason too, so the line before the round is about the step and the
+    // two do not say the same thing twice.
+    assert!(
+        body.contains("Each call's own why says what that call is for"),
+        "the planner was not told the line and each call's reason differ"
     );
 }
 

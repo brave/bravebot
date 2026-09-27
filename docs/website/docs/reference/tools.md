@@ -38,6 +38,12 @@ will ask again, which is a one-shot run, the desktop application, or a line the 
 [`watch_file`](#watch_file) goes to a session that keeps watches, so not to a delegate, a one-shot
 run or a planned run.
 
+Every tool also takes `why`, one line from the planner saying what the call is for. It is content
+on every tool: it is drawn beside the call for you to read, and nothing reads it or decides on it.
+Every tool lists it as required, and a call that leaves it out still runs, drawn with no reason. A
+server's tool is the exception, since it is offered as the server
+describes it.
+
 A number or a flag that shapes a call is routing too, not content: nothing carries it anywhere, so it
 sits on the same footing as the fields beside it. A routing argument naming a **reference** rather
 than a path is bound to the context the planner named it in, so a turn whose context has met

@@ -9,8 +9,8 @@ documented-by: docs/website/docs/reference/tools.md
 
 ## Scope
 
-Reading one file. `path`, `offset` and `limit` are routing; there are no content arguments. The
-result is the lines, or a reference when the planner may not see them.
+Reading one file. `path`, `offset` and `limit` are routing; the only content argument is the
+`why` every tool takes ([TOOL-5](tool-surface.md#TOOL-5)). The result is the lines, or a reference when the planner may not see them.
 
 ## Clauses
 

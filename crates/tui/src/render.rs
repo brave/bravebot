@@ -343,6 +343,13 @@ pub(crate) fn one_line(text: &str) -> String {
     text.lines().next().unwrap_or_default().trim().to_string()
 }
 
+/// Why the planner made a call, dim beside the call it is for, the way a delegate's task sits
+/// beside the delegate. Nothing where it gave no reason.
+fn why_span(why: &str) -> Option<Span<'static>> {
+    let why = one_line(why);
+    (!why.is_empty()).then(|| Span::styled(format!("  {why}"), dim()))
+}
+
 fn activity_lines(
     activity: &Activity,
     landing: Option<Landing>,
@@ -357,13 +364,15 @@ fn activity_lines(
         Style::default().fg(theme::ok())
     };
 
-    let mut lines = vec![Line::from(vec![
+    let mut row = vec![
         Span::styled(format!("{TURN_MARKER} "), head),
         Span::styled(
             activity.line(),
             Style::default().add_modifier(Modifier::BOLD),
         ),
-    ])];
+    ];
+    row.extend(why_span(&activity.why));
+    let mut lines = vec![Line::from(row)];
 
     if let Some(note) = &activity.note {
         lines.push(Line::from(Span::styled(
@@ -1851,10 +1860,14 @@ fn with_prompts(session: &Session, width: u16, height: u16) -> (Vec<Line<'static
                 // A call read back out of a stored session, which records that it happened and
                 // not what came of it. Drawn without the coloured marker a live call earns,
                 // since green would claim an outcome the record does not have.
-                None => lines.push(Line::from(vec![
-                    Span::styled(format!("{TURN_MARKER} "), dim()),
-                    Span::styled(entry.text.clone(), dim()),
-                ])),
+                None => {
+                    let mut row = vec![
+                        Span::styled(format!("{TURN_MARKER} "), dim()),
+                        Span::styled(entry.text.clone(), dim()),
+                    ];
+                    row.extend(why_span(&entry.why));
+                    lines.push(Line::from(row));
+                }
             },
         }
 
@@ -5556,6 +5569,32 @@ mod tests {
                 .join("\n")
         }
 
+        /// The reason the planner gave sits on the call's own row, while it runs and once it is
+        /// over. The finished line replaces the running one, so a reason drawn on only one of them
+        /// is gone the moment the call ends; and a reason of several lines is kept to its first,
+        /// since the row is one line of a transcript and not a paragraph.
+        #[test]
+        fn a_call_is_drawn_with_the_reason_it_was_made() {
+            let running = Activity::running("Search", "MAX_STEPS")
+                .saying_why("find where the bound is set\nand then some");
+            for activity in [running.clone(), running.done("4 matches")] {
+                let head = activity_lines(&activity, None, 80)[0].to_string();
+                assert!(
+                    head.ends_with("Search(MAX_STEPS)  find where the bound is set"),
+                    "the reason is not on the call's row: {head}"
+                );
+            }
+        }
+
+        /// A call with no reason is drawn as it was before there was one to give, with nothing
+        /// trailing the call.
+        #[test]
+        fn a_call_with_no_reason_draws_nothing_beside_it() {
+            let head =
+                activity_lines(&Activity::running("Search", "MAX_STEPS"), None, 80)[0].to_string();
+            assert!(head.ends_with("Search(MAX_STEPS)"), "{head:?}");
+        }
+
         /// A call that ran a model inside itself says how long it waited there. A read whose check
         /// took eight seconds otherwise looks exactly like a read that was slow for some other
         /// reason, and the figure that tells them apart was already measured and then dropped.
@@ -7510,9 +7549,26 @@ mod tests {
         let mut session = Session::new("none");
         session
             .transcript
-            .push(crate::state::Entry::recalled_tool("Read(src/main.rs)"));
+            .push(crate::state::Entry::recalled_tool("Read(src/main.rs)", ""));
 
         assert!(rendered(&session).contains("Read(src/main.rs)"));
+    }
+
+    /// A resumed session is read for what was done and why, so a call read back off disk keeps
+    /// the reason it was made with.
+    #[test]
+    fn a_recalled_call_is_shown_with_its_reason() {
+        let mut session = Session::new("none");
+        session.transcript.push(crate::state::Entry::recalled_tool(
+            "Read(src/main.rs)",
+            "see the entry point",
+        ));
+
+        let drawn = rendered(&session);
+        assert!(
+            drawn.contains("Read(src/main.rs)  see the entry point"),
+            "{drawn}"
+        );
     }
 
     /// And drawn without the marker a live call earns. Green says the call finished cleanly, and
@@ -7526,7 +7582,7 @@ mod tests {
         let mut session = Session::new("none");
         session
             .transcript
-            .push(crate::state::Entry::recalled_tool("Read(src/main.rs)"));
+            .push(crate::state::Entry::recalled_tool("Read(src/main.rs)", ""));
         let recalled = marker_style(&session);
 
         let mut session = Session::new("none");

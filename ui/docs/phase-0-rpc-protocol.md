@@ -260,7 +260,7 @@ implementation should have one serialisation function per row and a round-trip t
 | `report::Reach` | `"not_the_planner"` \| `"no_model"` | |
 | `report::Landing` | `"context"` \| `"quarantined"` \| `"reserved"` | |
 | `todo::Status` | `"pending"` \| `"active"` \| `"done"` | |
-| `conversation::Said` | `{"kind":"user"\|"assistant"\|"tool","text":"…"}` with `"prompt":N` on `user` only, `{"kind":"attached","path":"…"}`, `{"kind":"watch","number":N,"path":"…"}` or `{"kind":"consolidation"}` | from `recounted()`, §7.1 |
+| `conversation::Said` | `{"kind":"user"\|"assistant"\|"tool","text":"…"}` with `"prompt":N` on `user` only and `"why":"…"` on `tool` only, `{"kind":"attached","path":"…"}`, `{"kind":"watch","number":N,"path":"…"}` or `{"kind":"consolidation"}` | from `recounted()`, §7.1 |
 | `core::event::Event` | as `audit::as_json` already produces, `refusal` included | **reuse verbatim**, do not re-derive |
 | `label::Label` | `{"integrity":"trusted"\|"untrusted","confidentiality":"public"\|"private"}` | as `audit::label_json` |
 | `SystemTime` seconds | JSON number, seconds since epoch | matches `Record::started`/`updated` |
@@ -731,10 +731,14 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 `Activity` serialises as:
 
 ```json
-{ "verb": "read", "target": "src/main.rs", "note": "412 lines",
+{ "verb": "read", "target": "src/main.rs", "why": "see the entry point", "note": "412 lines",
   "failed": false, "untrusted": false, "waitedSeconds": null,
   "changes": [ { "kind": "added", "text": "…" } ] }
 ```
+
+`why` is the planner's own line on what the call is for, the same on `tool.started` and
+`tool.finished`, and empty where it gave none. It is released for the screen and read by
+nothing else, so a client draws it beside the call or not at all.
 
 `note: null` means the call is still running — that is what distinguishes an unfinished
 line from one that finished with nothing to say, and the client must render the two

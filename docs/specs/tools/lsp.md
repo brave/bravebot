@@ -18,8 +18,8 @@ documented-by: docs/website/docs/reference/tools.md
 ## Scope
 
 Asking a language server where a symbol is defined, what refers to it, and what it is. The
-operation, the file, the position, and the query a whole-tree question carries are routing; there
-are no content arguments. The result is a set of locations, or a refusal.
+operation, the file, the position, and the query a whole-tree question carries are routing; the
+only content argument is the `why` every tool takes ([TOOL-5](tool-surface.md#TOOL-5)). The result is a set of locations, or a refusal.
 
 Confinement of the server process is [sandboxing.md](../sandboxing.md). Why the built-in tools are
 not MCP servers is [mcp.md](../mcp.md), and this tool is native for exactly that reason: a call
@@ -53,8 +53,9 @@ for. A field that decides that is routing, so it is promoted and recorded the wa
 read for that operation alone, since a promotion recorded against a call that sends no query would
 put a choice in the trail that nobody made.
 
-There are no content arguments at all, which makes this the only tool besides `read_file` and
-`list_files` whose call carries nothing untrusted.
+Its one content argument is the `why` every tool takes ([TOOL-5](tool-surface.md#TOOL-5)), which is the planner's own
+words, so this is the only tool besides `read_file` and `list_files` whose call carries nothing
+untrusted.
 
 **Why the list is closed.** LSP is an open protocol and a server advertises methods of its own,
 including ones that apply a workspace edit. Forwarding a method name would make the tool's blast

@@ -17,7 +17,8 @@ Reading a repository's history from the files under its `.git`, and its status f
 working tree, without starting git. `query`,
 `repository`, `revision`, `path`, `since`, `until` and `count` are routing: the first names which
 question is asked, the next three name which repository, which commits and which files it is asked
-about, and the rest bound the commits a log lists. There are no content arguments. The result is
+about, and the rest bound the commits a log lists. The only content argument is the `why` every
+tool takes ([TOOL-5](tool-surface.md#TOOL-5)). The result is
 the answer, or a reference where a path it showed is untrusted. What it shows is scanned for
 credentials before the planner receives it, as a file read is
 ([credential-protection.md](../credential-protection.md)): the lines it prints of a file are

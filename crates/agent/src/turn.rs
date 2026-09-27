@@ -215,6 +215,10 @@ all: you get the same bytes visibly, and each one gated on its own.";
 /// to arbitrate something they never set up, and the list on the screen belongs to the turn they
 /// are actually watching.
 ///
+/// The line saying why before each round of calls, because the person follows the turn: its own
+/// line before spawn_agent already says why a delegate started, and the terminal interface draws
+/// none of a delegate's narration.
+///
 /// It opens on working in slices, which is here rather than in [`PLANNING`] because it is about
 /// somebody watching. A delegate reports once and is read once; a turn a person is watching is
 /// stopped, redirected and resumed, and what survives all three is what was written down. A
@@ -275,6 +279,11 @@ than one per file you might touch. Asked to fix a bug in a directory of two file
 have two tasks: you have one, which is to find and fix it, and possibly a second to write the \
 result back. A list saying the bug will be fixed in both files claims to know something you have \
 no way of knowing, and the person reading it can see that you sent one call and listed two jobs.
+
+Before each round of tool calls, write one short line saying why: what the step is trying to find \
+out, or what it is about to change. One line, not a plan. Each call's own why says what that call \
+is for, so this line is about the step the calls make together, and neither repeats the tool or \
+the path, since those are on the screen already.
 
 Hand work to a delegate with spawn_agent when finding something out would cost you more context \
 than the answer is worth. Building and testing is the usual case: the log is long and what you \
