@@ -131,7 +131,8 @@ pub fn compose<S: Sink>(
         preamble.text.push_str(
             "\n\nSkills. Each is a set of instructions for a kind of task, most of them written \
              by the user. When a task matches one, call load_skill with its name before starting \
-             that work and follow what it says. These names are the only ones that exist.\n\n",
+             that work and follow what it says. A prompt naming one as /name is the user asking \
+             for it. These names are the only ones that exist.\n\n",
         );
         preamble.text.push_str(&skills.describe_for_prompt());
     }

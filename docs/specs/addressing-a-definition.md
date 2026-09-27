@@ -102,7 +102,7 @@ which is where content belongs.
 **Why.** The surface stays one word wide however many definitions a machine holds, which is what
 keeps it small enough to reason about. A name read from a directory could never be a command word
 itself: a definition's name is written by whoever wrote the definition, it can be composed to read
-like an instruction, and the rule that keeps skills off this surface is exactly that.
+like an instruction, and the rule that keeps a skill from being a command is exactly that.
 
 **What the alternatives cost.** `@name` is taken: `@` names a file and putting a second meaning on it
 would make one prefix mean two things at the moment a person is typing fastest. A bare
@@ -190,8 +190,13 @@ program had written it, and Enter submits the highlighted one: a name composed t
 instruction would then be one keystroke from dispatching itself. Discovery is what a completion
 list is for, and the bare word gives it on demand instead.
 
+A skill's name is offered in that list, and the difference is what taking the row writes. A skill
+row writes a prompt naming the skill, which the planner is asked about like any other sentence. A
+definition's name is only ever the argument of `/agent`, so a row for one would write a command
+line that starts a run.
+
 `verified-by: bravebot_tui::app::the_bare_word_says_what_this_session_resolved`
-`verified-by: by-construction (the completion list reads the command table and nothing else, and the resolved set exists only in the event loop after a line is submitted, so nothing drawn while a person types can hold a definition name)`
+`verified-by: by-construction (the completion list reads the command table and the resolved skills and nothing else, nothing is offered after the word of a command line, and the resolved set of definitions exists only in the event loop after a line is submitted, so nothing drawn while a person types can hold a definition name)`
 
 ## What it may do
 

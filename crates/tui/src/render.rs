@@ -2832,10 +2832,11 @@ fn tail_of(path: &str, room: usize) -> String {
 /// comes to: the shortcut list folds into as many columns as the width holds, so counting the
 /// entries would not answer it.
 ///
-/// What is offered is commands or files, never a mixture, because the line can only be being typed
-/// towards one of them. Nothing labelled is involved either way: the commands are this program's own
-/// words, and the filenames are read out of the directory to show a person which files are in it,
-/// never to decide anything and never reaching a model from here.
+/// What is offered is commands and skills or files, never a mixture, because the last word opens
+/// with a slash or an `@`. Nothing labelled is involved either way: the commands are this program's
+/// own words, the skills are the names and descriptions a turn would advertise and passed the same
+/// trust gate, and the filenames are read out of the directory to show a person which files are in
+/// it, never to decide anything and never reaching a model from here.
 fn lines_beneath_the_box(
     session: &Session,
     width: u16,
@@ -2855,7 +2856,9 @@ fn lines_beneath_the_box(
     lines.extend(queued_lines(session, width));
     lines.extend(match offered {
         crate::state::Offered::Nothing => Vec::new(),
-        crate::state::Offered::Commands(commands) => command_lines(session, commands),
+        crate::state::Offered::Slash { commands, skills } => {
+            slash_lines(session, commands, skills, width)
+        }
         crate::state::Offered::Files(entries) => entry_lines(session, entries),
         crate::state::Offered::Shortcuts => {
             shortcut_lines(session.editing(), session.bindings(), width)
@@ -2864,42 +2867,91 @@ fn lines_beneath_the_box(
     lines
 }
 
-/// One row per command, with what it does.
+/// One row per command and then one per skill, each with what it is for.
 ///
-/// The description column is measured from every command rather than from the ones on screen, so it
-/// sits in the same place however far the list has narrowed. Measuring the visible rows instead
-/// would slide the descriptions sideways with each letter typed.
-fn command_lines(session: &Session, offered: &[crate::app::Command]) -> Vec<Line<'static>> {
+/// The description column is measured from every command and every skill held rather than from the
+/// rows on screen, so it sits in the same place however far the list has narrowed. Measuring the
+/// visible rows instead would slide the descriptions sideways with each letter typed.
+fn slash_lines(
+    session: &Session,
+    commands: &[crate::app::Command],
+    skills: &[crate::skills::Skill],
+    width: u16,
+) -> Vec<Line<'static>> {
     let column = crate::app::commands()
         .iter()
         .map(|command| command_word(command).chars().count())
+        .chain(
+            crate::skills::matching(session.held_skills(), "")
+                .iter()
+                .map(|skill| skill_word(skill).chars().count()),
+        )
         .max()
         .unwrap_or(0);
 
     let highlighted = session.highlighted_completion();
-    offered
+    let mut lines: Vec<Line<'static>> = commands
         .iter()
         .map(|command| {
             let chosen = Some(*command) == highlighted;
-            let name = if chosen {
-                Style::default()
-                    .fg(theme::brand_primary())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme::brand_primary())
-            };
-
             let word = command_word(command);
             let padding = column.saturating_sub(word.chars().count()) + 2;
-
-            Line::from(vec![
-                Span::styled(if chosen { "  ❯ " } else { "    " }, name),
-                Span::styled(word, name),
-                Span::raw(" ".repeat(padding)),
-                Span::styled(command.description, dim()),
-            ])
+            let mut row = slash_row(chosen, word);
+            row.push(Span::raw(" ".repeat(padding)));
+            row.push(Span::styled(command.description, dim()));
+            Line::from(row)
         })
-        .collect()
+        .collect();
+
+    let highlighted = session.highlighted_skill();
+    lines.extend(skills.iter().map(|skill| {
+        let chosen = highlighted.as_ref() == Some(skill);
+        let word = skill_word(skill);
+        let padding = column.saturating_sub(word.chars().count()) + 2;
+        let from = match skill.source {
+            bravebot_agent::skills::Source::Workspace => t!(skill_from_project),
+            bravebot_agent::skills::Source::Home => t!(skill_from_user),
+            bravebot_agent::skills::Source::BuiltIn => t!(skill_from_built_in),
+        };
+        // Cut rather than wrapped, since nothing below the box wraps, and cut short of the width so
+        // where the skill came from is still on the row.
+        let used = SLASH_MARGIN + word.chars().count() + padding + 1 + from.chars().count();
+        let room = usize::from(width).saturating_sub(used);
+        let description = skill
+            .description
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut row = slash_row(chosen, word);
+        row.push(Span::raw(" ".repeat(padding)));
+        row.push(Span::styled(head_of(&printable(&description), room), dim()));
+        row.push(Span::styled(format!(" {from}"), dim()));
+        Line::from(row)
+    }));
+    lines
+}
+
+/// How wide the margin before a slash row's word is, the marker for the chosen row included.
+const SLASH_MARGIN: usize = 4;
+
+/// The margin and the word of one slash row, bold where it is the row the cursor is on.
+fn slash_row(chosen: bool, word: String) -> Vec<Span<'static>> {
+    let style = if chosen {
+        Style::default()
+            .fg(theme::brand_primary())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::brand_primary())
+    };
+    vec![
+        Span::styled(if chosen { "  ❯ " } else { "    " }, style),
+        Span::styled(word, style),
+    ]
+}
+
+/// A skill as it is typed.
+fn skill_word(skill: &crate::skills::Skill) -> String {
+    format!("/{}", printable(&skill.name))
 }
 
 /// How the hint line says where the rest of the bindings went.
@@ -2942,7 +2994,7 @@ fn shortcuts(editing: crate::vim::Editing, bindings: &Keybindings) -> [(String, 
     };
     [
         ("!".to_string(), "run a shell command"),
-        ("/".to_string(), "commands"),
+        ("/".to_string(), "commands and skills"),
         ("@".to_string(), "name a file"),
         ("?".to_string(), "this list"),
         ("enter".to_string(), "send"),
@@ -7054,6 +7106,58 @@ mod tests {
                 command.name
             );
         }
+    }
+
+    /// A skill row says where the skill was found. Nothing below the box wraps, so a description
+    /// too long for the screen is cut short of the edge, which keeps that on the row, and one the
+    /// file wrapped or put an escape in is still one row of plain text.
+    #[test]
+    fn a_skill_row_says_where_it_came_from_within_the_width() {
+        use bravebot_agent::skills::Source;
+        let mut session = Session::new("none");
+        for c in "this is /rel".chars() {
+            session.type_char(c);
+        }
+        session.settle_skills(|| {
+            vec![
+                crate::skills::Skill {
+                    name: "release-notes".to_string(),
+                    description: "Draft the notes\nfrom the \u{1b}[31mchangelog, ".repeat(8),
+                    source: Source::Workspace,
+                },
+                crate::skills::Skill {
+                    name: "release-check".to_string(),
+                    description: "Check a tag".to_string(),
+                    source: Source::Home,
+                },
+            ]
+        });
+
+        let width = 120;
+        let rows: Vec<String> = lines_beneath_the_box(&session, width, &session.offered())
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect()
+            })
+            .collect();
+
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert!(rows[0].starts_with("  ❯ /release-check"), "{rows:?}");
+        assert!(rows[0].ends_with("Check a tag (user)"), "{rows:?}");
+        assert!(rows[1].starts_with("    /release-notes"), "{rows:?}");
+        assert!(rows[1].ends_with("… (project)"), "{rows:?}");
+        assert_eq!(rows[1].chars().count(), usize::from(width), "{rows:?}");
+        assert!(
+            rows[1].contains("Draft the notes from the ␛[31mchangelog, Draft"),
+            "the file's line break was not read as a space: {rows:?}"
+        );
+        assert!(
+            !rows[1].contains(['\u{1b}', '\n']),
+            "an escape or a line break reached the row: {rows:?}"
+        );
     }
 
     /// The figure a person needs to decide whether to compact by hand, on the line they already

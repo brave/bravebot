@@ -33,9 +33,11 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/rewind` | `[turns]` | List the turns a rewind could go back to, or go back that many |
 | `/exit` | | Leave |
 
-Typing `/` offers the list in that order, and Tab completes. The list is one row per command, and a
-terminal without the room for all twenty-two drops the last of them: every command is still typeable in
-full, but a short terminal costs you the discovery the list is there for.
+Typing `/` offers the list in that order, with your [skills](#skills-after-a-slash) beneath it, and
+Tab completes. The list is one row per command and per skill, and a terminal without the room for all
+of them drops the last ones, skills first: everything is still typeable in full, and a letter or two
+narrows the list back onto the screen, but a short terminal costs you the discovery the list is there
+for.
 
 ## `/status`
 
@@ -646,13 +648,13 @@ box like any other line.
 **A command name is written in this program, never read from a directory.** There is no way to add one
 by putting a file somewhere.
 
-## Skills are not slash commands
+## Skills after a slash
 
-`/commit-style` is a prompt like any other sentence, even where a skill of that name exists. Other
-agents let you type a skill's name after a slash. This one does not: a skill is advertised to the
-planner by name and description, and its body is fetched by the planner asking for it. Nothing in the
-input box knows skills exist. See
-[Skills](../customize/skills.md#skills-are-not-slash-commands).
+A skill's name completes after a slash: beneath the commands at the start of a line, and on its own
+later in a sentence, as in `this is /release-no`. Taking one writes `/release-notes ` into the line,
+and the line is still a prompt. The planner is told it is you asking for that skill and loads it, so
+`/commit-style` never runs anything itself, and no skill becomes a command whatever it is called. See
+[Skills](../customize/skills.md#naming-a-skill-after-a-slash).
 
 ## Not a command, but typed in the same place
 

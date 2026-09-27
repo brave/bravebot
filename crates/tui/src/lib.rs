@@ -33,6 +33,7 @@ pub mod remote_confirm;
 pub mod render;
 pub mod resume;
 pub mod select;
+pub mod skills;
 pub mod state;
 pub mod status;
 pub mod table;

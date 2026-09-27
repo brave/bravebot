@@ -1406,6 +1406,13 @@ command-rewind = List the turns a rewind could go back to, or go back that many
 command-exit = Leave
 
 
+## Where a skill offered after a slash was found
+
+skill-from-project = (project)
+skill-from-user = (user)
+skill-from-built-in = (built-in)
+
+
 ## What the session says back
 
 session-resumed = resumed session: { $title }
