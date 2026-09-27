@@ -28503,12 +28503,22 @@ fn a_key_that_is_the_whole_of_a_file_is_caught_in_the_commit_that_added_it() {
     );
 }
 
-/// GIT-5. The question is one of three words, and a word off the list is refused by name rather
-/// than guessed at; status, the one a planner most often reaches for, is pointed at run.
+/// GIT-5 and GIT-10. status is answered the way git status --short prints it, from the index and
+/// the working tree, and a word off the list is refused by name.
 #[test]
-fn read_git_answers_three_questions_and_points_status_at_run() {
+fn read_git_answers_status_and_refuses_a_query_off_the_list() {
     let scratch = Scratch::new("read-git-queries");
-    repository::commit_files(&scratch.path, &[("README", "hello\n")], "first");
+    repository::commit_files(
+        &scratch.path,
+        &[("README", "hello\n"), ("src/lib.rs", "fn f() {}\n")],
+        "first",
+    );
+    repository::check_out(
+        &scratch.path,
+        &[("README", "hello\n"), ("src/lib.rs", "fn f() {}\n")],
+    );
+    std::fs::write(scratch.path.join("README"), "hello again\n").unwrap();
+    std::fs::write(scratch.path.join("notes.txt"), "mine\n").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, received) = serve_sequence(vec![
         tool_request_2("read_git", r#"{"query":"status"}"#),
@@ -28530,14 +28540,62 @@ fn read_git_answers_three_questions_and_points_status_at_run() {
     let _first = received.recv().expect("first request");
     let status = tool_results(&received.recv().expect("second request"));
     assert!(
-        status.contains("does not answer status") && status.contains("git status --short"),
-        "status was not pointed at run: {status}"
+        status.contains(r" M README\n?? notes.txt") && !status.contains("lib.rs"),
+        "status was not answered as git status --short prints it: {status}"
     );
     let blame = tool_results(&received.recv().expect("third request"));
     assert!(
-        blame.contains("answers log, show and diff, not blame"),
+        blame.contains("answers log, show, diff and status, not blame"),
         "a query off the list was not refused by name: {blame}"
     );
+}
+
+/// GIT-11. status compares every file in the working tree, so it answers only where the map trusts
+/// all of it; with one directory distrusted it names run, while log, which reads only `.git`,
+/// still answers.
+#[test]
+fn status_is_answered_only_where_the_whole_working_tree_is_trusted() {
+    const SUBJECT: &str = "SUBJECT-OF-A-TRUSTED-HISTORY";
+    let scratch = Scratch::new("read-git-status-untrusted-tree");
+    repository::commit_files(&scratch.path, &[("README", "hello\n")], SUBJECT);
+    repository::check_out(&scratch.path, &[("README", "hello\n")]);
+    std::fs::create_dir_all(scratch.path.join("vendor")).unwrap();
+    std::fs::write(
+        scratch.path.join("vendor/NAME-IN-A-DISTRUSTED-DIRECTORY"),
+        "x\n",
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_git", r#"{"query":"status"}"#),
+        tool_request_2("read_git", r#"{"query":"log"}"#),
+        reply_with("understood"),
+    ]);
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    trust.distrust("vendor");
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what changed"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let status = tool_results(&received.recv().expect("second request"));
+    assert!(
+        !status.contains("NAME-IN-A-DISTRUSTED-DIRECTORY")
+            && status.contains("not a working tree this session trusts in full")
+            && status.contains("Use run"),
+        "status read a working tree the map does not trust in full: {status}"
+    );
+    let log = tool_results(&received.recv().expect("third request"));
+    assert!(log.contains(SUBJECT), "log was not answered: {log}");
 }
 
 /// GIT-6. `since` and `until` are whole days in UTC, so a commit made late on the day `until`

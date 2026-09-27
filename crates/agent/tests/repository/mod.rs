@@ -72,3 +72,38 @@ pub fn commit_files(root: &std::path::Path, files: &[(&str, &str)], message: &st
     )
     .expect("main");
 }
+
+/// Write `files` to the working tree at `root` and list them in `.git/index`, version 2, with
+/// zeroed stat data, so a status reads each file rather than trusting a timestamp.
+pub fn check_out(root: &std::path::Path, files: &[(&str, &str)]) {
+    let mut sorted = files.to_vec();
+    sorted.sort();
+    let mut bytes = b"DIRC".to_vec();
+    bytes.extend_from_slice(&2u32.to_be_bytes());
+    bytes.extend_from_slice(&(sorted.len() as u32).to_be_bytes());
+    for (path, text) in sorted {
+        let file = root.join(path);
+        std::fs::create_dir_all(file.parent().expect("parent")).expect("directory");
+        std::fs::write(&file, text).expect("working tree");
+        let start = bytes.len();
+        for word in [0, 0, 0, 0, 0, 0, 0o100644u32, 0, 0, 0] {
+            bytes.extend_from_slice(&word.to_be_bytes());
+        }
+        let id = gix_object::compute_hash(
+            gix_hash::Kind::Sha1,
+            gix_object::Kind::Blob,
+            text.as_bytes(),
+        )
+        .expect("hashed");
+        bytes.extend_from_slice(id.as_bytes());
+        bytes.extend_from_slice(&(path.len() as u16).to_be_bytes());
+        bytes.extend_from_slice(path.as_bytes());
+        let len = bytes.len() - start;
+        bytes.resize(start + ((len + 8) & !7), 0);
+    }
+    let mut hasher = gix_hash::hasher(gix_hash::Kind::Sha1);
+    hasher.update(&bytes);
+    let checksum = hasher.try_finalize().expect("hashed");
+    bytes.extend_from_slice(checksum.as_bytes());
+    std::fs::write(root.join(".git/index"), bytes).expect("index");
+}

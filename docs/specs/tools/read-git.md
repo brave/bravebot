@@ -4,6 +4,7 @@ title: read_git
 status: normative
 governs:
   - crates/agent/src/git.rs
+  - crates/agent/src/git/status.rs
   - crates/agent/src/workspace.rs
   - crates/agent/src/tools.rs
   - crates/core/src/policy.rs
@@ -12,7 +13,8 @@ documented-by: docs/website/docs/reference/tools.md
 
 ## Scope
 
-Reading a repository's history from the files under its `.git`, without starting git. `query`,
+Reading a repository's history from the files under its `.git`, and its status from those and the
+working tree, without starting git. `query`,
 `repository`, `revision`, `path`, `since`, `until` and `count` are routing: the first names which
 question is asked, the next three name which repository, which commits and which files it is asked
 about, and the rest bound the commits a log lists. There are no content arguments. The result is
@@ -89,7 +91,7 @@ The files a read opens are listed before any of them is decoded, and that list i
 are held against. A file a read opens is on it; a file no read opens is not. That is the
 configuration, whatever case its name is written in, the refs a name can reach, which leaves out a
 `.lock` and any name with a part starting `.`, the loose objects, and each pack index with the pack
-beside it. A listing that runs past the search deadline is declined as a read out of time is.
+beside it. A status adds the index, `info/exclude` and `info/attributes`. A listing that runs past the search deadline is declined as a read out of time is.
 
 **Why.** Reading history means following ids the files hold: a ref naming a commit, a commit its
 parent and its tree, a tree its entries. Following them over bytes nobody vouched for is the driver
@@ -104,6 +106,7 @@ this reader declines ([GIT-8](#GIT-8)), never what it runs.
 `verified-by: bravebot_core::policy::a_repository_is_trusted_beneath_only_where_nothing_inside_it_is_distrusted`
 `verified-by: bravebot_core::policy::a_repository_nobody_vouched_for_is_not_trusted_beneath`
 `verified-by: bravebot_agent::git::survey_lists_the_files_a_read_opens_and_none_it_does_not`
+`verified-by: bravebot_agent::git::status_surveys_the_index_and_the_info_files_it_reads`
 
 <a id="GIT-3"></a>
 ### GIT-3: an answer is labelled by the whole of `.git` and by every path it showed
@@ -149,21 +152,21 @@ which object a file holds is not known until it is read.
 `verified-by: bravebot_agent::turn::a_repository_holding_a_file_a_deny_rule_covers_is_not_opened`
 `verified-by: bravebot_agent::workspace::a_repository_a_deny_rule_names_is_not_opened`
 `verified-by: bravebot_agent::git::a_withheld_path_is_left_out_of_every_answer_and_the_answer_says_so`
+`verified-by: bravebot_agent::git::a_withheld_path_is_neither_read_nor_listed`
 
 <a id="GIT-5"></a>
-### GIT-5: the question is log, show or diff, and anything else is refused by name
+### GIT-5: the question is log, show, diff or status, and anything else is refused by name
 
-A word off the list is refused and the planner is told to use `run`; `status` is told to use `run`
-with `git status --short`. A revision form this reader does not implement, `A...B` or `HEAD^@`
+A word off the list is refused and the planner is told to use `run`. A revision form this reader does not implement, `A...B` or `HEAD^@`
 among them, is refused by name, and a query given the other shape of revision, one where it takes
-two or two where it takes one, is told which query takes it.
+two or two where it takes one, is told which query takes it. A status given a revision is told to
+use diff.
 
 **Why.** A guess answers a question the planner did not ask as though it had. `A...B` read as the
 forms this reader knows is the range from `A.` to `.B`, and `HEAD^@` is `HEAD^`, so each would
-come back as a confident answer to something else. Status reads the index and the working tree,
-which this reader does not open.
+come back as a confident answer to something else.
 
-`verified-by: bravebot_agent::turn::read_git_answers_three_questions_and_points_status_at_run`
+`verified-by: bravebot_agent::turn::read_git_answers_status_and_refuses_a_query_off_the_list`
 `verified-by: bravebot_agent::git::revision_syntax_read_git_does_not_implement_is_refused_by_name`
 `verified-by: bravebot_agent::git::a_query_given_the_wrong_shape_of_revision_says_which_query_takes_it`
 
@@ -237,3 +240,81 @@ though it were the whole draws conclusions from what is missing.
 `verified-by: bravebot_agent::git::a_file_past_the_size_cap_is_described_by_its_size`
 `verified-by: bravebot_agent::git::a_read_out_of_time_says_so`
 `verified-by: bravebot_agent::git::a_listing_or_a_diff_that_fills_the_answer_says_it_was_cut_only_when_more_was_left`
+
+<a id="GIT-10"></a>
+### GIT-10: status lists what `git status --short --no-renames` lists
+
+Staged changes compare the index with the tree at HEAD, unstaged ones the working tree with the
+index, and untracked paths follow, sorted, each as `XY path` the way git prints them. A conflict is
+coded by the stages the index holds (`UU`, `AA`, `DU` and the rest), a file added with intent is
+` A`, or ` D` once its file is gone or a directory stands in its place, and a directory holding nothing tracked is one line, `dir/`, or
+none where everything in it is ignored. A nested repository, a directory whose `.git` is a file or
+holds a `HEAD`, reached through a symbolic link or not, is one line too. Only files and symbolic links are listed, never a fifo or a
+socket, and `status.showUntrackedFiles` is read: `no` lists nothing untracked, and `all` lists each
+file rather than its directory. A path filter lists that path and what is beneath it, not the
+directories above it. A path holding a space, a quote, a backslash, a control character or, with
+`core.quotePath` on as it is by default, a byte past ASCII is quoted as git quotes it. A tree where
+nothing changed says so, and where the trust map withheld a path, says only that nothing changed
+among the paths it could read.
+
+A file whose stat data matches the index is taken as unchanged unless the index was written no
+later than the file last changed, or the entry records a size of zero for content that is not
+empty, as git takes it; any other file is read and hashed. A symbolic link is compared by where it
+points, the executable bit counts where `core.filemode` says it does, a submodule replaced by a
+file is a type change, and a path under a directory that is now a symbolic link is deleted rather
+than followed. Ignore files are read as git reads them, per directory with `info/exclude` beneath
+them, and so are attributes files. A file an attribute or `core.autocrlf` would convert on its way
+into the index, and a submodule, is listed under a heading as not compared rather than guessed at.
+An ignore or attributes file the trust map withholds is not guessed at either: nothing untracked
+beneath a withheld ignore file is listed, though an untracked directory holding one is, as git lists
+it for the ignore file itself, and a withheld attributes file leaves every file beneath its
+directory whose stat data changed not compared. A rule withholding a name counts only where a file
+stands at it, and a withheld ignore file counts only where untracked files are listed. A file
+replaced between being looked at and being read is not compared either, and is never followed
+through a link or waited on as a fifo. Renames are not detected. Nothing is written, the index included.
+
+Declined, with a sentence pointing at `run`: a split or sparse index, one holding an extension
+this reader does not know that git would need, one whose checksum does not match, one naming a
+path git would not check out, a repository whose configuration sets `core.bare`, and one that
+names an ignore or attributes file outside it through `core.excludesFile`, `core.attributesFile`
+or `attr.tree`. The global and system configuration and the global ignore file are not read, so
+on Windows, where Git for Windows sets `core.autocrlf` in the system file, line endings are taken
+as converted unless the repository's own configuration says they are not.
+
+**Why.** Status is the question a planner asks most, and the one git answers by running what
+`core.fsmonitor` names. Where this reader cannot tell what git would print, it says so rather than
+printing something else: a filter or line-ending conversion changes the bytes a file is hashed as,
+and an index this reader does not parse in full lists entries it cannot see.
+
+`verified-by: bravebot_agent::git::status_lists_staged_unstaged_and_untracked_as_git_status_short_does`
+`verified-by: bravebot_agent::git::a_clean_tree_says_so_and_a_version_four_index_reads_the_same`
+`verified-by: bravebot_agent::git::matching_stat_data_is_trusted_unless_the_index_is_as_new_as_the_file`
+`verified-by: bravebot_agent::git::a_merge_conflict_is_coded_by_the_stages_the_index_holds`
+`verified-by: bravebot_agent::git::a_file_an_attribute_converts_is_not_compared`
+`verified-by: bravebot_agent::git::a_link_above_a_tracked_file_is_not_followed`
+`verified-by: bravebot_agent::git::an_untracked_directory_is_one_line_and_one_of_only_ignored_files_is_none`
+`verified-by: bravebot_agent::git::a_changed_executable_bit_is_a_change`
+`verified-by: bravebot_agent::git::a_layout_status_cannot_read_as_git_would_is_declined`
+`verified-by: bravebot_agent::git::a_path_with_a_space_is_quoted_as_git_quotes_it`
+`verified-by: bravebot_agent::git::paths_are_quoted_and_filtered_as_git_quotes_and_filters_them`
+`verified-by: bravebot_agent::git::an_intent_to_add_entry_whose_file_is_gone_is_a_deletion`
+`verified-by: bravebot_agent::git::a_replaced_submodule_a_smudged_entry_and_a_socket_read_as_git_reads_them`
+`verified-by: bravebot_agent::git::status_show_untracked_files_is_read_from_the_config`
+`verified-by: bravebot_agent::git::a_withheld_attributes_or_ignore_file_is_not_guessed_at`
+`verified-by: bravebot_agent::git::a_withheld_rule_counts_only_where_a_file_it_withholds_is_read`
+`verified-by: bravebot_agent::turn::read_git_answers_status_and_refuses_a_query_off_the_list`
+
+<a id="GIT-11"></a>
+### GIT-11: status is answered only where the trust map trusts the whole working tree
+
+The map is asked about the repository's directory as a subtree, as [GIT-2](#GIT-2) asks about
+`.git`, and a tree it fails is refused with a sentence pointing at `run`. log, show and diff in the
+same repository are answered as before.
+
+**Why.** Status reads every file in the tree: it hashes their bytes, reads their ignore and
+attributes files, and prints their names. Each of those is the driver branching on the file, so a
+file nobody vouched for keeps status closed, as a pack nobody vouched for keeps the repository
+closed.
+
+`verified-by: bravebot_agent::turn::status_is_answered_only_where_the_whole_working_tree_is_trusted`
+`verified-by: bravebot_agent::workspace::a_status_below_the_root_is_asked_about_its_own_directory`
