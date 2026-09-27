@@ -5309,6 +5309,8 @@ fn log_of(repository: &Labelled<String>) -> bravebot_agent::workspace::GitQuesti
         path: None,
         query: bravebot_agent::git::Query::Log,
         count: bravebot_agent::git::DEFAULT_COUNT,
+        skip: 0,
+        messages: false,
         since: None,
         until: None,
     }

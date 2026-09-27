@@ -1,7 +1,8 @@
 //! Repositories written object by object, so a test of read_git needs no git installed.
 
 /// A repository at `root` whose `main` holds one commit of `files` with `message`, made at
-/// 2023-11-14 22:13:20 UTC. A path with a `/` is placed in a directory.
+/// 2023-11-14 22:13:20 UTC. A path with a `/` is placed in a directory. Called again on the same
+/// root, it commits on top of `main`, at the same moment.
 pub fn commit_files(root: &std::path::Path, files: &[(&str, &str)], message: &str) {
     use gix_object::Write as _;
 
@@ -55,12 +56,15 @@ pub fn commit_files(root: &std::path::Path, files: &[(&str, &str)], message: &st
     .expect("config");
     let store = gix_odb::loose::Store::at(git.join("objects"), gix_hash::Kind::Sha1);
     let tree = tree(&store, files);
+    let parent = std::fs::read_to_string(git.join("refs/heads/main"))
+        .map(|id| format!("parent {}\n", id.trim()))
+        .unwrap_or_default();
     let commit = store
         .write_buf(
             gix_object::Kind::Commit,
             format!(
-                "tree {}\nauthor A U Thor <author@example.com> 1700000000 +0000\ncommitter C O \
-                 Mitter <committer@example.com> 1700000000 +0000\n\n{message}\n",
+                "tree {}\n{parent}author A U Thor <author@example.com> 1700000000 +0000\n\
+                 committer C O Mitter <committer@example.com> 1700000000 +0000\n\n{message}\n",
                 tree.to_hex()
             )
             .as_bytes(),

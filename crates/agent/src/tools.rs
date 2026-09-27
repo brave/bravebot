@@ -414,7 +414,8 @@ fn table(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<Tool> {
         Tool::function(
             "read_git",
             "Read a repository's history from its .git directory without starting git: log lists \
-             commits one per line, show prints a commit with its diff or a file or directory at \
+             commits one per line, or each with its whole message, a page at a time; show \
+             prints a commit with its diff or a file or directory at \
              a revision, diff compares two commits, and status lists staged, unstaged and \
              untracked paths as git status --short does. Works only where the whole of .git is \
              trusted, and for status the whole working tree; elsewhere it says so and you use \
@@ -453,6 +454,18 @@ fn table(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<Tool> {
                     "count": {
                         "type": "integer",
                         "description": "Commits a log lists. Defaults to 20, at most 200."
+                    },
+                    "skip": {
+                        "type": "integer",
+                        "description": "log only: commits to pass over before listing, as git \
+                                        log --skip does. A log that stopped with commits left \
+                                        gives the skip that lists the next of them."
+                    },
+                    "messages": {
+                        "type": "boolean",
+                        "description": "log only: print each commit's whole message beneath its \
+                                        line, which is where a commit says why it was made and \
+                                        what it closes. Defaults to false."
                     },
                     "since": {
                         "type": "string",
@@ -7063,6 +7076,14 @@ fn read_git<S: Sink, C: Confirmer>(
         .map_or(crate::git::DEFAULT_COUNT, |n| {
             n.clamp(1, crate::git::MAX_COUNT as u64) as usize
         });
+    let skip = arguments
+        .get("skip")
+        .and_then(Value::as_u64)
+        .map_or(0, |n| usize::try_from(n).unwrap_or(usize::MAX));
+    let messages = arguments
+        .get("messages")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
 
     // A deny rule over the file a question names covers asking about its history too, and is said
     // the way every other read says it, before anything under `.git` is opened.
@@ -7095,6 +7116,8 @@ fn read_git<S: Sink, C: Confirmer>(
         path: path.as_ref(),
         query,
         count,
+        skip,
+        messages,
         since,
         until,
     };
@@ -7186,6 +7209,11 @@ fn read_git<S: Sink, C: Confirmer>(
                 "\n\n(read_git ran out of time and this answer is partial; narrow it with a \
                  path, a range or a smaller count)",
             );
+        } else if let Some(next) = a.next {
+            body.push_str(&format!(
+                "\n\n(this log stopped with more commits to list; ask again with skip {next} for \
+                 the next of them)"
+            ));
         } else if a.cut {
             body.push_str(
                 "\n\n(this answer stopped at read_git's cap and is incomplete; narrow it with a \

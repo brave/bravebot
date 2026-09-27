@@ -15,7 +15,7 @@ that is merely carried.
 | [`read_file`](#read_file) | `path`, `path_ref`, `offset`, `limit` | none | only to trust a quarantined file |
 | [`list_files`](#list_files) | `directory`, `pattern`, `depth` | none | no |
 | [`search`](#search) | `pattern`, `directory`, `include`, `offset`, `case_sensitive` | none | no |
-| [`read_git`](#read_git) | `query`, `repository`, `revision`, `path`, `count`, `since`, `until` | none | only if what it would show holds a credential |
+| [`read_git`](#read_git) | `query`, `repository`, `revision`, `path`, `count`, `skip`, `messages`, `since`, `until` | none | only if what it would show holds a credential |
 | [`lsp`](#lsp) | `operation`, `path`, `line`, `character`, `query` | none | **yes, to start a language server** |
 | [`write_file`](#write_file) | `path`, `path_ref`, `contents_ref` | `contents` | **yes, every time** |
 | [`edit_file`](#edit_file) | `path`, `path_ref`, `replace_all` | `old_text`, `new_text` | **yes, every time** |
@@ -216,10 +216,14 @@ working tree, **without starting git**.
 | `revision` | in git's syntax: a branch, a tag, `HEAD`, an id or its prefix, then `~N`, `^N` or `^{commit}`. `log` takes one or a range `A..B`; `show` takes one, or `<revision>:<path>` for a file or directory as it was; `diff` takes two, as `A..B` or `A B` |
 | `path` | relative to the repository's root. Limits `log` to commits that changed it, and `show`, `diff` and `status` to changes under it |
 | `count` | commits a `log` lists: 20 unless given, at most 200 |
+| `skip` | `log` only: commits to pass over before listing, as `git log --skip` does |
+| `messages` | `log` only: print each commit's whole message beneath its line |
 | `since`, `until` | `log` only: whole days in UTC, written `YYYY-MM-DD`, both ends included |
 
 `log` prints one commit per line: the first ten characters of its id, the day it was authored, its
-author and its subject. `show` prints a commit
+author and its subject. With `messages`, the rest of each commit's message follows its line,
+indented. A log that stopped with commits left names the `skip` that lists the next page, and a page
+holds whole commits. `show` prints a commit
 with its message and diff, a tag with its message and then its commit, or a file or directory at a
 revision. `diff` compares two commits. A merge is shown without a diff and says which diff to ask for.
 `status` lists staged, unstaged and untracked paths as `git status --short --no-renames` does. It

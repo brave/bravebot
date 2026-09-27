@@ -15,9 +15,10 @@ documented-by: docs/website/docs/reference/tools.md
 
 Reading a repository's history from the files under its `.git`, and its status from those and the
 working tree, without starting git. `query`,
-`repository`, `revision`, `path`, `since`, `until` and `count` are routing: the first names which
-question is asked, the next three name which repository, which commits and which files it is asked
-about, and the rest bound the commits a log lists. The only content argument is the `why` every
+`repository`, `revision`, `path`, `since`, `until`, `count`, `skip` and `messages` are routing: the
+first names which question is asked, the next three name which repository, which commits and which
+files it is asked about, and the rest bound the commits a log lists and how much of each it prints.
+The only content argument is the `why` every
 tool takes ([TOOL-5](tool-surface.md#TOOL-5)). The result is
 the answer, or a reference where a path it showed is untrusted. What it shows is scanned for
 credentials before the planner receives it, as a file read is
@@ -33,7 +34,8 @@ to nothing about another's.
 
 `log` lists commits one per line, newest first: the first ten characters of the id, the day it was
 authored, its author and its subject, as `git log --format='%h %ad %an %s' --date=short
---abbrev=10` prints them.
+--abbrev=10` prints them, and asked for messages, the rest of each message beneath its line
+([GIT-12](#GIT-12)).
 `show` prints a commit with its message and its diff as `git show` does, a tag with its message and
 then its commit, and `<revision>:<path>` as the file or directory stood at that revision. `diff`
 compares two commits' trees as `git diff` prints them. Revisions are read in git's syntax, as git
@@ -319,3 +321,28 @@ closed.
 
 `verified-by: bravebot_agent::turn::status_is_answered_only_where_the_whole_working_tree_is_trusted`
 `verified-by: bravebot_agent::workspace::a_status_below_the_root_is_asked_about_its_own_directory`
+
+<a id="GIT-12"></a>
+### GIT-12: a log is read a page at a time, with whole messages where asked
+
+`skip` passes over that many of the commits a log matches before it lists any, as `git log --skip`
+does. It counts the commits the log would list once its range, path and days are applied, not the
+commits walked on the way to them. A log that stopped with commits still to list, at its count or at
+its lines, names the skip that lists the next of them, and one that listed its last commit names
+none.
+
+With `messages`, each commit's line is followed by the rest of its message, every line indented
+four spaces as `git show` indents it, so a line that is not indented starts a commit. A commit goes
+on a page whole or waits for the next one. The exception is a commit whose message alone is longer
+than an answer, which is shown as far as it fits and cut, so that the next skip moves past it.
+
+**Why.** A commit's body is where it says why it was made and what it closes, and a history longer
+than one answer is common. A planner given neither reruns git through `run`, where the answer may be
+sealed, or narrows the question until commits drop out of it. A skip that counted walked commits
+would pass over a different set from the one the planner was shown, and a message cut at the foot of
+a page would be read as the whole of it.
+
+`verified-by: bravebot_agent::turn::read_git_pages_through_a_log_and_shows_whole_messages_when_asked`
+`verified-by: bravebot_agent::git::a_log_with_messages_prints_each_commit_whole_beneath_its_line`
+`verified-by: bravebot_agent::git::skip_passes_over_the_commits_a_log_already_listed`
+`verified-by: bravebot_agent::git::a_page_of_messages_ends_at_a_whole_commit`

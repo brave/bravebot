@@ -28939,6 +28939,75 @@ fn since_and_until_are_whole_days_and_anything_else_is_refused() {
     );
 }
 
+/// GIT-12. A log that stopped with commits left tells the planner the skip that lists the next of
+/// them, and asking with it lists them rather than the same page again. Asked for messages, a
+/// commit's body reaches the planner beneath its line, which is where a commit says what it closes.
+#[test]
+fn read_git_pages_through_a_log_and_shows_whole_messages_when_asked() {
+    const BODY: &str = "BODY-OF-THE-OLDER-COMMIT Closes #84";
+    let scratch = Scratch::new("read-git-pages");
+    repository::commit_files(
+        &scratch.path,
+        &[("README", "hello\n")],
+        &format!("OLDER\n\n{BODY}"),
+    );
+    repository::commit_files(&scratch.path, &[("README", "hello\nworld\n")], "NEWER");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_git", r#"{"query":"log","count":1}"#),
+        tool_request_2("read_git", r#"{"query":"log","count":1,"skip":1}"#),
+        tool_request_2("read_git", r#"{"query":"log","skip":1,"messages":true}"#),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what changed"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let newest = |request: String| -> String {
+        let parsed: serde_json::Value = serde_json::from_str(&request).expect("a request");
+        parsed["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .rev()
+            .find(|message| message["role"] == "tool")
+            .map(|message| message["content"].to_string())
+            .expect("a tool result")
+    };
+    let _first = received.recv().expect("first request");
+    let first = newest(received.recv().expect("second request"));
+    assert!(
+        first.contains("NEWER") && !first.contains("OLDER"),
+        "the first page was not the newest commit alone: {first}"
+    );
+    assert!(
+        first.contains("ask again with skip 1"),
+        "a log that stopped with a commit left did not say how to list it: {first}"
+    );
+    let second = newest(received.recv().expect("third request"));
+    assert!(
+        second.contains("OLDER") && !second.contains("NEWER"),
+        "the skip did not move the log on to the next commit: {second}"
+    );
+    assert!(
+        !second.contains("ask again with skip") && !second.contains(BODY),
+        "a log that reached its end, or was not asked for messages, said otherwise: {second}"
+    );
+    let third = newest(received.recv().expect("fourth request"));
+    assert!(
+        third.contains(&format!("    {BODY}")),
+        "the message asked for did not reach the planner: {third}"
+    );
+}
+
 /// GIT-7. A git run's sealed output names read_git, which answers the same question with nobody
 /// asked where the repository is trusted. Any other program's does not, where the sentence would
 /// be noise.

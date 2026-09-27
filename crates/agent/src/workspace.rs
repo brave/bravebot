@@ -86,6 +86,8 @@ pub struct GitQuestion<'a> {
     pub path: Option<&'a Labelled<String>>,
     pub query: crate::git::Query,
     pub count: usize,
+    pub skip: usize,
+    pub messages: bool,
     pub since: Option<i64>,
     pub until: Option<i64>,
 }
@@ -2332,6 +2334,8 @@ impl Workspace {
             path,
             query,
             count,
+            skip,
+            messages,
             since,
             until,
         } = *question;
@@ -2412,6 +2416,8 @@ impl Workspace {
                 revision: revision.as_deref(),
                 path: path.as_deref(),
                 count,
+                skip,
+                messages,
                 since,
                 until,
                 deadline,

@@ -95,6 +95,10 @@ pub struct Request<'a> {
     /// Relative to the repository's root, not the workspace's.
     pub path: Option<&'a str>,
     pub count: usize,
+    /// Commits a log matches and passes over before it lists any, as `git log --skip` does.
+    pub skip: usize,
+    /// Whether a log prints each commit's whole message beneath its line.
+    pub messages: bool,
     /// Seconds since the epoch; a commit older than this is not shown and not walked past.
     pub since: Option<i64>,
     /// Seconds since the epoch; a commit newer than this is not shown but is walked past.
@@ -112,6 +116,8 @@ pub struct Answer {
     pub withheld: bool,
     /// Whether the text stops short of everything the question matched.
     pub cut: bool,
+    /// Where a log stopped with commits still to list, the `skip` that lists the next of them.
+    pub next: Option<usize>,
     pub timed_out: bool,
     /// Each run of a file's lines the text printed, so each is scanned as a read of that file.
     pub printed: Vec<Printed>,
@@ -1065,9 +1071,9 @@ impl Repository {
                 }
             }
         };
-        let mut cut = false;
+        let mut next = None;
         match request.query {
-            Query::Log => cut = self.log(&mut out, request, filter.as_deref())?,
+            Query::Log => next = self.log(&mut out, request, filter.as_deref())?,
             Query::Show => self.show(&mut out, request, filter.as_deref())?,
             Query::Diff => self.diff(&mut out, request, filter.as_deref())?,
             Query::Status => status::answer(self, &mut out, filter.as_deref())?,
@@ -1079,7 +1085,8 @@ impl Repository {
             text: out.text.body,
             shown,
             withheld: out.withheld_any,
-            cut: cut || out.text.cut,
+            cut: next.is_some() || out.text.cut,
+            next,
             timed_out: out.timed_out,
             printed: out.printed,
             around: out.text.around,
@@ -1396,12 +1403,13 @@ impl Repository {
         Ok(entries)
     }
 
+    /// `Some` with the skip that lists the rest, where commits were left for another page.
     fn log(
         &self,
         out: &mut Out<'_>,
         request: &Request<'_>,
         filter: Option<&str>,
-    ) -> Result<bool, Declined> {
+    ) -> Result<Option<usize>, Declined> {
         let (tips, hidden_tips) = match spec(request.revision.unwrap_or("HEAD"))? {
             Spec::One(one) => (vec![self.commit_of(one, out)?], Vec::new()),
             Spec::Range(a, b) => (vec![self.commit_of(b, out)?], vec![self.commit_of(a, out)?]),
@@ -1427,9 +1435,8 @@ impl Repository {
         // A range is walked to its end before any of it is listed, because a commit is known to
         // be reachable from the range's start only once everything newer has been read.
         let limited = !hidden_tips.is_empty();
-        let count = request.count.min(MAX_COUNT);
         let mut listed = Vec::new();
-        let mut shown = 0;
+        let mut page = Page::default();
         let mut date = i64::MAX;
         let mut slop = SLOP;
         while let Some(next) = walk.queue.pop() {
@@ -1468,11 +1475,9 @@ impl Repository {
             if walk.treesame.contains(&id) {
                 continue;
             }
-            if shown == count {
-                return Ok(true);
+            if let Some(next) = self.list(out, request, &id, &mut page)? {
+                return Ok(Some(next));
             }
-            out.text.line(&self.log_line(&id)?);
-            shown += 1;
         }
         // A range cut off by the deadline lists nothing: a commit its start reaches is known to
         // be one only once the walk is done.
@@ -1481,20 +1486,56 @@ impl Repository {
                 if walk.hidden.contains(&id) || walk.treesame.contains(&id) {
                     continue;
                 }
-                if shown == count {
-                    return Ok(true);
+                if let Some(next) = self.list(out, request, &id, &mut page)? {
+                    return Ok(Some(next));
                 }
-                out.text.line(&self.log_line(&id)?);
-                shown += 1;
             }
         }
-        if shown == 0 && !out.timed_out {
-            out.text.line("(no commits match)");
+        if page.shown == 0 && !out.timed_out {
+            out.text.line(&match request.skip {
+                0 => "(no commits match)".to_owned(),
+                skip => format!("(no commits match past the first {skip})"),
+            });
         }
-        Ok(false)
+        Ok(None)
     }
 
-    fn log_line(&self, id: &oid) -> Result<String, Declined> {
+    /// List `id`, a commit the log matched, unless it is among the first `skip`. `Some` with the
+    /// skip that lists it, where the page is already full by its count or by its lines.
+    fn list(
+        &self,
+        out: &mut Out<'_>,
+        request: &Request<'_>,
+        id: &oid,
+        page: &mut Page,
+    ) -> Result<Option<usize>, Declined> {
+        if page.passed < request.skip {
+            page.passed += 1;
+            return Ok(None);
+        }
+        let next = request.skip + page.shown;
+        if page.shown == request.count.min(MAX_COUNT) {
+            return Ok(Some(next));
+        }
+        let lines = self.log_entry(id, request.messages)?;
+        // A commit goes on a page whole or waits for the next one, except the first: a message
+        // longer than a whole answer would otherwise wait forever.
+        if page.shown > 0 && out.text.lines + lines.len() > MAX_LINES {
+            out.text.cut = true;
+            return Ok(Some(next));
+        }
+        for line in &lines {
+            if !out.text.line(line) {
+                break;
+            }
+        }
+        page.shown += 1;
+        Ok(None)
+    }
+
+    /// A commit's line in a log, then with `messages` the rest of its message, indented as `git
+    /// show` indents it.
+    fn log_entry(&self, id: &oid, messages: bool) -> Result<Vec<String>, Declined> {
         let data = self.object(id, Kind::Commit)?;
         let commit =
             CommitRef::from_bytes(&data, HashKind::Sha1).map_err(|_| Declined::Unreadable)?;
@@ -1505,11 +1546,17 @@ impl Repository {
             }
             Err(_) => (String::new(), String::new()),
         };
-        let summary = one_line(commit.message().summary().as_ref());
-        Ok(format!(
+        let message = commit.message();
+        let summary = one_line(message.summary().as_ref());
+        let mut lines = vec![format!(
             "{} {day} {name} {summary}",
             id.to_hex_with_len(SHORT)
-        ))
+        )];
+        if let Some(body) = message.body.filter(|_| messages) {
+            let body = String::from_utf8_lossy(body);
+            lines.extend(body.trim_end().lines().map(|line| format!("    {line}")));
+        }
+        Ok(lines)
     }
 
     fn show(
@@ -2060,6 +2107,13 @@ impl Walk {
     }
 }
 
+/// How far a log has got: the matching commits it passed over for `skip`, then those it listed.
+#[derive(Default)]
+struct Page {
+    passed: usize,
+    shown: usize,
+}
+
 struct Out<'w> {
     text: Text,
     shown: Vec<String>,
@@ -2518,6 +2572,8 @@ mod tests {
             revision,
             path,
             count: DEFAULT_COUNT,
+            skip: 0,
+            messages: false,
             since: None,
             until: None,
             deadline: later(),
@@ -3236,6 +3292,181 @@ mod tests {
         let answer = repository.answer(&asked, &|_| false).expect("answered");
         assert_eq!(answer.text.lines().count(), 3);
         assert!(!answer.cut, "every commit was shown");
+    }
+
+    /// A commit says why it was made and what it closes in the body a log's one line leaves out.
+    /// Asked for, the body follows its commit's line indented as `git show` indents it, so a line
+    /// that is not indented always starts a commit, and a commit with no body is its line alone.
+    #[test]
+    fn a_log_with_messages_prints_each_commit_whole_beneath_its_line() {
+        let repo = Repo::new("log-messages");
+        let tree = repo.tree(&[("100644", "README", repo.blob("hello\n"))]);
+        let first = repo.commit(tree, &[], T1, "first");
+        let second = repo.commit(
+            tree,
+            &[first],
+            T1 + DAY,
+            "second\nwrapped\n\nWhy it was made.\n\nCloses #84\n\n",
+        );
+        repo.point("refs/heads/main", second);
+        let repository = repo.opened().expect("opened");
+        let mut asked = request(Query::Log, None, None);
+        let lines = format!(
+            "{} 2023-11-15 A U Thor second wrapped\n{} 2023-11-14 A U Thor first\n",
+            short(second, 10),
+            short(first, 10)
+        );
+        assert_eq!(
+            repository
+                .answer(&asked, &|_| false)
+                .expect("answered")
+                .text,
+            lines,
+            "a log not asked for messages printed more than a line per commit"
+        );
+
+        asked.messages = true;
+        assert_eq!(
+            repository
+                .answer(&asked, &|_| false)
+                .expect("answered")
+                .text,
+            format!(
+                "{} 2023-11-15 A U Thor second wrapped\n    Why it was made.\n    \n    Closes \
+                 #84\n{} 2023-11-14 A U Thor first\n",
+                short(second, 10),
+                short(first, 10)
+            )
+        );
+    }
+
+    /// `skip` passes over the commits a log matched, as `git log --skip` does, so it counts only
+    /// those the log would list: a path's log passes over the commits that changed the path, not
+    /// every commit walked on the way. A log that stopped with commits left says which skip lists
+    /// the next of them, and one that reached the end says nothing of the kind.
+    #[test]
+    fn skip_passes_over_the_commits_a_log_already_listed() {
+        let (h, side, merge, _) = branchy("skip");
+        let repository = h.repo.opened().expect("opened");
+        let page = |revision: Option<&str>, path: Option<&str>, skip: usize, count: usize| {
+            let mut asked = request(Query::Log, revision, path);
+            asked.skip = skip;
+            asked.count = count;
+            let answer = repository.answer(&asked, &|_| false).expect("answered");
+            let listed: Vec<String> = answer
+                .text
+                .lines()
+                .filter(|line| !line.starts_with('('))
+                .map(|line| line[..10].to_owned())
+                .collect();
+            (listed, answer.next, answer.cut)
+        };
+        let ids = |ids: &[ObjectId]| ids.iter().map(|&id| short(id, 10)).collect::<Vec<_>>();
+
+        assert_eq!(
+            page(None, None, 0, 2),
+            (ids(&[merge, h.third]), Some(2), true)
+        );
+        assert_eq!(
+            page(None, None, 2, 2),
+            (ids(&[side, h.second]), Some(4), true)
+        );
+        assert_eq!(page(None, None, 4, 2), (ids(&[h.first]), None, false));
+        assert_eq!(page(None, None, 5, 2), (ids(&[]), None, false));
+
+        let range = format!("{}..HEAD", h.first.to_hex());
+        assert_eq!(
+            page(Some(&range), None, 1, 2),
+            (ids(&[h.third, side]), Some(3), true)
+        );
+        assert_eq!(
+            page(Some(&range), None, 3, 2),
+            (ids(&[h.second]), None, false)
+        );
+
+        // README changed in first, third, side and merge; second only added src.
+        assert_eq!(
+            page(None, Some("README"), 2, 1),
+            (ids(&[side]), Some(3), true)
+        );
+        assert_eq!(
+            page(None, Some("README"), 3, 2),
+            (ids(&[h.first]), None, false)
+        );
+        assert_eq!(
+            page(None, Some("README"), 4, 1),
+            (ids(&[]), None, false),
+            "the commit that left README alone was counted toward the skip"
+        );
+
+        let mut asked = request(Query::Log, None, None);
+        asked.skip = 5;
+        assert_eq!(
+            repository
+                .answer(&asked, &|_| false)
+                .expect("answered")
+                .text,
+            "(no commits match past the first 5)\n"
+        );
+    }
+
+    /// A page of messages holds whole commits: one that would not fit waits for the next page,
+    /// which the skip names, rather than being cut short where the planner would take its message
+    /// for the whole of it. A single message longer than a page is the exception, shown as far as
+    /// it fits so that the next skip moves past it.
+    #[test]
+    fn a_page_of_messages_ends_at_a_whole_commit() {
+        let repo = Repo::new("log-message-pages");
+        let tree = repo.tree(&[("100644", "README", repo.blob("hello\n"))]);
+        let body = |lines: usize| {
+            (0..lines)
+                .map(|i| format!("line {i}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let mut parent = Vec::new();
+        let mut made = Vec::new();
+        for (day, lines) in [(0, 300), (1, 900), (2, 900), (3, 2500)] {
+            let id = repo.commit(
+                tree,
+                &parent,
+                T1 + day * DAY,
+                &format!("subject {day}\n\n{}", body(lines)),
+            );
+            parent = vec![id];
+            made.push(id);
+        }
+        repo.point("refs/heads/main", made[3]);
+        let repository = repo.opened().expect("opened");
+        let page = |skip: usize| {
+            let mut asked = request(Query::Log, None, None);
+            asked.messages = true;
+            asked.skip = skip;
+            repository.answer(&asked, &|_| false).expect("answered")
+        };
+
+        let first = page(0);
+        assert!(first.text.starts_with(&short(made[3], 10)));
+        assert_eq!(first.text.lines().count(), MAX_LINES);
+        assert!(!first.text.contains(&short(made[2], 10)));
+        assert_eq!(
+            (first.next, first.cut),
+            (Some(1), true),
+            "a message longer than a page was not moved past"
+        );
+
+        let second = page(1);
+        assert_eq!(second.text.lines().count(), 2 * 901);
+        assert!(second.text.ends_with("    line 899\n"));
+        assert!(
+            !second.text.contains(&short(made[0], 10)),
+            "a commit that did not fit was started on the page anyway"
+        );
+        assert_eq!((second.next, second.cut), (Some(3), true));
+
+        let third = page(3);
+        assert_eq!(third.text.lines().count(), 301);
+        assert_eq!((third.next, third.cut), (None, false));
     }
 
     /// `show` is how a planner reads what one commit did, so it prints the commit and its
