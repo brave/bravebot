@@ -514,6 +514,17 @@ on failure and cancellation too; a pre-turn fallback is not current state.
 `verified-by: bravebot_agent::rewind::failed_restore_leaves_distrust_and_attempts_other_files`
 `verified-by: bravebot_agent::rewind::restore_distrusts_before_entering_the_effect`
 
+An uncertain run has a different boundary: after a recovered panic or lost worker result, close
+every checkpoint captured before recovery before live continuation or save, including checkpoints
+imported from another front end. This closure applies to the whole window, even where an older
+point has an unavailable backup. Commands, incomplete backups and coverage warnings alone keep
+the useful points described above.
+
+`verified-by: bravebot_tui::undo_tests::a_lost_turn_result_closes_imported_points_and_saves_conservative_state`
+`verified-by: bravebot_tui::undo_tests::a_recovered_tui_panic_keeps_available_decisions_and_closes_saved_points`
+`verified-by: bravebot_ui_bridge::bridge::a_recovered_desktop_turn_saves_no_imported_rewind_points`
+`verified-by: bravebot_tui::undo_tests::terminal_bridge_terminal_handoff_and_both_forks_keep_current_file_decisions`
+
 What is kept is bounded twice over. A session remembers its last five turns, and what those turns
 wrote over is held to one budget between them rather than to one each: past it the turns furthest
 back are dropped whole, and the most recent is kept whatever it cost. Inside a turn the same
@@ -708,6 +719,9 @@ under the directory the resumed session works in, as trust rules do.
 `verified-by: bravebot_tui::sessions::backup_capture_trust_overrides_a_stale_pre_turn_grant`
 `verified-by: bravebot_tui::sessions::a_path_vouched_for_inside_the_turn_keeps_what_it_held_out_of_the_record`
 
+Recovery from uncertain effects closes imported and live points before the next write, as
+SESSION-19 requires. A resumed or forked record cannot restore those closed points.
+
 Only the points a rewind can still reach are written. A record holds what the session holds, so a
 point that ages out of the session's depth or budget, and every point given up when something
 changes the session outside a turn, is gone from the record at the next write. What a turn
@@ -824,8 +838,8 @@ where guessing costs the numbers.
 
 The turns before the loss keep their prompts, outcomes and measurements, and the messages they
 claimed are no longer claimed: those places belong to a conversation that is gone, and the one the
-session holds now starts again from nothing. A rewind across the loss brings back the earlier
-conversation and the places in it together.
+session holds now starts again from nothing. A worker loss with uncertain effects closes the rewind window under SESSION-19; older
+conversation boundaries cannot restore file grants after that loss.
 
 **Why.** A turn number is what the person saw and what their spend is filed under, so losing the
 conversation must not renumber the session. Letting the old places stand instead would hand the

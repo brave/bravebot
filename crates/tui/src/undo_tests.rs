@@ -134,17 +134,14 @@ fn oversized_undo(ending: &str, resumed: bool) {
         },
         FinishedTurn {
             decisions: Some(completed.decisions),
+            uncertain_effects: completed.uncertain_effects,
+            lost_state: completed.lost_state,
             outcome: result,
             conversation,
             sink,
             servers: None,
         },
-        RetainedTurn {
-            files: authority,
-            programs,
-            asked: AskedAbout::new(),
-            exposed: Default::default(),
-        },
+        RetainedTurn { files: authority },
     );
     trust = continued.trust;
     programs = continued.programs;
@@ -570,7 +567,7 @@ fn terminal_bridge_terminal_handoff_and_both_forks_keep_current_file_decisions()
     if !in_isolated_profile() {
         return;
     }
-    for ending in ["success", "failure", "cancel"] {
+    for ending in ["success", "failure", "cancel", "panic"] {
         bridge_handoff(ending);
     }
 }
@@ -614,6 +611,13 @@ fn bridge_handoff(ending: &str) {
         conversation.push(bravebot_aichat::protocol::Message::assistant("done"));
         session.complete("done", vec![], 7);
         session.record_turn(start, &conversation);
+        if ending == "panic" {
+            session.keep_backups(vec![bravebot_agent::workspace::Backup {
+                path: root.join("output.txt"),
+                was: bravebot_agent::workspace::Before::NotKept,
+                captured_trust: Integrity::Trusted,
+            }]);
+        }
     }
     save(&mut stored, &session, &conversation, &trust, &programs);
     let source = sessions::load(root, stored.id()).unwrap();
@@ -622,29 +626,31 @@ fn bridge_handoff(ending: &str) {
         source
             .rewind
             .iter()
-            .all(|point| point.wrote_over.is_empty())
+            .all(|point| point.wrote_over.is_empty() == (ending != "panic"))
     );
     let full_fork = sessions::fork(root, stored.id()).unwrap();
     assert!(full_fork.rewind.is_empty());
     assert_eq!(full_fork.trust_map(root), Some(trust.clone()));
     assert_eq!(sessions::load(root, stored.id()).unwrap().rewind.len(), 2);
-    let (config, requests, server) = endpoint::endpoint(
-        vec![
-            endpoint::tool("read_file", json!({"path":"input.txt"})),
-            endpoint::tool(
-                "write_file",
-                json!({"path":"output.txt","contents_ref":"ref:1"}),
-            ),
-            match ending {
-                "success" => endpoint::answer(),
-                "failure" => "fail".into(),
-                _ => "hold".into(),
-            },
-            endpoint::tool("read_file", json!({"path":"output.txt"})),
-            endpoint::answer(),
-        ],
-        None,
-    );
+    let mut replies = vec![
+        endpoint::tool("read_file", json!({"path":"input.txt"})),
+        endpoint::tool(
+            "write_file",
+            json!({"path":"output.txt","contents_ref":"ref:1"}),
+        ),
+    ];
+    if ending != "panic" {
+        replies.push(match ending {
+            "success" => endpoint::answer(),
+            "failure" => "fail".into(),
+            _ => "hold".into(),
+        });
+    }
+    replies.extend([
+        endpoint::tool("read_file", json!({"path":"output.txt"})),
+        endpoint::answer(),
+    ]);
+    let (config, requests, server) = endpoint::endpoint(replies, None);
     let settings = root.join("test-settings.json");
     std::fs::write(
         &settings,
@@ -655,7 +661,17 @@ fn bridge_handoff(ending: &str) {
     )
     .unwrap();
     let (events_tx, events_rx) = std::sync::mpsc::channel();
+    let mut panic_once = ending == "panic";
     let mut bridge = Bridge::new(Box::new(move |event| {
+        if panic_once
+            && event.name == "tool.finished"
+            && event.data["changes"]
+                .as_array()
+                .is_some_and(|changes| !changes.is_empty())
+        {
+            panic_once = false;
+            panic!("controlled listener panic after write");
+        }
         let _ = events_tx.send(event);
     }))
     .with_settings(Some(settings));
@@ -714,7 +730,7 @@ fn bridge_handoff(ending: &str) {
         SENTINEL
     );
     let record = sessions::load(root, stored.id()).unwrap();
-    assert_eq!(record.rewind.len(), 2);
+    assert_eq!(record.rewind.len(), if ending == "panic" { 0 } else { 2 });
     assert!(record.rewind_points(root).iter().all(|p| {
         p.coverage
             .gaps()
@@ -791,8 +807,8 @@ fn bridge_handoff(ending: &str) {
     .unwrap();
     server.join().unwrap();
     observed.extend(requests.try_iter());
-    assert_eq!(observed.len(), 5);
-    assert!(!observed[4].contains(SENTINEL));
+    assert_eq!(observed.len(), if ending == "panic" { 4 } else { 5 });
+    assert!(!observed.last().unwrap().contains(SENTINEL));
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -1346,6 +1362,8 @@ fn ordinary_tui_endings_keep_exact_approvals_advice_and_exposure() {
                         assert_eq!(confirmer.runs.len(), 1);
                         FinishedTurn {
                             decisions: Some(completed.decisions),
+                            uncertain_effects: completed.uncertain_effects,
+                            lost_state: completed.lost_state,
                             outcome: completed.outcome,
                             conversation,
                             sink,
@@ -1373,12 +1391,7 @@ fn ordinary_tui_endings_keep_exact_approvals_advice_and_exposure() {
                     addressed: None,
                 },
                 finished,
-                RetainedTurn {
-                    files: authority,
-                    programs: TrustedPrograms::new(),
-                    asked: AskedAbout::new(),
-                    exposed: Default::default(),
-                },
+                RetainedTurn { files: authority },
             );
             let mut stored = sessions::Handle::begin(
                 workspace.root(),
@@ -1435,4 +1448,250 @@ fn ordinary_tui_endings_keep_exact_approvals_advice_and_exposure() {
             assert_eq!(requests.try_iter().count(), 8);
         }
     }
+}
+
+/// A lost worker result withdraws old grants and closes every checkpoint before save.
+#[test]
+fn a_lost_turn_result_closes_imported_points_and_saves_conservative_state() {
+    tui_uncertainty(true);
+}
+
+/// Retained engine decisions survive TUI recovery, while every old undo point closes before save.
+#[test]
+fn a_recovered_tui_panic_keeps_available_decisions_and_closes_saved_points() {
+    tui_uncertainty(false);
+}
+
+fn tui_uncertainty(lost_state: bool) {
+    if !in_isolated_profile() {
+        return;
+    }
+    let root = scratch_dir("undo-lost-turn-result");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("target.txt"), "before").unwrap();
+    std::fs::write(root.join("source.txt"), "LOST-WORKER-SENTINEL").unwrap();
+    let workspace = Workspace::new(&root).unwrap();
+    let mut trust = TrustStore::new(workspace.root());
+    trust.trust(".");
+    trust.trust("/outside/approved");
+    trust.distrust("refused");
+    trust.distrust("source.txt");
+    let command = bravebot_core::programs::Command::new(
+        "/usr/bin/tool",
+        vec!["--exact".into()],
+        workspace.root(),
+    );
+    let mut programs = TrustedPrograms::new();
+    programs.trust(command.clone());
+    let mut conversation = Conversation::new();
+    let mut session = Session::new("uncertain");
+    let mut stored = sessions::Handle::begin(
+        workspace.root(),
+        sessions::Front::Terminal,
+        bravebot_stamp::BUILD,
+    );
+    for prompt in ["earlier point", "latest point"] {
+        session.paste(prompt);
+        session.submit().unwrap();
+        session.open_rewind_point(
+            rewind_point(&session, &conversation, &trust, &programs, &stored),
+            prompt.into(),
+        );
+        session.complete("done", vec![], 0);
+        session.keep_backups(vec![bravebot_agent::workspace::Backup {
+            path: root.join("target.txt"),
+            was: bravebot_agent::workspace::Before::NotKept,
+            captured_trust: Integrity::Trusted,
+        }]);
+    }
+    assert_eq!(session.rewind_points().len(), 2);
+
+    let authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
+    let expected_programs = if lost_state {
+        TrustedPrograms::new()
+    } else {
+        programs.clone()
+    };
+    let mut asked = AskedAbout::new();
+    asked.record(command.clone());
+    let expected_asked = if lost_state {
+        AskedAbout::new()
+    } else {
+        asked.clone()
+    };
+    let mut exposed = bravebot_core::credentials::Exposed::new();
+    exposed.allow(".env");
+    let (recovery_config, recovery_requests, recovery_server) = endpoint::endpoint(
+        if lost_state {
+            Vec::new()
+        } else {
+            vec![
+                endpoint::tool("read_file", json!({"path":"source.txt"})),
+                endpoint::tool(
+                    "write_file",
+                    json!({"path":"target.txt","contents_ref":"ref:1"}),
+                ),
+            ]
+        },
+        None,
+    );
+    let worker_authority = authority.clone();
+    let worker_workspace = workspace.clone();
+    let worker_config = recovery_config.clone();
+    let worker_trust = trust.clone();
+    let worker_programs = programs.clone();
+    let worker = std::thread::spawn(move || -> FinishedTurn {
+        worker_authority.publish("new-refused", Integrity::Untrusted);
+        worker_authority.publish("/outside/new-refused", Integrity::Untrusted);
+        if lost_state {
+            std::fs::write(
+                worker_workspace.root().join("target.txt"),
+                "LOST-WORKER-SENTINEL",
+            )
+            .unwrap();
+            panic!("controlled whole worker result loss");
+        }
+        struct PanicAfterWrite;
+        impl bravebot_agent::report::Reporter for PanicAfterWrite {
+            fn todos(&mut self, _: Vec<bravebot_core::todo::Row>) {}
+            fn tool_finished(&mut self, activity: bravebot_agent::report::Activity) {
+                if activity.tool == "write_file" && !activity.failed {
+                    panic!("controlled TUI engine panic after write");
+                }
+            }
+        }
+        let mut sink = Trail::new();
+        let completed = turn::resume(
+            &worker_config,
+            &Egress::new(),
+            &worker_workspace,
+            &Task::new("copy source")
+                .with_file_authority(worker_authority)
+                .already_asked_about(asked)
+                .already_exposed(exposed),
+            &mut conversation,
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut PanicAfterWrite,
+            &mut sink,
+            worker_trust,
+            worker_programs,
+            None,
+            &Cancel::new(),
+        );
+        FinishedTurn {
+            decisions: Some(completed.decisions),
+            uncertain_effects: completed.uncertain_effects,
+            lost_state: completed.lost_state,
+            outcome: completed.outcome,
+            conversation,
+            sink,
+            servers: None,
+        }
+    });
+    let finished = join_turn(worker);
+    assert!(finished.uncertain_effects);
+    assert_eq!(finished.lost_state, lost_state);
+    let continued = finish_turn(
+        &mut session,
+        &recovery_config,
+        &workspace,
+        Line {
+            text: "interrupted",
+            wrote: Wrote::ThePerson,
+            addressed: None,
+        },
+        finished,
+        RetainedTurn { files: authority },
+    );
+    trust = continued.trust;
+    programs = continued.programs;
+    let mut conversation = continued.conversation;
+
+    assert!(session.rewind_points().is_empty());
+    assert_eq!(
+        trust.integrity_of("new-refused"),
+        Some(Integrity::Untrusted)
+    );
+    assert_eq!(
+        trust.integrity_of("/outside/new-refused"),
+        Some(Integrity::Untrusted)
+    );
+    assert_eq!(trust.integrity_of("target.txt"), Some(Integrity::Untrusted));
+    assert_eq!(
+        trust.integrity_of("/outside/approved/file"),
+        Some(Integrity::Untrusted)
+    );
+    assert_eq!(trust.integrity_of("refused"), Some(Integrity::Untrusted));
+    assert_eq!(programs, expected_programs);
+    assert_eq!(continued.asked_about, expected_asked);
+    assert_eq!(continued.exposed.holds(".env"), !lost_state);
+    recovery_server.join().unwrap();
+    assert_eq!(
+        recovery_requests.try_iter().count(),
+        if lost_state { 0 } else { 2 }
+    );
+
+    save(&mut stored, &session, &conversation, &trust, &programs);
+    let record = sessions::load(workspace.root(), stored.id()).unwrap();
+    assert!(record.rewind_points(workspace.root()).is_empty());
+    let mut saved_trust = record.trust_map(workspace.root()).unwrap();
+    let mut resumed = Session::new("test");
+    conversation = Conversation::restored(record.conversation.clone());
+    resumed.restore_rewind(&record, &workspace, &conversation);
+    rewind(
+        &mut resumed,
+        &mut conversation,
+        &mut saved_trust,
+        &mut programs,
+        &mut stored,
+        &workspace,
+        &mut None,
+        2,
+    );
+    assert!(resumed.rewind_points().is_empty());
+    assert_eq!(
+        std::fs::read_to_string(root.join("target.txt")).unwrap(),
+        "LOST-WORKER-SENTINEL"
+    );
+    assert_eq!(
+        saved_trust.integrity_of("target.txt"),
+        Some(Integrity::Untrusted)
+    );
+    assert_eq!(
+        saved_trust.integrity_of("/outside/approved/file"),
+        Some(Integrity::Untrusted)
+    );
+    assert_eq!(record.trusted_programs(workspace.root()), expected_programs);
+
+    let (config, requests, server) = endpoint::endpoint(
+        vec![
+            endpoint::tool("read_file", json!({"path":"target.txt"})),
+            endpoint::answer(),
+        ],
+        None,
+    );
+    turn::resume(
+        &config,
+        &Egress::new(),
+        &workspace,
+        &Task::new("read the target"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::IgnoreReports,
+        &mut Trail::new(),
+        saved_trust,
+        record.trusted_programs(workspace.root()),
+        None,
+        &Cancel::new(),
+    )
+    .outcome
+    .unwrap();
+    let first_request = requests.recv_timeout(endpoint::LIMIT).unwrap();
+    assert!(!first_request.contains("LOST-WORKER-SENTINEL"));
+    let read_request = requests.recv_timeout(endpoint::LIMIT).unwrap();
+    assert!(
+        !read_request.contains("LOST-WORKER-SENTINEL"),
+        "the resumed read result must not reach the planner: {read_request}"
+    );
+    server.join().unwrap();
 }

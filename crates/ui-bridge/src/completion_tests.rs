@@ -31,7 +31,8 @@ fn final_events_find_the_session_ready_for_another_request() {
         );
         return;
     }
-    let results = ["success", "failure", "cancel"].map(|ending| (ending, check_completion(ending)));
+    let results = ["success", "failure", "cancel", "listener_panic"]
+        .map(|ending| (ending, check_completion(ending)));
     assert!(
         results.iter().all(|(_, ready)| *ready == (true, true)),
         "(finished, unlocked) at final event: {results:?}"
@@ -45,10 +46,19 @@ fn check_completion(ending: &str) -> (bool, bool) {
     let state = Arc::new(Mutex::new(State::fresh(TrustStore::new(&project))));
     let finished = Arc::new(AtomicBool::new(false));
     let (events, received) = mpsc::channel();
+    let observed_state = state.clone();
+    let listener_panics = ending == "listener_panic";
     let held_state = state.clone();
     let held_finished = finished.clone();
     let emitter = Emitter::new(Box::new(move |event| {
         if event.name == "turn.done" || event.name == "turn.error" {
+            // Completion permits a client to install newer session decisions immediately.
+            // A later listener panic must not let the completed worker replace them.
+            if listener_panics {
+                let mut state = held_state.lock().unwrap();
+                state.trust.distrust("newer-refusal");
+                state.turns = 2;
+            }
             events
                 .send((
                     event,
@@ -56,6 +66,10 @@ fn check_completion(ending: &str) -> (bool, bool) {
                     held_state.try_lock().is_ok(),
                 ))
                 .unwrap();
+            assert!(
+                !listener_panics,
+                "controlled panic after completion was delivered"
+            );
         }
     }));
     let (endpoint, stop, server) = service(ending == "failure");
@@ -94,16 +108,28 @@ fn check_completion(ending: &str) -> (bool, bool) {
             pending: Arc::new(Mutex::new(None)),
             answers: receiver,
             finished,
+            lose_result: false,
         })
     });
     let result = received.recv_timeout(Duration::from_secs(10));
     stop.store(true, Ordering::Release);
     server.join().unwrap();
     let (event, finished, unlocked) = result.expect("turn must report its end");
-    worker.join().unwrap();
+    let joined = worker.join();
+    if listener_panics {
+        assert!(joined.is_err());
+        let state = observed_state.lock().unwrap();
+        assert_eq!(state.turns, 2);
+        assert_eq!(
+            state.trust.integrity_of("newer-refusal"),
+            Some(bravebot_core::label::Integrity::Untrusted)
+        );
+    } else {
+        joined.unwrap();
+    }
     assert_eq!(
         event.name,
-        if ending == "success" {
+        if matches!(ending, "success" | "listener_panic") {
             "turn.done"
         } else {
             "turn.error"

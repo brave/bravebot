@@ -38,8 +38,11 @@ use bravebot_core::programs::{AskedAbout, TrustedPrograms};
 use bravebot_core::trust::TrustStore;
 use bravebot_core::vetting::Verdict;
 use bravebot_i18n::t;
+use std::collections::VecDeque;
 use std::io::{BufRead, IsTerminal, Write};
 use std::process::ExitCode;
+use std::sync::mpsc::{self, Sender};
+use std::sync::{Arc, Condvar, Mutex};
 
 /// What the person types a prompt after.
 ///
@@ -180,6 +183,7 @@ pub fn session(skip_permissions: bool) -> ExitCode {
     for note in std::mem::take(&mut reached.notes) {
         asking.say(&note);
     }
+    asking.enable_cancelable_input();
 
     // What compaction measures the conversation against, and whether the model in force reads an
     // effort level. A session in lines opens no picker, so the model in force here is the stored
@@ -327,6 +331,12 @@ struct Said {
     clean: bool,
     /// What to say where one model was asked for and another one answered (CLI-10).
     not_served: Option<String>,
+}
+
+fn add_recovery_notice(notices: &mut Vec<String>, uncertain_effects: bool, lost_state: bool) {
+    if uncertain_effects && lost_state {
+        notices.push(t!(turn_recovery_state_unavailable).to_string());
+    }
 }
 
 /// How one prompt becomes a turn.
@@ -492,6 +502,11 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
                 ..Said::default()
             },
         };
+        add_recovery_notice(
+            &mut said.notices,
+            completed.uncertain_effects,
+            completed.lost_state,
+        );
         // After either ending, because either can have learned it: the level goes out on the first
         // request a turn makes, and a turn that then failed refused nothing about the field.
         said.notices.extend(self.a_level_refused_this_turn());
@@ -597,13 +612,32 @@ fn opening_trust<R: BufRead, W: Write>(
 /// of what a session in lines puts on a terminal, so a test can say that none of it is an escape
 /// sequence.
 pub struct Prompting<R: BufRead, W: Write> {
-    input: R,
+    input: Input<R>,
     output: W,
+    cancel: bravebot_core::cancel::Cancel,
+    pending: Option<String>,
 }
 
 impl<R: BufRead, W: Write> Prompting<R, W> {
     pub(crate) fn new(input: R, output: W) -> Self {
-        Self { input, output }
+        Self {
+            input: Input::direct(input),
+            output,
+            cancel: bravebot_core::cancel::Cancel::new(),
+            pending: None,
+        }
+    }
+
+    fn enable_cancelable_input(&mut self)
+    where
+        R: Send + 'static,
+    {
+        // Startup questions run before an engine turn can become uncertain. Move the shared input
+        // reader to its cancellable wait once those prompts are over.
+        let input = std::mem::replace(&mut self.input, Input::Disabled);
+        if let Input::Direct(reader) = input {
+            self.input = Input::cancelable(reader);
+        }
     }
 
     /// Say something beside the work. A failed write is dropped: stderr closed means nobody is
@@ -619,9 +653,11 @@ impl<R: BufRead, W: Write> Prompting<R, W> {
     /// the terminal is not in raw mode, so Ctrl-D is the terminal's own end of file and arrives
     /// here as one.
     fn prompt(&mut self) -> Option<String> {
-        let _ = write!(self.output, "{MARKER}");
-        let _ = self.output.flush();
-        self.line()
+        self.cancel = bravebot_core::cancel::Cancel::new();
+        self.line_after(|output| {
+            let _ = write!(output, "{MARKER}");
+            let _ = output.flush();
+        })
     }
 
     /// One line, with its newline taken off, or `None` at the end of the input.
@@ -633,13 +669,28 @@ impl<R: BufRead, W: Write> Prompting<R, W> {
     /// question nobody can see the end of. The end of the input needs it most: there is no echo for
     /// Ctrl-D at all, so without this the shell's own prompt comes back on the marker's line.
     fn line(&mut self) -> Option<String> {
-        let mut line = String::new();
-        let read = self.input.read_line(&mut line);
+        self.line_after(|_| {})
+    }
+
+    fn line_after(&mut self, before_wait: impl FnOnce(&mut W)) -> Option<String> {
+        if self.cancel.is_cancelled() {
+            return None;
+        }
+        let (input, output) = (&mut self.input, &mut self.output);
+        let line = match self.pending.take() {
+            Some(line) => {
+                before_wait(output);
+                Some(line)
+            }
+            None => input.read_line(&self.cancel, || before_wait(output)),
+        };
         let _ = writeln!(self.output);
         let _ = self.output.flush();
-        match read {
-            Ok(0) | Err(_) => None,
-            Ok(_) => Some(line.trim_end_matches(['\n', '\r']).to_string()),
+        if self.cancel.is_cancelled() {
+            self.pending = line;
+            None
+        } else {
+            line
         }
     }
 
@@ -652,12 +703,13 @@ impl<R: BufRead, W: Write> Prompting<R, W> {
         for line in lines {
             self.say(line);
         }
-        let _ = write!(self.output, "{question} {} ", t!(line_answer));
-        let _ = self.output.flush();
 
         // Only the affirmative approves. Any other line is a person who typed something that was
         // not yes, and the end of the input is nobody answering at all.
-        let typed = self.line()?;
+        let typed = self.line_after(|output| {
+            let _ = write!(output, "{question} {} ", t!(line_answer));
+            let _ = output.flush();
+        })?;
         Some(match typed.trim().to_lowercase() == t!(line_answer_yes) {
             true => Decision::Approve,
             false => Decision::Reject,
@@ -836,6 +888,10 @@ fn program(request: &RunRequest) -> Vec<String> {
 }
 
 impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
+    fn set_cancel(&mut self, cancel: bravebot_core::cancel::Cancel) {
+        self.cancel = cancel;
+    }
+
     fn confirm_write(&mut self, request: &WriteRequest) -> Decision {
         let lines = change(request);
         self.ask(&lines, t!(write_title))
@@ -1055,9 +1111,567 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
     }
 }
 
+enum Input<R> {
+    Direct(R),
+    Cancelable {
+        state: Arc<SharedInput>,
+        next_id: u64,
+        _reader: std::marker::PhantomData<R>,
+    },
+    Disabled,
+}
+
+struct InputRequest {
+    id: u64,
+    cancel: bravebot_core::cancel::Cancel,
+    answer: Sender<Option<String>>,
+}
+
+struct SharedInput {
+    state: Mutex<InputState>,
+    ready: Condvar,
+}
+
+#[derive(Default)]
+struct InputState {
+    active: Option<InputRequest>,
+    pending: VecDeque<String>,
+    ended: bool,
+}
+
+impl<R: BufRead> Input<R> {
+    fn direct(reader: R) -> Self {
+        Self::Direct(reader)
+    }
+
+    fn read_line(
+        &mut self,
+        cancel: &bravebot_core::cancel::Cancel,
+        before_wait: impl FnOnce(),
+    ) -> Option<String> {
+        match self {
+            Self::Direct(reader) => {
+                before_wait();
+                if cancel.is_cancelled() {
+                    return None;
+                }
+                let mut line = String::new();
+                let read = reader.read_line(&mut line).ok()?;
+                if read == 0 || cancel.is_cancelled() {
+                    return None;
+                }
+                Some(line.trim_end_matches(['\n', '\r']).to_string())
+            }
+            Self::Cancelable {
+                state: shared_state,
+                next_id,
+                ..
+            } => {
+                let (answer, waiting) = mpsc::channel();
+                let id = *next_id;
+                *next_id = next_id.wrapping_add(1);
+                let mut state = shared_state
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if let Some(answer) = state.pending.pop_front() {
+                    drop(state);
+                    before_wait();
+                    if cancel.is_cancelled() {
+                        shared_state
+                            .state
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .pending
+                            .push_front(answer);
+                        return None;
+                    }
+                    return Some(answer);
+                }
+                if state.ended {
+                    drop(state);
+                    before_wait();
+                    return None;
+                }
+                state.active = Some(InputRequest {
+                    id,
+                    cancel: cancel.clone(),
+                    answer,
+                });
+                shared_state.ready.notify_one();
+                drop(state);
+                before_wait();
+                loop {
+                    if cancel.is_cancelled() {
+                        let mut state = shared_state
+                            .state
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        if state
+                            .active
+                            .as_ref()
+                            .is_some_and(|request| request.id == id)
+                        {
+                            state.active = None;
+                        } else if let Ok(Some(answer)) = waiting.try_recv() {
+                            // The reader has removed this request and sent its line. Keep that
+                            // completed input for the next prompt instead of losing it here.
+                            state.pending.push_front(answer);
+                        }
+                        return None;
+                    }
+                    match waiting.recv_timeout(std::time::Duration::from_millis(50)) {
+                        Ok(answer) if cancel.is_cancelled() => {
+                            if let Some(answer) = answer {
+                                shared_state
+                                    .state
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                    .pending
+                                    .push_front(answer);
+                            }
+                            return None;
+                        }
+                        Ok(answer) => return answer,
+                        Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => return None,
+                    }
+                }
+            }
+            Self::Disabled => {
+                before_wait();
+                None
+            }
+        }
+    }
+}
+
+impl<R: BufRead> BufRead for Input<R> {
+    fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+        match self {
+            Self::Direct(reader) => reader.fill_buf(),
+            Self::Cancelable { .. } | Self::Disabled => Err(std::io::Error::other(
+                "line input is waiting through its cancellation-aware reader",
+            )),
+        }
+    }
+
+    fn consume(&mut self, amount: usize) {
+        if let Self::Direct(reader) = self {
+            reader.consume(amount);
+        }
+    }
+}
+
+impl<R: BufRead> std::io::Read for Input<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Self::Direct(reader) => std::io::Read::read(reader, buffer),
+            Self::Cancelable { .. } | Self::Disabled => Err(std::io::Error::other(
+                "line input is waiting through its cancellation-aware reader",
+            )),
+        }
+    }
+}
+
+impl<R: BufRead + Send + 'static> Input<R> {
+    fn cancelable(mut reader: R) -> Self {
+        let state = Arc::new(SharedInput {
+            state: Mutex::new(InputState::default()),
+            ready: Condvar::new(),
+        });
+        let reader_state = Arc::clone(&state);
+        // The reader stays off the turn thread and waits for a question before consuming input.
+        // A completed line goes to the question active when it arrives, so a cancelled wait cannot
+        // consume the next question's answer or drain input while a turn is running.
+        std::thread::spawn(move || {
+            loop {
+                let mut state = reader_state
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                while state.active.is_none() && !state.ended {
+                    state = reader_state
+                        .ready
+                        .wait(state)
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                }
+                if state.ended {
+                    break;
+                }
+                drop(state);
+
+                let mut line = String::new();
+                let read = reader.read_line(&mut line);
+                let answer = match read {
+                    Ok(0) | Err(_) => None,
+                    Ok(_) => Some(line.trim_end_matches(['\n', '\r']).to_string()),
+                };
+                let ended = answer.is_none();
+                {
+                    let mut state = reader_state
+                        .state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    if ended {
+                        state.ended = true;
+                    }
+                    match state.active.take() {
+                        Some(request) if !request.cancel.is_cancelled() => {
+                            let _ = request.answer.send(answer);
+                        }
+                        _ => {
+                            if let Some(answer) = answer {
+                                state.pending.push_back(answer);
+                            }
+                        }
+                    }
+                }
+                if ended {
+                    break;
+                }
+            }
+        });
+        Self::Cancelable {
+            state,
+            next_id: 0,
+            _reader: std::marker::PhantomData,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plain_sessions_report_decisions_lost_to_uncertain_recovery() {
+        let mut notices = Vec::new();
+        add_recovery_notice(&mut notices, true, true);
+        assert_eq!(
+            notices,
+            vec![t!(turn_recovery_state_unavailable).to_string()]
+        );
+
+        let mut notices = Vec::new();
+        add_recovery_notice(&mut notices, true, false);
+        add_recovery_notice(&mut notices, false, true);
+        assert!(notices.is_empty());
+    }
+
+    #[test]
+    fn uncertain_recovery_releases_a_pending_question_and_keeps_the_next_line() {
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let reader = PausedReader {
+            started: Some(started_tx),
+            release: release_rx,
+            bytes: Vec::new(),
+            position: 0,
+        };
+        let (visible_tx, visible_rx) = std::sync::mpsc::channel();
+        let mut asking = Prompting::new(
+            reader,
+            SignalledOutput {
+                next_prompt: Some(visible_tx),
+                bytes: Vec::new(),
+            },
+        );
+        asking.enable_cancelable_input();
+        let shared_state = match &asking.input {
+            Input::Cancelable { state, .. } => Arc::clone(state),
+            _ => unreachable!("the test enabled the cancellation-aware reader"),
+        };
+        let uncertainty = Cancel::new();
+        asking.set_cancel(uncertainty.clone());
+        let (question_returned_tx, question_returned_rx) = std::sync::mpsc::channel();
+        let (continue_tx, continue_rx) = std::sync::mpsc::channel();
+        let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let decision = asking.ask(&[], "approve?");
+            question_returned_tx.send(()).unwrap();
+            continue_rx.recv().unwrap();
+            let next_prompt = asking.prompt();
+            finished_tx.send((decision, next_prompt)).unwrap();
+        });
+
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("the question reached its input wait");
+        uncertainty.cancel();
+        question_returned_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("uncertainty released the question");
+        release_tx.send(()).unwrap();
+        // The line completes while cleanup is between the cancelled question and the next prompt.
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let pending = shared_state
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .pending
+                .front()
+                .is_some_and(|line| line == "y");
+            if pending {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < until,
+                "the line was not retained"
+            );
+            std::thread::yield_now();
+        }
+        // The next prompt accepts the line after cleanup rather than losing it or treating it as
+        // the cancelled approval.
+        continue_tx.send(()).unwrap();
+        visible_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("the next prompt appeared");
+        assert_eq!(
+            finished_rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .expect("next prompt received its line"),
+            (Decision::Reject, Some("y".into()))
+        );
+        worker.join().expect("question returned");
+    }
+
+    #[test]
+    fn uncertain_recovery_keeps_a_line_sent_before_cancellation() {
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_reader_tx, release_reader_rx) = std::sync::mpsc::channel();
+        let reader = PausedReader {
+            started: Some(started_tx),
+            release: release_reader_rx,
+            bytes: Vec::new(),
+            position: 0,
+        };
+        let (question_tx, question_rx) = std::sync::mpsc::channel();
+        let (release_question_tx, release_question_rx) = std::sync::mpsc::channel();
+        let (next_prompt_tx, next_prompt_rx) = std::sync::mpsc::channel();
+        let mut asking = Prompting::new(
+            reader,
+            ControlledOutput {
+                question: Some(question_tx),
+                release_question: release_question_rx,
+                next_prompt: Some(next_prompt_tx),
+            },
+        );
+        asking.enable_cancelable_input();
+        let shared_state = match &asking.input {
+            Input::Cancelable { state, .. } => Arc::clone(state),
+            _ => unreachable!("the test enabled the cancellation-aware reader"),
+        };
+        let uncertainty = Cancel::new();
+        asking.set_cancel(uncertainty.clone());
+        let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let decision = asking.ask(&[], "approve?");
+            let next_prompt = asking.prompt();
+            finished_tx.send((decision, next_prompt)).unwrap();
+        });
+
+        question_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("the approval prompt is waiting before input");
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("the reader reached the question");
+        release_reader_tx.send(()).unwrap();
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let sent = shared_state
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .active
+                .is_none();
+            if sent {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < until,
+                "the reader did not deliver the completed line"
+            );
+            std::thread::yield_now();
+        }
+        uncertainty.cancel();
+        release_question_tx.send(()).unwrap();
+
+        next_prompt_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("the next prompt appeared");
+        assert_eq!(
+            finished_rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .expect("the next prompt received its line"),
+            (Decision::Reject, Some("y".into()))
+        );
+        worker.join().expect("question returned");
+    }
+
+    #[test]
+    fn uncertain_recovery_keeps_a_line_during_trailing_output() {
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_reader_tx, release_reader_rx) = std::sync::mpsc::channel();
+        let reader = PausedReader {
+            started: Some(started_tx),
+            release: release_reader_rx,
+            bytes: Vec::new(),
+            position: 0,
+        };
+        let (line_ready_tx, line_ready_rx) = std::sync::mpsc::channel();
+        let (release_line_tx, release_line_rx) = std::sync::mpsc::channel();
+        let (next_prompt_tx, next_prompt_rx) = std::sync::mpsc::channel();
+        let mut asking = Prompting::new(
+            reader,
+            TrailingOutput {
+                line_ready: Some(line_ready_tx),
+                release_line: release_line_rx,
+                next_prompt: Some(next_prompt_tx),
+            },
+        );
+        asking.enable_cancelable_input();
+        let uncertainty = Cancel::new();
+        asking.set_cancel(uncertainty.clone());
+        let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let decision = asking.ask(&[], "approve?");
+            let next_prompt = asking.prompt();
+            finished_tx.send((decision, next_prompt)).unwrap();
+        });
+
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("the reader reached the approval question");
+        release_reader_tx.send(()).unwrap();
+        line_ready_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("the line was read before trailing output");
+        uncertainty.cancel();
+        release_line_tx.send(()).unwrap();
+
+        next_prompt_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("the next prompt appeared");
+        assert_eq!(
+            finished_rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .expect("the next prompt received its line"),
+            (Decision::Reject, Some("y".into()))
+        );
+        worker.join().expect("question returned");
+    }
+
+    struct PausedReader {
+        started: Option<std::sync::mpsc::Sender<()>>,
+        release: std::sync::mpsc::Receiver<()>,
+        bytes: Vec<u8>,
+        position: usize,
+    }
+
+    struct SignalledOutput {
+        next_prompt: Option<std::sync::mpsc::Sender<()>>,
+        bytes: Vec<u8>,
+    }
+
+    struct ControlledOutput {
+        question: Option<std::sync::mpsc::Sender<()>>,
+        release_question: std::sync::mpsc::Receiver<()>,
+        next_prompt: Option<std::sync::mpsc::Sender<()>>,
+    }
+
+    struct TrailingOutput {
+        line_ready: Option<std::sync::mpsc::Sender<()>>,
+        release_line: std::sync::mpsc::Receiver<()>,
+        next_prompt: Option<std::sync::mpsc::Sender<()>>,
+    }
+
+    impl Write for TrailingOutput {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if bytes == b"\n"
+                && let Some(line_ready) = self.line_ready.take()
+            {
+                line_ready.send(()).map_err(std::io::Error::other)?;
+                self.release_line.recv().map_err(std::io::Error::other)?;
+            }
+            if bytes == MARKER.as_bytes()
+                && let Some(signal) = self.next_prompt.take()
+            {
+                signal.send(()).map_err(std::io::Error::other)?;
+            }
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Write for ControlledOutput {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if bytes.starts_with(b"approve?")
+                && let Some(question) = self.question.take()
+            {
+                question.send(()).map_err(std::io::Error::other)?;
+                self.release_question
+                    .recv()
+                    .map_err(std::io::Error::other)?;
+            }
+            if bytes == MARKER.as_bytes()
+                && let Some(signal) = self.next_prompt.take()
+            {
+                signal.send(()).map_err(std::io::Error::other)?;
+            }
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Write for SignalledOutput {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if bytes == MARKER.as_bytes()
+                && let Some(signal) = self.next_prompt.take()
+            {
+                signal.send(()).map_err(std::io::Error::other)?;
+            }
+            self.bytes.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl BufRead for PausedReader {
+        fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+            if let Some(started) = self.started.take() {
+                started.send(()).map_err(std::io::Error::other)?;
+                self.release.recv().map_err(std::io::Error::other)?;
+                self.bytes = b"y\n".to_vec();
+            }
+            Ok(&self.bytes[self.position..])
+        }
+
+        fn consume(&mut self, amount: usize) {
+            self.position = (self.position + amount).min(self.bytes.len());
+        }
+    }
+
+    impl std::io::Read for PausedReader {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let bytes = self.fill_buf()?;
+            let count = bytes.len().min(buffer.len());
+            buffer[..count].copy_from_slice(&bytes[..count]);
+            self.consume(count);
+            Ok(count)
+        }
+    }
 
     /// A confirmer that needs no backend: it answers with what the test wrote for it.
     struct Canned {

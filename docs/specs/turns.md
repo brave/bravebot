@@ -211,10 +211,50 @@ adopt these before handling the ending. Early context-loading errors follow the 
 Cancellation before effects keeps existing decisions. Delegates return exact command approvals
 on ordinary endings; file authority remains shared and child advice remains local.
 
+A recovered panic or delegate panic is different from an ordinary error. It stops the run before
+another planner request and joins every child. It also stops streaming retries and compaction
+retries; a request already in progress may finish, but its retry cannot start. The caller withdraws
+every current file grant, keeps explicit distrust and closes every older rewind point before
+continuing or saving. A later sibling cannot restore a grant withdrawn for that run. When the
+policy state is still available, the caller keeps exact program approvals, live advice and exposure
+answers under their own lifetimes. When the whole worker result is lost, it uses the shared file
+authority if available; otherwise it distrusts known pre-turn grants, keeps known pre-turn distrust,
+clears unavailable program and advice state, and reports that newer decisions or audit data are
+unavailable. Uncertainty does not outlive the run, so a later run may receive fresh approvals.
+Ordinary coverage gaps, incomplete backups, errors and cancellation do not close rewind points by
+themselves.
+
+Once the turn publishes its current decisions, a panic in later finishing-hook reporting keeps
+those exact program approvals, live advice and exposure answers. It still withdraws file grants
+and closes older rewind points because the hook may already have had an effect.
+
+An approval wait is part of the affected run. Plain sessions release the waiting decision on
+cancellation and keep a completed line for the next prompt while cleanup finishes. Terminal
+question screens return to the completion path without taking a late keypress as approval. The
+next plain prompt uses a fresh cancellation token.
+
+If an uncertain ending leaves a tool call without a result, record that its effect may have run
+before continuing or saving. A later planner request must not be told the call did not run.
+
 `verified-by: bravebot_agent::turn::retention::early_loading_errors_return_current_decisions`
 `verified-by: bravebot_agent::turn::retention::cancellation_before_effect_keeps_existing_decisions`
 `verified-by: bravebot_agent::turn::ordinary_parent_endings_retain_delegate_file_and_program_decisions`
 `verified-by: bravebot_tui::undo_tests::ordinary_tui_endings_keep_exact_approvals_advice_and_exposure`
+`verified-by: bravebot_agent::turn::retention::recovered_engine_panic_keeps_distrust_and_stops_before_another_request`
+`verified-by: bravebot_agent::turn::retention::a_finishing_hook_reporter_panic_keeps_published_decisions`
+`verified-by: bravebot_agent::turn::a_panicked_delegate_barrier_blocks_a_later_sibling_file_grant`
+`verified-by: bravebot_agent::turn::a_panicked_delegate_stops_a_later_granting_sibling_before_continuation`
+`verified-by: bravebot_agent::turn::a_panicked_parent_keeps_decisions_returned_by_its_children`
+`verified-by: bravebot_agent::workspace::a_panic_between_write_and_publication_returns_conservative_decisions`
+`verified-by: bravebot_aichat::client::an_uncertain_effect_cancels_a_streaming_retry_before_it_is_sent`
+`verified-by: bravebot_cli::plain::plain_sessions_report_decisions_lost_to_uncertain_recovery`
+`verified-by: bravebot_tui::remote_confirm::uncertainty_cancels_a_pending_question_without_cancelling_the_user_token`
+`verified-by: bravebot_ui_bridge::refusal::uncertainty_wakes_a_waiting_confirmer_without_cancelling_the_user_token`
+`verified-by: bravebot_cli::plain::uncertain_recovery_releases_a_pending_question_and_keeps_the_next_line`
+`verified-by: bravebot_cli::plain::uncertain_recovery_keeps_a_line_sent_before_cancellation`
+`verified-by: bravebot_cli::plain::uncertain_recovery_keeps_a_line_during_trailing_output`
+`verified-by: bravebot_tui::input::a_modal_question_stops_polling_when_its_run_is_cancelled`
+`verified-by: bravebot_ui_bridge::bridge::poisoned_state_recovers_once_and_allows_the_next_turn`
 
 `verified-by: bravebot_agent::turn::an_empty_reply_is_asked_about_and_the_turn_carries_on`
 `verified-by: bravebot_agent::turn::two_empty_replies_in_a_row_end_the_turn`

@@ -215,10 +215,22 @@ joining the turn's children. This includes grants made while loading context bef
 fails and downgrades recorded by effects. The caller adopts that map before saving or starting
 another turn; a pre-turn copy cannot replace it.
 
+After a recovered panic or lost worker result, the affected run stops and all children finish
+before the caller continues. Uncertainty withdraws every current grant, including grants outside
+the workspace, while keeping explicit distrust. A later sibling or write in that run cannot
+restore one. The caller closes all checkpoints from before recovery before continuing or saving.
+If the whole result is unavailable, the shared authority is used when it survived; otherwise
+known pre-turn grants become explicit distrust and known pre-turn distrust remains. A new run
+starts without the old uncertainty barrier and may accept fresh approvals. Ordinary returned
+errors, cancellation, incomplete backups and coverage gaps do not invoke this recovery.
+
 `verified-by: bravebot_cli::plain_retention_tests::failed_plain_turn_excludes_replacement_from_the_next_request`
 `verified-by: bravebot_agent::turn::retention::early_loading_errors_return_current_decisions`
 `verified-by: bravebot_agent::turn::ordinary_parent_endings_retain_delegate_file_and_program_decisions`
 `verified-by: bravebot_ui_bridge::retention::worker::bridge_ordinary_endings_keep_decisions_live_and_resumed`
+`verified-by: bravebot_agent::turn::retention::recovered_engine_panic_keeps_distrust_and_stops_before_another_request`
+`verified-by: bravebot_core::file_authority::uncertainty_blocks_regrants_until_the_next_run_and_keeps_outside_distrust`
+`verified-by: bravebot_core::file_authority::a_poisoned_state_lock_recovers_without_permanently_blocking_new_grants`
 
 A remembered answer is the answer and nothing else the session held. The session it settles starts
 from the rule a yes writes and from no other: a path an earlier session's writes marked untrusted, a

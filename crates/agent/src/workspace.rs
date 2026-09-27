@@ -265,6 +265,7 @@ pub struct Workspace {
 struct WriteInterruption {
     entered: std::sync::mpsc::Sender<()>,
     resume: std::sync::mpsc::Receiver<bool>,
+    panic: bool,
 }
 
 /// What a path held before a turn wrote to it.
@@ -1382,6 +1383,9 @@ impl Workspace {
                 .entered
                 .send(())
                 .map_err(|_| synchronization_failed("effect observer disconnected"))?;
+            if interruption.panic {
+                panic!("controlled panic between write and publication");
+            }
             if interruption
                 .resume
                 .recv_timeout(Duration::from_secs(5))
@@ -2745,8 +2749,115 @@ fn written_below(named: &Path, opened: &Path) -> Option<PathBuf> {
 }
 
 #[cfg(test)]
+#[path = "../../tui/src/undo_endpoint.rs"]
+mod recovery_endpoint;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A landed effect with no publication must stop the real engine and withdraw every grant.
+    #[test]
+    fn a_panic_between_write_and_publication_returns_conservative_decisions() {
+        use bravebot_core::{TrustStore, label::Integrity};
+        let root = crate::testutil::scratch_dir("uncertain-before-publication");
+        std::fs::create_dir_all(&root).unwrap();
+        let workspace = Workspace::new(&root).unwrap();
+        let (entered, observed) = std::sync::mpsc::channel();
+        let (_release, resume) = std::sync::mpsc::channel();
+        *workspace.after_write.lock().unwrap() = Some(WriteInterruption {
+            entered,
+            resume,
+            panic: true,
+        });
+        let mut trust = TrustStore::new(workspace.root());
+        trust.trust(".");
+        trust.trust("/outside/granted");
+        trust.distrust("/outside/refused");
+        let authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
+        let (config, requests, server) = super::recovery_endpoint::endpoint(
+            vec![super::recovery_endpoint::tool(
+                "write_file",
+                serde_json::json!({"path":"written.txt", "contents":"LANDED-BEFORE-PUBLICATION"}),
+            )],
+            None,
+        );
+        let completed = crate::turn::resume(
+            &config,
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &crate::Task::new("write a file").with_file_authority(authority.clone()),
+            &mut crate::Conversation::new(),
+            &mut crate::confirm::ApproveWrites,
+            &mut crate::IgnoreReports,
+            &mut bravebot_core::RecordingSink::new(),
+            trust,
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        );
+        observed
+            .recv_timeout(Duration::from_secs(2))
+            .expect("write happened before panic");
+        assert_eq!(
+            std::fs::read_to_string(root.join("written.txt")).unwrap(),
+            "LANDED-BEFORE-PUBLICATION"
+        );
+        assert!(completed.uncertain_effects);
+        assert!(!completed.lost_state);
+        assert!(completed.outcome.is_err());
+        for path in [
+            "written.txt",
+            "untouched.txt",
+            "/outside/granted",
+            "/outside/refused",
+        ] {
+            assert_eq!(
+                completed.decisions.trust.integrity_of(path),
+                Some(Integrity::Untrusted),
+                "{path}"
+            );
+        }
+        server.join().unwrap();
+        assert_eq!(requests.try_iter().count(), 1);
+        std::fs::write(root.join("fresh.txt"), "APPROVED-NEXT-RUN").unwrap();
+        let (config, requests, server) =
+            super::recovery_endpoint::endpoint(vec![super::recovery_endpoint::answer()], None);
+        let fresh = crate::turn::resume(
+            &config,
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &crate::Task::new("use this file")
+                .with_file("fresh.txt")
+                .with_file_authority(authority),
+            &mut crate::Conversation::new(),
+            &mut crate::confirm::ApproveWrites,
+            &mut crate::IgnoreReports,
+            &mut bravebot_core::RecordingSink::new(),
+            completed.decisions.trust,
+            completed.decisions.programs,
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        );
+        assert!(fresh.outcome.is_ok());
+        assert!(!fresh.uncertain_effects);
+        assert_eq!(
+            fresh.decisions.trust.integrity_of("fresh.txt"),
+            Some(Integrity::Trusted)
+        );
+        assert_eq!(
+            fresh.decisions.trust.integrity_of("written.txt"),
+            Some(Integrity::Untrusted)
+        );
+        server.join().unwrap();
+        assert!(
+            requests
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap()
+                .contains("APPROVED-NEXT-RUN")
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     /// Losing the journal lock cannot turn an attempted mutation into an empty complete backup.
     #[test]
@@ -2792,7 +2903,11 @@ mod tests {
             let authority = FileAuthority::new(trust);
             let (entered, observed) = mpsc::channel();
             let (release, resume) = mpsc::channel();
-            *workspace.after_write.lock().unwrap() = Some(WriteInterruption { entered, resume });
+            *workspace.after_write.lock().unwrap() = Some(WriteInterruption {
+                entered,
+                resume,
+                panic: false,
+            });
             let coverage = workspace.rewind_coverage();
             let child_workspace = workspace.clone();
             let child_authority = authority.clone();
@@ -2924,7 +3039,11 @@ mod tests {
         let authority = FileAuthority::new(trust);
         let (entered, observed) = mpsc::channel();
         let (release, resume) = mpsc::channel();
-        *workspace.after_write.lock().unwrap() = Some(WriteInterruption { entered, resume });
+        *workspace.after_write.lock().unwrap() = Some(WriteInterruption {
+            entered,
+            resume,
+            panic: false,
+        });
 
         fn writing(
             authority: FileAuthority,

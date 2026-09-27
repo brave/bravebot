@@ -2,14 +2,15 @@
 //!
 //! A turn runs off the main thread so the indicator keeps animating while the model is slow.
 //! But only the main thread owns the terminal, so the turn can neither draw an approval prompt
-//! nor update a display itself. Both travel over one channel, because the main thread waits on
-//! exactly one thing and `mpsc` has no way to select across two.
+//! nor update a display itself. Both travel over one channel. The worker checks the run's
+//! cancellation while it waits for an answer, so an uncertain run can refuse a pending prompt.
 //!
 //! The messages behave in two ways, and the difference is consent:
 //!
-//! - A write, a run, and a question **ask**. The worker blocks until an answer arrives, and every
-//!   failure resolves to the negative one: a channel that cannot carry the question cannot carry
-//!   consent either, and a reply that never came is not an answer to report as the user's.
+//! - A write, a run, and a question **ask**. The worker waits until an answer arrives or its run
+//!   is cancelled, and every failure resolves to the negative one: a channel that cannot carry the
+//!   question cannot carry consent either, and a reply that never came is not an answer to report
+//!   as the user's.
 //! - Progress **announces**. There is no reply to wait for and nothing to refuse, so a listener
 //!   that has gone away is simply not drawing. Failing a turn because nobody was watching would
 //!   let the display outrank the work.
@@ -81,6 +82,8 @@ impl Interjections {
 /// What a worker sends the main thread.
 #[derive(Debug)]
 pub enum ToMain {
+    /// The active run token for synchronous questions on the main thread.
+    RunCancel(bravebot_core::cancel::Cancel),
     /// The submitted prompt entered the conversation at this recounted position.
     PromptRecorded(usize),
     /// A write needs approval. The main thread must reply.
@@ -180,6 +183,7 @@ pub enum Reply {
 pub struct RemoteConfirmer {
     outbound: Sender<ToMain>,
     answers: Receiver<Reply>,
+    cancel: bravebot_core::cancel::Cancel,
     /// Prompts typed while the turn ran, in the order they were typed.
     ///
     /// Not a [`Reply`], because this is the one thing crossing here that nobody asked for: a reply
@@ -193,6 +197,7 @@ impl RemoteConfirmer {
         Self {
             outbound,
             answers,
+            cancel: bravebot_core::cancel::Cancel::new(),
             typed,
         }
     }
@@ -200,12 +205,32 @@ impl RemoteConfirmer {
     /// Send a question and block for its reply.
     fn exchange(&mut self, message: ToMain) -> Option<Reply> {
         // A channel that cannot carry the question cannot carry consent either.
+        if self.cancel.is_cancelled() {
+            return None;
+        }
         self.outbound.send(message).ok()?;
-        self.answers.recv().ok()
+        loop {
+            if self.cancel.is_cancelled() {
+                return None;
+            }
+            match self
+                .answers
+                .recv_timeout(std::time::Duration::from_millis(50))
+            {
+                Ok(reply) => return (!self.cancel.is_cancelled()).then_some(reply),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return None,
+            }
+        }
     }
 }
 
 impl Confirmer for RemoteConfirmer {
+    fn set_cancel(&mut self, cancel: bravebot_core::cancel::Cancel) {
+        self.cancel = cancel.clone();
+        let _ = self.outbound.send(ToMain::RunCancel(cancel));
+    }
+
     fn confirm_write(&mut self, request: &WriteRequest) -> Decision {
         match self.exchange(ToMain::Write(request.clone())) {
             Some(Reply::Write(decision)) => decision,
@@ -464,6 +489,44 @@ mod tests {
         let mut confirmer = RemoteConfirmer::new(outbound, answer_rx, Interjections::new());
         assert_eq!(confirmer.confirm_write(&request()), Decision::Approve);
         responder.join().expect("responder finished");
+    }
+
+    #[test]
+    fn uncertainty_cancels_a_pending_question_without_cancelling_the_user_token() {
+        let (outbound, inbound) = channel::<ToMain>();
+        let (_answer_tx, answer_rx) = channel();
+        let user_cancel = bravebot_core::cancel::Cancel::new();
+        let uncertainty = bravebot_core::cancel::Cancel::new();
+        let mut confirmer = RemoteConfirmer::new(outbound, answer_rx, Interjections::new());
+        confirmer.set_cancel(bravebot_core::cancel::Cancel::linked(
+            &user_cancel,
+            &uncertainty,
+        ));
+
+        let (finished_tx, finished_rx) = channel();
+        let worker = thread::spawn(move || {
+            finished_tx
+                .send(confirmer.confirm_write(&request()))
+                .unwrap();
+        });
+        assert!(matches!(
+            inbound.recv_timeout(std::time::Duration::from_secs(2)),
+            Ok(ToMain::RunCancel(_))
+        ));
+        assert!(matches!(
+            inbound.recv_timeout(std::time::Duration::from_secs(2)),
+            Ok(ToMain::Write(_))
+        ));
+        uncertainty.cancel();
+
+        assert_eq!(
+            finished_rx
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .expect("uncertainty released the pending question"),
+            Decision::Reject
+        );
+        assert!(!user_cancel.is_cancelled());
+        worker.join().expect("worker finished");
     }
 
     fn a_run() -> RunRequest {
@@ -929,6 +992,7 @@ mod tests {
             let mut seen = Vec::new();
             while let Ok(message) = inbound.recv() {
                 match message {
+                    ToMain::RunCancel(_) => seen.push("run cancel"),
                     ToMain::Ask(_) => seen.push("ask"),
                     ToMain::Run(_) => seen.push("run"),
                     ToMain::ReadOutput(_) => seen.push("read_output"),

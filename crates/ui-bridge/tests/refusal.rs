@@ -464,6 +464,50 @@ fn cancelling_wakes_a_waiting_confirmer_without_approval() {
 }
 
 #[test]
+fn uncertainty_wakes_a_waiting_confirmer_without_cancelling_the_user_token() {
+    let (event_tx, event_rx) = mpsc::channel();
+    let emitter = Emitter::new(Box::new(move |event| {
+        event_tx.send(event).expect("test observes the question");
+    }));
+    let pending: Pending = Arc::new(Mutex::new(None));
+    let (answers_tx, answers_rx) = mpsc::channel();
+    let running_cancel = bravebot_core::cancel::Cancel::new();
+    let uncertainty = bravebot_core::cancel::Cancel::new();
+    let mut confirmer = BridgeConfirmer::new(
+        emitter,
+        "s1",
+        Arc::clone(&pending),
+        answers_rx,
+        running_cancel.clone(),
+    );
+    confirmer.set_cancel(bravebot_core::cancel::Cancel::linked(
+        &running_cancel,
+        &uncertainty,
+    ));
+    let (finished_tx, finished_rx) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        finished_tx
+            .send(confirmer.confirm_write(&a_write()))
+            .unwrap();
+    });
+    event_rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("question was emitted");
+    assert!(pending.lock().unwrap().is_some());
+    uncertainty.cancel();
+    assert_eq!(
+        finished_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap(),
+        Decision::Reject
+    );
+    assert!(!running_cancel.is_cancelled());
+    assert!(pending.lock().unwrap().is_none());
+    drop(answers_tx);
+    worker.join().unwrap();
+}
+
+#[test]
 fn cancelling_before_a_question_cannot_leave_it_waiting() {
     let mut harness = harness();
     harness.running.cancel.cancel();

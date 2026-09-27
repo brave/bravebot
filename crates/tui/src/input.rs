@@ -30,11 +30,48 @@
 //! believe it arrived alone.
 
 use ratatui::crossterm::event::{self, Event as TermEvent, KeyEvent, KeyEventKind};
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
+
+thread_local! {
+    static QUESTION_CANCEL: RefCell<bravebot_core::cancel::Cancel> =
+        RefCell::new(bravebot_core::cancel::Cancel::new());
+}
+
+/// Replace the token observed by a confirmation screen on this thread.
+pub fn set_question_cancel(cancel: bravebot_core::cancel::Cancel) {
+    QUESTION_CANCEL.with(|current| *current.borrow_mut() = cancel);
+}
+
+/// Read an event for a modal question, refusing promptly when its run has ended.
+pub fn read_question() -> io::Result<TermEvent> {
+    QUESTION_CANCEL.with(|current| {
+        let cancel = current.borrow().clone();
+        read_while_active(&cancel, poll, read)
+    })
+}
+
+fn read_while_active(
+    cancel: &bravebot_core::cancel::Cancel,
+    mut poll_event: impl FnMut(Duration) -> io::Result<bool>,
+    mut read_event: impl FnMut() -> io::Result<TermEvent>,
+) -> io::Result<TermEvent> {
+    loop {
+        if cancel.is_cancelled() {
+            return Err(io::Error::from(io::ErrorKind::Interrupted));
+        }
+        if poll_event(Duration::from_millis(50))? {
+            if cancel.is_cancelled() {
+                return Err(io::Error::from(io::ErrorKind::Interrupted));
+            }
+            return read_event();
+        }
+    }
+}
 
 /// The most events taken as having arrived together.
 ///
@@ -198,6 +235,20 @@ fn answerable(event: &TermEvent) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_modal_question_stops_polling_when_its_run_is_cancelled() {
+        let cancel = bravebot_core::cancel::Cancel::new();
+        let result = read_while_active(
+            &cancel,
+            |_| {
+                cancel.cancel();
+                Ok(false)
+            },
+            || panic!("a cancelled prompt must not read a key"),
+        );
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Interrupted);
+    }
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
     fn released(code: KeyCode) -> TermEvent {

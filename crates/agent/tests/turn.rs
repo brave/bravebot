@@ -20255,6 +20255,97 @@ fn a_delegate_can_spawn_its_own_delegate_and_the_trail_names_it() {
     );
 }
 
+/// A panic in a nested delegate crosses both real cleanup boundaries and stops the parent turn.
+#[test]
+fn a_panicked_nested_delegate_stops_the_resumed_parent_after_cleanup() {
+    struct PanicAfterWrite;
+    impl bravebot_agent::report::Reporter for PanicAfterWrite {
+        fn todos(&mut self, _: Vec<bravebot_core::todo::Row>) {}
+
+        fn tool_finished(&mut self, activity: bravebot_agent::report::Activity) {
+            if activity.tool == "write_file" && !activity.failed {
+                panic!("controlled nested delegate panic after its write");
+            }
+        }
+    }
+
+    let scratch = Scratch::new("nested-delegate-panic");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "PARENT-WAIT-FOR-NESTED-PANIC",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"CHILD-SPAWNS-PANICKING-GRANDCHILD"}"#,
+                ),
+                reply_with("waiting"),
+            ],
+        ),
+        (
+            "CHILD-SPAWNS-PANICKING-GRANDCHILD",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"GRANDCHILD-WRITES-THEN-PANICS"}"#,
+                ),
+                reply_with("waiting for the nested worker"),
+            ],
+        ),
+        (
+            "GRANDCHILD-WRITES-THEN-PANICS",
+            vec![tool_request(
+                "write_file",
+                r#"{"path":"written.txt","contents":"NESTED-EFFECT-SENTINEL"}"#,
+            )],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let completed = turn::resume(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("PARENT-WAIT-FOR-NESTED-PANIC").with_rounds(None),
+        &mut conversation,
+        &mut RecordingConfirmer::approving(),
+        &mut PanicAfterWrite,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+
+    let asked = every_request(&received);
+    assert!(
+        completed.uncertain_effects,
+        "nested panic was not recovered"
+    );
+    assert!(
+        completed.outcome.is_err(),
+        "the parent turn continued as success"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("written.txt")).unwrap(),
+        "NESTED-EFFECT-SENTINEL"
+    );
+    let parent_requests = asked
+        .iter()
+        .filter(|body| body.contains("PARENT-WAIT-FOR-NESTED-PANIC"))
+        .count();
+    assert!(
+        parent_requests <= 2,
+        "the parent planner was called after nested delegate recovery: {parent_requests}; {asked:?}"
+    );
+    assert!(
+        asked
+            .iter()
+            .any(|body| body.contains("GRANDCHILD-WRITES-THEN-PANICS")),
+        "the nested delegate did not reach its production planner: {asked:?}"
+    );
+}
+
 /// Records every task list it is handed, so a test can assert it was handed none.
 #[derive(Default)]
 struct RecordsTaskLists {
@@ -24951,6 +25042,127 @@ mod usage {
         }
     }
 
+    /// A child panic stops real sibling requests and cleanup joins both delegates before return.
+    #[test]
+    fn a_panicked_delegate_stops_a_later_granting_sibling_before_continuation() {
+        struct PanicOnce {
+            panicked: bool,
+            collected: Arc<std::sync::atomic::AtomicUsize>,
+        }
+        impl Reporter for PanicOnce {
+            fn todos(&mut self, _: Vec<bravebot_core::todo::Row>) {}
+            fn tool_finished(&mut self, activity: bravebot_agent::report::Activity) {
+                if activity.tool == "write_file" && !activity.failed && !self.panicked {
+                    self.panicked = true;
+                    panic!("controlled delegate write panic");
+                }
+            }
+            fn delegate_finished(
+                &mut self,
+                _: DelegateId,
+                _: String,
+                _: bool,
+                _: Option<bravebot_agent::report::Reported>,
+            ) {
+                self.collected
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        let scratch = Scratch::new("uncertain-granting-sibling");
+        let workspace = Workspace::new(&scratch.path).unwrap();
+        let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+        trust.trust(".");
+        trust.trust("/outside/approved");
+        trust.distrust("/outside/refused");
+        let authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
+        let worker_authority = authority.clone();
+        let collected = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut reporter = PanicOnce {
+            panicked: false,
+            collected: collected.clone(),
+        };
+        let (endpoint, pending) = controlled_server();
+        let (done, finished) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            done.send(turn::resume(
+                &config_for(&endpoint),
+                &bravebot_net::Egress::new(),
+                &workspace,
+                &Task::new("UNCERTAIN-PARENT").with_file_authority(worker_authority),
+                &mut bravebot_agent::Conversation::new(),
+                &mut bravebot_agent::confirm::ApproveWrites,
+                &mut reporter,
+                &mut RecordingSink::new(),
+                trust,
+                bravebot_core::programs::TrustedPrograms::new(),
+                None,
+                &bravebot_core::cancel::Cancel::new(),
+            ))
+            .unwrap();
+        });
+        let request = || pending.recv_timeout(WAIT).expect("expected request");
+        request().answer(&two_tool_requests(
+            (
+                "spawn_agent",
+                r#"{"kind":"worker","task":"PANICKING-WRITER"}"#,
+            ),
+            (
+                "spawn_agent",
+                r#"{"kind":"worker","task":"LATE-GRANTING-WRITER"}"#,
+            ),
+        ));
+        let (mut parent, mut panicking, mut sibling) = (None, None, None);
+        for _ in 0..3 {
+            let next = request();
+            if next.body.contains("UNCERTAIN-PARENT") {
+                parent = Some(next);
+            } else if next.body.contains("PANICKING-WRITER") {
+                panicking = Some(next);
+            } else {
+                assert!(next.body.contains("LATE-GRANTING-WRITER"));
+                sibling = Some(next);
+            }
+        }
+        panicking.unwrap().answer(&tool_request(
+            "write_file",
+            r#"{"path":"written.txt","contents":"PANIC-EFFECT"}"#,
+        ));
+        let until = std::time::Instant::now() + WAIT;
+        while !authority.is_uncertain() {
+            assert!(
+                std::time::Instant::now() < until,
+                "write panic did not stop the run"
+            );
+            thread::yield_now();
+        }
+        sibling.unwrap().answer(&tool_request(
+            "write_file",
+            r#"{"path":"late.txt","contents":"late trusted replacement"}"#,
+        ));
+        parent.unwrap().answer(&reply_with("finished"));
+        let completed = finished.recv_timeout(WAIT).expect("both children joined");
+        worker.join().unwrap();
+        assert!(completed.uncertain_effects);
+        assert!(completed.outcome.is_err());
+        assert_eq!(collected.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert!(!scratch.path.join("late.txt").exists());
+        assert_eq!(
+            std::fs::read_to_string(scratch.path.join("written.txt")).unwrap(),
+            "PANIC-EFFECT"
+        );
+        for path in ["written.txt", "/outside/approved", "/outside/refused"] {
+            assert_eq!(
+                completed.decisions.trust.integrity_of(path),
+                Some(bravebot_core::label::Integrity::Untrusted),
+                "{path}"
+            );
+        }
+        assert!(
+            pending.try_recv().is_err(),
+            "a planner request followed uncertainty"
+        );
+    }
+
     /// A sibling's unchanged private map must not hide its later untrusted replacement.
     #[test]
     fn overlapping_delegate_writes_follow_effect_order_in_both_collection_orders() {
@@ -25363,7 +25575,26 @@ mod usage {
     /// Decisions made by an outstanding child survive every ordinary parent ending.
     #[test]
     fn ordinary_parent_endings_retain_delegate_file_and_program_decisions() {
-        for ending in ["success", "failure", "cancel"] {
+        retained_delegate_decisions(&["success", "failure", "cancel"]);
+    }
+
+    /// Parent unwind must collect available child approvals rather than dropping join results.
+    #[test]
+    fn a_panicked_parent_keeps_decisions_returned_by_its_children() {
+        retained_delegate_decisions(&["panic"]);
+    }
+
+    fn retained_delegate_decisions(endings: &[&str]) {
+        struct PanicOnListing(bool);
+        impl Reporter for PanicOnListing {
+            fn todos(&mut self, _: Vec<bravebot_core::todo::Row>) {}
+            fn tool_finished(&mut self, activity: bravebot_agent::report::Activity) {
+                if self.0 && activity.tool == "list_files" {
+                    panic!("controlled parent panic with outstanding child approval");
+                }
+            }
+        }
+        for &ending in endings {
             let scratch = Scratch::new(&format!("retained-delegate-{ending}"));
             const SENTINEL: &str = "UNTRUSTED_DELEGATE_INTERRUPTION_85119";
             std::fs::write(scratch.path.join("source.txt"), SENTINEL).unwrap();
@@ -25372,6 +25603,7 @@ mod usage {
             let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
             trust.trust(".");
             trust.distrust("source.txt");
+            let authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
             let (endpoint, pending) = controlled_server();
             let cancel = bravebot_core::cancel::Cancel::new();
             let (tx, done) = mpsc::channel();
@@ -25390,12 +25622,12 @@ mod usage {
                         &config_for(&endpoint),
                         &bravebot_net::Egress::new(),
                         &workspace,
-                        &Task::new("PARENT-RETENTION"),
+                        &Task::new("PARENT-RETENTION").with_file_authority(authority.clone()),
                         &mut conversation,
                         &mut retention_answers::Answers::new(
                             bravebot_agent::RunDecision::approve_always(),
                         ),
-                        &mut bravebot_agent::IgnoreReports,
+                        &mut PanicOnListing(ending == "panic"),
                         &mut RecordingSink::new(),
                         trust,
                         bravebot_core::programs::TrustedPrograms::new(),
@@ -25439,6 +25671,18 @@ mod usage {
                         child_done.answer(&reply_with("done"));
                         request().answer(&reply_with("done"));
                     }
+                    "panic" => {
+                        parent.answer(&tool_request("list_files", r#"{"directory":"."}"#));
+                        let until = std::time::Instant::now() + WAIT;
+                        while !authority.is_uncertain() {
+                            assert!(
+                                std::time::Instant::now() < until,
+                                "parent panic not observed"
+                            );
+                            thread::yield_now();
+                        }
+                        child_done.interrupted_stream();
+                    }
                     "failure" => {
                         parent.refuse();
                         child_done.refuse();
@@ -25464,6 +25708,10 @@ mod usage {
                 assert_eq!(completed.outcome.is_ok(), ending == "success");
             }
             assert_eq!(completed.decisions.programs.len(), 1);
+            let command = completed.decisions.programs.iter().next().unwrap();
+            assert_eq!(command.args, vec!["child-approved.txt"]);
+            assert_eq!(command.directory, workspace.root());
+            assert_eq!(completed.uncertain_effects, ending == "panic");
             assert_eq!(
                 completed.decisions.asked_about,
                 bravebot_core::programs::AskedAbout::new(),

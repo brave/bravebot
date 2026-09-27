@@ -3690,6 +3690,7 @@ mod preserved_history {
                 ToMain::Notice(text) => session.note_once(text),
                 ToMain::Streaming(text) => session.streaming(&text),
                 ToMain::ReportingFor(delegate) => session.reporting_for(delegate),
+                ToMain::RunCancel(_) => {}
                 other => assert!(
                     matches!(
                         other,

@@ -4,9 +4,11 @@
 //! An entered effect publishes distrust before releasing that lock. Long effects keep a
 //! path reservation, so unrelated captures proceed while that path remains quarantined.
 
+use crate::cancel::Cancel;
 use crate::label::Integrity;
 use crate::trust::TrustStore;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 #[derive(Debug)]
@@ -48,6 +50,8 @@ impl State {
 struct Shared {
     access: Mutex<()>,
     state: Mutex<State>,
+    uncertain: AtomicBool,
+    run_cancel: Mutex<Cancel>,
 }
 
 /// Live authority. Cloning shares decisions; `snapshot` makes an independent record.
@@ -64,6 +68,8 @@ impl FileAuthority {
                 revision: 0,
                 versions: BTreeMap::new(),
             }),
+            uncertain: AtomicBool::new(false),
+            run_cancel: Mutex::new(Cancel::new()),
         }))
     }
 
@@ -73,17 +79,74 @@ impl FileAuthority {
             Err(error) => (error.into_inner(), true),
         };
         if poisoned {
-            let paths: Vec<String> = state
-                .trust
-                .keyed()
-                .filter(|(_, integrity)| integrity.is_some())
-                .map(|(path, _)| path.to_string())
-                .collect();
-            for path in paths {
-                state.trust.distrust(&path);
-            }
+            self.signal_uncertainty();
+        }
+        if self.is_uncertain() {
+            state.trust.withdraw_grants();
         }
         state
+    }
+
+    /// Begin a new top-level run using the current, already-recovered session authority.
+    ///
+    /// Delegates share this authority and must never call this. Poison recovery remains
+    /// acknowledged across runs, while an uncertainty barrier lasts only through one run.
+    pub fn start_run(&self) {
+        // All children have joined before the continuing caller starts another run.
+        // Acknowledge poison under both locks so a later panic is detected afresh.
+        let _access = self
+            .0
+            .access
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let _state = self.state();
+        let mut cancel = self
+            .0
+            .run_cancel
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        self.0.access.clear_poison();
+        self.0.state.clear_poison();
+        self.0.run_cancel.clear_poison();
+        *cancel = Cancel::new();
+        self.0.uncertain.store(false, Ordering::SeqCst);
+    }
+
+    fn signal_uncertainty(&self) {
+        self.0.uncertain.store(true, Ordering::SeqCst);
+        self.run_cancel_token().cancel();
+    }
+
+    /// Close the current run to every grant until its caller finishes recovery.
+    pub fn mark_uncertain(&self) {
+        self.signal_uncertainty();
+        // Serialize withdrawal with publication. Reads also withdraw while uncertain.
+        self.state().trust.withdraw_grants();
+    }
+
+    /// Cancellation observed by model clients and child runs in this run.
+    pub fn run_cancel_token(&self) -> Cancel {
+        match self.0.run_cancel.lock() {
+            Ok(cancel) => cancel.clone(),
+            Err(error) => {
+                self.0.uncertain.store(true, Ordering::SeqCst);
+                let cancel = error.into_inner().clone();
+                cancel.cancel();
+                cancel
+            }
+        }
+    }
+
+    pub fn is_uncertain(&self) -> bool {
+        self.0.uncertain.load(Ordering::SeqCst)
+    }
+
+    /// Withdraw current grants after all effects and child runs have stopped.
+    pub fn recover_uncertain(&self) -> TrustStore {
+        self.mark_uncertain();
+        let mut state = self.state();
+        state.trust.withdraw_grants();
+        state.trust.clone()
     }
 
     /// Order a capture or effect entry against every other participant.
@@ -144,7 +207,8 @@ impl FileAuthority {
 
     /// A poisoned boundary cannot validate an earlier command proof.
     pub fn is_current(&self, revision: u64) -> bool {
-        !self.0.access.is_poisoned() && !self.0.state.is_poisoned() && self.revision() == revision
+        let current = self.revision();
+        !self.is_uncertain() && current == revision
     }
 
     pub fn revision_of(&self, path: &str) -> u64 {
@@ -156,6 +220,11 @@ impl FileAuthority {
     pub fn publish(&self, path: &str, integrity: Integrity) -> bool {
         let mut state = self.state();
         let key = state.trust.key(path);
+        if integrity == Integrity::Trusted && self.is_uncertain() {
+            state.trust.distrust(&key);
+            state.record_change(key);
+            return false;
+        }
         if integrity == Integrity::Trusted && state.active.contains(&key) {
             return false;
         }
@@ -222,7 +291,9 @@ impl FileEffect {
         state.active.remove(&self.key);
         let unchanged = state.revision_of(&self.key) <= self.revision;
         match integrity {
-            Integrity::Trusted if unchanged => state.trust.trust(&self.key),
+            Integrity::Trusted if unchanged && !self.authority.is_uncertain() => {
+                state.trust.trust(&self.key)
+            }
             _ => state.trust.distrust(&self.key),
         }
         state.record_change(self.key.clone());
@@ -244,6 +315,145 @@ impl Drop for FileEffect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Uncertainty withdraws grants everywhere, preserves refusals, and ends at the next run.
+    #[test]
+    fn uncertainty_blocks_regrants_until_the_next_run_and_keeps_outside_distrust() {
+        let mut trust = TrustStore::new("/work");
+        trust.trust(".");
+        trust.trust("nested/approved");
+        trust.trust("/outside/approved");
+        trust.distrust("nested/refused");
+        trust.distrust("/outside/refused");
+        trust.undecide("nested/unknown");
+        let authority = FileAuthority::new(trust);
+
+        authority.start_run();
+        let run_cancel = authority.run_cancel_token();
+        authority.mark_uncertain();
+        assert!(run_cancel.is_cancelled());
+        assert!(!authority.publish("later-sibling.txt", Integrity::Trusted));
+        assert_eq!(
+            authority.snapshot().integrity_of("later-sibling.txt"),
+            Some(Integrity::Untrusted)
+        );
+
+        let recovered = authority.recover_uncertain();
+        for path in [
+            "src/main.rs",
+            "nested/approved/file",
+            "/outside/approved/file",
+        ] {
+            assert_eq!(
+                recovered.integrity_of(path),
+                Some(Integrity::Untrusted),
+                "{path}"
+            );
+        }
+        for path in ["nested/refused/file", "/outside/refused/file"] {
+            assert_eq!(
+                recovered.integrity_of(path),
+                Some(Integrity::Untrusted),
+                "{path}"
+            );
+        }
+        assert_eq!(recovered.integrity_of("nested/unknown/file"), None);
+
+        authority.start_run();
+        assert!(!authority.is_uncertain());
+        assert!(!authority.run_cancel_token().is_cancelled());
+        assert!(authority.publish("fresh.txt", Integrity::Trusted));
+        assert_eq!(
+            authority.integrity_of("fresh.txt"),
+            Some(Integrity::Trusted)
+        );
+    }
+
+    /// A poisoned state lock withdraws known grants, then permits fresh decisions next run.
+    #[test]
+    fn a_poisoned_state_lock_recovers_without_permanently_blocking_new_grants() {
+        let mut trust = TrustStore::new("/work");
+        trust.trust(".");
+        trust.trust("/outside/approved");
+        trust.distrust("refused");
+        let authority = FileAuthority::new(trust);
+        let run_cancel = authority.run_cancel_token();
+        let poisoner = authority.clone();
+        let _ = std::thread::spawn(move || {
+            let _state = poisoner.0.state.lock().unwrap();
+            panic!("controlled state lock poison");
+        })
+        .join();
+
+        let recovered = authority.snapshot();
+        assert!(authority.is_uncertain());
+        assert!(run_cancel.is_cancelled());
+        assert_eq!(
+            recovered.integrity_of("src/main.rs"),
+            Some(Integrity::Untrusted)
+        );
+        assert_eq!(
+            recovered.integrity_of("/outside/approved/file"),
+            Some(Integrity::Untrusted)
+        );
+        assert_eq!(
+            recovered.integrity_of("refused"),
+            Some(Integrity::Untrusted)
+        );
+
+        authority.start_run();
+        assert!(authority.publish("fresh.txt", Integrity::Trusted));
+        assert_eq!(
+            authority.integrity_of("fresh.txt"),
+            Some(Integrity::Trusted)
+        );
+    }
+
+    /// Each panic must revoke that run's grants, even after an earlier poison was recovered.
+    #[test]
+    fn separate_runs_recover_separate_poisoned_locks() {
+        let authority = FileAuthority::new(TrustStore::new("/work"));
+        for _ in 0..2 {
+            authority.start_run();
+            assert!(authority.publish("fresh.txt", Integrity::Trusted));
+            let poisoner = authority.clone();
+            assert!(
+                std::thread::spawn(move || {
+                    let _capture = poisoner.capture();
+                    panic!("controlled capture poison");
+                })
+                .join()
+                .is_err()
+            );
+            assert_eq!(
+                authority.integrity_of("fresh.txt"),
+                Some(Integrity::Untrusted)
+            );
+            assert!(authority.is_uncertain());
+        }
+    }
+
+    /// A recovering child cannot release a sibling's unfinished write reservation.
+    #[test]
+    fn recovery_withdraws_grants_without_releasing_inflight_effects() {
+        let authority = FileAuthority::new(TrustStore::new("/work"));
+        authority.publish("old.txt", Integrity::Trusted);
+        let effect = authority.capture().begin("active.txt").unwrap();
+        authority.mark_uncertain();
+        assert_eq!(
+            authority.integrity_of("old.txt"),
+            Some(Integrity::Untrusted)
+        );
+        authority.recover_uncertain();
+        assert!(authority.capture().begin("active.txt").is_none());
+        effect.complete(Integrity::Trusted);
+        assert_eq!(
+            authority.integrity_of("active.txt"),
+            Some(Integrity::Untrusted)
+        );
+        authority.start_run();
+        assert!(authority.publish("fresh.txt", Integrity::Trusted));
+    }
 
     /// Ancestor decisions invalidate previews; sibling and descendant decisions do not.
     #[test]

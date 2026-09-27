@@ -62,6 +62,7 @@ cli-name-a-file = Inclure un fichier de l'espace de travail comme contexte fiabl
 cli-plain-opening =
     bravebot { $version } en lignes, { $model }. Une ligne est une demande ; la fin de
     l'entrée (Ctrl-D) termine la session.
+turn-recovery-state-unavailable = Les nouvelles autorisations de commande, les conseils et les réponses de partage de secrets de ce tour étaient indisponibles après la récupération.
 # Dit lorsque --plain est donné avec autre chose qu'un terminal sur l'entrée standard. Les lignes
 # qu'il lit sont des demandes, et rien ne se porte garant de ce qu'un tube transporte.
 cli-plain-needs-a-terminal =

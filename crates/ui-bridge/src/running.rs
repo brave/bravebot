@@ -85,6 +85,18 @@ pub struct State {
 }
 
 impl State {
+    /// Close imported rewind points and install file decisions after an uncertain turn.
+    pub fn recover_uncertain(&mut self, trust: TrustStore, lost_state: bool) {
+        self.trust = trust;
+        self.conversation.mark_unanswered_effects_uncertain();
+        self.rewind.clear();
+        if lost_state {
+            self.programs = bravebot_core::programs::TrustedPrograms::new();
+            self.asked_about = Default::default();
+            self.exposed = Default::default();
+        }
+    }
+
     pub fn fresh(trust: TrustStore) -> Self {
         Self {
             conversation: Conversation::new(),

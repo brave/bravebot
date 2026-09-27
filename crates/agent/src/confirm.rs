@@ -744,6 +744,12 @@ pub enum Decision {
 /// written out at every implementation rather than inherited from a trait an implementor never
 /// read.
 pub trait Confirmer {
+    /// Let a pending question end when its run is cancelled or becomes uncertain.
+    ///
+    /// Implementations that wait asynchronously should stop waiting and refuse when this token
+    /// is set. The default keeps existing non-blocking and unattended confirmers source-compatible.
+    fn set_cancel(&mut self, _cancel: bravebot_core::cancel::Cancel) {}
+
     /// Ask about a write. Implementations must default to refusal when they cannot ask.
     fn confirm_write(&mut self, request: &WriteRequest) -> Decision;
 
@@ -1584,6 +1590,10 @@ impl<'a, C: Confirmer + ?Sized> Timed<'a, C> {
 }
 
 impl<C: Confirmer + ?Sized> Confirmer for Timed<'_, C> {
+    fn set_cancel(&mut self, cancel: bravebot_core::cancel::Cancel) {
+        self.inner.set_cancel(cancel);
+    }
+
     fn confirm_write(&mut self, request: &WriteRequest) -> Decision {
         self.timing(|inner| inner.confirm_write(request))
     }

@@ -64,6 +64,8 @@ cli-plain-takes-nothing-else =
     --dangerously-skip-permissions and --settings go with it; everything else is another way of
     starting.
 
+turn-recovery-state-unavailable = Newer command approvals, advice, and credential-exposure answers from this turn were unavailable after recovery.
+
 ## How much a session asks before it acts, drawn under the input box
 #
 # The markers are Claude Code's, and deliberately: somebody who has used one of these knows what

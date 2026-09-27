@@ -186,6 +186,29 @@ impl Conversation {
         Self::assembled(system, &self.messages)
     }
 
+    /// Record that unanswered effects may have run before an uncertain turn ended.
+    ///
+    /// The result is stored beside its call so snapshots and the next planner request do not
+    /// describe a possibly completed effect as one that never ran.
+    pub fn mark_unanswered_effects_uncertain(&mut self) {
+        let mut messages = Vec::with_capacity(self.messages.len());
+        for (index, stored) in self.messages.iter().enumerate() {
+            messages.push(stored.clone());
+            let Some(calls) = &stored.message.tool_calls else {
+                continue;
+            };
+            for call in calls {
+                if !answered(&self.messages, index, &call.id) {
+                    messages.push(Stored::plain(Message::tool_result(
+                        call.id.clone(),
+                        "This call may have run, but its result is unknown because the turn ended during an uncertain effect.",
+                    )));
+                }
+            }
+        }
+        self.messages = messages;
+    }
+
     /// The same, over some prefix of the exchange.
     ///
     /// Shared with [`Conversation::with_system`] rather than written twice, because the gap

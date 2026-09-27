@@ -658,17 +658,22 @@ impl Bridge {
         let project = open.project.clone();
         let state = Arc::clone(&open.state);
         let watches = Arc::clone(&open.watches);
-        let (turn_number, directories) = state
-            .lock()
-            .map(|mut s| {
+        let (turn_number, directories) = match state.lock() {
+            Ok(mut s) => {
                 for point in &mut s.rewind {
                     point
                         .coverage
                         .record([bravebot_agent::rewind::CoverageGap::Desktop]);
                 }
                 (s.turns + 1, s.directories.clone())
-            })
-            .unwrap_or((1, Vec::new()));
+            }
+            Err(poisoned) => {
+                let state = poisoned.into_inner();
+                // The worker will install conservative state and refuse this turn. Keep the
+                // recovered ordinal, and do not use directories from a poisoned snapshot.
+                (state.turns + 1, Vec::new())
+            }
+        };
 
         // A workspace is built per turn and opens the project only, so the directories a
         // resumed session had open have to be opened again here. The rules about them came back
@@ -734,6 +739,8 @@ impl Bridge {
                 pending,
                 answers: answers_rx,
                 finished,
+                #[cfg(test)]
+                lose_result: false,
             });
         });
 
@@ -1263,6 +1270,8 @@ struct Work {
     pending: crate::turn::Pending,
     answers: mpsc::Receiver<crate::turn::Reply>,
     finished: Arc<std::sync::atomic::AtomicBool>,
+    #[cfg(test)]
+    lose_result: bool,
 }
 
 /// Where the prompt a turn carried landed among the things the user said.
@@ -1280,12 +1289,92 @@ fn prompt_ordinal(conversation: &bravebot_agent::Conversation, prompt: &str) -> 
         .rposition(|said| *said == prompt)
 }
 
+/// Install conservative state before clearing a poisoned session lock for the next turn.
+fn recover_poisoned_state<'a>(
+    shared: &'a Mutex<State>,
+    poisoned: std::sync::PoisonError<std::sync::MutexGuard<'a, State>>,
+    turn: usize,
+) -> std::sync::MutexGuard<'a, State> {
+    let mut recovered = poisoned.into_inner();
+    let mut trust = recovered.trust.clone();
+    trust.withdraw_grants();
+    recovered.recover_uncertain(trust, true);
+    recovered.turns = turn;
+    shared.clear_poison();
+    recovered
+}
+
 /// Run one turn to its end, whatever that end is.
 ///
 /// The worker owns the whole of it: the call, writing the record afterwards, and saying
 /// what happened. A turn that fails is still part of the conversation and is still
 /// written down — the next question is usually about it.
+const UNCERTAIN_TURN_MESSAGE: &str = "The turn stopped because its effects are uncertain. File grants were withdrawn and rewind points were closed.";
+const LOST_TURN_MESSAGE: &str = "The turn lost state during recovery. File grants were withdrawn and rewind points were closed. Unreturned decisions and audit data are unavailable.";
+
+fn recovery_event(session: &str, turn: usize, state: &State) -> Event {
+    Event::new(
+        "turn.error",
+        session,
+        json!({ "turn": turn, "kind": "precommit", "message": LOST_TURN_MESSAGE,
+            "category": null, "attempts": null, "notices": [],
+            "contextTokens": state.conversation.last_request_tokens(),
+            "id": state.handle.as_ref().map(|handle| handle.id()) }),
+    )
+}
+
 fn work(work: Work) {
+    let shared = work.state.clone();
+    let project = work.project.clone();
+    let session = work.session.clone();
+    let turn = work.turn;
+    let finished = work.finished.clone();
+    let emitter = work.emitter.clone();
+    let watches = work.watches.clone();
+    let mut authority = None;
+    let mut decisions_available = false;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        work_inner(work, &mut authority, &mut decisions_available)
+    }));
+    let event = result.unwrap_or_else(|_| {
+        // The engine's scopes have joined before unwind reaches this boundary. Keep the
+        // independently held file authority even if the worker never handed back decisions.
+        let mut state = shared
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let trust = match authority {
+            Some(authority) => authority.recover_uncertain(),
+            None => {
+                let mut trust = state.trust.clone();
+                trust.withdraw_grants();
+                trust
+            }
+        };
+        state.recover_uncertain(trust, !decisions_available);
+        state.turns = turn;
+        let _ = save(
+            &project,
+            &mut state,
+            turn,
+            &bravebot_session::audit::Trail::new(),
+        );
+        shared.clear_poison();
+        recovery_event(&session, turn, &state)
+    });
+    if let Ok(mut watches) = watches.lock() {
+        watches.turn_ended(std::time::Instant::now());
+    }
+    // Delivery may let the client start another turn. Nothing after this point may recover
+    // or rewrite this turn's state, even if the listener panics after publishing completion.
+    finished.store(true, std::sync::atomic::Ordering::Release);
+    emitter.send(event);
+}
+
+fn work_inner(
+    work: Work,
+    retained_authority: &mut Option<bravebot_core::file_authority::FileAuthority>,
+    decisions_available: &mut bool,
+) -> Event {
     let Work {
         emitter,
         session,
@@ -1307,14 +1396,21 @@ fn work(work: Work) {
         cancel,
         pending,
         answers,
-        finished,
+        finished: _,
+        #[cfg(test)]
+        lose_result,
     } = work;
 
     // Held for the length of the turn. Nothing else contends for it: a session with a
     // turn in flight refuses another one.
-    let Ok(mut state) = state.lock() else {
-        finished.store(true, std::sync::atomic::Ordering::Release);
-        return;
+    let mut state = match state.lock() {
+        Ok(state) => state,
+        Err(poisoned) => {
+            let mut recovered = recover_poisoned_state(&state, poisoned, turn);
+            let trail = bravebot_session::audit::Trail::new();
+            let _ = save(&project, &mut recovered, turn, &trail);
+            return recovery_event(&session, turn, &recovered);
+        }
     };
 
     let history =
@@ -1360,6 +1456,7 @@ fn work(work: Work) {
     // duration and both of these are passed by value.
     let trust = state.trust.clone();
     let file_authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
+    *retained_authority = Some(file_authority.clone());
     let task = task.with_file_authority(file_authority.clone());
     let programs = state.programs.clone();
     let completed = agent_turn::resume(
@@ -1377,11 +1474,29 @@ fn work(work: Work) {
         &cancel,
     );
 
+    #[cfg(test)]
+    if lose_result {
+        panic!("controlled loss of completed engine result");
+    }
+
     // Cleanup has finished on every return, including cancellation and request errors.
-    state.trust = completed.decisions.trust;
-    state.programs = completed.decisions.programs;
-    state.asked_about = completed.decisions.asked_about;
-    state.exposed = completed.decisions.exposed;
+    let lost_state = completed.lost_state;
+    let uncertain_effects = completed.uncertain_effects;
+    let decisions = completed.decisions;
+    if completed.uncertain_effects {
+        state.recover_uncertain(decisions.trust, lost_state);
+        if !lost_state {
+            state.programs = decisions.programs;
+            state.asked_about = decisions.asked_about;
+            state.exposed = decisions.exposed;
+        }
+    } else {
+        state.trust = decisions.trust;
+        state.programs = decisions.programs;
+        state.asked_about = decisions.asked_about;
+        state.exposed = decisions.exposed;
+    }
+    *decisions_available = !lost_state;
     let outcome = completed.outcome;
 
     // The prompt joins the history the terminal also reads, so recall works across both
@@ -1399,7 +1514,7 @@ fn work(work: Work) {
         state.first_prompt = Some(prompt.clone());
     }
 
-    let event = match outcome {
+    match outcome {
         Ok(outcome) => {
             if let Ok(mut watches) = watches.lock() {
                 for path in &outcome.watches {
@@ -1469,6 +1584,12 @@ fn work(work: Work) {
         }
         Err(error) => {
             let _ = save(&project, &mut state, turn, sink.trail());
+            let mut notices = reporter.notices().to_vec();
+            if lost_state {
+                notices.push(
+                    "Newer approvals, advice, exposure answers, and audit data are unavailable after turn state loss.".to_string(),
+                );
+            }
 
             let ending = error.ending();
             let diagnosis = ending.diagnosis();
@@ -1505,27 +1626,19 @@ fn work(work: Work) {
             Event::new(
                 "turn.error",
                 &session,
-                json!({ "turn": turn, "kind": kind, "message": category.unwrap_or("cancelled"), "category": category, "attempts": attempts, "status": diagnosis.and_then(|d| d.status),
+                json!({ "turn": turn, "kind": kind, "message": if lost_state { LOST_TURN_MESSAGE } else if uncertain_effects { UNCERTAIN_TURN_MESSAGE } else { category.unwrap_or("cancelled") }, "category": category, "attempts": attempts, "status": diagnosis.and_then(|d| d.status),
                     "contextTokens": state.conversation.last_request_tokens(),
                     // What the turn said about itself before it failed, as `turn.done` carries for a
                     // turn that answered. There is no outcome here to take them from, and a hook
                     // that could not be started is the person's own to hear about (HOOK-7).
-                    "notices": reporter.notices(),
+                    "notices": notices,
                     // As on `turn.done`. A turn that failed still said what it was asked, so the
                     // prompt is in the conversation and is still a place a fork can be cut at.
                     "prompt": prompt_ordinal(&state.conversation, &prompt),
                     "id": state.handle.as_ref().map(|handle| handle.id()) }),
             )
         }
-    };
-
-    // Finish bookkeeping and release the session before inviting the next request.
-    if let Ok(mut watches) = watches.lock() {
-        watches.turn_ended(std::time::Instant::now());
     }
-    drop(state);
-    finished.store(true, std::sync::atomic::Ordering::Release);
-    emitter.send(event);
 }
 
 /// Write the session down, in the agent's own format.
@@ -1735,6 +1848,139 @@ mod test_profile;
 #[cfg(test)]
 mod coverage_tests {
     use super::*;
+
+    #[test]
+    fn poisoned_state_recovers_once_and_allows_the_next_turn() {
+        let mut trust = TrustStore::new("/work");
+        trust.trust("/outside/approved");
+        trust.distrust("refused");
+        let state = Arc::new(Mutex::new(State::fresh(trust)));
+        let poison = Arc::clone(&state);
+        let _ = thread::spawn(move || {
+            let mut state = poison.lock().unwrap();
+            state.turns = 4;
+            panic!("controlled session-state panic");
+        })
+        .join();
+
+        let poisoned = match state.lock() {
+            Ok(_) => panic!("the controlled panic did not poison state"),
+            Err(poisoned) => poisoned,
+        };
+        let recovered = recover_poisoned_state(&state, poisoned, 5);
+        assert_eq!(recovered.turns + 1, 6);
+        assert_eq!(
+            recovered.trust.integrity_of("/outside/approved/file"),
+            Some(bravebot_core::label::Integrity::Untrusted)
+        );
+        assert_eq!(
+            recovered.trust.integrity_of("refused"),
+            Some(bravebot_core::label::Integrity::Untrusted)
+        );
+        drop(recovered);
+        assert_eq!(state.lock().unwrap().turns + 1, 6);
+    }
+
+    /// Uncertainty closes checkpoints imported from a terminal before the bridge saves.
+    #[test]
+    fn a_recovered_desktop_turn_saves_no_imported_rewind_points() {
+        if !test_profile::in_isolated_profile() {
+            return;
+        }
+        let project = test_profile::project("uncertain-imported-rewind");
+        std::fs::create_dir_all(&project).unwrap();
+        let conversation = bravebot_agent::Conversation::new();
+        let conversation_snapshot = conversation.snapshot();
+        let mut trust = TrustStore::new(&project);
+        trust.trust(".");
+        trust.trust("/outside/approved");
+        trust.distrust("refused");
+        let programs = bravebot_core::programs::TrustedPrograms::new();
+        let snapshot = || bravebot_session::sessions::TurnSnapshot {
+            conversation: conversation_snapshot.clone(),
+            turns: 0,
+            tokens: 0,
+            spend: Default::default(),
+            timing: Default::default(),
+            cached: None,
+            trust: trust.clone(),
+            programs: programs.clone(),
+            transcript_len: 0,
+            title: "work".to_string(),
+            was_wrote: true,
+        };
+        let rewind = ["large-a.txt", "large-b.txt"]
+            .into_iter()
+            .enumerate()
+            .map(|(turn, path)| bravebot_session::sessions::RewindPoint {
+                coverage: bravebot_agent::rewind::RewindCoverage::default(),
+                snapshot: snapshot(),
+                backups: vec![bravebot_agent::workspace::Backup {
+                    path: project.join(path),
+                    was: bravebot_agent::workspace::Before::NotKept,
+                    captured_trust: bravebot_core::label::Integrity::Trusted,
+                }],
+                prompt: format!("point {turn}"),
+            })
+            .collect::<Vec<_>>();
+        let spend = std::collections::BTreeMap::new();
+        let timing = std::collections::BTreeMap::new();
+        let todos = std::collections::BTreeMap::new();
+        let mut handle = bravebot_session::sessions::Handle::begin(
+            &project,
+            bravebot_session::sessions::Front::Terminal,
+            "test-build",
+        );
+        handle.save(
+            "work",
+            bravebot_session::sessions::Standing {
+                conversation: &conversation_snapshot,
+                history: None,
+                turns: 2,
+                tokens: 0,
+                spend: &spend,
+                timing: &timing,
+                model: None,
+                todos: &todos,
+                asides: &[],
+                trust: &trust,
+                programs: &programs,
+                directories: &[],
+                manifest: None,
+                rewind: &rewind,
+            },
+        );
+        let record = bravebot_session::sessions::load(&project, handle.id()).unwrap();
+        let mut state = State::resumed(&project, &record, record.trust_map(&project).unwrap());
+        assert_eq!(state.rewind.len(), 2);
+        assert!(
+            state.rewind.iter().all(|point| {
+                point.backups[0].was == bravebot_agent::workspace::Before::NotKept
+            })
+        );
+
+        let mut trust = state.trust.clone();
+        trust.withdraw_grants();
+        state.recover_uncertain(trust, true);
+        let trail = bravebot_session::audit::Trail::new();
+        save(&project, &mut state, 3, &trail);
+
+        let saved = bravebot_session::sessions::load(&project, &record.id).unwrap();
+        assert!(saved.rewind_points(&project).is_empty());
+        let trust = saved.trust_map(&project).unwrap();
+        assert_eq!(
+            trust.integrity_of("current.txt"),
+            Some(bravebot_core::label::Integrity::Untrusted)
+        );
+        assert_eq!(
+            trust.integrity_of("/outside/approved/file"),
+            Some(bravebot_core::label::Integrity::Untrusted)
+        );
+        assert_eq!(
+            trust.integrity_of("refused"),
+            Some(bravebot_core::label::Integrity::Untrusted)
+        );
+    }
 
     /// A fork cannot prove that server descendants from the parent stopped writing.
     #[test]

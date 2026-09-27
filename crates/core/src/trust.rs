@@ -136,6 +136,18 @@ impl TrustStore {
         self.rules.insert(key, Some(Integrity::Untrusted));
     }
 
+    /// Withdraw every explicit trust grant while keeping refusals and undecided boundaries.
+    ///
+    /// Used after effects become uncertain. The keys are already full paths, so this also
+    /// withdraws grants outside the workspace without changing which files the rules name.
+    pub fn withdraw_grants(&mut self) {
+        for integrity in self.rules.values_mut() {
+            if *integrity == Some(Integrity::Trusted) {
+                *integrity = Some(Integrity::Untrusted);
+            }
+        }
+    }
+
     /// Leave this subtree undecided, overriding any broader decision.
     pub fn undecide(&mut self, path: &str) {
         let key = self.key(path);

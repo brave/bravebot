@@ -27,12 +27,14 @@ impl Emitter {
 
     /// Announce something. Never fails, by design.
     ///
-    /// A poisoned lock means another thread panicked mid-emit. The event is dropped
-    /// rather than propagating that panic into a turn, since a turn that is working is
-    /// worth more than a line about it.
+    /// Recovery may report a turn after a listener panicked. Keep the listener available
+    /// for that report; a fresh panic still propagates to the worker recovery boundary.
     pub fn send(&self, event: Event) {
-        if let Ok(mut sink) = self.0.lock() {
-            sink(event);
-        }
+        let mut sink = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.0.clear_poison();
+        sink(event);
     }
 }

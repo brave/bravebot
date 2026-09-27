@@ -358,6 +358,10 @@ impl BridgeConfirmer {
 }
 
 impl Confirmer for BridgeConfirmer {
+    fn set_cancel(&mut self, cancel: bravebot_core::cancel::Cancel) {
+        self.cancel = cancel;
+    }
+
     // These upstream capabilities have no approval UI yet. Never grant authority
     // for a request the person could not review.
     fn confirm_fetch(&mut self, _request: &FetchRequest) -> Decision {

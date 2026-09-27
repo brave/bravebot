@@ -559,8 +559,14 @@ on.
 A live session keeps these answers after a turn fails or is cancelled, including when a later
 context load fails. They are not written into the session record, so reopening asks again.
 
+When a recovered panic still has the policy state, it keeps the current exposure answers with
+the live session. If the whole worker result is unavailable, those answers are unavailable and
+are cleared; a pre-turn copy is not presented as current. File-grant recovery does not alter the
+separate lifetime of an exposure answer.
+
 `verified-by: bravebot_agent::turn::retention::ordinary_endings_retain_live_exposure_answers`
 `verified-by: bravebot_tui::undo_tests::ordinary_tui_endings_keep_exact_approvals_advice_and_exposure`
+`verified-by: bravebot_tui::undo_tests::a_lost_turn_result_closes_imported_points_and_saves_conservative_state`
 
 **Why the person is asked rather than the read refused.** The rarity layer is a guess, and a tree
 holds development passwords, test fixtures and inline manifests as readily as it holds keys. A gate

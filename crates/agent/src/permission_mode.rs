@@ -186,6 +186,10 @@ impl<'a, C: Confirmer> Confining<'a, C> {
 }
 
 impl<C: Confirmer> Confirmer for Confining<'_, C> {
+    fn set_cancel(&mut self, cancel: bravebot_core::cancel::Cancel) {
+        self.inner.set_cancel(cancel);
+    }
+
     /// The one question the mode may answer either way.
     ///
     /// A refusal is not the same as a person having said no, but the tool reports it the same way,

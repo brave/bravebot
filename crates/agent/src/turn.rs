@@ -1333,6 +1333,10 @@ impl Decisions {
 pub struct CompletedTurn {
     pub outcome: Result<Outcome, TurnError>,
     pub decisions: Decisions,
+    /// Whether uncertainty forced file grants to be withdrawn for this run.
+    pub uncertain_effects: bool,
+    /// Whether the run lost the policy state needed to retain newer non-file decisions.
+    pub lost_state: bool,
 }
 
 /// Run one turn, continuing a conversation.
@@ -1361,27 +1365,63 @@ pub fn resume<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
     servers: Option<&mut crate::lsp::LanguageServers>,
     cancel: &Cancel,
 ) -> CompletedTurn {
-    let mut decisions = Decisions::initial(task, trust.clone(), programs.clone());
-    let outcome = run_inner(
-        config,
-        egress,
-        workspace,
-        task,
-        conversation,
-        confirmer,
-        reporter,
-        sink,
-        trust,
-        programs,
-        servers,
-        cancel,
-        Some(&mut decisions),
-        // A turn a person asked for reads what its hooks said off the [`Outcome`].
-        None,
-        // And it opens the run's wallet rather than being lent one: it is the run.
-        None,
-    );
-    CompletedTurn { outcome, decisions }
+    let authority = task
+        .file_authority
+        .clone()
+        .unwrap_or_else(|| bravebot_core::file_authority::FileAuthority::new(trust.clone()));
+    let run_task = task.clone().with_file_authority(authority.clone());
+    let mut decisions = Decisions::initial(&run_task, trust.clone(), programs.clone());
+    let mut decisions_published = false;
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_inner(
+            config,
+            egress,
+            workspace,
+            &run_task,
+            conversation,
+            confirmer,
+            reporter,
+            sink,
+            trust,
+            programs,
+            servers,
+            cancel,
+            Some(&mut decisions),
+            Some(&mut decisions_published),
+            // A turn a person asked for reads what its hooks said off the [`Outcome`].
+            None,
+            // And it opens the run's wallet rather than being lent one: it is the run.
+            None,
+        )
+    }));
+    let (outcome, lost_state) = match outcome {
+        Ok(outcome) => (outcome, false),
+        Err(_) => {
+            decisions.trust = authority.recover_uncertain();
+            if !decisions_published {
+                decisions.programs = TrustedPrograms::new();
+                decisions.asked_about = Default::default();
+                decisions.exposed = Default::default();
+            }
+            (
+                Err(TurnError::Precommit(
+                    "the turn stopped after an uncertain effect".to_string(),
+                )),
+                !decisions_published,
+            )
+        }
+    };
+    let uncertain_effects = authority.is_uncertain();
+    if uncertain_effects {
+        decisions.trust = authority.recover_uncertain();
+        conversation.mark_unanswered_effects_uncertain();
+    }
+    CompletedTurn {
+        outcome,
+        decisions,
+        uncertain_effects,
+        lost_state,
+    }
 }
 
 /// As [`run_with_trust`], with a token the caller can use to stop the turn and a reporter to tell
@@ -1420,6 +1460,7 @@ pub fn run_cancellable<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
         // it belonged to. The turn owns the servers it starts and stops them on the way out.
         None,
         cancel,
+        None,
         None,
         // A turn a person asked for reads what its hooks said off the [`Outcome`].
         None,
@@ -1464,26 +1505,42 @@ pub(crate) fn delegated(
         ));
     }
     let mut decisions = Decisions::initial(task, trust.clone(), programs.clone());
-    let outcome = run_inner(
-        config,
-        egress,
-        workspace,
-        task,
-        conversation,
-        confirmer,
-        reporter,
-        sink,
-        trust,
-        programs,
-        // Its own, not the parent session's. A delegate runs on a thread beside the turn that
-        // spawned it and beside its siblings, so a shared set would be one several of them held
-        // at once.
-        None,
-        cancel,
-        Some(&mut decisions),
-        Some(notices),
-        wallet,
-    );
+    let authority = task
+        .file_authority
+        .clone()
+        .unwrap_or_else(|| bravebot_core::file_authority::FileAuthority::new(trust.clone()));
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_inner(
+            config,
+            egress,
+            workspace,
+            task,
+            conversation,
+            confirmer,
+            reporter,
+            sink,
+            trust,
+            programs,
+            // Its own, not the parent session's. A delegate runs on a thread beside the turn that
+            // spawned it and beside its siblings, so a shared set would be one several of them held
+            // at once.
+            None,
+            cancel,
+            Some(&mut decisions),
+            None,
+            Some(notices),
+            wallet,
+        )
+    }));
+    let outcome = match outcome {
+        Ok(outcome) => outcome,
+        Err(_) => {
+            decisions.trust = authority.recover_uncertain();
+            Err(TurnError::Precommit(
+                "the delegate stopped after an uncertain effect".to_string(),
+            ))
+        }
+    };
     *vouched = Vouched {
         trust: decisions.trust,
         programs: decisions.programs,
@@ -1519,6 +1576,7 @@ pub fn run_with_trust<S: Sink + Send, C: Confirmer + Send>(
         // One turn is the whole session here, so the set the turn owns is the session's.
         None,
         &Cancel::new(),
+        None,
         None,
         // A turn a person asked for reads what its hooks said off the [`Outcome`].
         None,
@@ -1792,11 +1850,47 @@ struct Working<'scope> {
     handle: std::thread::ScopedJoinHandle<
         'scope,
         (
-            crate::delegate::Ended,
+            Result<crate::delegate::Ended, ()>,
             crate::outcome::Spent,
             Vec<crate::timing::Interval>,
         ),
     >,
+}
+
+/// Raise the shared file barrier before a panicking scope starts joining its children.
+struct UncertainOnPanic(bravebot_core::file_authority::FileAuthority);
+
+impl Drop for UncertainOnPanic {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            self.0.mark_uncertain();
+        }
+    }
+}
+
+fn ensure_certain(
+    authority: &bravebot_core::file_authority::FileAuthority,
+) -> Result<(), TurnError> {
+    if authority.is_uncertain() {
+        Err(TurnError::Precommit(
+            "the turn stopped after an uncertain effect".to_string(),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn stop_success_after_uncertain_effect<T>(
+    outcome: Result<T, TurnError>,
+    authority: &bravebot_core::file_authority::FileAuthority,
+) -> Result<T, TurnError> {
+    if authority.is_uncertain() {
+        Err(TurnError::Precommit(
+            "the turn stopped after an uncertain effect".to_string(),
+        ))
+    } else {
+        outcome
+    }
 }
 
 /// Put what the planner said into the conversation, through the gate every model output passes.
@@ -1900,7 +1994,13 @@ fn collect_delegates<S: Sink, R: Reporter>(
     {
         let working = delegates.remove(at);
         let id = working.id;
-        reporter.delegate_waiting(id);
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            reporter.delegate_waiting(id)
+        }))
+        .is_err()
+        {
+            policy.file_authority().mark_uncertain();
+        }
         // After the report above, not before it: what a delegate's requests are clipped to is the
         // wait itself, and a reporter that draws a screen or blocks on the lock another delegate
         // holds is the parent's own overhead. Starting the window first would charge whatever a
@@ -1911,8 +2011,12 @@ fn collect_delegates<S: Sink, R: Reporter>(
             // A closed receiver means the test observer has already exited.
             let _ = started.send(());
         }
-        let (delegated, partial, requests) = match working.handle.join() {
-            Ok((ended, partial, requests)) => {
+        let (ended, partial, requests) = match working.handle.join() {
+            Ok((ended, partial, requests)) => (ended, partial, requests),
+            Err(_) => (Err(()), Default::default(), Vec::new()),
+        };
+        let (delegated, partial, requests) = match ended {
+            Ok(ended) => {
                 // Before anything else, and on both of the ways a run can end. A person who
                 // vouched for the build inside this delegate is not asked again by a delegate
                 // spawned after it, and one whose run failed had the same person answer the same
@@ -1930,13 +2034,16 @@ fn collect_delegates<S: Sink, R: Reporter>(
             // Nothing came back, not even a record, so there is no adoption either: "nothing
             // moved" and "nothing is known" are different things, and the trail should not
             // record the second as the first.
-            Err(_) => (
-                Err(TurnError::Precommit(
-                    "the delegate stopped without finishing".to_string(),
-                )),
-                Default::default(),
-                Vec::new(),
-            ),
+            Err(()) => {
+                policy.file_authority().mark_uncertain();
+                (
+                    Err(TurnError::Precommit(
+                        "a delegate stopped after an uncertain effect".to_string(),
+                    )),
+                    partial,
+                    requests,
+                )
+            }
         };
 
         spent.inference += waits.collected(crate::timing::Interval::since(joined_at), requests);
@@ -2015,6 +2122,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
         conversation.observed(policy.context_integrity());
         collected += 1;
     }
+    ensure_certain(&policy.file_authority())?;
     Ok(collected)
 }
 
@@ -2242,6 +2350,8 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     cancel: &Cancel,
     // Published on every ordinary return, after child cleanup and before result handling.
     retained: Option<&mut Decisions>,
+    // Set with `retained`, before work that may still panic after the policy has been captured.
+    decisions_published: Option<&mut bool>,
     // What the hooks had to say, written whether or not the rounds produced an outcome, and for
     // the same reason the record above is. Only a delegate's caller passes one: a turn a person
     // asked for hands these back on its [`Outcome`], and a delegate's outcome dies at the
@@ -2254,6 +2364,17 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     // presenting (PREM-5).
     lent_wallet: Option<&dyn crate::shared::Spends>,
 ) -> Result<Outcome, TurnError> {
+    let authority = task
+        .file_authority
+        .clone()
+        .unwrap_or_else(|| bravebot_core::file_authority::FileAuthority::new(trust.clone()));
+    if task.delegate.is_none() {
+        authority.start_run();
+    }
+    let run_cancel = Cancel::linked(cancel, &authority.run_cancel_token());
+    confirmer.set_cancel(run_cancel.clone());
+    let task = task.clone().with_file_authority(authority);
+
     // Read once, here, rather than at each moment. What the file says is a property of the machine
     // and not of a round, and a turn whose hooks changed halfway through would be the harder thing
     // to explain to whoever edited it mid-session.
@@ -2283,7 +2404,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
         config,
         egress,
         workspace,
-        task,
+        &task,
         conversation,
         confirmer,
         reporter,
@@ -2291,9 +2412,10 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
         trust,
         programs,
         servers,
-        cancel,
+        &run_cancel,
         &hooks,
         retained,
+        decisions_published,
         &mut fired,
         lent_wallet,
     );
@@ -2344,6 +2466,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     cancel: &Cancel,
     hooks: &bravebot_config::hooks::Hooks,
     retained: Option<&mut Decisions>,
+    decisions_published: Option<&mut bool>,
     // Every sentence a hook that went wrong produced, this turn's own and its delegates'.
     // Written as the rounds go rather than gathered from the outcome, so that a turn which ends
     // in an error has still said what it found (HOOK-7).
@@ -2412,7 +2535,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
 
     // Keep the policy outside all fallible context loading and execution. Locals in this
     // closure, including child scopes and jobs, are cleaned up before decisions are copied.
-    let mut outcome = (|| {
+    let execution = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         // Read once. A turn nobody is looping arranges its own later look, which is what a request to
         // report a change needs; a tick of a self-paced loop sets the pace of the next one; and a tick
         // the person gave an interval for decides nothing, because their interval already did.
@@ -2896,14 +3019,20 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // Shared rather than handed over: a delegate takes the lock for one call and gives it back,
         // and the turn keeps its own handle on all three.
         let (confirming, reporting, recording) = (&confirming, &reporting, &recording);
+        let authority = policy.file_authority();
         let completion = std::thread::scope(|scope| {
+            // Scope cleanup joins children while unwinding. Mark uncertainty before that join so
+            // they cannot make another planner request or publish a fresh file grant meanwhile.
+            let _uncertain_on_panic = UncertainOnPanic(authority.clone());
             // Started by this turn and not yet collected. A delegate cannot outlive the scope, which is
             // what makes "a delegate does not outlive the turn that spawned it" a fact about the program
             // rather than a promise about the code.
             let mut delegates: Vec<Working<'_>> = Vec::new();
             let mut waits = crate::timing::DelegateWait::default();
-            let result = (|| {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _uncertain_on_panic = UncertainOnPanic(authority.clone());
                 let completion = loop {
+                    ensure_certain(&authority)?;
                     // Checked before each request rather than mid-flight: a request already on the wire has
                     // to finish, but nothing new needs to start.
                     if cancel.is_cancelled() {
@@ -2926,6 +3055,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         &mut spent,
                         hook_notices,
                     )?;
+                    ensure_certain(&authority)?;
 
                     reporter.spent(crate::outcome::Spent {
                         tokens,
@@ -2951,7 +3081,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     // compared is the last round's, so this is one round late by construction, which is why
                     // the budget sits below any window rather than at it.
                     if may_compact && context_tokens >= config.context_budget {
+                        ensure_certain(&authority)?;
                         reporter.phase(Phase::Compacting);
+                        ensure_certain(&authority)?;
                         let mut chat = crate::processor::Chat {
                             config,
                             egress,
@@ -3062,6 +3194,11 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     // and a trail with a line per chunk would bury every other line in it.
                     let as_written =
                         policy.authorise_display_release("the reply as the model writes it");
+
+                    // Collection and compaction can overlap a delegate panic. Recheck at the
+                    // request boundary so neither this planner round nor a summary starts after
+                    // uncertainty was observed.
+                    ensure_certain(&authority)?;
 
                     let asked_at = Instant::now();
                     let completion = {
@@ -3399,29 +3536,40 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         let spawning_model = turn_model.as_deref();
                         for (id, seeded) in std::mem::take(&mut output.delegate) {
                             let vouched = seeded.vouched.clone();
+                            let authority = policy.file_authority();
                             let handle = scope.spawn(move || {
-                                let mut confirmer = confirming.delegate(id);
-                                let mut reporter = reporting.delegate(id);
-                                let mut sink = recording.delegate(id);
-                                let ended = crate::delegate::run(
-                                    &seeded,
-                                    config,
-                                    egress,
-                                    workspace,
-                                    task.home.as_deref(),
-                                    task.profile.as_deref(),
-                                    spawning_model,
-                                    task.permission_mode,
-                                    task.auto_vetting,
-                                    &task.attribution,
-                                    task.output_cap,
-                                    cancel,
-                                    &mut confirmer,
-                                    &mut reporter,
-                                    &mut sink,
-                                    wallet,
-                                );
-                                (ended, reporter.last_spent(), reporter.take_inference())
+                                let result =
+                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                        let mut confirmer = confirming.delegate(id);
+                                        let mut reporter = reporting.delegate(id);
+                                        let mut sink = recording.delegate(id);
+                                        let ended = crate::delegate::run(
+                                            &seeded,
+                                            config,
+                                            egress,
+                                            workspace,
+                                            task.home.as_deref(),
+                                            task.profile.as_deref(),
+                                            spawning_model,
+                                            task.permission_mode,
+                                            task.auto_vetting,
+                                            &task.attribution,
+                                            task.output_cap,
+                                            cancel,
+                                            &mut confirmer,
+                                            &mut reporter,
+                                            &mut sink,
+                                            wallet,
+                                        );
+                                        (ended, reporter.last_spent(), reporter.take_inference())
+                                    }));
+                                match result {
+                                    Ok((ended, spent, inference)) => (Ok(ended), spent, inference),
+                                    Err(_) => {
+                                        authority.mark_uncertain();
+                                        (Err(()), Default::default(), Vec::new())
+                                    }
+                                }
                             });
                             delegates.push(Working {
                                 #[cfg(test)]
@@ -4098,22 +4246,31 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     }
                 };
                 Ok::<_, TurnError>(completion)
-            })();
-            // Join outstanding work even when the parent has no outcome to return.
+            })).unwrap_or_else(|_| Err(TurnError::Precommit(
+                "the turn stopped after an uncertain effect".to_string(),
+            )));
+            // Keep the handles across parent unwind, so returned child decisions are adopted.
+            // A reporting panic cannot prevent the remaining children from being collected.
             while result.is_err() && !delegates.is_empty() {
-                let _ = collect_delegates(
-                    &mut delegates,
-                    &mut policy,
-                    conversation,
-                    &mut reporter,
-                    &mut tokens,
-                    &mut output_tokens,
-                    &mut cached,
-                    true,
-                    &mut waits,
-                    &mut spent,
-                    hook_notices,
-                );
+                let cleanup = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _uncertain_on_panic = UncertainOnPanic(authority.clone());
+                    collect_delegates(
+                        &mut delegates,
+                        &mut policy,
+                        conversation,
+                        &mut reporter,
+                        &mut tokens,
+                        &mut output_tokens,
+                        &mut cached,
+                        true,
+                        &mut waits,
+                        &mut spent,
+                        hook_notices,
+                    )
+                }));
+                if cleanup.is_err() {
+                    authority.mark_uncertain();
+                }
             }
             result
         });
@@ -4235,9 +4392,24 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             attempt: None,
             addressed,
         })
-    })();
+    }));
+    let mut outcome = match execution {
+        Ok(outcome) => outcome,
+        Err(_) => {
+            policy.file_authority().mark_uncertain();
+            Err(TurnError::Precommit(
+                "the turn stopped after an uncertain effect".to_string(),
+            ))
+        }
+    };
+    let authority = policy.file_authority();
+    outcome = stop_success_after_uncertain_effect(outcome, &authority);
     let decisions = Decisions {
-        trust: policy.trust(),
+        trust: if authority.is_uncertain() {
+            authority.recover_uncertain()
+        } else {
+            policy.trust()
+        },
         programs: policy.programs().clone(),
         asked_about: policy.asked().clone(),
         exposed: policy.exposed().clone(),
@@ -4251,6 +4423,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     }
     if let Some(retained) = retained {
         *retained = decisions;
+        if let Some(published) = decisions_published {
+            *published = true;
+        }
     }
     outcome
 }
@@ -4258,6 +4433,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bravebot_core::label::Integrity;
     use std::sync::mpsc;
     use std::time::Duration;
 
@@ -4320,11 +4496,11 @@ mod tests {
                     .expect("join released the worker");
                 assert!(child_cancel.is_cancelled());
                 (
-                    crate::delegate::Ended {
+                    Ok(crate::delegate::Ended {
                         delegated: Err(TurnError::Cancelled { attempts: None }),
                         vouched: seeded_for_worker,
                         notices: Vec::new(),
-                    },
+                    }),
                     crate::outcome::Spent {
                         tokens: 17,
                         ..Default::default()
@@ -4378,6 +4554,124 @@ mod tests {
         );
     }
 
+    /// A sibling that finishes after a panic cannot restore a file grant.
+    #[test]
+    fn a_panicked_delegate_barrier_blocks_a_later_sibling_file_grant() {
+        struct Quiet;
+        impl Reporter for Quiet {
+            fn todos(&mut self, _: Vec<bravebot_core::todo::Row>) {}
+        }
+
+        let mut trust = TrustStore::new("/work");
+        trust.trust(".");
+        trust.trust("/outside/file");
+        let authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
+        authority.start_run();
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "collect delegates");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::default(),
+            &mut sink,
+        )
+        .unwrap()
+        .with_trust(trust)
+        .with_file_authority(authority.clone());
+        let seeded = policy.vouched();
+        let seeded_sibling = seeded.clone();
+        let (regrant_tx, regrant_rx) = mpsc::channel();
+        let mut spent = Elapsed::default();
+        let mut waits = crate::timing::DelegateWait::default();
+
+        std::thread::scope(|scope| {
+            let panicked = scope.spawn(|| -> (
+                    Result<crate::delegate::Ended, ()>,
+                    crate::outcome::Spent,
+                    Vec<crate::timing::Interval>,
+                ) { panic!("controlled delegate panic") });
+            let sibling_authority = authority.clone();
+            let sibling = scope.spawn(move || {
+                let until = std::time::Instant::now() + Duration::from_secs(2);
+                while !sibling_authority.is_uncertain() {
+                    assert!(
+                        std::time::Instant::now() < until,
+                        "delegate panic did not close the shared file authority"
+                    );
+                    std::thread::yield_now();
+                }
+                let restored = sibling_authority.publish("/outside/file", Integrity::Trusted);
+                regrant_tx.send(restored).unwrap();
+                (
+                    Ok(crate::delegate::Ended {
+                        delegated: Err(TurnError::Cancelled { attempts: None }),
+                        vouched: seeded_sibling,
+                        notices: Vec::new(),
+                    }),
+                    Default::default(),
+                    Vec::new(),
+                )
+            });
+            let mut delegates = vec![
+                Working {
+                    #[cfg(test)]
+                    join_started: None,
+                    id: DelegateId::nth(1),
+                    seeded: seeded.clone(),
+                    handle: panicked,
+                },
+                Working {
+                    #[cfg(test)]
+                    join_started: None,
+                    id: DelegateId::nth(2),
+                    seeded,
+                    handle: sibling,
+                },
+            ];
+            let mut tokens = 0;
+            assert!(
+                collect_delegates(
+                    &mut delegates,
+                    &mut policy,
+                    &mut Conversation::new(),
+                    &mut Quiet,
+                    &mut tokens,
+                    &mut 0,
+                    &mut Cached::default(),
+                    true,
+                    &mut waits,
+                    &mut spent,
+                    &mut Vec::new(),
+                )
+                .is_err()
+            );
+            assert!(delegates.is_empty());
+            let mut planner_requests = 0;
+            if ensure_certain(&authority).is_ok() {
+                planner_requests += 1;
+            }
+            assert_eq!(
+                planner_requests, 0,
+                "a panic collected at the request boundary must stop the next planner call"
+            );
+        });
+
+        assert!(!regrant_rx.recv().unwrap());
+        assert!(authority.is_uncertain());
+        let recovered = authority.recover_uncertain();
+        assert_eq!(
+            recovered.integrity_of("/outside/file"),
+            Some(Integrity::Untrusted)
+        );
+        assert_eq!(
+            recovered.integrity_of("/work/other"),
+            Some(Integrity::Untrusted)
+        );
+        authority.start_run();
+        assert!(authority.publish("/outside/file", Integrity::Trusted));
+    }
+
     /// A turn holds a grant for each server the session reached and for no other, and a delegate
     /// it spawns holds none: the widest kind is a worker, and a worker names no server.
     #[test]
@@ -4412,5 +4706,69 @@ mod tests {
                 .any(|c| matches!(c, Capability::McpCall(_))),
             "a delegate holds a server grant: {delegated:?}"
         );
+    }
+
+    #[test]
+    fn a_parent_panic_marks_uncertain_before_scoped_children_join() {
+        let mut trust = TrustStore::new("/work");
+        trust.trust("/outside/file");
+        let authority = bravebot_core::file_authority::FileAuthority::new(trust);
+        authority.start_run();
+        let (published_tx, published_rx) = mpsc::channel();
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            std::thread::scope(|scope| {
+                let child_authority = authority.clone();
+                scope.spawn(move || {
+                    let until = std::time::Instant::now() + Duration::from_secs(2);
+                    while !child_authority.is_uncertain() {
+                        assert!(
+                            std::time::Instant::now() < until,
+                            "parent panic did not close the shared file authority before join"
+                        );
+                        std::thread::yield_now();
+                    }
+                    published_tx
+                        .send(child_authority.publish("/outside/file", Integrity::Trusted))
+                        .unwrap();
+                });
+                let _uncertain_on_panic = UncertainOnPanic(authority.clone());
+                panic!("controlled parent panic");
+            });
+        }));
+
+        assert!(panic.is_err());
+        assert!(!published_rx.recv().unwrap());
+        assert_eq!(
+            authority.recover_uncertain().integrity_of("/outside/file"),
+            Some(Integrity::Untrusted)
+        );
+    }
+
+    #[test]
+    fn a_late_uncertain_delegate_cannot_leave_a_successful_turn_result() {
+        let authority = bravebot_core::file_authority::FileAuthority::new(TrustStore::new("/work"));
+        authority.start_run();
+        authority.mark_uncertain();
+
+        assert!(matches!(
+            stop_success_after_uncertain_effect(Ok(()), &authority),
+            Err(TurnError::Precommit(_))
+        ));
+        assert!(matches!(
+            stop_success_after_uncertain_effect::<()>(
+                Err(TurnError::Cancelled { attempts: None }),
+                &authority
+            ),
+            Err(TurnError::Precommit(_))
+        ));
+
+        authority.start_run();
+        assert!(matches!(
+            stop_success_after_uncertain_effect::<()>(
+                Err(TurnError::Cancelled { attempts: None }),
+                &authority
+            ),
+            Err(TurnError::Cancelled { attempts: None })
+        ));
     }
 }

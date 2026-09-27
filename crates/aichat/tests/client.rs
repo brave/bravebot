@@ -1205,6 +1205,45 @@ fn a_stop_does_not_wait_out_the_pause_between_attempts() {
     assert_eq!(client.attempts(), 0, "a new call resets the attempt count");
 }
 
+/// Uncertainty raised by a sibling during the retry notice stops the next HTTP attempt.
+#[test]
+fn an_uncertain_effect_cancels_a_streaming_retry_before_it_is_sent() {
+    let (endpoint, _received) = serve_attempts(vec![Attempt::Dropped]);
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let authority = bravebot_core::file_authority::FileAuthority::new(
+        bravebot_core::trust::TrustStore::new("/work"),
+    );
+    authority.start_run();
+    let user_cancel = Cancel::new();
+    let uncertain_cancel = authority.run_cancel_token();
+    let run_cancel = Cancel::linked(&user_cancel, &uncertain_cancel);
+    let mut client = AichatClient::new(&config, &egress).with_cancel(run_cancel);
+    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
+
+    let error = client
+        .complete_streaming(&mut policy, &request, |progress| {
+            if progress.attempt > 1 {
+                authority.mark_uncertain();
+            }
+        })
+        .expect_err("the uncertain run retried");
+
+    assert!(matches!(error, ChatError::Cancelled), "{error}");
+    assert_eq!(client.attempts(), 1, "uncertainty sent another attempt");
+    assert!(authority.is_uncertain());
+    assert!(!user_cancel.is_cancelled());
+}
+
 /// The same pause runs before a whole reply is asked for again, and that path has no progress
 /// callback to press a key against, so the stop arrives from elsewhere. It is pressed once the
 /// server has the first request, so the stop lands in the pause and not before anything was sent.

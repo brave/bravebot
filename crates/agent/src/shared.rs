@@ -262,6 +262,10 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
 }
 
 impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
+    fn set_cancel(&mut self, cancel: bravebot_core::cancel::Cancel) {
+        self.lent.hold().set_cancel(cancel);
+    }
+
     fn confirm_write(&mut self, request: &WriteRequest) -> Decision {
         self.lent.hold().confirm_write(request)
     }

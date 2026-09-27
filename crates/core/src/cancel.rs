@@ -27,12 +27,24 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[derive(Debug, Clone, Default)]
 pub struct Cancel {
     flag: Arc<AtomicBool>,
+    linked: Vec<Arc<AtomicBool>>,
 }
 
 impl Cancel {
     /// A token that has not been cancelled.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Stop when either input token is stopped, while keeping their owners independent.
+    pub fn linked(first: &Self, second: &Self) -> Self {
+        let mut linked = vec![first.flag.clone(), second.flag.clone()];
+        linked.extend(first.linked.iter().cloned());
+        linked.extend(second.linked.iter().cloned());
+        Self {
+            flag: Arc::new(AtomicBool::new(false)),
+            linked,
+        }
     }
 
     /// Ask the turn to stop at its next check.
@@ -47,6 +59,7 @@ impl Cancel {
     /// Whether a stop has been requested.
     pub fn is_cancelled(&self) -> bool {
         self.flag.load(Ordering::Acquire)
+            || self.linked.iter().any(|flag| flag.load(Ordering::Acquire))
     }
 }
 
@@ -111,5 +124,23 @@ mod tests {
         for _ in 0..10 {
             assert!(cancel.is_cancelled());
         }
+    }
+
+    #[test]
+    fn a_linked_token_observes_either_cause_without_cancelling_its_owners() {
+        let user = Cancel::new();
+        let uncertainty = Cancel::new();
+        let run = Cancel::linked(&user, &uncertainty);
+
+        uncertainty.cancel();
+        assert!(run.is_cancelled());
+        assert!(!user.is_cancelled());
+
+        let user = Cancel::new();
+        let uncertainty = Cancel::new();
+        let run = Cancel::linked(&user, &uncertainty);
+        user.cancel();
+        assert!(run.is_cancelled());
+        assert!(!uncertainty.is_cancelled());
     }
 }

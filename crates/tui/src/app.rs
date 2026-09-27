@@ -9,6 +9,7 @@
 //! the reply arrives. That is honest about what is happening, and it keeps two turns from
 //! ever being in flight together.
 
+use bravebot_agent::confirm::Confirmer;
 use bravebot_agent::conversation::Conversation;
 use bravebot_agent::lsp::LanguageServers;
 use bravebot_agent::turn::{self, PastedImage, Task};
@@ -5421,6 +5422,7 @@ fn manifest_animated(
         // nobody made.
         let mut confirmer =
             bravebot_agent::Confining::new(&mut asking, permission_mode, worker_task.auto_vetting);
+        confirmer.set_cancel(worker_cancel.clone());
         let egress = Egress::new();
         let outcome = bravebot_agent::manifest::run(
             &worker_config,
@@ -5474,6 +5476,9 @@ fn manifest_animated(
         }
 
         let carrying_on = drain_worker(&from_worker, Duration::ZERO, |message| match message {
+            crate::remote_confirm::ToMain::RunCancel(cancel) => {
+                crate::input::set_question_cancel(cancel);
+            }
             // The one question this mode asks that a turn does not, and the reason the session
             // prompt is worth reaching: it is drawn and scrolled rather than printed and read off
             // a line, so a plan longer than the window can be walked back through before it is
@@ -5925,6 +5930,8 @@ struct Continued {
 /// What the joined worker returns, including an ordinary error or cancellation.
 struct FinishedTurn {
     decisions: Option<turn::Decisions>,
+    uncertain_effects: bool,
+    lost_state: bool,
     outcome: Result<turn::Outcome, turn::TurnError>,
     conversation: Conversation,
     sink: Trail,
@@ -5934,9 +5941,6 @@ struct FinishedTurn {
 /// Decisions retained outside the worker when it cannot return an outcome.
 struct RetainedTurn {
     files: bravebot_core::file_authority::FileAuthority,
-    programs: TrustedPrograms,
-    asked: AskedAbout,
-    exposed: bravebot_core::credentials::Exposed,
 }
 
 /// Run a turn on a worker thread, redrawing while it works.
@@ -6060,6 +6064,7 @@ fn run_turn_animated(
         // And the files this session has already agreed the planner may be given, so a planner
         // reading the same `.env` on turn after turn is asked about it once.
         .already_exposed(exposed.clone())
+        .already_asked_about(asked_about.clone())
         .working_towards(working_towards)
         // The servers the session started, with a grant naming each. Their tools are offered once
         // a person has read the list, which the turn puts to them before it plans (SERVERS-8).
@@ -6077,9 +6082,6 @@ fn run_turn_animated(
     let task = task.with_file_authority(file_authority.clone());
     let retained = RetainedTurn {
         files: file_authority,
-        programs: programs.clone(),
-        asked: asked_about.clone(),
-        exposed: exposed.clone(),
     };
 
     let worker = thread::spawn(move || {
@@ -6131,6 +6133,8 @@ fn run_turn_animated(
         );
         FinishedTurn {
             decisions: Some(completed.decisions),
+            uncertain_effects: completed.uncertain_effects,
+            lost_state: completed.lost_state,
             outcome: completed.outcome,
             conversation,
             sink,
@@ -6193,6 +6197,9 @@ fn run_turn_animated(
         }
 
         let carrying_on = drain_worker(&from_worker, Duration::ZERO, |message| match message {
+            crate::remote_confirm::ToMain::RunCancel(cancel) => {
+                crate::input::set_question_cancel(cancel);
+            }
             crate::remote_confirm::ToMain::Write(request) => {
                 let answer = crate::confirm::ask(terminal, &request);
                 // Ctrl-C at the prompt is the same request it is anywhere else in a turn: stop.
@@ -6420,21 +6427,8 @@ fn run_turn_animated(
         }
     }
 
-    let finished = worker.join().unwrap_or_else(|_| {
-        // A panicked turn is reported rather than propagated: the session survives. The
-        // conversation does not, since the thread that held it is gone, and neither do the
-        // servers: they went down with the thread that owned them, so the next turn starts and
-        // is asked about a fresh one.
-        FinishedTurn {
-            decisions: None,
-            outcome: Err(turn::TurnError::Precommit(
-                t!(turn_ended_unexpectedly).to_string(),
-            )),
-            conversation: Conversation::new(),
-            sink: Trail::new(),
-            servers: None,
-        }
-    });
+    let finished = join_turn(worker);
+    crate::input::set_question_cancel(Cancel::new());
 
     Ok(finish_turn(
         session,
@@ -6450,6 +6444,27 @@ fn run_turn_animated(
     ))
 }
 
+/// Recover a missing worker result after its children and owned resources have stopped.
+fn join_turn(worker: thread::JoinHandle<FinishedTurn>) -> FinishedTurn {
+    worker.join().unwrap_or_else(|_| {
+        // A panicked turn is reported rather than propagated: the session survives. The
+        // conversation does not, since the thread that held it is gone, and neither do the
+        // servers: they went down with the thread that owned them, so the next turn starts and
+        // is asked about a fresh one.
+        FinishedTurn {
+            decisions: None,
+            uncertain_effects: true,
+            lost_state: true,
+            outcome: Err(turn::TurnError::Precommit(
+                t!(turn_ended_unexpectedly).to_string(),
+            )),
+            conversation: Conversation::new(),
+            sink: Trail::new(),
+            servers: None,
+        }
+    })
+}
+
 /// Adopt decisions before classifying the joined result or handing state back for saving.
 fn finish_turn(
     session: &mut Session,
@@ -6461,11 +6476,14 @@ fn finish_turn(
 ) -> Continued {
     let FinishedTurn {
         decisions,
+        uncertain_effects,
+        lost_state,
         outcome,
-        conversation,
+        mut conversation,
         sink,
         servers,
     } = finished;
+    let decisions_lost = decisions.is_none();
     let carried = match decisions {
         Some(decisions) => Carried {
             trust: decisions.trust,
@@ -6473,14 +6491,21 @@ fn finish_turn(
             asked: decisions.asked_about,
             exposed: decisions.exposed,
         },
-        // Preserve the existing unwind fallback; ordinary endings always carry current decisions.
+        // Whole result loss has no current non-file decisions to retain.
         None => Carried {
-            trust: retained.files.snapshot(),
-            programs: retained.programs,
-            asked: retained.asked,
-            exposed: retained.exposed,
+            trust: retained.files.recover_uncertain(),
+            programs: TrustedPrograms::new(),
+            asked: AskedAbout::new(),
+            exposed: bravebot_core::credentials::Exposed::new(),
         },
     };
+    if uncertain_effects {
+        session.close_rewind_window();
+        conversation.mark_unanswered_effects_uncertain();
+    }
+    let recovery_notice = (uncertain_effects && (lost_state || decisions_lost)).then(|| {
+        "Turn state was lost during recovery. Newer approvals, advice, exposure answers, and audit data are unavailable; file grants were withdrawn and rewind points were closed.".to_string()
+    });
     // Record cancellation separately from failure, then restore the prompt when possible.
     let events = sink.events().to_vec();
 
@@ -6518,6 +6543,9 @@ fn finish_turn(
             workspace,
         )
     };
+    if let Some(notice) = recovery_notice {
+        session.note(notice);
+    }
     Continued {
         conversation,
         trust: carried.trust,
@@ -12918,6 +12946,8 @@ mod tests {
             },
             FinishedTurn {
                 decisions: None,
+                uncertain_effects: true,
+                lost_state: true,
                 outcome: Err(turn::TurnError::Cancelled { attempts: Some(0) }),
                 conversation: Conversation::new(),
                 sink: Trail::new(),
@@ -12925,9 +12955,6 @@ mod tests {
             },
             RetainedTurn {
                 files: bravebot_core::file_authority::FileAuthority::new(TrustStore::new("/work")),
-                programs: TrustedPrograms::new(),
-                asked: AskedAbout::new(),
-                exposed: bravebot_core::credentials::Exposed::new(),
             },
         );
 

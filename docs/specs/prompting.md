@@ -299,10 +299,17 @@ Errors and cancellation within a live session retain exact standing command appr
 advice. They do not turn one-use consent or per-policy refusals into standing permission. Saving
 keeps standing approvals; resuming starts with no live advice or exposure answers.
 
+A recovered panic keeps available command approvals and advice under those same lifetimes. If the
+whole worker result is lost, unavailable approvals and advice are cleared rather than restored
+from pre-turn copies. A later run starts with a fresh uncertainty barrier and may accept new
+approvals.
+
 `verified-by: bravebot_agent::turn::retention::ordinary_endings_retain_exact_programs_and_live_advice`
 `verified-by: bravebot_cli::plain_retention_tests::failed_plain_turn_keeps_exact_approvals_advice_and_exposure`
 `verified-by: bravebot_tui::undo_tests::ordinary_tui_endings_keep_exact_approvals_advice_and_exposure`
 `verified-by: bravebot_ui_bridge::retention::worker::bridge_ordinary_endings_keep_decisions_live_and_resumed`
+`verified-by: bravebot_agent::turn::retention::recovered_engine_panic_keeps_distrust_and_stops_before_another_request`
+`verified-by: bravebot_tui::undo_tests::a_lost_turn_result_closes_imported_points_and_saves_conservative_state`
 
 Nothing else survives. A single-use endorsement is created by one approval, is bound to one value,
 and is never written down, so a resumed turn cannot replay a write or a run that an earlier turn

@@ -45,11 +45,16 @@ pub struct TerminalConfirmer<'t, B: Backend> {
 
 impl<'t, B: Backend> TerminalConfirmer<'t, B> {
     pub fn new(terminal: &'t mut Terminal<B>) -> Self {
+        input::set_question_cancel(bravebot_core::cancel::Cancel::new());
         Self { terminal }
     }
 }
 
 impl<B: Backend> Confirmer for TerminalConfirmer<'_, B> {
+    fn set_cancel(&mut self, cancel: bravebot_core::cancel::Cancel) {
+        input::set_question_cancel(cancel);
+    }
+
     fn confirm_write(&mut self, request: &WriteRequest) -> Decision {
         ask(self.terminal, request).decision()
     }
@@ -159,7 +164,7 @@ pub fn ask<B: Backend>(terminal: &mut Terminal<B>, request: &WriteRequest) -> An
             return Answer::Reject;
         }
 
-        match input::read() {
+        match input::read_question() {
             // Presses only: asking for disambiguated keys reports releases too, and a release
             // taken for a press approves whatever the press had just approved, twice.
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
@@ -558,7 +563,7 @@ pub fn ask_run<B: Backend>(terminal: &mut Terminal<B>, request: &RunRequest) -> 
             return RunAnswer::Reject;
         }
 
-        match input::read() {
+        match input::read_question() {
             // Presses only: asking for disambiguated keys reports releases too, and a release
             // taken for a press approves whatever the press had just approved, twice.
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
@@ -1066,7 +1071,7 @@ pub fn ask_output<B: Backend>(terminal: &mut Terminal<B>, request: &OutputReques
             return VetAnswer::Reject;
         }
 
-        match input::read() {
+        match input::read_question() {
             // Presses only: asking for disambiguated keys reports releases too, and a release
             // taken for a press approves whatever the press had just approved, twice.
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
@@ -1357,7 +1362,7 @@ pub fn ask_vet<B: Backend>(terminal: &mut Terminal<B>, request: &VetRequest) -> 
             return VetAnswer::Reject;
         }
 
-        match input::read() {
+        match input::read_question() {
             // Presses only: asking for disambiguated keys reports releases too, and a release
             // taken for a press approves whatever the press had just approved, twice.
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
@@ -1548,7 +1553,7 @@ pub fn ask_fetch<B: Backend>(terminal: &mut Terminal<B>, request: &FetchRequest)
             return Answer::Reject;
         }
 
-        match input::read() {
+        match input::read_question() {
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
                 continue;
             }
@@ -1575,7 +1580,7 @@ pub fn ask_server<B: Backend>(terminal: &mut Terminal<B>, request: &ServerReques
             return Answer::Reject;
         }
 
-        match input::read() {
+        match input::read_question() {
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
                 continue;
             }
@@ -1769,7 +1774,7 @@ pub fn ask_vouch<B: Backend>(terminal: &mut Terminal<B>, request: &VouchRequest)
             return Answer::Reject;
         }
 
-        match input::read() {
+        match input::read_question() {
             // Presses only: asking for disambiguated keys reports releases too, and a release
             // taken for a press approves whatever the press had just approved, twice.
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
@@ -1940,7 +1945,7 @@ pub fn ask_tool_list<B: Backend>(terminal: &mut Terminal<B>, request: &ToolListR
             return Answer::Reject;
         }
 
-        match input::read() {
+        match input::read_question() {
             // Presses only: asking for disambiguated keys reports releases too, and a release
             // taken for a press approves whatever the press had just approved, twice.
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
@@ -2189,7 +2194,7 @@ pub fn ask_mcp_call<B: Backend>(
             return CallAnswer::Reject;
         }
 
-        match input::read() {
+        match input::read_question() {
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
                 continue;
             }
@@ -2334,7 +2339,7 @@ pub fn ask_exposure<B: Backend>(terminal: &mut Terminal<B>, request: &ExposureRe
             return Answer::Reject;
         }
 
-        match input::read() {
+        match input::read_question() {
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
                 continue;
             }
@@ -2467,7 +2472,7 @@ pub fn ask_manifest<B: Backend>(terminal: &mut Terminal<B>, request: &ManifestRe
             return Answer::Reject;
         }
 
-        match input::read() {
+        match input::read_question() {
             Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
                 continue;
             }
