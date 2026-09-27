@@ -14766,6 +14766,7 @@ mod tests {
             Some(crate::vim::Mode::Normal),
             Some(crate::vim::Mode::Visual { lines: false }),
             Some(crate::vim::Mode::Visual { lines: true }),
+            Some(crate::vim::Mode::Replace),
         ];
         for editing in crate::vim::Editing::ALL {
             for mode in modes {
@@ -14785,6 +14786,10 @@ mod tests {
                                 Some(crate::vim::Mode::Visual { lines }) => {
                                     session.enter_vi_normal();
                                     session.type_char(if lines { 'V' } else { 'v' });
+                                }
+                                Some(crate::vim::Mode::Replace) => {
+                                    session.enter_vi_normal();
+                                    session.type_char('R');
                                 }
                                 Some(_) => {
                                     session.enter_vi_normal();

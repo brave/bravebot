@@ -1043,18 +1043,17 @@ letters as letters, with no instruction left waiting for a key.
 
 Vi editing has two modes over the same line. INSERT is the box everybody has, where a typed
 character lands at the caret. NORMAL takes a letter as an instruction, and a letter it has no
-instruction for does nothing at all rather than being typed. Every session opens in INSERT.
+instruction for does nothing at all rather than being typed. NORMAL opens two more for a while,
+VISUAL ([INPUT-30](#INPUT-30)) and REPLACE ([INPUT-37](#INPUT-37)). Every session opens in INSERT.
 
 A key beginning one of vi's instructions that this box does not have does nothing either, and nor
-does the key vi would give it. `"`, `q`, `@`, `m`, `'`, `` ` ``, `z`, `Z`, `[`, `]` and `R` each
-take one more key, and so do `g'` and `` g` ``. `R` begins vi's replace mode, which this box
-does not have, and takes one key the way `r` does (INPUT-28) rather than every key up to Escape. The
-operators vi spells after `g` that this box does not have, which are `g?`, `gq`, `gw` and `g@`, take
-the stretch they would act on, the way `d` does. After an operator, `'`, `` ` ``, `[`, `]` and `z`
-still take their key, so `d'a` does nothing. The other prefixes end the operator there, as they do
-in vi, and the key after `dm` is read on its own. VISUAL mode reads the prefixes the same way, except
-that the operators under `g` take no key, since the selection is already the stretch they act on, and
-`R` there is an instruction of its own ([INPUT-30](#INPUT-30)).
+does the key vi would give it. `"`, `q`, `@`, `m`, `'`, `` ` ``, `z`, `Z`, `[` and `]` each take
+one more key, and so do `g'` and `` g` ``. The operators vi spells after `g` that this box does not
+have, which are `g?`, `gq`, `gw` and `g@`, take the stretch they would act on, the way `d` does.
+After an operator, `'`, `` ` ``, `[`, `]` and `z` still take their key, so `d'a` does nothing. The
+other prefixes end the operator there, as they do in vi, and the key after `dm` is read on its own.
+VISUAL mode reads the prefixes the same way, except that the operators under `g` take no key, since
+the selection is already the stretch they act on.
 
 The ordinary box is in neither mode, and nothing about a mode is drawn at it.
 
@@ -1072,12 +1071,10 @@ it would make NORMAL mode a place where half the alphabet quietly edits the prom
 would find out by reading the line rather than by pressing the key.
 
 A prefix is the same promise one key later. `ma` is one instruction, and a box that did nothing with
-the `m` alone would read the `a` as the next one and open INSERT mode. For the same reason `Rx` would
-delete a character and `g?iw` would type a `w`. Taking the key vi would give the prefix keeps the
-box doing nothing for the whole of an instruction it does not have. Taking more than that is the
-opposite failure: after an operator vi gives `m` no key, and a box that waited for one would swallow
-the instruction typed next. One key after `R` is the least wait that keeps `Rx` from deleting, and
-every key up to Escape would be replace mode without the replacing.
+the `m` alone would read the `a` as the next one and open INSERT mode. For the same reason `g?iw`
+would type a `w`. Taking the key vi would give the prefix keeps the box doing nothing for the whole
+of an instruction it does not have. Taking more than that is the opposite failure: after an operator
+vi gives `m` no key, and a box that waited for one would swallow the instruction typed next.
 
 `verified-by: bravebot_tui::vim::the_configured_word_for_vi_editing_is_the_one_other_tools_use`
 `verified-by: bravebot_tui::vim::the_configured_word_is_read_whatever_its_case`
@@ -1378,7 +1375,8 @@ back as a line of its own. `J` makes this line and the one below into one with a
 the newline was, and `gJ` with nothing there and the blanks the line below began with left as they
 were. `u` puts back what the last change took, one step. `.` does the last change again at
 the caret. A put and a join are changes it cannot yet make again, and so are `r` and a case change
-over a selection, so after one of those `.` does nothing rather than make the change before it.
+over a selection and what `R` typed over the line ([INPUT-37](#INPUT-37)), so after one of those `.`
+does nothing rather than make the change before it.
 
 A marker is taken whole by every operator, or not at all, and taking one takes the attachment off.
 A case change goes around a marker and leaves it as it was, and `r` over one does nothing.
@@ -1570,6 +1568,14 @@ on, whether the edit came from one of vi's own keys or from a key VISUAL mode do
 that deletes nothing has not edited the line and leaves the stretch standing; choosing a style of
 editing abandons it along with the mode that showed it.
 
+`gv` marks out again the last selection that ended, however it ended, of the same kind and with the
+caret at the end it was at. Each end comes back at the row and the column it held before the key that
+ended the selection acted, so after `V>` it is the same rows, now shifted. Where the line no longer
+reaches that far an end stops where the line does, and one that falls inside a marker is the marker.
+Pressed in VISUAL mode, `gv` trades the selection on the screen for the one before it, and a second
+`gv` brings that one back. With no selection ended yet it does nothing, and a line that arrives
+whole, sent, recalled or put away, is one on which none has ended.
+
 **The whole marked stretch is drawn**, on every row it crosses, and the caret is not drawn within it.
 
 A selection holding a marker is not replaced character by character: that press does nothing.
@@ -1617,6 +1623,13 @@ the screen, and a key that closed it would be doing something visible while doin
 line. The style of editing is the other way round: it is chosen away from the box, and the box it
 comes back to may have no key that could act on a stretch and no mode to draw one for.
 
+`gv` is for a selection an operator has just spent: shifting the same rows again, or changing a
+stretch and then yanking it. Two positions would name other characters once the key that ended the
+selection had moved any, so the ends are kept as rows and columns, which is what vim keeps too. They
+are taken before that key acts because some keys move the caret as they end the selection, and `v1jU`
+would otherwise come back as the one character the caret was left on. After `p` over a selection vim
+marks out what was put; this box marks out the selection that was there, which is a known cost.
+
 Block-wise selection is a known cost rather than a clause.
 
 `verified-by: bravebot_tui::vim::an_operator_in_visual_mode_acts_on_the_selection`
@@ -1627,7 +1640,7 @@ Block-wise selection is a known cost rather than a clause.
 `verified-by: bravebot_tui::vim::a_text_object_in_visual_mode_selects`
 `verified-by: bravebot_tui::vim::replacing_a_selection_waits_for_the_character`
 `verified-by: bravebot_tui::vim::an_object_has_no_character_beyond_it`
-`verified-by: bravebot_tui::vim::every_mode_but_insert_takes_letters_as_instructions`
+`verified-by: bravebot_tui::vim::only_normal_and_visual_mode_take_letters_as_instructions`
 `verified-by: bravebot_tui::state::a_selection_is_marked_out_and_then_acted_on`
 `verified-by: bravebot_tui::state::a_selection_covers_the_character_it_opened_on`
 `verified-by: bravebot_tui::state::the_line_wise_selection_takes_whole_lines`
@@ -1652,6 +1665,15 @@ Block-wise selection is a known cost rather than a clause.
 `verified-by: bravebot_tui::render::the_selection_is_drawn_over_the_whole_stretch`
 `verified-by: bravebot_tui::render::a_selection_across_rows_is_drawn_on_all_of_them`
 `verified-by: bravebot_tui::render::the_ordinary_box_draws_no_selection`
+`verified-by: bravebot_tui::vim::replace_mode_and_the_last_selection_have_keys_of_their_own`
+`verified-by: bravebot_tui::state::gv_marks_out_the_last_selection_again`
+`verified-by: bravebot_tui::state::gv_after_a_shift_marks_out_the_rows_that_were_shifted`
+`verified-by: bravebot_tui::state::gv_marks_out_the_selection_as_it_was_before_the_key_that_ended_it`
+`verified-by: bravebot_tui::state::gv_in_visual_mode_trades_places_with_the_selection_before`
+`verified-by: bravebot_tui::state::gv_with_no_selection_made_yet_does_nothing`
+`verified-by: bravebot_tui::state::gv_on_a_line_that_arrived_whole_does_nothing`
+`verified-by: bravebot_tui::state::gv_over_a_line_that_has_changed_comes_back_where_the_caret_can_rest`
+`verified-by: bravebot_tui::state::taking_back_a_queued_prompt_with_a_selection_open_lets_go_of_it`
 
 <a id="INPUT-31"></a>
 ### INPUT-31: Ctrl-S on a prompt walked back to searches this workspace instead
@@ -2033,3 +2055,54 @@ would have typed had they known in advance.
 `verified-by: bravebot_tui::state::the_count_is_part_of_what_the_hint_line_draws`
 `verified-by: bravebot_tui::app::a_counted_row_key_never_reaches_the_prompt_history`
 `verified-by: bravebot_tui::render::the_hint_line_draws_the_count_in_front_of_an_instruction`
+
+<a id="INPUT-37"></a>
+### INPUT-37: `R` types over the line, and Backspace puts back what it took
+
+`R` in NORMAL mode opens REPLACE mode, and the hint line says `REPLACE`. Each character typed there
+takes the place of the one under the caret, and the caret moves past it; a letter is a letter, as it
+is in INSERT. Where there is no one character to take the place of, the character goes in beside the
+caret instead: at the end of a row, which it lengthens rather than eating the newline, and on a
+marker, which stays whole ([INPUT-3](#INPUT-3)). A new line ([INPUT-2](#INPUT-2)) goes in beside as
+well, breaking the row and taking nothing, and Enter sends as it does from INSERT.
+
+Backspace takes back the last character typed and puts back the one it took the place of, as far back
+as where `R` was pressed. Once the caret has moved off the end of what was typed, Backspace steps the
+caret left and takes nothing. Ctrl-W and Ctrl-U are Backspace as far as the start of the word and of
+the row. Escape goes back to NORMAL mode, except while a turn runs, when it stops the turn and
+Ctrl-`[` is the way back ([INPUT-24](#INPUT-24)).
+
+Everything typed between `R` and Escape is one change, and `u` puts the line back as it stood before
+the first character. An `R` left with nothing typed is no change, so `u` after it still takes back the
+change before. Any other edit of the line, such as a paste, Delete, or a line sent or recalled, ends
+the change, and what is typed over after it is a change of its own that Backspace takes back alone.
+`.` repeats none of it and does nothing after it ([INPUT-28](#INPUT-28)). A count in front of `R` is
+spent and says nothing.
+
+**Why.** `R` is how vi fixes a stretch of the same length without counting it out first, and in a box
+that had no instruction for it the letters after it were read as instructions. Backspace taking back
+only what was typed is vi's rule, and the reason for it: the mode is for typing over a line, and a key
+that went on to eat the line the person came to would be INSERT's Backspace under another name. Ctrl-W
+and Ctrl-U follow it for that reason, as they do in vim. A marker is typed beside rather than over
+because a marker with its first bracket gone names no attachment.
+
+The change begins at the first character rather than at `R` because `u` takes back one change, and an
+`R` pressed and left would otherwise leave the change before it with no way back. Another edit ends
+it because the change is kept as the line it began on, and REPLACE mode outlives a prompt being sent:
+typing on after one, `u` would put back what had already gone. vim repeats the
+typing with `.` and types it over as many times as a count says. Neither is here, since what REPLACE
+mode typed is not an instruction the session keeps; both are known costs.
+
+`verified-by: bravebot_tui::vim::replace_mode_and_the_last_selection_have_keys_of_their_own`
+`verified-by: bravebot_tui::vim::only_normal_and_visual_mode_take_letters_as_instructions`
+`verified-by: bravebot_tui::state::capital_r_types_each_character_in_place_of_the_one_under_the_caret`
+`verified-by: bravebot_tui::state::capital_r_past_the_end_of_a_row_adds_to_it`
+`verified-by: bravebot_tui::state::a_new_line_while_typing_over_breaks_the_row_without_taking_a_character`
+`verified-by: bravebot_tui::state::typing_over_a_marker_goes_in_beside_it`
+`verified-by: bravebot_tui::state::backspace_while_typing_over_puts_back_what_was_there`
+`verified-by: bravebot_tui::state::typing_over_is_one_change_to_undo_and_none_to_repeat`
+`verified-by: bravebot_tui::state::typing_over_a_line_that_arrived_whole_is_a_change_of_its_own`
+`verified-by: bravebot_tui::state::a_count_in_front_of_capital_r_is_spent`
+`verified-by: bravebot_tui::state::the_keys_that_delete_backwards_take_back_what_was_typed_over`
+`verified-by: bravebot_tui::render::the_hint_line_says_which_vi_mode_the_box_is_in`
+`verified-by: bravebot_tui::app::the_two_paths_answer_the_same_set_of_keys`

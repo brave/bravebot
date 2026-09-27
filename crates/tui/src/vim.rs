@@ -28,6 +28,9 @@ pub enum Mode {
     /// Line-wise where the flag says so, which is `V` against `v`: the selection is then whole lines
     /// however far along one either end happens to sit.
     Visual { lines: bool },
+    /// Typing over the line rather than into it, which is what `R` opens: each character takes the
+    /// place of the one under the caret.
+    Replace,
 }
 
 impl Mode {
@@ -42,15 +45,17 @@ impl Mode {
             Mode::Normal => "NORMAL",
             Mode::Visual { lines: false } => "VISUAL",
             Mode::Visual { lines: true } => "VISUAL LINE",
+            Mode::Replace => "REPLACE",
         }
     }
 
     /// Whether a letter typed now is an instruction rather than a letter.
     ///
-    /// Both modes that are not INSERT, so the one guard covers them: the difference between NORMAL and
-    /// VISUAL is what an instruction acts on, not whether a letter is one.
+    /// NORMAL and VISUAL, so the one guard covers them: the difference between those two is what an
+    /// instruction acts on, not whether a letter is one. REPLACE types its letters, as INSERT does,
+    /// and differs only in where they go.
     pub fn takes_instructions(self) -> bool {
-        !matches!(self, Mode::Insert)
+        !matches!(self, Mode::Insert | Mode::Replace)
     }
 }
 
@@ -120,6 +125,10 @@ pub enum Command {
     Join { spaced: bool },
     /// Mark out a stretch for the next instruction, character-wise or line-wise: `v` and `V`.
     Select { lines: bool },
+    /// Mark out the last selection again, which is `gv`.
+    Reselect,
+    /// Type over the line from the caret until Escape, which is `R`.
+    TypeOver,
     /// Swap which end of the selection the caret is at, which is `o`.
     SwapEnds,
     /// Replace every character of the selection with one, which is `r` once its character arrives.
@@ -482,7 +491,7 @@ pub enum Pending {
     /// `a`.
     OperateObject { operator: Operator, around: bool },
     /// One of vi's prefixes this box has no instruction for, waiting for the key vi would give it:
-    /// the register in `"a`, the mark in `ma`, the character in `Rx`. That key is taken, and nothing
+    /// the register in `"a`, the mark in `ma`, the scroll in `zz`. That key is taken, and nothing
     /// happens.
     Unclaimed,
     /// An operator vi spells after `g` that this box has no instruction for, waiting for the stretch
@@ -564,6 +573,7 @@ impl Pending {
                 None if c == 'e' => Command::Move(Motion::WordEndLeft),
                 None if c == 'E' => Command::Move(Motion::BigwordEndLeft),
                 None if c == 'J' => Command::Join { spaced: false },
+                None if c == 'v' => Command::Reselect,
                 // vi's other operators under `g`: rot13, formatting and the operator function. Each
                 // takes a stretch, so the keys naming one are not left to run on their own and open
                 // INSERT mode on the `i` of `g?iw`.
@@ -817,11 +827,11 @@ pub fn command(c: char) -> Command {
         // operator and the reason to have both: the selection is on the screen while it is chosen.
         'v' => Command::Select { lines: false },
         'V' => Command::Select { lines: true },
-        // vi's prefixes with no instruction here: a register, a macro, a mark, the scrolls, the
-        // bracket jumps, and replace mode. Each takes the key vi would give it, since a prefix that
-        // did nothing alone would leave the `a` of `ma` to open INSERT mode and the `x` of `Rx` to
-        // delete.
-        '"' | 'q' | '@' | 'm' | '\'' | '`' | 'z' | 'Z' | '[' | ']' | 'R' => {
+        'R' => Command::TypeOver,
+        // vi's prefixes with no instruction here: a register, a macro, a mark, the scrolls and the
+        // bracket jumps. Each takes the key vi would give it, since a prefix that did nothing alone
+        // would leave the `a` of `ma` to open INSERT mode.
+        '"' | 'q' | '@' | 'm' | '\'' | '`' | 'z' | 'Z' | '[' | ']' => {
             Command::Wait(Pending::Unclaimed)
         }
         _ => Command::Nothing,
@@ -937,7 +947,7 @@ mod tests {
     /// which is the `a` of `ma` opening INSERT mode.
     #[test]
     fn a_prefix_this_box_has_no_instruction_for_waits_for_its_key_and_then_does_nothing() {
-        for c in ['"', 'q', '@', 'm', '\'', '`', 'z', 'Z', '[', ']', 'R'] {
+        for c in ['"', 'q', '@', 'm', '\'', '`', 'z', 'Z', '[', ']'] {
             assert_eq!(command(c), Command::Wait(Pending::Unclaimed), "{c}");
         }
         for c in ' '..='~' {
@@ -1563,14 +1573,27 @@ mod tests {
         );
     }
 
-    /// Both modes that are not INSERT take a letter as an instruction, so one guard covers them: what
-    /// differs between NORMAL and VISUAL is what an instruction acts on.
+    /// NORMAL and VISUAL take a letter as an instruction, so one guard covers them: what differs
+    /// between the two is what an instruction acts on. REPLACE types its letters, and a guard that
+    /// read it as a third mode of instructions would take the `x` of `Rx` as a delete.
     #[test]
-    fn every_mode_but_insert_takes_letters_as_instructions() {
+    fn only_normal_and_visual_mode_take_letters_as_instructions() {
         assert!(!Mode::Insert.takes_instructions());
+        assert!(!Mode::Replace.takes_instructions());
         assert!(Mode::Normal.takes_instructions());
         assert!(Mode::Visual { lines: false }.takes_instructions());
         assert!(Mode::Visual { lines: true }.takes_instructions());
+    }
+
+    /// `R` opens REPLACE mode rather than waiting for one key the way `r` does, so everything typed
+    /// up to Escape goes over the line. `gv` marks the last selection out again, and is the same
+    /// pair in VISUAL mode, where `g` is read from a table of its own.
+    #[test]
+    fn replace_mode_and_the_last_selection_have_keys_of_their_own() {
+        assert_eq!(command('R'), Command::TypeOver);
+        assert_eq!(Pending::G.then('v'), Command::Reselect);
+        assert_eq!(Pending::VisualG.then('v'), Command::Reselect);
+        assert_eq!(Mode::Replace.as_str(), "REPLACE");
     }
 
     /// A yank reads without writing, which is why there is nothing for undo to put back after one and
