@@ -295,6 +295,15 @@ the record of command lines somebody asked to be remembered past the session, wh
 fresh. It reaches a fresh session because the key that made it said how long its answer lasts, and
 because what it carries is the asking rather than any trust.
 
+Errors and cancellation within a live session retain exact standing command approvals and live
+advice. They do not turn one-use consent or per-policy refusals into standing permission. Saving
+keeps standing approvals; resuming starts with no live advice or exposure answers.
+
+`verified-by: bravebot_agent::turn::retention::ordinary_endings_retain_exact_programs_and_live_advice`
+`verified-by: bravebot_cli::plain_retention_tests::failed_plain_turn_keeps_exact_approvals_advice_and_exposure`
+`verified-by: bravebot_tui::undo_tests::ordinary_tui_endings_keep_exact_approvals_advice_and_exposure`
+`verified-by: bravebot_ui_bridge::retention::worker::bridge_ordinary_endings_keep_decisions_live_and_resumed`
+
 Nothing else survives. A single-use endorsement is created by one approval, is bound to one value,
 and is never written down, so a resumed turn cannot replay a write or a run that an earlier turn
 was allowed. Answers to the planner's own questions are remembered only in the live session, so a

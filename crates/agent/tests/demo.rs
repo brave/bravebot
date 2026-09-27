@@ -266,6 +266,7 @@ fn a_background_server_stays_up() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     println!("  started ./serve in the background, then ran `sleep 1` in the foreground");

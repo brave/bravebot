@@ -100,7 +100,7 @@ fn oversized_undo(ending: &str, resumed: bool) {
     let start = conversation.recounted().len();
     let mut sink = Trail::new();
     let authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
-    let result = turn::resume(
+    let completed = turn::resume(
         &config,
         &Egress::new(),
         &workspace,
@@ -114,6 +114,7 @@ fn oversized_undo(ending: &str, resumed: bool) {
         None,
         &cancel,
     );
+    let result = completed.outcome;
     if ending == "cancel" {
         assert!(
             matches!(result, Err(turn::TurnError::Cancelled { .. })),
@@ -132,6 +133,7 @@ fn oversized_undo(ending: &str, resumed: bool) {
             addressed: None,
         },
         FinishedTurn {
+            decisions: Some(completed.decisions),
             outcome: result,
             conversation,
             sink,
@@ -235,6 +237,7 @@ fn oversized_undo(ending: &str, resumed: bool) {
         None,
         &Cancel::new(),
     )
+    .outcome
     .unwrap();
     server.join().unwrap();
     let requests: Vec<_> = requests.try_iter().collect();
@@ -784,6 +787,7 @@ fn bridge_handoff(ending: &str) {
         None,
         &Cancel::new(),
     )
+    .outcome
     .unwrap();
     server.join().unwrap();
     observed.extend(requests.try_iter());
@@ -876,6 +880,7 @@ fn editing_then_running_a_program_keeps_undo_and_warns() {
             None,
             &Cancel::new(),
         )
+        .outcome
         .unwrap();
         assert!(observe.ran);
         session.keep_backups(workspace.take_backups());
@@ -988,6 +993,7 @@ fn matching_hooks_keep_undo_with_saved_coverage_warnings() {
             None,
             &Cancel::new(),
         )
+        .outcome
         .unwrap();
         assert_eq!(
             std::fs::read_to_string(root.join("output.txt")).unwrap(),
@@ -1261,4 +1267,172 @@ fn resumed_undo_keeps_the_record_when_gap_evidence_is_missing() {
         stored.discard_unwritten("");
     }
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[path = "../../agent/test-support/answers.rs"]
+mod answers;
+
+/// The worker's current decisions must reach finish_turn before an error is classified or saved.
+#[test]
+fn ordinary_tui_endings_keep_exact_approvals_advice_and_exposure() {
+    if !in_isolated_profile() {
+        return;
+    }
+    for ending in ["success", "failure", "cancel"] {
+        for resumed in [false, true] {
+            let root = scratch_dir(&format!("tui-retention-{ending}-{resumed}"));
+            std::fs::create_dir_all(root.join("sub")).unwrap();
+            std::fs::write(
+                root.join(".env"),
+                "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n",
+            )
+            .unwrap();
+            let workspace = Workspace::new(&root).unwrap();
+            let mut trust = TrustStore::new(workspace.root());
+            trust.trust(".");
+            let home = bravebot_agent::home::directory().unwrap();
+            let authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
+            let cancel = Cancel::new();
+            let (config, requests, server) = endpoint::endpoint(
+                vec![
+                    endpoint::tool("read_file", json!({"path":".env"})),
+                    endpoint::tool("run", json!({"command":"touch approved.txt"})),
+                    if ending == "success" {
+                        endpoint::answer()
+                    } else {
+                        "fail".into()
+                    },
+                    endpoint::tool("run", json!({"command":"touch changed.txt"})),
+                    endpoint::tool(
+                        "run",
+                        json!({"command":"touch approved.txt","directory":"sub"}),
+                    ),
+                    endpoint::tool(
+                        "run",
+                        json!({"command":"touch approved.txt","directory":"."}),
+                    ),
+                    endpoint::tool("read_file", json!({"path":".env"})),
+                    endpoint::answer(),
+                ],
+                (ending == "cancel").then(|| (2, cancel.clone())),
+            );
+            let mut session = Session::new("test");
+            session.paste("read and run");
+            session.submit().unwrap();
+            let finished = std::thread::scope(|scope| {
+                scope
+                    .spawn(|| {
+                        let mut conversation = Conversation::new();
+                        let mut sink = Trail::new();
+                        let mut confirmer =
+                            answers::Answers::new(bravebot_agent::RunDecision::approve_always());
+                        let completed = turn::resume(
+                            &config,
+                            &Egress::new(),
+                            &workspace,
+                            &Task::new("read and run")
+                                .with_home(Some(home.clone()))
+                                .with_file_authority(authority.clone()),
+                            &mut conversation,
+                            &mut confirmer,
+                            &mut bravebot_agent::IgnoreReports,
+                            &mut sink,
+                            trust.clone(),
+                            TrustedPrograms::new(),
+                            None,
+                            &cancel,
+                        );
+                        assert_eq!(confirmer.exposures, 1);
+                        assert_eq!(confirmer.runs.len(), 1);
+                        FinishedTurn {
+                            decisions: Some(completed.decisions),
+                            outcome: completed.outcome,
+                            conversation,
+                            sink,
+                            servers: None,
+                        }
+                    })
+                    .join()
+                    .unwrap()
+            });
+            if ending == "cancel" {
+                assert!(matches!(
+                    finished.outcome,
+                    Err(turn::TurnError::Cancelled { .. })
+                ));
+            } else {
+                assert_eq!(finished.outcome.is_ok(), ending == "success");
+            }
+            let mut continued = finish_turn(
+                &mut session,
+                &config,
+                &workspace,
+                Line {
+                    text: "read and run",
+                    wrote: Wrote::ThePerson,
+                    addressed: None,
+                },
+                finished,
+                RetainedTurn {
+                    files: authority,
+                    programs: TrustedPrograms::new(),
+                    asked: AskedAbout::new(),
+                    exposed: Default::default(),
+                },
+            );
+            let mut stored = sessions::Handle::begin(
+                workspace.root(),
+                sessions::Front::Terminal,
+                bravebot_stamp::BUILD,
+            );
+            save(
+                &mut stored,
+                &session,
+                &continued.conversation,
+                &continued.trust,
+                &continued.programs,
+            );
+            if resumed {
+                let record = sessions::load(workspace.root(), stored.id()).unwrap();
+                continued.trust = record.trust_map(workspace.root()).unwrap();
+                continued.programs = record.trusted_programs(workspace.root());
+                continued.conversation = Conversation::restored(record.conversation);
+                continued.asked_about = AskedAbout::new();
+                continued.exposed = Default::default();
+            }
+            std::fs::remove_file(root.join("approved.txt")).unwrap();
+            let mut later = answers::Answers::new(bravebot_agent::RunDecision::reject());
+            turn::resume(
+                &config,
+                &Egress::new(),
+                &workspace,
+                &Task::new("continue")
+                    .with_home(Some(home.clone()))
+                    .already_asked_about(continued.asked_about)
+                    .already_exposed(continued.exposed),
+                &mut continued.conversation,
+                &mut later,
+                &mut bravebot_agent::IgnoreReports,
+                &mut Trail::new(),
+                continued.trust,
+                continued.programs,
+                None,
+                &Cancel::new(),
+            )
+            .outcome
+            .unwrap();
+            server.join().unwrap();
+            assert_eq!(later.runs.len(), 2);
+            assert_eq!(
+                later.runs[0].pattern,
+                (!resumed).then(|| home.join("settings.json"))
+            );
+            assert_eq!(later.runs[1].plan.directory, workspace.root().join("sub"));
+            assert_eq!(later.exposures, usize::from(resumed));
+            assert!(root.join("approved.txt").exists());
+            assert!(!root.join("changed.txt").exists());
+            assert!(!root.join("sub/approved.txt").exists());
+            assert_eq!(requests.try_iter().count(), 8);
+        }
+    }
 }

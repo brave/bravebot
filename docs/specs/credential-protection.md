@@ -556,6 +556,12 @@ shows is asked about under the path it was committed at, so agreeing to one file
 nothing about another's. It does not outlive the session, and the Known costs say what that rests
 on.
 
+A live session keeps these answers after a turn fails or is cancelled, including when a later
+context load fails. They are not written into the session record, so reopening asks again.
+
+`verified-by: bravebot_agent::turn::retention::ordinary_endings_retain_live_exposure_answers`
+`verified-by: bravebot_tui::undo_tests::ordinary_tui_endings_keep_exact_approvals_advice_and_exposure`
+
 **Why the person is asked rather than the read refused.** The rarity layer is a guess, and a tree
 holds development passwords, test fixtures and inline manifests as readily as it holds keys. A gate
 that refused every such read with no way to say otherwise would make an ordinary `.env` unreadable

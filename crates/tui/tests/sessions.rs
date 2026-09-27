@@ -2402,6 +2402,7 @@ mod completed_usage {
                 None,
                 &bravebot_core::cancel::Cancel::new(),
             )
+            .outcome
             .unwrap_err();
             for at in reporter.prompts {
                 session.prompt_recorded(at);
@@ -3581,7 +3582,8 @@ mod preserved_history {
             TrustedPrograms::new(),
             None,
             cancel,
-        );
+        )
+        .outcome;
         for message in inbound.try_iter() {
             match message {
                 ToMain::PromptRecorded(at) => session.prompt_recorded(at),
@@ -3702,7 +3704,7 @@ mod preserved_history {
         }
         let (result, continued) = worker.join().unwrap();
         *conversation = continued;
-        match result {
+        match result.outcome {
             Ok(outcome) => {
                 session.complete(outcome.reply_for_display(), vec![], outcome.tokens);
                 session.spent_time(outcome.timing);
