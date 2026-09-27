@@ -433,6 +433,7 @@ or success. All of it sits under the prompt's own heading, beside the headings t
 and how the turn ended rather than in place of any of them.
 
 `verified-by: bravebot_tui::sessions::reopening_keeps_failure_and_cancellation_in_export`
+`verified-by: bravebot_tui::sessions::accepted_corrections_survive_cancellation_storage_export_and_the_next_turn`
 
 **Why.** The transcript belongs to the person who had the conversation, which
 [compaction.md](compaction.md) says in as many words, and without this the only way to exercise
@@ -759,6 +760,7 @@ interface composed, never a message from the backend. A prompt handed back to th
 cancellation stays out of the transcript on resume while that turn's spend and timing stay with its
 number; whether those words remain available to recall is SESSION-6, and the two are independent of
 each other. None of this is sent to the planner.
+Accepted corrections remain within the cancelled turn through reload, export and later turns.
 
 **Why.** Turn boundaries cannot be recovered from the conversation afterwards, because a
 user-role message is as likely to be loaded context, a correction or a shell line as a prompt.
@@ -771,6 +773,7 @@ closes.
 `verified-by: bravebot_tui::sessions::reopening_keeps_task_ownership_and_recorded_measurements`
 `verified-by: bravebot_tui::sessions::failure_after_work_keeps_its_prompt_and_safe_reason_without_changing_context`
 `verified-by: bravebot_tui::sessions::hidden_cancellation_then_corrections_keeps_plan_ownership`
+`verified-by: bravebot_tui::sessions::accepted_corrections_survive_cancellation_storage_export_and_the_next_turn`
 `verified-by: bravebot_tui::sessions::processor_cancellation_preserves_its_plan_and_measurements_on_resume`
 `verified-by: bravebot_tui::sessions::reopening_does_not_restore_an_unsent_prompt`
 `verified-by: bravebot_tui::sessions::a_request_after_resume_excludes_the_display_failure`
