@@ -22,9 +22,28 @@ permissions:
   contents: read
 
 jobs:
+  # On a pull request, only where a manifest, the lockfile or deny.toml changed, decided the way
+  # ci.yml decides its jobs and failing the same way: toward running. The schedule and main run it
+  # whatever changed, since an advisory arrives without a diff.
+  changes:
+    name: Affected checks
+    runs-on: ubuntu-latest
+    outputs:
+      deps: ${{ steps.affected.outputs.deps }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+
+      - name: Decide which checks this change needs
+        id: affected
+        run: python3 contrib/affected-checks.py --github-output
+
   deny:
     name: Dependency policy
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.deps != 'false' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

@@ -65,8 +65,8 @@ class CheckTargets(unittest.TestCase):
         overrides.write_text("\n".join(
             f'{gate}:\n\t@echo {gate} >> "$$CALL_LOG"\n\t@test "$$FAIL_COMMAND" != {gate}\n'
             for gate in sorted(gates)
-        ) + '\ncheck-ui-build check-all-selftest check-reviewdog-selftest check-rebase-selftest:'
-          '\n\t@true\n')
+        ) + '\ncheck-ui-build check-all-selftest check-reviewdog-selftest check-rebase-selftest'
+          ' check-affected-selftest:\n\t@true\n')
         for target, expected in (("check-all-local", local), ("check-all", gates)):
             for failing in ("", *sorted(expected)):
                 with self.subTest(target=target, failing=failing):
@@ -79,12 +79,55 @@ class CheckTargets(unittest.TestCase):
         """The CI entry point must cover every suite and fail when any fails."""
         commands = ["python3 contrib/check-all-selftest.py",
                     "python3 contrib/check-reviewdog-selftest.py",
-                    "python3 agents/skills/rebase/selftest.py"]
+                    "python3 agents/skills/rebase/selftest.py",
+                    "python3 contrib/affected-checks.py --selftest"]
         for failing in ("", *commands):
             with self.subTest(failing=failing):
                 result = self.run_make("-k", "check-scripts", FAIL_COMMAND=failing)
                 self.assertEqual(result.returncode != 0, bool(failing), result.stderr)
                 self.assertCountEqual(self.log.read_text().splitlines(), commands)
+
+    def affected_classifier(self):
+        """A python3 that answers for the classifier with $AFFECTED and logs like the others."""
+        python = self.bin / "python3"
+        python.write_text('#!/bin/sh\ncommand="python3 $*"\n'
+                          'printf "%s\\n" "$command" >> "$CALL_LOG"\n'
+                          'case "$1 $2" in "contrib/affected-checks.py --containers") '
+                          'printf "%s\\n" "$AFFECTED_CONTAINERS";;\n'
+                          '  contrib/affected-checks.py*) printf "%s\\n" "$AFFECTED";; esac\n'
+                          '[ "$command" != "$FAIL_COMMAND" ]\n')
+        python.chmod(0o755)
+
+    def test_affected_runs_only_what_the_classifier_names_and_fails_with_it(self):
+        """A classifier that fails or names nothing must fail the gate, not run make's default
+        goal, and a gate it names must fail the target when it fails, without stopping the rest."""
+        self.affected_classifier()
+        classify = "python3 contrib/affected-checks.py"
+        locales = ["python3 contrib/check-locales.py --selftest", "python3 contrib/check-locales.py"]
+        versions = ["python3 contrib/check-versions.py --selftest", "python3 contrib/check-versions.py"]
+        for affected, failing, expected in (
+            ("check-locales", "", [classify, *locales]),
+            ("check-locales", locales[0], [classify, locales[0]]),
+            ("check-locales check-versions", locales[0], [classify, locales[0], *versions]),
+            ("check-locales", classify, [classify]),
+            ("", "", [classify]),
+        ):
+            with self.subTest(affected=affected, failing=failing):
+                result = self.run_make("check-affected", AFFECTED=affected, FAIL_COMMAND=failing)
+                self.assertEqual(result.returncode != 0, bool(failing) or not affected,
+                                 result.stdout + result.stderr)
+                self.assertEqual(self.log.read_text().splitlines(), expected)
+
+    def test_affected_containers_run_none_when_none_are_named(self):
+        """No container gate needed is a pass, and a failed classifier is not."""
+        self.affected_classifier()
+        classify = "python3 contrib/affected-checks.py --containers"
+        for failing in ("", classify):
+            with self.subTest(failing=failing):
+                result = self.run_make("check-affected-containers", AFFECTED_CONTAINERS="",
+                                       FAIL_COMMAND=failing)
+                self.assertEqual(result.returncode != 0, bool(failing), result.stderr)
+                self.assertEqual(self.log.read_text().splitlines(), [classify])
 
     def test_scan_targets_run_only_the_scanner_selftest_and_stop_if_it_fails(self):
         """A scan needs its own selftest, and must not run after that selftest fails."""
