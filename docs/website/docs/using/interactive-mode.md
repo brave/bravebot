@@ -152,6 +152,7 @@ in front of an operator and one in front of its motion multiply, so `2d3w` is `d
 | `3dd`, `d3w`, `3x`, `3X`, `3~`, `3rx`, `3gUU`, `3>>` | how much of the stretch the operator takes |
 | `3p`, `3J`, `3gJ` | how many copies go back, and how many rows end up as one |
 | `3.` | how many the repeat is of, in place of the count it recorded |
+| `3u` | how many changes to take back |
 
 **The line bounds a count, not the number you type.** A counted motion stops at the first step that
 moves nothing, so `999l` reaches the end of the line, and an extent takes what there is, so `9dd` on
@@ -197,9 +198,21 @@ them, from either bracket, and `d|` stops short of the column, so `d|` is `d0`. 
 `p` and `P` put the register back after and before the caret, and a stretch that was whole lines comes
 back as a line of its own. `J` makes this line and the one below into one, with a single space where
 the newline was. `gJ` joins them with nothing there and leaves the blanks the next line began with,
-for a line broken in the middle of a word or a path. `u` puts back what the last change took, **one step and no further**. `.` does the
-last change again at the caret, except after a put, a join, `r` or a case change over a selection, or
-typing over the line with `R`, where it does nothing.
+for a line broken in the middle of a word or a path.
+
+`u` puts back what the last change took, and pressed again the change before that, **as far back as
+a thousand changes**, the same depth as vim's. Everything typed in INSERT mode after `c` or one of
+the keys that open it is one change with the key, so one `u` takes back `o`'s new row and all you
+typed on it. Sending, clearing or putting away the line leaves nothing to undo, and so does a line
+the box is handed whole, such as a recalled prompt. There is no redo: Ctrl-R is the prompt search.
+
+`.` does the last change again at the caret. After `c`, `s`, `S`, `C`, `i`, `a`, `I`, `A`, `o` or
+`O` that includes what you typed, so `cw`, `X`, Escape, `w`, `.` changes the next word to `X` as
+well, and `p`, `P`, `J` and `gJ` are made again too. It does nothing after typing that attached
+something, whether a picture, a paste the box folded into a marker or an `@` name, since doing it
+again would attach the same thing twice, and nothing after a completion you chose from a list. It
+does nothing either after a put, a join, `r` or a case change over a selection, `d` or `c` over a
+selection made with `v` rather than `V`, or typing over the line with `R`.
 
 The register is vi's unnamed one and the only one. It is not the system clipboard, which Ctrl-V owns
 and which you share with every other window you have open, so a yank here does not travel out of the
