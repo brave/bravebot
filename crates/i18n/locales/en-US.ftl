@@ -1538,9 +1538,11 @@ session-vetting-in-force =
     a check that finds nothing reads content to the model without asking you
 # Said once at the top of a session when a newer release has been published. The command is
 # passed in rather than written here: it is a line somebody pastes into a shell, and which one it
-# is depends on how this copy was installed, so it is not a translator's to reword.
+# is depends on how this copy was installed, so it is not a translator's to reword. The newer
+# version is not named: the one on disk is as old as the last launch that asked, and the command
+# installs whatever is newest when it runs.
 update-available =
-    bravebot { $version } is out (this is { $running }); update with: { $command }
+    a newer bravebot is out (this is { $running }); update with: { $command }
 session-started-server = running the { $language } language server for this session ({ $program })
 # Said when a person agrees to offer a server's tools to the model. The list is recorded, so it
 # is offered again in later sessions until the server's list changes.
