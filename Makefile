@@ -52,6 +52,8 @@ help:
 	@echo "  make test                  Run all tests"
 	@echo "  make check                 Format check, clippy, tests, and toolchain age"
 	@echo "  make check-all-local       All checks except Docker platform checks"
+	@echo "  make check-affected        The host checks this branch's changes need [BASE=ref]"
+	@echo "  make check-affected-containers  The Docker checks they need [BASE=ref]"
 	@echo "  make check-spec            Check docs/specs against the implementation"
 	@echo "  make check-security        The security audit's deterministic half"
 	@echo "  make check-locales         Hold the catalogs to contrib/untranslated-messages.txt"
@@ -61,7 +63,7 @@ help:
 	@echo "  make docs-updated-to-sha   The commit the documentation site is current as of"
 	@echo "  make write-unverified      Write agents/unverified-clauses.txt, which check-spec holds it to"
 	@echo "  make write-untranslated    Write contrib/untranslated-messages.txt, which check-locales holds it to"
-	@echo "  make check-reviewdog       The PR security scan, on this branch's changes"
+	@echo "  make check-reviewdog       The PR security scan, on this branch's changes [BASE=ref]"
 	@echo "  make check-reviewdog-full  The same scan, over the whole tree"
 	@echo "  make check-npm             The installer test, the lockfile install and its lint"
 	@echo "  make check-deps            Advisories, licences, duplicate versions, and sources"
@@ -229,7 +231,7 @@ write-untranslated:
 # No model is involved, so both are deterministic.
 .PHONY: check-reviewdog
 check-reviewdog: check-reviewdog-selftest
-	@contrib/check-reviewdog.sh
+	@contrib/check-reviewdog.sh $(if $(BASE),--base '$(BASE)')
 
 .PHONY: check-reviewdog-full
 check-reviewdog-full: check-reviewdog-selftest
@@ -335,11 +337,30 @@ docs-updated-to-sha:
 check-all-local: check-scripts check check-spec check-security check-locales check-versions check-docs check-npm check-deps check-ui check-reviewdog
 check-all: check-all-local check-msrv check-windows check-linux
 
-.PHONY: check-scripts check-all-selftest check-reviewdog-selftest check-rebase-selftest
-check-scripts: check-all-selftest check-reviewdog-selftest check-rebase-selftest
+# The gates this branch's changes need, against its merge base with BASE, which check-reviewdog
+# is measured from too: the ones that always run in CI, then each one contrib/affected-checks.py
+# says a touched path could fail, the way CI decides which of its jobs to run. For iterating before a push; check-all is still the whole.
+# The container gates are their own target, since they are the ones that need Docker.
+# The classifier failing, or naming nothing, fails the target rather than handing make an empty
+# list, which it would answer by running its default goal and passing.
+.PHONY: check-affected check-affected-containers
+check-affected:
+	@targets="$$(python3 contrib/affected-checks.py $(if $(BASE),--base '$(BASE)'))" && \
+		[ -n "$$targets" ] || { echo "check-affected: no gates were named, so none ran" >&2; exit 1; }; \
+		$(MAKE) --no-print-directory -k $$targets
+
+check-affected-containers:
+	@targets="$$(python3 contrib/affected-checks.py --containers $(if $(BASE),--base '$(BASE)'))" && \
+		{ [ -z "$$targets" ] || $(MAKE) --no-print-directory -k $$targets; }
+
+.PHONY: check-scripts check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest
+check-scripts: check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest
 
 check-all-selftest:
 	python3 contrib/check-all-selftest.py
+
+check-affected-selftest:
+	python3 contrib/affected-checks.py --selftest
 
 check-reviewdog-selftest:
 	python3 contrib/check-reviewdog-selftest.py

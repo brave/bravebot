@@ -20,9 +20,35 @@ env:
   BRAVEBOT_ALLOW_UNCONFIGURED_BUILD: "1"
 
 jobs:
+  # Which of the jobs below this change could affect, from the paths it touches. A job its
+  # condition skips reports success, which branch protection counts as passing, so every
+  # condition here runs its job unless this said "false": a run where this job failed runs
+  # everything. Anything but a pull request runs everything too, so main and every tag are
+  # checked whole. The jobs with no condition answer in seconds and run on every change.
+  changes:
+    name: Affected checks
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.affected.outputs.rust }}
+      ui: ${{ steps.affected.outputs.ui }}
+      build: ${{ steps.affected.outputs.build }}
+      docs: ${{ steps.affected.outputs.docs }}
+      npm: ${{ steps.affected.outputs.npm }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The merge commit and its first parent, which is the base as the change would land on it.
+          fetch-depth: 2
+
+      - name: Decide which checks this change needs
+        id: affected
+        run: python3 contrib/affected-checks.py --github-output
+
   check:
     name: Format, lint, and test
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -56,6 +82,8 @@ jobs:
   macos:
     name: Lint and test on macOS
     runs-on: macos-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -94,6 +122,8 @@ jobs:
   windows:
     name: Lint the Windows target
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -126,6 +156,8 @@ jobs:
   npm-lockfile:
     name: npm lockfile
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.npm != 'false' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -138,10 +170,13 @@ jobs:
         run: make check-npm
 
   # The documentation website under docs/website. Docusaurus throws on broken links or
-  # broken anchors, so this job validates documentation correctness across the tree.
+  # broken anchors, so this job validates documentation correctness across the site. It links
+  # to the rest of the tree by URL, which the build does not follow.
   docs:
     name: Documentation website
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs != 'false' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -225,6 +260,8 @@ jobs:
   minimum-toolchain:
     name: Minimum supported Rust
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -251,10 +288,15 @@ jobs:
       - name: Build
         run: cargo build --all --locked
 
+  # On a pull request, only where what is linked or how it is built could have changed: a
+  # manifest, the lockfile, a build script or the Dockerfile. Nothing in the tree is gated on an
+  # architecture, and the jobs above lint every platform these build, so for anything else a
+  # cross-build proves again what they did. Main and every tag build all six.
   cross-build:
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
-    needs: check
+    needs: [changes, check]
+    if: ${{ !cancelled() && contains(fromJSON('["success", "skipped"]'), needs.check.result) && needs.changes.outputs.build != 'false' }}
     strategy:
       fail-fast: false
       matrix:
@@ -315,10 +357,13 @@ jobs:
   # submodule problem inside one repository, which is the whole thing folding the front end
   # in was meant to fix. This job compiles them anyway, because `npm run build` runs
   # `scripts/build-bridge.sh` to produce the two binaries the app spawns, so it needs the
-  # toolchain and the cache the sibling Rust jobs have.
+  # toolchain and the cache the sibling Rust jobs have, and it runs when any crate those two
+  # name changes, however far down.
   ui:
     name: Front end
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.ui != 'false' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -358,6 +403,8 @@ jobs:
   windows-desktop:
     name: Desktop on Windows
     runs-on: windows-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.ui != 'false' }}
     defaults:
       run:
         shell: bash
