@@ -1409,7 +1409,9 @@ mod tests {
         let mut conversation = four_exchanges();
         conversation.write_requested();
 
-        let restored = Conversation::restored(conversation.snapshot());
+        let written = serde_json::to_string(&conversation.snapshot()).expect("a record");
+        let restored =
+            Conversation::restored(serde_json::from_str(&written).expect("the record back"));
 
         assert!(
             restored.asked_to_write(),

@@ -86,8 +86,10 @@ tried to deliver, and telling it to start delivering would answer something nobo
 **Counted since the last answer, not since the turn began.** A stop is usually not the end of a
 task: the next prompt is `continue`, and a change the stopped turn asked to write is the change
 being continued. An answer usually is the end of one, so the turn after it starts from nothing
-written. The count belongs to the conversation, so a session resumed after a stop keeps it, and a
-fork starts from nothing written, because the turns it keeps end before the parent's last ones.
+written. The count belongs to the conversation, so a session resumed after a stop keeps it. A
+fork cut in front of one of the parent's prompts starts from nothing written, because the count
+describes the parent's last turns rather than the ones in front of the cut: starting clear costs
+at most a nudge the kept turns did not need, where starting set could withhold one they did.
 
 `verified-by: bravebot_agent::turn::a_turn_that_writes_nothing_for_long_enough_is_told_so`
 `verified-by: bravebot_agent::turn::a_turn_that_has_written_is_not_told_to_write`
