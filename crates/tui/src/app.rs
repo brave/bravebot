@@ -571,20 +571,57 @@ fn cycles_the_mode(key: KeyEvent) -> bool {
 ///
 /// Named rather than written out at each loop, because there are three of them and a condition
 /// copied three times is a condition that ends up meaning three things.
+///
+/// Escape is the box's as well for somebody editing the way vi does, and there it reaches the turn
+/// only once the box has no use for it (INPUT-24). Ctrl-C reaches the turn from any mode.
 fn stops_the_turn(session: &Session, key: KeyEvent) -> bool {
+    stops_a_command(session, key) && !(is_escape(session, key) && escape_is_the_boxs(session))
+}
+
+/// Whether a key press reaches a command running from shell mode.
+///
+/// The keys that stop a turn, with Escape reaching the command from every vi mode: no press reaches
+/// the box while a command runs, so there is no mode for Escape to have been meant for.
+fn stops_a_command(session: &Session, key: KeyEvent) -> bool {
     !session.scrolling()
         && session.watching().is_none()
         && !session.searching_history()
-        && (is_ctrl_c(key) || wants_cancel(key))
+        && (is_ctrl_c(key) || is_escape(session, key))
+}
+
+/// Whether a press is Escape, in either spelling the box's style answers.
+///
+/// For somebody editing the way vi does, Ctrl-`[` is Escape too: a terminal asked to disambiguate
+/// reports that chord where another sends the byte Escape already is, and which arrives is the
+/// terminal's choice rather than the person's. The ordinary box gives the chord nothing.
+fn is_escape(session: &Session, key: KeyEvent) -> bool {
+    wants_cancel(key)
+        || (key.code == KeyCode::Char('[')
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+            && session.editing() == crate::vim::Editing::Vi)
+}
+
+/// Whether Escape is for the box rather than for what is running.
+///
+/// A vi user presses Escape to leave INSERT, VISUAL or REPLACE and to abandon a half-typed
+/// instruction, out of habit, and the box is still in INSERT once the prompt has gone. Only NORMAL
+/// mode with nothing waiting leaves the box no use for the press. A count is waiting, since it is
+/// the start of an instruction. The ordinary box has no mode to leave.
+fn escape_is_the_boxs(session: &Session) -> bool {
+    match session.vi_mode() {
+        None => false,
+        Some(crate::vim::Mode::Normal) => session.half_typed().is_some(),
+        Some(_) => true,
+    }
 }
 
 /// Stop what is running, at the press that asked for it.
 ///
 /// None of the places that answer such a press is a ladder: the loops running a turn, a plan or a
-/// command read the stopping keys against [`stops_the_turn`] themselves, and a Ctrl-C at an
-/// approval box is answered by the box. So what [`handle_key_while_working`] does for every other
-/// key has to be done here as well: the offer to leave lives for one press, and each of these is a
-/// press.
+/// command read the stopping keys against [`stops_the_turn`] or [`stops_a_command`] themselves,
+/// and a Ctrl-C at an approval box is answered by the box. So what [`handle_key_while_working`]
+/// does for every other key has to be done here as well: the offer to leave lives for one press,
+/// and each of these is a press.
 ///
 /// It can be standing when the press arrives, because a turn can begin with nobody pressing
 /// anything. A loop tick or a watch submits from the main loop, carrying an offer put up while the
@@ -1042,6 +1079,12 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
     // second time, so a letter cannot come to disagree with the chord it stands for.
     let key = spelled_by_vi(session, key).unwrap_or(key);
 
+    // Read before the instruction below is abandoned, since whether Escape is the box's or the
+    // turn's depends on whether one is waiting.
+    let escape_stops_the_turn = session.status == Status::Working
+        && is_escape(session, key)
+        && stops_the_turn(session, key);
+
     // A press that is not a character cannot be the key a half-typed vi instruction waits for. Left
     // standing, the wait would take the next letter instead, so `d`, Left, `w` would delete a word
     // from wherever the arrow had put the caret.
@@ -1166,29 +1209,19 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
         // what someone reaches for on a long prompt. A paragraph worth thinking about goes
         // somewhere with room instead.
         _ if session.bindings().is_editor(&key) => Action::Edit,
-        // Escape means "stop what is happening" before it means anything else, so a turn in
-        // flight is cancelled first. The prompt comes back for editing rather than being lost.
-        KeyCode::Esc if session.status == Status::Working => Action::Cancel,
-        // Then, for somebody editing the way vi does, it is how the letters become instructions. The
-        // line is untouched: throwing a paragraph away is Ctrl-C's job, and a key that did both would
-        // be one nobody could press safely. In NORMAL mode already it is claimed and does nothing,
-        // which is what it does in every vi.
-        //
-        // The guard asks the style rather than calling the method that changes the mode, so nothing
-        // here mutates the session while the arms are still being chosen between. Ctrl-`[` is the same
-        // request from a terminal that reports the modifier, and the shared ladder answers that one.
-        KeyCode::Esc if session.editing() == crate::vim::Editing::Vi => {
-            session.enter_vi_normal();
-            Action::Redraw
-        }
-        // Then it discards a half-typed prompt, and an armed shell mode is something to abandon
-        // even with no line behind it: the marker is on screen, and Backspace at that same caret
-        // already backs out of it.
+        // Escape stops a turn in flight where it is the turn's rather than the box's, which the loop
+        // running the turn decides before any ladder. The prompt comes back for editing rather than
+        // being lost.
+        _ if escape_stops_the_turn => Action::Cancel,
+        // In the ordinary box it then discards a half-typed prompt, and an armed shell mode is
+        // something to abandon even with no line behind it: the marker is on screen, and Backspace
+        // at that same caret already backs out of it. For somebody editing the way vi does it is how
+        // the letters become instructions, which the shared ladder answers.
         //
         // On an empty line it does nothing at all. It used to leave, which made every press a
         // question of what was in the box: the key for abandoning a thought was the key for
         // ending the session as soon as the thought was short enough. Ctrl-C is the way out.
-        KeyCode::Esc => {
+        KeyCode::Esc if session.editing() == crate::vim::Editing::Ordinary => {
             session.clear_input();
             Action::Redraw
         }
@@ -1679,17 +1712,18 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
             session.scroll_down(u16::MAX);
             Action::Redraw
         }
-        // How the letters become instructions, for somebody editing the way vi does. The other
-        // spelling is Escape, which the idle ladder answers: a terminal asked to disambiguate reports
-        // this chord where another sends the byte Escape already is, and which arrives is the
-        // terminal's choice rather than the person's.
+        // How the letters become instructions, for somebody editing the way vi does, in both of the
+        // spellings [`is_escape`] answers. The line is untouched: throwing a paragraph away is
+        // Ctrl-C's job, and a key that did both would be one nobody could press safely. In NORMAL
+        // mode already it is claimed and does nothing, which is what it does in every vi.
         //
         // In the shared ladder, so it works while a turn runs like everything else that only moves
-        // the caret. It is also the one spelling that can: Escape mid-turn stops the turn, which is a
-        // difference the box is allowed and this chord is not part of.
+        // the caret. Mid-turn it arrives here only while it is the box's: from NORMAL mode with
+        // nothing waiting it stops the turn, which the loops decide before any ladder is reached.
         //
-        // Before the catch-all below, which would otherwise swallow it as an unclaimed control chord.
-        KeyCode::Char('[') if ctrl && session.editing() == crate::vim::Editing::Vi => {
+        // Before the catch-all below, which would otherwise swallow Ctrl-`[` as an unclaimed control
+        // chord.
+        _ if session.editing() == crate::vim::Editing::Vi && is_escape(session, key) => {
             session.enter_vi_normal();
             Action::Redraw
         }
@@ -4849,7 +4883,7 @@ fn run_command(
                 TermEvent::Key(key) if key.kind == KeyEventKind::Release => {}
                 // A running command is something to stop, so Ctrl-C stops it and stays, for the
                 // reason it stops a turn: the way out is the press after that, at the box.
-                TermEvent::Key(key) if stops_the_turn(session, key) => {
+                TermEvent::Key(key) if stops_a_command(session, key) => {
                     stop_what_is_running(session, &cancel);
                 }
                 TermEvent::Mouse(mouse) => {
@@ -6580,7 +6614,8 @@ fn drain_worker(
 /// Whether a key press asks for whatever is in flight to stop, and nothing more.
 ///
 /// Escape, and only Escape. Ctrl-C asks for it too, but Ctrl-C also leaves, so the loops take it
-/// separately: which of the two it means depends on whether there is anything to stop.
+/// separately: which of the two it means depends on whether there is anything to stop. In vi's
+/// style Escape can be the box's instead, which [`stops_the_turn`] decides.
 fn wants_cancel(key: KeyEvent) -> bool {
     matches!(key.code, KeyCode::Esc)
 }
@@ -10353,21 +10388,246 @@ mod tests {
         assert_eq!(session.vi_mode(), None);
     }
 
-    /// Escape stops the turn in flight before it means anything else, which is the one thing every
-    /// press of it has always done first. Entering a mode instead would leave the key that stops a
-    /// runaway turn doing nothing a person could see.
-    #[test]
-    fn escape_still_stops_a_turn_before_it_enters_normal_mode() {
+    /// A press the way the turn's own loop takes it: read against [`stops_the_turn`] before any
+    /// ladder, and handed to the box otherwise.
+    fn pressed_during_a_turn(session: &mut Session, key: KeyEvent, cancel: &Cancel) {
+        if stops_the_turn(session, key) {
+            stop_what_is_running(session, cancel);
+        } else {
+            turn_key(session, key, cancel);
+        }
+    }
+
+    /// A turn in flight in a session editing vi's way, with the box in INSERT as sending leaves it.
+    fn a_turn_running_vis_way() -> Session {
         let mut session = editing_vis_way();
         type_line(&mut session, "a question");
         handle_key(&mut session, key(KeyCode::Enter));
         assert_eq!(session.status, Status::Working);
+        assert_eq!(session.vi_mode(), Some(crate::vim::Mode::Insert));
+        session
+    }
+
+    /// A vi user presses Escape to leave INSERT, out of habit, and the box is still in INSERT once
+    /// the prompt has gone. The press is the box's: it enters NORMAL mode, the line typed mid-turn
+    /// stays as it was, and the turn keeps running.
+    #[test]
+    fn escape_from_insert_mode_mid_turn_enters_normal_mode_and_the_turn_keeps_running() {
+        for escape in [key(KeyCode::Esc), ctrl('[')] {
+            let mut session = a_turn_running_vis_way();
+            let cancel = Cancel::new();
+            for c in "next".chars() {
+                pressed_during_a_turn(&mut session, key(KeyCode::Char(c)), &cancel);
+            }
+
+            pressed_during_a_turn(&mut session, escape, &cancel);
+
+            assert!(
+                !cancel.is_cancelled(),
+                "{escape:?} from INSERT stopped the turn"
+            );
+            assert_eq!(
+                session.vi_mode(),
+                Some(crate::vim::Mode::Normal),
+                "{escape:?}"
+            );
+            assert_eq!(session.input(), "next", "{escape:?}");
+        }
+    }
+
+    /// In NORMAL mode with nothing waiting the box has no use for Escape, so the second of the two
+    /// presses a vi user makes is the one that stops the turn.
+    #[test]
+    fn a_second_escape_mid_turn_stops_the_turn() {
+        for escape in [key(KeyCode::Esc), ctrl('[')] {
+            let mut session = a_turn_running_vis_way();
+            let cancel = Cancel::new();
+            pressed_during_a_turn(&mut session, escape, &cancel);
+            assert!(!cancel.is_cancelled(), "{escape:?}");
+
+            pressed_during_a_turn(&mut session, escape, &cancel);
+
+            assert!(
+                cancel.is_cancelled(),
+                "a second {escape:?} left the turn running"
+            );
+        }
+    }
+
+    /// An instruction still waiting for its key is what Escape abandons, and abandoning it is all
+    /// the press does: the turn keeps running and the Escape after it stops the turn. A count is
+    /// waiting too, being the start of an instruction.
+    #[test]
+    fn escape_mid_turn_abandons_a_waiting_instruction_rather_than_stopping_the_turn() {
+        for escape in [key(KeyCode::Esc), ctrl('[')] {
+            for waiting in ['d', '2'] {
+                let mut session = a_turn_running_vis_way();
+                let cancel = Cancel::new();
+                pressed_during_a_turn(&mut session, escape, &cancel);
+                pressed_during_a_turn(&mut session, key(KeyCode::Char(waiting)), &cancel);
+                assert!(session.half_typed().is_some(), "{waiting} is not waiting");
+
+                pressed_during_a_turn(&mut session, escape, &cancel);
+
+                let keys = format!("{waiting}, {escape:?}");
+                assert!(!cancel.is_cancelled(), "{keys} stopped the turn");
+                assert_eq!(session.half_typed(), None, "{keys}");
+                assert_eq!(session.vi_mode(), Some(crate::vim::Mode::Normal), "{keys}");
+
+                pressed_during_a_turn(&mut session, escape, &cancel);
+                assert!(
+                    cancel.is_cancelled(),
+                    "{keys}, {escape:?} left the turn running"
+                );
+            }
+        }
+    }
+
+    /// VISUAL and REPLACE are left by Escape as INSERT is, so the press that leaves either mid-turn
+    /// is the box's as well.
+    #[test]
+    fn escape_mid_turn_leaves_visual_and_replace_modes_rather_than_stopping_the_turn() {
+        for escape in [key(KeyCode::Esc), ctrl('[')] {
+            for (opening, opened) in [
+                ('v', crate::vim::Mode::Visual { lines: false }),
+                ('V', crate::vim::Mode::Visual { lines: true }),
+                ('R', crate::vim::Mode::Replace),
+            ] {
+                let mut session = a_turn_running_vis_way();
+                let cancel = Cancel::new();
+                for c in "next".chars() {
+                    pressed_during_a_turn(&mut session, key(KeyCode::Char(c)), &cancel);
+                }
+                pressed_during_a_turn(&mut session, escape, &cancel);
+                pressed_during_a_turn(&mut session, key(KeyCode::Char(opening)), &cancel);
+                assert_eq!(session.vi_mode(), Some(opened), "{opening}");
+
+                pressed_during_a_turn(&mut session, escape, &cancel);
+
+                let keys = format!("{opening}, {escape:?}");
+                assert!(!cancel.is_cancelled(), "{keys} stopped the turn");
+                assert_eq!(session.vi_mode(), Some(crate::vim::Mode::Normal), "{keys}");
+            }
+        }
+    }
+
+    /// Ctrl-C is the box's in no mode, so it stops the turn on the first press whatever the box is
+    /// doing.
+    #[test]
+    fn ctrl_c_stops_a_turn_on_the_first_press_from_every_vi_mode() {
+        let escape = key(KeyCode::Esc);
+        for before in [
+            &[][..],
+            &[escape],
+            &[escape, key(KeyCode::Char('d'))],
+            &[escape, key(KeyCode::Char('v'))],
+            &[escape, key(KeyCode::Char('R'))],
+        ] {
+            let mut session = a_turn_running_vis_way();
+            let cancel = Cancel::new();
+            for pressed in before {
+                pressed_during_a_turn(&mut session, *pressed, &cancel);
+            }
+            assert!(!cancel.is_cancelled(), "{before:?}");
+
+            pressed_during_a_turn(&mut session, ctrl('c'), &cancel);
+
+            assert!(
+                cancel.is_cancelled(),
+                "ctrl-c after {before:?} left the turn running"
+            );
+        }
+    }
+
+    /// The ordinary box has no mode for Escape to leave, so there it stops the turn on the first
+    /// press, and Ctrl-`[` is still nothing to it.
+    #[test]
+    fn the_ordinary_box_stops_a_turn_on_the_first_escape() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "a question");
+        handle_key(&mut session, key(KeyCode::Enter));
+        let cancel = Cancel::new();
+
+        pressed_during_a_turn(&mut session, ctrl('['), &cancel);
+        assert!(
+            !cancel.is_cancelled(),
+            "ctrl-[ stopped the ordinary box's turn"
+        );
+
+        pressed_during_a_turn(&mut session, key(KeyCode::Esc), &cancel);
+        assert!(cancel.is_cancelled(), "escape left the turn running");
+    }
+
+    /// The idle ladder names the same stop for a session marked working, and reads it before the
+    /// press abandons what was waiting, since what was waiting is what decides it.
+    #[test]
+    fn the_idle_ladder_enters_normal_mode_before_escape_stops_a_turn() {
+        let mut session = a_turn_running_vis_way();
+
+        assert_eq!(handle_key(&mut session, key(KeyCode::Esc)), Action::Redraw);
+        assert_eq!(session.vi_mode(), Some(crate::vim::Mode::Normal));
+
+        handle_key(&mut session, key(KeyCode::Char('d')));
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Esc)),
+            Action::Redraw,
+            "d, escape"
+        );
+        assert_eq!(session.half_typed(), None);
 
         assert_eq!(handle_key(&mut session, key(KeyCode::Esc)), Action::Cancel);
-        assert_eq!(
-            session.vi_mode(),
-            Some(crate::vim::Mode::Insert),
-            "the press that stopped the turn also changed the mode"
+        assert_eq!(handle_key(&mut session, ctrl('[')), Action::Cancel);
+    }
+
+    /// A running command takes no press at the box, so there is no mode for Escape to have been
+    /// meant for, and it stops the command from INSERT as well.
+    #[test]
+    fn escape_stops_a_command_from_every_vi_mode() {
+        let session = editing_vis_way();
+        assert_eq!(session.vi_mode(), Some(crate::vim::Mode::Insert));
+
+        for escape in [key(KeyCode::Esc), ctrl('[')] {
+            assert!(!stops_the_turn(&session, escape), "{escape:?}");
+            assert!(stops_a_command(&session, escape), "{escape:?}");
+        }
+        assert!(
+            !stops_a_command(&Session::new("none"), ctrl('[')),
+            "ctrl-[ stopped a command from the ordinary box"
+        );
+    }
+
+    /// A summary, an aside and a goal check read the stop keys against the same gate as a turn, so
+    /// from INSERT Escape is the box's there too. The notice that nothing can be stopped, and the
+    /// goal coming off, wait for the Escape that is not.
+    #[test]
+    fn escape_from_insert_mode_reaches_the_box_during_a_single_request() {
+        let mut session = having_sent(&["first question"]);
+        session.choose_editing(crate::vim::Editing::Vi);
+        session.begin_aside();
+        let said = session.transcript.len();
+
+        one_request_key(&mut session, key(KeyCode::Esc), "nothing to interrupt");
+        assert_eq!(session.vi_mode(), Some(crate::vim::Mode::Normal));
+        assert_eq!(session.transcript.len(), said, "escape from INSERT said so");
+
+        one_request_key(&mut session, key(KeyCode::Esc), "nothing to interrupt");
+        assert_eq!(session.transcript.len(), said + 1);
+
+        let mut session = having_sent(&["first question"]);
+        session.choose_editing(crate::vim::Editing::Vi);
+        session.begin_aside();
+        session.start_goal("cargo test exits 0".to_string());
+
+        goal_check_key(&mut session, key(KeyCode::Esc));
+        assert!(
+            session.goal().is_some(),
+            "escape from INSERT took the goal off"
+        );
+
+        goal_check_key(&mut session, key(KeyCode::Esc));
+        assert!(
+            session.goal().is_none(),
+            "escape in NORMAL left the goal armed"
         );
     }
 
@@ -10464,8 +10724,7 @@ mod tests {
     }
 
     /// While a turn runs the box is still NORMAL mode's, and a press that is not a character still
-    /// abandons the wait. So does stopping the turn, which Escape and Ctrl-C do before any ladder
-    /// reads them.
+    /// abandons the wait. So does stopping the turn, which Ctrl-C does before any ladder reads it.
     #[test]
     fn a_press_while_a_turn_runs_abandons_an_instruction_still_waiting_for_a_key() {
         let working = || {
