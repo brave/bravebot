@@ -600,6 +600,24 @@ mod tests {
         }
     }
 
+    /// The person follows the turn, whose line before spawn_agent already says why a delegate
+    /// started. The terminal interface draws none of a delegate's narration, and a delegate runs
+    /// the most rounds, so a line per round there is the most spent on the least shown.
+    #[test]
+    fn no_kind_is_told_to_say_why_before_its_calls() {
+        for (name, may_delegate) in Kind::NAMES
+            .iter()
+            .flat_map(|name| [(name, true), (name, false)])
+        {
+            let kind = Kind::from_name(name).expect("enumerated");
+            let prompt = prompt_for(&kind.capabilities(), "", may_delegate);
+            assert!(
+                !prompt.contains("Before each round of tool calls"),
+                "a {name} was told to say why before each of its rounds"
+            );
+        }
+    }
+
     /// Whether a delegate may delegate is where it sits, and it is told which: one above the
     /// bottom that believed it could not would do serially what it was offered a tool to fan
     /// out, and one at the bottom told it could would spend a round being refused.

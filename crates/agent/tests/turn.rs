@@ -10259,6 +10259,42 @@ fn the_planner_is_told_to_build_and_test_what_it_changed() {
     );
 }
 
+/// The screen shows every call a turn makes and nothing of why it made it, so a session reads as
+/// a list of commands. What the model writes before a round of calls is already drawn; a model
+/// that is never asked for it mostly sends the calls bare.
+#[test]
+fn the_planner_is_told_to_say_why_before_each_round_of_calls() {
+    let scratch = Scratch::new("say-why-before-calls");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(&reply_with("the answer"));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("do the work"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let body = received.recv().expect("request body");
+    assert!(
+        body.contains("Before each round of tool calls, write one short line saying why"),
+        "the planner was not told to say why before its calls"
+    );
+    // Kept to a line so it costs a few tokens a round rather than a paragraph.
+    assert!(
+        body.contains("One line, not a plan"),
+        "the planner was not told to keep the reason to one line"
+    );
+}
+
 /// A project without one is the ordinary case, and it must not cost a notice or a refusal.
 #[test]
 fn a_missing_agents_file_is_not_an_error() {
