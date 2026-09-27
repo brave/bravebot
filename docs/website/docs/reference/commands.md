@@ -338,7 +338,8 @@ That is what makes a goal steerable. Stop the turn, say something else, and the 
 there; the press that ends the goal is the one you make with nothing running.
 
 A check already in flight is one request and does not stop, but Escape and Ctrl-C still take the
-goal off, and nothing more is sent. A verdict about a goal you have just taken off is neither acted
+goal off, and nothing more is sent. With vi editing, an Escape from INSERT mode enters NORMAL mode
+first, as it does while a turn runs. A verdict about a goal you have just taken off is neither acted
 on nor reported.
 
 **A goal is never written down.** It is not in the session record, so `--resume` restores none and it

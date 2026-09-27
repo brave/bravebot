@@ -137,7 +137,8 @@ interrupt away at the moment it is most wanted. The asymmetry is in what the ref
 the key costs.
 
 It would also buy nothing. The interrupt an editor writes arrives on its own, so a guard asking whether
-it arrived alone passes it, and Escape stops a turn on one byte as well. **So an editor writing `\x03`
+it arrived alone passes it, and Escape stops a turn on one byte as well, or on two from vi's INSERT
+mode ([INPUT-24](#INPUT-24)). **So an editor writing `\x03`
 or `\x1b` into the terminal stops whatever is running, and nothing here prevents it.** What bounds the
 damage is that a stopped turn puts its prompt back where the box can take it, so the loss is the tokens
 and the time rather than the work. That is a bound and not a defence, and it is written here so nobody
@@ -252,7 +253,7 @@ process and can carry only text, so Ctrl-V is the key for a picture, and which k
 carries a picture is said once per session. Ctrl-Enter (INPUT-36) needs the same kind of terminal, or
 Windows, which reports the modifier without being asked. Elsewhere it arrives as Enter and only
 queues the line, so the offer beside the queue is not drawn there, and the way to the same turn is
-Up, then Escape, then Enter.
+Up, then Escape, then Enter. From vi's INSERT mode that Escape is two presses (INPUT-24).
 
 **Why.** A chord that silently does nothing reads as a broken feature.
 
@@ -324,7 +325,7 @@ named here and nowhere else:
 | Key | Why it may differ |
 |---|---|
 | Enter | sends, which is the whole of what is refused (INPUT-10), and a line that is one of the words a slash may begin waits to be carried out rather than to be sent ([commands.md](commands.md)) |
-| Escape, Ctrl-C | stop the turn in flight (INPUT-4) |
+| Escape, Ctrl-C | stop the turn in flight (INPUT-4), Escape in vi's style only from NORMAL mode with nothing waiting, and Ctrl-`[` with it ([INPUT-24](#INPUT-24)) |
 | Ctrl-Enter | queues the line as Enter does, then stops the turn in flight so what is waiting goes now (INPUT-36) |
 | Ctrl-D | leaves, which is not something the box does |
 | Ctrl-G | hands the screen the turn is drawing on to an editor (INPUT-14) |
@@ -1117,8 +1118,19 @@ moves a word rather than deleting one. So does every other press that is not a c
 an arrow, Backspace or Enter, which then does what it does alone, and so does the press that stops a
 turn. Pressed in NORMAL mode with nothing waiting, Escape is claimed and does nothing.
 
-A turn in flight is still stopped first, and discarding a half-typed line is still Ctrl-C. In the
-ordinary style Escape discards the line as it always has (INPUT-4).
+**While a turn runs, Escape is the box's until the box has no use for it:**
+
+| The box | Escape |
+|---|---|
+| INSERT, VISUAL or REPLACE | enters NORMAL mode, and the turn keeps running |
+| NORMAL, an instruction or a count waiting | abandons it, and the turn keeps running |
+| NORMAL, nothing waiting | stops the turn ([INPUT-4](#INPUT-4)) |
+
+Ctrl-`[` is Escape there too, and Ctrl-C stops the turn on the first press from every mode. A summary,
+an aside, a goal check and a manifest run read Escape the same way, so it reaches them only from NORMAL mode with
+nothing waiting. A command run from shell mode takes no press at the box, so Escape stops one from
+every mode, and so does Ctrl-`[`. Discarding a half-typed line is still Ctrl-C. In the ordinary style
+Escape discards the line as it always has and stops a turn on the first press (INPUT-4).
 
 The mode the box is in is drawn beneath it, beside the mode that says what the session asks before
 it acts, and is given up only after everything that is not a mode. The keys of an instruction still
@@ -1128,6 +1140,12 @@ and the word alone once the instruction is whole or abandoned.
 **Why.** These are two presses of one key in the same box, and a key that both entered a mode and
 threw a paragraph away would be one nobody could press safely. Somebody reaching for NORMAL mode
 would lose a prompt each time, and the way to find out is to have already lost one.
+
+A stopped turn costs more than a paragraph. A vi user presses Escape to leave INSERT out of habit,
+and the box is still in INSERT once the prompt has gone, so a stop from there would end work nobody
+asked to stop. Only in NORMAL mode with nothing waiting is the
+press not one the box would take. Ctrl-C is the box's in no mode, so a turn going wrong can still be
+stopped on the first press.
 
 Answering one spelling of the chord works on one machine and does nothing on the next, which reads
 as a broken key rather than as a terminal difference.
@@ -1152,7 +1170,15 @@ alone.
 `verified-by: bravebot_tui::app::a_press_while_a_turn_runs_abandons_an_instruction_still_waiting_for_a_key`
 `verified-by: bravebot_tui::render::the_hint_line_draws_an_instruction_still_waiting_beside_the_mode`
 `verified-by: bravebot_tui::app::the_chord_that_enters_normal_mode_does_nothing_to_the_ordinary_box`
-`verified-by: bravebot_tui::app::escape_still_stops_a_turn_before_it_enters_normal_mode`
+`verified-by: bravebot_tui::app::escape_from_insert_mode_mid_turn_enters_normal_mode_and_the_turn_keeps_running`
+`verified-by: bravebot_tui::app::a_second_escape_mid_turn_stops_the_turn`
+`verified-by: bravebot_tui::app::escape_mid_turn_abandons_a_waiting_instruction_rather_than_stopping_the_turn`
+`verified-by: bravebot_tui::app::escape_mid_turn_leaves_visual_and_replace_modes_rather_than_stopping_the_turn`
+`verified-by: bravebot_tui::app::ctrl_c_stops_a_turn_on_the_first_press_from_every_vi_mode`
+`verified-by: bravebot_tui::app::the_ordinary_box_stops_a_turn_on_the_first_escape`
+`verified-by: bravebot_tui::app::the_idle_ladder_enters_normal_mode_before_escape_stops_a_turn`
+`verified-by: bravebot_tui::app::escape_stops_a_command_from_every_vi_mode`
+`verified-by: bravebot_tui::app::escape_from_insert_mode_reaches_the_box_during_a_single_request`
 `verified-by: bravebot_tui::state::leaving_insert_mode_puts_the_caret_on_a_character`
 `verified-by: bravebot_tui::render::the_hint_line_says_which_vi_mode_the_box_is_in`
 `verified-by: bravebot_tui::render::the_hint_line_says_nothing_about_a_box_that_edits_the_ordinary_way`
@@ -2047,7 +2073,7 @@ and a person who typed one by accident would otherwise find out from what the ne
 ### INPUT-36: Ctrl-Enter stops the turn and sends what is waiting, as one turn
 
 Ctrl-Enter mid-turn takes the line out of the box exactly as Enter does ([INPUT-10](#INPUT-10)), and
-then stops the turn in flight as Escape does ([INPUT-4](#INPUT-4)). What was waiting when it was
+then stops the turn in flight as Ctrl-C does ([INPUT-4](#INPUT-4)). What was waiting when it was
 pressed goes once the turn has ended, and the prompts among it go as **one** turn, one to a line, in
 the order they were typed. Over an empty box it does the second half alone.
 
@@ -2123,8 +2149,7 @@ well, breaking the row and taking nothing, and Enter sends as it does from INSER
 Backspace takes back the last character typed and puts back the one it took the place of, as far back
 as where `R` was pressed. Once the caret has moved off the end of what was typed, Backspace steps the
 caret left and takes nothing. Ctrl-W and Ctrl-U are Backspace as far as the start of the word and of
-the row. Escape goes back to NORMAL mode, except while a turn runs, when it stops the turn and
-Ctrl-`[` is the way back ([INPUT-24](#INPUT-24)).
+the row. Escape goes back to NORMAL mode, while a turn runs as well ([INPUT-24](#INPUT-24)).
 
 Everything typed between `R` and Escape is one change, and `u` puts the line back as it stood before
 the first character. An `R` left with nothing typed is no change, so `u` after it still takes back the

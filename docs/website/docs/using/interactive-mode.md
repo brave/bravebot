@@ -23,7 +23,7 @@ growing further. It keeps growing while a turn runs.
 | Ctrl-G | compose in `$VISUAL` or `$EDITOR` and take back what you saved |
 | Ctrl-V | paste what is on the clipboard, a picture included |
 | Ctrl-S | put the line away, bring back the one you put away, or search this workspace |
-| Escape | discard a half-typed prompt, or stop a running turn |
+| Escape | discard a half-typed prompt, or stop a running turn (with vi editing, from NORMAL mode) |
 | Ctrl-C | stop the nearest thing there is to stop, and leave when there is nothing left |
 | Up / Down | walk back through prompts you have sent |
 | Ctrl-R | search every prompt you have sent |
@@ -69,9 +69,22 @@ since the selection is the stretch, and `R` changes the rows the selection cross
 **Escape enters NORMAL mode and leaves the line exactly as it was.** It also abandons an instruction
 still waiting for a key, so `d`, Escape, `w` moves a word rather than deleting one, and so does any
 other key that is not a character, such as an arrow or Enter. Discarding a
-half-typed line is still Ctrl-C, and a turn in flight is still stopped first. Ctrl-`[` is the same
-request from a terminal that reports the modifier rather than sending the byte Escape already is. In
-the ordinary box Escape discards the line as it always has.
+half-typed line is still Ctrl-C. Ctrl-`[` is the same request from a terminal that reports the
+modifier rather than sending the byte Escape already is. In the ordinary box Escape discards the line
+as it always has.
+
+**While a turn runs, Escape stops it only once the box has no use for the press:**
+
+| The box | Escape |
+|---|---|
+| INSERT, VISUAL or REPLACE | enters NORMAL mode, and the turn keeps running |
+| NORMAL, an instruction or a count waiting | abandons it, and the turn keeps running |
+| NORMAL, nothing waiting | stops the turn |
+
+So the Escape you press out of habit after sending leaves INSERT, and a second one stops the turn.
+Ctrl-C stops the turn on the first press from any mode. A summary, an aside, a goal check and a
+manifest run take Escape the same way. A shell command takes no keys at the box, so
+Escape stops one from any mode. In the ordinary box Escape stops a turn on the first press.
 
 ### Getting back into INSERT mode
 
@@ -511,7 +524,8 @@ manifest run, Ctrl-Enter only queues the line, and Escape is still the key that 
 
 While something is waiting behind a turn, the last waiting row says so. It says so only where the
 terminal reports the modifier (see Shift-Enter above), because elsewhere Ctrl-Enter arrives as Enter
-and only queues the line. There, **Up**, then **Escape**, then **Enter** gets you the same turn.
+and only queues the line. There, **Up**, then **Escape**, then **Enter** gets you the same turn. With
+vi editing, from INSERT mode, that is Escape twice.
 
 ### Taking the queue back
 

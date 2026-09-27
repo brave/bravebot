@@ -196,7 +196,7 @@ pays for it.
 | What | When |
 |---|---|
 | the person asks | `/goal clear` |
-| the person interrupts | Ctrl-C, read against the goal after a mode open over the session, the turn in flight and the line in the box, and before leaving; during a check Escape reaches the goal as well, and neither key reaches it while a mode is open |
+| the person interrupts | Ctrl-C, read against the goal after a mode open over the session, the turn in flight and the line in the box, and before leaving; during a check Escape reaches the goal as well, where it would stop a turn ([INPUT-24](terminal-input.md#INPUT-24)), and neither key reaches it while a mode is open |
 | the session moves on | `/clear`, and leaving |
 | the rounds run out | [GOAL-9](#GOAL-9) |
 

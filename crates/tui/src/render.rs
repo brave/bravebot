@@ -2925,7 +2925,7 @@ const COMPACTED_CONTEXT: &str = "context compacted";
 fn shortcuts(editing: crate::vim::Editing, bindings: &Keybindings) -> [(String, &'static str); 22] {
     let escape = match editing {
         crate::vim::Editing::Ordinary => "clear the line",
-        crate::vim::Editing::Vi => "take letters as commands",
+        crate::vim::Editing::Vi => "letters as commands, then stop",
     };
     [
         ("!".to_string(), "run a shell command"),
@@ -6736,8 +6736,9 @@ mod tests {
     }
 
     /// The list is the one place a binding's meaning is written down, so it cannot go on saying that
-    /// Escape clears the line to somebody whose Escape takes the letters as commands. A list
-    /// advertising a binding that does something else is worse than no list.
+    /// Escape clears the line to somebody whose Escape takes the letters as commands, and it has to
+    /// say that the press after that one is the stop. A list advertising a binding that does
+    /// something else is worse than no list.
     #[test]
     fn the_key_list_says_what_escape_does_in_the_box_it_is_drawn_over() {
         let mut ordinary = Session::new("none");
@@ -6753,7 +6754,7 @@ mod tests {
             !drawn.contains("clear the line"),
             "the list told a vi box that escape clears the line: {drawn}"
         );
-        assert!(drawn.contains("take letters as commands"), "{drawn}");
+        assert!(drawn.contains("letters as commands, then stop"), "{drawn}");
     }
 
     /// The moment a person hunts for a key is the moment a turn is going somewhere they did not
