@@ -4,6 +4,7 @@ title: Slash commands
 status: normative
 governs:
   - crates/tui/src/app.rs
+  - crates/tui/src/skills.rs
 guards:
   - symbol: commands
 documented-by: docs/website/docs/reference/commands.md
@@ -22,12 +23,13 @@ conversation never sees, and where its answer is drawn is [watching.md](watching
 `/manifest` starts the other kind of run, which is [manifest.md](manifest.md)'s. The `!` prompt is
 a different surface entirely and is [shell-mode.md](shell-mode.md).
 
-**Skills are not on this surface.** Other agents let a person type a skill's name after a slash,
-and this one does not: a skill is advertised to the planner by name and description, and its body
-is fetched by the planner asking for it. Nothing in the input box knows skills exist, so
-`/commit-style` is a prompt like any other sentence. [skills.md](skills.md) owns what a skill is
-and what each source is trusted for, and [tools/load-skill.md](tools/load-skill.md) owns the
-fetch. CMD-7 says why the two surfaces stay apart.
+**Skills are offered here, and are never commands.** A slash word is offered the skills a turn
+starting now would advertise to the planner, beneath the commands at the start of a line and alone
+after other words. Taking one writes `/name ` into the line and nothing else, so `/commit-style` is
+still a prompt like any other sentence, and the planner is what fetches the skill it names.
+[skills.md](skills.md) owns what a skill is and what each source is trusted for, and
+[tools/load-skill.md](tools/load-skill.md) owns the fetch. CMD-7 says why no skill becomes a
+command, and CMD-9 says what the box offers.
 
 ## Where a command may come from
 
@@ -190,9 +192,11 @@ exactly those characters have to arrive.
 ### CMD-6: the set is written down once
 
 One table names every command, its argument and its one-line description, and each name is a
-single constant the one place that dispatches matches on. The completion list, Tab and the arrows
-all read the table, and so does the arm that queues a command typed mid-turn (CMD-8), so typing `/`
-lists every command with what it does and narrowing, queueing and dispatching all work on one set.
+single constant the one place that dispatches matches on. The completion list's command rows, Tab
+and the arrows all read the table, and so does the arm that queues a command typed mid-turn
+(CMD-8), so typing `/` lists every command with what it does and narrowing, queueing and
+dispatching all work on one set. The skill rows beneath them read the set a turn would advertise
+(CMD-9), and no key on one dispatches anything.
 
 **Why.** A word written down in more than one place is a word that is renamed in one of them,
 leaving the rest advertising something that no longer works, which a person discovers by typing
@@ -211,24 +215,30 @@ The set is fixed when this program is built. No name is enumerated from disk, fr
 from anything a person installed, and nothing a turn produced can add to it, remove from it, or
 change what one of them does.
 
-**Why.** This is what makes the surface small enough to reason about, and it is the reason skills
-are kept off it. A skill's name is content: it comes from a directory that may not be trusted, it
-is written by whoever wrote the skill, and the rule that an untrusted skill is counted rather than
-named exists because such a name can be composed to read like an instruction on a person's screen.
-Offering those names in a completion list would put exactly that text in front of the user as
-though this program had written it, one keystroke from a line that decides something. If skills
-are ever wanted here, the name still may not come from the directory: this clause is what the
-change has to answer to.
+**Why.** This is what makes the surface small enough to reason about, and it is why no skill is a
+command. A skill's name is content: it is written by whoever wrote the skill, and the rule that an
+untrusted skill is counted rather than named exists because such a name can be composed to read
+like an instruction on a person's screen. The skill rows CMD-9 draws beside the commands answer
+each part of that without adding a word here:
 
-`/loop` is what that answer looks like. The word is a string literal in this table like every
-other command, and the skill it shares a name with is one written into this program too, so
-nothing about either came from a directory. A skill somebody installs still has no line here,
-whatever it is called, and installing one called `loop` shadows the built-in body without
-touching this table.
+- Only a skill a turn would advertise is offered, read through the same trust gate, so a skill
+  from a project nobody trusts is never drawn, and nothing reaches the screen that the planner is
+  not already shown.
+- Each row says whether it came from the project, the person's own directory or this program, so
+  none is drawn as though this program had written it.
+- Taking one writes a prompt naming it, never a command line. A name a command claims, or one
+  holding a space or a control character, is never a row, so no key on a skill row reaches a line
+  that decides something.
 
-`/agent` is the same answer for definitions. The word is a literal in this table, and the
-definition it runs is an argument on the line, compared against the set the session resolved and
-never added here, however many definitions a machine holds
+`/loop` is the one name a command and a skill share. The word is a string literal in this table
+like every other command, and the skill it shares a name with is one written into this program
+too, so nothing about either came from a directory. A skill somebody installs still has no line
+here, whatever it is called, and installing one called `loop` shadows the built-in body without
+touching this table. Neither is a skill row, since the command claims the name.
+
+`/agent` is how definitions are reached, and they get no rows at all. The word is a literal in
+this table, and the definition it runs is an argument on the line, compared against the set the
+session resolved and never added here, however many definitions a machine holds
 ([addressing-a-definition.md](addressing-a-definition.md)).
 
 `verified-by: by-construction (the table is an array of string literals fixed at compile time, and no directory listing, configuration value or turn output reaches it)`
@@ -269,13 +279,64 @@ so a command recorded there would cost a person the prompt they stopped.
 `verified-by: bravebot_tui::app::a_queued_command_is_not_what_the_turn_took`
 `verified-by: bravebot_tui::app::a_queued_command_comes_back_to_the_box`
 
+## What a slash word is offered
+
+<a id="CMD-9"></a>
+### CMD-9: the skills a turn would advertise, and taking one writes a prompt
+
+A slash word at the start of the line is offered the commands it could still become and, beneath
+them, the skills whose names start with it. A slash word after other words is offered the skills
+alone, since there a command is a prompt (CMD-2). The skills are the ones a turn starting now would
+advertise to the planner, read the same way, and each row says when to use the skill and where it
+was found: the project, the person's own directory, or this program. They are read as a slash word
+begins and let go as it ends, so a skill written while the box sat idle is offered at the next
+slash.
+
+Tab, or Enter on a half-typed name, replaces the word with `/name ` and nothing else; Enter on a
+name typed in full sends the line, unless the arrows moved onto another row first. Either way the line is a prompt, sent as it reads. The planner
+is told that a prompt naming a skill as `/name` is the person asking for it, and it loads that
+skill the way it loads any other. The arrows walk down the commands and on into the skills.
+
+Nothing is offered in shell mode, while a turn runs, or after the word of a command line, which is
+CMD-3 and CMD-5 holding for skills as they hold for commands. A skill whose name a command claims,
+or whose name holds a space or a control character, is never a row.
+
+**Why.** A person who knows which skill a task wants should be able to say so without hoping the
+planner picks it from its description, and the name is easier to take from a list than to
+remember. Writing the name into a prompt, rather than making it a command that loads the body,
+keeps the choice where every other skill choice is made: the planner asks for the skill and
+fetches it, so one named this way is loaded, recorded and bounded exactly as one it chose on its
+own.
+
+Reading the skills once a word, rather than once a session or once a key, is because resolving
+reads directories: once a session would go on offering a skill that was deleted, and once a key
+would read them on every letter.
+
+`verified-by: bravebot_tui::app::a_slash_offers_the_skills_after_the_commands`
+`verified-by: bravebot_tui::app::a_skill_is_completed_mid_sentence_and_sent_as_a_prompt`
+`verified-by: bravebot_tui::app::enter_completes_a_half_typed_skill_and_sends_a_whole_one`
+`verified-by: bravebot_tui::app::the_arrows_walk_from_the_commands_onto_the_skills`
+`verified-by: bravebot_tui::app::the_skills_are_resolved_once_a_word_and_let_go_after_it`
+`verified-by: bravebot_tui::app::no_skill_is_offered_in_a_command_line_or_inside_a_command`
+`verified-by: bravebot_tui::app::nothing_is_offered_for_completion_while_a_turn_runs`
+`verified-by: bravebot_tui::skills::the_word_being_typed_is_the_last_one_on_the_line`
+`verified-by: bravebot_tui::skills::nothing_is_offered_inside_a_command_line`
+`verified-by: bravebot_tui::skills::what_matches_is_every_name_starting_with_the_word_in_name_order`
+`verified-by: bravebot_tui::skills::no_offered_skill_completes_to_a_command_line`
+`verified-by: bravebot_tui::render::a_skill_row_says_where_it_came_from_within_the_width`
+`verified-by: bravebot_agent::skills::the_set_an_interface_resolves_is_the_one_a_turn_would`
+`verified-by: bravebot_agent::skills::each_skill_records_which_of_the_three_places_it_came_from`
+`verified-by: bravebot_agent::preamble::a_turn_offered_skills_is_told_a_slash_name_is_the_user_asking_for_one`
+
 ## Known costs
 
-- **The list is one row per command, and a screen with no room for it loses the last of them.**
-  Nothing bounds it and nothing scrolls it: the rows are handed to the layout and whatever does
-  not fit is dropped from the bottom, so a terminal a few rows short of the whole table offers
-  the commands at the top of it and silently offers none of the ones below. The arrows still walk
-  onto a row that was not drawn, which puts the highlight somewhere the person cannot see. Every
-  command is still typeable in full, and the table is still the one place they are written down;
-  what a short terminal costs is the discovery the list exists for. Bounding it would mean a
-  window that scrolls with the cursor, which is a second scroller beside the transcript's.
+- **The list is one row per command and per skill, and a screen with no room for it loses the
+  last of them.** Nothing bounds it and nothing scrolls it: the rows are handed to the layout and
+  whatever does not fit is dropped from the bottom, so a terminal a few rows short of the whole
+  list offers the rows at the top of it and silently offers none of the ones below. The skills sit
+  beneath the commands, so they are the first to go, and a bare `/` in a session holding many
+  skills is the list most likely to be cut. The arrows still walk onto a row that was not drawn,
+  which puts the highlight somewhere the person cannot see. Every command and skill is still
+  typeable in full, and typing a letter or two narrows the list back onto the screen; what a
+  short terminal costs is the discovery the list exists for. Bounding it would mean a window that
+  scrolls with the cursor, which is a second scroller beside the transcript's.

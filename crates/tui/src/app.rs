@@ -340,7 +340,7 @@ fn argument_to<'a>(line: &'a str, command: &str) -> Option<&'a str> {
 /// bare word, so `/undo the last change` is a prompt there and has to be one here too. The
 /// argument the table names is what says which of the two a word is, so the two agree by reading
 /// the same column rather than by anybody keeping two lists in step.
-fn command_typed(line: &str) -> Option<&'static str> {
+pub(crate) fn command_typed(line: &str) -> Option<&'static str> {
     commands()
         .into_iter()
         .find(|command| match argument_to(line, command.name) {
@@ -2912,6 +2912,10 @@ fn event_loop(
     let mut drawn_at = Instant::now();
 
     loop {
+        // Before the frame and before the next key, so what a slash offers is on the screen as the
+        // slash is, and Tab never reaches a list the frame did not show.
+        session.settle_skills(|| crate::skills::resolved(&workspace, trust.clone()));
+
         // Waiting for the burst to end, but not indefinitely: a drag that never pauses would
         // otherwise show nothing until it stopped.
         let waited_long_enough = drawn_at.elapsed() >= FRAME;
@@ -11323,6 +11327,7 @@ mod tests {
         session.submit().expect("the prompt is sent");
 
         handle_key_while_working(&mut session, key(KeyCode::Char('/')));
+        session.settle_skills(|| panic!("skills were read for a line the turn will queue"));
         assert_eq!(session.offered(), crate::state::Offered::Nothing);
     }
 
@@ -13569,6 +13574,162 @@ mod tests {
         }
         assert_eq!(handle_key(&mut session, key(KeyCode::Tab)), Action::None);
         assert_eq!(session.input(), "an ordinary prompt");
+    }
+
+    /// Skills as a session resolving them would hold them. `mode` shares its letters with a
+    /// command, which is what lets a test tell a finished skill name from a half-typed command.
+    fn skills() -> Vec<crate::skills::Skill> {
+        use bravebot_agent::skills::Source;
+        [
+            ("review-pr", Source::Home),
+            ("release-notes", Source::Workspace),
+            ("review", Source::Home),
+            ("mode", Source::Home),
+        ]
+        .into_iter()
+        .map(|(name, source)| crate::skills::Skill {
+            name: name.to_string(),
+            description: format!("what {name} is for"),
+            source,
+        })
+        .collect()
+    }
+
+    /// Type a line the way the loop takes it: a key, then the skills settled before the next one.
+    fn type_with_skills(session: &mut Session, line: &str) {
+        for c in line.chars() {
+            handle_key(session, key(KeyCode::Char(c)));
+            session.settle_skills(skills);
+        }
+    }
+
+    fn skill_names(offered: &[crate::skills::Skill]) -> Vec<&str> {
+        offered.iter().map(|skill| skill.name.as_str()).collect()
+    }
+
+    /// At the start of a line a slash word may be a command or a skill, so both are offered, the
+    /// commands first.
+    #[test]
+    fn a_slash_offers_the_skills_after_the_commands() {
+        let mut session = Session::new("none");
+        type_with_skills(&mut session, "/re");
+
+        let crate::state::Offered::Slash { commands, skills } = session.offered() else {
+            panic!("nothing was offered");
+        };
+        assert!(
+            !commands.is_empty(),
+            "no command shares the letters, so the order proves nothing"
+        );
+        assert_eq!(commands, completions("/re"));
+        assert_eq!(
+            skill_names(&skills),
+            ["release-notes", "review", "review-pr"]
+        );
+    }
+
+    /// Mid-sentence a command is a prompt, so only skills are offered there. Taking one writes its
+    /// name over the half-typed word, and the line is then sent as the sentence it is.
+    #[test]
+    fn a_skill_is_completed_mid_sentence_and_sent_as_a_prompt() {
+        let mut session = Session::new("none");
+        type_with_skills(&mut session, "this is /release-no");
+
+        assert!(session.completions().is_empty(), "a command was offered");
+        assert_eq!(
+            session.highlighted_skill().map(|skill| skill.name),
+            Some("release-notes".to_string())
+        );
+        assert_eq!(handle_key(&mut session, key(KeyCode::Tab)), Action::Redraw);
+        assert_eq!(session.input(), "this is /release-notes ");
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("this is /release-notes".to_string())
+        );
+    }
+
+    /// Enter on a half-typed skill name completes it, as it does a half-typed command. On a name
+    /// typed in full it sends the line, though a command sharing the letters is listed above it.
+    #[test]
+    fn enter_completes_a_half_typed_skill_and_sends_a_whole_one() {
+        let mut session = Session::new("none");
+        type_with_skills(&mut session, "/rev");
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Redraw
+        );
+        assert_eq!(session.input(), "/review ");
+
+        let mut session = Session::new("none");
+        type_with_skills(&mut session, "/mode");
+        assert_eq!(
+            session.highlighted_completion().map(|command| command.name),
+            Some(MODEL_COMMAND),
+            "the command is not above the skill, so this proves nothing"
+        );
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("/mode".to_string())
+        );
+    }
+
+    /// The arrows walk off the last command onto the skills, and Tab takes the one they reached.
+    #[test]
+    fn the_arrows_walk_from_the_commands_onto_the_skills() {
+        let mut session = Session::new("none");
+        type_with_skills(&mut session, "/");
+        for _ in 0..commands().len() {
+            handle_key(&mut session, key(KeyCode::Down));
+        }
+
+        assert_eq!(session.highlighted_completion(), None);
+        assert_eq!(
+            session.highlighted_skill().map(|skill| skill.name),
+            Some("mode".to_string())
+        );
+        handle_key(&mut session, key(KeyCode::Tab));
+        assert_eq!(session.input(), "/mode ");
+    }
+
+    /// Read once as a slash word begins rather than once a key, and let go once it ends, so a
+    /// skill written since is offered the next time.
+    #[test]
+    fn the_skills_are_resolved_once_a_word_and_let_go_after_it() {
+        let mut session = Session::new("none");
+        let mut resolved = 0;
+        for c in "/re x /c".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+            session.settle_skills(|| {
+                resolved += 1;
+                skills()
+            });
+            if c == ' ' {
+                assert!(session.held_skills().is_empty(), "held past the word");
+            }
+        }
+        assert_eq!(resolved, 2, "one read for each of the two slash words");
+    }
+
+    /// With the `!` mode armed a slash begins a path, so no skill is read or offered, and inside a
+    /// command line the argument is taken verbatim, so nothing is offered there either.
+    #[test]
+    fn no_skill_is_offered_in_a_command_line_or_inside_a_command() {
+        let mut session = Session::new("none");
+        for c in "!/re".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+            session.settle_skills(|| panic!("skills were read in shell mode"));
+        }
+        assert!(
+            !session.is_completing(),
+            "a skill was offered in shell mode"
+        );
+
+        let mut session = Session::new("none");
+        type_with_skills(&mut session, "/btw what does /re");
+        assert!(
+            !session.is_completing(),
+            "a skill was offered in an argument"
+        );
     }
 
     #[test]

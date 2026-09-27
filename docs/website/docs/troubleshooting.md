@@ -123,9 +123,9 @@ instructions are read through the trust map, so they load when you vouched for t
 matter, since a file missing either is skipped. Then check the description: it is the only part the
 planner sees before loading, so it should say *when* to use the skill.
 
-**`/commit-style` did not run my skill.** Skills are not slash commands here. Say what you want and
-the planner loads the skill when the description matches. See
-[Skills](customize/skills.md#skills-are-not-slash-commands).
+**`/commit-style` is not listed after a slash.** The list holds the skills the planner is offered, so
+a skill missing from it was not found: check its front matter, and that a project skill is in a
+directory you trusted. See [Skills](customize/skills.md#naming-a-skill-after-a-slash).
 
 **A write asked for approval on a file in a directory I trusted.** Untrusted data going into a trusted
 path asks, because approving it also marks that path untrusted. That is the round trip being closed.

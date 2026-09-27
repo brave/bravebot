@@ -1236,6 +1236,13 @@ command-rewind = Lister les tours qu'un rembobinage peut atteindre, ou reculer d
 command-exit = Partir
 
 
+## Where a skill offered after a slash was found
+
+skill-from-project = (projet)
+skill-from-user = (utilisateur)
+skill-from-built-in = (intégré)
+
+
 ## Ce que la session répond
 
 session-resumed = session reprise : { $title }

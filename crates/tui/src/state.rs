@@ -579,13 +579,19 @@ pub fn failure_reason(diagnosis: bravebot_agent::Diagnosis) -> String {
 
 /// What a half-typed line could still become.
 ///
-/// One kind at a time: a command is the whole line and a file reference is its last word, so the
-/// list is never a mixture and the keys that walk it never have to ask which they are walking.
+/// One kind at a time: a word opening with a slash is a command or a skill's name, and one opening
+/// with an `@` is a file reference, so the keys that walk the list never have to ask which of the
+/// two they are walking.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Offered {
     /// Nothing is being typed towards, so the list is closed.
     Nothing,
-    Commands(Vec<crate::app::Command>),
+    /// The commands first and then the skills, walked as one list. Commands only where the word is
+    /// the whole line, since anywhere else a command is a prompt.
+    Slash {
+        commands: Vec<crate::app::Command>,
+        skills: Vec<crate::skills::Skill>,
+    },
     Files(Vec<crate::entries::Entry>),
     /// Every key and marker, listed under the box. Not a completion: there is nothing to choose,
     /// which is why the keys that walk a list leave this one alone.
@@ -1539,6 +1545,11 @@ pub struct Session {
     /// whatever happened to be in the process's working directory. The real session names it with
     /// [`Session::in_workspace`].
     workspace: std::path::PathBuf,
+    /// The skills a turn would advertise, held while a slash word is being typed.
+    ///
+    /// Resolved as one starts and let go once it ends, so a skill written mid-session is offered
+    /// the next time, and constructing a session reads no directory.
+    skills: Option<Vec<crate::skills::Skill>>,
     /// Files dropped on the box, by the marker standing for each in the line.
     ///
     /// Kept until the line is sent, and read back out of the line at that point rather than sent
@@ -1672,6 +1683,7 @@ impl Session {
             model_reads_effort: true,
             completion: 0,
             workspace: std::path::PathBuf::new(),
+            skills: None,
             attached: Vec::new(),
             sent: Vec::new(),
             attachments_made: 0,
@@ -5326,10 +5338,28 @@ impl Session {
         self.completion = 0;
     }
 
-    /// What the half-typed line could still become: a command, or a file reference.
+    /// Hold the skills a slash word could become while one is being typed, and let them go once
+    /// nothing is.
+    pub fn settle_skills(&mut self, resolve: impl FnOnce() -> Vec<crate::skills::Skill>) {
+        let typing = !self.shell
+            && self.status != Status::Working
+            && crate::skills::typed(&self.input).is_some();
+        match (typing, self.skills.is_some()) {
+            (true, false) => self.skills = Some(resolve()),
+            (false, true) => self.skills = None,
+            _ => {}
+        }
+    }
+
+    /// The skills held while a slash word is being typed, and none otherwise.
+    pub fn held_skills(&self) -> &[crate::skills::Skill] {
+        self.skills.as_deref().unwrap_or_default()
+    }
+
+    /// What the half-typed line could still become: a command or a skill, or a file reference.
     ///
-    /// One of the two at most. A command is the whole line and a reference is its last word, so
-    /// nothing can be both.
+    /// One of the two at most. Both are the last word, and a word opens with a slash or with an
+    /// `@`, so nothing can be both.
     pub fn offered(&self) -> Offered {
         // First, before either guard below. The list of keys is documentation somebody asked for by
         // pressing a key, not machinery for finishing the line, so neither a turn in flight nor a
@@ -5355,8 +5385,12 @@ impl Session {
             return Offered::Nothing;
         }
         let commands = crate::app::completions(&self.input);
-        if !commands.is_empty() {
-            return Offered::Commands(commands);
+        let skills = match (crate::skills::typed(&self.input), &self.skills) {
+            (Some(typed), Some(held)) => crate::skills::matching(held, typed),
+            _ => Vec::new(),
+        };
+        if !commands.is_empty() || !skills.is_empty() {
+            return Offered::Slash { commands, skills };
         }
         match crate::entries::typed_reference(&self.input) {
             Some(typed) => {
@@ -5374,7 +5408,7 @@ impl Session {
     /// The commands the half-typed line could still become.
     pub fn completions(&self) -> Vec<crate::app::Command> {
         match self.offered() {
-            Offered::Commands(commands) => commands,
+            Offered::Slash { commands, .. } => commands,
             _ => Vec::new(),
         }
     }
@@ -5385,11 +5419,21 @@ impl Session {
     /// input: typing a letter can shorten it, and a cursor past the end would otherwise choose
     /// nothing at the moment Tab was pressed.
     pub fn highlighted_completion(&self) -> Option<crate::app::Command> {
-        let offered = self.completions();
-        if offered.is_empty() {
+        let Offered::Slash { commands, skills } = self.offered() else {
             return None;
-        }
-        Some(offered[self.completion.min(offered.len() - 1)])
+        };
+        let at = self.completion.min(commands.len() + skills.len() - 1);
+        commands.get(at).copied()
+    }
+
+    /// Which offered skill is under the cursor, or `None` when the cursor is on a command or no
+    /// skill is offered.
+    pub fn highlighted_skill(&self) -> Option<crate::skills::Skill> {
+        let Offered::Slash { commands, skills } = self.offered() else {
+            return None;
+        };
+        let at = self.completion.min(commands.len() + skills.len() - 1);
+        skills.get(at.checked_sub(commands.len())?).cloned()
     }
 
     /// Which offered file is under the cursor, or `None` when no file is offered.
@@ -5407,7 +5451,7 @@ impl Session {
     /// The shortcuts are not: there is nothing to choose among them, so Tab and the arrows keep
     /// meaning what they mean everywhere else while the list is up.
     pub fn is_completing(&self) -> bool {
-        matches!(self.offered(), Offered::Commands(_) | Offered::Files(_))
+        matches!(self.offered(), Offered::Slash { .. } | Offered::Files(_))
     }
 
     /// Whether taking what is offered would change the line.
@@ -5419,9 +5463,23 @@ impl Session {
     pub fn completion_would_change_the_line(&self) -> bool {
         match self.offered() {
             Offered::Nothing | Offered::Shortcuts => false,
-            Offered::Commands(_) => self
-                .highlighted_completion()
-                .is_some_and(|command| command.name != self.input.trim()),
+            Offered::Slash { skills, .. } => {
+                let typed = crate::skills::typed(&self.input);
+                // A skill's name typed in full is a finished sentence, as a file's is, whatever
+                // the untouched cursor is on: `/review` names a skill of its own while `/review-pr`
+                // or a command sharing the letters is listed above it.
+                if self.completion == 0
+                    && typed.is_some_and(|typed| skills.iter().any(|skill| skill.name == typed))
+                {
+                    return false;
+                }
+                if let Some(command) = self.highlighted_completion() {
+                    return command.name != self.input.trim();
+                }
+                self.highlighted_skill()
+                    .zip(typed)
+                    .is_some_and(|(skill, typed)| skill.name != typed)
+            }
             Offered::Files(_) => {
                 let Some(typed) = crate::entries::typed_reference(&self.input) else {
                     return false;
@@ -5447,7 +5505,7 @@ impl Session {
     /// How many things are offered, which is what bounds the cursor that walks them.
     pub fn offered_count(&self) -> usize {
         match self.offered() {
-            Offered::Commands(commands) => commands.len(),
+            Offered::Slash { commands, skills } => commands.len() + skills.len(),
             Offered::Files(entries) => entries.len(),
             Offered::Nothing | Offered::Shortcuts => 0,
         }
@@ -5466,24 +5524,32 @@ impl Session {
 
     /// Take what is under the cursor.
     ///
-    /// A command replaces the whole line, since a command *is* the line. A file replaces only the
-    /// half-typed reference, because the rest is the sentence it was written into.
+    /// A command replaces the whole line, since a command *is* the line. A skill or a file
+    /// replaces only the half-typed word, because the rest is the sentence it was written into.
     ///
-    /// Neither adds a trailing space when there is more to type: a command expecting an argument
-    /// gets one, and so does a file, while a directory does not, so the path can be typed onwards
-    /// into it.
+    /// None adds a trailing space where there is more to type: a command expecting an argument
+    /// gets one, and so do a skill and a file, while a directory does not, so the path can be
+    /// typed onwards into it.
     pub fn accept_completion(&mut self) {
         match self.offered() {
-            Offered::Commands(_) => {
-                let Some(command) = self.highlighted_completion() else {
-                    return;
-                };
-                let line = if command.argument.is_empty() {
-                    command.name.to_string()
+            Offered::Slash { .. } => {
+                if let Some(command) = self.highlighted_completion() {
+                    let line = if command.argument.is_empty() {
+                        command.name.to_string()
+                    } else {
+                        format!("{} ", command.name)
+                    };
+                    self.put_in_the_box(line);
+                } else if let Some(skill) = self.highlighted_skill() {
+                    let start = self.last_word_starts_at();
+                    if !self.input[start..].starts_with('/') {
+                        return;
+                    }
+                    let kept = self.input[..start].to_string();
+                    self.put_in_the_box(format!("{kept}/{} ", skill.name));
                 } else {
-                    format!("{} ", command.name)
-                };
-                self.put_in_the_box(line);
+                    return;
+                }
             }
             Offered::Files(_) => {
                 let Some(entry) = self.highlighted_entry() else {
@@ -5493,12 +5559,7 @@ impl Session {
                 // not the last `@` in the line. A file may have one in its name, and cutting
                 // there rebuilds the line around a path nobody chose: `@logo@2` plus the
                 // offered `logo@2x.png` becomes `@logo@logo@2x.png`.
-                let start = self
-                    .input
-                    .char_indices()
-                    .rev()
-                    .find(|(_, c)| c.is_whitespace())
-                    .map_or(0, |(at, c)| at + c.len_utf8());
+                let start = self.last_word_starts_at();
                 if !self.input[start..].starts_with('@') {
                     return;
                 }
@@ -5514,6 +5575,15 @@ impl Session {
             inserting.change = None;
         }
         self.completion = 0;
+    }
+
+    /// Where the line's last word begins, which is where a completion of it is written.
+    fn last_word_starts_at(&self) -> usize {
+        self.input
+            .char_indices()
+            .rev()
+            .find(|(_, c)| c.is_whitespace())
+            .map_or(0, |(at, c)| at + c.len_utf8())
     }
 
     /// The worker appended the submitted prompt at this recounted position.

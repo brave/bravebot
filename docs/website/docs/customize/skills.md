@@ -45,14 +45,21 @@ not
 description: Notes about commits.
 ```
 
-## Skills are not slash commands
+## Naming a skill after a slash
 
-`/commit-style` is a prompt like any other sentence. Other agents let you type a skill's name after a
-slash. This one does not.
+Type `/` and the skills this session has are listed beneath the commands, each with its description
+and where it was found: `(project)`, `(user)` or `(built-in)`. After other words, as in
+`this is /release-no`, the list holds skills alone. Tab takes the highlighted one and writes
+`/release-notes ` into the line.
 
-A skill is advertised to the planner by name and description, and its body is fetched by the planner
-asking for it. Nothing in the input box knows skills exist. The two surfaces stay apart deliberately:
-a slash command is a thing *you* decide, and loading a skill is a thing the *planner* decides.
+The line is still a prompt, sent as you typed it. The planner is told that a prompt naming a skill as
+`/name` is you asking for it, and it loads the skill with `load_skill` the way it loads any other, so
+a skill you named is loaded and recorded exactly as one it picked for itself.
+
+The list is the set the planner is offered and nothing more: a skill in a project you have not trusted
+is never listed, just as it is never shown to the planner. No skill is a slash command, so one whose
+name a command already claims, such as `loop`, is not listed, and nothing is completed after a
+command's own word or in [shell mode](../using/shell-mode.md).
 
 ## Loading
 

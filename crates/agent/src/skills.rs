@@ -214,12 +214,25 @@ pub struct Skill {
     pub description: String,
     /// Where it came from, for the audit trail and for what the user is told.
     pub origin: String,
+    /// Which of the three places it came from, for an interface saying so beside its name.
+    pub source: Source,
     /// The instructions themselves, still carrying the label they were read with.
     ///
     /// Kept labelled rather than as bare text so the planner is shown them through
     /// `Policy::present` like any other content. Nothing here re-labels: the value is the one
     /// the source produced, reshaped in the kernel to drop the frontmatter.
     body: Labelled<String>,
+}
+
+/// The three places a skill can come from, least specific first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    /// Written into this program.
+    BuiltIn,
+    /// The user's own directory, `~/.bravebot/skills`.
+    Home,
+    /// The project's `.bravebot/skills`, which the trust map vouched for.
+    Workspace,
 }
 
 impl Skill {
@@ -422,6 +435,7 @@ pub fn discover<S: Sink>(
             // is trusted for being this program's own words, which is what the label says.
             body: Labelled::trusted(built_in.body.to_string()),
             origin: "built-in".to_string(),
+            source: Source::BuiltIn,
         });
     }
 
@@ -431,6 +445,35 @@ pub fn discover<S: Sink>(
     discover_workspace(policy, workspace, &mut catalogue, &mut notices);
 
     (catalogue, notices)
+}
+
+/// The set a turn starting now would resolve, for an interface offering the names as they are typed.
+///
+/// Read the way a turn reads it, through a policy holding only the read, so what the box offers is
+/// what the planner would be advertised: the same gate, the same trust map, the same shadowing. An
+/// untrusted project's skills are dropped here exactly as they are there, so no name the turn would
+/// refuse is ever drawn.
+pub fn resolved<S: Sink>(
+    workspace: &Workspace,
+    home: Option<&Path>,
+    trust: bravebot_core::trust::TrustStore,
+    sink: &mut S,
+) -> Catalogue {
+    let mut routing = bravebot_core::policy::Routing::new();
+    routing.insert_trusted("skills", WORKSPACE_SKILLS);
+    let Ok(policy) = Policy::begin(
+        routing,
+        bravebot_core::policy::ReleasePlan::new(),
+        bravebot_core::capability::CapabilitySet::from_iter([Capability::FileRead]),
+        sink,
+    ) else {
+        return Catalogue::default();
+    };
+    let mut policy = policy
+        .with_trust(trust)
+        .with_root(workspace.root())
+        .with_backslash_separates(crate::workspace::BACKSLASH_SEPARATES);
+    discover(&mut policy, workspace, home).0
 }
 
 /// Skills from `~/.bravebot/skills`, labelled from where they sit.
@@ -470,6 +513,7 @@ fn discover_home<S: Sink>(
                     description: front.description,
                     body,
                     origin,
+                    source: Source::Home,
                 });
             }
             None => notices.push(Notice::new(format!(
@@ -536,6 +580,7 @@ fn discover_workspace<S: Sink>(
                     description: front.description,
                     body,
                     origin: relative,
+                    source: Source::Workspace,
                 });
             }
             None => notices.push(Notice::new(format!(
@@ -707,6 +752,7 @@ mod tests {
             name: "commit-style".to_string(),
             description: "how commit messages are written here".to_string(),
             origin: "SKILL.md".to_string(),
+            source: Source::Home,
             body: Labelled::trusted("sign them".to_string()),
         });
 

@@ -601,3 +601,94 @@ fn skills_are_offered_in_the_same_order_every_time() {
 
     assert_eq!(from_disk(&catalogue), vec!["alpha", "middle", "zebra"]);
 }
+
+/// What the input box offers after a slash is the set a turn would advertise, so it has to be the
+/// one a turn would resolve: a project's skill is there once the project is vouched for and missing
+/// from both while it is not. The trusted case is the control, since a set missing everything would
+/// pass the untrusted one.
+#[test]
+fn the_set_an_interface_resolves_is_the_one_a_turn_would() {
+    let scratch = Scratch::new("resolved");
+    let home = scratch.home();
+    let project = scratch.workspace();
+    write_skill(
+        &home,
+        "commit-style",
+        "commit-style",
+        "how commits read",
+        "sign",
+    );
+    write_skill(
+        &project.join(".bravebot"),
+        "release-notes",
+        "release-notes",
+        "draft the notes",
+        "draft",
+    );
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    for trusted in [&["."][..], &[]] {
+        let mut sink = RecordingSink::new();
+        let (turn, _) = {
+            let mut policy = policy(&mut sink, trusted);
+            skills::discover(&mut policy, &workspace, Some(&home))
+        };
+        let mut store = TrustStore::new("/work");
+        for path in trusted {
+            store.trust(path);
+        }
+        let interface = skills::resolved(&workspace, Some(&home), store, &mut sink);
+
+        let names = |catalogue: &skills::Catalogue| {
+            catalogue
+                .iter()
+                .map(|skill| (skill.name.clone(), skill.description.clone(), skill.source))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            names(&interface),
+            names(&turn),
+            "the interface and the turn resolved different sets, trusting {trusted:?}"
+        );
+        let expected: &[&str] = if trusted.is_empty() {
+            &["commit-style"]
+        } else {
+            &["commit-style", "release-notes"]
+        };
+        assert_eq!(from_disk(&interface), expected, "trusting {trusted:?}");
+    }
+}
+
+/// Where a skill came from is said beside its name, so each has to carry the place it was found,
+/// and a project's skill shadowing one of the user's own is the project's.
+#[test]
+fn each_skill_records_which_of_the_three_places_it_came_from() {
+    let scratch = Scratch::new("sources");
+    let home = scratch.home();
+    let project = scratch.workspace();
+    write_skill(&home, "mine", "mine", "the user's own", "body");
+    write_skill(&home, "shared", "shared", "the user's copy", "body");
+    write_skill(
+        &project.join(".bravebot"),
+        "shared",
+        "shared",
+        "the project's copy",
+        "body",
+    );
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, _) = {
+        let mut policy = policy(&mut sink, &["."]);
+        skills::discover(&mut policy, &workspace, Some(&home))
+    };
+
+    let source = |name: &str| catalogue.get(name).expect("offered").source;
+    assert_eq!(source("loop"), skills::Source::BuiltIn);
+    assert_eq!(source("mine"), skills::Source::Home);
+    assert_eq!(source("shared"), skills::Source::Workspace);
+    assert_eq!(
+        catalogue.get("shared").expect("offered").description,
+        "the project's copy"
+    );
+}
