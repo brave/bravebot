@@ -4307,6 +4307,10 @@ mod tests {
         (repo, first)
     }
 
+    fn compiled(pattern: &str) -> crate::regex::Regex {
+        crate::regex::Regex::compile(pattern).expect("a test's pattern compiles")
+    }
+
     fn searched(
         repo: &Repo,
         revision: Option<&str>,
@@ -4314,7 +4318,7 @@ mod tests {
         pattern: &str,
         withheld: &dyn Fn(&str) -> bool,
     ) -> Result<Answer, Declined> {
-        let pattern = crate::regex::Regex::compile(pattern).expect("compiled");
+        let pattern = compiled(pattern);
         let mut asked = request(Query::Search, revision, path);
         asked.pattern = Some(&pattern);
         repo.opened()?.answer(&asked, withheld)
