@@ -28,6 +28,11 @@ pub struct Activity {
     pub verb: &'static str,
     /// What is being acted on, as the model named it. Empty where there is nothing to name.
     pub target: String,
+    /// Why the planner made the call, in its own words. Empty where it gave no reason.
+    ///
+    /// Carried to a screen and nowhere else: the call runs the same with or without it, and
+    /// whether there is anything to draw is the screen's question to ask of the text.
+    pub why: String,
     /// The tool's own name, as dispatch matched it. Empty where nothing set one.
     ///
     /// Beside [`Activity::verb`] rather than instead of it, because the two have different
@@ -69,6 +74,7 @@ impl Activity {
         Self {
             verb,
             target: target.into(),
+            why: String::new(),
             tool: String::new(),
             note: None,
             failed: false,
@@ -81,6 +87,12 @@ impl Activity {
     /// Say which tool this is, by the name dispatch matched rather than the word shown.
     pub fn of_tool(mut self, tool: &str) -> Self {
         self.tool = tool.to_string();
+        self
+    }
+
+    /// Say why the planner made the call.
+    pub fn saying_why(mut self, why: impl Into<String>) -> Self {
+        self.why = why.into();
         self
     }
 

@@ -112,6 +112,25 @@ fn a_running_call_sends_an_explicit_null_note() {
     assert_eq!(refused["failed"], json!(true));
 }
 
+/// A window draws why a call was made beside the call, so the reason has to reach it on the
+/// started line and the finished one alike: the finished one replaces the started one.
+#[test]
+fn a_call_carries_the_reason_it_was_made() {
+    let running =
+        wire::activity(&Activity::running("read", "src/main.rs").saying_why("see the entry"));
+    assert_eq!(running["why"], json!("see the entry"));
+
+    let finished = wire::activity(
+        &Activity::running("read", "src/main.rs")
+            .saying_why("see the entry")
+            .done("412 lines"),
+    );
+    assert_eq!(finished["why"], json!("see the entry"));
+
+    let unexplained = wire::activity(&Activity::running("read", "src/main.rs"));
+    assert_eq!(unexplained["why"], json!(""));
+}
+
 #[test]
 fn quarantined_content_says_how_much_it_left_out() {
     let value = wire::shown(&Shown {
@@ -174,10 +193,18 @@ fn released_content_crosses_the_transport_with_the_label_it_was_released_under()
 
 #[test]
 fn a_replayed_tool_line_carries_no_outcome() {
-    let said = wire::recounted(&[Said::Tool("read(src/main.rs)".into())]);
+    let said = wire::recounted(&[Said::Tool {
+        line: "read(src/main.rs)".into(),
+        why: "to see the entry point".into(),
+    }]);
     assert_eq!(said[0]["kind"], json!("tool"));
+    assert_eq!(said[0]["why"], json!("to see the entry point"));
     let keys: Vec<&String> = said[0].as_object().expect("an object").keys().collect();
-    assert_eq!(keys, vec!["kind", "text"], "nothing to imply a result");
+    assert_eq!(
+        keys,
+        vec!["kind", "text", "why"],
+        "nothing to imply a result"
+    );
 
     let said = wire::recounted(&[Said::User("hi".into()), Said::Assistant("hello".into())]);
     assert_eq!(said[0]["kind"], json!("user"));
@@ -200,7 +227,10 @@ fn only_prompts_are_numbered_and_they_are_numbered_in_order() {
     let said = wire::recounted(&[
         Said::User("first".into()),
         Said::Assistant("a reply".into()),
-        Said::Tool("read(src/main.rs)".into()),
+        Said::Tool {
+            line: "read(src/main.rs)".into(),
+            why: String::new(),
+        },
         Said::Composed {
             why: Composed::Attached {
                 path: "notes.md".into(),

@@ -242,6 +242,11 @@ pub struct Entry {
     /// reply: which definition answered is a fact the driver holds, and the reply is model output
     /// that could claim to be any of them (ADDRESS-12).
     pub answered_as: Option<String>,
+    /// Why the planner made the call, for a [`Speaker::Tool`] entry read back off disk.
+    ///
+    /// A live call carries its reason on its [`Activity`]; a recalled one has no activity, and
+    /// the reason is still what the person watching was shown beside it the first time round.
+    pub why: String,
 }
 
 impl Entry {
@@ -257,6 +262,7 @@ impl Entry {
             activity: None,
             delegate: None,
             answered_as: None,
+            why: String::new(),
         }
     }
 
@@ -272,6 +278,7 @@ impl Entry {
             activity: None,
             delegate: None,
             answered_as: None,
+            why: String::new(),
         }
     }
 
@@ -302,6 +309,7 @@ impl Entry {
             activity: None,
             delegate: None,
             answered_as: None,
+            why: String::new(),
         }
     }
 
@@ -318,6 +326,7 @@ impl Entry {
             activity: None,
             delegate: None,
             answered_as: None,
+            why: String::new(),
         }
     }
 
@@ -334,6 +343,7 @@ impl Entry {
             activity: None,
             delegate: None,
             answered_as: None,
+            why: String::new(),
         }
     }
 
@@ -353,6 +363,7 @@ impl Entry {
             activity: Some(activity),
             delegate: None,
             answered_as: None,
+            why: String::new(),
         }
     }
 
@@ -362,7 +373,7 @@ impl Entry {
     /// of it. Giving it one would mean choosing an outcome, and every choice available is a
     /// claim the record does not support: `running` says it never finished, and `done` says it
     /// succeeded. The line alone is what is known, and the interface draws it as such.
-    pub fn recalled_tool(line: impl Into<String>) -> Self {
+    pub fn recalled_tool(line: impl Into<String>, why: impl Into<String>) -> Self {
         Self {
             speaker: Speaker::Tool,
             text: line.into(),
@@ -374,6 +385,7 @@ impl Entry {
             activity: None,
             delegate: None,
             answered_as: None,
+            why: why.into(),
         }
     }
 
@@ -402,7 +414,7 @@ fn recalled_entry(line: &bravebot_agent::conversation::Said) -> Entry {
     match line {
         Said::User(text) | Said::Composed { text, .. } => Entry::user(text),
         Said::Assistant(text) => Entry::assistant(text, Vec::new()),
-        Said::Tool(text) => Entry::recalled_tool(text),
+        Said::Tool { line, why } => Entry::recalled_tool(line, why),
     }
 }
 

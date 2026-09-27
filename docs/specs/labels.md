@@ -32,7 +32,7 @@ guards:
       - crates/agent/src/manifest.rs: 5
       - crates/agent/src/mcp.rs: 2
       - crates/agent/src/processor.rs: 1
-      - crates/agent/src/tools.rs: 31
+      - crates/agent/src/tools.rs: 32
       - crates/agent/src/turn.rs: 4
       - crates/agent/src/vet.rs: 1
       - crates/agent/src/workspace.rs: 1
@@ -124,7 +124,7 @@ guards:
   - symbol: Policy::label_model_output
     sites:
       - crates/agent/src/mcp.rs: 1
-      - crates/agent/src/tools.rs: 4
+      - crates/agent/src/tools.rs: 5
       - crates/core/src/policy.rs: 16
   - symbol: Policy::adopt_model_output
     sites:

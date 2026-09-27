@@ -621,3 +621,28 @@ what the planner was about to rely on without opening the file or the command's 
 `verified-by: bravebot_tui::state::a_glimpse_goes_under_the_call_it_came_from`
 `verified-by: bravebot_tui::state::a_glimpse_does_not_bleed_into_an_earlier_turns_tool`
 `verified-by: bravebot_tui::state::a_delegates_glimpse_goes_under_the_delegates_call`
+
+
+<a id="VIEW-25"></a>
+### VIEW-25: a call is drawn with the reason the planner gave for it
+
+A call's row carries the planner's own line on what the call is for
+([TOOL-5](tools/tool-surface.md#TOOL-5)), after the call and dimmer than it, while the call runs and
+once it is over. A reason of several lines is drawn to its first, since the row is one line of a
+transcript and not a paragraph. A call given no reason is drawn with nothing after it.
+
+The interactive terminal, a headless run's progress and the desktop window all draw it, and a
+resumed session draws each recorded call with the reason it was made with, as it draws the calls
+themselves under [VIEW-2](#VIEW-2).
+
+**Why.** The line before a round says what the step is for, and a round of calls made for
+different reasons was explained only as far as that one line went. The call's own reason is the
+one place left to say what each of them was for.
+
+`verified-by: bravebot_tui::render::a_call_is_drawn_with_the_reason_it_was_made`
+`verified-by: bravebot_tui::render::a_call_with_no_reason_draws_nothing_beside_it`
+`verified-by: bravebot_tui::render::a_recalled_call_is_shown_with_its_reason`
+`verified-by: bravebot_cli::progress::a_call_is_printed_with_the_reason_it_was_made`
+`verified-by: bravebot_ui_bridge::wire::a_call_carries_the_reason_it_was_made`
+`verified-by: bravebot_agent::conversation::every_call_in_a_round_is_recounted`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so it is pinned instead by ui/scripts/ux-state.test.mjs, which renders the real transcript row through react-dom, live and replayed, and asserts that the reason reaches the markup while the call runs and once it is over and that a call with none draws nothing for it; make check-ui and the Front end CI job both run it, and the governs list above holds the file to existing)`

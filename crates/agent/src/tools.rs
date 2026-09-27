@@ -91,6 +91,14 @@ impl Scheduling {
 /// `arming` says whether the session this turn belongs to keeps standing watches, which decides
 /// whether `watch_file` is offered.
 pub fn available(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<Tool> {
+    let mut tools = table(scheduling, arming);
+    for tool in &mut tools {
+        ask_why(tool);
+    }
+    tools
+}
+
+fn table(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<Tool> {
     // Which of the two answers a request about one file gets. Both exist wherever watches do, and
     // a description that named neither as the better one would leave the planner picking the one
     // it read first, which is the read's own paragraph and therefore always the loop.
@@ -1029,8 +1037,30 @@ pub fn available(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<To
             "required": ["delay_seconds", "noop"]
         }),
     ));
-
     tools
+}
+
+/// The argument every tool takes saying why the call is being made.
+pub const WHY: &str = "why";
+
+/// Ask for the reason a call is made, on every tool alike.
+///
+/// Required, because a model asked for a reason in prose mostly sends calls without one, and a
+/// person watching sees every call and otherwise nothing of what it was for. Content rather than
+/// routing (TOOL-5): no tool reads it, so it is added here once rather than written into each
+/// schema.
+fn ask_why(tool: &mut Tool) {
+    let parameters = &mut tool.function.parameters;
+    parameters["properties"][WHY] = json!({
+        "type": "string",
+        "description": "One short line saying why you are making this call: what you want to \
+                        find out, or what you are about to change. The user reads it beside the \
+                        call, which already shows the tool and what it acts on, so give the \
+                        reason rather than repeating those."
+    });
+    if let Some(required) = parameters["required"].as_array_mut() {
+        required.push(json!(WHY));
+    }
 }
 
 /// The tools a delegate of one kind is offered.
@@ -2095,6 +2125,35 @@ fn target_of<S: Sink>(
     shaped.declassify(&proof)
 }
 
+/// Why the planner made a call, in its own words, for the line the call is drawn on.
+///
+/// At the integrity of the context it was written in, and released to a screen and nowhere else
+/// (TOOL-5). No tool is handed it and nothing is decided from it, so a call without one runs as a
+/// call with one does.
+fn why_of<S: Sink>(policy: &mut Policy<'_, S>, tool: &str, arguments: &Value) -> String {
+    let said = policy.label_model_output(
+        tool,
+        arguments
+            .get(WHY)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+    );
+    let proof = policy.authorise_display_release("why the planner made a call");
+    said.declassify(&proof)
+}
+
+/// The reason a stored call gave, for the transcript of a session read back off disk.
+///
+/// No policy, for the reason [`describe_stored_call`] has none: this is the text a person watching
+/// was shown the first time round, going back to a screen.
+pub fn stored_why(arguments: &str) -> String {
+    serde_json::from_str::<Value>(arguments)
+        .ok()
+        .and_then(|parsed| parsed.get(WHY).and_then(Value::as_str).map(str::to_string))
+        .unwrap_or_default()
+}
+
 /// How a call reads in the transcript of a session read back off disk.
 ///
 /// The same words a live call is announced with, from the same two functions, so a resumed
@@ -2330,7 +2389,12 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         Some((_, alias, tool)) => format!("{alias}:{tool}"),
         None => target_of(policy, &name, tools.slots, &arguments),
     };
-    reporter.tool_started(Activity::running(verb, target.clone()).of_tool(&name));
+    let why = why_of(policy, &name, &arguments);
+    reporter.tool_started(
+        Activity::running(verb, target.clone())
+            .of_tool(&name)
+            .saying_why(why.clone()),
+    );
 
     let produced = match name.as_str() {
         unoffered
@@ -2423,6 +2487,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
     // call was the slow one or whether a model or this machine was what took the time.
     let finished = Activity::running(verb, target)
         .of_tool(&name)
+        .saying_why(why)
         .with_changes(produced.changes)
         .marked_untrusted(produced.untrusted)
         .after_waiting(
@@ -7364,6 +7429,57 @@ mod tests {
         );
     }
 
+    /// A person watching sees every call and, without this, nothing of what it was for, so every
+    /// tool asks the reason and none may be sent without one (TOOL-5). Checked over every list a
+    /// turn or a delegate is offered, because a tool added to one of them is the one that would
+    /// arrive without it.
+    #[test]
+    fn every_tool_offered_asks_why_it_is_being_called() {
+        use bravebot_core::delegate::{Definitions, Kind};
+
+        let mut offered = Vec::new();
+        for scheduling in [
+            Scheduling::ArrangingALook,
+            Scheduling::PacingALoop,
+            Scheduling::TheirInterval,
+            Scheduling::NoLaterLook,
+        ] {
+            for arming in [
+                Arming::Allowed { free: 1 },
+                Arming::UnderALoop,
+                Arming::UnderAGoal,
+                Arming::Full,
+                Arming::Unavailable,
+            ] {
+                offered.extend(for_planner(scheduling, arming, &Definitions::default()));
+            }
+        }
+        for name in Kind::NAMES {
+            let kind = Kind::from_name(name).expect("enumerated");
+            offered.extend(for_delegate(
+                &kind.capabilities(),
+                None,
+                Some(&Definitions::default()),
+            ));
+        }
+
+        for tool in offered {
+            let name = &tool.function.name;
+            let parameters = &tool.function.parameters;
+            assert_eq!(
+                parameters["properties"][WHY]["type"], "string",
+                "{name} does not ask why it is being called"
+            );
+            assert!(
+                parameters["required"]
+                    .as_array()
+                    .is_some_and(|required| required.contains(&json!(WHY))),
+                "{name} may be called without saying why: {}",
+                parameters["required"]
+            );
+        }
+    }
+
     /// Every kind above the bottom of the tree is offered the way to delegate, with the kinds this
     /// session resolved, and none at the bottom is. This is the offer; the kernel refusing a call
     /// from the bottom anyway is `policy::tests`' half.
@@ -7779,10 +7895,11 @@ mod tests {
                 "deadline_seconds",
                 "directory",
                 "read",
-                "stdin_ref"
+                "stdin_ref",
+                "why"
             ],
             "run gained a field beside the command line, whether to wait for it, how long, \
-             where, what to feed it, and whether to read it"
+             where, what to feed it, whether to read it, and why it was run"
         );
         assert_eq!(properties["command"]["type"], "string");
         assert_eq!(properties["background"]["type"], "boolean");
@@ -7794,8 +7911,8 @@ mod tests {
             tool.function.parameters["required"]
                 .as_array()
                 .expect("run says what is required"),
-            &[serde_json::json!("command")],
-            "the command line is the only thing a run must be given"
+            &[serde_json::json!("command"), serde_json::json!(WHY)],
+            "the command line and the reason are the only things a run must be given"
         );
     }
 
@@ -8409,8 +8526,8 @@ mod tests {
 
         assert_eq!(
             properties.keys().collect::<Vec<_>>(),
-            vec!["todos"],
-            "todo_write advertises an argument beside the list itself"
+            vec!["todos", "why"],
+            "todo_write advertises an argument beside the list itself and the reason"
         );
     }
 
@@ -9162,7 +9279,7 @@ mod tests {
                     .expect("properties");
                 let mut fields: Vec<&str> = properties.keys().map(String::as_str).collect();
                 fields.sort_unstable();
-                assert_eq!(fields, ["delay_seconds", "noop", "reason"]);
+                assert_eq!(fields, ["delay_seconds", "noop", "reason", "why"]);
             }
         }
 
@@ -9871,7 +9988,7 @@ mod tests {
                 .as_object()
                 .expect("properties");
             let fields: Vec<&str> = properties.keys().map(String::as_str).collect();
-            assert_eq!(fields, ["path"]);
+            assert_eq!(fields, ["path", "why"]);
         }
 
         /// Both answers describe themselves as the answer to a request to be told when something

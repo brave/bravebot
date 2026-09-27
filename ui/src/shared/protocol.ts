@@ -29,6 +29,8 @@ export type Change =
 export interface Activity {
   verb: string
   target: string
+  /** Why the planner made the call, in its own words. Empty where it gave no reason. */
+  why: string
   /** `null` while the call is still running. Absent-vs-null matters: see the Rust doc. */
   note: string | null
   failed: boolean
@@ -76,7 +78,7 @@ export type Said =
       prompt?: number
     }
   | { kind: 'assistant'; text: string }
-  | { kind: 'tool'; text: string }
+  | { kind: 'tool'; text: string; why: string }
   | { kind: 'attached'; path: string }
   | { kind: 'watch'; number: number; path: string }
   /**

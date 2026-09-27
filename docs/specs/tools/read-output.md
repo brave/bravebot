@@ -13,8 +13,8 @@ documented-by:
 
 ## Scope
 
-Letting the planner read what a program printed. The reference naming the result is routing; there
-are no content arguments. What a program's output is labelled in the first place is
+Letting the planner read what a program printed. The reference naming the result is routing; the
+only content argument is the `why` every tool takes ([TOOL-5](tool-surface.md#TOOL-5)). What a program's output is labelled in the first place is
 [run.md](run.md).
 
 ## Clauses

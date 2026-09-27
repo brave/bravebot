@@ -12,7 +12,7 @@ documented-by: docs/website/docs/reference/tools.md
 
 ## Scope
 
-`questions` is routing; there are no content arguments. The result is what the user answered,
+`questions` is routing; the only content argument is the `why` every tool takes ([TOOL-5](tool-surface.md#TOOL-5)). The result is what the user answered,
 question by question. This is the one tool whose result comes from a person rather than from the
 workspace, and the
 only one with no effect at all.

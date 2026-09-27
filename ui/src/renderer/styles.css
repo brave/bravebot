@@ -824,6 +824,8 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .tool .verb { font-weight: 600; color: var(--ink); }
 .tool .target { font-family: var(--mono); font-size: 11px; }
 .tool .note { color: var(--ink-faint); }
+/* The planner's reason for the call, set apart from the outcome beside it. */
+.tool .why { font-style: italic; }
 .tool.failed { border-left-color: var(--removed); }
 .tool.failed .note { color: var(--removed); }
 .tool.running .ellipsis { color: var(--accent-text); }

@@ -385,3 +385,24 @@ test('a call that waited on a model of its own says how long, and one that asked
   assert.doesNotMatch(draw(read), /at the model/)
   assert.doesNotMatch(draw({ ...read, waitedSeconds: 0 }), /at the model/, 'a wait rounded to nothing is drawn')
 })
+
+// A window shows every call and, without this, nothing of what it was for. Rendered through the
+// real row for live and replayed calls alike, because the reason arriving and going undrawn is the
+// fault, and a resumed session is read for exactly this.
+test('a call is drawn with the reason the planner gave for it', () => {
+  const React = require('react')
+  const { renderToStaticMarkup } = require('react-dom/server')
+  const source = buildSync({ entryPoints: ['src/renderer/components/Transcript.tsx'], bundle: true, write: false, platform: 'node', format: 'cjs', jsx: 'automatic', external: ['react', 'react-dom', 'react/jsx-runtime'] }).outputFiles[0].text
+  const module = { exports: {} }
+  new Function('require', 'module', 'exports', source)(require, module, module.exports)
+  const { Row } = module.exports
+  const draw = (entry) => renderToStaticMarkup(React.createElement(Row, { entry, onDecide() {}, onAnswer() {}, onFork() {}, forkable: false }))
+
+  const read = { verb: 'Read', target: 'src/main.rs', why: 'see the entry point', note: '3 lines', failed: false, untrusted: false, changes: [], waitedSeconds: null }
+  assert.match(draw({ kind: 'tool', id: 'row', activity: read, landing: null }), /<span class="why">see the entry point<\/span>/)
+  assert.match(draw({ kind: 'tool', id: 'row', activity: { ...read, note: null }, landing: null }), /<span class="why">see the entry point<\/span>/, 'a running call lost its reason')
+  assert.doesNotMatch(draw({ kind: 'tool', id: 'row', activity: { ...read, why: '' }, landing: null }), /class="why"/)
+
+  assert.match(draw({ kind: 'replayed-tool', id: 'row', text: 'Read(src/main.rs)', why: 'see the entry point' }), /<span class="why">see the entry point<\/span>/)
+  assert.doesNotMatch(draw({ kind: 'replayed-tool', id: 'row', text: 'Read(src/main.rs)', why: '' }), /class="why"/)
+})

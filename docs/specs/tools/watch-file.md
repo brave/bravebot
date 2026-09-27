@@ -10,7 +10,8 @@ documented-by: docs/website/docs/using/watches.md
 
 ## Scope
 
-Arming a standing watch on one file. `path` is routing, and it is the only argument. The result is
+Arming a standing watch on one file. `path` is routing, and it is the only argument besides the
+`why` every tool takes ([TOOL-5](tool-surface.md#TOOL-5)). The result is
 a confirmation saying the watch exists.
 
 What a watch then is, what a firing does, how long one lives and what ends one is
@@ -24,6 +25,8 @@ What a watch then is, what a firing does, how long one lives and what ends one i
 
 No interval, no condition, no sentence for the fire to say, and no second path. A person reading
 the call sees which file this session may be told about, and that is the whole of the decision.
+The reason every call gives ([TOOL-5](tool-surface.md#TOOL-5)) sits beside the path, and nothing reads it,
+so it decides nothing about the watch.
 
 **Why.** This is what makes the routing approvable on its own, the test every tool on this surface
 is held to. A field for what a fire should say would let a turn write its own next prompt; a field

@@ -35,6 +35,9 @@ note drawn in the wrong one would still be outside a block.
 Where a result went is drawn only where that is not the ordinary answer. A quarantined read says so,
 and an ordinary one does not clutter the transcript saying what always happens.
 
+**Each call says why it was made**, in the model's own words, dim after the call on the same row.
+It stays there once the call is over, and a resumed session draws it too.
+
 **A call the model read shows a few lines of what it found**, drawn under the call behind a plain
 margin. A command shows its last five lines, because that is where a build or a test run says how it
 went. A file, a listing or a search shows its first five. A line under them says how many were left

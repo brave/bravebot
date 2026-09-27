@@ -462,7 +462,12 @@ pub enum Said {
     ///
     /// What came of it is not here. The record does not say, and inventing an outcome for a call
     /// whose result nobody wrote down would be worse than admitting the line is all there is.
-    Tool(String),
+    Tool {
+        /// The call, as the line announcing it read.
+        line: String,
+        /// Why the planner made it, in its own words. Empty where it gave no reason.
+        why: String,
+    },
     /// A message the agent wrote into the conversation, what it wrote it for, and what it said.
     ///
     /// The tag is what a surface decides from. The text is what a surface draws when it has no row
@@ -666,10 +671,13 @@ impl Conversation {
                         said.push(Said::Assistant(spoken));
                     }
                     for call in message.tool_calls.iter().flatten() {
-                        said.push(Said::Tool(crate::tools::describe_stored_call(
-                            &call.function.name,
-                            &call.function.arguments,
-                        )));
+                        said.push(Said::Tool {
+                            line: crate::tools::describe_stored_call(
+                                &call.function.name,
+                                &call.function.arguments,
+                            ),
+                            why: crate::tools::stored_why(&call.function.arguments),
+                        });
                     }
                 }
                 Role::System | Role::Tool => {}
@@ -830,6 +838,13 @@ mod tests {
                 name: name.to_string(),
                 arguments: arguments.to_string(),
             },
+        }
+    }
+
+    fn said_tool(line: &str, why: &str) -> Said {
+        Said::Tool {
+            line: line.to_string(),
+            why: why.to_string(),
         }
     }
 
@@ -1042,7 +1057,10 @@ mod tests {
         conversation.push(Message::user("what is in main.rs?"));
         conversation.push(Message::assistant_calling(
             "let me look",
-            vec![a_call("read_file", r#"{"path":"src/main.rs"}"#)],
+            vec![a_call(
+                "read_file",
+                r#"{"path":"src/main.rs","why":"to see the entry point"}"#,
+            )],
         ));
         conversation.push(Message::tool_result("call-1", "fn main() {}"));
         conversation.push(Message::assistant("it is a hello world"));
@@ -1052,7 +1070,7 @@ mod tests {
             vec![
                 Said::User("what is in main.rs?".to_string()),
                 Said::Assistant("let me look".to_string()),
-                Said::Tool("Read(src/main.rs)".to_string()),
+                said_tool("Read(src/main.rs)", "to see the entry point"),
                 Said::Assistant("it is a hello world".to_string()),
             ]
         );
@@ -1075,26 +1093,33 @@ mod tests {
         )));
 
         let recounted = conversation.recounted();
-        assert_eq!(recounted, vec![Said::Tool("Read(secrets.txt)".to_string())]);
+        assert_eq!(recounted, vec![said_tool("Read(secrets.txt)", "")]);
     }
 
-    /// A round with several calls is several lines, in the order they were asked for.
+    /// A round with several calls is several lines, in the order they were asked for, each with
+    /// the reason given for it rather than one reason for the round.
     #[test]
     fn every_call_in_a_round_is_recounted() {
         let mut conversation = Conversation::new();
         conversation.push(Message::assistant_calling(
             String::new(),
             vec![
-                a_call("search", r#"{"pattern":"MAX_STEPS"}"#),
-                a_call("list_files", r#"{"directory":"src"}"#),
+                a_call(
+                    "search",
+                    r#"{"pattern":"MAX_STEPS","why":"find where the bound is set"}"#,
+                ),
+                a_call(
+                    "list_files",
+                    r#"{"directory":"src","why":"see the layout"}"#,
+                ),
             ],
         ));
 
         assert_eq!(
             conversation.recounted(),
             vec![
-                Said::Tool("Search(MAX_STEPS)".to_string()),
-                Said::Tool("List(src)".to_string()),
+                said_tool("Search(MAX_STEPS)", "find where the bound is set"),
+                said_tool("List(src)", "see the layout"),
             ]
         );
     }
@@ -1109,10 +1134,7 @@ mod tests {
             vec![a_call("read_file", "{\"path\":")],
         ));
 
-        assert_eq!(
-            conversation.recounted(),
-            vec![Said::Tool("Read".to_string())]
-        );
+        assert_eq!(conversation.recounted(), vec![said_tool("Read", "")]);
     }
 
     /// The note is for the planner. Drawn in a transcript it would read as a prompt the user
