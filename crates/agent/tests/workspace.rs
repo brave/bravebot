@@ -5307,6 +5307,7 @@ fn log_of(repository: &Labelled<String>) -> bravebot_agent::workspace::GitQuesti
         repository,
         revision: None,
         path: None,
+        pattern: None,
         query: bravebot_agent::git::Query::Log,
         count: bravebot_agent::git::DEFAULT_COUNT,
         skip: 0,
@@ -5350,6 +5351,53 @@ fn a_repository_a_deny_rule_names_is_not_opened() {
         "a repository whose .git a rule denies was read: {:?}",
         refused.map(|answer| answer.label())
     );
+}
+
+/// GIT-14. A search's pattern decides which lines of which files the answer prints, so it is a
+/// routing field held to (T,pub) like the path beside it. A private one would carry what it holds
+/// into an answer the planner reads, however trusted its author.
+#[test]
+fn a_search_pattern_is_held_to_trusted_public_before_anything_is_read() {
+    let scratch = Scratch::new("git-search-pattern-routing");
+    repository::commit_files(&scratch.path, &[("README", "hello\n")], "first");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut trust = TrustStore::new(workspace.root());
+    trust.trust(".");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust);
+
+    let repository = Labelled::trusted(".".to_string());
+    let public = Labelled::trusted("hello".to_string());
+    let private = Labelled::new("hello".to_string(), Label::trusted_private());
+    let untrusted = Labelled::new("hello".to_string(), Label::untrusted_public());
+    let search = |pattern| bravebot_agent::workspace::GitQuestion {
+        query: bravebot_agent::git::Query::Search,
+        pattern: Some(pattern),
+        ..log_of(&repository)
+    };
+    let found = workspace
+        .read_git(&mut policy, &search(&public))
+        .expect("a trusted public pattern is searched for");
+    assert_eq!(found.label(), Label::trusted_private());
+    for (pattern, refusal) in [
+        (&private, "routing field 'pattern' of 'read_git'"),
+        (&untrusted, "injection blocked"),
+    ] {
+        let label = pattern.label();
+        let refused = workspace.read_git(&mut policy, &search(pattern));
+        let error = refused.map(|answer| answer.label()).expect_err("searched");
+        assert!(
+            error.to_string().contains(refusal),
+            "a {label} pattern was not refused at the routing gate: {error}"
+        );
+    }
 }
 
 /// A repository in a subdirectory answers to the rules on its own path: `sub/.git` is what the map

@@ -28840,7 +28840,7 @@ fn read_git_answers_status_and_refuses_a_query_off_the_list() {
     );
     let blame = tool_results(&received.recv().expect("third request"));
     assert!(
-        blame.contains("answers log, show, diff and status, not blame"),
+        blame.contains("answers log, show, diff, status, tags and search, not blame"),
         "a query off the list was not refused by name: {blame}"
     );
 }
@@ -28971,17 +28971,7 @@ fn read_git_pages_through_a_log_and_shows_whole_messages_when_asked() {
     )
     .expect("turn runs");
 
-    let newest = |request: String| -> String {
-        let parsed: serde_json::Value = serde_json::from_str(&request).expect("a request");
-        parsed["messages"]
-            .as_array()
-            .expect("messages")
-            .iter()
-            .rev()
-            .find(|message| message["role"] == "tool")
-            .map(|message| message["content"].to_string())
-            .expect("a tool result")
-    };
+    let newest = newest_tool_result;
     let _first = received.recv().expect("first request");
     let first = newest(received.recv().expect("second request"));
     assert!(
@@ -29005,6 +28995,205 @@ fn read_git_pages_through_a_log_and_shows_whole_messages_when_asked() {
     assert!(
         third.contains(&format!("    {BODY}")),
         "the message asked for did not reach the planner: {third}"
+    );
+}
+
+/// The newest tool result in one request the planner was sent.
+fn newest_tool_result(request: String) -> String {
+    let parsed: serde_json::Value = serde_json::from_str(&request).expect("a request");
+    parsed["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .rev()
+        .find(|message| message["role"] == "tool")
+        .map(|message| message["content"].to_string())
+        .expect("a tool result")
+}
+
+/// GIT-13. Which release came last is the newest version a revision's history holds, so tags reach
+/// the planner newest version first, only those the revision reaches when one is named, and paged
+/// as a log is.
+#[test]
+fn read_git_lists_the_tags_a_revision_reaches_newest_version_first() {
+    let scratch = Scratch::new("read-git-tags");
+    let git = scratch.path.join(".git");
+    repository::commit_files(&scratch.path, &[("README", "hello\n")], "OLDER");
+    std::fs::create_dir_all(git.join("refs/tags")).expect("tags");
+    std::fs::copy(git.join("refs/heads/main"), git.join("refs/tags/v0.9.0")).expect("tag");
+    repository::commit_files(&scratch.path, &[("README", "hello\nworld\n")], "NEWER");
+    std::fs::copy(git.join("refs/heads/main"), git.join("refs/tags/v0.10.0")).expect("tag");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_git", r#"{"query":"tags","count":1}"#),
+        tool_request_2("read_git", r#"{"query":"tags","revision":"HEAD~1"}"#),
+        tool_request_2("read_git", r#"{"query":"tags","path":"README"}"#),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("which release came last"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let newest = newest_tool_result(received.recv().expect("second request"));
+    assert!(
+        newest.contains("v0.10.0 ") && newest.contains("NEWER") && !newest.contains("v0.9.0"),
+        "the first tag listed was not the newest version alone: {newest}"
+    );
+    assert!(
+        newest.contains("this list of tags stopped with more tags to list; ask again with skip 1"),
+        "a list of tags that stopped with one left did not say how to list it: {newest}"
+    );
+    let merged = newest_tool_result(received.recv().expect("third request"));
+    assert!(
+        merged.contains("v0.9.0 ") && !merged.contains("v0.10.0"),
+        "a tag the revision does not reach was listed, or one it does was not: {merged}"
+    );
+    let refused = newest_tool_result(received.recv().expect("fourth request"));
+    assert!(
+        refused.contains("tags lists the repository's tags and takes no path"),
+        "a path on a list of tags was not refused: {refused}"
+    );
+}
+
+/// GIT-14. A search reaches the planner as `git grep` prints it, paged by its lines, and a pattern
+/// that is missing, empty or not a regular expression is refused rather than searched for.
+#[test]
+fn read_git_searches_the_files_at_a_revision_and_pages_the_lines() {
+    let scratch = Scratch::new("read-git-search");
+    repository::commit_files(
+        &scratch.path,
+        &[
+            ("README", "hello NEEDLE\n"),
+            ("src/lib.rs", "fn f() {}\nlet NEEDLE = 1;\n"),
+        ],
+        "add both",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "read_git",
+            r#"{"query":"search","pattern":"NEEDLE","count":1}"#,
+        ),
+        tool_request_2(
+            "read_git",
+            r#"{"query":"search","pattern":"NEEDLE","skip":1}"#,
+        ),
+        tool_request_2("read_git", r#"{"query":"search"}"#),
+        tool_request_2("read_git", r#"{"query":"search","pattern":""}"#),
+        tool_request_2("read_git", r#"{"query":"search","pattern":"("}"#),
+        tool_request_2("read_git", r#"{"query":"log","pattern":"NEEDLE"}"#),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("where is NEEDLE"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let first = newest_tool_result(received.recv().expect("second request"));
+    assert!(
+        first.contains("README:1: hello NEEDLE") && !first.contains("src/lib.rs"),
+        "the first page was not the first matching line alone: {first}"
+    );
+    assert!(
+        first.contains(
+            "this search stopped with more matching lines to list; ask again with skip 1"
+        ),
+        "a search that stopped with a line left did not say how to list it: {first}"
+    );
+    let second = newest_tool_result(received.recv().expect("third request"));
+    assert!(
+        second.contains("src/lib.rs:2: let NEEDLE = 1;")
+            && !second.contains("README")
+            && !second.contains("ask again with skip"),
+        "the skip did not move the search on to the next line: {second}"
+    );
+    for (request, refusal) in [
+        ("fourth", "search needs a pattern"),
+        ("fifth", "the search pattern was empty"),
+        ("sixth", "the search pattern is not usable"),
+        ("seventh", "a pattern is what search looks for"),
+    ] {
+        let refused = newest_tool_result(received.recv().expect(request));
+        assert!(
+            refused.contains(refusal),
+            "the {request} question was not refused with {refusal:?}: {refused}"
+        );
+    }
+}
+
+/// GIT-14. A search that found nothing in a file still read it, so a file the map distrusts makes
+/// the whole answer untrusted whether or not it matched. Narrowed to a trusted path, the same
+/// search is shown.
+#[test]
+fn a_search_that_read_a_distrusted_file_is_quarantined_matched_or_not() {
+    const OURS: &str = "LINE-FROM-A-TRUSTED-FILE";
+    let scratch = Scratch::new("read-git-search-distrusted");
+    repository::commit_files(
+        &scratch.path,
+        &[
+            ("README", &format!("{OURS}\n")),
+            ("vendor/b.js", "nothing here\n"),
+        ],
+        "add both",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "read_git",
+            &format!(r#"{{"query":"search","pattern":"{OURS}"}}"#),
+        ),
+        tool_request_2(
+            "read_git",
+            &format!(r#"{{"query":"search","pattern":"{OURS}","path":"README"}}"#),
+        ),
+        reply_with("understood"),
+    ]);
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    trust.distrust("vendor");
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("where is it"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let whole = newest_tool_result(received.recv().expect("second request"));
+    assert!(
+        !whole.contains(&format!("README:1: {OURS}")),
+        "a search that read a distrusted file reached the planner: {whole}"
+    );
+    assert!(
+        whole.contains("could not be shown to you"),
+        "the planner was not told the answer was withheld: {whole}"
+    );
+    let narrowed = newest_tool_result(received.recv().expect("third request"));
+    assert!(
+        narrowed.contains(&format!("README:1: {OURS}")),
+        "the search narrowed to a trusted path was not shown: {narrowed}"
     );
 }
 

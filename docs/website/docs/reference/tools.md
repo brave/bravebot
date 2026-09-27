@@ -15,7 +15,7 @@ that is merely carried.
 | [`read_file`](#read_file) | `path`, `path_ref`, `offset`, `limit` | none | only to trust a quarantined file |
 | [`list_files`](#list_files) | `directory`, `pattern`, `depth` | none | no |
 | [`search`](#search) | `pattern`, `directory`, `include`, `offset`, `case_sensitive` | none | no |
-| [`read_git`](#read_git) | `query`, `repository`, `revision`, `path`, `count`, `skip`, `messages`, `since`, `until` | none | only if what it would show holds a credential |
+| [`read_git`](#read_git) | `query`, `repository`, `revision`, `path`, `pattern`, `count`, `skip`, `messages`, `since`, `until` | none | only if what it would show holds a credential |
 | [`lsp`](#lsp) | `operation`, `path`, `line`, `character`, `query` | none | **yes, to start a language server** |
 | [`write_file`](#write_file) | `path`, `path_ref`, `contents_ref` | `contents` | **yes, every time** |
 | [`edit_file`](#edit_file) | `path`, `path_ref`, `replace_all` | `old_text`, `new_text` | **yes, every time** |
@@ -211,12 +211,13 @@ working tree, **without starting git**.
 
 | Parameter | |
 |---|---|
-| `query` | `log`, `show`, `diff` or `status` |
+| `query` | `log`, `show`, `diff`, `status`, `tags` or `search` |
 | `repository` | workspace-relative directory holding `.git`, defaults to `.` |
-| `revision` | in git's syntax: a branch, a tag, `HEAD`, an id or its prefix, then `~N`, `^N` or `^{commit}`. `log` takes one or a range `A..B`; `show` takes one, or `<revision>:<path>` for a file or directory as it was; `diff` takes two, as `A..B` or `A B` |
-| `path` | relative to the repository's root. Limits `log` to commits that changed it, and `show`, `diff` and `status` to changes under it |
-| `count` | commits a `log` lists: 20 unless given, at most 200 |
-| `skip` | `log` only: commits to pass over before listing, as `git log --skip` does |
+| `revision` | in git's syntax: a branch, a tag, `HEAD`, an id or its prefix, then `~N`, `^N` or `^{commit}`. `log` takes one or a range `A..B`; `show` takes one, or `<revision>:<path>` for a file or directory as it was; `diff` takes two, as `A..B` or `A B`; `tags` takes none, or one to list only the tags it reaches; `search` takes one and defaults to `HEAD` |
+| `path` | relative to the repository's root. Limits `log` to commits that changed it, `show`, `diff` and `status` to changes under it, and `search` to files under it |
+| `pattern` | `search` only, and required there: the regular expression to look for, matched against each line |
+| `count` | commits a `log` lists, tags a `tags` lists or lines a `search` prints: 20 unless given, at most 200 |
+| `skip` | `log`, `tags` and `search`: how many to pass over before listing, as `git log --skip` does |
 | `messages` | `log` only: print each commit's whole message beneath its line |
 | `since`, `until` | `log` only: whole days in UTC, written `YYYY-MM-DD`, both ends included |
 
@@ -226,6 +227,9 @@ indented. A log that stopped with commits left names the `skip` that lists the n
 holds whole commits. `show` prints a commit
 with its message and diff, a tag with its message and then its commit, or a file or directory at a
 revision. `diff` compares two commits. A merge is shown without a diff and says which diff to ask for.
+`tags` lists tags newest version first, as `git tag --sort=-v:refname` does, and given a revision
+only those it reaches, as `--merged` does. `search` prints the lines `pattern` matches in the files
+at a revision, as `git grep -n` does. Both page with `skip` as a log does.
 `status` lists staged, unstaged and untracked paths as `git status --short --no-renames` does. It
 detects no renames, and lists a file an attribute or `core.autocrlf` would convert, or a
 submodule, as not compared.
@@ -242,10 +246,11 @@ under `.git` say, so `.git` and everything beneath it has to be trusted before a
 Anywhere else it says so, and the planner uses `run`. `status` also reads every file in the working
 tree, so it answers only where you trust the whole of it; log, show and diff still answer where you
 distrust part of it. An answer showing a file you distrust is
-quarantined like a read of that file, since a commit holds that file's bytes.
+quarantined like a read of that file, since a commit holds that file's bytes, and so is a search
+that read one, whether or not anything in it matched.
 
 **A deny rule on a file covers its history.** Naming a denied file, as a `path` or as
-`HEAD:.env`, is refused. A denied file met in a diff or a listing is left out, and the answer says
+`HEAD:.env`, is refused. A denied file met in a diff, a listing or a search is left out, and the answer says
 so. A rule over `.git` or anything in it keeps the repository closed.
 
 What it would show is scanned for credentials as a file read is, and held back until you agree. A

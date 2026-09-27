@@ -66,6 +66,16 @@ Exactly that, clause by clause:
 
 The notes cover everything between the last release and the version in the tree.
 
+Where there is a `read_git` tool, use it:
+
+- `$current` is what a `search` for `^version = ` with `path` set to `Cargo.toml` prints first.
+- `tags` with `revision` set to `HEAD` lists the tags HEAD's history holds, newest version first.
+  The base is the first `v` tag there that is not `v$current`.
+- With no such tag, a `log` with `path` set to `Cargo.toml` lists the commits that changed it. The
+  base is the newest whose subject bumps the version to anything but `$current`.
+
+Without one, git gives the same:
+
 ```sh
 current="$(sed -nE 's/^version[[:space:]]*=[[:space:]]*"([0-9]+\.[0-9]+\.[0-9]+)".*/\1/p' Cargo.toml | head -n 1)"
 

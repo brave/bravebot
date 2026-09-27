@@ -15,9 +15,10 @@ documented-by: docs/website/docs/reference/tools.md
 
 Reading a repository's history from the files under its `.git`, and its status from those and the
 working tree, without starting git. `query`,
-`repository`, `revision`, `path`, `since`, `until`, `count`, `skip` and `messages` are routing: the
-first names which question is asked, the next three name which repository, which commits and which
-files it is asked about, and the rest bound the commits a log lists and how much of each it prints.
+`repository`, `revision`, `path`, `pattern`, `since`, `until`, `count`, `skip` and `messages` are
+routing: the first names which question is asked, the next four name which repository, which
+commits, which files and which lines it is asked about, and the rest bound what a log, a list of
+tags or a search lists and how much of each it prints.
 The only content argument is the `why` every
 tool takes ([TOOL-5](tool-surface.md#TOOL-5)). The result is
 the answer, or a reference where a path it showed is untrusted. What it shows is scanned for
@@ -141,8 +142,8 @@ than by what it holds, a file the map distrusts would reach the planner through 
 
 A file the question names, by `path` or by `<revision>:<path>`, is refused under a deny rule as a
 read of it is, before anything under `.git` is opened. A file a rule covers that an answer would
-otherwise show, in a diff, a listing or a log narrowed to it, is left out, and the answer says
-something was left out.
+otherwise show, in a diff, a listing, a search or a log narrowed to it, is left out, and the answer
+says something was left out.
 
 A rule covering `.git` or any file beneath it keeps the repository closed. read_git reads every
 file there or none.
@@ -158,20 +159,25 @@ which object a file holds is not known until it is read.
 `verified-by: bravebot_agent::git::a_withheld_path_is_neither_read_nor_listed`
 
 <a id="GIT-5"></a>
-### GIT-5: the question is log, show, diff or status, and anything else is refused by name
+### GIT-5: the question is log, show, diff, status, tags or search, and anything else is refused by name
 
 A word off the list is refused and the planner is told to use `run`. A revision form this reader does not implement, `A...B` or `HEAD^@`
 among them, is refused by name, and a query given the other shape of revision, one where it takes
 two or two where it takes one, is told which query takes it. A status given a revision is told to
-use diff.
+use diff. A pattern given to anything but search, a search given none, an empty one or one that is
+not a regular expression, and a list of tags given a path are each refused by name.
 
 **Why.** A guess answers a question the planner did not ask as though it had. `A...B` read as the
 forms this reader knows is the range from `A.` to `.B`, and `HEAD^@` is `HEAD^`, so each would
-come back as a confident answer to something else.
+come back as a confident answer to something else. A pattern or a path dropped without a word is
+the same guess: a log with its pattern dropped is every commit, read as the ones that matched.
 
 `verified-by: bravebot_agent::turn::read_git_answers_status_and_refuses_a_query_off_the_list`
+`verified-by: bravebot_agent::turn::read_git_searches_the_files_at_a_revision_and_pages_the_lines`
+`verified-by: bravebot_agent::turn::read_git_lists_the_tags_a_revision_reaches_newest_version_first`
 `verified-by: bravebot_agent::git::revision_syntax_read_git_does_not_implement_is_refused_by_name`
 `verified-by: bravebot_agent::git::a_query_given_the_wrong_shape_of_revision_says_which_query_takes_it`
+`verified-by: bravebot_agent::git::a_pattern_is_for_search_alone_and_tags_take_no_path`
 
 <a id="GIT-6"></a>
 ### GIT-6: `since` and `until` are whole days in UTC
@@ -230,9 +236,10 @@ from the one git would, and the rules were held against files it did not read.
 <a id="GIT-9"></a>
 ### GIT-9: an answer is bounded, and one that stopped short says so
 
-A log lists 20 commits unless the planner names a count, and never more than 200. An answer holds
-at most 2,000 lines and each line at most 2,000 characters. A file past 1 MiB is described by its
-size, read from the object's header alone. An answer stops at the search deadline. An answer cut
+A log lists 20 commits, a list of tags 20 tags and a search 20 lines unless the planner names a
+count, and never more than 200. An answer holds at most 2,000 lines and each line at most 2,000
+characters. A file past 1 MiB is described by its size, read from the object's header alone, and
+not searched. An answer stops at the search deadline. An answer cut
 by any of these says it was cut, and one that was not makes no such claim.
 
 **Why.** A repository's history is as large as the repository, and a planner handed part of it as
@@ -346,3 +353,53 @@ a page would be read as the whole of it.
 `verified-by: bravebot_agent::git::a_log_with_messages_prints_each_commit_whole_beneath_its_line`
 `verified-by: bravebot_agent::git::skip_passes_over_the_commits_a_log_already_listed`
 `verified-by: bravebot_agent::git::a_page_of_messages_ends_at_a_whole_commit`
+
+<a id="GIT-13"></a>
+### GIT-13: tags are listed newest version first, and with a revision only those it reaches
+
+`tags` lists the repository's tags, loose and packed alike and a loose one over a packed one of the
+same name, in the order `git tag --sort=-v:refname` lists them: a run of digits is compared as a
+number, so `v0.10.0` comes before `v0.9.0`. Each line is the tag's name and the commit it names as a
+log prints it, or for a tag that names a tree or a file, its id and what it is. Given a revision,
+only the tags whose commit that revision's history holds are listed, as `git tag --merged` lists
+them, and a tag naming no commit is not. A list of tags shows no path and is labelled by `.git`
+alone. It pages by `count` and `skip` as a log does ([GIT-12](#GIT-12)), naming the skip that lists
+the next of them.
+
+**Why.** Where the last release ended is the newest tag the history being released holds. Sorted as
+names, `v0.9.0` would be taken as newer than `v0.10.0`, and without a revision a tag on another
+branch would be taken as the one before this release.
+
+`verified-by: bravebot_agent::turn::read_git_lists_the_tags_a_revision_reaches_newest_version_first`
+`verified-by: bravebot_agent::git::tags_are_listed_newest_version_first_loose_and_packed_alike`
+`verified-by: bravebot_agent::git::tags_given_a_revision_are_only_those_its_history_holds`
+`verified-by: bravebot_agent::git::tags_page_by_count_and_skip`
+
+<a id="GIT-14"></a>
+### GIT-14: a search is labelled by every file it read, matched or not
+
+`search` prints the lines of the files at one revision, HEAD unless another is named, that
+`pattern` matches, as `git grep -n` prints them: `path:line: text`, in the order git lists the tree,
+with a binary file that matches named rather than printed and a file past the size cap described by
+its size. A path narrows it to that file or the files beneath it. A symbolic link and a submodule
+are not searched, as `git grep` over a tree searches neither. The pattern is written as
+`file_grep`'s is ([SEARCH-1](search.md#SEARCH-1)).
+
+Every file the search read is a path it showed ([GIT-3](#GIT-3)), whether or not a line in it
+matched, so one file the map distrusts makes the whole answer a reference. A file the trust map
+withholds is not read, and the answer says one was left out only where it was inside the path
+searched. A search pages by the lines it prints, counting a binary file that matches and a file past
+the cap as one each, and names the skip that lists the next of them.
+
+**Why.** Finding nothing in a file says something about what it holds too. Labelled by its matches
+alone, a search over a file the map distrusts would come back trusted whenever the file happened
+not to match, and whether it matched is exactly what that file's author controls. A page counted
+in anything other than the lines it printed would repeat or skip one on the next.
+
+`verified-by: bravebot_agent::turn::read_git_searches_the_files_at_a_revision_and_pages_the_lines`
+`verified-by: bravebot_agent::turn::a_search_that_read_a_distrusted_file_is_quarantined_matched_or_not`
+`verified-by: bravebot_agent::workspace::a_search_pattern_is_held_to_trusted_public_before_anything_is_read`
+`verified-by: bravebot_agent::git::search_lists_the_lines_a_pattern_matches_at_a_revision_as_git_grep_does`
+`verified-by: bravebot_agent::git::a_search_shows_every_file_it_read_whether_or_not_it_matched`
+`verified-by: bravebot_agent::git::a_search_leaves_out_a_withheld_file_and_says_so`
+`verified-by: bravebot_agent::git::a_search_pages_by_the_lines_it_prints`

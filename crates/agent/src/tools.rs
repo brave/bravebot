@@ -417,7 +417,10 @@ fn table(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<Tool> {
              commits one per line, or each with its whole message, a page at a time; show \
              prints a commit with its diff or a file or directory at \
              a revision, diff compares two commits, and status lists staged, unstaged and \
-             untracked paths as git status --short does. Works only where the whole of .git is \
+             untracked paths as git status --short does. tags lists tags newest version first, \
+             as git tag --sort=-v:refname does, and with a revision only those it reaches, as \
+             --merged does; search finds the lines matching a regular expression in the files \
+             at a revision, as git grep does. Works only where the whole of .git is \
              trusted, and for status the whole working tree; elsewhere it says so and you use \
              run. Nothing git's configuration names is applied: no diff drivers, textconv, \
              filters or signature checks, and no remote URL is ever returned. Status detects no \
@@ -428,8 +431,8 @@ fn table(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<Tool> {
                 "properties": {
                     "query": {
                         "type": "string",
-                        "enum": ["log", "show", "diff", "status"],
-                        "description": "log, show, diff or status."
+                        "enum": ["log", "show", "diff", "status", "tags", "search"],
+                        "description": "log, show, diff, status, tags or search."
                     },
                     "repository": {
                         "type": "string",
@@ -443,23 +446,31 @@ fn table(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<Tool> {
                                         revision or a range A..B and defaults to HEAD. show takes \
                                         one and defaults to HEAD; <revision>:<path> shows a file \
                                         or directory as it was. diff needs two, written A..B or \
-                                        \"A B\"."
+                                        \"A B\". tags takes none, or one to list only the tags \
+                                        it reaches. search takes one and defaults to HEAD."
                     },
                     "path": {
                         "type": "string",
                         "description": "Relative to the repository's root. Limits log to commits \
-                                        that changed it, and show, diff and status to changes \
-                                        under it."
+                                        that changed it, show, diff and status to changes \
+                                        under it, and search to files under it."
+                    },
+                    "pattern": {
+                        "type": "string",
+                        "description": "search only, and required there: the regular expression \
+                                        to look for, matched against each line."
                     },
                     "count": {
                         "type": "integer",
-                        "description": "Commits a log lists. Defaults to 20, at most 200."
+                        "description": "Commits a log lists, tags a list of tags shows, or lines \
+                                        a search prints. Defaults to 20, at most 200."
                     },
                     "skip": {
                         "type": "integer",
-                        "description": "log only: commits to pass over before listing, as git \
-                                        log --skip does. A log that stopped with commits left \
-                                        gives the skip that lists the next of them."
+                        "description": "log, tags and search: how many to pass over before \
+                                        listing, as git log --skip does. An answer that stopped \
+                                        with more left gives the skip that lists the next of \
+                                        them."
                     },
                     "messages": {
                         "type": "boolean",
@@ -7012,7 +7023,9 @@ fn read_git<S: Sink, C: Confirmer>(
 ) -> Produced {
     let workspace = tools.workspace;
     let Some(named) = argument(arguments, "query") else {
-        return Produced::problem("error: 'query' is required: one of log, show, diff or status");
+        return Produced::problem(
+            "error: 'query' is required: one of log, show, diff, status, tags or search",
+        );
     };
     // The question is routing, promoted like any other proposal and then matched against the
     // closed set, so a name off the list is refused rather than guessed at.
@@ -7022,8 +7035,8 @@ fn read_git<S: Sink, C: Confirmer>(
                 Some(query) => query,
                 None => {
                     return Produced::problem(format!(
-                        "error: read_git answers log, show, diff and status, not {}. Use run to \
-                         ask git for anything else.",
+                        "error: read_git answers log, show, diff, status, tags and search, not \
+                         {}. Use run to ask git for anything else.",
                         name.trim()
                     ));
                 }
@@ -7053,6 +7066,10 @@ fn read_git<S: Sink, C: Confirmer>(
     };
     let path = match git_argument(policy, arguments, "path") {
         Ok(path) => path,
+        Err(refused) => return Produced::problem(refused),
+    };
+    let pattern = match git_argument(policy, arguments, "pattern") {
+        Ok(pattern) => pattern,
         Err(refused) => return Produced::problem(refused),
     };
     let since = match git_argument(policy, arguments, "since")
@@ -7114,6 +7131,7 @@ fn read_git<S: Sink, C: Confirmer>(
         repository: &repository,
         revision: revision.as_ref(),
         path: path.as_ref(),
+        pattern: pattern.as_ref(),
         query,
         count,
         skip,
@@ -7210,9 +7228,14 @@ fn read_git<S: Sink, C: Confirmer>(
                  path, a range or a smaller count)",
             );
         } else if let Some(next) = a.next {
+            let (answer, more) = match query {
+                crate::git::Query::Tags => ("list of tags", "tags"),
+                crate::git::Query::Search => ("search", "matching lines"),
+                _ => ("log", "commits"),
+            };
             body.push_str(&format!(
-                "\n\n(this log stopped with more commits to list; ask again with skip {next} for \
-                 the next of them)"
+                "\n\n(this {answer} stopped with more {more} to list; ask again with skip {next} \
+                 for the next of them)"
             ));
         } else if a.cut {
             body.push_str(
