@@ -2815,20 +2815,21 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         }
 
         let mut steps = 0;
-        // Whether a write has been asked for this turn, and whether the driver has already said none
-        // has. A requested write counts rather than a completed one: a write the user refused is a
-        // planner that tried to deliver, and telling it to start delivering would be answering
-        // something nobody asked.
-        let mut asked_to_write = false;
+        // Whether the driver has already said this turn that no write has been asked for. Whether one
+        // has is the conversation's, since a turn continuing a stopped one inherits its writes. A
+        // requested write counts rather than a completed one: a write the user refused is a planner
+        // that tried to deliver, and telling it to start delivering would be answering something
+        // nobody asked.
         let mut said_nothing_written = false;
         // The round a file on disk first became different from how this turn found it, where one
         // did, and whether a program has been run since the turn began.
         //
         // Both from what dispatch did rather than from what the planner asked for, which is the
-        // opposite of the flag above and for the opposite reason. These say what the workspace holds:
-        // a write the person declined and a write plan mode refused leave nothing to build, and a run
-        // the person declined builds nothing, so a turn counting either would tell the planner and
-        // then the person about a diff that was never made or a check that never happened.
+        // opposite of the write counted above and for the opposite reason. These say what the
+        // workspace holds: a write the person declined and a write plan mode refused leave nothing to
+        // build, and a run the person declined builds nothing, so a turn counting either would tell
+        // the planner and then the person about a diff that was never made or a check that never
+        // happened.
         let mut changed_at: Option<usize> = None;
         let mut ran_a_program = false;
         let mut said_nothing_run = false;
@@ -3268,8 +3269,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         .iter()
                         .map(|c| c.function.name.clone())
                         .collect();
-                    asked_to_write =
-                        asked_to_write || requested.iter().any(|name| tools::writes_a_file(name));
+                    if requested.iter().any(|name| tools::writes_a_file(name)) {
+                        conversation.write_requested();
+                    }
 
                     let spoken = policy
                         .adopt_model_output("chat", completion.content.clone())
@@ -4048,7 +4050,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     // knows is that rounds have gone by and nothing was written, and the planner is the
                     // one that knows whether that is wrong.
                     if may_write
-                        && !asked_to_write
+                        && !conversation.asked_to_write()
                         && !said_nothing_written
                         && steps >= ROUNDS_BEFORE_WRITING
                     {
@@ -4183,6 +4185,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             }
         }));
         conversation.observed(policy.context_integrity());
+        // Here and nowhere earlier: a turn that was stopped or failed has not answered, and the next
+        // prompt is usually the same task carried on rather than a new one.
+        conversation.turn_answered();
 
         // Taken before `finish` consumes the policy, since a write may have changed the map and an
         // approved run may have added to the programs.
