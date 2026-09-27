@@ -50,19 +50,19 @@ who has never made one.
 
 Vi editing has two modes over the same line. **INSERT** is the box everybody has. **NORMAL** takes a
 letter as an instruction, and a letter it has no instruction for does nothing at all rather than
-being typed. Every session opens in INSERT, whichever style is in force, and the mode is drawn
-beneath the box beside the mode that says how much the session asks. The ordinary box is in neither
-mode, and nothing about a mode is drawn at it.
+being typed. NORMAL opens two more for a while, [VISUAL](#marking-a-stretch-out-first) and
+[REPLACE](#typing-over-the-line). Every session opens in INSERT, whichever style is in force, and
+the mode is drawn beneath the box beside the mode that says how much the session asks. The ordinary
+box is in neither mode, and nothing about a mode is drawn at it.
 
 An instruction still waiting for its next key is drawn after the mode, as vi's `showcmd` draws it:
 `NORMAL d` once `d` is pressed, `NORMAL di` after the `i`, and the mode alone once the instruction is
 whole.
 
 A key beginning one of vi's instructions that this box does not have does nothing, and nor does the
-key vi would give it: `"`, `q`, `@`, `m`, `'`, `` ` ``, `z`, `Z`, `[`, `]`, `R`, `g'` and `` g` ``
-each take one more key, so `ma` sets no mark and opens no INSERT mode. `R` takes one key rather
-than replacing until Escape. `g?`, `gq`, `gw` and `g@` take the stretch they would act on, so `g?iw`
-changes nothing. After an operator only `'`, `` ` ``, `[`, `]` and `z` take their key, as in vi, so
+key vi would give it: `"`, `q`, `@`, `m`, `'`, `` ` ``, `z`, `Z`, `[`, `]`, `g'` and `` g` ``
+each take one more key, so `ma` sets no mark and opens no INSERT mode. `g?`, `gq`, `gw` and `g@`
+take the stretch they would act on, so `g?iw` changes nothing. After an operator only `'`, `` ` ``, `[`, `]` and `z` take their key, as in vi, so
 `dm` ends the `d` and the key after it is read on its own. In VISUAL mode those four take no key,
 since the selection is the stretch, and `R` changes the rows the selection crosses.
 
@@ -88,6 +88,16 @@ NORMAL mode it sits on the character the next instruction acts on.
 [shell mode](shell-mode.md) and put the key list up. Both are a press of `i` away. Reading `!` as the
 mark would arm a shell from a press asking for something else, and there is no way out of a shell
 armed by accident except deleting back past the mark.
+
+### Typing over the line
+
+`R` opens REPLACE mode, and the hint line says `REPLACE`. Each character you type takes the place of
+the one under the caret, until Escape takes you back to NORMAL mode. At the end of a row and on a
+[marker](#markers) the character goes in beside the caret instead, and Shift-Enter breaks the row
+without taking anything; Enter sends. Backspace puts back what the last character you typed took the
+place of, as far back as the `R`, and past that only moves the caret left. Ctrl-W and Ctrl-U do the
+same as far as the start of the word and of the row. `u` takes back everything typed since the `R` as
+one change. `.` does not repeat it, and a count in front of `R` does nothing.
 
 ### Motions
 
@@ -188,8 +198,8 @@ them, from either bracket, and `d|` stops short of the column, so `d|` is `d0`. 
 back as a line of its own. `J` makes this line and the one below into one, with a single space where
 the newline was. `gJ` joins them with nothing there and leaves the blanks the next line began with,
 for a line broken in the middle of a word or a path. `u` puts back what the last change took, **one step and no further**. `.` does the
-last change again at the caret, except after a put, a join, or `r` or a case change over a selection,
-where it does nothing.
+last change again at the caret, except after a put, a join, `r` or a case change over a selection, or
+typing over the line with `R`, where it does nothing.
 
 The register is vi's unnamed one and the only one. It is not the system clipboard, which Ctrl-V owns
 and which you share with every other window you have open, so a yank here does not travel out of the
@@ -231,6 +241,10 @@ several stretches. A yanked row stays a row, splitting the line when you put it 
 The key that opened the mode closes it, the other of the two changes which kind is in force, and
 Escape abandons the selection. Every operator ends it, so nothing acts on a stretch that is no longer
 drawn.
+
+`gv` marks the last selection out again, however it ended, with each end at the row and the column it
+was at, so `V>` and then `gv>` shifts the same rows twice. In VISUAL mode `gv` swaps the selection on
+the screen for the one before.
 
 A selection is character-wise or line-wise and never a rectangle. A box ten rows tall holding one
 prompt is not where somebody edits columns.

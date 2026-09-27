@@ -6401,6 +6401,11 @@ mod tests {
         let hint = hint_row_at(&session, 120, 24);
         assert!(hint.contains("NORMAL"), "{hint}");
         assert!(!hint.contains("INSERT"), "both modes were drawn: {hint}");
+
+        session.type_char('R');
+        let hint = hint_row_at(&session, 120, 24);
+        assert!(hint.contains("REPLACE"), "{hint}");
+        assert!(!hint.contains("NORMAL"), "both modes were drawn: {hint}");
     }
 
     /// A `d` waiting for its stretch decides what the next letter does as much as the mode does, so
