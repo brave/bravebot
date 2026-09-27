@@ -1838,6 +1838,12 @@ delegate-skills-not-found =
         [one] { $definition } names a skill this session did not find, so its delegate is offered without it: { $skills }
        *[other] { $definition } names skills this session did not find, so its delegate is offered without them: { $skills }
     }
+# A definition's rounds line is not a whole number above zero, so the file did not load. The
+# definition is its file's path.
+delegate-rounds-not-a-count = { $definition } was skipped: its rounds must be a whole number above zero
+# A definition asked for more rounds than its kind may make. The kind is its key's value (reader,
+# checker or worker), left as written because it is typed.
+delegate-rounds-held = { $definition } asks for { $asked } rounds, more than the { $most } a { $kind } may make, so its delegate is given { $most }
 
 # Advisory checks shown only in a Bravebot source checkout.
 doctor-development = development environment { $path }

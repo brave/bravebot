@@ -173,18 +173,53 @@ are asked about separately, and what a delegate is told it can do is what it is 
 `verified-by: bravebot_agent::delegate::a_delegate_holding_no_reading_is_not_told_it_may_read`
 
 <a id="DELEGATE-6"></a>
-### DELEGATE-6: a delegate is bounded, and the bound is its kind's
+### DELEGATE-6: a delegate is bounded, by its definition beneath its kind's ceiling
 
-Every kind carries a round limit and the call cannot set one. On the limiting round the delegate
-loses its tools rather than its run, and answers with what it has.
+Every kind carries a round limit: 60 for a `reader`, 80 for a `checker` and 120 for a `worker`. A
+definition may name its own with `rounds:`, a whole number above zero, and its delegate runs to
+that number instead. Each kind also carries a ceiling no definition passes, twice its own limit:
+120, 160 and 200. The call sets no bound at all. On the limiting round the delegate loses its
+tools rather than its run, and answers with what it has.
+
+A definition asking for more than its kind's ceiling is loaded with the ceiling, and the turn
+says so, naming the definition, the number it asked for and the number it is given. A `rounds:`
+line that is not a whole number above zero is a definition that does not load, and the notice
+names its file, as [DELEGATE-20](#DELEGATE-20) does for any file that claims to be a definition
+and is not.
 
 **Not a safety property.** A gate refuses on the last round what it refuses on the first. It
 bounds futility, and it applies here because nobody is coming to stop a delegate: the person is
 watching the turn, and a turn that has started several has no more idea than they do which of
 them is making progress.
 
+**Why a definition may choose it.** Whoever wrote down what a delegate is for knows how long that
+takes better than its kind does: a staged migration needs more rounds than a lookup, and a lookup
+still going at sixty has gone wrong. The number comes from a file somebody vouched for
+([DELEGATE-20](#DELEGATE-20)), the same endorsement its body and its model rest on, and the
+planner's call, which nobody vouched for, still sets nothing.
+
+**Why a ceiling.** A delegate is a run nobody is watching, which is why each kind is bounded at
+all, and a number with no ceiling would hand that bound to the file at whatever figure it wrote.
+A `worker`'s ceiling is the bound an unwatched turn carries ([TURN-2](turns.md#TURN-2)), since a
+delegate is one.
+
+**Why hold the number rather than refuse the file.** A number past the ceiling says the task is
+long, which the ceiling can honour as far as it goes, and refusing the file would lose the
+delegate over a figure. It is said, because an author not told would read their number as the
+one in force. A value that is no number has nothing in it to hold, so its file does not load.
+Zero goes with it: the bound is checked after a round, so zero would run as one.
+
 `verified-by: bravebot_core::delegate::every_kind_carries_a_bound`
-`verified-by: bravebot_core::policy::a_delegates_bound_comes_from_its_kind`
+`verified-by: bravebot_core::delegate::a_definition_may_ask_its_kind_for_more_rounds_than_its_own`
+`verified-by: bravebot_core::delegate::a_definition_naming_no_rounds_keeps_its_kinds_own`
+`verified-by: bravebot_core::delegate::a_definition_may_set_its_own_bound_beneath_its_kinds_ceiling`
+`verified-by: bravebot_core::delegate::a_definition_asking_past_its_kinds_ceiling_is_held_to_it`
+`verified-by: bravebot_core::policy::a_kind_is_delegated_with_its_own_bound`
+`verified-by: bravebot_core::policy::a_definition_is_delegated_with_the_bound_it_names`
+`verified-by: bravebot_agent::agents::a_definition_reads_the_rounds_it_names`
+`verified-by: bravebot_agent::agents::a_rounds_line_that_is_not_a_count_is_not_a_definition`
+`verified-by: bravebot_agent::agents::a_definition_asking_past_its_kinds_ceiling_says_what_it_is_given`
+`verified-by: bravebot_agent::turn::no_kind_lets_a_definition_run_longer_than_an_unwatched_turn`
 
 <a id="DELEGATE-7"></a>
 ### DELEGATE-7: a delegate may delegate, to a fixed depth and under one ceiling for the turn
@@ -218,9 +253,9 @@ in its own context, which is the cost delegation exists to avoid, paid again one
 
 **Why these bounds.** A ceiling per node makes the bound on the tree the product of the ceilings,
 a number nobody chose. One count shared by the whole tree is chosen directly, however the tree
-is arranged. Rounds do not multiply either: a nested delegate keeps its own kind's limit
-([DELEGATE-6](#DELEGATE-6)), so the rounds one turn's delegates spend are at most 32 of those
-limits, at any depth. The depth keeps each number short enough to read: a delegate's number is
+is arranged. Rounds do not multiply either: a nested delegate keeps its own definition's bound
+([DELEGATE-6](#DELEGATE-6)), so the rounds one turn's delegates spend are at most 32 of the kinds'
+ceilings, at any depth. The depth keeps each number short enough to read: a delegate's number is
 its path from the turn ([DELEGATE-13](#DELEGATE-13)).
 
 **Why a definition's list decides it.** A child is narrowed by its parent's capabilities, not by
@@ -567,9 +602,9 @@ Two files in one directory resolve by file name, so which of them is live is the
 machine.
 
 **A later definition of the same name replaces the one before it and never widens it.** It has the
-last word about what the name is *for*, taking over the description, the body, the model and the
-skills ([DELEGATE-23](#DELEGATE-23)), and none at all about what it may do. Both fields that decide
-that are met with the one it replaced:
+last word about what the name is *for*, taking over the description, the body, the model, the
+skills ([DELEGATE-23](#DELEGATE-23)) and the rounds ([DELEGATE-6](#DELEGATE-6)), and none at all
+about what it may do. Both fields that decide that are met with the one it replaced:
 
 - It is loaded as the **narrower of the two kinds**, so a project cannot turn a `reader` a person
   wrote in their own directory into a `worker`.
@@ -582,6 +617,11 @@ that are met with the one it replaced:
 Met on the fields rather than on the capability set they come to, because two tools one capability
 reaches are two different things a delegate may do, and a meet taken on capabilities alone would
 hand back every other tool that capability reaches.
+
+The rounds are taken over rather than met, because a bound is not authority: a gate refuses on
+the last round what it refuses on the first. They are held to the ceiling of the kind the
+replacement is loaded as, so a project writing a `worker`'s number under the name of a `reader` a
+person wrote gets a `reader`'s ceiling, and is told so ([DELEGATE-6](#DELEGATE-6)).
 
 DELEGATE-19 says a checked-in file granting a capability would make the file the author of
 authority rather than the person who vouched for it, and a wider `kind:` for a name that person
@@ -618,6 +658,8 @@ each came from a source somebody vouched for, which is what separates this from 
 `verified-by: bravebot_core::delegate::tool_lists_with_nothing_in_common_meet_at_nothing`
 `verified-by: bravebot_core::delegate::a_narrowing_carries_through_a_third_definition_of_the_same_name`
 `verified-by: bravebot_core::delegate::a_later_definition_takes_over_the_skills_the_one_it_replaces_named`
+`verified-by: bravebot_core::delegate::a_later_definition_takes_over_the_rounds_under_the_kind_it_is_loaded_as`
+`verified-by: bravebot_agent::agents::a_project_replacement_is_held_to_the_ceiling_of_the_kind_it_is_loaded_as`
 
 <a id="DELEGATE-21"></a>
 ### DELEGATE-21: a definition's name may not open with `-` or carry a colon
@@ -732,6 +774,11 @@ has.
   list (`[a, b]`) or a quoted entry arrives as names no skill goes by. Each is said as a name
   nothing found ([DELEGATE-23](#DELEGATE-23)), so what it costs is a line to rewrite rather than a
   delegate quietly told the wrong things. A name spelt like `commit-style` splits cleanly.
+
+- **Another agent's bound does not carry over.** Claude Code writes it `maxTurns:` and opencode
+  `steps:`, and each is a key this does not read, so a definition ported from either runs at its
+  kind's own limit until somebody adds a `rounds:` line ([DELEGATE-6](#DELEGATE-6)). Reading them
+  would give one number three names here, each meaning what another agent defines it to.
 
 - **A definition's model is checked by using it.** Whether the endpoint serves a name is learned
   from its reply, so a definition naming one it does not serve has its delegate run on a substitute

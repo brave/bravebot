@@ -1607,6 +1607,10 @@ delegate-skills-not-found =
         [one] { $definition } nomme une compétence que cette session n'a pas trouvée, si bien qu'elle n'est pas proposée à son délégué : { $skills }
        *[other] { $definition } nomme des compétences que cette session n'a pas trouvées, si bien qu'elles ne sont pas proposées à son délégué : { $skills }
     }
+delegate-rounds-not-a-count =
+    { $definition } a été ignoré : son nombre de cycles (rounds) doit être un entier supérieur à zéro
+delegate-rounds-held =
+    { $definition } demande { $asked } cycles, plus que les { $most } permis à un { $kind } : son délégué en reçoit { $most }
 
 ## Regarder ce que fait un delegue
 

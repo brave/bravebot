@@ -18,8 +18,9 @@
 //!   spawned it did not already hold.
 //! - **Its prompt**, which is a constant per kind. The planner names a kind and cannot describe
 //!   one, so there is no sentence it can write that changes what a delegate is.
-//! - **Its bound**, which is its kind's. Nobody is watching a delegate the way a person watches
-//!   a turn, and the thing being bounded is futility rather than danger.
+//! - **Its bound**, which its definition may choose beneath its kind's ceiling and the call never
+//!   can. Nobody is watching a delegate the way a person watches a turn, and the thing being
+//!   bounded is futility rather than danger.
 //!
 //! It still asks. Every write and every run a delegate performs passes the same gates with the
 //! same single-use endorsements, so a person sees the path and the diff whoever proposed them.
@@ -107,7 +108,8 @@ impl Kind {
         }
     }
 
-    /// How many rounds of tool calls this kind may make before it has to answer.
+    /// How many rounds of tool calls this kind may make before it has to answer, where its
+    /// definition named no number of its own.
     ///
     /// Bounded for every kind, and the bound rises with what the kind can do rather than with
     /// how much anybody trusts it: a delegate that may not write has less to be part-way
@@ -118,6 +120,20 @@ impl Kind {
             Self::Reader => 60,
             Self::Checker => 80,
             Self::Worker => 120,
+        }
+    }
+
+    /// The most rounds a definition of this kind may ask for.
+    ///
+    /// Twice the kind's own, so a definition written for a long sub-task has room to finish it,
+    /// and never more than a turn nobody is watching may make, since a delegate is one: the
+    /// worker's is that turn's bound. A ceiling rather than whatever the file says, for the reason
+    /// every kind is bounded at all.
+    pub fn most_rounds(self) -> usize {
+        match self {
+            Self::Reader => 120,
+            Self::Checker => 160,
+            Self::Worker => 200,
         }
     }
 
@@ -259,6 +275,11 @@ pub struct Definition {
     /// turn did not find selects nothing: a skill is guidance a planner may load, and a list of
     /// them chooses what a delegate is told about rather than anything it may do.
     skills: Option<Vec<String>>,
+    /// The rounds the definition asked for, where it asked for a number.
+    ///
+    /// `None` is the kind's own bound. Held to the kind's ceiling where it is read rather than
+    /// where it is set, so a replacement loaded as a narrower kind is held to that kind's.
+    rounds: Option<usize>,
     /// The standing part of what a delegate of this name is told about itself.
     ///
     /// Empty where the file had no body. Carried rather than read: the kernel never branches on
@@ -279,6 +300,7 @@ impl Definition {
             model: None,
             tools: None,
             skills: None,
+            rounds: None,
             prompt: String::new(),
             origin: "built-in".to_string(),
         }
@@ -300,6 +322,7 @@ impl Definition {
             model: None,
             tools,
             skills: None,
+            rounds: None,
             prompt: prompt.into(),
             origin: origin.into(),
         }
@@ -344,6 +367,27 @@ impl Definition {
     /// Offer this delegate only the skills of these names that the turn found.
     pub fn with_skills(mut self, skills: Vec<String>) -> Self {
         self.skills = Some(skills);
+        self
+    }
+
+    /// How many rounds its delegate may make: the number it asked for held to its kind's
+    /// ceiling, or its kind's own where it asked for none.
+    pub fn rounds(&self) -> usize {
+        match self.rounds {
+            Some(asked) => asked.min(self.kind.most_rounds()),
+            None => self.kind.rounds(),
+        }
+    }
+
+    /// The number it asked for where that is above its kind's ceiling, for whoever wrote it to
+    /// be told the delegate is held to less.
+    pub fn rounds_beyond_its_kind(&self) -> Option<usize> {
+        self.rounds.filter(|&asked| asked > self.kind.most_rounds())
+    }
+
+    /// Ask for this many rounds, which its kind's ceiling still holds.
+    pub fn with_rounds(mut self, rounds: usize) -> Self {
+        self.rounds = Some(rounds);
         self
     }
 
@@ -468,8 +512,8 @@ impl Definitions {
     /// [INSTR-4]: https://github.com/brave/bravebot/blob/main/docs/specs/instructions.md
     ///
     /// **Last word about what a name is for, and never about what it may do.** A replacement
-    /// takes over the description, the body, the model and the skills, and is cut down on the two
-    /// fields that decide what it may do: it is loaded as the narrower of the two kinds, and its
+    /// takes over the description, the body, the model, the skills and the rounds, and is cut
+    /// down on the two fields that decide what it may do: it is loaded as the narrower of the two kinds, and its
     /// `tools:` line is met with the one it replaced. So a project cannot turn a `reader` a
     /// person wrote into a `worker`, and cannot hand back a tool that person's own `tools:` line
     /// had taken away. Widening it would make the checked-in file the author of authority rather
@@ -480,6 +524,10 @@ impl Definitions {
     /// The skills are taken over rather than met because a skill is guidance, as the body is: a
     /// list of them chooses which of the turn's own skills a delegate is told about, and the turn
     /// found every one of those whichever file named them.
+    ///
+    /// The rounds are taken over because a bound is not authority: a gate refuses on the last
+    /// round what it refuses on the first. They are still held to the ceiling of the kind the
+    /// replacement is loaded as, so a narrower kind brings its lower ceiling with it.
     ///
     /// **Both fields rather than a ceiling beside them**, so that what a definition holds is
     /// still read off the definition, and the trail a delegate leaves names the kind and the
@@ -1027,6 +1075,113 @@ mod tests {
             let kind = Kind::from_name(name).expect("advertised");
             assert!(kind.rounds() > 0, "{name} must be bounded");
         }
+    }
+
+    /// A ceiling at the kind's own bound would let a definition shorten a delegate and never
+    /// lengthen one, which leaves the long sub-task cut off exactly where it was.
+    #[test]
+    fn a_definition_may_ask_its_kind_for_more_rounds_than_its_own() {
+        for name in Kind::NAMES {
+            let kind = Kind::from_name(name).expect("advertised");
+            assert!(
+                kind.most_rounds() > kind.rounds(),
+                "a {name} definition cannot ask for more than the {} a {name} gets anyway",
+                kind.rounds()
+            );
+        }
+        assert!(Kind::Reader.most_rounds() < Kind::Checker.most_rounds());
+        assert!(Kind::Checker.most_rounds() < Kind::Worker.most_rounds());
+    }
+
+    /// A definition that asks for nothing is bounded as it was before it could ask.
+    #[test]
+    fn a_definition_naming_no_rounds_keeps_its_kinds_own() {
+        for name in Kind::NAMES {
+            let kind = Kind::from_name(name).expect("advertised");
+            let definition = Definition::from_file("helper", "helps", kind, None, "", "test");
+            assert_eq!(definition.rounds(), kind.rounds(), "{name}");
+            assert_eq!(definition.rounds_beyond_its_kind(), None, "{name}");
+        }
+    }
+
+    /// Below the ceiling the file's number is the bound, in either direction from the kind's.
+    #[test]
+    fn a_definition_may_set_its_own_bound_beneath_its_kinds_ceiling() {
+        for asked in [1, 10, Kind::Worker.rounds() + 1, Kind::Worker.most_rounds()] {
+            let definition =
+                Definition::from_file("fixer", "fixes", Kind::Worker, None, "", "test")
+                    .with_rounds(asked);
+            assert_eq!(definition.rounds(), asked);
+            assert_eq!(definition.rounds_beyond_its_kind(), None, "{asked}");
+        }
+    }
+
+    /// The ceiling is what keeps a delegate nobody is watching from running as long as a file
+    /// says, so a number above it is held to it, and what was asked is kept to be said.
+    #[test]
+    fn a_definition_asking_past_its_kinds_ceiling_is_held_to_it() {
+        for name in Kind::NAMES {
+            let kind = Kind::from_name(name).expect("advertised");
+            for asked in [kind.most_rounds() + 1, usize::MAX] {
+                let definition = Definition::from_file("long", "runs long", kind, None, "", "test")
+                    .with_rounds(asked);
+                assert_eq!(
+                    definition.rounds(),
+                    kind.most_rounds(),
+                    "{name} asking {asked}"
+                );
+                assert_eq!(definition.rounds_beyond_its_kind(), Some(asked), "{name}");
+            }
+        }
+    }
+
+    /// A bound is not authority, so a replacement's own number is the one in force, as its body
+    /// is. It is held to the ceiling of the kind it is loaded as, so a project that could not
+    /// widen a `reader` to a `worker` cannot have a worker's ceiling either.
+    #[test]
+    fn a_later_definition_takes_over_the_rounds_under_the_kind_it_is_loaded_as() {
+        let mut definitions = Definitions::default();
+        definitions.insert(
+            Definition::from_file("reviewer", "global", Kind::Reader, None, "", "home")
+                .with_rounds(30),
+        );
+        definitions.insert(
+            Definition::from_file("reviewer", "project", Kind::Reader, None, "", "project")
+                .with_rounds(90),
+        );
+        assert_eq!(
+            definitions.get("reviewer").expect("selectable").rounds(),
+            90
+        );
+
+        definitions.insert(
+            Definition::from_file("reviewer", "wider", Kind::Worker, None, "", "wider")
+                .with_rounds(Kind::Worker.most_rounds()),
+        );
+        let found = definitions.get("reviewer").expect("selectable");
+        assert_eq!(found.kind(), Kind::Reader);
+        assert_eq!(
+            found.rounds(),
+            Kind::Reader.most_rounds(),
+            "a replacement kept the ceiling of a kind it was not loaded as"
+        );
+        assert_eq!(
+            found.rounds_beyond_its_kind(),
+            Some(Kind::Worker.most_rounds())
+        );
+
+        definitions.insert(Definition::from_file(
+            "reviewer",
+            "again",
+            Kind::Reader,
+            None,
+            "",
+            "again",
+        ));
+        assert_eq!(
+            definitions.get("reviewer").expect("selectable").rounds(),
+            Kind::Reader.rounds()
+        );
     }
 
     /// A definition narrows its kind and there is no spelling of `tools:` that adds anything.

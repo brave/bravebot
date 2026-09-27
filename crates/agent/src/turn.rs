@@ -862,9 +862,9 @@ impl Task {
 
     /// The task one delegate was given.
     ///
-    /// Its prompt is the task the kernel recorded on the spec, and its bound is its kind's: a
-    /// caller cannot set either, which is the difference between a delegate and a turn. See
-    /// [`crate::delegate`].
+    /// Its prompt is the task the kernel recorded on the spec, and its bound is the one its
+    /// definition chose beneath its kind's ceiling: a caller cannot set either, which is the
+    /// difference between a delegate and a turn. See [`crate::delegate`].
     pub fn delegated(spec: bravebot_core::delegate::DelegateSpec) -> Self {
         let rounds = spec.rounds();
         Self {
@@ -4246,6 +4246,20 @@ mod tests {
     use super::*;
     use std::sync::mpsc;
     use std::time::Duration;
+
+    /// A delegate is a turn nobody is watching, so no definition may give one longer than such a
+    /// turn may run. The ceilings live in the kernel and this bound here, so it is checked here.
+    #[test]
+    fn no_kind_lets_a_definition_run_longer_than_an_unwatched_turn() {
+        use bravebot_core::delegate::Kind;
+        for kind in [Kind::Reader, Kind::Checker, Kind::Worker] {
+            assert!(
+                kind.most_rounds() <= MAX_TOOL_ROUNDS,
+                "a {kind} may be given {} rounds, more than an unwatched turn's {MAX_TOOL_ROUNDS}",
+                kind.most_rounds()
+            );
+        }
+    }
 
     /// Cleanup entered after cancellation must still charge requests that overlap its join.
     /// A controlled worker keeps the interval open independently of transport polling.

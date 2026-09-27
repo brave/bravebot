@@ -61,6 +61,11 @@ enum Read {
     NotOne,
     /// A file claiming to be a definition and failing to be one, with what it is missing.
     Skipped(&'static str),
+    /// A definition whose `rounds:` is not a whole number above zero, which is also not loaded.
+    ///
+    /// Apart from [`Read::Skipped`] because it is said as a message of the catalogue's, whole,
+    /// rather than as an English reason placed into one.
+    NotACount,
 }
 
 /// Read one definition out of the text of a file.
@@ -115,7 +120,33 @@ fn read_definition(text: &str, origin: &str) -> Read {
         definition = definition.with_skills(names_in(skills));
     }
 
+    // Refused rather than left at the kind's own, because its author believes the number is in
+    // force. Zero goes with the rest: the bound is checked after a round, so it would be one.
+    if let Some(written) = declared
+        .get("rounds")
+        .map(|r| r.trim())
+        .filter(|r| !r.is_empty())
+    {
+        let Some(rounds) = rounds_in(written) else {
+            return Read::NotACount;
+        };
+        definition = definition.with_rounds(rounds);
+    }
+
     Read::Definition(Box::new(definition))
+}
+
+/// The count a `rounds:` value names, or nothing where it names none above zero.
+///
+/// A number too large to hold is still a number past every kind's ceiling, so it is read as the
+/// largest one rather than refused as though it were a word.
+fn rounds_in(written: &str) -> Option<usize> {
+    match written.parse::<usize>() {
+        Ok(0) => None,
+        Ok(rounds) => Some(rounds),
+        Err(e) if *e.kind() == std::num::IntErrorKind::PosOverflow => Some(usize::MAX),
+        Err(_) => None,
+    }
 }
 
 /// Whether this is a name a definition may go by.
@@ -211,6 +242,7 @@ pub fn discover<S: Sink>(
         discover_home(policy, &home.join(AGENTS), &mut definitions, &mut notices);
     }
     discover_workspace(policy, workspace, &mut definitions, &mut notices);
+    notices.extend(rounds_held_to_their_kind(&definitions));
 
     (definitions, notices)
 }
@@ -352,9 +384,37 @@ fn admit(read: Read, origin: &str, definitions: &mut Definitions, notices: &mut 
             Admitted::Refused => "its name is one of the kinds' own",
         },
         Read::NotOne => return,
+        Read::NotACount => {
+            notices.push(Notice::from_message(t!(
+                delegate_rounds_not_a_count,
+                definition = origin
+            )));
+            return;
+        }
         Read::Skipped(why) => why,
     };
     notices.push(Notice::from_message(format!("{origin} was skipped: {why}")));
+}
+
+/// What to tell whoever wrote a definition asking for more rounds than its kind may make.
+///
+/// Its delegate is given the ceiling, and silence would leave the number reading to its author as
+/// the bound in force. Asked once every file is in, because a replacement is held to the kind it
+/// was loaded as rather than the one it named.
+fn rounds_held_to_their_kind(definitions: &Definitions) -> Vec<Notice> {
+    definitions
+        .iter()
+        .filter_map(|definition| {
+            let asked = definition.rounds_beyond_its_kind()?;
+            Some(Notice::from_message(t!(
+                delegate_rounds_held,
+                definition = definition.origin(),
+                asked = asked,
+                most = definition.rounds(),
+                kind = definition.kind()
+            )))
+        })
+        .collect()
 }
 
 /// What to tell whoever wrote a definition that the one of the same name before it cut down.
@@ -450,6 +510,7 @@ mod tests {
         match read_definition(text, "test") {
             Read::Definition(definition) => *definition,
             Read::NotOne => panic!("not read as a definition at all"),
+            Read::NotACount => panic!("skipped: its rounds are not a count"),
             Read::Skipped(why) => panic!("skipped: {why}"),
         }
     }
@@ -713,5 +774,96 @@ mod tests {
 
             assert_eq!(definition.model(), None, "model: {written}");
         }
+    }
+
+    /// `rounds:` is the delegate's bound. An absent or empty line leaves it at the kind's own, and
+    /// a number too large to hold is still a number, held to the ceiling like any other past it.
+    #[test]
+    fn a_definition_reads_the_rounds_it_names() {
+        let read = |line: &str| {
+            definition_of(&format!(
+                "---\nname: migrator\ndescription: a staged refactor\nkind: worker\n{line}---\n\n\
+                 body\n"
+            ))
+        };
+
+        assert_eq!(read("rounds: 180\n").rounds(), 180);
+        assert_eq!(read("rounds: \"30\"\n").rounds(), 30);
+        assert_eq!(read("rounds:\n").rounds(), Kind::Worker.rounds());
+        assert_eq!(read("").rounds(), Kind::Worker.rounds());
+
+        let huge = read("rounds: 99999999999999999999999999\n");
+        assert_eq!(huge.rounds(), Kind::Worker.most_rounds());
+        assert_eq!(huge.rounds_beyond_its_kind(), Some(usize::MAX));
+    }
+
+    /// A value that is no count above zero is refused rather than left at the kind's own, since
+    /// whoever wrote it believes it is in force, and the notice names the file.
+    #[test]
+    fn a_rounds_line_that_is_not_a_count_is_not_a_definition() {
+        for written in ["0", "-5", "lots", "1.5", "12 rounds", "1e3"] {
+            let text = format!(
+                "---\nname: migrator\ndescription: a staged refactor\nkind: worker\nrounds: \
+                 {written}\n---\n"
+            );
+            assert!(
+                matches!(read_definition(&text, "test"), Read::NotACount),
+                "'{written}' was read as a number of rounds"
+            );
+        }
+
+        let mut definitions = Definitions::default();
+        let mut notices = Vec::new();
+        admit(
+            read_definition(
+                "---\nname: migrator\ndescription: d\nkind: worker\nrounds: 0\n---\n",
+                ".bravebot/agents/migrator.md",
+            ),
+            ".bravebot/agents/migrator.md",
+            &mut definitions,
+            &mut notices,
+        );
+        assert!(definitions.get("migrator").is_none());
+        let said: Vec<&str> = notices.iter().map(|n| n.message.as_str()).collect();
+        assert_eq!(
+            said,
+            [
+                ".bravebot/agents/migrator.md was skipped: its rounds must be a whole number above \
+              zero"
+            ]
+        );
+    }
+
+    /// A number past the kind's ceiling is said with what the delegate is given instead, and a
+    /// number beneath it says nothing.
+    #[test]
+    fn a_definition_asking_past_its_kinds_ceiling_says_what_it_is_given() {
+        let mut definitions = Definitions::default();
+        definitions.insert(definition_of(
+            "---\nname: long-reader\ndescription: reads a lot\nkind: reader\nrounds: 500\n---\n",
+        ));
+        definitions.insert(
+            Definition::from_file(
+                "short-reader",
+                "reads a little",
+                Kind::Reader,
+                None,
+                "",
+                "x",
+            )
+            .with_rounds(Kind::Reader.most_rounds()),
+        );
+
+        let said: Vec<String> = rounds_held_to_their_kind(&definitions)
+            .into_iter()
+            .map(|notice| notice.message)
+            .collect();
+        assert_eq!(
+            said,
+            [
+                "test asks for 500 rounds, more than the 120 a reader may make, so its delegate is \
+              given 120"
+            ]
+        );
     }
 }
