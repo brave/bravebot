@@ -2626,7 +2626,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         slots: &mut crate::slot::SlotStore,
     ) -> Gated<crate::reference::Reference> {
         let label = content.label();
-        let reference = self.store_in_slot(tool, slot, origin, content, slots)?;
+        let reference = self
+            .store_in_slot(tool, slot, origin, content, slots)?
+            .of_kept_output();
         self.allow(
             "present",
             format!(
@@ -12100,6 +12102,8 @@ five
         assert_eq!(reference.bytes, Some("head\nMIDDLE\ntail\n".len()));
         // Keeping bytes where the planner cannot see them asserts nothing about them.
         assert_eq!(reference.label, Label::trusted_private());
+        // Said to be the rest of what it read, not quarantined content it may not.
+        assert_eq!(reference.kind, crate::reference::Kind::Kept);
         assert!(
             !reference.describe().contains("MIDDLE"),
             "the description carried the content: {}",

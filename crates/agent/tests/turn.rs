@@ -21009,6 +21009,182 @@ fn the_middle_of_a_capped_output_stays_reachable() {
     );
 }
 
+/// OUTPUT-4. Output the planner may read is kept out of a result by its length alone, so the rest
+/// of it comes back a page at a time from any offset, each page no longer than a run's result, and
+/// nobody is asked. The confirmer here refuses every request to read output, so a page reaching
+/// the planner is one no prompt was drawn for.
+#[test]
+fn output_too_long_for_its_result_is_read_page_by_page_with_nobody_asked() {
+    let scratch = Scratch::new("run-paged");
+    let mut log = String::new();
+    for line in 0..2000 {
+        if line == 1000 {
+            log.push_str("MIDDLE-MARKER-XYZZY\n");
+        }
+        log.push_str(&format!("line {line} of a long build log\n"));
+    }
+    std::fs::write(scratch.path.join("build.log"), &log).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let total = log.len();
+    let start = log.find("MIDDLE-MARKER-XYZZY").expect("marker") - 7;
+    let cap = 4096;
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cat build.log"}"#),
+        tool_request(
+            "read_output",
+            &format!(r#"{{"ref":"ref:1","offset":{start}}}"#),
+        ),
+        tool_request(
+            "read_output",
+            &format!(r#"{{"ref":"ref:1","offset":{}}}"#, total - 20),
+        ),
+        tool_request(
+            "read_output",
+            &format!(r#"{{"ref":"ref:1","offset":{total}}}"#),
+        ),
+        tool_request("read_output", r#"{"ref":"ref:1","offset":-1}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("build it").with_output_cap(Some(cap)),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let results: Vec<String> = std::iter::from_fn(|| received.try_recv().ok())
+        .skip(1)
+        .map(newest_tool_result)
+        .collect();
+    let [sample, middle, end, past, unusable] = &results[..] else {
+        panic!("the turn made {} rounds after the first", results.len());
+    };
+    assert!(
+        sample.contains(&format!("from byte {}", cap / 2)),
+        "the sample does not say where its middle begins: {sample}"
+    );
+    assert!(
+        sample.contains("read_output with ref:1 and an offset"),
+        "the planner was not told how to read the rest: {sample}"
+    );
+    assert!(!sample.contains("Quarantined"), "{sample}");
+    assert!(!sample.contains("MIDDLE-MARKER-XYZZY"));
+
+    assert!(
+        middle.contains("MIDDLE-MARKER-XYZZY"),
+        "the page from the offset did not reach the planner: {middle}"
+    );
+    let next = start + cap;
+    assert!(
+        middle.contains(&format!(
+            "(bytes {start} to {next} of {total} in ref:1; read_output with offset {next} gives \
+             the next part.)"
+        )),
+        "{middle}"
+    );
+    let page = &log[start..next];
+    assert!(
+        middle.contains(
+            &serde_json::to_string(page)
+                .unwrap()
+                .trim_matches('"')
+                .to_owned()
+        ),
+        "the page is not the bytes from the offset to the cap"
+    );
+    assert!(
+        !middle.contains(&log[next..next + 40]),
+        "a page ran past the cap"
+    );
+    assert!(!middle.contains("kept back"), "{middle}");
+
+    assert!(
+        end.contains(&format!(
+            "(bytes {} to {total} of {total} in ref:1; which is the end of it.)",
+            total - 20
+        )),
+        "{end}"
+    );
+    assert!(
+        past.contains(&format!(
+            "(ref:1 holds {total} bytes, so nothing starts at byte {total}.)"
+        )),
+        "{past}"
+    );
+    assert!(
+        unusable.contains("'offset' must be a whole number of bytes"),
+        "{unusable}"
+    );
+}
+
+/// OUTPUT-4. An offset is for output the planner may already read. On output nobody vouched for it
+/// is refused before anybody is asked or any check is made, since the page it expects is not what
+/// read_output would hand it.
+#[test]
+fn an_offset_into_output_nobody_vouched_for_is_refused_and_nobody_is_asked() {
+    let scratch = Scratch::new("read-output-offset");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cat where.txt"}"#),
+        tool_request("read_output", r#"{"ref":"ref:1","offset":0}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ReadsWhatItRan::new(true);
+    let shown = confirmer.shown.clone();
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    assert!(
+        shown.lock().unwrap().is_empty(),
+        "the user was asked about output the planner asked to page through"
+    );
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    assert_eq!(bodies.len(), 3, "a check was made about the output");
+    let refused = newest_tool_result(bodies[2].clone());
+    assert!(
+        refused.contains(
+            "an offset pages through output you may already read, and ref:1 is \
+                          quarantined"
+        ),
+        "{refused}"
+    );
+    assert!(!refused.contains("SENTINEL-XYZZY"));
+}
+
 /// A page server, for the fetch tests. Answers each request with the next reply it was given and
 /// reports the request lines it was sent, so a test can tell what actually went out.
 ///
@@ -22425,6 +22601,10 @@ fn what_an_ended_job_printed_is_capped_with_the_whole_of_it_kept() {
     assert!(
         told.contains("The whole of this output, middle included, is a reference"),
         "the middle of what the job printed exists nowhere but the sample: {told}"
+    );
+    assert!(
+        told.contains("and an offset in bytes"),
+        "the planner was not told it may page through the rest: {told}"
     );
 }
 

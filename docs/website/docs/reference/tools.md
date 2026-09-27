@@ -20,7 +20,7 @@ that is merely carried.
 | [`write_file`](#write_file) | `path`, `path_ref`, `contents_ref` | `contents` | **yes, every time** |
 | [`edit_file`](#edit_file) | `path`, `path_ref`, `replace_all` | `old_text`, `new_text` | **yes, every time** |
 | [`run`](#run) | the compiled plan, `directory`, `background`, `deadline_seconds`, `stdin_ref`, `read` | stdin | **yes, unless vouched for, remembered, ruled on or proven** |
-| [`read_output`](#read_output) | `ref` | none | **yes** |
+| [`read_output`](#read_output) | `ref`, `offset` | none | **yes, unless the planner may already read it** |
 | [`vet_content`](#vet_content) | `ref` | none | **yes, that is what it is for** |
 | [`job_output`](#job_output) | `job`, `kill`, `wait_seconds` | none | no |
 | [`fetch_url`](#fetch_url) | `url` | none | **yes, unless a rule names the host** |
@@ -696,9 +696,10 @@ puts nothing in the planner's context that a program chose.
 
 Output the planner **may** read comes back as text, capped at 16 KiB unless
 [`run.maxOutput`](../customize/configuration.md#runmaxoutput) names another figure. Past the cap the
-head and the tail are kept and the middle dropped, with a line in between saying how much went. The
-cap is on what enters the conversation rather than on what the command printed, and the whole of it
-stays available as a reference.
+head and the tail are kept and the middle dropped, with a line in between saying how much went and
+the byte it starts at. The cap is on what enters the conversation rather than on what the command
+printed, and the whole of it stays available as a reference, which
+[`read_output`](#read_output) reads back a page at a time without asking you.
 
 ### Reading the output in the same result
 
@@ -815,6 +816,7 @@ the planner as text.
 | Parameter | |
 |---|---|
 | `ref` | the reference a `run` handed back |
+| `offset` | for output the planner may read that was too long for one result, the byte to start from; defaults to 0 |
 
 It works only for output from `run`. A quarantined *file* is not readable this way. This is why
 `which`, `find` and `uname` tell the planner nothing until it asks. When you bypass permissions with no
@@ -825,6 +827,13 @@ makes the same release without the extra call.
 wrote are on the screen beside the bytes. The check runs before the question rather than after your
 answer, and nothing it wrote goes back to the planner either way. No expectation is sent with it: the
 planner asked for the output to be read, not for it to be judged. See [Vetting](../security/vetting.md).
+
+**Output the planner may already read is not asked about.** Where a command's output was one the
+planner may read and too long for one result, it saw the beginning and the end, and `read_output`
+hands back the rest a page at a time from `offset`. Each page is no longer than
+[`run.maxOutput`](../customize/configuration.md#runmaxoutput) and ends with the offset of the next.
+Nobody is asked, since there is nothing for you to decide: only the length kept it out. An `offset`
+on output the planner may not read is refused before you are asked anything.
 
 ## `vet_content`
 
