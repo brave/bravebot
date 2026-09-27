@@ -1201,7 +1201,10 @@ INSERT mode still arms it, which is where somebody who wanted a command is.
 | `w`, `e`, `b`, `ge` | the start of the next word, the end of this word or the next, the start of this word or the previous, the end of the word before |
 | `W`, `E`, `B`, `gE` | the same four, where a word is a run of anything that is not a blank |
 | `0`, `$`, `^` | the first column, the last character, the first character that is not a blank |
-| `gg`, `G` | the first line of the input, the last |
+| `_` | the first character that is not a blank, on the row the count names counting this one as the first |
+| `\|` | the column the count names, counting the first as one |
+| `gg`, `G` | the first character that is not a blank on the first line of the input, and on the last |
+| `%` | the bracket that pairs with the first one at or after the caret on this line |
 | `f`, `F`, `t`, `T` then a character | the next or previous occurrence of it on this line, landing on it or stopping one short |
 | `;`, `,` | the last such jump again, and the same jump reversed |
 
@@ -1217,8 +1220,15 @@ caret sits on the character the next instruction acts on. A jump looks only alon
 is on, and one that finds nothing leaves the caret where it was. Repeating with nothing to repeat
 does nothing.
 
+`%` pairs `(` with `)`, `[` with `]` and `{` with `}`, and counts only brackets of the kind it found,
+so `(a]b)` pairs the round ones. It looks along the caret's line alone, and where the bracket it
+found has no partner there, or the line has no bracket at or after the caret, it leaves the caret
+where it was. `_` and `|` alone are `^` and `0`, and a column past the end of the line is its last
+character.
+
 A marker is crossed whole by every one of these, and there is no position inside one for a motion to
-leave the caret at.
+leave the caret at. A column that falls inside a marker is the marker, and `%` does not read the
+brackets a marker is spelled with as brackets.
 
 **Why.** These are the keys somebody's hands already know, so what they do here has to be what they
 do everywhere else. `w` lands on the first character of the next word rather than after the word it
@@ -1236,6 +1246,18 @@ A jump crossing a newline would land off the row being read, which is not what a
 bracket in front of you is for. Leaving the caret at the end of the line when the character is not
 there would move it on a press that failed.
 
+`gg` and `G` land on the first word rather than the first column because vi's do, and an indent is
+not where anything a person reaches for begins. `_` and `|` are there for their count
+([INPUT-35](#INPUT-35)): `^` and `0` name no row and no column, and `_` is how vi spells the doubled
+letter for every operator at once ([INPUT-28](#INPUT-28)).
+
+`%` is how somebody checks what a closing bracket closes without counting. It reads the caret's line
+alone, as `i(` does ([INPUT-29](#INPUT-29)), so neither `d%` nor `di(` takes text off another row.
+vi crosses lines, and the cost is a pair split over
+rows, a block pasted in with its closing brace three rows down: `%` does nothing there, and the brace
+is `j` and `f}` away. It skips a marker's brackets because they pair with each other, and landing on
+the closing one would leave the caret inside a picture.
+
 The marker rule holds because the motions walk through the same caret steps the arrows use, rather
 than searching the line's bytes. A motion doing its own arithmetic would have to know the marker
 rules itself, and the one that forgot would be the one that put the caret inside a picture: `f]`
@@ -1248,6 +1270,7 @@ names a character a marker is spelled with, and it did exactly that before it wa
 `verified-by: bravebot_tui::vim::a_pair_beginning_with_g_is_the_start_of_the_input_or_nothing`
 `verified-by: bravebot_tui::vim::ge_and_g_capital_e_are_motions_alone_after_an_operator_and_in_visual_mode`
 `verified-by: bravebot_tui::vim::the_capital_word_keys_are_motions_of_their_own`
+`verified-by: bravebot_tui::vim::the_bracket_underscore_and_bar_keys_are_motions`
 `verified-by: bravebot_tui::state::the_character_motions_move_one_character`
 `verified-by: bravebot_tui::state::the_word_motions_land_where_vi_lands`
 `verified-by: bravebot_tui::state::the_word_motions_stop_where_punctuation_begins_and_ends`
@@ -1257,6 +1280,10 @@ names a character a marker is spelled with, and it did exactly that before it wa
 `verified-by: bravebot_tui::state::the_word_motions_stop_on_an_empty_row`
 `verified-by: bravebot_tui::state::the_line_motions_reach_the_ends_and_the_first_word`
 `verified-by: bravebot_tui::state::the_input_motions_reach_the_first_and_last_line`
+`verified-by: bravebot_tui::state::the_bracket_key_goes_to_the_partner_of_the_next_bracket_on_the_row`
+`verified-by: bravebot_tui::state::the_bracket_key_never_pairs_a_bracket_a_marker_is_spelled_with`
+`verified-by: bravebot_tui::state::the_underscore_key_is_the_first_word_of_the_row_its_count_names`
+`verified-by: bravebot_tui::state::the_bar_key_is_the_column_its_count_names`
 `verified-by: bravebot_tui::state::the_jumps_to_a_character_land_on_it_or_just_short_of_it`
 `verified-by: bravebot_tui::state::a_jump_to_a_character_stays_on_its_own_line`
 `verified-by: bravebot_tui::state::the_repeat_keys_do_the_last_jump_again_and_then_the_other_way`
@@ -1312,7 +1339,7 @@ to act on:
 | Keys | The stretch |
 |---|---|
 | any other motion | from the caret to wherever that motion would take it |
-| `j`, `k`, `G`, `gg` | every row from the caret's to the one the key reaches, whole |
+| `j`, `k`, `G`, `gg`, `_` | every row from the caret's to the one the key reaches, whole |
 | the operator's own letter doubled | the whole line: `dd`, and `guu` or `gugu` |
 | `D`, `C`, `x`, `s` | to the end of the line, and the character under the caret |
 | `X` | the character before the caret, taken out as `dh` would |
@@ -1333,20 +1360,23 @@ leave it holding what it held.
 Whether the character the motion landed on is taken depends on the motion: `de` takes the word's last
 letter, `dw` stops before the next word's first. `ge` and `gE` take both ends, the character they land
 on and the one the caret was on, so `dge` on the first letter of a word takes that letter and the last
-of the word before. `cw` on a character that is not a blank leaves the space after it, and on a blank
-takes it, and so does `cW`. On the last character of a word `cw` changes that character alone. The
-last word a `w` or `W` counts under an operator ends at the end of its line, so `dw` on the last word
-of a row leaves the newline, and on an empty row takes that row.
+of the word before. `%` takes both ends too, so `d%` takes both brackets and what lies between them
+from either one, and `|` takes neither, so `d|` is `d0`. `cw` on a character that is not a blank
+leaves the space after it, and on a blank takes it, and so does `cW`. On the last character of a word
+`cw` changes that character alone. The last word a `w` or `W` counts under an operator ends at the
+end of its line, so `dw` on the last word of a row leaves the newline, and on an empty row takes that
+row.
 
 After an operator `j` and `k` are the row below and the row above, and where there is no such row they
-take nothing. The rows those four keys name are whole lines to every operator, as the doubled letter's
+take nothing. The rows those five keys name are whole lines to every operator, as the doubled letter's
 are: `dj` closes the gap and `cj` leaves one empty row to type on. An empty row is a row to every
 operator that takes whole ones: `dd` and `dG` take it, `cc` opens INSERT on it, and `yy` puts it back
 as an empty row. `>` leaves an empty row empty, as vi does.
 
 `p` and `P` put the register back after and before the caret. A stretch that was whole lines comes
 back as a line of its own. `J` makes this line and the one below into one with a single space where
-the newline was. `u` puts back what the last change took, one step. `.` does the last change again at
+the newline was, and `gJ` with nothing there and the blanks the line below began with left as they
+were. `u` puts back what the last change took, one step. `.` does the last change again at
 the caret. A put and a join are changes it cannot yet make again, and so are `r` and a case change
 over a selection, so after one of those `.` does nothing rather than make the change before it.
 
@@ -1361,7 +1391,8 @@ The row keys take whole rows because a row is what they count in, which is vi's 
 character, `dG` would leave the last row standing with what was left of the caret's row joined onto
 it, and `dj` from the middle of a row would split two rows apart. `j` and `k` are the history ladder
 on their own (INPUT-27), and an operator waiting for its stretch claims them, since a stretch cannot
-reach into a prompt that is not in the box.
+reach into a prompt that is not in the box. `_` takes rows because in vi it is the doubled letter for
+every operator at once, so `d_` is `dd` and `d3_` is `3dd`.
 
 The inclusive and exclusive motions are vi's distinction and not decoration, and `ge` is inclusive in
 vim going back as well. `cw` behaving as `ce`, and `cW` as `cE`, is vi's own special case, kept
@@ -1383,6 +1414,9 @@ is not one anybody meant, and replacing what there is would be a guess at what t
 character for one is vim's case rule too, and cutting a two-character case to its first would turn
 `ß` into an `S` that had lost a letter.
 
+`gJ` is for the line broken in the middle of a word or a path, where any space would be one the text
+never had, and stripping the blanks after the break would take an indent somebody is keeping.
+
 Undo is one step, on the same footing as putting a line away: the press that undoes and the keystroke
 that will be regretted are one apart, and a depth is a thing to remember. `.` repeats the instruction
 rather than what it produced, which is the whole point of the key.
@@ -1401,6 +1435,7 @@ selection holding one is ([INPUT-30](#INPUT-30)).
 `verified-by: bravebot_tui::vim::the_doubled_letter_is_the_whole_line_and_only_its_own`
 `verified-by: bravebot_tui::vim::an_operator_over_a_jump_waits_again_for_the_character`
 `verified-by: bravebot_tui::vim::a_motion_says_whether_an_operator_takes_the_character_it_landed_on`
+`verified-by: bravebot_tui::vim::j_joins_with_a_space_and_gj_with_nothing`
 `verified-by: bravebot_tui::vim::the_yank_is_the_operator_that_only_reads`
 `verified-by: bravebot_tui::vim::a_case_change_under_g_is_an_operator_and_doubled_is_the_line`
 `verified-by: bravebot_tui::vim::the_keys_for_one_character_name_it_and_r_waits_for_what_it_becomes`
@@ -1410,6 +1445,9 @@ selection holding one is ([INPUT-30](#INPUT-30)).
 `verified-by: bravebot_tui::state::the_delete_operator_takes_the_stretch_a_motion_names`
 `verified-by: bravebot_tui::state::a_row_key_under_an_operator_takes_the_rows_there_are`
 `verified-by: bravebot_tui::state::every_operator_over_a_row_key_takes_the_rows`
+`verified-by: bravebot_tui::state::an_operator_over_the_underscore_key_takes_the_rows_the_doubled_letter_does`
+`verified-by: bravebot_tui::state::an_operator_over_the_bracket_key_takes_both_brackets`
+`verified-by: bravebot_tui::state::an_operator_over_the_bar_key_leaves_the_column_it_reaches`
 `verified-by: bravebot_tui::state::an_empty_row_is_a_row_to_every_line_wise_operator`
 `verified-by: bravebot_tui::state::indenting_leaves_an_empty_row_empty`
 `verified-by: bravebot_tui::state::the_character_and_the_line_are_extents_of_their_own`
@@ -1426,6 +1464,8 @@ selection holding one is ([INPUT-30](#INPUT-30)).
 `verified-by: bravebot_tui::state::the_line_shifts_by_spaces_and_stops_at_the_margin`
 `verified-by: bravebot_tui::state::the_caret_follows_every_row_a_shift_moves`
 `verified-by: bravebot_tui::state::joining_puts_one_space_where_the_newline_was`
+`verified-by: bravebot_tui::state::the_bare_join_puts_nothing_where_the_newline_was`
+`verified-by: bravebot_tui::state::the_bare_join_of_an_empty_row_leaves_the_caret_on_the_line`
 `verified-by: bravebot_tui::state::undo_puts_back_what_a_change_took`
 `verified-by: bravebot_tui::state::there_is_nothing_to_undo_after_a_yank_or_before_a_change`
 `verified-by: bravebot_tui::state::the_repeat_key_does_the_last_change_again_at_the_caret`
@@ -1450,8 +1490,8 @@ selection holding one is ([INPUT-30](#INPUT-30)).
 
 After an operator, `i` and `a` say the stretch is a thing rather than a distance, and the next press
 says which thing: `w` a word, `W` a run of anything that is not a blank, and a quote or either half of
-a bracket pair for what lies between them. `i` takes what is inside and `a` takes what surrounds it
-too. All on the line the caret is on.
+a bracket pair for what lies between them, with `b` for the round pair and `B` for the curly one. `i`
+takes what is inside and `a` takes what surrounds it too. All on the line the caret is on.
 
 A word object is the run the caret is in, and a run of blanks is a run, so the caret is always in
 something. `aw` takes the blanks after the word, or the ones before it where there are none after. A
@@ -1466,7 +1506,9 @@ objects it is what it is to the word motions ([INPUT-26](#INPUT-26)): a word by 
 counting characters to a closing bracket they can see perfectly well.
 
 The pair being the next one along, and not only the enclosing one, is what makes `ci(` work with the
-caret on the name in front of the bracket, which is where it usually is.
+caret on the name in front of the bracket, which is where it usually is. `b` and `B` are vi's names
+for the two pairs a block is written in, and somebody whose hands know `dib` has no reason to reach
+for the bracket instead.
 
 Three classes of character rather than two, because `w` treats punctuation as a word of its own: in
 `src/main.rs` the slashes are part of neither name. `W` is the same machinery with punctuation folded
@@ -1485,11 +1527,13 @@ digit, so `di[` named the brackets one is written with and left half of it stand
 `verified-by: bravebot_tui::vim::either_half_of_a_pair_names_the_same_object`
 `verified-by: bravebot_tui::vim::a_quote_closes_itself`
 `verified-by: bravebot_tui::vim::a_key_naming_no_kind_of_object_means_nothing`
+`verified-by: bravebot_tui::vim::the_block_letters_name_the_round_and_curly_pairs`
 `verified-by: bravebot_tui::state::a_word_is_a_text_object_with_and_without_the_blanks_around_it`
 `verified-by: bravebot_tui::state::a_bigword_is_everything_that_is_not_a_blank`
 `verified-by: bravebot_tui::state::a_pair_of_delimiters_is_a_text_object`
 `verified-by: bravebot_tui::state::a_pair_is_the_one_around_the_caret_or_the_next_one_along`
 `verified-by: bravebot_tui::state::a_pair_named_from_its_own_delimiter_is_that_pair`
+`verified-by: bravebot_tui::state::a_block_letter_is_a_text_object_over_the_pair_it_names`
 `verified-by: bravebot_tui::state::a_text_object_works_with_every_operator`
 `verified-by: bravebot_tui::state::a_pair_naming_no_kind_of_object_does_nothing`
 `verified-by: bravebot_tui::state::a_text_object_over_a_marker_takes_it_whole_or_not_at_all`
@@ -1857,15 +1901,17 @@ is `d6w`.
 
 | What it counts | Keys |
 |---|---|
-| how many times over the motion is meant | every motion of [INPUT-26](#INPUT-26), and `;` and `,` |
-| which row to go to | `G` and `gg` |
+| how many times over the motion is meant | every motion of [INPUT-26](#INPUT-26) but `%` and the ones below, and `;` and `,` |
+| which row to go to | `G` and `gg`, and `_`, counting the caret's row as the first |
+| which column to go to | `\|` |
 | how many rows to move inside the input | `j` and `k`, which reach no history counted ([INPUT-27](#INPUT-27)) |
 | how much of the extent the operator takes | `3dd`, `d3w`, `3x`, `3X`, `3~`, `3rx`, `3gUU`, `3>>` |
-| how many copies, and how many rows end as one | `p`, `P`, and `J`, where `3J` is three rows and `2J` is the bare key |
+| how many copies, and how many rows end as one | `p`, `P`, `J` and `gJ`, where `3J` is three rows and `2J` is the bare key |
 | how many the repeat is of, in place of the count recorded | `.` |
 
 A counted motion moves the end of a selection as far as it moves a bare caret, so `v2j` marks three
-rows out. The extents that name no quantity take no count, since there is no second end of the line
+rows out. A count in front of `%` is spent and the caret stays where it was, and so does the line
+under `d2%`. The extents that name no quantity take no count, since there is no second end of the line
 to reach, no second thing the keys named and no second selection: `3D`, `d3iw`, and a counted
 operator or capital in VISUAL mode act on what the uncounted one would.
 
@@ -1897,6 +1943,11 @@ One change and one undo step is the same rule undo already keeps ([INPUT-28](#IN
 against an instruction the count made bigger. Carried out as one change per step, `3x` would leave
 two of the three beyond the reach of the only undo there is.
 
+`%` takes no count because in vi a count makes it a different key, the row that many hundredths of
+the way through the file, and a prompt's handful of rows is what `G` already names. Read as more of
+the same, `3%` would bounce between the two brackets and land on whichever the number happened to be
+odd or even for.
+
 The count is drawn for the reason a half-typed instruction is: it decides what the next letter does,
 and a person who typed one by accident would otherwise find out from what the next letter did.
 
@@ -1909,6 +1960,10 @@ and a person who typed one by accident would otherwise find out from what the ne
 `verified-by: bravebot_tui::state::a_count_moves_the_caret_by_rows`
 `verified-by: bravebot_tui::state::a_count_stops_where_the_line_does`
 `verified-by: bravebot_tui::state::a_count_makes_the_input_motions_a_row`
+`verified-by: bravebot_tui::state::the_underscore_key_is_the_first_word_of_the_row_its_count_names`
+`verified-by: bravebot_tui::state::the_bar_key_is_the_column_its_count_names`
+`verified-by: bravebot_tui::state::a_counted_bracket_key_moves_nothing`
+`verified-by: bravebot_tui::state::the_bare_join_puts_nothing_where_the_newline_was`
 `verified-by: bravebot_tui::state::a_count_claims_the_row_keys_and_leaves_the_search_key`
 `verified-by: bravebot_tui::state::r_with_fewer_characters_left_than_its_count_changes_nothing`
 

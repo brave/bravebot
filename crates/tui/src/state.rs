@@ -3123,7 +3123,7 @@ impl Session {
             }
             Command::Paste { before } => self.put_the_register_back(before, count),
             Command::PutOver { keep } => self.put_over_the_selection(keep, count),
-            Command::Join => self.join_the_line_below(count),
+            Command::Join { spaced } => self.join_the_line_below(count, spaced),
             Command::Select { lines } => self.select(lines),
             Command::SwapEnds => self.swap_the_ends_of_the_selection(),
             Command::Replace(c) => self.replace_the_selection_with(c),
@@ -3827,12 +3827,13 @@ impl Session {
         }
     }
 
-    /// Make this line and the one below into one, which is what `J` asks for.
+    /// Make this line and the one below into one, which is what `J` and `gJ` ask for.
     ///
-    /// The newline becomes a single space, which is what vi does: two sentences run together with no
-    /// gap is not what somebody joining lines wants, and the blanks the next line was indented with are
-    /// part of the shape it no longer has.
-    fn join_the_line_below(&mut self, count: Option<u32>) {
+    /// Spaced, the newline becomes a single space, which is what vi does: two sentences run together
+    /// with no gap is not what somebody joining lines wants, and the blanks the next line was indented
+    /// with are part of the shape it no longer has. Unspaced is `gJ`, for the line that was broken in
+    /// the middle of a word or a path, where any space would be one the text never had.
+    fn join_the_line_below(&mut self, count: Option<u32>, spaced: bool) {
         let (_, end) = self.caret_line();
         if end >= self.input.len() {
             return;
@@ -3846,14 +3847,21 @@ impl Session {
         for _ in 1..count.unwrap_or(2).max(2) {
             let (_, end) = self.caret_line();
             if end >= self.input.len() {
-                return;
+                break;
             }
             let below = end + 1;
-            let text = self.input[below..].to_string();
-            let blanks = text.len() - text.trim_start_matches([' ', '\t']).len();
-            self.input.replace_range(end..below + blanks, " ");
+            if spaced {
+                let text = self.input[below..].to_string();
+                let blanks = text.len() - text.trim_start_matches([' ', '\t']).len();
+                self.input.replace_range(end..below + blanks, " ");
+            } else {
+                self.input.replace_range(end..below, "");
+            }
             self.caret = end;
         }
+        // Where the row joined on was empty, `gJ` leaves the caret where the newline was, which is
+        // the column after the line.
+        self.step_back_off_the_end();
     }
 
     /// Open VISUAL mode, or change which kind it is, or leave it.
@@ -4057,6 +4065,17 @@ impl Session {
 
         match (motion, count) {
             (Motion::InputStart | Motion::InputEnd, Some(row)) => self.move_to_row(row),
+            // The row the count names, counting this one as the first, so `_` alone is this row.
+            (Motion::FirstNonBlankBelow, _) => {
+                self.move_rows(true, Some(count.unwrap_or(1).saturating_sub(1)));
+                self.move_to_first_non_blank();
+            }
+            (Motion::Column, _) => self.move_to_column(count.unwrap_or(1)),
+            // In vi a count makes `%` a different key, the row that many hundredths of the way
+            // through the file, and a prompt's handful of rows is what `G` already names. Spent and
+            // moving nothing, where a count taken as more of the same would bounce between the two
+            // brackets and land on the one it happened to be odd or even for.
+            (Motion::MatchingBracket, Some(_)) => {}
             (Motion::WordRight | Motion::BigwordRight, _) if measuring => {
                 let big = motion == Motion::BigwordRight;
                 let before_the_last = count.unwrap_or(1).saturating_sub(1);
@@ -4069,7 +4088,8 @@ impl Session {
         }
     }
 
-    /// Put the caret at the first column of a row, counting the first row as one.
+    /// Put the caret on the first character of a row that is not a blank, counting the first row as
+    /// one.
     ///
     /// Past the last row is the last row, the way every counted thing here stops where the input
     /// does rather than doing nothing at all.
@@ -4080,7 +4100,88 @@ impl Session {
                 break;
             }
         }
+        self.move_to_first_non_blank();
+    }
+
+    /// Put the caret on a column of its row, counting the first as one, which is what `|` asks for.
+    ///
+    /// A column is a character, as it is to `gr`, and a column inside a marker is the marker, since
+    /// there is no position inside one for the caret to rest at. Past the end of the row is its last
+    /// character, as it is in vi.
+    fn move_to_column(&mut self, column: u32) {
         self.move_to_line_start();
+        let (_, end) = self.caret_line();
+        let mut reached = 0;
+        while self.caret < end {
+            reached += self.input[self.caret..self.past(self.caret)]
+                .chars()
+                .count();
+            if reached >= column as usize {
+                break;
+            }
+            self.move_right();
+        }
+        self.step_back_off_the_end();
+    }
+
+    /// Move to the bracket that pairs with the first one at or after the caret on its row, which is
+    /// what `%` asks for, and nowhere where the row holds no such pair.
+    ///
+    /// Only brackets of the kind found are counted, so a `]` between two parentheses is text. The
+    /// row rather than the input, for the reason a jump to a character stays on its own row.
+    ///
+    /// Read over the caret's own positions, where a marker is one position and no bracket at all. A
+    /// marker is spelled with brackets, and searched as characters one would pair with itself and
+    /// land the caret inside a picture.
+    fn move_to_the_matching_bracket(&mut self) {
+        let (start, end) = self.caret_line();
+        let mut steps = Vec::new();
+        let mut at = start;
+        while at < end {
+            let bracket = match self.marker_at(at) {
+                Some(_) => None,
+                None => self.input[at..]
+                    .chars()
+                    .next()
+                    .filter(|c| "()[]{}".contains(*c)),
+            };
+            steps.push((at, bracket));
+            at = self.past(at);
+        }
+        let Some((first, bracket)) =
+            steps
+                .iter()
+                .enumerate()
+                .find_map(|(index, &(at, bracket))| {
+                    Some((index, bracket.filter(|_| at >= self.caret)?))
+                })
+        else {
+            return;
+        };
+        let (partner, forwards) = match bracket {
+            '(' => (')', true),
+            ')' => ('(', false),
+            '[' => (']', true),
+            ']' => ('[', false),
+            '{' => ('}', true),
+            _ => ('{', false),
+        };
+        let mut ahead = steps[first..].iter();
+        let mut behind = steps[..=first].iter().rev();
+        let walk: &mut dyn Iterator<Item = &(usize, Option<char>)> =
+            if forwards { &mut ahead } else { &mut behind };
+        let mut depth = 0usize;
+        for &(at, c) in walk {
+            if c == Some(bracket) {
+                depth += 1;
+            } else if c == Some(partner) {
+                depth -= 1;
+                if depth == 0 {
+                    self.caret = at;
+                    return;
+                }
+            }
+        }
     }
 
     /// Move the caret where a motion says, told whether it is moving the caret or measuring a
@@ -4131,11 +4232,18 @@ impl Session {
                 self.move_to_line_end();
                 self.step_back_off_the_end();
             }
-            Motion::FirstNonBlank => self.move_to_first_non_blank(),
-            Motion::InputStart => self.caret = 0,
+            Motion::FirstNonBlank | Motion::FirstNonBlankBelow => self.move_to_first_non_blank(),
+            Motion::Column => self.move_to_column(1),
+            Motion::MatchingBracket => self.move_to_the_matching_bracket(),
+            // On the first character that is not a blank, as vi does: the row's indent is not
+            // where anything a person would reach for begins.
+            Motion::InputStart => {
+                self.caret = 0;
+                self.move_to_first_non_blank();
+            }
             Motion::InputEnd => {
                 self.caret = self.input.len();
-                self.move_to_line_start();
+                self.move_to_first_non_blank();
             }
             Motion::Down => {
                 self.move_down_a_line();
@@ -14920,6 +15028,7 @@ mod tests {
             "\n\n",
             "a.b\n-c",
             "x/\n",
+            "(a)\n  [b\n{c}",
         ];
         // Every motion of INPUT-26, and the pairs that reach a second line before the motion under
         // test runs.
@@ -14927,7 +15036,8 @@ mod tests {
             "h", "l", " ", "w", "e", "b", "W", "E", "B", "ge", "gE", "0", "$", "^", "gg", "G",
             "fo", "Fo", "to", "To", "fo;", "fo,", "hh", "ll", "ww", "ee", "bb", "WW", "EE", "BB",
             "gege", "gEgE", "$h", "0l", "^h", "Ge", "Gw", "GE", "GW", "ggw", "gge", "ggE", "Gge",
-            "GgE",
+            "GgE", "%", "%%", "$%", "_", "2_", "9_", "|", "3|", "99|", "G|", "G99|", "2G", "9G",
+            "2gg",
         ];
         for input in inputs {
             for at in 0..=input.len() {
@@ -14955,11 +15065,180 @@ mod tests {
     }
 
     /// `gg` and `G` reach the whole input rather than the line, which is what makes them worth having
-    /// in a box that holds a paragraph. `G` lands at the start of the last line, as vi does.
+    /// in a box that holds a paragraph. Each lands on the first character of its row that is not a
+    /// blank, as vi does, and so does a counted one: a row's indent is not where anything a person
+    /// would reach for begins, and the next `w` from there would stop on the first word rather than
+    /// taking the indent as a word of its own.
     #[test]
     fn the_input_motions_reach_the_first_and_last_line() {
         assert_eq!(after("one\ntwo\nthree", 9, "gg"), 0);
         assert_eq!(after("one\ntwo\nthree", 1, "G"), 8);
+        assert_eq!(after("  one\ntwo\n  three", 12, "gg"), 2);
+        assert_eq!(after("one\ntwo\n  three", 1, "G"), 10);
+        assert_eq!(after("one\n  two\nthree", 0, "2G"), 6);
+        assert_eq!(after("one\n  two\nthree", 0, "2gg"), 6);
+    }
+
+    /// `%` goes to the bracket that pairs with the first one at or after the caret on its row, which
+    /// is how somebody checks what a closing bracket closes without counting. From in front of the
+    /// bracket, where the caret usually is, it goes to the partner rather than to the bracket
+    /// itself, as vi does.
+    ///
+    /// Only brackets of the kind found are counted, and the row is as far as it looks: a row with
+    /// no partner for it leaves the caret where it was, as a jump to a character that is not there
+    /// does.
+    #[test]
+    fn the_bracket_key_goes_to_the_partner_of_the_next_bracket_on_the_row() {
+        assert_eq!(after("call(a, b) ok", 4, "%"), 9);
+        assert_eq!(after("call(a, b) ok", 9, "%"), 4);
+        assert_eq!(after("call(a, b) ok", 0, "%"), 9);
+        // Nested, where the partner is the one at the same depth.
+        assert_eq!(after("f(g(x))", 1, "%"), 6);
+        assert_eq!(after("f(g(x))", 3, "%"), 5);
+        assert_eq!(after("f(g(x))", 6, "%"), 1);
+        // Inside a pair, where the first bracket along is the closing one.
+        assert_eq!(after("(a b) c", 2, "%"), 0);
+        assert_eq!(after("(a]b)", 0, "%"), 4);
+        assert_eq!(after("{a[b}", 0, "%"), 4);
+        // Nothing to go to.
+        assert_eq!(after("no brackets", 3, "%"), 3);
+        assert_eq!(after("(a b", 0, "%"), 0);
+        assert_eq!(after("(a) b", 4, "%"), 4);
+        assert_eq!(after("(a\nb)", 0, "%"), 0);
+        assert_eq!(after("(a\nb)", 4, "%"), 4);
+    }
+
+    /// A count in front of `%` is spent and the caret stays where it was. In vi the count makes it
+    /// a different key, the row that many hundredths of the way through the file, and read as more
+    /// of the same it would bounce between the two brackets and land on whichever one the number
+    /// happened to be odd or even for.
+    #[test]
+    fn a_counted_bracket_key_moves_nothing() {
+        for keys in ["1%", "2%", "50%"] {
+            assert_eq!(after("call(a, b) ok", 4, keys), 4, "{keys}");
+        }
+        assert_eq!(
+            after("call(a, b) ok", 4, "3%%"),
+            9,
+            "the count outlived the key it was typed in front of"
+        );
+        assert_eq!(edited("call(a, b) ok", 4, "d2%"), "call(a, b) ok");
+    }
+
+    /// A marker is spelled with brackets, and `%` must not take either of them for one: the two
+    /// would pair with each other, and the caret would come to rest on the marker's closing
+    /// bracket, inside a picture, where the next character typed splits it and takes the picture
+    /// off the prompt.
+    #[test]
+    fn the_bracket_key_never_pairs_a_bracket_a_marker_is_spelled_with() {
+        for at in [0, 4] {
+            let mut s = vi();
+            for c in "see ".chars() {
+                s.type_char(c);
+            }
+            s.attach(picture(b"pixels"));
+            for c in " (x)".chars() {
+                s.type_char(c);
+            }
+            s.enter_vi_normal();
+            s.caret = at;
+            s.type_char('%');
+            assert_eq!(
+                s.caret,
+                s.input.rfind(')').expect("the bracket is in the line"),
+                "from {at} of {:?}",
+                s.input
+            );
+        }
+    }
+
+    /// `_` is the first character that is not a blank, on the row its count names counting the
+    /// caret's own as the first, so `_` alone is `^`. Its count is rows, which is what makes `d3_`
+    /// the three rows `3dd` is; read as more of the same, `3_` would be `_` three times over and
+    /// stay on its row.
+    #[test]
+    fn the_underscore_key_is_the_first_word_of_the_row_its_count_names() {
+        let rows = "  one\n  two\n  three";
+        assert_eq!(after(rows, 4, "_"), 2);
+        assert_eq!(after(rows, 16, "_"), 14);
+        assert_eq!(after(rows, 0, "2_"), 8);
+        assert_eq!(after(rows, 0, "3_"), 14);
+        assert_eq!(after(rows, 0, "9_"), 14, "it went past the last row");
+    }
+
+    /// An operator over `_` takes rows, as it does in vi, where `dd` is spelled `d_`: the key is
+    /// the doubled letter for every operator at once, and a stretch from the caret to the first
+    /// word would take half a row where the key names all of it.
+    #[test]
+    fn an_operator_over_the_underscore_key_takes_the_rows_the_doubled_letter_does() {
+        let rows = "one\n  two\nthree\nfour";
+        for (keys, doubled) in [
+            ("d_", "dd"),
+            ("d3_", "3dd"),
+            ("2d_", "2dd"),
+            ("c_", "cc"),
+            (">_", ">>"),
+            ("gU2_", "2gUU"),
+            ("y_P", "yyP"),
+        ] {
+            for at in [0, 6] {
+                assert_eq!(
+                    edited(rows, at, keys),
+                    edited(rows, at, doubled),
+                    "{keys} from {at}"
+                );
+            }
+        }
+    }
+
+    /// `|` is the column its count names, counting the first as one, so `|` alone is `0`. A column
+    /// is a character, and one inside a marker is the marker, which has no position inside it for
+    /// the caret to rest at. Past the end of the row is its last character.
+    #[test]
+    fn the_bar_key_is_the_column_its_count_names() {
+        assert_eq!(after("abcdef", 4, "|"), 0);
+        assert_eq!(after("abcdef", 0, "3|"), 2);
+        assert_eq!(after("abcdef", 0, "99|"), 5);
+        assert_eq!(after("ab\ncdef", 3, "3|"), 5);
+
+        let mut s = vi();
+        for c in "look at ".chars() {
+            s.type_char(c);
+        }
+        s.attach(picture(b"pixels"));
+        for c in " and say".chars() {
+            s.type_char(c);
+        }
+        s.enter_vi_normal();
+        let opens = s.input.find('[').expect("the marker is in the line");
+        let closes = s.input.find(']').expect("the marker is in the line") + 1;
+        for (column, lands) in [(opens + 1, opens), (opens + 4, opens), (closes + 1, closes)] {
+            s.caret = 0;
+            for c in format!("{column}|").chars() {
+                s.type_char(c);
+            }
+            assert_eq!(s.caret, lands, "column {column}");
+        }
+    }
+
+    /// An operator over `%` takes both brackets and what lies between them, from either end and
+    /// from in front of the pair, since the motion takes the bracket it lands on. Left out, `d%`
+    /// would leave a closing bracket standing for nothing.
+    #[test]
+    fn an_operator_over_the_bracket_key_takes_both_brackets() {
+        assert_eq!(edited("call(a, b) ok", 4, "d%"), "call ok");
+        assert_eq!(edited("call(a, b) ok", 9, "d%"), "call ok");
+        assert_eq!(edited("call(a, b) ok", 0, "d%"), " ok");
+        assert_eq!(edited("f(x) y", 1, "c%z"), "fz y");
+        assert_eq!(edited("(a b", 0, "d%"), "(a b", "there was no partner");
+    }
+
+    /// An operator over `|` stops short of the column it reaches, as it does in vi, so `d|` is `d0`
+    /// and the character the count names is the one left standing.
+    #[test]
+    fn an_operator_over_the_bar_key_leaves_the_column_it_reaches() {
+        assert_eq!(edited("abcdef", 4, "d|"), "ef");
+        assert_eq!(edited("abcdef", 1, "d4|"), "adef");
     }
 
     /// `g` alone means nothing, and a pair that means nothing must not hold the wait open: one stray
@@ -15151,6 +15430,10 @@ mod tests {
             ("E", true),
             ("f]", true),
             ("$", true),
+            // Not a crossing, but the other two keys that could come to rest in one: `%` on the
+            // brackets it is spelled with, and `|` on a column it covers.
+            ("%", true),
+            ("12|", true),
             ("h", false),
             ("b", false),
             ("B", false),
@@ -15762,12 +16045,37 @@ mod tests {
         assert_eq!(edited("only", 0, "J"), "only", "there was no line to join");
     }
 
+    /// `gJ` joins with nothing where the newline was and the next row's blanks left standing, for
+    /// the line that was broken in the middle of a word or a path: any space there would be one
+    /// the text never had, and so would stripping an indent somebody is keeping. Its count is how
+    /// many rows end up as one, as `J`'s is.
+    #[test]
+    fn the_bare_join_puts_nothing_where_the_newline_was() {
+        assert_eq!(edited("one\ntwo", 0, "gJ"), "onetwo");
+        assert_eq!(edited("one\n  two", 0, "gJ"), "one  two");
+        assert_eq!(
+            edited("one\ntwo\nthree\nfour", 0, "3gJ"),
+            "onetwothree\nfour"
+        );
+        assert_eq!(edited("one\ntwo", 0, "9gJ"), "onetwo");
+        assert_eq!(edited("only", 0, "gJ"), "only", "there was no line to join");
+    }
+
+    /// Joining an empty row on leaves nothing on the joined row past the last character, and the
+    /// caret must not be left there: every other normal-mode key keeps it on a character, and one
+    /// past the end is where `i` would type after the line rather than before its last character.
+    #[test]
+    fn the_bare_join_of_an_empty_row_leaves_the_caret_on_the_line() {
+        assert_eq!(after("one\n", 0, "gJ"), 2);
+        assert_eq!(edited("one\n", 0, "gJ"), "one");
+    }
+
     /// `u` puts back what the last change took. The failure worth ruling out is the one that loses a
     /// paragraph: every operator that writes records the line first, in the one place they all pass
     /// through, so none of them can be the one that forgot.
     #[test]
     fn undo_puts_back_what_a_change_took() {
-        for keys in ["dw", "dd", "D", "x", "cw", "J", ">>", "p"] {
+        for keys in ["dw", "dd", "D", "x", "cw", "J", "gJ", ">>", "p", "d_"] {
             let mut s = normal("one two\nthree", 0);
             // So that `p` has something to put back, and every case starts from the same line.
             s.register = Some(Yanked {
@@ -15847,6 +16155,22 @@ mod tests {
         assert_eq!(edited("call(a, b) ok", 5, "di)"), "call() ok");
         assert_eq!(edited("x[1] ok", 2, "di["), "x[] ok");
         assert_eq!(edited("a{b}c", 2, "di{"), "a{}c");
+    }
+
+    /// `b` and `B` are vi's names for the round and the curly pair, the two a block is written in,
+    /// and somebody used to `dib` has no reason to reach for the bracket instead. Left unnamed,
+    /// `dib` ends the wait and changes nothing.
+    #[test]
+    fn a_block_letter_is_a_text_object_over_the_pair_it_names() {
+        assert_eq!(edited("call(a, b) ok", 5, "dib"), "call() ok");
+        assert_eq!(edited("call(a, b) ok", 5, "dab"), "call ok");
+        assert_eq!(edited("a{b}c", 2, "diB"), "a{}c");
+        assert_eq!(edited("a{b}c", 2, "daB"), "ac");
+        assert_eq!(
+            edited("x[1] ok", 2, "dib"),
+            "x[1] ok",
+            "b is not the square pair"
+        );
     }
 
     /// The pair the caret is inside, or else the next one along the line. The second half is what makes
@@ -15989,6 +16313,8 @@ mod tests {
             ("P", "oNe two\nthree"),
             ("J", "Ne two three"),
             ("vJ", "Ne two three"),
+            ("gJ", "Ne twothree"),
+            ("vgJ", "Ne twothree"),
             ("viwp", "o two\nthree"),
             ("viwP", "o two\nthree"),
             ("vrz", "ze two\nthree"),

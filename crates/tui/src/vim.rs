@@ -115,8 +115,9 @@ pub enum Command {
     /// Put the register where the selection is, which is `p` there, and `P` keeping the register as
     /// it was rather than filling it with what the selection held.
     PutOver { keep: bool },
-    /// Join this line and the one below into one, which is `J`.
-    Join,
+    /// Join this line and the one below into one: `J` with a single space where the newline was,
+    /// and `gJ` with nothing there and the blanks left as they were.
+    Join { spaced: bool },
     /// Mark out a stretch for the next instruction, character-wise or line-wise: `v` and `V`.
     Select { lines: bool },
     /// Swap which end of the selection the caret is at, which is `o`.
@@ -307,9 +308,10 @@ impl Kind {
             '"' => Some(Kind::Pair('"', '"')),
             '\'' => Some(Kind::Pair('\'', '\'')),
             '`' => Some(Kind::Pair('`', '`')),
-            '(' | ')' => Some(Kind::Pair('(', ')')),
+            // `b` and `B` are vi's names for the two pairs a block is written in.
+            '(' | ')' | 'b' => Some(Kind::Pair('(', ')')),
             '[' | ']' => Some(Kind::Pair('[', ']')),
-            '{' | '}' => Some(Kind::Pair('{', '}')),
+            '{' | '}' | 'B' => Some(Kind::Pair('{', '}')),
             '<' | '>' => Some(Kind::Pair('<', '>')),
             _ => None,
         }
@@ -345,9 +347,16 @@ pub enum Motion {
     LineEnd,
     /// `^`: the first character of the line that is not a blank.
     FirstNonBlank,
-    /// `gg`: the first line of the input.
+    /// `_`: the first character that is not a blank, on the row the count names counting this one
+    /// as the first.
+    FirstNonBlankBelow,
+    /// `|`: the column the count names, counting the first as one.
+    Column,
+    /// `%`: the bracket that pairs with the first one at or after the caret on its row.
+    MatchingBracket,
+    /// `gg`: the first character of the first line of the input that is not a blank.
     InputStart,
-    /// `G`: the last line of the input.
+    /// `G`: the first character of the last line of the input that is not a blank.
     InputEnd,
     /// `j` after an operator: the row below.
     Down,
@@ -376,7 +385,8 @@ impl Motion {
             | Motion::BigwordEnd
             | Motion::WordEndLeft
             | Motion::BigwordEndLeft
-            | Motion::LineEnd => true,
+            | Motion::LineEnd
+            | Motion::MatchingBracket => true,
             // `f` lands on the character and takes it; `t` stops one short and takes that one.
             Motion::ToChar(find) => find.forwards,
             // An object names both its ends, so there is no character beyond it to take or leave.
@@ -389,6 +399,8 @@ impl Motion {
             | Motion::BigwordLeft
             | Motion::LineStart
             | Motion::FirstNonBlank
+            | Motion::FirstNonBlankBelow
+            | Motion::Column
             | Motion::InputStart
             | Motion::InputEnd
             | Motion::Down
@@ -406,7 +418,11 @@ impl Motion {
     pub fn line_wise(self) -> bool {
         matches!(
             self,
-            Motion::Down | Motion::Up | Motion::InputStart | Motion::InputEnd
+            Motion::Down
+                | Motion::Up
+                | Motion::FirstNonBlankBelow
+                | Motion::InputStart
+                | Motion::InputEnd
         )
     }
 }
@@ -547,6 +563,7 @@ impl Pending {
                 None if c == 'g' => Command::Move(Motion::InputStart),
                 None if c == 'e' => Command::Move(Motion::WordEndLeft),
                 None if c == 'E' => Command::Move(Motion::BigwordEndLeft),
+                None if c == 'J' => Command::Join { spaced: false },
                 // vi's other operators under `g`: rot13, formatting and the operator function. Each
                 // takes a stretch, so the keys naming one are not left to run on their own and open
                 // INSERT mode on the `i` of `g?iw`.
@@ -748,6 +765,9 @@ pub fn command(c: char) -> Command {
         '0' => Command::Move(Motion::LineStart),
         '$' => Command::Move(Motion::LineEnd),
         '^' => Command::Move(Motion::FirstNonBlank),
+        '_' => Command::Move(Motion::FirstNonBlankBelow),
+        '|' => Command::Move(Motion::Column),
+        '%' => Command::Move(Motion::MatchingBracket),
         'G' => Command::Move(Motion::InputEnd),
         'g' => Command::Wait(Pending::G),
         'f' => Command::Wait(Pending::Find {
@@ -790,7 +810,7 @@ pub fn command(c: char) -> Command {
         'S' => Command::Change(Operator::Change, Extent::Line),
         'p' => Command::Paste { before: false },
         'P' => Command::Paste { before: true },
-        'J' => Command::Join,
+        'J' => Command::Join { spaced: true },
         'u' => Command::Undo,
         '.' => Command::Again,
         // Marking a stretch out before saying what to do with it, which is the other way round from an
@@ -834,7 +854,7 @@ pub fn visual_command(c: char) -> Command {
         '<' => Command::Change(Operator::Dedent, Extent::Selection),
         'p' => Command::PutOver { keep: false },
         'P' => Command::PutOver { keep: true },
-        'J' => Command::Join,
+        'J' => Command::Join { spaced: true },
         'r' => Command::Wait(Pending::ReplaceWith),
         '~' => Command::Case(Case::Swapped),
         // Not undo, which is what these letters mean in NORMAL mode: with a selection on the screen
@@ -1062,7 +1082,44 @@ mod tests {
         for c in ['w', '$', 'u', 'x', 'd', 'm', '"', 'r'] {
             assert_eq!(Pending::UnclaimedStretch.then(c), Command::Nothing, "g?{c}");
         }
-        assert_eq!(Pending::G.then('J'), Command::Nothing);
+    }
+
+    /// `J` joins with a space and `gJ` with nothing, in NORMAL mode and in VISUAL mode alike. Read
+    /// as one join, `gJ` would put a space in the middle of the word or the path the break split.
+    #[test]
+    fn j_joins_with_a_space_and_gj_with_nothing() {
+        assert_eq!(command('J'), Command::Join { spaced: true });
+        assert_eq!(visual_command('J'), Command::Join { spaced: true });
+        assert_eq!(Pending::G.then('J'), Command::Join { spaced: false });
+        assert_eq!(Pending::VisualG.then('J'), Command::Join { spaced: false });
+    }
+
+    /// `%`, `_` and `|` are motions, so an operator takes them as it takes any motion: `d%` is the
+    /// pair, `d_` the row and `d|` back to a column.
+    #[test]
+    fn the_bracket_underscore_and_bar_keys_are_motions() {
+        for (c, motion) in [
+            ('%', Motion::MatchingBracket),
+            ('_', Motion::FirstNonBlankBelow),
+            ('|', Motion::Column),
+        ] {
+            assert_eq!(command(c), Command::Move(motion), "{c}");
+            assert_eq!(visual_command(c), Command::Move(motion), "v{c}");
+            assert_eq!(
+                Pending::Operate(Operator::Delete).then(c),
+                Command::Change(Operator::Delete, Extent::To(motion)),
+                "d{c}"
+            );
+        }
+    }
+
+    /// `b` is vi's name for the round pair and `B` for the curly one, so `dib` is `di(` and `daB` is
+    /// `da{`.
+    #[test]
+    fn the_block_letters_name_the_round_and_curly_pairs() {
+        assert_eq!(Kind::named('b'), Kind::named('('));
+        assert_eq!(Kind::named('B'), Kind::named('{'));
+        assert_ne!(Kind::named('b'), Kind::named('{'));
     }
 
     /// `gu`, `gU` and `g~` are operators like `d`, waiting for the stretch whose case they change,
@@ -1218,6 +1275,7 @@ mod tests {
             Motion::Up,
             Motion::InputStart,
             Motion::InputEnd,
+            Motion::FirstNonBlankBelow,
         ] {
             assert!(motion.line_wise(), "{motion:?}");
         }
@@ -1235,6 +1293,8 @@ mod tests {
             Motion::LineStart,
             Motion::LineEnd,
             Motion::FirstNonBlank,
+            Motion::Column,
+            Motion::MatchingBracket,
         ] {
             assert!(!motion.line_wise(), "{motion:?}");
         }
@@ -1314,6 +1374,7 @@ mod tests {
             Motion::WordEndLeft,
             Motion::BigwordEndLeft,
             Motion::LineEnd,
+            Motion::MatchingBracket,
         ] {
             assert!(motion.takes_what_it_lands_on(), "{motion:?}");
         }
@@ -1322,6 +1383,8 @@ mod tests {
             Motion::WordLeft,
             Motion::BigwordRight,
             Motion::BigwordLeft,
+            Motion::Column,
+            Motion::FirstNonBlankBelow,
         ] {
             assert!(!motion.takes_what_it_lands_on(), "{motion:?}");
         }
