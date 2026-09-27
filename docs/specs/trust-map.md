@@ -259,7 +259,9 @@ only mean (TRUST-23).
 `verified-by: bravebot_session::sessions::a_record_resumes_its_rules_under_the_directory_it_is_read_in`
 `verified-by: bravebot_tui::app::a_fresh_session_is_asked_rather_than_inheriting_a_map`
 `verified-by: bravebot_tui::app::a_remembered_answer_settles_a_fresh_session`
+`verified-by: bravebot_ui_bridge::remembered_trust::a_remembered_yes_settles_the_next_session_started_there`
 `verified-by: bravebot_tui::app::a_resume_starts_with_the_map_its_own_record_kept`
+`verified-by: bravebot_ui_bridge::remembered_trust::a_resume_takes_its_own_map_before_a_kept_answer`
 `verified-by: bravebot_tui::app::a_record_from_before_maps_were_kept_is_asked_about`
 `verified-by: bravebot_session::sessions::a_record_that_predates_the_map_has_none_rather_than_an_empty_one`
 `verified-by: bravebot_session::sessions::a_distrusted_path_inside_a_trusted_tree_survives_the_record`
@@ -273,7 +275,8 @@ At startup the user is asked whether they trust the working directory. Yes write
 the tree. Declining writes nothing, so every write is shown. Leaving at the question starts no
 session. Where the answer may be kept ([TRUST-23](#TRUST-23)), a third key, `r`, writes the same rule
 as yes and keeps the answer for later sessions; where it may not, `r` is neither shown nor answers.
-It is held to the rule the other keys are, so an `r` arriving with other bytes answers nothing.
+It is held to the rule the other keys are, so an `r` arriving with other bytes answers nothing. The
+desktop interface offers the same answer as a third button, on the same terms.
 
 A session running in the mode that asks about nothing is the one exception: the question is not put,
 and the map is the one a yes would have written. That mode approves vouching for every quarantined
@@ -303,6 +306,7 @@ every permission says the flag answered, which is what is in force, and never wr
 `verified-by: bravebot_tui::trust_prompt::an_r_nobody_pressed_on_its_own_remembers_nothing`
 `verified-by: bravebot_tui::trust_prompt::remembering_trusts_exactly_what_yes_trusts`
 `verified-by: bravebot_tui::trust_prompt::the_prompt_not_offering_to_remember_says_nothing_of_it`
+`verified-by: bravebot_ui_bridge::remembered_trust::an_answer_is_kept_only_where_the_question_offered_it`
 
 ## The ways a rule is written
 
@@ -469,10 +473,12 @@ the workspace. Asking it about one would be laundering.
 ### TRUST-12: `/status` lists the rules in force
 
 Every rule the session holds is readable back, so what a line vouched for does not have to be
-remembered. So is a kept answer about the working directory ([TRUST-24](#TRUST-24)).
+remembered. So is a kept answer about the working directory ([TRUST-24](#TRUST-24)), there and in
+the permissions a desktop session lists.
 
 `verified-by: bravebot_tui::status::an_added_directory_is_reported`
 `verified-by: bravebot_tui::status::the_report_says_a_directory_is_trusted_by_a_remembered_answer`
+`verified-by: bravebot_ui_bridge::remembered_trust::a_remembered_yes_settles_the_next_session_started_there`
 `verified-by: bravebot_tui::status::every_trust_rule_is_listed_however_many_there_are`
 
 ## Moving the working directory
@@ -952,27 +958,32 @@ tree, which is why it is narrower than the answer it keeps.
 <a id="TRUST-23"></a>
 ### TRUST-23: a remembered yes answers for later sessions started in exactly that directory
 
-**Offered.** `r` is offered at the question about the working directory, in the terminal interface,
-and nowhere else: not at a directory a settings file named, not at the rules a checkout proposed.
-A session in lines puts its question every time and reads no record, since it offers no answer that
-outlives the session ([cli.md](cli.md#CLI-14)), and the desktop interface puts its own every time
-too. Neither has been given the record yet.
+**Offered.** Remembering is offered at the question about the working directory and nowhere else:
+not at a directory a settings file named, not at the rules a checkout proposed. The terminal
+interface offers it as a third key, `r`, and the desktop interface as a third button beside the two
+answers. Both read and write one record, under the name a turn resolves the directory to, so an
+answer kept in either is honoured by the other and taken back from either. A session in lines puts
+its question every time and reads no record, since it offers no answer that outlives the session
+([cli.md](cli.md#CLI-14)), and has not been given the record yet.
 It is offered only where the answer may be kept and later honoured: there is a state directory, the
 working directory is not a filesystem root, not the user's home and not a directory holding it
 (compared both as named and with links resolved, since `$HOME` is often named through a link the
 working directory is resolved past), the filesystem says when the directory was made, and the
-session is not incognito. The question says
-what `r` does, that the directory has to be this one exactly, how to take it back, and the file it
-writes, since nobody can endorse a record they were not shown.
+session is not incognito. One check decides that for every front end, so none keeps or honours an
+answer another would refuse. The question says what remembering does, that the directory has to be
+this one exactly, how to take it back, and the file it writes, since nobody can endorse a record they
+were not shown. An answer to remember that the question did not offer, or given with a no, is
+refused and writes nothing; the question once answered offers nothing more.
 
-**Kept.** Pressing it writes the rule a yes writes, for this session, and appends one line to
+**Kept.** Choosing it writes the rule a yes writes, for this session, and appends one line to
 `~/.bravebot/trusted/<key>.jsonl`, keyed as the other per-directory records are. The line names the
 directory in full, which directory is at that path (when it was made and, where the platform has one,
-its number on the volume), the session and when. A line that cannot be written leaves the answer as
-a yes for this session, and the session says so and names the file.
+its number on the volume), the session and when. A desktop session is named on its first turn, so a
+line kept before one names no session; the name decides nothing. A line that cannot be written
+leaves the answer as a yes for this session, and the session says so and names the file.
 
-**Honoured.** A later session started in that directory, fresh, by `/clear`, or by a resume whose
-record keeps no map, is not asked. It starts from the rule a yes writes and from nothing else
+**Honoured.** A later session started in that directory, fresh, by `/clear`, by a new session in the
+desktop interface, or by a resume or reopening whose record keeps no map, is not asked. It starts from the rule a yes writes and from nothing else
 ([TRUST-6](#TRUST-6)), and says as it opens that it is trusting the directory because the person
 said to remember it, when, and how to be asked again. Only the directory itself: a session
 started in a directory inside it or above it is asked, since a tree rule covers everything below it
@@ -995,7 +1006,7 @@ root and of the home directory apply when reading, so a line written by hand is 
 asks about nothing answers before the record is read and never writes it (TRUST-7). A one-shot run
 reads no record and writes none: it asks no question to keep an answer to, and a run nobody is
 watching has answered nothing. In an incognito session the record is read, as the other records are
-([incognito.md](incognito.md#INCOG-5)), and `r` is not offered.
+([incognito.md](incognito.md#INCOG-5)), and remembering is not offered.
 
 **Why.** See TRUST-6: a fresh yes already trusts whatever arrived since the last session, so asking
 again only protects a person who reads the tree before pressing `y`, and a question answered daily
@@ -1016,7 +1027,13 @@ yes writes rather than everything the session went on to record.
 `verified-by: bravebot_agent::trusted::a_half_written_line_leaves_the_answer_before_it`
 `verified-by: bravebot_agent::trusted::an_answer_kept_after_a_half_written_line_is_read_back`
 `verified-by: bravebot_agent::trusted::a_line_cut_inside_a_character_is_skipped_like_any_half_written_line`
-`verified-by: bravebot_tui::app::no_remembered_answer_is_read_about_the_home_or_what_holds_it`
+`verified-by: bravebot_agent::trusted::no_remembered_answer_is_read_about_the_home_or_what_holds_it`
+`verified-by: bravebot_ui_bridge::remembered_trust::a_remembered_yes_settles_the_next_session_started_there`
+`verified-by: bravebot_ui_bridge::remembered_trust::a_directory_named_another_way_shares_the_terminals_record`
+`verified-by: bravebot_ui_bridge::remembered_trust::a_remembered_answer_answers_for_that_directory_alone`
+`verified-by: bravebot_ui_bridge::remembered_trust::an_answer_is_kept_only_where_the_question_offered_it`
+`verified-by: bravebot_ui_bridge::remembered_trust::an_answer_that_cannot_be_kept_is_still_a_yes_for_this_session`
+`verified-by: bravebot_ui_bridge::remembered_trust::a_resume_takes_its_own_map_before_a_kept_answer`
 `verified-by: bravebot_agent::incognito::no_trusted_directory_is_written_down`
 `verified-by: bravebot_agent::incognito::a_directory_an_earlier_session_kept_is_still_trusted`
 `verified-by: bravebot_tui::app::a_remembered_answer_settles_a_fresh_session`
@@ -1027,19 +1044,21 @@ yes writes rather than everything the session went on to record.
 `verified-by: bravebot_tui::trust_prompt::a_tiny_terminal_offering_to_remember_still_renders`
 
 <a id="TRUST-24"></a>
-### TRUST-24: a kept answer is shown by `/status` and taken back by `/forget-trust`
+### TRUST-24: a kept answer is shown with the session's rules and taken back where they are
 
-`/status` says, under the working directory, that a later session started there will trust it
-without asking, when the person said to remember it, the file it is kept in and the command that
-withdraws it. The record is read when the report is drawn rather than when the session began, since
-it belongs to every session in the directory. Nothing is said where nothing is kept.
+`/status` in the terminal interface, and the permissions a desktop session lists, say that a later
+session started in the working directory will trust it without asking, when the person said to
+remember it, the file it is kept in and how to withdraw it. The record is read when the report is
+drawn rather than when the session began, since it belongs to every session in the directory.
+Nothing is said where nothing is kept.
 
-`/forget-trust` removes every line kept about the working directory, whichever directory was at the
-path when each was written and whether or not this build can read the rest of it, and leaves every
-line about another directory as it found it. A file left empty is removed. The next session started
-there asks; this one keeps the map it has, and `/clear` starts one that asks. With nothing kept it
-says so rather than claiming to have withdrawn anything. In an incognito session it writes nothing,
-and names the file so the person can remove it themselves.
+`/forget-trust`, or forgetting it from the desktop's list, removes every line kept about the working
+directory, whichever directory was at the path when each was written and whether or not this build
+can read the rest of it, and leaves every line about another directory as it found it. A file left
+empty is removed. The next session started there asks; this one keeps the map it has, and `/clear`
+or a new desktop session starts one that asks. With nothing kept it says so rather than claiming to
+have withdrawn anything. In an incognito session it writes nothing, and names the file so the person
+can remove it themselves.
 
 **Why every line, and not only the one that answers now.** A person taking the answer back means
 the name. A line left about an earlier directory at the path would be read by nothing today, and
@@ -1048,6 +1067,8 @@ the file would still say they had vouched for it.
 `verified-by: bravebot_tui::status::the_report_says_a_directory_is_trusted_by_a_remembered_answer`
 `verified-by: bravebot_tui::app::forgetting_trust_makes_the_next_session_here_ask`
 `verified-by: bravebot_tui::app::forgetting_trust_where_nothing_is_kept_says_so`
+`verified-by: bravebot_ui_bridge::remembered_trust::forgetting_a_remembered_answer_makes_the_next_session_there_ask`
+`verified-by: bravebot_ui_bridge::remembered_trust::a_remembered_yes_settles_the_next_session_started_there`
 `verified-by: bravebot_agent::trusted::forgetting_removes_this_directorys_answers_and_keeps_the_rest`
 `verified-by: bravebot_agent::trusted::forgetting_the_last_answer_removes_the_file`
 `verified-by: bravebot_agent::trusted::a_line_cut_inside_a_character_is_skipped_like_any_half_written_line`

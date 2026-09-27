@@ -1360,6 +1360,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 .trust p { margin: 0 0 9px; color: var(--ink-dim); font-size: 12px; }
 .trust .aside { color: var(--ink-faint); font-size: 11px; }
+.trust .aside code { font-family: var(--mono); word-break: break-all; }
 .trust-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 
 /* A line from the record, which has no outcome behind it. */

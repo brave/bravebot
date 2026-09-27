@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react'
 import { Modal } from './Modal'
+import type { KeptTrust } from '../../shared/protocol'
 
 interface Grants {
   paths: { path: string; integrity: string }[]
   commands: { program: string; args: string[]; display: string }[]
+  /** The yes kept about this directory for later sessions (TRUST-23), read when this was asked. */
+  remembered?: KeptTrust | null
 }
-export function Permissions({ session, onClose }: { session: string; onClose: () => void }): React.JSX.Element {
+export function Permissions({ session, onClose, onRemembered }: { session: string; onClose: () => void; onRemembered?: (kept: KeptTrust | null) => void }): React.JSX.Element {
   const [grants, setGrants] = useState<Grants | null>(null)
   const [problem, setProblem] = useState('')
   const [busy, setBusy] = useState(false)
@@ -14,7 +17,10 @@ export function Permissions({ session, onClose }: { session: string; onClose: ()
     try {
       const answer = await window.bravebot.request<Grants>(method, { session, ...params })
       if (answer.error) setProblem(answer.error.message)
-      else if (answer.ok) setGrants(answer.ok)
+      else if (answer.ok) {
+        setGrants(answer.ok)
+        if ('remembered' in answer.ok) onRemembered?.(answer.ok.remembered ?? null)
+      }
     } catch { setProblem('Permissions could not be loaded. Try again.') }
     finally { setBusy(false) }
   }
@@ -29,6 +35,10 @@ export function Permissions({ session, onClose }: { session: string; onClose: ()
     <p className="bot-note">Each grant covers the resolved program and its exact arguments, including trust in its output.</p>
     {grants?.commands.map((command) => <div className="permission-row" key={JSON.stringify(command)}><code>{command.display}</code><button disabled={busy} onClick={() => void request('permissions.revoke', { kind: 'command', command: { program: command.program, args: command.args } })}>Revoke</button></div>)}
     {grants?.commands.length === 0 && <p>No remembered command grants.</p>}
+    <h3>Remembered for this directory</h3>
+    <p className="bot-note">Kept outside this conversation: sessions started in exactly this directory are trusted without asking. Forgetting it makes the next one ask; this conversation keeps its own grants.</p>
+    {grants?.remembered && <div className="permission-row"><code>{grants.remembered.path}</code><button disabled={busy} onClick={() => void request('permissions.revoke', { kind: 'remembered' })}>Forget</button></div>}
+    {grants && !grants.remembered && <p>No answer is remembered for this directory.</p>}
     <button onClick={onClose}>Done</button>
   </Modal>
 }

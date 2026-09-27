@@ -373,14 +373,18 @@ Loads the `Record` via `sessions::load` and the trail and todos via `sessions::r
 - `context` is `Snapshot::context`, the word for what the conversation has met.
 - `todos` and `audit` are keyed by turn number as strings, because JSON object keys are
   strings; the Rust side is a `BTreeMap<usize, _>`.
-- `trust.known` is `false` when `Record::trust` is `None` — a record written before the
-  map was kept. **Nothing recorded is not the same as nothing trusted**, and the client
-  must ask (§9) rather than assume an empty map.
+- `trust.known` is `false` when `Record::trust` is `None` (a record written before the
+  map was kept) and no kept answer (§9) settles the directory. **Nothing recorded is not the
+  same as nothing trusted**, and the client must ask (§9) rather than assume an empty map.
+  Where a kept answer settles it, `known` is `true` and `rules` are the rule a yes writes.
+- `remembered` and `keeping` are what §9 says of a kept answer. Both are `null` on a record
+  that kept its map, which answers first.
 - `branchNote` / `buildNote` are the existing `sessions::branch_note` and
   `sessions::build_note` outputs: a sentence, or `null` when there is nothing to say.
 
-`session.open` does **not** start a turn. If the record has no saved trust map,
-it emits `trust.request`; the client must answer before sending a turn.
+`session.open` does **not** start a turn. If the record has no saved trust map and no kept
+answer settles the directory, it emits `trust.request`; the client must answer before sending
+a turn.
 
 #### `session.new`
 
@@ -388,9 +392,10 @@ it emits `trust.request`; the client must answer before sending a turn.
 { "id": 3, "method": "session.new", "params": { "directory": "/Users/me/repos/thing" } }
 ```
 
-Returns `{ "session": "s2", "directory": "…", "branch": "main" }`. The `Record` is not
-written until the first turn, matching `Session::begin` + `save`, so an opened-and-
-abandoned window leaves nothing behind.
+Returns `{ "session": "s2", "directory": "…", "branch": "main", "remembered": null,
+"keeping": "…" }`, the last two as §9 has them. The `Record` is not written until the first
+turn, matching `Session::begin` + `save`, so an opened-and-abandoned window leaves nothing
+behind.
 
 Errors with `not_a_directory` if the path is not one, or `no_home` if `~/.bravebot` cannot be
 located.
@@ -464,8 +469,9 @@ differently: the front-end puts it in the composer and the person edits it.
   not in the child's history, and `TrustedPrograms` has no timeline to filter by. The
   alternative is asking the same person about the same command again, which is how people
   are taught to click through questions. `trust.known` is `false` when the parent was
-  itself still holding the question, and then the fork emits `trust.request` exactly as a
-  new session does.
+  itself still holding the question and no kept answer settles the directory, and then the
+  fork emits `trust.request` exactly as a new session does. `remembered` and `keeping` are
+  as §9 has them.
 - `turns` and `todos` are the parent's, cut to the same place: a turn's plan belongs to its turn.
   Tokens start at nothing, because that figure answers "what has this session cost me".
 - The fork keeps the **title of the session it came from**, since its title is derived from the
@@ -617,11 +623,14 @@ indices; unreadable entries decline. Choices are fitted to the question before u
 
 #### Permissions
 
-`permissions.list` takes `session` and returns `paths` and `commands`.
-`permissions.revoke` takes `session` plus either `kind: "path"` and `path`, or
-`kind: "command"` and `command: { program, args }`. It returns the updated lists.
-These methods refuse with `turn_in_flight` while the session is running. Revocation
-can reduce existing grants; it cannot add trust.
+`permissions.list` takes `session` and returns `paths`, `commands` and `remembered`, the
+kept answer about the session's directory as §9 has it, read when the list is asked for.
+`permissions.revoke` takes `session` plus either `kind: "path"` and `path`,
+`kind: "command"` and `command: { program, args }`, or `kind: "remembered"`, which removes
+every answer kept about the directory so the next session there is asked, and leaves this
+session's map as it is. It returns the updated lists, and refuses `kind: "remembered"` with
+`bad_request` where nothing is kept. These methods refuse with `turn_in_flight` while the
+session is running. Revocation can reduce existing grants; it cannot add trust.
 
 ### 7.3 Trust and diagnostics
 
@@ -629,11 +638,19 @@ can reduce existing grants; it cannot add trust.
 
 ```json
 { "id": 8, "method": "trust.reply",
-  "params": { "session": "s1", "directory": "/Users/me/repos/thing", "trusted": true } }
+  "params": { "session": "s1", "directory": "/Users/me/repos/thing", "trusted": true,
+              "remember": false } }
 ```
 
 Records the user's answer to the startup question into that session's `TrustStore`,
-before the first `turn.send`. See §9.
+before the first `turn.send`. See §9. Returns `{ "trusted": true, "kept": null }`.
+
+`remember` is optional, and `true` keeps the answer for later sessions in the directory. It is
+refused with `bad_request`, and nothing is recorded, with `trusted: false` or where the
+question offered no `keeping`; the offer is spent once the question is answered. `kept` is
+`true` when the answer was written down, `false` when writing it failed (the answer is then a
+yes for this session only, and the client says so, naming the file), and `null` when nothing
+was asked to be kept.
 
 #### `doctor`
 
@@ -707,7 +724,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `output.request` | `{ request, command, reference, lines, output, summary }` | admit command output |
 | `vouch.request` | preview and label fields from `wire::vouch_request` | trust a quarantined path |
 | `ask.request` | `{ request, prompts }` | user questions |
-| `trust.request` | `{ directory }` | initial project trust |
+| `trust.request` | `{ directory, keeping }` | initial project trust; `keeping` as §9 |
 | `turn.done` | see §8.2 | `Ok(Outcome)` |
 | `turn.error` | see §8.3 | `Err(TurnError)` |
 
@@ -902,6 +919,21 @@ The flow:
 
 `turn.send` before trust has been answered for that session errors `bad_request`. Not a
 default: defaulting either way is the mistake this design exists to avoid.
+
+**A remembered answer** is the one exception, and it is one the person made
+([trust-map.md](../../docs/specs/trust-map.md#TRUST-23)). Where a yes was kept about exactly
+this directory, a session the flow above would ask is not asked: it starts from the rule a yes
+writes, emits no `trust.request`, reports `trust.known: true` where its response has `trust`,
+and its response carries `remembered: { at, path }`, when
+the answer was given (seconds since the epoch) and the file it is kept in, for the client to
+say at the top of the conversation. Otherwise `remembered` is `null`. The record is the one
+the terminal keeps, so an answer kept in either front end settles the other.
+
+Where the question is put and its answer may be kept, the response and the `trust.request`
+carry `keeping`, the file a `trust.reply` with `remember: true` would write; the client names
+it on the question. `keeping` is `null` where the answer may not be kept: no state directory,
+a filesystem root, the home directory or one holding it, or a filesystem that cannot say when
+the directory was made.
 
 ---
 

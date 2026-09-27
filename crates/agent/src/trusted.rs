@@ -83,6 +83,29 @@ pub fn may_be_remembered(directory: &Path, profile: Option<&Path>) -> bool {
         })
 }
 
+/// The record of a remembered answer about `directory` inside the state directory `home`, and which
+/// directory is at `directory` now.
+///
+/// `None` where no answer about it may be kept or honoured: no state directory, a root, the user's
+/// home `profile` or anything holding it, or a filesystem that cannot tell this directory from the
+/// next one made at the same path. Every front end asks here, so none honours an answer another
+/// would refuse. Read in an incognito session too, as the other records are ([INCOG-5]); what it
+/// may not do there is write.
+///
+/// [INCOG-5]: ../../../docs/specs/incognito.md
+pub fn record_for(
+    home: Option<&Path>,
+    profile: Option<&Path>,
+    directory: &Path,
+) -> Option<(Store, Identity)> {
+    let home = home?;
+    if !may_be_remembered(directory, profile) {
+        return None;
+    }
+    let identity = Identity::of(directory)?;
+    Some((Store::new(home, directory), identity))
+}
+
 /// What the filesystem says about a directory that another directory at the same path would not.
 ///
 /// When it was made, to the nanosecond where the filesystem keeps that, and its number on the volume
@@ -505,6 +528,31 @@ mod tests {
             &holder.join("me/project"),
             Some(&linked_home)
         ));
+    }
+
+    /// TRUST-23: the refusals hold where a session reads the record, not only where remembering is
+    /// offered, so a line written by hand about the home directory or what holds it answers nothing.
+    #[test]
+    fn no_remembered_answer_is_read_about_the_home_or_what_holds_it() {
+        let scratch = Scratch::new("trusted-record-for-home");
+        let state = scratch.path.join("state");
+        let me = scratch.path.join("me");
+        let project = me.join("project");
+        std::fs::create_dir_all(&project).expect("create");
+        if Identity::of(&project).is_none() {
+            // A filesystem with no birth time keeps nothing, which a sibling test covers.
+            return;
+        }
+
+        assert!(record_for(Some(&state), Some(&me), &me).is_none());
+        assert!(record_for(Some(&state), Some(&me), &scratch.path).is_none());
+        assert!(
+            record_for(None, Some(&me), &project).is_none(),
+            "a record was read with no state directory"
+        );
+        let (store, _) = record_for(Some(&state), Some(&me), &project)
+            .expect("a directory inside the home is the ordinary case");
+        assert!(store.path().starts_with(state.join("trusted")));
     }
 
     /// TRUST-23: everything degrades to asking. A missing record or one nothing can read keeps no
