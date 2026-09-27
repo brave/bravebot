@@ -4641,41 +4641,19 @@ fn opening_for(
     }
 }
 
-/// The record of a remembered answer about `root`, and which directory is at `root` now.
-///
-/// `None` where no answer about it may be kept or honoured (TRUST-23): no state directory, a root,
-/// the user's home or anything holding it, or a filesystem that cannot tell this directory from the
-/// next one made at the same path. Read in an incognito session too, as the other records are
-/// (INCOG-5); what it may not do there is write.
+/// The record of a remembered answer about `root`, and which directory is at `root` now, or `None`
+/// where no answer about it may be kept or honoured ([`bravebot_agent::trusted::record_for`]).
 fn remembering(
     root: &std::path::Path,
 ) -> Option<(
     bravebot_agent::trusted::Store,
     bravebot_agent::trusted::Identity,
 )> {
-    remembering_in(
-        bravebot_agent::home::directory(),
+    bravebot_agent::trusted::record_for(
+        bravebot_agent::home::directory().as_deref(),
         bravebot_agent::home::profile().as_deref(),
         root,
     )
-}
-
-/// [`remembering`], given the state directory and the user's home rather than reading them.
-fn remembering_in(
-    home: Option<std::path::PathBuf>,
-    profile: Option<&std::path::Path>,
-    root: &std::path::Path,
-) -> Option<(
-    bravebot_agent::trusted::Store,
-    bravebot_agent::trusted::Identity,
-)> {
-    use bravebot_agent::trusted;
-    let home = home?;
-    if !trusted::may_be_remembered(root, profile) {
-        return None;
-    }
-    let identity = trusted::Identity::of(root)?;
-    Some((trusted::Store::new(&home, root), identity))
 }
 
 /// Seconds since the epoch, which is how a kept answer says when it was given.
@@ -16128,33 +16106,6 @@ mod tests {
             Opening::Settled(_, Whence::Unasked) => {}
             opening => panic!("bypass did not answer: {opening:?}"),
         }
-    }
-
-    /// TRUST-23: the refusals hold where a session reads the record, not only where `r` is
-    /// offered, so a line written by hand about the home directory or what holds it answers nothing.
-    #[test]
-    fn no_remembered_answer_is_read_about_the_home_or_what_holds_it() {
-        let scratch = crate::testutil::scratch_dir("bravebot-app-remembering-home");
-        let _ = std::fs::remove_dir_all(&scratch);
-        let state = scratch.join("state");
-        let me = scratch.join("me");
-        let project = me.join("project");
-        std::fs::create_dir_all(&project).expect("create");
-        if bravebot_agent::trusted::Identity::of(&project).is_none() {
-            // A filesystem with no birth time keeps nothing, which a sibling test covers.
-            return;
-        }
-
-        assert!(remembering_in(Some(state.clone()), Some(&me), &me).is_none());
-        assert!(remembering_in(Some(state.clone()), Some(&me), &scratch).is_none());
-        assert!(
-            remembering_in(None, Some(&me), &project).is_none(),
-            "a record was read with no state directory"
-        );
-        let (store, _) = remembering_in(Some(state.clone()), Some(&me), &project)
-            .expect("a directory inside the home is the ordinary case");
-        assert!(store.path().starts_with(state.join("trusted")));
-        let _ = std::fs::remove_dir_all(&scratch);
     }
 
     /// `/forget-trust` takes the kept answer back, so the next session started there asks, and

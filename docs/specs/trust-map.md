@@ -1016,7 +1016,7 @@ yes writes rather than everything the session went on to record.
 `verified-by: bravebot_agent::trusted::a_half_written_line_leaves_the_answer_before_it`
 `verified-by: bravebot_agent::trusted::an_answer_kept_after_a_half_written_line_is_read_back`
 `verified-by: bravebot_agent::trusted::a_line_cut_inside_a_character_is_skipped_like_any_half_written_line`
-`verified-by: bravebot_tui::app::no_remembered_answer_is_read_about_the_home_or_what_holds_it`
+`verified-by: bravebot_agent::trusted::no_remembered_answer_is_read_about_the_home_or_what_holds_it`
 `verified-by: bravebot_agent::incognito::no_trusted_directory_is_written_down`
 `verified-by: bravebot_agent::incognito::a_directory_an_earlier_session_kept_is_still_trusted`
 `verified-by: bravebot_tui::app::a_remembered_answer_settles_a_fresh_session`
