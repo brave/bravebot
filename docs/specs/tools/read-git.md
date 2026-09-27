@@ -247,24 +247,34 @@ though it were the whole draws conclusions from what is missing.
 Staged changes compare the index with the tree at HEAD, unstaged ones the working tree with the
 index, and untracked paths follow, sorted, each as `XY path` the way git prints them. A conflict is
 coded by the stages the index holds (`UU`, `AA`, `DU` and the rest), a file added with intent is
-` A`, and a directory holding nothing tracked is one line, `dir/`, or none where everything in it is
-ignored. A nested repository is one line too. A path holding a space, a quote, a backslash or a
-control character is quoted as git quotes it. A tree where nothing changed says so.
+` A`, or ` D` once its file is gone, and a directory holding nothing tracked is one line, `dir/`, or
+none where everything in it is ignored. A nested repository, a directory whose `.git` is a file or
+holds a `HEAD`, is one line too. Only files and symbolic links are listed, never a fifo or a
+socket, and `status.showUntrackedFiles` is read: `no` lists nothing untracked, and `all` lists each
+file rather than its directory. A path filter lists that path and what is beneath it, not the
+directories above it. A path holding a space, a quote, a backslash, a control character or, with
+`core.quotePath` on as it is by default, a byte past ASCII is quoted as git quotes it. A tree where
+nothing changed says so.
 
 A file whose stat data matches the index is taken as unchanged unless the index was written no
-later than the file last changed, as git takes it; any other file is read and hashed. A symbolic
-link is compared by where it points, the executable bit counts where `core.filemode` says it does,
-and a path under a directory that is now a symbolic link is deleted rather than followed. Ignore
-files are read as git reads them, per directory with `info/exclude` beneath them, and so are
-attributes files. A file an attribute or `core.autocrlf` would convert on its way into the index,
-and a submodule, is listed under a heading as not compared rather than guessed at. Renames are not
-detected. Nothing is written, the index included.
+later than the file last changed, or the entry records a size of zero for content that is not
+empty, as git takes it; any other file is read and hashed. A symbolic link is compared by where it
+points, the executable bit counts where `core.filemode` says it does, a submodule replaced by a
+file is a type change, and a path under a directory that is now a symbolic link is deleted rather
+than followed. Ignore files are read as git reads them, per directory with `info/exclude` beneath
+them, and so are attributes files. A file an attribute or `core.autocrlf` would convert on its way
+into the index, and a submodule, is listed under a heading as not compared rather than guessed at.
+An ignore or attributes file the trust map withholds is not guessed at either: nothing untracked
+beneath a withheld ignore file is listed, and a withheld attributes file leaves every file whose
+stat data changed not compared. Renames are not detected. Nothing is written, the index included.
 
 Declined, with a sentence pointing at `run`: a split or sparse index, one holding an extension
 this reader does not know that git would need, one whose checksum does not match, one naming a
 path git would not check out, a repository whose configuration sets `core.bare`, and one that
 names an ignore or attributes file outside it through `core.excludesFile`, `core.attributesFile`
-or `attr.tree`. The global configuration and the global ignore file are not read.
+or `attr.tree`. The global and system configuration and the global ignore file are not read, so
+on Windows, where Git for Windows sets `core.autocrlf` in the system file, line endings are taken
+as converted unless the repository's own configuration says they are not.
 
 **Why.** Status is the question a planner asks most, and the one git answers by running what
 `core.fsmonitor` names. Where this reader cannot tell what git would print, it says so rather than
@@ -281,6 +291,11 @@ and an index this reader does not parse in full lists entries it cannot see.
 `verified-by: bravebot_agent::git::a_changed_executable_bit_is_a_change`
 `verified-by: bravebot_agent::git::a_layout_status_cannot_read_as_git_would_is_declined`
 `verified-by: bravebot_agent::git::a_path_with_a_space_is_quoted_as_git_quotes_it`
+`verified-by: bravebot_agent::git::paths_are_quoted_and_filtered_as_git_quotes_and_filters_them`
+`verified-by: bravebot_agent::git::an_intent_to_add_entry_whose_file_is_gone_is_a_deletion`
+`verified-by: bravebot_agent::git::a_replaced_submodule_a_smudged_entry_and_a_socket_read_as_git_reads_them`
+`verified-by: bravebot_agent::git::status_show_untracked_files_is_read_from_the_config`
+`verified-by: bravebot_agent::git::a_withheld_attributes_or_ignore_file_is_not_guessed_at`
 `verified-by: bravebot_agent::turn::read_git_answers_status_and_refuses_a_query_off_the_list`
 
 <a id="GIT-11"></a>

@@ -4351,6 +4351,7 @@ mod tests {
             assert!(answer.text.ends_with("\n   a.txt\n"), "{}", answer.text);
 
             std::fs::remove_file(repo.root.join(".gitattributes")).expect("removed");
+            write(&repo, ".git/info/attributes", "# nothing here\n");
             let answer = text(&repo);
             assert!(
                 answer.ends_with("\n   a.txt\n"),
@@ -4546,6 +4547,142 @@ mod tests {
             write(&repo, "a b.txt", "x\n");
             index(&repo, &[]);
             assert_eq!(text(&repo), "?? \"a b.txt\"\n");
+        }
+
+        #[test]
+        fn paths_are_quoted_and_filtered_as_git_quotes_and_filters_them() {
+            let repo = Repo::new("status-quoting");
+            let one = repo.blob("one\n");
+            commit(&repo, &[("f", one)]);
+            write(&repo, "na\u{ef}ve.txt", "x\n");
+            write(&repo, "bel\u{7}", "x\n");
+            std::fs::create_dir_all(repo.root.join("empty/.git")).expect("empty .git");
+            index(&repo, &[]);
+            assert_eq!(
+                text(&repo),
+                "D  f\n?? \"bel\\a\"\n?? \"na\\303\\257ve.txt\"\n"
+            );
+            assert_eq!(status(&repo, Some("f/sub")).expect("answered").text, CLEAN);
+            repo.put("config", "[core]\n\tquotePath = false\n");
+            assert_eq!(text(&repo), "D  f\n?? \"bel\\a\"\n?? na\u{ef}ve.txt\n");
+        }
+
+        /// A v3 index of one entry `git add -N` wrote.
+        fn intent_to_add(repo: &Repo, path: &str) {
+            let mut bytes = b"DIRC".to_vec();
+            bytes.extend_from_slice(&3u32.to_be_bytes());
+            bytes.extend_from_slice(&1u32.to_be_bytes());
+            let start = bytes.len();
+            for word in [0, 0, 0, 0, 0, 0, FILE, 0, 0, 0] {
+                bytes.extend_from_slice(&word.to_be_bytes());
+            }
+            bytes.extend_from_slice(ObjectId::empty_blob(HashKind::Sha1).as_bytes());
+            bytes.extend_from_slice(&(0x4000u16 | path.len() as u16).to_be_bytes());
+            bytes.extend_from_slice(&0x2000u16.to_be_bytes());
+            bytes.extend_from_slice(path.as_bytes());
+            let len = bytes.len() - start;
+            bytes.resize(start + ((len + 8) & !7), 0);
+            let mut hasher = gix_hash::hasher(HashKind::Sha1);
+            hasher.update(&bytes);
+            let checksum = hasher.try_finalize().expect("hashed");
+            bytes.extend_from_slice(checksum.as_bytes());
+            std::fs::write(repo.git.join("index"), bytes).expect("index");
+        }
+
+        #[test]
+        fn an_intent_to_add_entry_whose_file_is_gone_is_a_deletion() {
+            let repo = Repo::new("status-intent");
+            commit(&repo, &[]);
+            write(&repo, "ita.txt", "x\n");
+            intent_to_add(&repo, "ita.txt");
+            assert_eq!(text(&repo), " A ita.txt\n");
+            std::fs::remove_file(repo.root.join("ita.txt")).expect("removed");
+            assert_eq!(text(&repo), " D ita.txt\n");
+        }
+
+        #[test]
+        fn a_replaced_submodule_a_smudged_entry_and_a_socket_read_as_git_reads_them() {
+            let repo = Repo::new("status-kinds");
+            let one = repo.blob("one\n");
+            commit(&repo, &[("f.txt", one)]);
+            write(&repo, "f.txt", "");
+            write(&repo, "mod", "a file where a submodule was\n");
+            let short = std::env::temp_dir().join(format!("bb{}.sock", std::process::id()));
+            let _ = std::fs::remove_file(&short);
+            let listener = std::os::unix::net::UnixListener::bind(&short).expect("socket");
+            std::fs::rename(&short, repo.root.join("sock")).expect("socket moved");
+            index(
+                &repo,
+                &[
+                    ("f.txt", FILE, one, 0, true),
+                    ("mod", 0o160000, one, 0, false),
+                ],
+            );
+            let file_time = std::fs::metadata(repo.root.join("f.txt"))
+                .and_then(|m| m.modified())
+                .expect("mtime");
+            std::fs::File::options()
+                .write(true)
+                .open(repo.git.join("index"))
+                .and_then(|f| f.set_modified(file_time + Duration::from_secs(10)))
+                .expect("index time");
+            let answer = text(&repo);
+            drop(listener);
+            assert_eq!(answer, " M f.txt\nAT mod\n");
+        }
+
+        #[test]
+        fn status_show_untracked_files_is_read_from_the_config() {
+            let repo = Repo::new("status-untracked-mode");
+            let one = repo.blob("one\n");
+            commit(&repo, &[("dir/kept.txt", one)]);
+            write(&repo, "dir/kept.txt", "two\n");
+            write(&repo, "dir/new.txt", "x\n");
+            write(&repo, "fresh/a.txt", "x\n");
+            write(&repo, "fresh/deeper/b.txt", "x\n");
+            index(&repo, &[("dir/kept.txt", FILE, one, 0, false)]);
+            assert_eq!(text(&repo), " M dir/kept.txt\n?? dir/new.txt\n?? fresh/\n");
+            repo.put("config", "[status]\n\tshowUntrackedFiles = no\n");
+            assert_eq!(text(&repo), " M dir/kept.txt\n");
+            repo.put("config", "[status]\n\tshowUntrackedFiles = all\n");
+            assert_eq!(
+                text(&repo),
+                " M dir/kept.txt\n?? dir/new.txt\n?? fresh/a.txt\n?? fresh/deeper/b.txt\n"
+            );
+        }
+
+        #[test]
+        fn a_withheld_attributes_or_ignore_file_is_not_guessed_at() {
+            let repo = Repo::new("status-withheld-rules");
+            let one = repo.blob("one\n");
+            commit(&repo, &[("a.txt", one), ("sub/b.txt", one)]);
+            write(&repo, "sub/.gitattributes", "*.txt text\n");
+            write(&repo, "sub/.gitignore", "*.o\n");
+            write(&repo, "a.txt", "two\n");
+            write(&repo, "sub/b.txt", "one\n");
+            write(&repo, "sub/out.o", "x\n");
+            write(&repo, "top.o", "x\n");
+            index(
+                &repo,
+                &[
+                    ("a.txt", FILE, one, 0, false),
+                    ("sub/b.txt", FILE, one, 0, false),
+                ],
+            );
+            let answer = repo
+                .opened()
+                .expect("opened")
+                .answer(&request(Query::Status, None, None), &|path| {
+                    path.starts_with("sub/.git")
+                })
+                .expect("answered");
+            assert!(answer.withheld);
+            assert!(
+                answer.text.starts_with("?? top.o\nNot compared, ")
+                    && answer.text.ends_with(":\n   a.txt\n   sub/b.txt\n"),
+                "{}",
+                answer.text
+            );
         }
     }
 }

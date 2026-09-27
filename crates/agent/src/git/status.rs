@@ -243,6 +243,16 @@ struct Settings {
     /// Set to anything but false, which has git convert line endings of any file no attribute
     /// excludes.
     autocrlf: bool,
+    quote_path: bool,
+    untracked: Untracked,
+}
+
+/// `status.showUntrackedFiles`: list nothing, collapse a directory to one line, or every file.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Untracked {
+    No,
+    Normal,
+    All,
 }
 
 fn boolean(value: Option<&[u8]>) -> Option<bool> {
@@ -266,7 +276,10 @@ impl Settings {
             filemode: cfg!(unix),
             ignorecase: false,
             symlinks: true,
-            autocrlf: false,
+            // Git for Windows sets core.autocrlf in a system file this reader does not open.
+            autocrlf: cfg!(windows),
+            quote_path: true,
+            untracked: Untracked::Normal,
         };
         for name in ["config", "config.worktree"] {
             let Some(bytes) = read_if_present(&git_dir.join(name))? else {
@@ -292,6 +305,16 @@ impl Settings {
                     ("core", "ignorecase") => settings.ignorecase = flag()?,
                     ("core", "symlinks") => settings.symlinks = flag()?,
                     ("core", "autocrlf") => settings.autocrlf = boolean(value) != Some(false),
+                    ("core", "quotepath") => settings.quote_path = flag()?,
+                    ("status", "showuntrackedfiles") => {
+                        settings.untracked = match value {
+                            Some(b"no") => Untracked::No,
+                            Some(b"normal") => Untracked::Normal,
+                            Some(b"all") => Untracked::All,
+                            _ if flag()? => Untracked::Normal,
+                            _ => Untracked::No,
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -312,8 +335,13 @@ struct Attributes {
 }
 
 impl Attributes {
+    /// Read the `.gitattributes` of `dir`.
     fn add(&mut self, dir: &str, bytes: &[u8]) {
         self.read_from.insert(dir.to_owned());
+        self.add_patterns(dir, bytes);
+    }
+
+    fn add_patterns(&mut self, dir: &str, bytes: &[u8]) {
         let bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes);
         for line in bytes.lines() {
             let line = line.trim_start();
@@ -388,6 +416,7 @@ struct Walk<'a> {
     attributes: Attributes,
     case: Case,
     filter: Option<&'a str>,
+    mode: Untracked,
     untracked: Vec<String>,
 }
 
@@ -414,9 +443,13 @@ impl Walk<'_> {
         }
         let full = self.root.join(path);
         match std::fs::symlink_metadata(&full) {
-            Ok(meta) if meta.file_type().is_file() => std::fs::read(&full)
-                .map(Some)
-                .map_err(|_| Declined::Unreadable),
+            Ok(meta) if meta.file_type().is_file() => {
+                let mut file = open_as_seen(&full, &meta)?;
+                let mut bytes = Vec::new();
+                std::io::Read::read_to_end(&mut file, &mut bytes)
+                    .map_err(|_| Declined::Unreadable)?;
+                Ok(Some(bytes))
+            }
             _ => Ok(None),
         }
     }
@@ -434,11 +467,22 @@ impl Walk<'_> {
         if out.late() {
             return Ok(false);
         }
-        if !probe && let Some(bytes) = self.regular(out, &join(dir, ".gitattributes"))? {
+        let attributes = join(dir, ".gitattributes");
+        if !probe && (out.withheld)(&attributes) {
+            // What it says is unknown, so any file may be one git converts.
+            self.attributes.all = true;
+        }
+        if !probe && let Some(bytes) = self.regular(out, &attributes)? {
             self.attributes.add(dir, &bytes);
         }
+        let ignore = join(dir, ".gitignore");
+        // Without the patterns, nothing beneath is listed rather than what they would hide.
+        let ignored_above = ignored_above || (out.withheld)(&ignore);
+        if ignored_above {
+            out.withheld_any |= (out.withheld)(&ignore);
+        }
         let mut pushed = false;
-        if !ignored_above && let Some(bytes) = self.regular(out, &join(dir, ".gitignore"))? {
+        if !ignored_above && let Some(bytes) = self.regular(out, &ignore)? {
             self.ignore.add_patterns_buffer(
                 &bytes,
                 self.root.join(dir).join(".gitignore"),
@@ -478,7 +522,7 @@ impl Walk<'_> {
                 out.withheld_any = true;
                 continue;
             };
-            if name.eq_ignore_ascii_case(".git") {
+            if name == ".git" || (self.case == Case::Fold && name.eq_ignore_ascii_case(".git")) {
                 continue;
             }
             let child = join(dir, name);
@@ -490,6 +534,13 @@ impl Walk<'_> {
                 continue;
             }
             let key = self.key(child.as_bytes());
+            if self.mode == Untracked::No {
+                if kind.is_dir() && self.tracked_dirs.contains(&key) {
+                    let ignored = ignored_above || self.ignored(&child, true);
+                    self.dir(out, &child, ignored, false)?;
+                }
+                continue;
+            }
             if kind.is_dir() {
                 if !probe && self.tracked.contains(&key) {
                     continue;
@@ -502,12 +553,12 @@ impl Walk<'_> {
                 if ignored_above || self.ignored(&child, true) {
                     continue;
                 }
-                let nested = std::fs::symlink_metadata(self.root.join(&child).join(".git")).is_ok();
+                let nested = is_repository(&self.root.join(&child));
                 let inside_filter = self.filter.is_some_and(|f| {
                     f.strip_prefix(child.as_str())
                         .is_some_and(|r| r.starts_with('/'))
                 });
-                if !probe && inside_filter && !nested {
+                if !probe && !nested && (inside_filter || self.mode == Untracked::All) {
                     self.dir(out, &child, false, false)?;
                     continue;
                 }
@@ -515,9 +566,15 @@ impl Walk<'_> {
                     if probe {
                         return Ok(true);
                     }
-                    self.untracked.push(format!("{child}/"));
+                    if within(&child, self.filter) {
+                        self.untracked.push(format!("{child}/"));
+                    }
                 }
             } else {
+                // Git lists no fifo, socket or device.
+                if !kind.is_file() && !kind.is_symlink() {
+                    continue;
+                }
                 if !probe && self.tracked.contains(&key) {
                     continue;
                 }
@@ -527,7 +584,9 @@ impl Walk<'_> {
                 if probe {
                     return Ok(true);
                 }
-                self.untracked.push(child);
+                if within(&child, self.filter) {
+                    self.untracked.push(child);
+                }
             }
             if out.late() {
                 break;
@@ -609,6 +668,25 @@ impl Compare<'_> {
         Ok(true)
     }
 
+    /// Whether anything stands at `path`, reached through real directories.
+    fn present(&mut self, path: &str) -> Result<bool, Declined> {
+        if !self.leading_dirs_real(path)? {
+            return Ok(false);
+        }
+        match std::fs::symlink_metadata(self.root.join(path)) {
+            Ok(_) => Ok(true),
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                Ok(false)
+            }
+            Err(_) => Err(Declined::Unreadable),
+        }
+    }
+
     fn worktree(
         &mut self,
         out: &mut Out<'_>,
@@ -639,7 +717,7 @@ impl Compare<'_> {
             return Ok(Some(if kind.is_dir() {
                 Worktree::NotCompared
             } else {
-                Worktree::Changed('D')
+                Worktree::Changed('T')
             }));
         }
         if kind.is_symlink() {
@@ -671,7 +749,9 @@ impl Compare<'_> {
         }
         let now = Stat::of(&meta);
         let racy = entry.stat.mtime >= self.index_time;
-        if entry.stat.unchanged(&now) && !racy {
+        // Git zeroes the recorded size of an entry it smudged as racy, so the stat says nothing.
+        let smudged = entry.stat.size == 0 && entry.id != ObjectId::empty_blob(HashKind::Sha1);
+        if entry.stat.unchanged(&now) && !racy && !smudged {
             return Ok(Some(Worktree::Same));
         }
         // As git does, a size other than the recorded one is a change without reading the file,
@@ -682,7 +762,7 @@ impl Compare<'_> {
         if self.settings.autocrlf || self.attributes.converts(path, self.case) {
             return Ok(Some(Worktree::NotCompared));
         }
-        let mut file = std::fs::File::open(&full).map_err(|_| Declined::Unreadable)?;
+        let mut file = open_as_seen(&full, &meta)?;
         Ok(hash_blob(&mut file, meta.len(), out)?.map(|id| {
             if id == entry.id {
                 Worktree::Same
@@ -758,33 +838,81 @@ fn conflict(stages: u8) -> &'static str {
 }
 
 /// A path as git's short status writes it: in double quotes, with C escapes, where it holds a
-/// space, a quote, a backslash or a control character.
-fn quoted(path: &str) -> Cow<'_, str> {
-    if !path
-        .chars()
-        .any(|c| c == ' ' || c == '"' || c == '\\' || c.is_control())
-    {
+/// space, a quote, a backslash, a control byte, or with `core.quotePath` on, a byte past ASCII.
+fn quoted(path: &str, fully: bool) -> Cow<'_, str> {
+    let escaped = |b: u8| b == b'"' || b == b'\\' || b < 0x20 || b == 0x7f || (fully && b >= 0x80);
+    if !path.bytes().any(|b| b == b' ' || escaped(b)) {
         return Cow::Borrowed(path);
     }
     let mut text = String::from("\"");
-    for c in path.chars() {
-        match c {
-            '"' => text.push_str("\\\""),
-            '\\' => text.push_str("\\\\"),
-            '\t' => text.push_str("\\t"),
-            '\n' => text.push_str("\\n"),
-            '\r' => text.push_str("\\r"),
-            c if c.is_control() => {
-                let mut bytes = [0u8; 4];
-                for byte in c.encode_utf8(&mut bytes).bytes() {
-                    let _ = write!(text, "\\{byte:03o}");
-                }
-            }
-            c => text.push(c),
+    let mut plain = Vec::new();
+    for b in path.bytes() {
+        if !escaped(b) {
+            plain.push(b);
+            continue;
         }
+        text.push_str(&String::from_utf8_lossy(&std::mem::take(&mut plain)));
+        let named = match b {
+            b'"' => "\\\"",
+            b'\\' => "\\\\",
+            0x07 => "\\a",
+            0x08 => "\\b",
+            b'\t' => "\\t",
+            b'\n' => "\\n",
+            0x0b => "\\v",
+            0x0c => "\\f",
+            b'\r' => "\\r",
+            _ => {
+                let _ = write!(text, "\\{b:03o}");
+                continue;
+            }
+        };
+        text.push_str(named);
     }
+    text.push_str(&String::from_utf8_lossy(&plain));
     text.push('"');
     Cow::Owned(text)
+}
+
+/// Whether `path` is the filter or beneath it: what git's pathspec lists, where [`in_scope`] also
+/// admits the directories above the filter so a walk can reach it.
+fn within(path: &str, filter: Option<&str>) -> bool {
+    filter.is_none_or(|filter| {
+        path == filter
+            || path
+                .strip_prefix(filter)
+                .is_some_and(|rest| rest.starts_with('/'))
+    })
+}
+
+/// Whether `dir` holds a repository of its own: a `.git` file pointing at one, or a `.git`
+/// directory with a HEAD.
+fn is_repository(dir: &Path) -> bool {
+    let git = dir.join(".git");
+    match std::fs::symlink_metadata(&git) {
+        Ok(meta) if meta.file_type().is_file() => true,
+        Ok(meta) if meta.file_type().is_dir() => {
+            std::fs::symlink_metadata(git.join("HEAD")).is_ok()
+        }
+        _ => false,
+    }
+}
+
+/// Open the file `seen` describes, declining if what opens is another file: one swapped for a
+/// link since it was looked at would otherwise be read wherever the link points.
+fn open_as_seen(full: &Path, seen: &std::fs::Metadata) -> Result<std::fs::File, Declined> {
+    let file = std::fs::File::open(full).map_err(|_| Declined::Unreadable)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let opened = file.metadata().map_err(|_| Declined::Unreadable)?;
+        if (opened.dev(), opened.ino()) != (seen.dev(), seen.ino()) {
+            return Err(Declined::Unreadable);
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = seen;
+    Ok(file)
 }
 
 #[derive(Default)]
@@ -848,6 +976,7 @@ pub(super) fn answer(
         attributes: Attributes::default(),
         case,
         filter,
+        mode: settings.untracked,
         untracked: Vec::new(),
     };
     for path in tracked.keys() {
@@ -867,7 +996,7 @@ pub(super) fn answer(
         );
     }
     if let Some(bytes) = read_if_present(&git_dir.join("info").join("attributes"))? {
-        walk.attributes.add("", &bytes);
+        walk.attributes.add_patterns("", &bytes);
     }
     walk.dir(out, "", false, false)?;
 
@@ -909,7 +1038,7 @@ pub(super) fn answer(
             out.withheld_any = true;
             continue;
         };
-        if !in_scope(path, filter) {
+        if !within(path, filter) {
             continue;
         }
         if (out.withheld)(path) {
@@ -939,7 +1068,10 @@ pub(super) fn answer(
         };
         let unstaged = match entry {
             None => ' ',
-            Some(e) if e.intent_to_add => 'A',
+            Some(e) if e.intent_to_add => match compare.present(path)? {
+                true => 'A',
+                false => 'D',
+            },
             Some(e) => match compare.worktree(out, path, e)? {
                 None => break,
                 Some(Worktree::Same) => ' ',
@@ -967,14 +1099,16 @@ pub(super) fn answer(
         if !out.room() {
             return Ok(());
         }
-        out.text.line(&format!("{code} {}", quoted(&path)));
+        out.text
+            .line(&format!("{code} {}", quoted(&path, settings.quote_path)));
         out.shown.push(path);
     }
     for path in untracked {
         if !out.room() {
             return Ok(());
         }
-        out.text.line(&format!("?? {}", quoted(&path)));
+        out.text
+            .line(&format!("?? {}", quoted(&path, settings.quote_path)));
         out.shown.push(path.trim_end_matches('/').to_owned());
     }
     if !not_compared.is_empty() && out.room() {
@@ -987,7 +1121,8 @@ pub(super) fn answer(
             if !out.room() {
                 return Ok(());
             }
-            out.text.line(&format!("   {}", quoted(&path)));
+            out.text
+                .line(&format!("   {}", quoted(&path, settings.quote_path)));
             out.shown.push(path);
         }
     }
