@@ -675,9 +675,9 @@ enum Change {
 /// An INSERT session a change or an opening began, until Escape ends it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Inserting {
-    /// The line before an opening, which becomes the step to undo once something has been typed.
-    /// `None` after `c`, which took its step before it removed anything.
-    before: Option<(String, usize)>,
+    /// The line and the caret before the change or the opening, which become the step to undo if
+    /// the line comes out of the session changed.
+    before: (String, usize),
     /// The line and the caret the session began from, which what is on the line at Escape is read
     /// against to find what was typed.
     opened_on: (String, usize),
@@ -2886,9 +2886,8 @@ impl Session {
     ///
     /// The first character after `R` is where the change begins, so everything typed until Escape
     /// is one change and `u` puts the line back as it stood before it. Not the `R` itself: one left
-    /// with nothing typed has changed nothing, and taking the step to undo there would leave the
-    /// change before it with no way back. `.` repeats none of it, since what was typed is not an
-    /// instruction the session keeps.
+    /// with nothing typed has changed nothing, and a step taken there would be a press of `u` that
+    /// puts back nothing. `.` repeats none of it, since what was typed over is not kept.
     fn type_over(&mut self, c: char) {
         if std::mem::take(&mut self.typing_over_begins_a_change) {
             self.begin_a_change();
@@ -3088,6 +3087,7 @@ impl Session {
         if self.persist {
             bravebot_session::store::save_editing(editing.as_str());
         }
+        let changed = self.editing != editing;
         self.editing = editing;
         // The selection goes with the mode that showed it, the way Escape out of VISUAL mode
         // abandons it. INSERT mode has no stretch to act on, and the ordinary box has nowhere to
@@ -3103,8 +3103,10 @@ impl Session {
         self.held_count = None;
         // The ordinary box keeps no steps, so what it types is in none of them, and `u` back in vi
         // would put back a line from before that typing and lose it.
-        self.inserting = None;
-        self.undo.clear();
+        if changed {
+            self.inserting = None;
+            self.undo.clear();
+        }
     }
 
     /// Which vi mode the box is in, or `None` where vi is not the style.
@@ -3375,9 +3377,9 @@ impl Session {
 
     /// Do something to the stretch of the line an extent names.
     ///
-    /// The one place a vi instruction changes the line, so the register, the undo step and the record
-    /// of what `.` repeats are all kept here. A copy of that bookkeeping for each operator is how one
-    /// of them would come to be missing.
+    /// The one place an operator changes the line, so the register, the undo step and the record of
+    /// what `.` repeats are kept here for all of them. A copy of that bookkeeping for each operator is
+    /// how one of them would come to be missing.
     fn change(
         &mut self,
         operator: crate::vim::Operator,
@@ -3404,8 +3406,15 @@ impl Session {
 
         let whole_lines = self.takes_whole_lines(extent);
         let mut repeated = None;
+        let before = (self.input.clone(), self.caret);
         if !operator.reads_only() {
-            self.begin_a_change();
+            // `c` takes its step at Escape instead, since one that typed back what it took has
+            // changed nothing and a step there would be a press of `u` that puts back nothing.
+            if operator == Operator::Change {
+                self.begin_an_edit();
+            } else {
+                self.begin_a_change();
+            }
             let (extent, count) = match extent {
                 // The selection is gone by the time `.` is pressed, so the rows it crossed are kept
                 // as that many rows from the caret, which is what vim repeats.
@@ -3448,7 +3457,7 @@ impl Session {
                 self.caret = from;
                 self.mode = crate::vim::Mode::Insert;
                 self.inserting = Some(Inserting {
-                    before: None,
+                    before,
                     opened_on: (self.input.clone(), self.caret),
                     change: repeated,
                 });
@@ -4303,6 +4312,12 @@ impl Session {
     /// Keep the line for `u` and forget what `.` repeats, since this edit is now the last change.
     fn begin_a_change(&mut self) {
         self.keep_for_undo((self.input.clone(), self.caret));
+        self.begin_an_edit();
+    }
+
+    /// Forget what `.` repeats, the prompt recalled and the completion offered, since the line is
+    /// about to be edited and none of them describe it any more.
+    fn begin_an_edit(&mut self) {
         self.last_change = None;
         self.history.leave();
         self.completion = 0;
@@ -4371,6 +4386,10 @@ impl Session {
         if self.mode != crate::vim::Mode::Insert {
             return;
         }
+        // As a character typed does, so a recalled prompt made again is the person's own line and
+        // `j` does not walk away from it.
+        self.history.leave();
+        self.completion = 0;
         self.input.insert_str(self.caret, typed);
         self.caret += typed.len();
         self.enter_vi_normal();
@@ -4393,12 +4412,10 @@ impl Session {
         else {
             return;
         };
-        if let Some(before) = before {
-            // An opening that changed nothing is no step, as an `R` that typed nothing is not: the
-            // step would be a press of `u` that put back nothing.
-            if self.input == before.0 {
-                return;
-            }
+        // A session that changed nothing is no step, as an `R` that typed nothing is not: the step
+        // would be a press of `u` that put back nothing.
+        let changed = self.input != before.0;
+        if changed {
             self.keep_for_undo(before);
         }
         let ends = line.len() - at;
@@ -4975,7 +4992,7 @@ impl Session {
             }
         }
         self.inserting = Some(Inserting {
-            before: Some(before),
+            before,
             opened_on: (self.input.clone(), self.caret),
             change: Some(Change::Opened {
                 opening,
@@ -16773,11 +16790,13 @@ mod tests {
 
     /// `.` after a change it cannot make again does nothing, rather than make the change before it,
     /// which here is the `x`, again at a caret that has since moved on. These are the keys pressed
-    /// over a selection that are not an operator, whose stretch is gone by the time `.` is. The third
-    /// row is there so that a join made again would have a row to take.
+    /// over a character-wise selection, whose stretch is gone by the time `.` is, and an opening that
+    /// typed nothing. The third row is there so that a join made again would have a row to take.
     #[test]
     fn a_repeat_after_a_change_it_cannot_make_again_does_nothing() {
+        assert_eq!(keyed("oNe two", 0, "xi\x1b.").input, "Ne two");
         for (keys, line) in [
+            ("vd", "e two\nthree\nfour"),
             ("vJ", "Ne two three\nfour"),
             ("vgJ", "Ne twothree\nfour"),
             ("viwp", "o two\nthree\nfour"),
@@ -16928,7 +16947,8 @@ mod tests {
     }
 
     /// A line that arrives whole starts with nothing to undo. The steps are copies of the line that
-    /// was in the box, and `u` after a send would put back the prompt that had just gone.
+    /// was in the box, and `u` after a send would put back the prompt that had just gone. Choosing
+    /// the style the box already has brings no line, and keeps them.
     #[test]
     fn a_line_that_arrives_whole_has_nothing_to_undo() {
         let mut s = keyed("one two", 0, "x");
@@ -16970,16 +16990,38 @@ mod tests {
         s.enter_vi_normal();
         s.type_char('u');
         assert_eq!(s.input, "ne two", "the step outlived a change of style");
+
+        let mut s = keyed("one two", 0, "x");
+        s.choose_editing(crate::vim::Editing::Vi);
+        s.enter_vi_normal();
+        s.type_char('u');
+        assert_eq!(s.input, "one two", "choosing vi again dropped the step");
+    }
+
+    /// `.` on a recalled prompt makes it the person's own line, as typing on it would. Left
+    /// browsing, the next `j` would walk away from the change and lose it.
+    #[test]
+    fn a_repeat_on_a_recalled_prompt_stops_browsing_history() {
+        let mut s = keyed("one", 0, "AX\x1b");
+        s.history.push("an older prompt".to_string(), None);
+        s.recall_older();
+        assert!(s.history.is_browsing());
+
+        s.type_char('.');
+        assert_eq!(s.input, "an older promptX");
+        assert!(!s.history.is_browsing(), "still browsing after a repeat");
     }
 
     /// One INSERT session is one change, so one `u` takes back everything typed in it, and the row
-    /// `o` opened with it. An opening with nothing typed is no change, and the one before it can
-    /// still be taken back.
+    /// `o` opened with it. A session that left the line as it was is no change, an opening with
+    /// nothing typed or a `c` that typed back what it took, and the one before it can still be
+    /// taken back.
     #[test]
     fn an_insert_session_is_one_change_to_undo() {
         assert_eq!(keyed("one", 0, "ihello\x1bu").input, "one");
         assert_eq!(keyed("one", 0, "ofoo\rbar\x1bu").input, "one");
         assert_eq!(keyed("one", 0, "xi\x1bu").input, "one");
+        assert_eq!(keyed("one two", 0, "xcwne\x1bu").input, "one two");
         assert_eq!(keyed("one", 0, "Afoo\x1bxu").input, "onefoo");
         assert_eq!(keyed("one", 0, "Afoo\x1bxuu").input, "one");
         assert_eq!(keyed("one two", 0, "cwX\x1bw.uu").input, "one two");

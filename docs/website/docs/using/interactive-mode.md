@@ -211,8 +211,8 @@ the box is handed whole, such as a recalled prompt. There is no redo: Ctrl-R is 
 well, and `p`, `P`, `J` and `gJ` are made again too. It does nothing after typing that attached
 something, whether a picture, a paste the box folded into a marker or an `@` name, since doing it
 again would attach the same thing twice, and nothing after a completion you chose from a list. It
-does nothing either after a put, a join, `r` or a case change over a selection, or typing over the
-line with `R`.
+does nothing either after a put, a join, `r` or a case change over a selection, `d` or `c` over a
+selection made with `v` rather than `V`, or typing over the line with `R`.
 
 The register is vi's unnamed one and the only one. It is not the system clipboard, which Ctrl-V owns
 and which you share with every other window you have open, so a yank here does not travel out of the

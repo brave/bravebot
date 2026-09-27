@@ -1379,21 +1379,24 @@ were.
 `u` puts back what the last change took, and pressed again the change before that, as far back as a
 thousand changes; a count says how many. Everything typed in INSERT mode after `c` or a key that
 opens it ([INPUT-25](#INPUT-25)) is one change with the key, so one `u` takes back `o`'s new row and
-all that was typed on it, and an opening left with nothing typed is no change. Nor is what is typed
+all that was typed on it, and a session that leaves the line as it was, an opening with nothing
+typed or a `c` that typed back what it took, is no change. Nor is what is typed
 in the INSERT mode a session and a newly chosen style begin in, before any key has opened it.
 Sending, clearing or putting a line away leaves nothing to undo, and so does a line the box is
 handed whole: recalled, chosen from the search, taken back from the queue, put back from the stash
-or brought back from the editor ([INPUT-14](#INPUT-14)). Changing the style leaves nothing to undo
-either ([INPUT-23](#INPUT-23)).
+or brought back from the editor ([INPUT-14](#INPUT-14)). Changing to the other style leaves nothing
+to undo either ([INPUT-23](#INPUT-23)); choosing the style already chosen keeps what there was.
 
 `.` does the last change again at the caret. After `c`, `s`, `S`, `C`, `i`, `a`, `I`, `A`, `o` and
 `O` that is the key and what was typed after it, so `cwX`, Escape, `w`, `.` changes the next word to
 `X` too; what is typed again is what the line was left holding, so a letter taken back with Backspace
 is not in it. `p`, `P`, `J` and `gJ` are changes it makes again. It makes nothing again where what
 it would type again holds a marker or an `@`, or was chosen from a list the box offered, or where
-the line was edited somewhere other than where the typing went. Nor does it make again what `r`, a
-case change, `J`, `gJ`, `p` or `P` did to a selection, or what `R` typed over the line
-([INPUT-37](#INPUT-37)). After one of those `.` does nothing rather than make the change before it.
+the line was edited somewhere other than where the typing went. Nor does it make again what `d` or
+`c` did to a character-wise selection, what `r`, a case change, `J`, `gJ`, `p` or `P` did to any
+selection, or what `R` typed over the line ([INPUT-37](#INPUT-37)). After one of those `.` does
+nothing rather than make the change before it. What it makes again on a recalled prompt makes that
+prompt the line being edited, as typing on it would ([INPUT-27](#INPUT-27)).
 
 A marker is taken whole by every operator, or not at all, and taking one takes the attachment off.
 A case change goes around a marker and leaves it as it was, and `r` over one does nothing.
@@ -1506,6 +1509,7 @@ selection holding one is ([INPUT-30](#INPUT-30)).
 `verified-by: bravebot_tui::state::the_repeat_key_does_nothing_after_typing_that_moved_off_its_own_text`
 `verified-by: bravebot_tui::state::the_repeat_key_does_nothing_after_typing_that_attached_something`
 `verified-by: bravebot_tui::state::the_repeat_key_puts_back_and_joins_again`
+`verified-by: bravebot_tui::state::a_repeat_on_a_recalled_prompt_stops_browsing_history`
 `verified-by: bravebot_tui::state::undo_goes_back_a_change_at_a_time`
 `verified-by: bravebot_tui::state::undo_goes_back_a_thousand_changes_and_no_further`
 `verified-by: bravebot_tui::state::a_line_that_arrives_whole_has_nothing_to_undo`
