@@ -2956,7 +2956,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
         let proof = Declassification::authorise("a delegate's prompt, carried not read");
         let task = task.clone().declassify(&proof);
-        let rounds = selected.kind().rounds();
+        let rounds = selected.rounds();
         let spec = crate::delegate::DelegateSpec::new(
             id,
             &selected,
@@ -12686,9 +12686,10 @@ five
             );
         }
 
-        /// A definition selects a kind, and what it is is that kind's: the bound, the prompt
-        /// bracketing and the capabilities all come from the enumerated set rather than from the
-        /// file. A file that could say either would be a checked-in file authoring authority.
+        /// A definition selects a kind, and what it is is that kind's: the prompt bracketing and
+        /// the capabilities come from the enumerated set rather than from the file, and so does
+        /// the bound where the file names none. A file that could say what a delegate holds would
+        /// be a checked-in file authoring authority.
         #[test]
         fn a_definition_is_delegated_as_the_kind_it_names() {
             let mut sink = RecordingSink::new();
@@ -12826,10 +12827,11 @@ five
             );
         }
 
-        /// The bound belongs to the kind, so nothing about a call can lengthen it. A planner that
-        /// could set it would be setting its own delegate's budget from a sentence it wrote.
+        /// The bound belongs to the definition, so nothing about a call can lengthen it. A
+        /// planner that could set it would be setting its own delegate's budget from a sentence it
+        /// wrote.
         #[test]
-        fn a_delegates_bound_comes_from_its_kind() {
+        fn a_kind_is_delegated_with_its_own_bound() {
             for name in Kind::NAMES {
                 let mut sink = RecordingSink::new();
                 let mut policy = open_policy(&mut sink);
@@ -12840,6 +12842,63 @@ five
                 let kind = Kind::from_name(name).expect("enumerated");
                 assert_eq!(spec.rounds(), kind.rounds(), "{name} was bounded elsewhere");
             }
+        }
+
+        /// A definition's number reaches the delegate the kernel builds, held to its kind's
+        /// ceiling, and the trail says the bound the delegate actually carries.
+        #[test]
+        fn a_definition_is_delegated_with_the_bound_it_names() {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            let mut definitions = crate::delegate::Definitions::default();
+            definitions.insert(
+                crate::delegate::Definition::from_file(
+                    "migrator",
+                    "a staged refactor",
+                    Kind::Worker,
+                    None,
+                    "",
+                    ".bravebot/agents/migrator.md",
+                )
+                .with_rounds(180),
+            );
+            definitions.insert(
+                crate::delegate::Definition::from_file(
+                    "endless",
+                    "asks for more than any worker gets",
+                    Kind::Worker,
+                    None,
+                    "",
+                    ".bravebot/agents/endless.md",
+                )
+                .with_rounds(100_000),
+            );
+            policy.install_delegates(definitions);
+
+            let long = policy
+                .before_delegate(&argument("migrator"), &argument("migrate it"))
+                .expect("a resolved definition may be selected");
+            assert_eq!(long.rounds(), 180);
+
+            let held = policy
+                .before_delegate(&argument("endless"), &argument("go on"))
+                .expect("a resolved definition may be selected");
+            assert_eq!(held.rounds(), Kind::Worker.most_rounds());
+
+            let said = |rounds: usize| {
+                let words = format!("for at most {rounds} rounds");
+                sink.events().iter().any(|event| {
+                    matches!(event, Event::GatePassed { detail, .. } if detail.contains(&words))
+                })
+            };
+            assert!(
+                said(180),
+                "the trail did not record the bound the file named"
+            );
+            assert!(
+                said(Kind::Worker.most_rounds()),
+                "the trail did not record the bound the ceiling held it to"
+            );
         }
 
         /// A delegate's delegates are numbered beneath it, so the trail names a grandchild by

@@ -9,8 +9,9 @@
 //!   with a way to delegate only while it sits above the bottom of the tree.
 //! - **Its prompt**, which its definition and what it holds decide and which the planner cannot
 //!   write a word of.
-//! - **Its bound**, which is its kind's, because nobody is watching a delegate the way a person
-//!   watches a turn: the person is watching the turn, and the turn is blocked.
+//! - **Its bound**, which its definition may choose beneath its kind's ceiling, because nobody is
+//!   watching a delegate the way a person watches a turn: the person is watching the turn, and the
+//!   turn is blocked.
 //!
 //! What crosses back is the report and nothing else. Its exchange, its tool results, its
 //! narration and its quarantine all die with it, which is the whole point: a planner that ran the

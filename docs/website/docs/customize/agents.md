@@ -45,10 +45,12 @@ ask you questions and what it reads stays in the conversation.
 | `model` | no | the model this delegate runs on (`haiku`, `sonnet`, `opus`, or an explicit model identifier); absent or `inherit` means the spawning turn's |
 | `tools` | no | fewer tools than the kind's; absent means the kind's own |
 | `skills` | no | the [skills](skills.md) this delegate is offered, out of the ones the turn found; absent means all of them, and an empty line none |
+| `rounds` | no | how many rounds of tools this delegate may take before it has to answer, up to its kind's ceiling; absent or empty means the kind's own |
 | body | no | the standing instruction |
 
 Keys other than these are ignored rather than refused, so a definition written for another agent
-loads here too.
+loads here too. That includes another agent's bound, `maxTurns` or `steps`: a definition ported
+with one runs at its kind's own limit until you add a `rounds` line.
 
 **`model` chooses what the delegate runs on.** A tier alias (`haiku`, `sonnet`, `opus`) or an
 explicit model identifier resolves through configuration the way any named model does. This lets a
@@ -88,6 +90,24 @@ for. A name no skill goes by picks nothing, and the turn says so:
 ~/.bravebot/agents/rule-reviewer.md names a skill this session did not find, so its delegate is offered without it: rule-reveiw
 ```
 
+**`rounds` sets how long the delegate may work.** Nobody is watching a delegate, so each kind stops
+one after a set number of rounds and makes it answer with what it has: 60 for a `reader`, 80 for a
+`checker` and 120 for a `worker`. A definition written for a long job, a staged refactor say, can
+ask for more, up to its kind's ceiling: 120 for a `reader`, 160 for a `checker` and 200 for a
+`worker`, which is the bound on a one-shot run nobody is watching. Asking for more than that gives
+the delegate the ceiling, and the turn says so:
+
+```
+~/.bravebot/agents/migrator.md asks for 500 rounds, more than the 200 a worker may make, so its delegate is given 200
+```
+
+The value is a whole number above zero. An empty line is the same as none. Anything else, `0` or
+`lots` or `1.5`, means the file does not load, and the turn names it. The planner cannot set a
+bound when it starts a delegate: only the definition can.
+
+`rounds` bounds the definition only when the planner starts it as a delegate. A turn you run
+yourself with `/agent` is yours, and carries no bound, as any turn you are watching does.
+
 A name may not open with `-`, may not contain a colon, which stays reserved for naming things
 inside a namespace, and may not be `reader`, `checker` or `worker`: those belong to the kinds, so
 that `reader` means the same thing in every project.
@@ -99,8 +119,9 @@ replaces yours, which is the same "most specific wins" the trust map uses for pa
 directory resolve by file name, so which is live is the same on every machine.
 
 **It wins about what the definition is for, and never about what it may do.** The project's file
-takes over the description, the body, the model and the skills. The kind is the narrower of the
-two, and the `tools` lists are met name by name, so a checkout you vouched for cannot turn a
+takes over the description, the body, the model, the skills and the rounds, held to the ceiling of
+the kind it is loaded as. The kind is the narrower of the two, and the `tools` lists are met name by
+name, so a checkout you vouched for cannot turn a
 `reader` you wrote into a `worker`, and cannot hand back a tool your own `tools` line took away.
 Vouching for a project is a decision about the project, not one about a name you had already
 defined. The same holds for two files of one name in one directory, since which of those is live
