@@ -820,13 +820,14 @@ flight, which is aimed at something else entirely and costs the answer being wri
   session record to pick up again. So the cost is having to choose, and neither half is the whole
   program.
 - **Vi's editing is what this box does with the keys, not what vi does with a file.** There is one
-  register rather than named ones, no macro and no mark, undo is a single step (INPUT-28), and there
-  is no `:` line. Each of those is machinery for a file being edited over an afternoon, where this
-  is a prompt being written over a minute. The keys that reach for a register, a macro or a mark do
-  nothing, and nor does the key after them (INPUT-23). `:` is the exception: it does nothing, and
-  what is typed after it is read as the instructions those letters spell. Counts are not on this
-  list, because a count is how a person says how far, and a prompt has as much room to go as a file
-  has (INPUT-35).
+  register rather than named ones, no macro and no mark, and there is no `:` line. Each of those is
+  machinery for a file being edited over an afternoon, where this is a prompt being written over a
+  minute. The keys that reach for a register, a macro or a mark do nothing, and nor does the key
+  after them (INPUT-23). `:` is the exception: it does nothing, and what is typed after it is read as
+  the instructions those letters spell. Counts are not on this list, because a count is how a person
+  says how far, and a prompt has as much room to go as a file has (INPUT-35). Nor is how far back `u`
+  reaches, which is as far as vim's. Redo is missing for another reason: its key is the prompt search
+  (INPUT-19), so what `u` took back is typed again (INPUT-28).
 - **The key list names Ctrl-Enter on every terminal.** Where the terminal does not report the
   modifier the chord arrives as Enter and only queues the line (INPUT-5). The offer beside the queue,
   which is where somebody reaches for it, is left off there; the list is drawn from one table for
@@ -1373,10 +1374,26 @@ as an empty row. `>` leaves an empty row empty, as vi does.
 `p` and `P` put the register back after and before the caret. A stretch that was whole lines comes
 back as a line of its own. `J` makes this line and the one below into one with a single space where
 the newline was, and `gJ` with nothing there and the blanks the line below began with left as they
-were. `u` puts back what the last change took, one step. `.` does the last change again at
-the caret. A put and a join are changes it cannot yet make again, and so are `r` and a case change
-over a selection and what `R` typed over the line ([INPUT-37](#INPUT-37)), so after one of those `.`
-does nothing rather than make the change before it.
+were.
+
+`u` puts back what the last change took, and pressed again the change before that, as far back as a
+thousand changes; a count says how many. Everything typed in INSERT mode after `c` or a key that
+opens it ([INPUT-25](#INPUT-25)) is one change with the key, so one `u` takes back `o`'s new row and
+all that was typed on it, and an opening left with nothing typed is no change. Nor is what is typed
+in the INSERT mode a session and a newly chosen style begin in, before any key has opened it.
+Sending, clearing or putting a line away leaves nothing to undo, and so does a line the box is
+handed whole: recalled, chosen from the search, taken back from the queue, put back from the stash
+or brought back from the editor ([INPUT-14](#INPUT-14)). Changing the style leaves nothing to undo
+either ([INPUT-23](#INPUT-23)).
+
+`.` does the last change again at the caret. After `c`, `s`, `S`, `C`, `i`, `a`, `I`, `A`, `o` and
+`O` that is the key and what was typed after it, so `cwX`, Escape, `w`, `.` changes the next word to
+`X` too; what is typed again is what the line was left holding, so a letter taken back with Backspace
+is not in it. `p`, `P`, `J` and `gJ` are changes it makes again. It makes nothing again where what
+it would type again holds a marker or an `@`, or was chosen from a list the box offered, or where
+the line was edited somewhere other than where the typing went. Nor does it make again what `r`, a
+case change, `J`, `gJ`, `p` or `P` did to a selection, or what `R` typed over the line
+([INPUT-37](#INPUT-37)). After one of those `.` does nothing rather than make the change before it.
 
 A marker is taken whole by every operator, or not at all, and taking one takes the attachment off.
 A case change goes around a marker and leaves it as it was, and `r` over one does nothing.
@@ -1415,9 +1432,24 @@ character for one is vim's case rule too, and cutting a two-character case to it
 `gJ` is for the line broken in the middle of a word or a path, where any space would be one the text
 never had, and stripping the blanks after the break would take an indent somebody is keeping.
 
-Undo is one step, on the same footing as putting a line away: the press that undoes and the keystroke
-that will be regretted are one apart, and a depth is a thing to remember. `.` repeats the instruction
-rather than what it produced, which is the whole point of the key.
+Undo goes as far back as vim's does by default because `.` is what makes changes cheap to pile up:
+`x..` is three changes, and a person who finds the second was a mistake reaches for `u` twice. A
+thousand steps are a thousand copies of a prompt, which is sentences rather than a file. The typing a
+box begins with is the prompt being written rather than a change to it, and a `u` pressed once too
+often would otherwise take the whole of it. The steps go when a line arrives whole because they are
+copies of the line that was there, and `u` after a send would put back the prompt that had just
+gone. The ordinary style keeps no steps, so a step kept across a change of style would put back a
+line from before what was typed in it. There is no redo because its key, Ctrl-R, is the prompt
+search in both styles ([INPUT-19](#INPUT-19)), so what `u` went past is typed again.
+
+`.` does the instruction again rather than put back the line it produced, which is the whole point
+of the key, and in vi what was typed after `c` or `i` is part of the instruction: `cw` then `X` is
+"change the word to `X`", and repeating the `cw` alone would take the next word and put nothing in
+its place. What is typed again is read off the line at Escape rather than recorded key by key, so a
+session that moved off its own text and edited elsewhere is one that typing the same characters
+again would not reproduce, and `.` makes nothing rather than something else. A marker or an `@` is
+left out because typing it again would attach the same file or picture a second time, which nobody
+who pressed `.` asked for, and a choice from a list is not typing.
 
 A marker is one thing on the screen and one thing to the person looking at it, so half of one stands
 for nothing and text that still reads as an attachment over something no longer attached is the
@@ -1468,6 +1500,16 @@ selection holding one is ([INPUT-30](#INPUT-30)).
 `verified-by: bravebot_tui::state::there_is_nothing_to_undo_after_a_yank_or_before_a_change`
 `verified-by: bravebot_tui::state::the_repeat_key_does_the_last_change_again_at_the_caret`
 `verified-by: bravebot_tui::state::a_repeat_after_a_change_it_cannot_make_again_does_nothing`
+`verified-by: bravebot_tui::state::the_repeat_key_types_again_what_a_change_typed`
+`verified-by: bravebot_tui::state::the_repeat_key_opens_again_and_types_again`
+`verified-by: bravebot_tui::state::the_repeat_key_types_what_backspace_left`
+`verified-by: bravebot_tui::state::the_repeat_key_does_nothing_after_typing_that_moved_off_its_own_text`
+`verified-by: bravebot_tui::state::the_repeat_key_does_nothing_after_typing_that_attached_something`
+`verified-by: bravebot_tui::state::the_repeat_key_puts_back_and_joins_again`
+`verified-by: bravebot_tui::state::undo_goes_back_a_change_at_a_time`
+`verified-by: bravebot_tui::state::undo_goes_back_a_thousand_changes_and_no_further`
+`verified-by: bravebot_tui::state::a_line_that_arrives_whole_has_nothing_to_undo`
+`verified-by: bravebot_tui::state::an_insert_session_is_one_change_to_undo`
 `verified-by: bravebot_tui::state::an_operator_takes_a_marker_whole`
 `verified-by: bravebot_tui::state::an_operator_that_takes_a_marker_takes_the_attachment_with_it`
 `verified-by: bravebot_tui::state::a_case_change_leaves_a_marker_naming_its_picture`
@@ -1930,12 +1972,14 @@ is `d6w`.
 | how much of the extent the operator takes | `3dd`, `d3w`, `3x`, `3X`, `3~`, `3rx`, `3gUU`, `3>>` |
 | how many copies, and how many rows end as one | `p`, `P`, `J` and `gJ`, where `3J` is three rows and `2J` is the bare key |
 | how many the repeat is of, in place of the count recorded | `.` |
+| how many changes back | `u` |
 
 A counted motion moves the end of a selection as far as it moves a bare caret, so `v2j` marks three
 rows out. A count in front of `%` is spent and the caret stays where it was, and so does the line
 under `d2%`. The extents that name no quantity take no count, since there is no second end of the line
 to reach, no second thing the keys named and no second selection: `3D`, `d3iw`, and a counted
-operator or capital in VISUAL mode act on what the uncounted one would.
+operator or capital in VISUAL mode act on what the uncounted one would. The keys that open INSERT
+mode take no count, and nor does `.` making one of them again: `3ix` and Escape types one `x`.
 
 **The line bounds a count, and not the number typed.** Every counted motion stops at the first step
 that moves nothing, so `999l` costs the length of a line, and an extent takes what there is, so
@@ -1961,9 +2005,13 @@ instruction it belongs to is known, so somebody leaning on a digit spells a numb
 line can reach, and a box that walked it out one position at a time would stop answering for as long
 as it took.
 
-One change and one undo step is the same rule undo already keeps ([INPUT-28](#INPUT-28)), read
-against an instruction the count made bigger. Carried out as one change per step, `3x` would leave
-two of the three beyond the reach of the only undo there is.
+One change and one undo step is the rule an instruction already keeps ([INPUT-28](#INPUT-28)), read
+against one the count made bigger. Carried out as one change per step, `3x` would take three presses
+of `u` to put back what one instruction took.
+
+A count in front of an opening key is spent because what vim does with it, type the text that many
+times over, is a way of filling a file with rows, and a prompt that wants one word three times is
+typed faster than it is counted.
 
 `%` takes no count because in vi a count makes it a different key, the row that many hundredths of
 the way through the file, and a prompt's handful of rows is what `G` already names. Read as more of
@@ -1988,6 +2036,8 @@ and a person who typed one by accident would otherwise find out from what the ne
 `verified-by: bravebot_tui::state::the_bare_join_puts_nothing_where_the_newline_was`
 `verified-by: bravebot_tui::state::a_count_claims_the_row_keys_and_leaves_the_search_key`
 `verified-by: bravebot_tui::state::r_with_fewer_characters_left_than_its_count_changes_nothing`
+`verified-by: bravebot_tui::state::undo_goes_back_a_change_at_a_time`
+`verified-by: bravebot_tui::state::the_repeat_key_opens_again_and_types_again`
 
 <a id="INPUT-36"></a>
 ### INPUT-36: Ctrl-Enter stops the turn and sends what is waiting, as one turn
@@ -2086,8 +2136,8 @@ that went on to eat the line the person came to would be INSERT's Backspace unde
 and Ctrl-U follow it for that reason, as they do in vim. A marker is typed beside rather than over
 because a marker with its first bracket gone names no attachment.
 
-The change begins at the first character rather than at `R` because `u` takes back one change, and an
-`R` pressed and left would otherwise leave the change before it with no way back. Another edit ends
+The change begins at the first character rather than at `R` because an `R` pressed and left would
+otherwise be a change that changed nothing, and the next `u` would put back nothing. Another edit ends
 it because the change is kept as the line it began on, and REPLACE mode outlives a prompt being sent:
 typing on after one, `u` would put back what had already gone. vim repeats the
 typing with `.` and types it over as many times as a count says. Neither is here, since what REPLACE

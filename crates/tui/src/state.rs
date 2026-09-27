@@ -19,6 +19,12 @@ use std::time::{Duration, Instant};
 /// past what a prompt is meant to look like.
 const FOLD_AT_NEWLINES: usize = 3;
 
+/// How many changes back `u` reaches, which is vim's `undolevels` as it ships.
+///
+/// Each step is a copy of the line as it stood, so this is what bounds what undo holds: a thousand
+/// copies of a prompt, where a prompt is sentences rather than a file.
+const UNDO_DEPTH: usize = 1000;
+
 /// Text with the line endings every clipboard uses turned into the one the box draws.
 fn normalised(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
@@ -642,6 +648,43 @@ struct TypedOver {
     was: Option<char>,
 }
 
+/// A change `.` can make again, with what was typed after it where it opened INSERT mode.
+///
+/// What was typed is part of the instruction, as it is in vi: `cw` then `X` is "change the word to
+/// X", and repeating only the `cw` would leave the next word gone and nothing in its place.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Change {
+    /// An operator over an extent. `typed` is empty for every operator but `c`.
+    Operated {
+        operator: crate::vim::Operator,
+        extent: crate::vim::Extent,
+        count: Option<u32>,
+        typed: String,
+    },
+    /// One of the keys that open INSERT mode, which take no count.
+    Opened {
+        opening: crate::vim::Opening,
+        typed: String,
+    },
+    /// `p` or `P`.
+    Put { before: bool, count: Option<u32> },
+    /// `J` or `gJ`.
+    Joined { spaced: bool, count: Option<u32> },
+}
+
+/// An INSERT session a change or an opening began, until Escape ends it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Inserting {
+    /// The line before an opening, which becomes the step to undo once something has been typed.
+    /// `None` after `c`, which took its step before it removed anything.
+    before: Option<(String, usize)>,
+    /// The line and the caret the session began from, which what is on the line at Escape is read
+    /// against to find what was typed.
+    opened_on: (String, usize),
+    /// What `.` will make again, or `None` where the session did something it cannot.
+    change: Option<Change>,
+}
+
 /// A binding vi spells with a letter, which the key handler answers as though the key had arrived.
 ///
 /// These reach past the line: at the ends of the input the row keys walk the prompt history and then
@@ -1089,15 +1132,20 @@ pub struct Session {
     register: Option<Yanked>,
     /// The last change, for the key that does it again.
     ///
-    /// The instruction rather than what it produced, so `.` acts at the caret wherever that now is.
-    /// That is the whole of why the key is worth having: the change is repeated somewhere else. The
-    /// count is part of the instruction, and a count typed in front of `.` replaces it.
-    last_change: Option<(crate::vim::Operator, crate::vim::Extent, Option<u32>)>,
-    /// The line as it stood before the last change, for the key that puts it back.
+    /// The instruction and what was typed into it, rather than the line it produced, so `.` acts at
+    /// the caret wherever that now is. That is the whole of why the key is worth having: the change
+    /// is repeated somewhere else. The count is part of the instruction, and a count typed in front
+    /// of `.` replaces it.
+    last_change: Option<Change>,
+    /// The line and the caret as they stood before each change, the latest last, for the key that
+    /// puts them back.
     ///
-    /// One step rather than a stack, on the same footing as the stash: the key that undoes and the
-    /// keystroke that will be regretted are one press apart, and a depth is a thing to remember.
-    before_last_change: Option<(String, usize)>,
+    /// As deep as vim's, so a run of `x` and `.` comes back one press at a time. Emptied by a line
+    /// that arrives whole, which is not the line these were taken of: a step kept across a send
+    /// would put back a prompt that has already gone.
+    undo: std::collections::VecDeque<(String, usize)>,
+    /// The INSERT session a change or an opening began, while it is open.
+    inserting: Option<Inserting>,
     pub status: Status,
     /// Whether the audit trail is shown alongside replies.
     pub show_trail: bool,
@@ -1538,7 +1586,8 @@ impl Session {
             typing_over_begins_a_change: false,
             register: None,
             last_change: None,
-            before_last_change: None,
+            undo: std::collections::VecDeque::new(),
+            inserting: None,
             status: Status::Idle,
             show_trail: false,
             scroll: 0,
@@ -3052,6 +3101,10 @@ impl Session {
         self.half_typed = None;
         self.count = None;
         self.held_count = None;
+        // The ordinary box keeps no steps, so what it types is in none of them, and `u` back in vi
+        // would put back a line from before that typing and lose it.
+        self.inserting = None;
+        self.undo.clear();
     }
 
     /// Which vi mode the box is in, or `None` where vi is not the style.
@@ -3156,6 +3209,8 @@ impl Session {
         if self.editing != crate::vim::Editing::Vi {
             return false;
         }
+        // Before the caret steps back, since where it stands is where the typing ended.
+        self.finish_inserting();
         // The selection goes with the mode that showed it. Escape out of VISUAL mode abandons the
         // stretch, so what the next operator acts on is what the caret is on and nothing invisible.
         self.let_go_of_the_selection();
@@ -3252,14 +3307,15 @@ impl Session {
             Command::Move(motion) => self.move_by_counted(motion, count, false),
             Command::Change(operator, extent) => self.change(operator, extent, count),
             Command::Wait(_) => unreachable!("a wait is answered above"),
-            Command::Undo => self.undo_last_change(),
-            // A count in front of `.` replaces the one the change was made with, which is vi's rule
-            // and the useful one: `3.` is how a repeat is made bigger than what it repeats.
-            Command::Again => {
-                if let Some((operator, extent, recorded)) = self.last_change {
-                    self.change(operator, extent, count.or(recorded));
+            // A count is how many changes back, as `3u` is in vim.
+            Command::Undo => {
+                for _ in 0..count.unwrap_or(1) {
+                    if !self.undo_last_change() {
+                        break;
+                    }
                 }
             }
+            Command::Again => self.make_the_last_change_again(count),
             Command::Paste { before } => self.put_the_register_back(before, count),
             Command::PutOver { keep } => self.put_over_the_selection(keep, count),
             Command::Join { spaced } => self.join_the_line_below(count, spaced),
@@ -3347,20 +3403,33 @@ impl Session {
         }
 
         let whole_lines = self.takes_whole_lines(extent);
+        let mut repeated = None;
         if !operator.reads_only() {
             self.begin_a_change();
-            self.last_change = Some(match extent {
+            let (extent, count) = match extent {
                 // The selection is gone by the time `.` is pressed, so the rows it crossed are kept
                 // as that many rows from the caret, which is what vim repeats.
                 crate::vim::Extent::Selection | crate::vim::Extent::SelectedRows if whole_lines => {
                     (
-                        operator,
                         crate::vim::Extent::Line,
                         Some(self.input[from..to].matches('\n').count() as u32 + 1),
                     )
                 }
-                _ => (operator, extent, count),
-            });
+                _ => (extent, count),
+            };
+            let change = Change::Operated {
+                operator,
+                extent,
+                count,
+                typed: String::new(),
+            };
+            // `c` is not the change to make again until what is typed after it is known, which is
+            // at Escape.
+            if operator == Operator::Change {
+                repeated = Some(change);
+            } else {
+                self.last_change = Some(change);
+            }
         }
 
         if operator.fills_the_register() {
@@ -3378,6 +3447,11 @@ impl Session {
                 self.input.replace_range(from..to, "");
                 self.caret = from;
                 self.mode = crate::vim::Mode::Insert;
+                self.inserting = Some(Inserting {
+                    before: None,
+                    opened_on: (self.input.clone(), self.caret),
+                    change: repeated,
+                });
             }
             Operator::Delete => {
                 // A whole line takes the newline that ends it, so the gap closes rather than leaving a
@@ -3877,9 +3951,10 @@ impl Session {
             return;
         };
         // A count is how many copies, and they go in together: one insertion is one change and one
-        // step to undo, where putting it back N times over would leave N-1 of them unreachable.
+        // step to undo, where putting it back N times over would take N presses of `u` to take back.
         let copies = count.unwrap_or(1) as usize;
         self.begin_a_change();
+        self.last_change = Some(Change::Put { before, count });
         self.abandon_the_selection();
 
         if yanked.lines {
@@ -3983,7 +4058,13 @@ impl Session {
         if end >= self.input.len() {
             return;
         }
+        // Pressed over a selection it is not made again, as nothing else pressed over one is but an
+        // operator.
+        let selected = self.anchor.is_some();
         self.begin_a_change();
+        if !selected {
+            self.last_change = Some(Change::Joined { spaced, count });
+        }
         self.abandon_the_selection();
 
         // A count is how many rows end up as one, so it is one join fewer than the number typed and
@@ -4221,25 +4302,136 @@ impl Session {
 
     /// Keep the line for `u` and forget what `.` repeats, since this edit is now the last change.
     fn begin_a_change(&mut self) {
-        self.before_last_change = Some((self.input.clone(), self.caret));
+        self.keep_for_undo((self.input.clone(), self.caret));
         self.last_change = None;
         self.history.leave();
         self.completion = 0;
     }
 
-    /// Put the line back as it stood before the last change.
-    ///
-    /// Nothing where no change has been made. One step rather than a stack, on the same footing as the
-    /// stash: the press that undoes and the keystroke that will be regretted are one apart.
-    fn undo_last_change(&mut self) {
-        let Some((line, caret)) = self.before_last_change.take() else {
-            return;
+    /// Keep a line and a caret as the latest step to undo, letting the oldest go past the depth.
+    fn keep_for_undo(&mut self, step: (String, usize)) {
+        if self.undo.len() == UNDO_DEPTH {
+            self.undo.pop_front();
+        }
+        self.undo.push_back(step);
+    }
+
+    /// Put the line back as it stood before the last change, and say whether there was one.
+    fn undo_last_change(&mut self) -> bool {
+        let Some((line, caret)) = self.undo.pop_back() else {
+            return false;
         };
         self.input = line;
         self.caret = caret;
         self.history.leave();
         self.completion = 0;
         self.step_back_off_the_end();
+        true
+    }
+
+    /// Make the last change again at the caret, typing again what was typed into it.
+    ///
+    /// A count in front of `.` replaces the one the change was made with, which is vi's rule and the
+    /// useful one: `3.` is how a repeat is made bigger than what it repeats. The keys that open
+    /// INSERT mode take no count, so there it is spent.
+    fn make_the_last_change_again(&mut self, count: Option<u32>) {
+        let Some(change) = self.last_change.clone() else {
+            return;
+        };
+        match change {
+            Change::Operated {
+                operator,
+                extent,
+                count: recorded,
+                typed,
+            } => {
+                self.change(operator, extent, count.or(recorded));
+                self.type_again(&typed);
+            }
+            Change::Opened { opening, typed } => {
+                self.open_insert(opening);
+                self.type_again(&typed);
+            }
+            Change::Put {
+                before,
+                count: recorded,
+            } => self.put_the_register_back(before, count.or(recorded)),
+            Change::Joined {
+                spaced,
+                count: recorded,
+            } => self.join_the_line_below(count.or(recorded), spaced),
+        }
+    }
+
+    /// Type again what a change typed, where making it again has opened INSERT mode, and leave.
+    ///
+    /// Put in whole rather than a character at a time, since typed one at a time a `?` or a `!` on
+    /// an empty line would be the key list or shell mode rather than the character it was.
+    fn type_again(&mut self, typed: &str) {
+        if self.mode != crate::vim::Mode::Insert {
+            return;
+        }
+        self.input.insert_str(self.caret, typed);
+        self.caret += typed.len();
+        self.enter_vi_normal();
+    }
+
+    /// End the INSERT session a change or an opening began, keeping it for `u` and for `.`.
+    ///
+    /// What was typed is read off the line rather than recorded key by key: it is whatever stands
+    /// between the two halves of the line the session began from, with the caret at its end. A line
+    /// that does not read that way was edited somewhere other than where the typing went, by an arrow
+    /// and a Delete, and typing the same characters again would not make the same change, so `.` is
+    /// left with nothing to make. So is a session whose typing holds a marker or an `@`: made again,
+    /// either would attach the same thing a second time, which nobody asked for.
+    fn finish_inserting(&mut self) {
+        let Some(Inserting {
+            before,
+            opened_on: (line, at),
+            change,
+        }) = self.inserting.take()
+        else {
+            return;
+        };
+        if let Some(before) = before {
+            // An opening that changed nothing is no step, as an `R` that typed nothing is not: the
+            // step would be a press of `u` that put back nothing.
+            if self.input == before.0 {
+                return;
+            }
+            self.keep_for_undo(before);
+        }
+        let ends = line.len() - at;
+        let typed = self
+            .input
+            .len()
+            .checked_sub(line.len())
+            .filter(|_| self.caret + ends == self.input.len())
+            .filter(|_| self.input.get(..at) == line.get(..at))
+            .filter(|_| self.input.get(self.caret..) == line.get(at..))
+            .and_then(|_| self.input.get(at..self.caret))
+            .filter(|typed| !typed.contains('@') && !self.markers().any(|m| typed.contains(m)))
+            .map(str::to_string);
+        self.last_change = match (change, typed) {
+            (
+                Some(Change::Operated {
+                    operator,
+                    extent,
+                    count,
+                    ..
+                }),
+                Some(typed),
+            ) => Some(Change::Operated {
+                operator,
+                extent,
+                count,
+                typed,
+            }),
+            (Some(Change::Opened { opening, .. }), Some(typed)) => {
+                Some(Change::Opened { opening, typed })
+            }
+            _ => None,
+        };
     }
 
     /// The key a press in NORMAL mode stands for, where vi spells an existing binding with a letter.
@@ -4755,9 +4947,13 @@ impl Session {
     }
 
     /// Take the letters as letters again, with the caret where the key asked for it.
+    ///
+    /// The session this begins is one change, `o`'s new row with what is typed on it, so one `u`
+    /// takes back the lot and `.` makes it again ([`Session::finish_inserting`]).
     fn open_insert(&mut self, opening: crate::vim::Opening) {
         use crate::vim::Opening;
 
+        let before = (self.input.clone(), self.caret);
         self.mode = crate::vim::Mode::Insert;
         match opening {
             Opening::Here => {}
@@ -4778,6 +4974,14 @@ impl Session {
                 self.move_left();
             }
         }
+        self.inserting = Some(Inserting {
+            before: Some(before),
+            opened_on: (self.input.clone(), self.caret),
+            change: Some(Change::Opened {
+                opening,
+                typed: String::new(),
+            }),
+        });
     }
 
     /// The line being typed.
@@ -4806,7 +5010,19 @@ impl Session {
     /// a line that arrived whole is a new list and an index into the one before it stands for a row
     /// nobody walked to. Recalling `look at @test` under a cursor an arrow had moved sent nothing
     /// and left `look at @tests/` in the box, because a finished name loses to a chosen row.
+    ///
+    /// The steps to undo go too, being copies of a line that is no longer the one in the box. Kept,
+    /// `u` after a send would put back the prompt that had just gone.
     fn set_input(&mut self, line: impl Into<String>) {
+        self.put_in_the_box(line);
+        self.undo.clear();
+        self.inserting = None;
+    }
+
+    /// Replace the line as [`Session::set_input`] does, keeping what `u` can take back.
+    ///
+    /// For a completion, which finishes the line being typed rather than bringing another.
+    fn put_in_the_box(&mut self, line: impl Into<String>) {
         self.abandon_the_selection();
         // A line that arrives whole has none of the rows the last selection was kept by.
         self.last_selection = None;
@@ -5238,7 +5454,7 @@ impl Session {
                 } else {
                     format!("{} ", command.name)
                 };
-                self.set_input(line);
+                self.put_in_the_box(line);
             }
             Offered::Files(_) => {
                 let Some(entry) = self.highlighted_entry() else {
@@ -5259,9 +5475,14 @@ impl Session {
                 }
                 let kept = self.input[..start].to_string();
                 let trailing = if entry.is_directory { "" } else { " " };
-                self.set_input(format!("{kept}@{}{trailing}", entry.path));
+                self.put_in_the_box(format!("{kept}@{}{trailing}", entry.path));
             }
             Offered::Nothing | Offered::Shortcuts => return,
+        }
+        // A choice from a list drawn over the line rather than typing, so `.` does not make it again:
+        // a file chosen this way would be named a second time.
+        if let Some(inserting) = &mut self.inserting {
+            inserting.change = None;
         }
         self.completion = 0;
     }
@@ -5933,6 +6154,8 @@ impl Session {
             self.last_selection = None;
             self.stashed = Some(std::mem::take(&mut self.input));
             self.caret = 0;
+            self.undo.clear();
+            self.inserting = None;
             true
         }
     }
@@ -15989,8 +16212,8 @@ mod tests {
     }
 
     /// A counted change is one change and one step to undo, because the count is part of one
-    /// instruction rather than a way of pressing the key again. Carried out as N changes, the undo
-    /// would put back the last of them and leave the rest gone with nothing left to reach them.
+    /// instruction rather than a way of pressing the key again. Carried out as N changes, it would
+    /// take N presses of `u` to put back what one instruction took.
     #[test]
     fn a_counted_change_is_one_change_and_one_undo_step() {
         let mut s = normal("hello world", 0);
@@ -16352,8 +16575,8 @@ mod tests {
         assert_eq!(s.input, "one two", "the yank got in the way of the undo");
     }
 
-    /// `.` repeats the instruction rather than what it produced, which is the whole reason to have it:
-    /// the change happens again at the caret, wherever that now is.
+    /// `.` makes the last change again at the caret, wherever that now is, which is the whole reason
+    /// to have it: the change happens somewhere else.
     #[test]
     fn the_repeat_key_does_the_last_change_again_at_the_caret() {
         assert_eq!(edited("one two three", 0, "dw."), "three");
@@ -16548,30 +16771,218 @@ mod tests {
         assert_eq!(edited("a\nb\nc", 2, "V1k>."), "    a\n    b\nc");
     }
 
-    /// `.` after a change it cannot yet make again does nothing, rather than make the change before
-    /// it, which here is the `x`, again at a caret that has since moved on.
+    /// `.` after a change it cannot make again does nothing, rather than make the change before it,
+    /// which here is the `x`, again at a caret that has since moved on. These are the keys pressed
+    /// over a selection that are not an operator, whose stretch is gone by the time `.` is. The third
+    /// row is there so that a join made again would have a row to take.
     #[test]
     fn a_repeat_after_a_change_it_cannot_make_again_does_nothing() {
         for (keys, line) in [
-            ("p", "Noe two\nthree"),
-            ("P", "oNe two\nthree"),
-            ("J", "Ne two three"),
-            ("vJ", "Ne two three"),
-            ("gJ", "Ne twothree"),
-            ("vgJ", "Ne twothree"),
-            ("viwp", "o two\nthree"),
-            ("viwP", "o two\nthree"),
-            ("vrz", "ze two\nthree"),
-            ("viwU", "NE two\nthree"),
-            ("viwgu", "ne two\nthree"),
-            ("viw~", "nE two\nthree"),
+            ("vJ", "Ne two three\nfour"),
+            ("vgJ", "Ne twothree\nfour"),
+            ("viwp", "o two\nthree\nfour"),
+            ("viwP", "o two\nthree\nfour"),
+            ("vrz", "ze two\nthree\nfour"),
+            ("viwU", "NE two\nthree\nfour"),
+            ("viwgu", "ne two\nthree\nfour"),
+            ("viw~", "nE two\nthree\nfour"),
         ] {
             assert_eq!(
-                edited("oNe two\nthree", 0, &format!("x{keys}.")),
+                edited("oNe two\nthree\nfour", 0, &format!("x{keys}.")),
                 line,
                 "{keys}"
             );
         }
+    }
+
+    /// `.` after `c` types again what was typed after it, since in vi what was typed is part of the
+    /// instruction: repeating only the `cw` would take the next word and put nothing in its place.
+    /// The two rows are the ones the issue measured against vim.
+    #[test]
+    fn the_repeat_key_types_again_what_a_change_typed() {
+        assert_eq!(keyed("foo bar baz", 0, "cwX\x1bw.").input, "X X baz");
+        assert_eq!(keyed("foo bar baz", 0, "AZ\x1b0.").input, "foo bar bazZZ");
+        assert_eq!(keyed("one two", 0, "ccnew\x1b.").input, "new");
+        assert_eq!(keyed("a b c d", 0, "cwX\x1bw2.").input, "X X d");
+        let s = keyed("foo bar baz", 0, "cwX\x1bw.");
+        assert_eq!(
+            s.vi_mode(),
+            Some(crate::vim::Mode::Normal),
+            "left in INSERT"
+        );
+    }
+
+    /// Every key that opens INSERT mode is a change `.` makes again, the opening and the typing
+    /// together, and a count in front of the key or of `.` is spent: vim reads it as how many times
+    /// to type the text, which a prompt has no use for.
+    #[test]
+    fn the_repeat_key_opens_again_and_types_again() {
+        for (keys, line) in [
+            ("ix\x1b.", "xxab"),
+            ("Ix\x1b$.", "xxab"),
+            ("$ax\x1b.", "abxx"),
+            ("Ax\x1b0.", "abxx"),
+            ("ox\x1b.", "ab\nx\nx"),
+            ("Ox\x1b.", "x\nx\nab"),
+            ("o\x1b.", "ab\n\n"),
+            ("3ix\x1b", "xab"),
+            ("ix\x1b3.", "xxab"),
+        ] {
+            assert_eq!(keyed("ab", 0, keys).input, line, "{keys:?}");
+        }
+    }
+
+    /// What `.` types again is what the session left, so a letter typed and taken back with
+    /// Backspace is not in it.
+    #[test]
+    fn the_repeat_key_types_what_backspace_left() {
+        assert_eq!(keyed("ab", 0, "ifoo\x7fx\x1b.").input, "foxfoxab");
+    }
+
+    /// A session that edited the line somewhere other than where its typing went is one typing the
+    /// same characters again would not make, so `.` does nothing after it. It is still one change,
+    /// and `u` takes it back.
+    #[test]
+    fn the_repeat_key_does_nothing_after_typing_that_moved_off_its_own_text() {
+        let mut s = keyed("ab", 0, "ifoo");
+        s.move_left();
+        s.enter_vi_normal();
+        s.type_char('.');
+        assert_eq!(s.input, "fooab");
+        s.type_char('u');
+        assert_eq!(s.input, "ab");
+    }
+
+    /// Typing that placed a marker or an `@` is not made again, and nor is the change before it:
+    /// made again, either would attach the same thing a second time. A completion is a choice from a
+    /// list rather than typing, so it is not made again either.
+    #[test]
+    fn the_repeat_key_does_nothing_after_typing_that_attached_something() {
+        assert_eq!(keyed("one", 0, "xi@a\x1b.").input, "@ane");
+
+        let mut s = keyed("one", 0, "xi");
+        s.attach(picture(b"pixels"));
+        s.enter_vi_normal();
+        let placed = s.input.clone();
+        s.type_char('.');
+        assert_eq!(s.input, placed, "the picture was typed again");
+
+        let mut s = keyed("one", 0, "xi");
+        s.paste_text("a\nb\nc\nd");
+        s.enter_vi_normal();
+        let placed = s.input.clone();
+        s.type_char('.');
+        assert_eq!(s.input, placed, "the folded paste was typed again");
+
+        let mut s = keyed("", 0, "i/mo");
+        s.accept_completion();
+        assert_ne!(s.input, "/mo", "nothing was completed");
+        s.enter_vi_normal();
+        let completed = s.input.clone();
+        s.type_char('.');
+        assert_eq!(s.input, completed, "the completion was made again");
+    }
+
+    /// `p`, `P`, `J` and `gJ` are changes `.` makes again, with the count they were made with or the
+    /// one in front of it.
+    #[test]
+    fn the_repeat_key_puts_back_and_joins_again() {
+        assert_eq!(edited("one\ntwo", 0, "yyp."), "one\none\none\ntwo");
+        assert_eq!(edited("one\ntwo", 0, "yyP."), "one\none\none\ntwo");
+        assert_eq!(edited("ab", 0, "ylP."), "aaab");
+        assert_eq!(
+            edited("one\ntwo", 0, "yy2p."),
+            "one\none\none\none\none\ntwo"
+        );
+        assert_eq!(edited("one\ntwo", 0, "yyp2."), "one\none\none\none\ntwo");
+        assert_eq!(edited("a\nb\nc\nd", 0, "J."), "a b c\nd");
+        assert_eq!(edited("a\nb\nc\nd\ne\nf", 0, "3J."), "a b c d e\nf");
+        assert_eq!(edited("a\nb\nc", 0, "gJ."), "abc");
+    }
+
+    /// Undo goes back a change at a time, as far back as vim's does, so `x` pressed twice comes back
+    /// with two presses of `u`, and a count says how many.
+    #[test]
+    fn undo_goes_back_a_change_at_a_time() {
+        assert_eq!(edited("abc", 0, "xxu"), "bc");
+        assert_eq!(edited("abc", 0, "xxuu"), "abc");
+        assert_eq!(edited("abcd", 0, "x..uu"), "bcd");
+        assert_eq!(edited("abcd", 0, "x..uuu"), "abcd");
+        assert_eq!(edited("abcd", 0, "x..2u"), "bcd");
+        assert_eq!(edited("abcd", 0, "x..9u"), "abcd");
+    }
+
+    /// The oldest change goes once a thousand are kept, so what holds the steps is bounded: a
+    /// thousand copies of a prompt rather than one for every key pressed in a session.
+    #[test]
+    fn undo_goes_back_a_thousand_changes_and_no_further() {
+        let mut s = normal(&format!("{}b", "a".repeat(UNDO_DEPTH + 1)), 0);
+        for _ in 0..=UNDO_DEPTH {
+            s.type_char('x');
+        }
+        assert_eq!(s.input, "b");
+        for _ in 0..=UNDO_DEPTH {
+            s.type_char('u');
+        }
+        assert_eq!(s.input, format!("{}b", "a".repeat(UNDO_DEPTH)));
+    }
+
+    /// A line that arrives whole starts with nothing to undo. The steps are copies of the line that
+    /// was in the box, and `u` after a send would put back the prompt that had just gone.
+    #[test]
+    fn a_line_that_arrives_whole_has_nothing_to_undo() {
+        let mut s = keyed("one two", 0, "x");
+        assert!(s.submit().is_some());
+        s.type_char('u');
+        assert_eq!(s.input, "");
+
+        let mut s = keyed("one two", 0, "x");
+        assert!(s.submit().is_some());
+        s.recall_older();
+        s.enter_vi_normal();
+        s.type_char('u');
+        assert_eq!(s.input, "ne two");
+
+        let mut s = keyed("one two", 0, "x");
+        s.clear_input();
+        s.type_char('u');
+        assert_eq!(s.input, "", "the step outlived clearing the line");
+
+        let mut s = keyed("one two", 0, "x");
+        assert!(s.stash());
+        s.type_char('u');
+        assert_eq!(s.input, "", "the step outlived putting the line away");
+        assert!(s.stash());
+        s.type_char('u');
+        assert_eq!(
+            s.input, "ne two",
+            "the step outlived bringing the line back"
+        );
+
+        let mut s = keyed("one two", 0, "x");
+        s.take_edited("from the editor");
+        s.type_char('u');
+        assert_eq!(s.input, "from the editor");
+
+        let mut s = keyed("one two", 0, "x");
+        s.choose_editing(crate::vim::Editing::Ordinary);
+        s.choose_editing(crate::vim::Editing::Vi);
+        s.enter_vi_normal();
+        s.type_char('u');
+        assert_eq!(s.input, "ne two", "the step outlived a change of style");
+    }
+
+    /// One INSERT session is one change, so one `u` takes back everything typed in it, and the row
+    /// `o` opened with it. An opening with nothing typed is no change, and the one before it can
+    /// still be taken back.
+    #[test]
+    fn an_insert_session_is_one_change_to_undo() {
+        assert_eq!(keyed("one", 0, "ihello\x1bu").input, "one");
+        assert_eq!(keyed("one", 0, "ofoo\rbar\x1bu").input, "one");
+        assert_eq!(keyed("one", 0, "xi\x1bu").input, "one");
+        assert_eq!(keyed("one", 0, "Afoo\x1bxu").input, "onefoo");
+        assert_eq!(keyed("one", 0, "Afoo\x1bxuu").input, "one");
+        assert_eq!(keyed("one two", 0, "cwX\x1bw.uu").input, "one two");
     }
 
     /// The register yanked at the start of the line and then put over a selection made at `at`,
