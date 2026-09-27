@@ -610,6 +610,10 @@ catches an inline Kubernetes `Secret`, a local development password and a test f
 all four with no override would stop ordinary work over a guess, and a scan people have to fight is
 a scan they turn off. The prompt names the finding, so the question can be answered.
 
+The name is the word the value is assigned to, not the rest of the line before it. A link whose
+words mention a password ends at the colon of its URL's scheme, and reading the whole link as a name
+would make every page linking to a password manager a page of passwords.
+
 A value standing as the whole of a file, with no name beside it and no provider prefix on it, is
 inferred the same way and raised the same way. The file being nothing else is what stands in for
 the name, which is weaker than a name: a commit id, a machine identifier and a digest are written
@@ -625,6 +629,8 @@ requires of a finding however it is answered.
 `verified-by: bravebot_agent::turn::a_value_that_only_looks_like_a_secret_is_put_to_the_person`
 `verified-by: bravebot_agent::turn::the_prompt_says_which_value_it_is_asking_about`
 `verified-by: bravebot_core::credentials::a_generated_key_is_recognised_from_its_name_and_its_rarity`
+`verified-by: bravebot_core::credentials::a_name_is_the_word_before_its_separator_however_the_line_opens`
+`verified-by: bravebot_core::credentials::a_link_whose_words_sound_like_a_secret_is_not_an_assignment`
 `verified-by: bravebot_core::credentials::a_provider_key_is_recognised_with_nothing_around_it_saying_so`
 `verified-by: bravebot_core::credentials::a_provider_key_is_recognised_when_it_is_assigned_to_a_name`
 `verified-by: bravebot_core::credentials::a_password_in_a_connection_string_is_a_finding`

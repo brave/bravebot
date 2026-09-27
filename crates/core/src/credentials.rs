@@ -451,23 +451,31 @@ const NAMES: &[&str] = &[
 /// A value assigned to a name that says it is a secret, where the value is rare enough to be one.
 ///
 /// `NAME=value`, `name: value` and `"name": "value"` are one shape with different punctuation
-/// around it, so the name is taken from the left of the first separator and the value from the
-/// right of it, each stripped of the quoting the format put there.
+/// around it, so the name is the word directly left of the first separator and the value is what
+/// is right of it, stripped of the quoting the format put there.
+///
+/// The word, not everything left of the separator. In `* [1password 8](https://...)` the first
+/// separator is the colon ending the URL's scheme, and what precedes it is a link's text rather
+/// than a name: read whole, it holds PASSWORD and made the rest of the URL a secret.
 fn assigned(line: &str) -> Option<String> {
     let cut = line.find(['=', ':'])?;
-    let (name, value) = line.split_at(cut);
+    let (before, value) = line.split_at(cut);
     let value = trim_quoting(&value[1..]);
 
-    let name = name
-        .trim()
-        .trim_start_matches("export ")
+    let name = before
+        .rsplit(|c: char| !is_name(c))
+        .find(|word| !word.is_empty())?
         .to_ascii_uppercase();
-    let name = trim_quoting(&name);
     if !NAMES.iter().any(|keyword| name.contains(keyword)) {
         return None;
     }
 
     looks_rare(value).then(|| value.to_string())
+}
+
+/// What a name is written in: a word, and the dots, dashes and underscores keys join words with.
+fn is_name(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.')
 }
 
 /// A rare value standing as the whole of a file, which is the shape creating one takes.
@@ -1118,6 +1126,45 @@ mod tests {
     fn a_keyword_in_the_value_rather_than_the_name_is_not_a_secret() {
         let line = "description: the deploy step needs a SECRET_KEY_BASE of 64 hex digits\n";
         assert!(scan("docs.md", line, 1).is_empty());
+    }
+
+    /// A link's text sits ahead of the colon its URL's scheme ends in. Read as `name: value`, the
+    /// words of the link are a name holding PASSWORD and the rest of the URL is a value rare enough
+    /// to believe, so a page linking to a password manager read as a page of passwords. The query
+    /// string is there because skipping `://` alone moves the cut to its `=`, with the same words
+    /// still ahead of it.
+    #[test]
+    fn a_link_whose_words_sound_like_a_secret_is_not_an_assignment() {
+        for line in [
+            "* [1password 8](https://blog.1password.com/git-commit-signing/)\n",
+            "[Reset your password](https://accounts.google.com/signin/v2/recoveryidentifier)\n",
+            "[1Password](https://1password.com/?utm_source=newsletter&utm_campaign=2024q3)\n",
+        ] {
+            let found = scan("notes.md", line, 1);
+            assert!(found.is_empty(), "reported a link: {line:?}, got {found:?}");
+        }
+    }
+
+    /// The name is the word directly before the separator, and the formats that put something
+    /// ahead of that word still name a secret: a keyword, a quote, a list marker, an operator.
+    #[test]
+    fn a_name_is_the_word_before_its_separator_however_the_line_opens() {
+        let value = "c8f1a0b4d2e6f7a9c3b5d8e0f2a4c6b8d1e3f5a7";
+        for line in [
+            format!("export SECRET_KEY_BASE={value}"),
+            format!("  {{\"secret\": \"{value}\"}},"),
+            format!("const API_KEY = \"{value}\";"),
+            format!("- **Password**: {value}"),
+            format!("TOKEN ?= {value}"),
+            format!("spring.datasource.password={value}"),
+            format!("run --password={value}"),
+        ] {
+            let found = scan("notes.md", &format!("{line}\n"), 1);
+            assert!(
+                found.iter().any(|f| f.kind == Kind::Assigned),
+                "no secret found in {line:?}, got {found:?}"
+            );
+        }
     }
 
     /// A key is armoured across as many lines as it takes. Reported per line it would be a dozen
