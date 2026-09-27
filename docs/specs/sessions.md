@@ -838,8 +838,9 @@ where guessing costs the numbers.
 
 The turns before the loss keep their prompts, outcomes and measurements, and the messages they
 claimed are no longer claimed: those places belong to a conversation that is gone, and the one the
-session holds now starts again from nothing. A worker loss with uncertain effects closes the rewind window under SESSION-19; older
-conversation boundaries cannot restore file grants after that loss.
+session holds now starts again from nothing. A worker loss with uncertain effects closes the
+rewind window under SESSION-19; older conversation boundaries cannot restore file grants after
+that loss.
 
 **Why.** A turn number is what the person saw and what their spend is filed under, so losing the
 conversation must not renumber the session. Letting the old places stand instead would hand the

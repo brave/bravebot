@@ -1884,13 +1884,8 @@ fn stop_success_after_uncertain_effect<T>(
     outcome: Result<T, TurnError>,
     authority: &bravebot_core::file_authority::FileAuthority,
 ) -> Result<T, TurnError> {
-    if authority.is_uncertain() {
-        Err(TurnError::Precommit(
-            "the turn stopped after an uncertain effect".to_string(),
-        ))
-    } else {
-        outcome
-    }
+    ensure_certain(authority)?;
+    outcome
 }
 
 /// Put what the planner said into the conversation, through the gate every model output passes.

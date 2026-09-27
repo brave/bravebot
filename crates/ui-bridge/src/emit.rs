@@ -25,7 +25,7 @@ impl Emitter {
         Self(Arc::new(Mutex::new(sink)))
     }
 
-    /// Announce something. Never fails, by design.
+    /// Deliver an event to the listener.
     ///
     /// Recovery may report a turn after a listener panicked. Keep the listener available
     /// for that report; a fresh panic still propagates to the worker recovery boundary.
