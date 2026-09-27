@@ -3704,7 +3704,7 @@ mod preserved_history {
         }
         let (result, continued) = worker.join().unwrap();
         *conversation = continued;
-        match result {
+        match result.outcome {
             Ok(outcome) => {
                 session.complete(outcome.reply_for_display(), vec![], outcome.tokens);
                 session.spent_time(outcome.timing);
