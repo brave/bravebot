@@ -662,13 +662,27 @@ concession has been given up, and a service that refuses it refuses the request 
 any other option it does not take. What is given up is the level somebody chose in the interface,
 that being the one this program decided to send.
 
-**The level is the last concession given up.** A request also carries cache breakpoints nobody asked
-for, and either field is refused with the same status, so the two are given up in order: a request
-still marking a prefix is sent again without the marks first, and the level goes only where that
-request is refused too. Giving up the level first would read a refusal of the caching as the model
-refusing to be told how hard to think, and stop sending a level to a model that reads one. Where the
-request that answered had given up both, both are remembered, the status naming no field: a service
-that reads a breakpoint and refuses a level gives up the caching as well for the life of the process.
+**On a gateway, the level is the last concession given up.** A request to a gateway also carries
+cache breakpoints nobody asked for, and either field is refused with the same status, so the two are
+given up in order: a request still marking a prefix is sent again without the marks first, and the
+level goes only where that request is refused too. Giving up the level first would read a refusal of
+the caching as the model refusing to be told how hard to think, and stop sending a level to a model
+that reads one. Where the request that answered had given up both, both are remembered, the status
+naming no field: a service that reads a breakpoint and refuses a level gives up the caching as well
+for the life of the process.
+
+**On Bedrock, the level goes before the ask.** A Bedrock request carries cache breakpoints too, and a
+streamed one offering a tool asks for its arguments as they are written
+([BACKEND-44](#BACKEND-44)). There the breakpoints are refused with a status of their own, the one an
+expired credential also gets, so they are given up on that status and never for a refusal of either
+field. The level and the ask share one status, so they are given up in order: the level first, and
+the ask only where the request is refused again without it. Either is given up only by a request
+that carried it, so a request that carried no level never records the model as refusing one. The
+order keeps what a model does read: Claude Haiku 4.5 takes the ask and refuses the level, measured,
+and giving up the ask first would cost it the field that keeps a long argument from being cut off
+and still be refused. Where the request that answered had given up both, both are remembered, as on
+a gateway. A request refused with nothing left to give up settles nothing, and what an earlier
+request settled for that model stands.
 
 **Why.** The judgment is the only description these services offer, and throwing it away leaves the
 interface reporting a charge somebody chose and stopped getting, which is the thing this clause
@@ -680,6 +694,9 @@ it, and a settings file cannot state what its author does not know either.
 `verified-by: bravebot_bedrock::lib::what_a_model_refused_outlives_the_client_that_found_out`
 `verified-by: bravebot_bedrock::lib::a_probe_that_settled_nothing_is_not_remembered`
 `verified-by: bravebot_bedrock::lib::one_model_refusing_says_nothing_about_another`
+`verified-by: bravebot_bedrock::lib::the_level_is_given_up_before_the_ask_for_arguments_as_written`
+`verified-by: bravebot_bedrock::lib::a_refused_ask_for_arguments_as_written_is_given_up_and_remembered`
+`verified-by: bravebot_bedrock::lib::a_probe_that_settled_nothing_leaves_what_was_known`
 `verified-by: bravebot_aichat::client::a_level_a_gateway_refuses_costs_the_field_and_not_the_turn`
 `verified-by: bravebot_aichat::client::a_gateway_that_refused_a_level_is_not_sent_one_again`
 `verified-by: bravebot_aichat::client::a_level_refusal_the_retry_did_not_fix_is_not_remembered`
@@ -1686,6 +1703,50 @@ what drifting costs is a word no service defines in a request field.
 `verified-by: bravebot_cli::main::an_effort_flag_naming_no_level_is_refused`
 `verified-by: bravebot_config::managed::a_name_outside_the_pinnable_set_pins_nothing`
 
+<a id="BACKEND-44"></a>
+### BACKEND-44: a streamed Bedrock request offering a tool asks for its arguments as they are written
+
+A streamed Bedrock request that offers the model a tool asks for each tool argument as the model
+writes it, in the field that service hands to the model without reading, as the beta the Anthropic
+API names for it. A whole-reply request and a request offering no tool do not ask. A model that
+refuses a request carrying the ask is asked again without it, and no later request carries it to
+that model, on the terms [BACKEND-22](#BACKEND-22) gives the level: what one model refused says
+nothing about another, a request refused without the ask as well settles nothing and is not
+remembered, and the order the concessions are given up in is that clause's to state. So a request
+refused on its contents for a reason of its own, a prompt too long for the model among them, is sent
+once more without the ask before that refusal is reported, and so is the next one.
+
+An argument that arrives this way is handed to the turn loop exactly as the model wrote it. One that
+does not parse is a failed call the planner is told about, and it never runs: nothing repairs it or
+closes it on the way to being dispatched. The conversation sent on the next round carries that call
+with an empty object for its arguments, this service taking nothing but an object there, beside the
+result saying it failed.
+
+**Why.** Without the ask the service holds an argument back until the model has finished writing it,
+so a `write_file` whose contents are a whole program is the tool's name and then silence for as long
+as the program takes to write. The egress layer cuts a connection that has sent nothing for two
+minutes, which a long enough file outlasts, and reports it as a request that did not get through.
+Measured on Bedrock against Claude Opus 5.5, one call writing a file of about 1,900 tokens sent
+nothing for 17 seconds and then all of it; with the ask, no gap in the same call was longer than 2.4
+seconds. The per-tool field the Anthropic API documents for the same thing is not what is sent,
+because this API drops a key it does not define from a tool's description: sent, it left the silence
+as long, and a made-up key in the same place is answered as readily.
+
+Streamed only, because a whole reply arrives at once however its arguments were written, so there
+the ask buys nothing and gives up the service's check that an argument parses. That check is the
+ask's cost where it is sent, which is why a call that does not parse fails where it is dispatched: a
+repaired argument is a call the model never finished, and a file written from one is reported
+written.
+
+`verified-by: bravebot_bedrock::protocol::the_level_and_the_ask_for_arguments_as_written_travel_together`
+`verified-by: bravebot_bedrock::lib::only_a_streamed_request_offering_a_tool_asks_for_arguments_as_they_are_written`
+`verified-by: bravebot_bedrock::lib::a_refused_ask_for_arguments_as_written_is_given_up_and_remembered`
+`verified-by: bravebot_bedrock::lib::the_level_is_given_up_before_the_ask_for_arguments_as_written`
+`verified-by: bravebot_bedrock::lib::a_streamed_argument_that_does_not_parse_is_handed_on_as_written`
+`verified-by: bravebot_bedrock::lib::a_probe_that_settled_nothing_leaves_what_was_known`
+`verified-by: bravebot_bedrock::protocol::unparseable_arguments_become_an_empty_object_rather_than_dropping_the_call`
+`verified-by: bravebot_agent::tools::a_call_whose_arguments_do_not_parse_fails_and_writes_nothing`
+
 ## Known costs
 
 - **The refusal is made at startup, and a model chosen mid-session is not checked again.**
@@ -1734,13 +1795,15 @@ what drifting costs is a word no service defines in a request field.
   that would say otherwise is the person's own to set, so a machine whose system drive is elsewhere
   has no managed layer at all rather than one that can be redirected.
 
-- **The effort level is the one field in a Bedrock request that a single provider defines.** The
-  body Bedrock states for every provider it hosts has no field for how hard to think, so the level
-  travels in the field that service hands to the model without reading, spelled the way the
-  Anthropic API spells it. A tier naming a model from another provider is reachable and answers,
-  and a level chosen against one is refused by that model on the field name. Nothing here can tell
-  the two apart, an inference-profile ARN not saying which provider serves it, and the alternative
-  is withholding a level from every Bedrock model including the ones that read it.
+- **Two fields in a Bedrock request are ones a single provider defines.** The body Bedrock states
+  for every provider it hosts has no field for how hard to think or for tool arguments as they are
+  written, so the level and the ask (BACKEND-44) travel in the field that service hands to the model
+  without reading, spelled the way the Anthropic API spells them. A tier naming a model from another
+  provider is reachable and answers, and a request carrying either is refused by that model, costing
+  the first streamed request with a tool one refused request per field before the model's answer is
+  remembered. Nothing here can tell the two apart, an inference-profile ARN not saying which
+  provider serves it, and the alternative is withholding both from every Bedrock model including
+  the ones that read them.
 
 - **Which models a product is served is the service's decision, and this holds no copy of it.** The
   roster is whatever the endpoint returns for `bravebot`, so a model becoming unsuitable for agentic
