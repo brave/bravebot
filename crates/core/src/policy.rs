@@ -2820,7 +2820,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// authority and never creates it, so the intersection is taken here rather than trusted to
     /// be empty: a kind asking for something the parent lacks gets a delegate without it, and the
     /// trail says what was dropped. A kind that holds servers carries every server this run holds
-    /// and no other, so a delegate can call what the turn already may (SERVERS-9).
+    /// that its definition selects and no other, so a delegate can call what the turn already may
+    /// and never more (SERVERS-9).
     ///
     /// The number is minted here, beneath this run's own, and a refusal spends one as a delegate
     /// would. Two bounds are this call's to keep: a run at [`MAX_DEPTH`] spawns nothing, and a
@@ -2936,6 +2937,20 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             );
         }
 
+        let servers = selected.servers_beyond_its_kind();
+        if !servers.is_empty() {
+            self.allow(
+                "delegate",
+                format!(
+                    "{id}: {} names the MCP servers {} which a {} does not call, so it is \
+                     delegated without them",
+                    selected.name(),
+                    servers.join(", "),
+                    selected.kind()
+                ),
+            );
+        }
+
         let wanted = selected.capabilities();
         let held = selected.held_out_of(&self.capabilities);
         let dropped: Vec<&str> = wanted
@@ -2951,6 +2966,18 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                      delegated without them",
                     selected.name(),
                     dropped.join(", ")
+                ),
+            );
+        }
+        let servers = selected.servers_not_held(&self.capabilities);
+        if !servers.is_empty() {
+            self.allow(
+                "delegate",
+                format!(
+                    "{id}: {} names the MCP servers {} which this run holds no grant for, so it \
+                     is delegated without them",
+                    selected.name(),
+                    servers.join(", ")
                 ),
             );
         }
@@ -2992,12 +3019,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// composes what steers a new run, and here the person did: the name and the task are both
     /// their line, so nothing this context has met reaches either (ADDRESS-4).
     ///
-    /// The turn keeps only what it holds that the definition also asks for, and its servers only
-    /// where the definition holds servers, so a definition can take away and never add
-    /// (ADDRESS-7). What stays offered is `offered` less every tool whose
-    /// capability is gone and every tool the definition did not name. [`NEVER_DELEGATED`] plays
-    /// no part, because this is the person's own turn and not a delegate (ADDRESS-8). Both
-    /// narrowings are recorded, so the trail says what the definition cost.
+    /// The turn keeps only what it holds that the definition also asks for, and only the servers
+    /// the definition selects, so a definition can take away and never add (ADDRESS-7). What
+    /// stays offered is `offered` less every tool whose capability is gone and every tool the
+    /// definition did not name. [`NEVER_DELEGATED`] plays no part, because this is the person's
+    /// own turn and not a delegate (ADDRESS-8). Every narrowing is recorded, so the trail says
+    /// what the definition cost.
     ///
     /// [`NEVER_DELEGATED`]: crate::delegate::NEVER_DELEGATED
     pub fn address(&mut self, offered: &[&str]) -> Gated<Option<crate::delegate::Addressed>> {
@@ -3048,6 +3075,29 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 format!(
                     "{name} asks for {} which this turn does not hold, so it runs without them",
                     not_held.join(", ")
+                ),
+            );
+        }
+        let beyond = selected.servers_beyond_its_kind();
+        if !beyond.is_empty() {
+            self.allow(
+                "address",
+                format!(
+                    "{name} names the MCP servers {} which a {} does not call, so it runs \
+                     without them",
+                    beyond.join(", "),
+                    selected.kind()
+                ),
+            );
+        }
+        let not_reached = selected.servers_not_held(&self.capabilities);
+        if !not_reached.is_empty() {
+            self.allow(
+                "address",
+                format!(
+                    "{name} names the MCP servers {} which this turn holds no grant for, so it \
+                     runs without them",
+                    not_reached.join(", ")
                 ),
             );
         }
@@ -13219,6 +13269,58 @@ five
             }
         }
 
+        /// SERVERS-9 through DELEGATE-24. A worker whose definition names its servers is handed
+        /// those of them its parent holds and no other, and a reader naming one is handed none.
+        /// The trail names each server the definition asked for and did not get, and why.
+        #[test]
+        fn a_definition_naming_servers_is_delegated_with_only_those_its_parent_holds() {
+            let weather = Capability::McpCall(ServerAlias::new("weather"));
+            let notes = Capability::McpCall(ServerAlias::new("notes"));
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing_with("task", "look into it"),
+                ReleasePlan::new(),
+                all_capabilities()
+                    .iter()
+                    .chain([weather.clone(), notes.clone()])
+                    .collect(),
+                &mut sink,
+            )
+            .unwrap();
+            let mut definitions = crate::delegate::Definitions::default();
+            for (name, kind) in [("forecaster", Kind::Worker), ("looker", Kind::Reader)] {
+                definitions.insert(
+                    crate::delegate::Definition::from_file(name, "looks it up", kind, None, "", "")
+                        .with_servers(vec!["weather".into(), "calendar".into()]),
+                );
+            }
+            policy.install_delegates(definitions);
+
+            let spec = policy
+                .before_delegate(&argument("forecaster"), &argument("look it up"))
+                .expect("a resolved definition may be selected");
+            assert!(spec.capabilities().contains(&weather));
+            assert!(
+                !spec.capabilities().contains(&notes),
+                "a worker was handed a server its definition left off"
+            );
+            let spec = policy
+                .before_delegate(&argument("looker"), &argument("look it up"))
+                .expect("a resolved definition may be selected");
+            assert!(!spec.capabilities().contains(&weather));
+
+            let trail = format!("{:?}", sink.events());
+            for said in [
+                "forecaster names the MCP servers calendar which this run holds no grant for",
+                "looker names the MCP servers weather, calendar which a reader does not call",
+            ] {
+                assert!(
+                    trail.contains(said),
+                    "the trail does not say '{said}': {trail}"
+                );
+            }
+        }
+
         /// The bound belongs to the definition, so nothing about a call can lengthen it. A
         /// planner that could set it would be setting its own delegate's budget from a sentence it
         /// wrote.
@@ -13910,6 +14012,90 @@ five
                 });
                 assert_eq!(gave_up, !keeps, "{name}: {trail}");
             }
+        }
+
+        /// ADDRESS-7 for a definition naming its servers. The turn keeps those of them the
+        /// session holds and gives up the rest, the gate refuses a call to a server given up, and
+        /// the trail says which named server the session holds no grant for.
+        #[test]
+        fn an_addressed_worker_naming_its_servers_keeps_only_those() {
+            let weather = Capability::McpCall(ServerAlias::new("weather"));
+            let notes = Capability::McpCall(ServerAlias::new("notes"));
+            let mut sink = RecordingSink::new();
+            let mut routing = routing_with("task", "look into it");
+            routing.insert_trusted(ADDRESSED, "forecaster");
+            let session = all_capabilities()
+                .iter()
+                .chain([weather.clone(), notes.clone()])
+                .collect();
+            let mut policy =
+                Policy::begin(routing, ReleasePlan::new(), session, &mut sink).unwrap();
+            let mut definitions = Definitions::default();
+            definitions.insert(
+                Definition::from_file("forecaster", "forecasts", Kind::Worker, None, "", "")
+                    .with_servers(vec!["weather".into(), "calendar".into()]),
+            );
+            policy.install_delegates(definitions);
+
+            let addressed = policy
+                .address(&OFFERED)
+                .expect("a resolved name is addressed")
+                .expect("the line named a definition");
+            assert!(addressed.capabilities().contains(&weather));
+            assert!(!addressed.capabilities().contains(&notes));
+            assert!(policy.before_capability(weather).is_ok());
+            assert!(
+                policy.before_capability(notes).is_err(),
+                "a server the definition left off still answers"
+            );
+            assert!(
+                addressed.tools().iter().any(|tool| tool == "write_file"),
+                "naming servers took a tool away"
+            );
+            let trail = trail(&sink);
+            for said in [
+                "runs without mcp_call:notes",
+                "forecaster names the MCP servers calendar which this turn holds no grant for",
+            ] {
+                assert!(
+                    trail.contains(said),
+                    "the trail does not say '{said}': {trail}"
+                );
+            }
+        }
+
+        /// ADDRESS-7 for a reader naming its servers. A reader calls no server, so naming one
+        /// hands it nothing, and the trail says the line was spent on a kind that cannot use it.
+        #[test]
+        fn an_addressed_reader_naming_servers_holds_none_and_the_trail_says_why() {
+            let weather = Capability::McpCall(ServerAlias::new("weather"));
+            let mut sink = RecordingSink::new();
+            let mut routing = routing_with("task", "look into it");
+            routing.insert_trusted(ADDRESSED, "looker");
+            let session = all_capabilities().iter().chain([weather.clone()]).collect();
+            let mut policy =
+                Policy::begin(routing, ReleasePlan::new(), session, &mut sink).unwrap();
+            let mut definitions = Definitions::default();
+            definitions.insert(
+                Definition::from_file("looker", "looks", Kind::Reader, None, "", "")
+                    .with_servers(vec!["weather".into()]),
+            );
+            policy.install_delegates(definitions);
+
+            let addressed = policy
+                .address(&OFFERED)
+                .expect("a resolved name is addressed")
+                .expect("the line named a definition");
+            assert!(!addressed.capabilities().contains(&weather));
+            assert!(
+                policy.before_capability(weather).is_err(),
+                "a reader naming a server still calls it"
+            );
+            let trail = trail(&sink);
+            assert!(
+                trail.contains("looker names the MCP servers weather which a reader does not call"),
+                "the trail does not say why the named server was dropped: {trail}"
+            );
         }
 
         /// ADDRESS-7 one level down. A delegate is cut from what the turn holds, so a worker an

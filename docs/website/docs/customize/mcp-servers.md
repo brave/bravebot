@@ -272,8 +272,12 @@ server's own words. No built-in tool can be shadowed by one, since no built-in's
 `mcp__`.
 
 A [delegate](../reference/tools.md#spawn_agent) is offered the same tools where it is a `worker`
-whose [definition](agents.md) names no tools, and is put no list of its own. A `reader` or a
-`checker` is offered none of them, and nor is a delegate of a turn that holds none.
+whose [definition](agents.md) names no tools, and is put no list of its own. A definition may name
+the servers its `worker` calls with an `mcpServers` line, and its delegate is then offered those
+servers' tools alone. A `reader` or a `checker` is offered none of them, and nor is a delegate of a
+turn that holds none. A turn you address to a definition with
+[`/agent`](../reference/commands.md#agent-name-task) asks you about the lists of only the servers it
+calls.
 
 ## Each call
 

@@ -5,7 +5,7 @@
 
 use bravebot_agent::agents;
 use bravebot_agent::workspace::Workspace;
-use bravebot_core::capability::{Capability, CapabilitySet};
+use bravebot_core::capability::{Capability, CapabilitySet, ServerAlias};
 use bravebot_core::delegate::{Definitions, Kind};
 use bravebot_core::event::RecordingSink;
 use bravebot_core::policy::{Policy, ReleasePlan, Routing};
@@ -372,6 +372,64 @@ fn a_project_cannot_hand_back_a_tool_a_persons_own_definition_took_away() {
         said,
         [".bravebot/agents/rule-reviewer.md does not widen \
           ~/.bravebot/agents/rule-reviewer.md: it is loaded confined to read_file"]
+    );
+}
+
+/// An `mcpServers:` line is a narrowing the person wrote down as a `tools:` line is, so a project
+/// cannot hand back a server it left off, and whoever wrote the project's file is told which
+/// servers its delegate calls.
+#[test]
+fn a_project_cannot_hand_back_a_server_a_persons_own_definition_left_off() {
+    let scratch = Scratch::new("widening-servers");
+    let home = scratch.home();
+    let project = scratch.workspace();
+    write_definition(
+        &home,
+        "forecaster",
+        &format!(
+            "{}\nmcpServers: weather",
+            frontmatter("forecaster", "looks up the forecast", "worker")
+        ),
+        "look it up",
+    );
+    write_definition(
+        &project.join(".bravebot"),
+        "forecaster",
+        &format!(
+            "{}\nmcpServers:\n  - weather\n  - notes",
+            frontmatter("forecaster", "looks up the forecast", "worker")
+        ),
+        "whatever the checkout wants said here",
+    );
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (definitions, notices) = {
+        let mut policy = policy(&mut sink, &["."]);
+        agents::discover(&mut policy, &workspace, Some(&home))
+    };
+
+    let found = definitions.get("forecaster").expect("selectable");
+    assert_eq!(found.servers(), Some(["weather".to_string()].as_slice()));
+    let parent: CapabilitySet = ["weather", "notes"]
+        .map(|alias| Capability::McpCall(ServerAlias::new(alias)))
+        .into_iter()
+        .collect();
+    assert_eq!(
+        found.held_out_of(&parent),
+        CapabilitySet::from_iter([Capability::McpCall(ServerAlias::new("weather"))])
+    );
+
+    let said: Vec<&str> = notices
+        .iter()
+        .map(|notice| notice.message.as_str())
+        .collect();
+    assert_eq!(
+        said,
+        [
+            ".bravebot/agents/forecaster.md does not widen ~/.bravebot/agents/forecaster.md: it is \
+          loaded calling only the MCP server weather"
+        ]
     );
 }
 

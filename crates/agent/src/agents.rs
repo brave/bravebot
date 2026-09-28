@@ -52,8 +52,12 @@ const WORKSPACE_AGENTS: &str = ".bravebot/agents";
 
 /// What a file turned out to be.
 enum Read {
-    /// A definition, ready to go into the set.
-    Definition(Box<Definition>),
+    /// A definition, ready to go into the set, and whether its `mcpServers:` line declared a
+    /// server rather than naming one.
+    Definition {
+        definition: Box<Definition>,
+        declares_servers: bool,
+    },
     /// Not a definition at all: no `name`, so nothing claimed to be one.
     ///
     /// Silent. A directory of definitions is a place a person also keeps a README, and a note
@@ -120,6 +124,17 @@ fn read_definition(text: &str, origin: &str) -> Read {
         definition = definition.with_skills(names_in(skills));
     }
 
+    // The key other agents' definitions spell it with, so a file ported from one selects the
+    // same servers here. No alias holds a colon, so one in the line is a server declared inline,
+    // whose entry may hold an argv and a variable's value: the line then selects no server, and
+    // nothing in it is repeated anywhere.
+    let mut declares_servers = false;
+    if let Some(servers) = declared.get("mcpServers") {
+        let names = names_in(servers);
+        declares_servers = names.iter().any(|name| name.contains(':'));
+        definition = definition.with_servers(if declares_servers { Vec::new() } else { names });
+    }
+
     // Refused rather than left at the kind's own, because its author believes the number is in
     // force. Zero goes with the rest: the bound is checked after a round, so it would be one.
     if let Some(written) = declared
@@ -133,7 +148,10 @@ fn read_definition(text: &str, origin: &str) -> Read {
         definition = definition.with_rounds(rounds);
     }
 
-    Read::Definition(Box::new(definition))
+    Read::Definition {
+        definition: Box::new(definition),
+        declares_servers,
+    }
 }
 
 /// The count a `rounds:` value names, or nothing where it names none above zero.
@@ -177,7 +195,7 @@ const FOLDS_TO_A_COLON: [char; 5] = [
     '\u{ff1a}', // FULLWIDTH COLON
 ];
 
-/// The names a `tools:` or a `skills:` value lists.
+/// The names a `tools:`, a `skills:` or an `mcpServers:` value lists.
 ///
 /// A comma and a space both separate, so a YAML scalar (`read_file, list_files`) and a YAML
 /// sequence (`- read_file` on its own line) both arrive here as something this splits the same
@@ -371,18 +389,29 @@ fn admit(read: Read, origin: &str, definitions: &mut Definitions, notices: &mut 
         // asked about it already, so a refusal here is a rule this loader missed rather than a
         // file. Reported rather than dropped: silence would be the one case where somebody's
         // file does nothing and nothing says so.
-        Read::Definition(definition) => match definitions.insert(*definition) {
-            Admitted::AsWritten => return,
-            // A later source narrows a name and never widens it, and what it asked for and did
-            // not get is said rather than dropped quietly: a narrowing nobody is told about
-            // reads to whoever wrote the file as one still in force. Both files can be named
-            // because by here each came from a source somebody vouched for.
-            Admitted::Narrowed(narrowing) => {
-                notices.push(Notice::from_message(narrowed(origin, &narrowing)));
-                return;
+        Read::Definition {
+            definition,
+            declares_servers,
+        } => {
+            if declares_servers {
+                notices.push(Notice::from_message(t!(
+                    delegate_servers_declared,
+                    definition = origin
+                )));
             }
-            Admitted::Refused => "its name is one of the kinds' own",
-        },
+            match definitions.insert(*definition) {
+                Admitted::AsWritten => return,
+                // A later source narrows a name and never widens it, and what it asked for and
+                // did not get is said rather than dropped quietly: a narrowing nobody is told
+                // about reads to whoever wrote the file as one still in force. Both files can be
+                // named because by here each came from a source somebody vouched for.
+                Admitted::Narrowed(narrowing) => {
+                    notices.push(Notice::from_message(narrowed(origin, &narrowing)));
+                    return;
+                }
+                Admitted::Refused => "its name is one of the kinds' own",
+            }
+        }
         Read::NotOne => return,
         Read::NotACount => {
             notices.push(Notice::from_message(t!(
@@ -419,9 +448,9 @@ fn rounds_held_to_their_kind(definitions: &Definitions) -> Vec<Notice> {
 
 /// What to tell whoever wrote a definition that the one of the same name before it cut down.
 ///
-/// The words are here rather than in the kernel, which hands over which of the two axes moved
-/// and nothing about how to say it. Both halves where both moved, because a person told only
-/// about the kind would go on believing their `tools:` line was the one in force.
+/// The words are here rather than in the kernel, which hands over which of the three axes moved
+/// and nothing about how to say it. Every one that moved, because a person told only about the
+/// kind would go on believing their `tools:` line was the one in force.
 fn narrowed(origin: &str, narrowing: &Narrowing) -> String {
     let mut said = Vec::new();
     if narrowing.named != narrowing.loaded {
@@ -434,6 +463,16 @@ fn narrowed(origin: &str, narrowing: &Narrowing) -> String {
         said.push(match confined_to {
             [] => "it is loaded with no tools at all".to_string(),
             tools => format!("it is loaded confined to {}", tools.join(", ")),
+        });
+    }
+    if let Some(servers) = narrowing.servers_confined_to.as_deref() {
+        said.push(match servers {
+            [] => "it is loaded calling no MCP server".to_string(),
+            [server] => format!("it is loaded calling only the MCP server {server}"),
+            servers => format!(
+                "it is loaded calling only the MCP servers {}",
+                servers.join(", ")
+            ),
         });
     }
     format!(
@@ -467,6 +506,34 @@ pub fn skills_not_found(definitions: &Definitions, skills: &Catalogue) -> Vec<No
                 definition = definition.origin(),
                 count = missing.len(),
                 skills = missing.join(", ")
+            )))
+        })
+        .collect()
+}
+
+/// What to tell whoever wrote a definition naming an MCP server this session did not reach.
+///
+/// Such a name selects nothing, as a `skills:` name nothing found does, and silence would leave a
+/// misspelt alias, or a server another agent defines inline, reading to its author as one the
+/// delegate calls. Only an alias the session reached is a server any run of it can hold.
+pub fn servers_not_found(definitions: &Definitions, reached: &[String]) -> Vec<Notice> {
+    definitions
+        .iter()
+        .filter_map(|definition| {
+            let mut missing: Vec<&str> = Vec::new();
+            for name in definition.servers()? {
+                if !reached.contains(name) && !missing.contains(&name.as_str()) {
+                    missing.push(name);
+                }
+            }
+            if missing.is_empty() {
+                return None;
+            }
+            Some(Notice::from_message(t!(
+                delegate_servers_not_found,
+                definition = definition.origin(),
+                count = missing.len(),
+                servers = missing.join(", ")
             )))
         })
         .collect()
@@ -508,7 +575,7 @@ mod tests {
 
     fn definition_of(text: &str) -> Definition {
         match read_definition(text, "test") {
-            Read::Definition(definition) => *definition,
+            Read::Definition { definition, .. } => *definition,
             Read::NotOne => panic!("not read as a definition at all"),
             Read::NotACount => panic!("skipped: its rounds are not a count"),
             Read::Skipped(why) => panic!("skipped: {why}"),
@@ -760,6 +827,114 @@ mod tests {
             [
                 "test names a skill this session did not find, so its delegate is offered without \
               it: rule-reveiw"
+            ]
+        );
+    }
+
+    /// `mcpServers:` is read the way `skills:` is, under the key other agents spell it with.
+    /// An empty line selects no server and an absent one leaves every server the parent holds,
+    /// and the two have to stay apart for the reason they do for skills.
+    #[test]
+    fn a_definition_reads_the_servers_it_names() {
+        let servers_of = |line: &str| {
+            definition_of(&format!(
+                "---\nname: forecaster\ndescription: forecasts\nkind: worker\n{line}---\n\nbody\n"
+            ))
+            .servers()
+            .map(<[String]>::to_vec)
+        };
+        let both = Some(vec!["weather".to_string(), "notes".to_string()]);
+
+        assert_eq!(servers_of("mcpServers: weather, notes\n"), both);
+        assert_eq!(servers_of("mcpServers:\n  - weather\n  - notes\n"), both);
+        assert_eq!(servers_of("mcpServers:\n"), Some(Vec::new()));
+        assert_eq!(servers_of(""), None);
+        assert_eq!(servers_of("mcp_servers: weather\n"), None);
+    }
+
+    /// A server named twice that this session did not reach is said once and in the singular,
+    /// and a server it did reach is not said at all.
+    #[test]
+    fn a_server_named_twice_and_reached_nowhere_is_said_once() {
+        let mut definitions = Definitions::default();
+        definitions.insert(definition_of(
+            "---\nname: forecaster\ndescription: forecasts\nkind: worker\nmcpServers: wether, \
+             weather, wether\n---\n\nbody\n",
+        ));
+
+        let said: Vec<String> = servers_not_found(&definitions, &["weather".to_string()])
+            .into_iter()
+            .map(|notice| notice.message)
+            .collect();
+
+        assert_eq!(
+            said,
+            [
+                "test names an MCP server this session did not reach, so its delegate runs \
+                 without it: wether"
+            ]
+        );
+    }
+
+    /// The servers a replacement is cut down to are said in the number there are, so a person
+    /// confined to one reads one, and one cut to none is told it calls nothing.
+    #[test]
+    fn a_server_narrowing_is_said_in_the_number_it_leaves() {
+        let said = |servers: &[&str]| {
+            narrowed(
+                "project.md",
+                &Narrowing {
+                    named: Kind::Worker,
+                    loaded: Kind::Worker,
+                    confined_to: None,
+                    servers_confined_to: Some(servers.iter().map(|s| s.to_string()).collect()),
+                    replaced: "home.md".to_string(),
+                },
+            )
+        };
+
+        assert_eq!(
+            said(&[]),
+            "project.md does not widen home.md: it is loaded calling no MCP server"
+        );
+        assert_eq!(
+            said(&["weather"]),
+            "project.md does not widen home.md: it is loaded calling only the MCP server weather"
+        );
+        assert_eq!(
+            said(&["weather", "notes"]),
+            "project.md does not widen home.md: it is loaded calling only the MCP servers \
+             weather, notes"
+        );
+    }
+
+    /// Another agent's definition may declare a server inline under the same key, with its argv
+    /// and a variable's value. Its names would otherwise reach the screen as servers nothing
+    /// reached, the value among them, and `weather` beside it would still be selected.
+    #[test]
+    fn a_server_declared_inline_selects_none_and_repeats_nothing_of_the_line() {
+        let mut definitions = Definitions::default();
+        let mut notices = Vec::new();
+        let text = "---\nname: forecaster\ndescription: forecasts\nkind: worker\nmcpServers:\n  - \
+                    weather\n  - github:\n      command: npx\n      env:\n        GITHUB_TOKEN: \
+                    ghp_secret\n---\n\nbody\n";
+
+        admit(
+            read_definition(text, "test"),
+            "test",
+            &mut definitions,
+            &mut notices,
+        );
+        notices.extend(servers_not_found(&definitions, &[]));
+
+        let definition = definitions.get("forecaster").expect("loaded");
+        assert_eq!(definition.servers(), Some(&[][..]));
+        let said: Vec<String> = notices.into_iter().map(|notice| notice.message).collect();
+        assert_eq!(
+            said,
+            [
+                "test declares an MCP server in its mcpServers line, which only \
+                 ~/.bravebot/mcp.json may do, so its delegate calls no MCP server"
             ]
         );
     }
