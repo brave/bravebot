@@ -409,6 +409,11 @@ pub fn run(
     // budget is the person's answer about what a command's output is worth spending context on, and
     // it does not stop being their answer because the spending moved.
     output_cap: Option<usize>,
+    // The spawning turn's as well, and for the reason the cap beside it is the parent's: how long a
+    // build may take is what somebody said about their own machine, and a delegate left on the
+    // built-in figures would be the one run stopped five minutes in, in the one place nobody is
+    // watching it happen.
+    deadlines: crate::exec::Deadlines,
     // The servers the spawning turn reached. A delegate is offered the tools of the ones its spec
     // holds a grant for, on the lists that turn already settled (SERVERS-9).
     mcp: Option<&crate::mcp::Session>,
@@ -469,6 +474,7 @@ pub fn run(
         .with_auto_vetting(auto_vetting)
         .with_attribution(attribution.clone())
         .with_output_cap(output_cap)
+        .with_deadlines(deadlines)
         .with_mcp(mcp.cloned());
 
     task.file_authority = Some(seeded.file_authority.clone());
@@ -790,10 +796,11 @@ mod tests {
                 .into_iter()
                 .chain(effects)
                 .collect();
-            let offered: Vec<String> = crate::tools::for_delegate(&held, None, None)
-                .into_iter()
-                .map(|tool| tool.function.name)
-                .collect();
+            let offered: Vec<String> =
+                crate::tools::for_delegate(&held, None, None, crate::exec::Deadlines::BUILT_IN)
+                    .into_iter()
+                    .map(|tool| tool.function.name)
+                    .collect();
             let said = limits(&held);
 
             let runs = offered.iter().any(|name| name == "run");

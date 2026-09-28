@@ -690,6 +690,11 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
         // And what they say a command's output may spend of this run's context (RUN-21), off the
         // same resolved settings.
         .with_output_cap(settings.run_output_cap())
+        // And how long one may take, resolved here because this is where the settings were read
+        // (RUN-23).
+        .with_deadlines(bravebot_agent::exec::Deadlines::resolve(
+            settings.run_deadlines(),
+        ))
         // Whether a check that finds nothing answers in a person's place. Resolved here, once, out
         // of the three routes: `bravebot_core::vetting::auto` is the rule and nothing below reads
         // any of the three again. A run nobody is watching has no prompt to fall back to, so

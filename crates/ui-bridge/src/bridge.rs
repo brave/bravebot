@@ -661,6 +661,7 @@ impl Bridge {
         let settings = crate::settings::layers(Some(&open.project), self.settings.as_deref());
         let attribution = settings.attribution().clone();
         let output_cap = settings.run_output_cap();
+        let deadlines = bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines());
         let auto_vetting = open.auto_vetting;
         let mut workspace = turn_workspace(open.project.clone(), &settings)
             .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
@@ -732,6 +733,7 @@ impl Bridge {
                 config,
                 attribution,
                 output_cap,
+                deadlines,
                 auto_vetting,
                 workspace,
                 prompt,
@@ -1256,6 +1258,9 @@ struct Work {
     /// What the settings say a command's output may spend of this turn's conversation, where they
     /// said anything (RUN-21). Read where the attribution was and carried the same way.
     output_cap: Option<usize>,
+    /// How long a command this turn runs may take, and the most one call may ask for (RUN-23). Read
+    /// where the cap was and carried the same way.
+    deadlines: bravebot_agent::exec::Deadlines,
     /// The session's, settled when it opened.
     auto_vetting: bool,
     watches: Arc<Mutex<bravebot_agent::watch::Watches>>,
@@ -1304,6 +1309,7 @@ fn work(work: Work) {
         config,
         attribution,
         output_cap,
+        deadlines,
         auto_vetting,
         watches,
         model,
@@ -1341,6 +1347,7 @@ fn work(work: Work) {
         .with_model(model)
         .with_attribution(attribution)
         .with_output_cap(output_cap)
+        .with_deadlines(deadlines)
         .with_auto_vetting(auto_vetting);
     if let Some(composed) = composed {
         task = task.composed_rather_than_typed(composed);

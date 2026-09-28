@@ -20312,6 +20312,7 @@ fn a_delegate_spends_the_wallet_the_turn_lent_it() {
         false,
         &bravebot_config::Attribution::default(),
         None,
+        bravebot_agent::exec::Deadlines::BUILT_IN,
         None,
         &bravebot_core::cancel::Cancel::new(),
         &mut bravebot_agent::confirm::ApproveWrites,
@@ -23554,6 +23555,19 @@ fn a_processor_is_given_a_picture_as_a_picture() {
 /// completes exactly as a working one does, so a test that asserts anything less than this cannot
 /// tell the two apart.
 fn the_outcome_of_a_run(scratch: &Scratch, arguments: &str) -> bravebot_agent::report::Outcome {
+    the_outcome_of_a_run_under(
+        scratch,
+        arguments,
+        bravebot_agent::exec::Deadlines::BUILT_IN,
+    )
+}
+
+/// As [`the_outcome_of_a_run`], for a turn whose caller read a settings file naming its own figures.
+fn the_outcome_of_a_run_under(
+    scratch: &Scratch,
+    arguments: &str,
+    deadlines: bravebot_agent::exec::Deadlines,
+) -> bravebot_agent::report::Outcome {
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, _received) =
         serve_sequence(vec![tool_request("run", arguments), reply_with("done")]);
@@ -23566,7 +23580,7 @@ fn the_outcome_of_a_run(scratch: &Scratch, arguments: &str) -> bravebot_agent::r
         &config,
         &egress,
         &workspace,
-        &Task::new("run it"),
+        &Task::new("run it").with_deadlines(deadlines),
         &mut bravebot_agent::Conversation::new(),
         &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
         &mut reporter,
@@ -23685,6 +23699,142 @@ fn a_non_integer_deadline_is_refused() {
     assert!(
         second.contains("whole number of seconds"),
         "the refusal did not explain the problem: {second}"
+    );
+}
+
+/// RUN-23: the figure a settings file named is the deadline a call that names none runs under.
+///
+/// Shown by naming a default far below the built-in one and outlasting it: a turn that read the key
+/// and handed `exec::LIMIT` to the wait loop anyway completes with the command succeeding, which is
+/// what every other assertion available here would also see. The raise cannot be shown the same way,
+/// because watching a command outlast 300 seconds costs five minutes of wall clock, and
+/// `bravebot_agent::tools::a_configured_deadline_is_what_a_call_runs_under` is the other half of it:
+/// that the configured figure is the one selected, and this, that the selected figure is what runs.
+#[test]
+fn a_configured_deadline_is_what_a_run_that_names_none_is_stopped_at() {
+    let scratch = Scratch::new("run-22-configured-default");
+    let outcome = the_outcome_of_a_run_under(
+        &scratch,
+        r#"{"command":"sleep 5"}"#,
+        bravebot_agent::exec::Deadlines::resolve(bravebot_config::RunDeadlines {
+            default: Some(std::time::Duration::from_secs(1)),
+            ceiling: None,
+        }),
+    );
+    assert!(
+        matches!(outcome, bravebot_agent::report::Outcome::Stopped(_)),
+        "the configured default never reached the wait loop: {outcome:?}"
+    );
+}
+
+/// RUN-23: the planner is told the figures in force, so a raised ceiling is one it can actually ask
+/// for.
+///
+/// The description is the only place either figure can be learnt. A turn that resolved them and then
+/// built its tool table out of the constants would leave the planner naming 600 because 600 is what
+/// it was told, and the twenty minutes somebody made room for would be unreachable while every other
+/// test here passed.
+#[test]
+fn the_planner_is_told_the_deadlines_the_settings_named() {
+    let scratch = Scratch::new("run-22-planner-told");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![reply_with("nothing to run")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let _ = turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("say nothing").with_deadlines(bravebot_agent::exec::Deadlines::resolve(
+            bravebot_config::RunDeadlines {
+                default: Some(std::time::Duration::from_secs(900)),
+                ceiling: Some(std::time::Duration::from_secs(1800)),
+            },
+        )),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+
+    let first = received.recv().expect("the turn sent a request");
+    assert!(
+        first.contains("900 seconds by default") && first.contains("up to 1800"),
+        "the planner was told a figure nobody configured: {first}"
+    );
+}
+
+/// RUN-23: a delegate runs under the figures the turn that spawned it holds.
+///
+/// How long a build may take is what a person said about their own machine, and it does not stop
+/// being their answer because the work moved. A delegate left on the built-in figures would be the
+/// one run stopped five minutes in, in the one place nobody is watching it happen. Read off what the
+/// delegate's own planner was told, since that is where a figure that failed to travel is visible
+/// without waiting out a deadline.
+#[test]
+fn a_delegate_runs_under_the_deadlines_of_the_turn_that_spawned_it() {
+    let scratch = Scratch::new("run-22-delegate");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "HAND-IT-ON",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"checker","task":"RUN-THE-BUILD"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "RUN-THE-BUILD",
+            vec![reply_with("the build is somebody else's problem")],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let _ = turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("HAND-IT-ON").with_deadlines(bravebot_agent::exec::Deadlines::resolve(
+            bravebot_config::RunDeadlines {
+                default: Some(std::time::Duration::from_secs(900)),
+                ceiling: Some(std::time::Duration::from_secs(1800)),
+            },
+        )),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    let delegate = bodies
+        .iter()
+        .find(|body| body.contains("RUN-THE-BUILD") && body.contains("deadline_seconds"))
+        .unwrap_or_else(|| {
+            panic!(
+                "the delegate was offered no run at all, over {} requests",
+                bodies.len()
+            )
+        });
+    assert!(
+        delegate.contains("900 seconds by default") && delegate.contains("up to 1800"),
+        "the delegate was told the built-in figures rather than the turn's: {delegate}"
     );
 }
 

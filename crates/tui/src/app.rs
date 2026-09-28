@@ -3324,6 +3324,7 @@ fn event_loop(
                         &rules.permissions,
                         settings.attribution(),
                         settings.run_output_cap(),
+                        bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines()),
                     )?;
 
                     // Taken off the workspace rather than kept for anything: a run is not a turn of
@@ -3474,6 +3475,7 @@ fn event_loop(
                         &rules.permissions,
                         settings.attribution(),
                         settings.run_output_cap(),
+                        bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines()),
                         stored.id(),
                     )?;
                     let events = continued.events;
@@ -5363,6 +5365,9 @@ fn manifest_animated(
     // anything. Passed in beside the attribution and for the same reason: which layer named it is
     // settled where the settings were read.
     output_cap: Option<usize>,
+    // And how long a command may run, resolved where those settings were read and for the same
+    // reason (RUN-23).
+    deadlines: bravebot_agent::exec::Deadlines,
 ) -> io::Result<Vec<Stamped>> {
     // For the reason a turn does it: a sign-in needs the terminal, and this is the thread that has
     // it. Left to the worker, the URL and code the AWS CLI prints would land nowhere anyone reads.
@@ -5403,7 +5408,8 @@ fn manifest_animated(
         .with_permissions(permissions.clone())
         .with_permission_mode(permission_mode)
         .with_attribution(attribution.clone())
-        .with_output_cap(output_cap);
+        .with_output_cap(output_cap)
+        .with_deadlines(deadlines);
     // In the order the markers in the task number them, for the reason a turn's are: a planner
     // reading "[Image #2]" has to be able to count to the picture that answers it.
     for image in pasted {
@@ -5996,6 +6002,9 @@ fn run_turn_animated(
     // anything. Passed in beside the attribution and for the same reason: which layer named it is
     // settled where the settings were read.
     output_cap: Option<usize>,
+    // And how long a command may run, resolved where those settings were read and for the same
+    // reason (RUN-23).
+    deadlines: bravebot_agent::exec::Deadlines,
     // This session's own identifier. It travels with the task because a run prompt may be answered
     // with the key whose grant outlives the session, and the record of that says which session
     // pressed it so that `/status` can tell a person which answers they are still carrying.
@@ -6076,6 +6085,7 @@ fn run_turn_animated(
         .with_permission_mode(permission_mode)
         .with_attribution(attribution.clone())
         .with_output_cap(output_cap)
+        .with_deadlines(deadlines)
         // Whether a check that finds nothing answers in the person's place. Read off the session
         // for the reason the mode is: the `a` key can change it, and a turn keeps the answer it
         // began with.

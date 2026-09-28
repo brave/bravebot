@@ -435,6 +435,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `provider` | an OpenAI-compatible gateway ([below](#reaching-an-openai-compatible-gateway)), or an AWS account ([below](#naming-more-than-three-models)) |
 | `run.scrubEnv` | further variables to keep from a program the agent runs ([below](#runscrubenv)) |
 | `run.maxOutput` | how much of what a command printed the agent reads ([below](#runmaxoutput)) |
+| `run.defaultSeconds`, `run.maxSeconds` | how long a command may run ([below](#rundefaultseconds-and-runmaxseconds)) |
 | `attribution` | what a commit message or a pull request this agent writes may carry ([below](#attribution)) |
 | `keybindings` | keys rebound to your own choice ([below](#keybindings)) |
 | `search` | how large a tree a search may walk ([below](#search)) |
@@ -622,6 +623,42 @@ to a file without running the command again.
 A cap of `0` leaves the built-in figure in force rather than meaning "no output": so does anything
 that is not a whole number, so a half-typed file costs you nothing. A delegate runs under whatever
 the session that started it is using.
+
+### `run.defaultSeconds` and `run.maxSeconds`
+
+```json
+{ "run": { "defaultSeconds": 900, "maxSeconds": 1800 } }
+```
+
+How long a command may run. `defaultSeconds` is what a command gets when the agent asks for no
+deadline of its own, and `maxSeconds` is the most it may ask for. Without them the two are 300 and
+600 seconds.
+
+Raise the first when the thing you ask for most often takes longer than five minutes. A checkout whose
+test run takes eight will otherwise be stopped partway through, every time, and the agent learns it
+needs a longer deadline by spending a round finding out. Raise the second, and leave the first alone,
+when one particular job needs twenty minutes and you still want a program that hangs given up on
+quickly. Lower either to keep a session brisk.
+
+**Two keys, because they are two decisions.** One is what every command gets; the other is the most
+any command may have. Somebody who wants their build to finish needs the first. Somebody who wants one
+long integration run needs the second.
+
+**A figure you did not write never overrides one you did.** Write `defaultSeconds` above 600 and the
+ceiling rises to meet it, since a default the ceiling forbids would be a number that does nothing.
+Write `maxSeconds` below 300 and the default comes down with it, since a default no command could ask
+for is not a default. Write both and the ceiling you wrote is the bound.
+
+A command is never given less than one second, and that figure is not configurable: below it a command
+would end at the moment it began.
+
+**Reaching the deadline is not a failure.** The command is stopped and whatever it printed comes back,
+which is why a server or a watcher is better started with `background: true` instead: see
+[the tools reference](../reference/tools.md#a-line-has-a-deadline).
+
+A figure of `0` leaves the built-in one in force rather than meaning "no limit": so does anything that
+is not a whole number of seconds. The agent is told both figures, so a ceiling you raise is one it
+knows it may ask for, and a delegate runs under whatever the session that started it is using.
 
 ### `permissions`
 

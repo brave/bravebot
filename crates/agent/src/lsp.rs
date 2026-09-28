@@ -876,9 +876,14 @@ mod tests {
             (Kind::Checker, true),
             (Kind::Worker, true),
         ] {
-            let offered = crate::tools::for_delegate(&kind.capabilities(), None, None)
-                .iter()
-                .any(|tool| tool.function.name == "lsp");
+            let offered = crate::tools::for_delegate(
+                &kind.capabilities(),
+                None,
+                None,
+                crate::exec::Deadlines::BUILT_IN,
+            )
+            .iter()
+            .any(|tool| tool.function.name == "lsp");
             assert_eq!(offered, offered_lsp, "a {kind} and lsp");
         }
     }

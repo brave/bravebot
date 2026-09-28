@@ -433,7 +433,9 @@ table establishes is what an output may be labelled rather than what may run.
 ### RUN-11: a run has a wall-clock limit, and reaching it ends the run rather than failing it
 
 A pipeline is given 300 seconds unless the call named its own deadline, which it may do up to a
-ceiling it cannot exceed; [CMDLINE-13](command-line.md#CMDLINE-13) is that bound. When the deadline
+ceiling it cannot exceed; [CMDLINE-13](command-line.md#CMDLINE-13) is that bound. Both figures are
+the built-in ones rather than the only ones: a settings file may name its own, and
+[RUN-23](#RUN-23) is what it names. When the deadline
 runs out the stages are killed, and what they printed
 before that is collected and returned exactly as it is for a pipeline that ended by itself, under
 the label RUN-4 gives it. The stop is reported as structure, a duration on the result, so a
@@ -1242,6 +1244,79 @@ started, and a planner offered `read_output` may call it on any reference it hol
 `verified-by: bravebot_agent::turn::output_too_long_for_its_result_is_read_in_part_by_a_filter_fed_its_reference`
 `verified-by: bravebot_agent::turn::a_read_that_was_refused_is_not_asked_for_again`
 `verified-by: bravebot_agent::turn::a_read_that_is_not_true_or_false_is_refused_before_the_line_runs`
+
+<a id="RUN-23"></a>
+### RUN-23: how long a command may run is configurable
+
+`run.defaultSeconds` and `run.maxSeconds`, in the settings files, name how long a command that names
+no deadline of its own is given and the most one call may name for itself. Either may be raised as
+well as lowered, and a key nobody set leaves the built-in figure in force. The two are independent,
+so a file naming one says nothing about the other, in any layer.
+
+A figure of zero is absence rather than a command given no time to run at all, as is any value that
+is not a whole count of seconds. Absence leaves the built-in figure in force, which is what a layer
+setting the key gets rather than the number a weaker layer named.
+
+**Two keys and not one.** Raising the default is not the decision raising the ceiling is. The default
+is what a call gets for asking nothing, so somebody whose build takes eight minutes needs that
+raised. The ceiling is the most a call may ask for, so somebody who wants one twenty-minute
+integration run needs that raised and the default left where it is, and a program that hangs is still
+given up on in five minutes. One key could not say both.
+
+**A figure nobody wrote never contradicts one somebody did.** A default past the built-in ceiling
+raises it, because the default is a deadline a run is actually given and a ceiling below it would
+forbid the figure just named. A ceiling under the built-in default lowers it, because a default no
+call could name is not a default. Where a file names both, the ceiling it named is the bound and the
+default is held to it: both are that person's own words, and of the two the ceiling is the one that
+says what the most a run may take is.
+
+**The floor is not configurable.** It is what makes a deadline name a wait at all rather than a
+budget anybody would want to choose: below it a run ends at or before the moment it began, which is
+every command stopped having printed nothing.
+
+**Why it may be configured at all.** Neither figure is a safety property, which [RUN-11](#RUN-11)
+and [CMDLINE-13](command-line.md#CMDLINE-13) say of themselves: a program that finishes in time is no
+safer than one that does not, and what a program printed keeps the label RUN-4 gave it however long
+it ran. What they bound is how long the turn spends waiting on one command, which is a budget, and
+the owner of a budget should be able to name it. The right number is a property of the machine and
+the tree rather than of this program: whoever knows how long their own build takes is the person at
+the keyboard, and nothing this program can measure tells it whether a checkout takes ninety seconds
+or eleven minutes to check.
+
+**It is not pinnable by the machine-level layer.** What an administrator may pin is what decides
+where a request goes and whose account pays for it
+([configuration.md](../../website/docs/customize/configuration.md)). How long a build may take is
+neither, so this is a preference, and a layer that could pin a preference is a layer somebody will
+use to pin one.
+
+**Where it is resolved.** In the caller that read the settings, as [RUN-21](#RUN-21)'s cap and
+[SEARCH-9](search.md#SEARCH-9)'s caps are and for the same reason: every test in the tree builds a
+turn, and one that read a settings file would answer differently on a machine whose owner had
+configured it. The two constrain each other, so what they come to is settled once rather than
+recomputed wherever a deadline is read.
+
+**The planner is told the figures in force.** Both appear in `run`'s own description and in
+`deadline_seconds`'s, because a description is the only place either can be learnt: a planner told
+the built-in ceiling where a person has raised it names the figure it was told about, and the time
+they made room for is never asked for. A delegate runs under the figures the turn that spawned it
+holds, since how long a build may take is that person's answer about their own machine and does not
+stop being theirs because the work moved ([DELEGATE-1](../delegation.md)).
+
+`verified-by: bravebot_config::settings::a_settings_file_names_how_long_a_command_may_run`
+`verified-by: bravebot_config::settings::one_run_deadline_is_read_without_the_other`
+`verified-by: bravebot_config::settings::a_run_deadline_of_zero_or_of_nonsense_leaves_the_built_in_ones`
+`verified-by: bravebot_config::settings::the_nearest_layer_that_named_a_run_deadline_wins`
+`verified-by: bravebot_agent::exec::run_deadlines_nobody_named_are_the_built_in_ones`
+`verified-by: bravebot_agent::exec::a_default_past_the_built_in_ceiling_raises_it`
+`verified-by: bravebot_agent::exec::a_ceiling_under_the_built_in_default_lowers_it`
+`verified-by: bravebot_agent::exec::a_file_naming_both_holds_the_default_to_the_ceiling_it_named`
+`verified-by: bravebot_agent::exec::a_call_is_held_to_the_ceiling_in_force`
+`verified-by: bravebot_agent::exec::a_ceiling_too_large_to_count_in_seconds_does_not_collapse_every_deadline`
+`verified-by: bravebot_agent::tools::a_configured_deadline_is_what_a_call_runs_under`
+`verified-by: bravebot_agent::tools::the_run_tool_quotes_the_deadlines_in_force`
+`verified-by: bravebot_agent::turn::a_configured_deadline_is_what_a_run_that_names_none_is_stopped_at`
+`verified-by: bravebot_agent::turn::the_planner_is_told_the_deadlines_the_settings_named`
+`verified-by: bravebot_agent::turn::a_delegate_runs_under_the_deadlines_of_the_turn_that_spawned_it`
 
 ## Open questions
 

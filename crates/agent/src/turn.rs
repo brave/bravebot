@@ -668,6 +668,14 @@ pub struct Task {
     /// knows. `None` rather than the built-in number, so the default lives in one place
     /// ([`crate::tools::OUTPUT_CAP`]) and a caller saying "unchanged" is not a second copy of it.
     pub output_cap: Option<usize>,
+    /// How long a command this turn runs may take, and the most one call may ask for.
+    ///
+    /// The caller's business for the reason `output_cap` is, and resolved rather than optional: the
+    /// two figures constrain each other, so a caller handing over what a file said one at a time
+    /// would leave the arithmetic to be done again here. [`crate::exec::Deadlines::resolve`] is
+    /// where it is done, and [`crate::exec::Deadlines::BUILT_IN`] is what a caller that read no
+    /// settings file gets.
+    pub deadlines: crate::exec::Deadlines,
     /// Rules the user wrote in advance about which actions to ask them about.
     ///
     /// Supplied per turn for the reason `home` and `model` are: which file they came from is the
@@ -861,6 +869,8 @@ impl Task {
             // The built-in cap, which is a caller that read no settings file saying nothing about
             // what a command's output may spend.
             output_cap: None,
+            // And the built-in figures for how long one may run, for the same reason.
+            deadlines: crate::exec::Deadlines::BUILT_IN,
             permissions: Permissions::new(),
             // Asking, which is what a turn has always done.
             permission_mode: crate::PermissionMode::default(),
@@ -1021,6 +1031,17 @@ impl Task {
     /// the cap every turn ran under before the key existed. See [`Task::output_cap`].
     pub fn with_output_cap(mut self, cap: Option<usize>) -> Self {
         self.output_cap = cap;
+        self
+    }
+
+    /// State how long a command may run, and the most one call may ask for.
+    ///
+    /// What `run.defaultSeconds` and `run.maxSeconds` come to, which is
+    /// [`crate::exec::Deadlines::resolve`]'s answer. A caller that read no settings file leaves this
+    /// alone and runs under the figures every turn ran under before the keys existed. See
+    /// [`Task::deadlines`].
+    pub fn with_deadlines(mut self, deadlines: crate::exec::Deadlines) -> Self {
+        self.deadlines = deadlines;
         self
     }
 
@@ -2571,10 +2592,12 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     spec.capabilities(),
                     spec.tools(),
                     spec.may_delegate().then_some(&delegates),
+                    task.deadlines,
                 ),
             ),
             None => {
-                let mut offered = tools::for_planner(scheduling, arming, &delegates);
+                let mut offered =
+                    tools::for_planner(scheduling, arming, &delegates, task.deadlines);
                 let names: Vec<&str> = offered
                     .iter()
                     .map(|tool| tool.function.name.as_str())
@@ -3422,6 +3445,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                             &mut tools::Tools {
                                 workspace,
                                 output_cap: task.output_cap.unwrap_or(tools::OUTPUT_CAP),
+                                deadlines: task.deadlines,
                                 skills: &catalogue,
                                 slots: conversation.quarantine(),
                                 chat: crate::processor::Chat {
@@ -3506,6 +3530,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                     task.auto_vetting,
                                     &task.attribution,
                                     task.output_cap,
+                                    task.deadlines,
                                     task.mcp.as_ref(),
                                     cancel,
                                     &mut confirmer,

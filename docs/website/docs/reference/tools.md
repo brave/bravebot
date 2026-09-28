@@ -434,7 +434,7 @@ Runs a command line. **You approve the compiled plan before anything runs.**
 |---|---|
 | `command` | one command line; a newline is refused, since this is a line and not a script |
 | `directory` | where to run, inside the workspace or a directory you added ([below](#the-directory-carries-over-and-nothing-else-does)) |
-| `deadline_seconds` | how long to wait, defaulting to 300 ([below](#a-line-has-a-deadline)) |
+| `deadline_seconds` | how long to wait, defaulting to 300 seconds ([below](#a-line-has-a-deadline)) |
 | `background` | start the line and hand back a job name instead of waiting ([below](#leaving-a-pipeline-running)) |
 | `stdin_ref` | a reference whose contents are fed to the first program ([below](#filtering-something-the-agent-may-not-read)) |
 | `read` | ask for the output in this result; honoured only when [bypassing with no screening](#reading-the-output-in-the-same-result) |
@@ -780,6 +780,13 @@ Every line is given 300 seconds unless the call names its own. `deadline_seconds
 that, and is held between 1 and 600: a value outside those becomes the nearer of the two, and one that
 is not a whole number of seconds is refused before anything runs. It has no effect with
 `background: true`, which is not waited for at all.
+
+**Both figures are yours to name.** `run.defaultSeconds` and `run.maxSeconds` in a settings file say
+what a line with no deadline of its own gets and the most one may ask for; see
+[configuration](../customize/configuration.md#rundefaultseconds-and-runmaxseconds). Raise the first
+where your build takes longer than five minutes, so a line the agent did not think to put a deadline
+on is not stopped partway through. The agent is told whichever figures are in force, so a ceiling you
+raise is one it knows it may ask for.
 
 When the deadline runs out the steps are killed, and **what they printed before that comes back exactly
 as it would from a line that ended on its own**, under the same label. Reaching the deadline ends a run

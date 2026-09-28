@@ -230,6 +230,7 @@ pub fn session(skip_permissions: bool) -> ExitCode {
         mode,
         attribution: settings.attribution().clone(),
         output_cap: settings.run_output_cap(),
+        deadlines: bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines()),
         model,
         in_force: named,
         reads_effort,
@@ -402,6 +403,11 @@ struct Running<'a> {
     /// Read once beside the attribution and for the same reason: a file edited mid-session
     /// describes the next one.
     output_cap: Option<usize>,
+    /// How long a command may run, and the most one call may ask for, as the settings leave them.
+    ///
+    /// Resolved once beside the cap and for the same reason: a file edited mid-session describes
+    /// the next one.
+    deadlines: bravebot_agent::exec::Deadlines,
     /// Whether a check that finds nothing may promote a slot without the person being asked.
     ///
     /// Resolved once, where the session is assembled, out of the three routes
@@ -433,6 +439,7 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
             .with_permission_mode(self.mode)
             .with_attribution(self.attribution.clone())
             .with_output_cap(self.output_cap)
+            .with_deadlines(self.deadlines)
             .with_auto_vetting(self.auto_vetting)
             .already_asked_about(self.asked_about.clone())
             .already_exposed(self.exposed.clone());

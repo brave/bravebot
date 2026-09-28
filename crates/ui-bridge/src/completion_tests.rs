@@ -80,6 +80,7 @@ fn check_completion(ending: &str) -> (bool, bool) {
             config,
             attribution: Default::default(),
             output_cap: None,
+            deadlines: bravebot_agent::exec::Deadlines::BUILT_IN,
             auto_vetting: false,
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             model: None,

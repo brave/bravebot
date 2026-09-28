@@ -1683,3 +1683,120 @@ fn a_cancelled_wait_for_more_comes_back_without_waiting_out_its_bound() {
         "a cancelled wait went on waiting: {waited:?}"
     );
 }
+
+/// RUN-23: figures nobody named are the ones compiled in, so a checkout with no settings file runs
+/// exactly as it did before either key existed.
+#[test]
+fn run_deadlines_nobody_named_are_the_built_in_ones() {
+    assert_eq!(
+        exec::Deadlines::resolve(bravebot_config::RunDeadlines {
+            default: None,
+            ceiling: None
+        }),
+        exec::Deadlines::BUILT_IN
+    );
+    assert_eq!(exec::Deadlines::BUILT_IN.default, exec::LIMIT);
+    assert_eq!(exec::Deadlines::BUILT_IN.ceiling, exec::CEILING);
+}
+
+/// RUN-23: a default past the built-in ceiling raises it, rather than being held down to a figure
+/// nobody wrote.
+///
+/// This is the whole motivating case: somebody whose build takes eleven minutes writes one key, and
+/// a resolution that clamped the default to the built-in ceiling would hand them ten and kill the
+/// build with nothing saying why.
+#[test]
+fn a_default_past_the_built_in_ceiling_raises_it() {
+    let resolved = exec::Deadlines::resolve(bravebot_config::RunDeadlines {
+        default: Some(Duration::from_secs(1200)),
+        ceiling: None,
+    });
+    assert_eq!(resolved.default, Duration::from_secs(1200));
+    assert_eq!(
+        resolved.ceiling,
+        Duration::from_secs(1200),
+        "a default a call could not have named for itself"
+    );
+}
+
+/// RUN-23: a ceiling under the built-in default lowers it, since a default no call could name is not
+/// a default.
+///
+/// The other direction of the same rule, and the one that matters for somebody holding every run to
+/// a minute: a default left at 300 there would be a figure the ceiling forbids, and every command
+/// would run under a number neither the person nor the program chose.
+#[test]
+fn a_ceiling_under_the_built_in_default_lowers_it() {
+    let resolved = exec::Deadlines::resolve(bravebot_config::RunDeadlines {
+        default: None,
+        ceiling: Some(Duration::from_secs(60)),
+    });
+    assert_eq!(resolved.ceiling, Duration::from_secs(60));
+    assert_eq!(resolved.default, Duration::from_secs(60));
+}
+
+/// RUN-23: where a file names both, the ceiling it names is the bound and the default is held to it.
+///
+/// Both figures are that person's own words, and of the two the ceiling is the one that says what the
+/// most a run may take is. A resolution that took the larger of the two instead would make the
+/// ceiling unwritable in any file that also raised the default.
+#[test]
+fn a_file_naming_both_holds_the_default_to_the_ceiling_it_named() {
+    let resolved = exec::Deadlines::resolve(bravebot_config::RunDeadlines {
+        default: Some(Duration::from_secs(900)),
+        ceiling: Some(Duration::from_secs(300)),
+    });
+    assert_eq!(resolved.ceiling, Duration::from_secs(300));
+    assert_eq!(resolved.default, Duration::from_secs(300));
+}
+
+/// RUN-23: a call's own deadline is held to the ceiling in force rather than to the built-in one.
+///
+/// Both ends of it: a raised ceiling is a deadline a call may actually reach, and a lowered one is a
+/// bound a call cannot talk its way past.
+#[test]
+fn a_call_is_held_to_the_ceiling_in_force() {
+    let raised = exec::Deadlines::resolve(bravebot_config::RunDeadlines {
+        default: None,
+        ceiling: Some(Duration::from_secs(1800)),
+    });
+    assert_eq!(raised.held_to(1200), Duration::from_secs(1200));
+    assert_eq!(raised.held_to(3600), Duration::from_secs(1800));
+
+    let lowered = exec::Deadlines::resolve(bravebot_config::RunDeadlines {
+        default: None,
+        ceiling: Some(Duration::from_secs(60)),
+    });
+    assert_eq!(lowered.held_to(600), Duration::from_secs(60));
+    assert_eq!(
+        lowered.held_to(-10),
+        exec::FLOOR,
+        "the floor is not a figure a settings file moves"
+    );
+}
+
+/// RUN-23: a ceiling too large to be a number of seconds still bounds nothing, rather than turning
+/// into a bound below the floor.
+///
+/// `maxSeconds` is read as a `u64`, so a file may name a figure past `i64::MAX`. Converted with a
+/// cast, that ceiling wraps negative, the clamp's bounds come out the wrong way round, and every
+/// deadline a call names collapses to one second: every command in the session stopped before it
+/// prints, from a key the person wrote meaning the opposite. Nothing warns, and the figure they
+/// asked for is the one place they would not think to look.
+#[test]
+fn a_ceiling_too_large_to_count_in_seconds_does_not_collapse_every_deadline() {
+    let absurd = exec::Deadlines::resolve(bravebot_config::RunDeadlines {
+        default: None,
+        ceiling: Some(Duration::from_secs(u64::MAX)),
+    });
+    assert_eq!(
+        absurd.held_to(1200),
+        Duration::from_secs(1200),
+        "a deadline the call named was not granted under an unbounded ceiling"
+    );
+    assert_eq!(
+        absurd.held_to(-10),
+        exec::FLOOR,
+        "the floor still holds at the bottom"
+    );
+}

@@ -89,16 +89,26 @@ impl Scheduling {
 /// `scheduling` says what this turn may say about when it runs again, which decides whether
 /// `schedule_next` is offered at all and, where it is, which of two jobs its description describes.
 /// `arming` says whether the session this turn belongs to keeps standing watches, which decides
-/// whether `watch_file` is offered.
-pub fn available(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<Tool> {
-    let mut tools = table(scheduling, arming);
+/// whether `watch_file` is offered. `deadlines` is how long a command may run, which `run`'s
+/// description quotes: a planner told 600 seconds where a person has made room for 1200 spends its
+/// deadline on the figure it was told about and never asks for the run they paid for.
+pub fn available(
+    scheduling: Scheduling,
+    arming: crate::watch::Arming,
+    deadlines: crate::exec::Deadlines,
+) -> Vec<Tool> {
+    let mut tools = table(scheduling, arming, deadlines);
     for tool in &mut tools {
         ask_why(tool);
     }
     tools
 }
 
-fn table(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<Tool> {
+fn table(
+    scheduling: Scheduling,
+    arming: crate::watch::Arming,
+    deadlines: crate::exec::Deadlines,
+) -> Vec<Tool> {
     // Which of the two answers a request about one file gets. Both exist wherever watches do, and
     // a description that named neither as the better one would leave the planner picking the one
     // it read first, which is the read's own paragraph and therefore always the loop.
@@ -140,6 +150,11 @@ fn table(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<Tool> {
             "Nothing will ask you again, though: this turn is the last one asked about the user's line, so take the look you can take inside it and say plainly that no later one is coming.",
         ),
     };
+    // The two figures `run` quotes, in seconds, wherever its description names them. Written out
+    // here because a description is the only place the planner can learn either: a call that names
+    // nothing gets the first, and a call may raise its own deadline as far as the second.
+    let (deadline_default, deadline_ceiling) =
+        (deadlines.default.as_secs(), deadlines.ceiling.as_secs());
     let mut tools = vec![
         Tool::function(
             "read_file",
@@ -725,7 +740,13 @@ fn table(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<Tool> {
              \
              A program meant to keep running, such as a server or a watcher, needs \
              background: true. Without it the line is waited on and stopped at its deadline \
-             (300 seconds by default; set deadline_seconds to allow up to 600), so there is \
+             ("
+                .to_string()
+                + &format!(
+                    "{deadline_default} seconds by default; set deadline_seconds to allow up to \
+                     {deadline_ceiling}"
+                )
+                + "), so there is \
              no moment at which it is up and you can do anything with it. \
              \
              Asked to watch something, or to say when it changes, decide first what is being \
@@ -736,7 +757,6 @@ fn table(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<Tool> {
              wait_seconds, which is one call covering a window rather than a look per turn. \
              Neither reaches past this turn by itself: a background job is killed when the turn \
              ends, and comparing a token needs a later look. "
-                .to_string()
                 + look_again_after_a_run
                 + " And say which window you watched, or which looks you compared, rather than \
                    a time of day, which you have no clock for; where you have scheduled no \
@@ -775,12 +795,15 @@ fn table(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<Tool> {
                     },
                     "deadline_seconds": {
                         "type": "integer",
-                        "description": "How long to wait for the command, in seconds. Defaults \
-                                        to 300. Held to between 1 and 600 seconds, so anything \
-                                        outside that becomes the nearest of the two. A command \
-                                        that outlasts its deadline is stopped and what it printed \
-                                        comes back. Has no effect with background: true, which is \
-                                        not waited for at all."
+                        "description": format!(
+                            "How long to wait for the command, in seconds. Defaults to \
+                             {deadline_default}. Held to between {} and {deadline_ceiling} \
+                             seconds, so anything outside that becomes the nearest of the two. A \
+                             command that outlasts its deadline is stopped and what it printed \
+                             comes back. Has no effect with background: true, which is not waited \
+                             for at all.",
+                            crate::exec::FLOOR.as_secs()
+                        )
                     },
                     "background": {
                         "type": "boolean",
@@ -1144,12 +1167,14 @@ pub fn for_delegate(
     capabilities: &bravebot_core::capability::CapabilitySet,
     confined_to: Option<&[String]>,
     delegating: Option<&bravebot_core::delegate::Definitions>,
+    deadlines: crate::exec::Deadlines,
 ) -> Vec<Tool> {
     use bravebot_core::delegate::{NEVER_DELEGATED, gating_capability};
 
     let mut tools: Vec<Tool> = available(
         Scheduling::ArrangingALook,
         crate::watch::Arming::Unavailable,
+        deadlines,
     )
     .into_iter()
     .filter(|tool| {
@@ -1184,8 +1209,9 @@ pub fn for_planner(
     scheduling: Scheduling,
     arming: crate::watch::Arming,
     delegates: &bravebot_core::delegate::Definitions,
+    deadlines: crate::exec::Deadlines,
 ) -> Vec<Tool> {
-    let mut tools = available(scheduling, arming);
+    let mut tools = available(scheduling, arming, deadlines);
     offer_kinds(&mut tools, delegates);
     tools
 }
@@ -1395,6 +1421,14 @@ pub struct Tools<'a> {
     /// tree, and one that read a settings file would answer differently on a machine whose owner
     /// had configured it.
     pub output_cap: usize,
+    /// How long a command may run, and the most a call may ask for, from `run.defaultSeconds` and
+    /// `run.maxSeconds` or the built-in figures where nothing named them.
+    ///
+    /// The figures in force rather than what a file said, and resolved by the caller that read the
+    /// settings, for the reason `output_cap` is: this crate is built by every test in the tree, and
+    /// one that read a settings file would answer differently on a machine whose owner had
+    /// configured it.
+    pub deadlines: crate::exec::Deadlines,
     /// The skills this turn found, which the planner selects from by name.
     pub skills: &'a crate::skills::Catalogue,
     /// Where quarantined content lives, by the names the planner was given for it.
@@ -2742,24 +2776,24 @@ fn references_in(arguments: &Value) -> Labelled<String> {
     )
 }
 
-/// The deadline asked for by a `run` call, held to the execution bounds.
+/// The deadline asked for by a `run` call, held to the figures in force.
 ///
-/// An absent field or `null` (frequent in model tool calls for omitted optional parameters)
-/// defaults to [`crate::exec::LIMIT`]. A value outside the bounds is clamped to between
-/// [`crate::exec::FLOOR`] and [`crate::exec::CEILING`]. Non-integers are refused.
-fn deadline_from(arguments: &Value) -> Result<std::time::Duration, &'static str> {
+/// An absent field or `null` (frequent in model tool calls for omitted optional parameters) takes
+/// `deadlines.default`. A value outside the bounds is clamped to between [`crate::exec::FLOOR`] and
+/// `deadlines.ceiling`. Non-integers are refused.
+///
+/// The figures are handed in rather than read from the constants, because a person may name either
+/// in a settings file and the figure in force is the one their call has to run under (RUN-23).
+fn deadline_from(
+    arguments: &Value,
+    deadlines: crate::exec::Deadlines,
+) -> Result<std::time::Duration, &'static str> {
     match arguments.get("deadline_seconds") {
         Some(value) if !value.is_null() => match value.as_i64() {
-            Some(seconds) => {
-                let clamped = seconds.clamp(
-                    crate::exec::FLOOR.as_secs() as i64,
-                    crate::exec::CEILING.as_secs() as i64,
-                ) as u64;
-                Ok(std::time::Duration::from_secs(clamped))
-            }
+            Some(seconds) => Ok(deadlines.held_to(seconds)),
             None => Err("error: 'deadline_seconds' must be a whole number of seconds"),
         },
-        _ => Ok(crate::exec::LIMIT),
+        _ => Ok(deadlines.default),
     }
 }
 
@@ -5297,7 +5331,7 @@ fn run<S: Sink, C: Confirmer>(
     // Not a safety property: a program that finishes in time is no safer than one that
     // does not. Absent a value, the short default is generous enough for an ordinary
     // build step and short enough that a hung program is noticed.
-    let limit = match deadline_from(arguments) {
+    let limit = match deadline_from(arguments, tools.deadlines) {
         Ok(limit) => limit,
         Err(diagnostic) => return Produced::problem(diagnostic),
     };
@@ -7508,6 +7542,7 @@ fn read_git<S: Sink, C: Confirmer>(
 
 #[cfg(test)]
 mod tests {
+    use crate::exec::Deadlines;
     use crate::watch::Arming;
     /// Where a gate shows up in the trail, so a test can say which of two reads happened first.
     fn gate_at(sink: &bravebot_core::event::RecordingSink, gate: &str, detail: &str) -> usize {
@@ -7623,7 +7658,11 @@ mod tests {
     /// expands came to be advertised as missing on one of them.
     #[test]
     fn both_glob_arguments_describe_the_matcher_the_same_way() {
-        let offered = available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 });
+        let offered = available(
+            Scheduling::ArrangingALook,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+        );
         // The part of a description that is about the matcher rather than about the argument.
         let syntax = |tool: &str, property: &str| -> String {
             let described = offered
@@ -7706,10 +7745,14 @@ mod tests {
 
     #[test]
     fn the_tool_set_is_reads_plus_gated_writes() {
-        let names: Vec<String> = available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 })
-            .iter()
-            .map(|t| t.function.name.clone())
-            .collect();
+        let names: Vec<String> = available(
+            Scheduling::ArrangingALook,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+        )
+        .iter()
+        .map(|t| t.function.name.clone())
+        .collect();
         assert_eq!(
             names,
             vec![
@@ -7758,7 +7801,12 @@ mod tests {
                 Arming::Full,
                 Arming::Unavailable,
             ] {
-                offered.extend(for_planner(scheduling, arming, &Definitions::default()));
+                offered.extend(for_planner(
+                    scheduling,
+                    arming,
+                    &Definitions::default(),
+                    Deadlines::BUILT_IN,
+                ));
             }
         }
         for name in Kind::NAMES {
@@ -7767,6 +7815,7 @@ mod tests {
                 &kind.capabilities(),
                 None,
                 Some(&Definitions::default()),
+                Deadlines::BUILT_IN,
             ));
         }
 
@@ -7805,7 +7854,12 @@ mod tests {
         ));
         for name in Kind::NAMES {
             let kind = Kind::from_name(name).expect("enumerated");
-            let above = for_delegate(&kind.capabilities(), None, Some(&delegates));
+            let above = for_delegate(
+                &kind.capabilities(),
+                None,
+                Some(&delegates),
+                Deadlines::BUILT_IN,
+            );
             let spawn = above
                 .iter()
                 .find(|t| t.function.name == "spawn_agent")
@@ -7818,10 +7872,11 @@ mod tests {
                 "a {name} was offered kinds other than the ones this session resolved"
             );
 
-            let bottom: Vec<String> = for_delegate(&kind.capabilities(), None, None)
-                .iter()
-                .map(|t| t.function.name.clone())
-                .collect();
+            let bottom: Vec<String> =
+                for_delegate(&kind.capabilities(), None, None, Deadlines::BUILT_IN)
+                    .iter()
+                    .map(|t| t.function.name.clone())
+                    .collect();
             assert!(
                 !bottom.iter().any(|t| t == "spawn_agent"),
                 "a {name} at the bottom of the tree was offered a way to delegate"
@@ -7837,6 +7892,7 @@ mod tests {
         let offered = available(
             Scheduling::ArrangingALook,
             crate::watch::Arming::Unavailable,
+            Deadlines::BUILT_IN,
         );
         let spawn = offered
             .iter()
@@ -7861,6 +7917,7 @@ mod tests {
                 &kind.capabilities(),
                 None,
                 Some(&bravebot_core::delegate::Definitions::default()),
+                Deadlines::BUILT_IN,
             )
             .iter()
             .map(|t| t.function.name.clone())
@@ -7879,7 +7936,7 @@ mod tests {
         use bravebot_core::delegate::Kind;
 
         let names = |kind: Kind| -> Vec<String> {
-            for_delegate(&kind.capabilities(), None, None)
+            for_delegate(&kind.capabilities(), None, None, Deadlines::BUILT_IN)
                 .iter()
                 .map(|t| t.function.name.clone())
                 .collect()
@@ -7916,6 +7973,7 @@ mod tests {
                 &kind.capabilities(),
                 None,
                 Some(&bravebot_core::delegate::Definitions::default()),
+                Deadlines::BUILT_IN,
             )
             .iter()
             .map(|t| t.function.name.clone())
@@ -7953,6 +8011,7 @@ mod tests {
                 &capabilities,
                 None,
                 Some(&bravebot_core::delegate::Definitions::default()),
+                Deadlines::BUILT_IN,
             )
             .iter()
             .map(|t| t.function.name.clone())
@@ -7972,17 +8031,27 @@ mod tests {
         use bravebot_core::delegate::Kind;
 
         let named = ["read_file".to_string()];
-        let offered: Vec<String> = for_delegate(&Kind::Worker.capabilities(), Some(&named), None)
-            .iter()
-            .map(|t| t.function.name.clone())
-            .collect();
+        let offered: Vec<String> = for_delegate(
+            &Kind::Worker.capabilities(),
+            Some(&named),
+            None,
+            Deadlines::BUILT_IN,
+        )
+        .iter()
+        .map(|t| t.function.name.clone())
+        .collect();
 
         assert_eq!(offered, ["read_file"]);
 
-        let all: Vec<String> = for_delegate(&Kind::Worker.capabilities(), None, None)
-            .iter()
-            .map(|t| t.function.name.clone())
-            .collect();
+        let all: Vec<String> = for_delegate(
+            &Kind::Worker.capabilities(),
+            None,
+            None,
+            Deadlines::BUILT_IN,
+        )
+        .iter()
+        .map(|t| t.function.name.clone())
+        .collect();
         assert!(
             all.len() > offered.len(),
             "confining a worker to one tool offered it no fewer than naming none did"
@@ -8003,6 +8072,7 @@ mod tests {
         for tool in available(
             Scheduling::ArrangingALook,
             crate::watch::Arming::Unavailable,
+            Deadlines::BUILT_IN,
         ) {
             let name = tool.function.name.as_str();
             if NEVER_DELEGATED.contains(&name) {
@@ -8018,6 +8088,7 @@ mod tests {
                     set,
                     None,
                     Some(&bravebot_core::delegate::Definitions::default()),
+                    Deadlines::BUILT_IN,
                 )
                 .iter()
                 .any(|t| t.function.name == name)
@@ -8038,6 +8109,7 @@ mod tests {
         let names: Vec<String> = available(
             Scheduling::ArrangingALook,
             crate::watch::Arming::Unavailable,
+            Deadlines::BUILT_IN,
         )
         .iter()
         .map(|tool| tool.function.name.clone())
@@ -8089,6 +8161,7 @@ mod tests {
             Scheduling::ArrangingALook,
             crate::watch::Arming::Unavailable,
             &delegates,
+            Deadlines::BUILT_IN,
         );
         let spawn = tools
             .iter()
@@ -8142,15 +8215,27 @@ mod tests {
             }
         }
 
-        let turn = available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 });
+        let turn = available(
+            Scheduling::ArrangingALook,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+        );
         shell_free("a turn", &turn);
         shell_free(
             "a turn pacing a loop",
-            &available(Scheduling::PacingALoop, Arming::Allowed { free: 1 }),
+            &available(
+                Scheduling::PacingALoop,
+                Arming::Allowed { free: 1 },
+                Deadlines::BUILT_IN,
+            ),
         );
         shell_free(
             "a turn on their interval",
-            &available(Scheduling::TheirInterval, Arming::Allowed { free: 1 }),
+            &available(
+                Scheduling::TheirInterval,
+                Arming::Allowed { free: 1 },
+                Deadlines::BUILT_IN,
+            ),
         );
 
         let held: Vec<&str> = turn.iter().map(|t| t.function.name.as_str()).collect();
@@ -8160,6 +8245,7 @@ mod tests {
                 &kind.capabilities(),
                 None,
                 Some(&bravebot_core::delegate::Definitions::default()),
+                Deadlines::BUILT_IN,
             );
             shell_free(name, &offered);
             for tool in &offered {
@@ -8183,10 +8269,14 @@ mod tests {
     /// [RUN-22]: ../../../docs/specs/tools/run.md
     #[test]
     fn run_takes_one_command_line_and_nothing_else() {
-        let tool = available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 })
-            .into_iter()
-            .find(|t| t.function.name == "run")
-            .expect("run is offered");
+        let tool = available(
+            Scheduling::ArrangingALook,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+        )
+        .into_iter()
+        .find(|t| t.function.name == "run")
+        .expect("run is offered");
         let properties = tool.function.parameters["properties"]
             .as_object()
             .expect("run has parameters");
@@ -8225,51 +8315,162 @@ mod tests {
         use std::time::Duration;
 
         // Absent or null field defaults to LIMIT (300s).
-        assert_eq!(deadline_from(&json!({})).unwrap(), crate::exec::LIMIT);
         assert_eq!(
-            deadline_from(&json!({"deadline_seconds": null})).unwrap(),
+            deadline_from(&json!({}), Deadlines::BUILT_IN).unwrap(),
+            crate::exec::LIMIT
+        );
+        assert_eq!(
+            deadline_from(&json!({"deadline_seconds": null}), Deadlines::BUILT_IN).unwrap(),
             crate::exec::LIMIT
         );
 
         // Values within bounds.
         assert_eq!(
-            deadline_from(&json!({"deadline_seconds": 150})).unwrap(),
+            deadline_from(&json!({"deadline_seconds": 150}), Deadlines::BUILT_IN).unwrap(),
             Duration::from_secs(150)
         );
         assert_eq!(
-            deadline_from(&json!({"deadline_seconds": 450})).unwrap(),
+            deadline_from(&json!({"deadline_seconds": 450}), Deadlines::BUILT_IN).unwrap(),
             Duration::from_secs(450)
         );
 
         // Clamping to bounds: <= 0 clamps to FLOOR (1s).
         assert_eq!(
-            deadline_from(&json!({"deadline_seconds": 0})).unwrap(),
+            deadline_from(&json!({"deadline_seconds": 0}), Deadlines::BUILT_IN).unwrap(),
             crate::exec::FLOOR
         );
         assert_eq!(
-            deadline_from(&json!({"deadline_seconds": -10})).unwrap(),
+            deadline_from(&json!({"deadline_seconds": -10}), Deadlines::BUILT_IN).unwrap(),
             crate::exec::FLOOR
         );
         assert_eq!(
-            deadline_from(&json!({"deadline_seconds": 1})).unwrap(),
+            deadline_from(&json!({"deadline_seconds": 1}), Deadlines::BUILT_IN).unwrap(),
             crate::exec::FLOOR
         );
 
         // Clamping to bounds: >= 600 clamps to CEILING (600s).
         assert_eq!(
-            deadline_from(&json!({"deadline_seconds": 600})).unwrap(),
+            deadline_from(&json!({"deadline_seconds": 600}), Deadlines::BUILT_IN).unwrap(),
             crate::exec::CEILING
         );
         assert_eq!(
-            deadline_from(&json!({"deadline_seconds": 9999})).unwrap(),
+            deadline_from(&json!({"deadline_seconds": 9999}), Deadlines::BUILT_IN).unwrap(),
             crate::exec::CEILING
         );
 
         // Non-integers are refused.
-        assert!(deadline_from(&json!({"deadline_seconds": "soon"})).is_err());
-        assert!(deadline_from(&json!({"deadline_seconds": 12.5})).is_err());
-        assert!(deadline_from(&json!({"deadline_seconds": true})).is_err());
-        assert!(deadline_from(&json!({"deadline_seconds": [300]})).is_err());
+        assert!(deadline_from(&json!({"deadline_seconds": "soon"}), Deadlines::BUILT_IN).is_err());
+        assert!(deadline_from(&json!({"deadline_seconds": 12.5}), Deadlines::BUILT_IN).is_err());
+        assert!(deadline_from(&json!({"deadline_seconds": true}), Deadlines::BUILT_IN).is_err());
+        assert!(deadline_from(&json!({"deadline_seconds": [300]}), Deadlines::BUILT_IN).is_err());
+    }
+
+    /// RUN-23: a call that names no deadline gets the figure in force, and one that names its own is
+    /// held to the ceiling in force.
+    ///
+    /// The figures are read three lines from where they are spent, so a driver that took the
+    /// constants here would parse both keys, report both in `doctor`, and still stop every command
+    /// at five minutes. Each half fails against a different version of that mistake: the first
+    /// against a default read from `exec::LIMIT`, the second against a ceiling read from
+    /// `exec::CEILING`.
+    #[test]
+    fn a_configured_deadline_is_what_a_call_runs_under() {
+        use std::time::Duration;
+
+        let named = Deadlines::resolve(bravebot_config::RunDeadlines {
+            default: Some(Duration::from_secs(900)),
+            ceiling: Some(Duration::from_secs(1800)),
+        });
+
+        assert_eq!(
+            deadline_from(&json!({}), named).unwrap(),
+            Duration::from_secs(900),
+            "a call that named nothing was given the built-in default"
+        );
+        assert_eq!(
+            deadline_from(&json!({"deadline_seconds": null}), named).unwrap(),
+            Duration::from_secs(900),
+            "a null deadline was given the built-in default"
+        );
+        assert_eq!(
+            deadline_from(&json!({"deadline_seconds": 1200}), named).unwrap(),
+            Duration::from_secs(1200),
+            "a deadline inside the configured ceiling was clamped to the built-in one"
+        );
+        assert_eq!(
+            deadline_from(&json!({"deadline_seconds": 3600}), named).unwrap(),
+            Duration::from_secs(1800),
+            "a deadline past the configured ceiling was not held to it"
+        );
+
+        // And the other direction, so the key cannot only ever raise: a call asking for the
+        // built-in ceiling under a lowered one gets the lowered one.
+        let lowered = Deadlines::resolve(bravebot_config::RunDeadlines {
+            default: None,
+            ceiling: Some(Duration::from_secs(60)),
+        });
+        assert_eq!(
+            deadline_from(&json!({"deadline_seconds": 600}), lowered).unwrap(),
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            deadline_from(&json!({}), lowered).unwrap(),
+            Duration::from_secs(60),
+            "a ceiling below the built-in default left the default above it"
+        );
+    }
+
+    /// RUN-23: the `run` tool tells the planner the figures in force rather than the built-in ones.
+    ///
+    /// The description is the only place either figure can be learnt, so a table that quoted the
+    /// constants would leave a raised ceiling unreachable: the planner would name 600 because 600 is
+    /// what it was told about, and the twenty minutes somebody made room for would never be asked
+    /// for. Pinned on both the tool's own prose and the argument's description, since those are two
+    /// separate strings and a fix to one is not a fix to the other.
+    #[test]
+    fn the_run_tool_quotes_the_deadlines_in_force() {
+        use std::time::Duration;
+
+        let described = |deadlines| {
+            let tool = available(
+                Scheduling::ArrangingALook,
+                Arming::Allowed { free: 1 },
+                deadlines,
+            )
+            .into_iter()
+            .find(|tool| tool.function.name == "run")
+            .expect("run is offered");
+            let argument =
+                tool.function.parameters["properties"]["deadline_seconds"]["description"]
+                    .as_str()
+                    .expect("the deadline argument is described")
+                    .to_string();
+            (tool.function.description, argument)
+        };
+
+        let (prose, argument) = described(Deadlines::resolve(bravebot_config::RunDeadlines {
+            default: Some(Duration::from_secs(900)),
+            ceiling: Some(Duration::from_secs(1800)),
+        }));
+        assert!(
+            prose.contains("900 seconds by default") && prose.contains("up to 1800"),
+            "the tool's own description quoted a figure nobody configured: {prose}"
+        );
+        assert!(
+            argument.contains("Defaults to 900") && argument.contains("and 1800 seconds"),
+            "the deadline argument quoted a figure nobody configured: {argument}"
+        );
+
+        // And a caller that read no settings file is told what it always was.
+        let (prose, argument) = described(Deadlines::BUILT_IN);
+        assert!(
+            prose.contains("300 seconds by default") && prose.contains("up to 600"),
+            "a turn under the built-in figures was told something else: {prose}"
+        );
+        assert!(
+            argument.contains("Defaults to 300") && argument.contains("between 1 and 600 seconds"),
+            "a turn under the built-in figures was told something else: {argument}"
+        );
     }
 
     /// A wait is refused rather than clamped, which is where it parts company with a deadline. A
@@ -8322,10 +8523,14 @@ mod tests {
     /// and the description has to say the wait ends when something arrives.
     #[test]
     fn job_output_offers_a_bounded_wait_rather_than_only_a_snapshot() {
-        let tool = available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 })
-            .into_iter()
-            .find(|t| t.function.name == "job_output")
-            .expect("job_output is offered");
+        let tool = available(
+            Scheduling::ArrangingALook,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+        )
+        .into_iter()
+        .find(|t| t.function.name == "job_output")
+        .expect("job_output is offered");
 
         let wait = &tool.function.parameters["properties"]["wait_seconds"];
         assert_eq!(wait["type"], "integer", "wait_seconds is not offered");
@@ -8446,7 +8651,7 @@ mod tests {
     #[test]
     fn what_a_watch_request_is_told_about_the_next_look_matches_what_this_turn_can_arrange() {
         let described = |scheduling, name: &str| {
-            available(scheduling, Arming::Allowed { free: 1 })
+            available(scheduling, Arming::Allowed { free: 1 }, Deadlines::BUILT_IN)
                 .into_iter()
                 .find(|t| t.function.name == name)
                 .unwrap_or_else(|| panic!("{name} is offered"))
@@ -8506,12 +8711,16 @@ mod tests {
     }
 
     fn run_description() -> String {
-        available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 })
-            .into_iter()
-            .find(|t| t.function.name == "run")
-            .expect("run is offered")
-            .function
-            .description
+        available(
+            Scheduling::ArrangingALook,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+        )
+        .into_iter()
+        .find(|t| t.function.name == "run")
+        .expect("run is offered")
+        .function
+        .description
     }
 
     /// Blind output is the default, not the rule, and describing it as the rule is what made
@@ -8519,10 +8728,14 @@ mod tests {
     /// reason to run a build. Vouching is the way out and the description has to say so.
     #[test]
     fn run_says_a_vouched_command_comes_back_readable() {
-        let tool = available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 })
-            .into_iter()
-            .find(|t| t.function.name == "run")
-            .expect("run is offered");
+        let tool = available(
+            Scheduling::ArrangingALook,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+        )
+        .into_iter()
+        .find(|t| t.function.name == "run")
+        .expect("run is offered");
         let description = &tool.function.description;
 
         assert!(
@@ -8552,10 +8765,14 @@ mod tests {
     /// because the driver can hand over what those programs cannot.
     #[test]
     fn read_file_sends_a_question_about_change_to_a_token_it_can_compare() {
-        let tool = available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 })
-            .into_iter()
-            .find(|t| t.function.name == "read_file")
-            .expect("read_file is offered");
+        let tool = available(
+            Scheduling::ArrangingALook,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+        )
+        .into_iter()
+        .find(|t| t.function.name == "read_file")
+        .expect("read_file is offered");
         let description = &tool.function.description;
 
         for stated in [
@@ -8650,7 +8867,11 @@ mod tests {
             }
         }
 
-        for tool in available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 }) {
+        for tool in available(
+            Scheduling::ArrangingALook,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+        ) {
             let name = tool.function.name;
             assert!(
                 tool.function.parameters["properties"].is_object(),
@@ -8679,10 +8900,14 @@ mod tests {
     /// One session opened by asking where Brave was installed rather than looking.
     #[test]
     fn asking_is_described_as_a_last_resort_after_looking() {
-        let tool = available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 })
-            .into_iter()
-            .find(|t| t.function.name == "ask_user")
-            .expect("ask_user is offered");
+        let tool = available(
+            Scheduling::ArrangingALook,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+        )
+        .into_iter()
+        .find(|t| t.function.name == "ask_user")
+        .expect("ask_user is offered");
         let described = tool.function.description.to_lowercase();
         assert!(
             described.contains("cannot find out yourself"),
@@ -8699,10 +8924,14 @@ mod tests {
     /// what made front-loading questions look obligatory.
     #[test]
     fn ask_user_says_that_looking_first_does_not_forfeit_the_question() {
-        let tool = available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 })
-            .into_iter()
-            .find(|t| t.function.name == "ask_user")
-            .expect("ask_user is offered");
+        let tool = available(
+            Scheduling::ArrangingALook,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+        )
+        .into_iter()
+        .find(|t| t.function.name == "ask_user")
+        .expect("ask_user is offered");
         assert!(
             tool.function
                 .description
@@ -8716,10 +8945,14 @@ mod tests {
     /// things to read results that never come back to it.
     #[test]
     fn run_says_its_output_does_not_come_back_to_the_planner() {
-        let tool = available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 })
-            .into_iter()
-            .find(|t| t.function.name == "run")
-            .expect("run is offered");
+        let tool = available(
+            Scheduling::ArrangingALook,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+        )
+        .into_iter()
+        .find(|t| t.function.name == "run")
+        .expect("run is offered");
         let described = tool.function.description.to_lowercase();
         assert!(
             described.contains("not be shown") || described.contains("reference"),
@@ -8736,10 +8969,14 @@ mod tests {
     #[test]
     fn the_mutating_tools_state_that_approval_is_required() {
         for name in ["write_file", "edit_file"] {
-            let tool = available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 })
-                .into_iter()
-                .find(|t| t.function.name == name)
-                .unwrap_or_else(|| panic!("{name} is offered"));
+            let tool = available(
+                Scheduling::ArrangingALook,
+                Arming::Allowed { free: 1 },
+                Deadlines::BUILT_IN,
+            )
+            .into_iter()
+            .find(|t| t.function.name == name)
+            .unwrap_or_else(|| panic!("{name} is offered"));
             assert!(
                 tool.function.description.contains("approve"),
                 "{name} does not mention approval: {}",
@@ -8752,10 +8989,14 @@ mod tests {
     /// matching will propose passages that are refused.
     #[test]
     fn the_edit_tool_states_that_matching_is_exact() {
-        let edit = available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 })
-            .into_iter()
-            .find(|t| t.function.name == "edit_file")
-            .expect("edit_file is offered");
+        let edit = available(
+            Scheduling::ArrangingALook,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+        )
+        .into_iter()
+        .find(|t| t.function.name == "edit_file")
+        .expect("edit_file is offered");
         let old_text = edit.function.parameters["properties"]["old_text"]["description"]
             .as_str()
             .expect("old_text is described");
@@ -8767,7 +9008,11 @@ mod tests {
 
     #[test]
     fn every_tool_declares_a_schema() {
-        for tool in available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 }) {
+        for tool in available(
+            Scheduling::ArrangingALook,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+        ) {
             assert_eq!(tool.kind, "function");
             assert_eq!(tool.function.parameters["type"], "object");
             assert!(!tool.function.description.is_empty());
@@ -8795,10 +9040,14 @@ mod tests {
     /// vocabulary the parser does not read.
     #[test]
     fn the_todo_schema_advertises_the_statuses_the_kernel_parses() {
-        let tool = available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 })
-            .into_iter()
-            .find(|t| t.function.name == "todo_write")
-            .expect("todo_write is offered");
+        let tool = available(
+            Scheduling::ArrangingALook,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+        )
+        .into_iter()
+        .find(|t| t.function.name == "todo_write")
+        .expect("todo_write is offered");
         let advertised = tool.function.parameters["properties"]["todos"]["items"]["properties"]
             ["status"]["enum"]
             .as_array()
@@ -8819,10 +9068,14 @@ mod tests {
     /// tool whose answer to "what would a person be approving?" is "nothing".
     #[test]
     fn the_task_list_tool_offers_no_argument_that_names_a_destination() {
-        let tool = available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 })
-            .into_iter()
-            .find(|t| t.function.name == "todo_write")
-            .expect("todo_write is offered");
+        let tool = available(
+            Scheduling::ArrangingALook,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+        )
+        .into_iter()
+        .find(|t| t.function.name == "todo_write")
+        .expect("todo_write is offered");
         let properties = tool.function.parameters["properties"]
             .as_object()
             .expect("the arguments are an object");
@@ -8838,10 +9091,14 @@ mod tests {
     /// and the finished tasks will vanish from the display.
     #[test]
     fn the_todo_tool_states_that_the_whole_list_is_required() {
-        let tool = available(Scheduling::ArrangingALook, Arming::Allowed { free: 1 })
-            .into_iter()
-            .find(|t| t.function.name == "todo_write")
-            .expect("todo_write is offered");
+        let tool = available(
+            Scheduling::ArrangingALook,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+        )
+        .into_iter()
+        .find(|t| t.function.name == "todo_write")
+        .expect("todo_write is offered");
         assert!(
             tool.function.description.contains("whole list"),
             "the description does not ask for the whole list: {}",
@@ -9606,7 +9863,7 @@ mod tests {
         #[test]
         fn nothing_on_this_tool_says_what_the_next_turn_asks() {
             for scheduling in [Scheduling::ArrangingALook, Scheduling::PacingALoop] {
-                let tool = available(scheduling, Arming::Allowed { free: 1 })
+                let tool = available(scheduling, Arming::Allowed { free: 1 }, Deadlines::BUILT_IN)
                     .into_iter()
                     .find(|t| t.function.name == "schedule_next")
                     .expect("schedule_next is offered");
@@ -9626,7 +9883,7 @@ mod tests {
         #[test]
         fn any_turn_may_arrange_the_next_look_and_is_told_which_case_it_is() {
             let described = |scheduling| {
-                available(scheduling, Arming::Allowed { free: 1 })
+                available(scheduling, Arming::Allowed { free: 1 }, Deadlines::BUILT_IN)
                     .into_iter()
                     .find(|t| t.function.name == "schedule_next")
                     .expect("schedule_next is offered")
@@ -9652,7 +9909,11 @@ mod tests {
         /// planner then writes into the answer of a run that is about to exit.
         #[test]
         fn a_turn_nothing_will_ask_again_is_offered_no_way_to_schedule_one() {
-            let offered = available(Scheduling::NoLaterLook, Arming::Allowed { free: 1 });
+            let offered = available(
+                Scheduling::NoLaterLook,
+                Arming::Allowed { free: 1 },
+                Deadlines::BUILT_IN,
+            );
             assert!(
                 !offered.iter().any(|t| t.function.name == "schedule_next"),
                 "a turn nothing will ask again was offered a way to arrange a later look"
@@ -9673,9 +9934,13 @@ mod tests {
         #[test]
         fn a_tick_the_person_timed_is_offered_no_way_to_schedule_one() {
             assert!(
-                !available(Scheduling::TheirInterval, Arming::Allowed { free: 1 })
-                    .iter()
-                    .any(|t| t.function.name == "schedule_next"),
+                !available(
+                    Scheduling::TheirInterval,
+                    Arming::Allowed { free: 1 },
+                    Deadlines::BUILT_IN
+                )
+                .iter()
+                .any(|t| t.function.name == "schedule_next"),
                 "a tick running on the person's interval was offered a way to reschedule itself"
             );
         }
@@ -10316,10 +10581,14 @@ mod tests {
         /// could read off the call.
         #[test]
         fn nothing_on_this_tool_says_anything_but_which_file() {
-            let tool = available(Scheduling::ArrangingALook, Arming::Allowed { free: 8 })
-                .into_iter()
-                .find(|t| t.function.name == "watch_file")
-                .expect("watch_file is offered");
+            let tool = available(
+                Scheduling::ArrangingALook,
+                Arming::Allowed { free: 8 },
+                Deadlines::BUILT_IN,
+            )
+            .into_iter()
+            .find(|t| t.function.name == "watch_file")
+            .expect("watch_file is offered");
             let properties = tool.function.parameters["properties"]
                 .as_object()
                 .expect("properties");
@@ -10332,12 +10601,16 @@ mod tests {
         /// the read's own paragraph and therefore always the schedule.
         #[test]
         fn a_read_is_sent_to_the_watch_where_one_can_be_armed() {
-            let described = available(Scheduling::ArrangingALook, Arming::Allowed { free: 8 })
-                .into_iter()
-                .find(|t| t.function.name == "read_file")
-                .expect("read_file is offered")
-                .function
-                .description;
+            let described = available(
+                Scheduling::ArrangingALook,
+                Arming::Allowed { free: 8 },
+                Deadlines::BUILT_IN,
+            )
+            .into_iter()
+            .find(|t| t.function.name == "read_file")
+            .expect("read_file is offered")
+            .function
+            .description;
             assert!(
                 described.contains("watch_file is the better answer"),
                 "a read does not send a question about one file to the watch: {described}"
@@ -10348,12 +10621,16 @@ mod tests {
         /// sentence pointing at a tool that is not there has to go with it.
         #[test]
         fn a_read_is_sent_to_the_schedule_alone_where_no_watch_can_be_armed() {
-            let described = available(Scheduling::ArrangingALook, Arming::Unavailable)
-                .into_iter()
-                .find(|t| t.function.name == "read_file")
-                .expect("read_file is offered")
-                .function
-                .description;
+            let described = available(
+                Scheduling::ArrangingALook,
+                Arming::Unavailable,
+                Deadlines::BUILT_IN,
+            )
+            .into_iter()
+            .find(|t| t.function.name == "read_file")
+            .expect("read_file is offered")
+            .function
+            .description;
             assert!(
                 !described.contains("watch_file"),
                 "a read names a tool this surface does not offer: {described}"
@@ -10392,16 +10669,21 @@ mod tests {
         #[test]
         fn a_surface_that_keeps_no_watches_is_not_offered_the_tool() {
             assert!(
-                !available(Scheduling::ArrangingALook, Arming::Unavailable)
-                    .iter()
-                    .any(|t| t.function.name == "watch_file"),
+                !available(
+                    Scheduling::ArrangingALook,
+                    Arming::Unavailable,
+                    Deadlines::BUILT_IN
+                )
+                .iter()
+                .any(|t| t.function.name == "watch_file"),
                 "the tool was offered to a caller that keeps no watches"
             );
             assert!(
                 !for_delegate(
                     &CapabilitySet::from_iter([Capability::FileRead]),
                     None,
-                    None
+                    None,
+                    Deadlines::BUILT_IN
                 )
                 .iter()
                 .any(|t| t.function.name == "watch_file"),
@@ -10858,6 +11140,7 @@ mod tests {
             body(&mut Tools {
                 workspace,
                 output_cap: OUTPUT_CAP,
+                deadlines: Deadlines::BUILT_IN,
                 skills: &skills,
                 slots: &mut slots,
                 chat: Chat {
