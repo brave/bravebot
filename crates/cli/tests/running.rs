@@ -2385,26 +2385,26 @@ fn approvals(scratch: &Scratch) -> String {
 
 /// SERVERS-3: typing `mcp add` writes the declaration and is not the approval. With nobody at a
 /// terminal to put the question to, the server is declared, left unapproved, and listed as that
-/// rather than left out (SERVERS-14).
+/// rather than left out (SERVERS-14). Typed as `claude mcp add` takes it, it declares the same.
 #[test]
 fn an_added_server_nobody_was_asked_about_is_declared_and_listed_unapproved() {
-    let scratch = Scratch::new("cli-running-mcp-add");
-    let added = bravebot(
-        &scratch.path,
-        &[],
-        &[
-            "mcp",
-            "add",
-            "weather",
-            "--env",
-            "PATH",
-            "--stdio",
-            "--",
-            "npx",
-            "-y",
-            "weather-mcp",
-        ],
-    );
+    for (name, flags) in [
+        (
+            "cli-running-mcp-add",
+            &["--env", "PATH", "--stdio", "--"][..],
+        ),
+        ("cli-running-mcp-add-short", &["--"]),
+    ] {
+        declared_and_listed_unapproved(name, flags);
+    }
+}
+
+fn declared_and_listed_unapproved(name: &str, flags: &[&str]) {
+    let scratch = Scratch::new(name);
+    let mut args = vec!["mcp", "add", "weather"];
+    args.extend(flags);
+    args.extend(["npx", "-y", "weather-mcp"]);
+    let added = bravebot(&scratch.path, &[], &args);
     let (stdout, stderr) = said(&added);
     assert!(added.status.success(), "{stderr}");
     assert!(
@@ -2499,10 +2499,10 @@ fn a_value_in_a_stray_word_or_a_joined_flag_is_never_repeated() {
     );
 }
 
-/// SERVERS-3: everything after `--stdio --` is the server's argv, bravebot's own flags included.
+/// SERVERS-3: everything after a bare `--`, alone or after `--stdio`, is the server's argv,
+/// bravebot's own flags included.
 #[test]
 fn a_flag_of_bravebots_after_the_bare_dashes_is_the_servers_argument() {
-    let scratch = Scratch::new("cli-running-mcp-foreign");
     let argv = [
         "srv",
         "--settings",
@@ -2511,24 +2511,32 @@ fn a_flag_of_bravebots_after_the_bare_dashes_is_the_servers_argument() {
         "--vet",
         "--dangerously-skip-permissions",
     ];
-    let mut args = vec!["mcp", "add", "srv", "--stdio", "--"];
-    args.extend(argv);
-    let output = bravebot(&scratch.path, &[], &args);
-    let (_, stderr) = said(&output);
-    assert!(output.status.success(), "{stderr}");
-    let written = std::fs::read_to_string(scratch.path.join(".bravebot").join("mcp.json"))
-        .expect("the declaration was written");
-    let read = bravebot_config::mcp::Declarations::parse(&written).expect("it reads back");
-    let declared = bravebot_config::mcp::Declaration::stdio(
-        argv.iter().map(|word| word.to_string()).collect(),
-        Vec::new(),
-        None,
-    )
-    .unwrap();
-    assert_eq!(
-        read.get("srv").map(|entry| entry.declaration),
-        Some(Ok(declared))
-    );
+    for (name, dashes) in [
+        ("cli-running-mcp-foreign", &["--stdio", "--"][..]),
+        ("cli-running-mcp-foreign-short", &["--"]),
+    ] {
+        let scratch = Scratch::new(name);
+        let mut args = vec!["mcp", "add", "srv"];
+        args.extend(dashes);
+        args.extend(argv);
+        let output = bravebot(&scratch.path, &[], &args);
+        let (_, stderr) = said(&output);
+        assert!(output.status.success(), "{dashes:?}: {stderr}");
+        let written = std::fs::read_to_string(scratch.path.join(".bravebot").join("mcp.json"))
+            .expect("the declaration was written");
+        let read = bravebot_config::mcp::Declarations::parse(&written).expect("it reads back");
+        let declared = bravebot_config::mcp::Declaration::stdio(
+            argv.iter().map(|word| word.to_string()).collect(),
+            vec!["PATH".into()],
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            read.get("srv").map(|entry| entry.declaration),
+            Some(Ok(declared)),
+            "{dashes:?}"
+        );
+    }
 }
 
 /// SERVERS-5: `remove` takes the approval out with the declaration, since an approval outliving

@@ -36,8 +36,10 @@ It names the key and nothing inside it, because what is inside may be a command 
 A program on your machine, speaking over its standard input and output:
 
 ```sh
-bravebot mcp add weather --env PATH --stdio -- npx -y @dangahagan/weather-mcp@latest
+bravebot mcp add weather -- npx -y @dangahagan/weather-mcp@latest
 ```
+
+This is the line `claude mcp add` takes, and it declares the same server here.
 
 A service somewhere else:
 
@@ -49,7 +51,7 @@ The alias, `weather` here, is the name you give the server: letters, digits, `-`
 with a letter or a digit, at most 64 characters. Giving `add` an alias that is already declared
 replaces that declaration.
 
-`--stdio` takes the program and its arguments after a bare `--`, each one as its own argument. They
+Everything after a bare `--` is the program and its arguments, each one as its own argument. They
 are never joined into a line and never read by a shell, so an argument holding a space is one
 argument, and a flag of bravebot's own among them, such as `--settings`, is the server's.
 
@@ -57,14 +59,15 @@ argument, and a flag of bravebot's own among them, such as `--settings`, is the 
 |---|---|
 | `--env <name>` | pass this variable to the server, by name; repeatable |
 | `--dir <path>` | the directory the server runs in, kept as the absolute path it resolves to |
-| `--stdio -- <program> [args...]` | a program on this machine |
+| `-- <program> [args...]` | a program on this machine; `--stdio --` means the same |
 | `--http <url>` | a service at this url; takes neither `--env` nor `--dir` |
 
 ### A server gets only the variables you name
 
-A server starts with an empty environment. `--env PATH` names one variable to hand it, and its value
-is read from your own environment when the server starts, which is also why `PATH` has to be named
-for a server whose program is found through it.
+A server starts with an empty environment. `--env WEATHER_TOKEN` names one variable to hand it, and
+its value is read from your own environment when the server starts. A program given by name rather
+than as a path, such as `npx`, is found through `PATH`, so `add` names `PATH` for it, and you see it
+at the question below.
 
 **A value is never written down.** `--env WEATHER_TOKEN=...` is refused, and so is an `env` block in
 the file, and the refusal names the variable without repeating what it was set to:

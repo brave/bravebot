@@ -502,14 +502,14 @@ mcp-needs-an-alias = { $command } needs the alias of a server
 mcp-unexpected-argument = { $command } does not take { $argument }
 mcp-add-stray-argument =
     word { $position } after add is not a flag, and is not repeated since it may be a value:
-    --env, --dir and --http take one word each, and --stdio -- takes the rest
+    --env, --dir and --http take one word each, and -- takes the rest
 mcp-not-an-alias =
     { $alias } cannot name a server: an alias is letters, digits, - and _, starts with a letter or
     a digit, and is at most 64 characters
-mcp-needs-a-transport = add needs --stdio -- <program> [args...] or --http <url>
-mcp-two-transports = add takes --stdio or --http, not both
+mcp-needs-a-transport = add needs -- <program> [args...] or --http <url>
+mcp-two-transports = add takes a program after -- or --http, not both
 mcp-stdio-needs-a-program =
-    --stdio takes the program and its arguments after a bare --, as in --stdio -- npx -y weather-mcp
+    a program and its arguments come after a bare --, as in -- npx -y weather-mcp
 mcp-http-needs-a-url = --http needs a url
 mcp-env-needs-a-name = --env needs the name of a variable
 mcp-dir-needs-a-path = --dir needs a directory

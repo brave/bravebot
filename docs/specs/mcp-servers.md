@@ -152,7 +152,7 @@ machine asks again, and a deliberate `rm -rf` of the workspace no longer forgets
 ## The command line
 
 ```
-bravebot mcp add <alias> [--env <name>]... [--dir <path>] --stdio -- <program> [args...]
+bravebot mcp add <alias> [--env <name>]... [--dir <path>] [--stdio] -- <program> [args...]
 bravebot mcp add <alias> --http <url>
 bravebot mcp get <alias>
 bravebot mcp list
@@ -169,11 +169,14 @@ anything requested it. `remove` deletes the declaration and its approval togethe
 approval outliving its declaration is a digest nothing resolves. `forget` drops the standing answers
 recorded for a project, defaulting to this one.
 
-`--stdio -- ...` takes the program and its arguments after a bare `--`, as argv and never as a line.
-Nothing here compiles shell syntax: that is [tools/command-line.md](tools/command-line.md)'s road,
-for a line a planner wrote, and a server is a program a person named. `--env <name>` names one
-variable the server receives ([SERVERS-10](#SERVERS-10)) and may be given more than once; `--dir
-<path>` is the directory it runs in, written into the file as the absolute path it resolves to.
+A bare `--` takes the program and its arguments after it, as argv and never as a line, and every
+word after it is the server's, a flag of bravebot's included. `--stdio --` is the same and may be
+written instead. Nothing here compiles shell syntax: that is
+[tools/command-line.md](tools/command-line.md)'s road, for a line a planner wrote, and a server is a
+program a person named. `--env <name>` names one variable the server receives
+([SERVERS-10](#SERVERS-10)) and may be given more than once, and a program given by a bare name
+has `PATH` named for it; `--dir <path>` is the directory it runs in, written into the file as the
+absolute path it resolves to.
 
 `forget` takes one path at most, and the current directory without one. The path is read with its
 links followed, as answer 2 recorded it, and one that no longer resolves, a deleted checkout's, is
@@ -187,8 +190,8 @@ was recorded, and leaves every other project's as it was. An incognito session w
 
 | Claude Code | Here | Note |
 |---|---|---|
-| `claude mcp add weather -- npx -y @dangahagan/weather-mcp@latest` | `bravebot mcp add weather --stdio -- npx -y @dangahagan/weather-mcp@latest` | The transport is named rather than inferred from whether a url was given. |
-| `claude mcp add weather -s user -- ...` | `bravebot mcp add weather --stdio -- ...` | Already the only scope that may declare, so the flag would have one value. |
+| `claude mcp add weather -- npx -y @dangahagan/weather-mcp@latest` | `bravebot mcp add weather -- npx -y @dangahagan/weather-mcp@latest` | The same line. It declares `PATH` for `npx`, and the question shows it. |
+| `claude mcp add weather -s user -- ...` | `bravebot mcp add weather -- ...` | Already the only scope that may declare, so the flag would have one value. |
 | `claude mcp add weather -s project -- ...` | no equivalent | [SERVERS-1](#SERVERS-1). The checkout may request the alias; it may not carry the argv. |
 | `claude mcp get weather` | `bravebot mcp get weather` | Also prints the digest, which is what an approval is against. |
 | `claude mcp remove weather -s project` | edit `"mcp": { "request": [...] }` in `.bravebot/settings.json` | A request is a line in a file somebody commits, so it is removed the way it was added. |
@@ -300,7 +303,9 @@ and `remove` is refused there and leaves the files as they were.
 `verified-by: bravebot_cli::mcp::a_yes_at_the_question_records_the_digest_and_nothing_else_does`
 `verified-by: bravebot_cli::mcp::approve_records_only_on_a_yes_and_a_no_ends_refused`
 `verified-by: bravebot_cli::mcp::the_question_shows_every_argument_as_the_word_it_is`
+`verified-by: bravebot_cli::mcp::a_bare_double_dash_declares_the_program_after_it`
 `verified-by: bravebot_cli::running::an_added_server_nobody_was_asked_about_is_declared_and_listed_unapproved`
+`verified-by: bravebot_cli::running::a_flag_of_bravebots_after_the_bare_dashes_is_the_servers_argument`
 `verified-by: bravebot_cli::running::approving_with_nobody_to_ask_is_refused_and_records_nothing`
 `verified-by: bravebot_cli::running::a_server_is_not_declared_in_an_incognito_session`
 
@@ -739,7 +744,11 @@ named ones keeps [MCP-9](mcp.md#MCP-9)'s property where it matters: this process
 are in variables, and a server is code we did not write.
 
 `--env <name>` adds a name, a name given a value (`--env TOKEN=...`, or an `env` block in the
-file) is refused, and the refusal names the variable and never repeats what it was set to.
+file) is refused, and the refusal names the variable and never repeats what it was set to. A
+program `add` is given by a bare name, such as `npx`, has `PATH` added to the names once, whether or
+not it was typed, since the `PATH` a declaration names is the only one such a program is looked for
+in, as the next paragraph says. It is shown at the question as a typed name is, and is part of what
+the digest covers. A program given as a path is declared with only the names typed.
 
 At launch each named variable this process holds is handed over, and one it does not hold is left
 out rather than set empty. A program named rather than given as a path is looked for in the `PATH`
@@ -806,6 +815,8 @@ not started either, and the line says why.
 `verified-by: bravebot_config::mcp::an_env_block_or_an_object_of_variables_is_values_and_is_refused`
 `verified-by: bravebot_config::mcp::a_name_that_is_not_one_is_refused`
 `verified-by: bravebot_cli::running::a_value_given_to_a_variable_is_refused_and_never_repeated`
+`verified-by: bravebot_cli::mcp::a_program_named_by_a_bare_name_is_declared_with_path`
+`verified-by: bravebot_cli::mcp::the_question_shows_the_path_a_bare_name_was_given`
 `verified-by: bravebot_cli::servers::a_program_is_found_in_the_path_it_names_and_nowhere_else`
 `verified-by: bravebot_cli::servers::a_path_the_declaration_does_not_name_resolves_nothing`
 `verified-by: bravebot_cli::servers::a_local_server_is_not_asked_about_where_nothing_can_confine_it`
@@ -1088,11 +1099,11 @@ is one of the clauses above; every refusal is a clause refusing.
 **1. Declare it.** A person types:
 
 ```
-bravebot mcp add weather --stdio -- npx -y @dangahagan/weather-mcp@latest
+bravebot mcp add weather -- npx -y @dangahagan/weather-mcp@latest
 ```
 
-The declaration lands in `~/.bravebot/mcp.json`. Nothing is reachable yet
-([SERVERS-3](#SERVERS-3)).
+The declaration lands in `~/.bravebot/mcp.json`, naming `PATH` for `npx`
+([SERVERS-10](#SERVERS-10)). Nothing is reachable yet ([SERVERS-3](#SERVERS-3)).
 
 **2. Answer the server question.** `add` asks [SERVERS-3](#SERVERS-3)'s question, naming `npx` as a
 runner that fetches its own code and `@latest` as unpinned ([SERVERS-6](#SERVERS-6)). `y` records
