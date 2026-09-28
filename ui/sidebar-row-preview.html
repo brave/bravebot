@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <link rel="stylesheet" href="/node_modules/@brave/leo/tokens/css/variables.css" />
+  <link rel="stylesheet" href="/src/renderer/styles.css" />
+  <style>
+    body { margin: 0; background: var(--leo-color-page-background); }
+    .stage { display: flex; gap: 24px; padding: 24px; align-items: flex-start; }
+    .col { width: 280px; height: 520px; --col-left-open: 280px; border: 1px solid var(--leo-color-divider-subtle); }
+    .label { font: 12px system-ui; color: var(--leo-color-text-secondary); margin: 0 0 8px; }
+    .face { width: 38px; height: 38px; border-radius: 50%; background: var(--leo-color-container-highlight); flex: none; }
+  </style>
+</head>
+<body>
+  <div class="stage">
+    <div>
+      <p class="label">Conversations</p>
+      <aside class="sessions col app">
+        <div class="session-list">
+          <div class="session-row current">
+            <button class="session current">
+              <span class="session-title">Fix the sidebar rows</span>
+              <span class="session-where">bravebot · main · 2 hours ago</span>
+            </button>
+            <button class="session-more">⋯</button>
+          </div>
+          <div class="session-row">
+            <button class="session">
+              <span class="session-title">Review the trust prompt</span>
+              <span class="session-where">bravebot · main · yesterday</span>
+            </button>
+            <button class="session-more">⋯</button>
+          </div>
+          <div class="session-row" id="hover-session">
+            <button class="session">
+              <span class="session-title">Export the conversation</span>
+              <span class="session-where">harbour · 3 days ago</span>
+            </button>
+            <button class="session-more">⋯</button>
+          </div>
+        </div>
+      </aside>
+    </div>
+    <div>
+      <p class="label">Bots</p>
+      <aside class="sessions col app">
+        <div class="session-list">
+          <div class="bot bot-open">
+            <button class="bot-open-button">
+              <span class="face"></span>
+              <span class="bot-said">
+                <span class="bot-name">Web dev bot</span>
+                <span class="bot-where">bravebot</span>
+              </span>
+            </button>
+            <button class="bot-edit">⋯</button>
+          </div>
+          <div class="bot">
+            <button class="bot-open-button">
+              <span class="face"></span>
+              <span class="bot-said">
+                <span class="bot-name">Reviewer</span>
+                <span class="bot-where">harbour</span>
+              </span>
+            </button>
+            <button class="bot-edit">⋯</button>
+          </div>
+          <div class="bot" id="hover-bot">
+            <button class="bot-open-button">
+              <span class="face"></span>
+              <span class="bot-said">
+                <span class="bot-name">A very long bot name that should ellipsize</span>
+                <span class="bot-where">Documents/GitHub/bravebot</span>
+              </span>
+            </button>
+            <button class="bot-edit">⋯</button>
+          </div>
+          <div class="bot-archived">
+            <span class="bot-said">
+              <span class="bot-name">Retired bot</span>
+              <span class="bot-where">notes</span>
+            </span>
+            <button class="bot-restore">Restore</button>
+            <button class="bot-delete">Delete</button>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+</body>
+</html>

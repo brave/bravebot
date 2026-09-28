@@ -22,7 +22,7 @@ import { ErrorCard } from './ErrorCard'
 import { FilePreview } from './FilePreview'
 import { TurnFooter, TurnNotices, type OpenAudit } from './TurnDetails'
 import type { Turns, TurnDisclosure } from '../turn-details'
-import { Button, Collapse, Icon, ProgressRing } from '../nala'
+import { Alert, Button, Collapse, Icon, ProgressRing, type IconName } from '../nala'
 
 interface Live {
   model: string | null
@@ -123,7 +123,8 @@ interface Props {
  * The name stays put and `aria-expanded` carries the state, which is the disclosure
  * pattern: a label that flipped between "Show" and "Hide" would say the state twice and
  * rename a button the moment it was pressed. The verb goes in `title`, which is for the
- * pointer.
+ * pointer. The mark swaps with that state: an open column shows the split it belongs to,
+ * and a folded column shows the panel coming back.
  */
 function ColumnToggle({
   side,
@@ -134,22 +135,62 @@ function ColumnToggle({
   collapsed: boolean
   onToggle: (side: Side) => void
 }): React.JSX.Element {
+  const host = useRef<HTMLElement>(null)
   const what = side === 'left' ? 'the session list' : 'the context panel'
+  const label = side === 'left' ? 'Session list' : 'Context panel'
+  const controls = side === 'left' ? 'sessions-column' : 'context-column'
+  const title = `${collapsed ? 'Show' : 'Hide'} ${what}`
+  const icon: IconName =
+    side === 'left'
+      ? collapsed
+        ? 'sidepanel-retract'
+        : 'browser-split-view-left'
+      : collapsed
+        ? 'sidepanel-open'
+        : 'browser-split-view-right'
+
+  // Leo draws the control inside a shadow root and rebuilds that inner button when the
+  // icon slot arrives, which is after this effect. The host is what the column drivers
+  // query, and the inner button is what the accessibility tree exposes — a name set on
+  // only one of them would satisfy either the tests or a screen reader. Reapplying when
+  // the slot lands puts the name on the button that stays.
+  useEffect(() => {
+    const node = host.current
+    if (!node) return
+    const apply = () => {
+      const current = host.current
+      if (!current) return
+      current.setAttribute('aria-expanded', collapsed ? 'false' : 'true')
+      current.setAttribute('aria-controls', controls)
+      current.setAttribute('aria-label', label)
+      const inner = current.shadowRoot?.querySelector('button')
+      if (!inner) return
+      inner.setAttribute('aria-expanded', collapsed ? 'false' : 'true')
+      inner.setAttribute('aria-controls', controls)
+      inner.setAttribute('aria-label', label)
+      inner.title = title
+    }
+    apply()
+    // The slot mutation rebuilds the inner button after this effect, inside the shadow
+    // root. Applying again once that new button is in place keeps the name on it.
+    const slots = new MutationObserver(() => queueMicrotask(apply))
+    slots.observe(node, { childList: true })
+    if (node.shadowRoot) slots.observe(node.shadowRoot, { childList: true, subtree: true })
+    return () => slots.disconnect()
+  }, [collapsed, controls, label, title])
+
   return (
-    <button
+    <Button
+      ref={host}
+      kind="plain-faint"
+      size="small"
+      fab
       className={`fold-toggle ${side}`}
-      aria-expanded={!collapsed}
-      aria-controls={side === 'left' ? 'sessions-column' : 'context-column'}
-      aria-label={side === 'left' ? 'Session list' : 'Context panel'}
-      title={`${collapsed ? 'Show' : 'Hide'} ${what}`}
+      title={title}
       onClick={() => onToggle(side)}
     >
-      {/* Pointing outward when folded — the way the column will come back — and inward
-          when open. Decorative: the button is already named and its state announced. */}
-      <span className={`fold-chevron ${collapsed ? '' : 'open'}`} aria-hidden="true">
-        {side === 'left' ? '›' : '‹'}
-      </span>
-    </button>
+      <Icon name={icon} slot="icon-before" />
+    </Button>
   )
 }
 
@@ -916,10 +957,11 @@ function ForkBanner({
  */
 function VettingBanner(): React.JSX.Element {
   return (
-    <p className="fork-banner vetting-banner" role="note">
-      <strong>Auto-vetting is on.</strong> A check that finds nothing reads content to the model
+    <Alert type="info" size="small" className="session-banner" role="note">
+      <span slot="title">Auto-vetting is on.</span>
+      A check that finds nothing reads content to the model
       without asking you. Kept in <code>~/.bravebot/vetting</code>.
-    </p>
+    </Alert>
   )
 }
 
@@ -931,11 +973,12 @@ function VettingBanner(): React.JSX.Element {
  */
 function RememberedBanner({ kept }: { kept: KeptTrust }): React.JSX.Element {
   return (
-    <p className="fork-banner vetting-banner" role="note">
-      <strong>Trust is remembered for this directory.</strong> You said to remember it {ago(kept.at)},
+    <Alert type="info" size="small" className="session-banner" role="note">
+      <span slot="title">Trust is remembered for this directory.</span>
+      You said to remember it {ago(kept.at)},
       so sessions started here are not asked. Kept in <code>{kept.path}</code>; Permissions takes
       it back.
-    </p>
+    </Alert>
   )
 }
 
@@ -1117,7 +1160,9 @@ function Card({
           {/* Inside the bubble, and positioned out of it. The wrapper this row sits in is
               `display: contents` and has no box to hang anything off, and the bubble is the
               only thing here that knows where the row actually is on screen. */}
-          <button
+          <Button
+            kind="plain-faint"
+            size="tiny"
             className="fork-here"
             aria-label="Fork from here"
             title={
@@ -1125,11 +1170,11 @@ function Card({
                 ? 'Start a session from what was said before this'
                 : 'Wait for the turn to finish'
             }
-            disabled={!forkable}
+            isDisabled={!forkable}
             onClick={() => onFork(entry.id)}
           >
             <ForkIcon />
-          </button>
+          </Button>
         </div>
       )
 

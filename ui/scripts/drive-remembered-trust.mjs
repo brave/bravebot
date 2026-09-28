@@ -32,7 +32,7 @@ async function launch(drive) {
 }
 
 const trust = (page) => page.getByRole('dialog', { name: 'Project trust', exact: true })
-const banner = (page) => page.locator('.transcript-head .fork-banner', { hasText: 'Trust is remembered' })
+const banner = (page) => page.locator('.transcript-head .session-banner', { hasText: 'Trust is remembered' })
 const openProject = (page) => page.getByRole('button', { name: 'Open project', exact: true }).click()
 
 try {

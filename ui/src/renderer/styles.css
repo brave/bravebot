@@ -8,7 +8,9 @@
 :root {
   color-scheme: light dark;
   --bg: var(--leo-color-page-background);
-  /* Translucent so the macOS sidebar vibrancy still shows through. */
+  /* The transcript is the raised surface; the side columns stay on the page ground. */
+  --bg-main: var(--leo-color-container-background);
+  /* Translucent wash for controls that sit on a solid surface, such as the model list. */
   --bg-side: color-mix(in srgb, var(--leo-color-container-background) 70%, transparent);
   --ink: var(--leo-color-text-primary);
   --ink-dim: var(--leo-color-text-secondary);
@@ -18,7 +20,10 @@
   --accent-ink: var(--leo-color-schemes-on-primary);
   --accent-quiet: var(--leo-color-text-interactive);
   --accent-text: var(--leo-color-text-interactive);
-  --bubble-user: var(--leo-color-primary-10);
+  /* A neutral ground rather than an accent one: a prompt is what was said, not an action the
+     window is offering, and an accent fill reads as the latter. The agent's side is unfilled
+     already, so this is the only bubble in the transcript that has a surface of its own. */
+  --bubble-user: var(--leo-color-neutral-10);
   --bubble-user-ink: var(--leo-color-text-primary);
   --bubble-agent: var(--leo-color-container-highlight);
   --added: var(--leo-color-systemfeedback-success-icon);
@@ -55,6 +60,10 @@ body {
 }
 
 button { font: inherit; color: inherit; cursor: pointer; }
+
+/* Leo's button paints `var(--bg)`, and plain-faint never sets it, so without this the app's
+   own `--bg` inherits into the shadow tree and every plain-faint button gets a page fill. */
+leo-button { --bg: transparent; }
 
 /* Leo Collapse titles ship as heading-h3 (20px). Remap to default size on the host so
    the shadow tree inherits it; keep semibold so the summary still reads as a title. */
@@ -128,7 +137,7 @@ leo-collapse {
 .sessions {
   display: flex;
   flex-direction: column;
-  background: var(--bg-side);
+  background: var(--bg);
   overflow: hidden;
 }
 
@@ -250,15 +259,9 @@ leo-collapse {
   display: flex;
   align-items: stretch;
   width: 100%;
-  /* `--bg-side` is translucent, and a sticky heading with a see-through background lets the
-     rows scroll visibly through it. Painting it over `--bg` reproduces exactly what the
-     column already shows — the same two layers the body and the aside make between them —
-     while being opaque enough to sit on top of something.
-
-     Held in a variable because hover has to paint *over* this rather than replace it: a
-     highlight that dropped the ground would make the heading transparent again at exactly
-     the moment the pointer is on it. */
-  --ground: linear-gradient(var(--bg-side), var(--bg-side)), var(--bg);
+  /* Same ground as the column, so scrolling rows do not show through the sticky heading.
+     Held in a variable because hover has to paint *over* this rather than replace it. */
+  --ground: var(--bg);
   background: var(--ground);
 }
 
@@ -343,27 +346,32 @@ leo-collapse {
   text-align: left;
 }
 .session:hover:not(.current) { background: var(--leo-color-container-highlight); }
-/* Quiet selection: a filled primary wash reads as a button, not a row. */
+/* Quiet selection: the raised container surface, the same one the transcript sits on. */
 .session.current {
-  background: var(--leo-color-container-interactive);
+  background: var(--leo-color-container-background);
 }
-.session.current .session-title {
+.session.current .session-title,
+.bot-open .bot-name {
   color: var(--ink);
   font-weight: 600;
 }
-.session.current .session-where {
+.session.current .session-where,
+.bot-open .bot-where {
   color: var(--ink-dim);
   opacity: 1;
 }
 
-.session-title {
+.session-title,
+.bot-name {
   font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.session-where { font-size: var(--leo-typography-x-small-regular-font-size); color: var(--ink-faint); }
-.session.current .session-where { color: var(--ink-dim); }
+.session-where,
+.bot-where { font-size: var(--leo-typography-x-small-regular-font-size); color: var(--ink-faint); }
+.session.current .session-where,
+.bot-open .bot-where { color: var(--ink-dim); }
 
 .build {
   padding: 8px 14px;
@@ -375,7 +383,7 @@ leo-collapse {
 
 /* ---------------------------------------------------------------- transcript */
 
-.transcript { display: flex; flex-direction: column; overflow: hidden; }
+.transcript { display: flex; flex-direction: column; overflow: hidden; background: var(--bg-main); }
 
 /* The centring is on the body rather than the column, because the column now also holds a
    header — the empty state still needs the fold toggles and the window's drag strip. */
@@ -423,31 +431,16 @@ leo-collapse {
 }
 
 /* The toggles sit on top of the drag strip and must stay clickable rather than moving the
-   window, the same exemption the New button gets in the session list. */
+   window, the same exemption the New button gets in the session list. Leo owns the chrome;
+   the host only has to stay icon-sized (it otherwise grows to fill the row) and quiet
+   beside the title. */
 .fold-toggle {
   -webkit-app-region: no-drag;
   position: relative;
   z-index: 1;
   flex: none;
-  display: grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--leo-radius-s);
-  background: transparent;
-  color: var(--ink-faint);
-  font-size: var(--leo-typography-default-regular-font-size);
-  line-height: 1;
+  color: var(--leo-color-icon-secondary);
 }
-.fold-toggle:hover { background: var(--hover-wash); color: var(--ink); }
-.fold-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-/* Same duration and easing as the panels' chevrons, so both kinds of fold in this window
-   read as one idea. A separate class from `.chevron`, though: sharing one would tie the
-   two together and a change meant for either would land on both. */
-.fold-chevron { display: inline-block; transition: transform var(--panel-motion); }
-.fold-toggle .fold-chevron.open { transform: rotate(180deg); }
 .note {
   margin: 6px 0 0;
   padding: 5px 9px;
@@ -474,36 +467,28 @@ leo-collapse {
    side with room; hidden until the row is under the pointer, because a transcript is a column
    of these and a control on every one of them would be a column of controls.
    Kept in the tree rather than rendered on hover so it can be tabbed to, and shown when it is
-   focused — a control reachable only by pointer is one a keyboard cannot fork with. */
+   focused — a control reachable only by pointer is one a keyboard cannot fork with.
+   Plain-faint, so it is a bare mark until it is reached for and wears Leo's faint wash only
+   then. The chip it used to be — a bordered box in the page's own colour — put a border
+   against every prompt in the column, and a border on every row is a rule down the page. */
 .fork-here {
   position: absolute;
-  left: -30px;
+  /* Far enough out that the wash stays off the bubble, which is where the mark is read from. */
+  left: -42px;
   top: 50%;
   transform: translateY(-50%);
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: 1px solid var(--line);
-  border-radius: var(--leo-radius-s);
-  /* A chip rather than a bare glyph. `⑂` is a thin mark, and at this size, unbacked, it reads
-     as a smudge beside the bubble rather than as something to press. */
-  background: var(--bg);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--ink-dim);
-  line-height: 1;
-  cursor: pointer;
+  /* Plain-faint takes its colour from here, so this is how a dim mark asks to be dimmer. */
+  --leo-button-color: var(--ink-dim);
   opacity: 0;
-  transition: opacity 120ms ease-out, color 120ms ease-out;
+  transition: opacity 120ms ease-out;
   /* It sits inside the bubble, so without this a drag across the prompt would select the
      glyph too and paste it into whatever the text was being copied for. */
   user-select: none;
 }
+/* The host is what this class lands on, and the focusable button is inside its shadow root, so
+   focus is asked after with `:focus-within` — `:focus-visible` on the host never matches. */
 .bubble.user:hover .fork-here,
-.fork-here:focus-visible { opacity: 1; }
-.fork-here:hover { color: var(--accent-text); border-color: var(--accent); }
-.fork-here:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.fork-here:focus-within { opacity: 1; }
 /* Shown on hover like the others, and plainly unavailable: a control that vanishes mid-turn
    is one the reader has to go looking for when the turn ends. */
 .fork-here:disabled { cursor: default; opacity: 0; }
@@ -554,8 +539,8 @@ leo-collapse {
 }
 .fork-banner .link:hover { color: var(--accent-text); }
 .fork-banner .link:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
-.vetting-banner { border-left: 3px solid var(--accent); }
-.vetting-banner strong { color: var(--ink); }
+.transcript-head .session-banner { margin-top: var(--leo-spacing-m); }
+.transcript-head .session-banner code { font-family: var(--mono); overflow-wrap: anywhere; }
 
 /* Where a fork's link landed. `display: contents` on `.entry-hit` means the wrapper cannot be
    painted, so the mark is drawn on the row inside it — and it fades, because it answers "which
@@ -564,18 +549,18 @@ leo-collapse {
   animation: fork-landed 1.6s ease-out;
   border-radius: var(--leo-radius-m);
 }
-/* Two rings, the inner one the page's own colour: a prompt bubble is already accent-coloured,
-   and an accent ring drawn against it is not a mark at all. The gap is what makes this read on
+/* Two rings, the inner one the transcript's own colour, so the accent ring reads as a mark
+   against whatever the row under it happens to be drawn in. The gap is what makes this read on
    any row, whatever colour the row is. */
 @keyframes fork-landed {
   0%,
-  60% { box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px var(--accent); }
-  100% { box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px transparent; }
+  60% { box-shadow: 0 0 0 3px var(--bg-main), 0 0 0 5px var(--accent); }
+  100% { box-shadow: 0 0 0 3px var(--bg-main), 0 0 0 5px transparent; }
 }
 @media (prefers-reduced-motion: reduce) {
   .entry-hit.focused > * {
     animation: none;
-    box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px var(--accent);
+    box-shadow: 0 0 0 3px var(--bg-main), 0 0 0 5px var(--accent);
   }
 }
 
@@ -1055,7 +1040,7 @@ leo-collapse {
   padding: 9px 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  background: var(--bg);
+  background: var(--bg-main);
   color: var(--ink);
   font: inherit;
   line-height: 18px;
@@ -1114,7 +1099,7 @@ leo-collapse {
 /* ---------------------------------------------------------------- context */
 
 .context {
-  background: var(--bg-side);
+  background: var(--bg);
   overflow-y: auto;
   padding-top: 0;
 }
@@ -1705,7 +1690,9 @@ leo-collapse {
    A bot is a name, a purpose, a memory and a checkout. What a row shows is what tells two of them
    apart at a glance: the face, the name, and where it works. */
 
-.bot { display: flex; align-items: center; gap: 2px; }
+/* Same row as a conversation: the shared hover, selection, radius, and type live with
+   `.session-row`. What stays here is the face beside the name. */
+.bot { display: flex; align-items: center; }
 
 .bot-open-button {
   flex: 1;
@@ -1715,46 +1702,38 @@ leo-collapse {
   /* Tighter than it looks: the figure is drawn with air around it inside its own square, so a gap
      matched to the text would leave the name floating away from the face. */
   gap: 6px;
-  padding: 5px 8px;
-  border: none;
-  border-radius: var(--leo-radius-s);
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--leo-radius-m);
   background: transparent;
   color: inherit;
   font: inherit;
   text-align: left;
 }
-.bot-open-button:hover { background: var(--hover-wash); }
 .bot-open-button:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
-/* The same mark an open session gets, so "this is the one on screen" reads the same in both
-   tabs. */
-.bot-open .bot-open-button { background: var(--accent-quiet); color: var(--accent-ink); }
-.bot-open .bot-where { color: var(--accent-ink); opacity: 0.75; }
 
-.bot-said { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
-.bot-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bot-said { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
 .bot-where {
-  font-size: var(--leo-typography-x-small-regular-font-size);
-  color: var(--ink-faint);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* The same trailing action a conversation row uses. Kept in the row, centered on the face,
+   because this row is taller than a title-and-subtitle. */
 .bot-edit {
   flex: none;
-  width: 24px;
+  align-self: center;
+  width: 28px;
+  height: 28px;
+  margin-right: 4px;
   padding: 0;
-  border: none;
-  border-radius: var(--leo-radius-s);
+  border: 0;
+  border-radius: var(--leo-radius-xs);
   background: transparent;
-  color: var(--ink-faint);
+  color: var(--ink-dim);
   font: inherit;
-  /* Shown on hover or focus only. A row of eight bots with eight always-visible controls on the
-     right is a column of furniture; the name is what the list is for. */
-  opacity: 0;
 }
-.bot:hover .bot-edit, .bot-edit:focus-visible { opacity: 1; }
-.bot-edit:hover { color: var(--ink); background: var(--hover-wash); }
 .bot-edit:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
 
 /* The avatar: a small figure turning slowly, drawn by the shared renderer in `avatar/stage.ts`.
@@ -1946,17 +1925,17 @@ leo-collapse {
    and an archive that pushed the bots still in use off the top would have taken the tab over. */
 .bot-archive-rows { max-height: 40vh; overflow-y: auto; }
 
-/* A row with no face. Padded to line up with `.bot-open-button` above it so the two lists share
-   a left edge, and dimmer, which is the whole of what "put away" has to say here. */
+/* A row with no face. Same padding and radius as a conversation row so the archive lines up
+   with the list above it, and dimmer, which is the whole of what "put away" has to say here. */
 .bot-archived {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 8px;
-  border-radius: var(--leo-radius-s);
+  padding: 8px 10px;
+  border-radius: var(--leo-radius-m);
   color: var(--ink-dim);
 }
-.bot-archived:hover { background: var(--hover-wash); }
+.bot-archived:hover { background: var(--leo-color-container-highlight); }
 .bot-archived .bot-said { flex: 1; }
 
 /* Text rather than bordered buttons, unlike the form's. Those sit in a row of their own at the
@@ -2029,8 +2008,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
   outline: 2px solid var(--accent); outline-offset: 3px;
 }
 .app { position: relative; }
-.app.comfortable .session { padding-top: 12px; padding-bottom: 12px; }
-.app .session-where, .app .where, .app .none, .app .model-current { font-size: var(--leo-typography-small-regular-font-size); }
+.app.comfortable .session,
+.app.comfortable .bot-open-button,
+.app.comfortable .bot-archived { padding-top: 12px; padding-bottom: 12px; }
+.app .session-where, .app .bot-where, .app .where, .app .none { font-size: var(--leo-typography-small-regular-font-size); }
 .app .panel-head { font-size: var(--leo-typography-small-regular-font-size); letter-spacing: .02em; text-transform: none; }
 .app .entries { padding: 24px clamp(18px, 3vw, 44px); gap: 18px; }
 .app .bubble { max-width: 100%; font-size: var(--leo-typography-default-regular-font-size); line-height: 1.65; }
@@ -2046,7 +2027,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .conversation-search input { flex: 1; min-width: 0; padding: 8px; border: 1px solid var(--line); border-radius: var(--leo-radius-s); color: var(--ink); background: var(--bg); }
 .conversation-search button { min-width: 28px; min-height: 30px; border: 1px solid var(--line); background: var(--bg); border-radius: var(--leo-radius-s); }
 .conversation-search span { font-size: var(--leo-typography-small-regular-font-size); white-space: nowrap; color: var(--ink-dim); }
-.app .composer { display: flex; flex-direction: column; align-items: stretch; padding: 12px 20px 16px; gap: 10px; background: var(--bg); }
+.app .composer { display: flex; flex-direction: column; align-items: stretch; padding: 12px 20px 16px; gap: 10px; background: var(--bg-main); }
 .app .composer textarea { width: 100%; flex: none; min-height: 70px; max-height: 210px; line-height: 1.5; padding: 14px; resize: none; border-radius: var(--leo-radius-l); }
 .composer-toolbar { display: flex; align-items: center; gap: 8px; }
 .composer-toolbar .model-picker { max-width: 220px; align-self: center; }
@@ -2156,13 +2137,18 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
   -webkit-app-region: no-drag;
   --leo-tabs-width: 100%;
 }
-.session-row { position: relative; display: flex; align-items: center; border-radius: var(--leo-radius-m); }
+.session-row,
+.bot { position: relative; display: flex; align-items: center; border-radius: var(--leo-radius-m); }
 .session-row .session { flex: 1; min-width: 0; padding-right: 32px; }
 .session-row .session-more { position: absolute; right: 4px; top: 10px; padding: 0; width: 28px; height: 28px; border: 0; background: transparent; border-radius: var(--leo-radius-xs); color: var(--ink-dim); }
-.session-row:hover:not(.current) { background: var(--leo-color-container-highlight); }
-.session-row:hover:not(.current) .session { background: transparent; }
-.session-row.current { background: var(--leo-color-container-interactive); }
-.session-row.current .session { background: transparent; color: var(--ink); }
+.session-row:hover:not(.current),
+.bot:hover:not(.bot-open) { background: var(--leo-color-container-highlight); }
+.session-row:hover:not(.current) .session,
+.bot:hover:not(.bot-open) .bot-open-button { background: transparent; }
+.session-row.current,
+.bot-open { background: var(--leo-color-container-background); }
+.session-row.current .session,
+.bot-open .bot-open-button { background: transparent; color: var(--ink); }
 .session-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; font-size: var(--leo-typography-x-small-regular-font-size); }
 .session-badges leo-label {
   --leo-label-padding: 1px 6px;
@@ -2202,7 +2188,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .bot-conversations strong { font-size: var(--leo-typography-components-tableheader-font-size); overflow-wrap: anywhere; }
 .bot-conversations span, .bot-conversations code { color: var(--ink-dim); font-size: var(--leo-typography-small-regular-font-size); }
 .bot-history-unavailable { border: 1px dashed var(--line); border-radius: var(--leo-radius-s); }
-.bot-edit { opacity: 1; }
 
 .bot-memory-panel { margin-top: 24px; border-top: 1px solid var(--line); padding-top: 16px; }
 .bot-memory-panel h3 { margin: 0 0 8px; font-size: var(--leo-typography-default-regular-font-size); }
@@ -2303,8 +2288,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .interrupted-request details { margin-top: 8px; }
 .interrupted-request details > .confirm, .interrupted-request details > .quarantine { margin-top: 8px; }
 
-.bot-open .bot-open-button { background: var(--bubble-user); color: var(--bubble-user-ink); }
-.bot-open .bot-where { color: var(--bubble-user-ink); opacity: 1; }
 .memory-readable { white-space: normal; }
 .memory-readable p { margin: 0 0 12px; }
 .memory-readable pre { white-space: pre-wrap; overflow-wrap: anywhere; }

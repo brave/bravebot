@@ -109,7 +109,6 @@ export function Sidebar({
       <SegmentedControl
         className="sidebar-tabs"
         value={tab}
-        size="small"
         data-test="sidebar-tabs"
         onChange={({ value }) => { if (value === 'sessions' || value === 'bots') show(value) }}
       >
