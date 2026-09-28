@@ -646,3 +646,31 @@ one place left to say what each of them was for.
 `verified-by: bravebot_ui_bridge::wire::a_call_carries_the_reason_it_was_made`
 `verified-by: bravebot_agent::conversation::every_call_in_a_round_is_recounted`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so it is pinned instead by ui/scripts/ux-state.test.mjs, which renders the real transcript row through react-dom, live and replayed, and asserts that the reason reaches the markup while the call runs and once it is over and that a call with none draws nothing for it; make check-ui and the Front end CI job both run it, and the governs list above holds the file to existing)`
+
+<a id="VIEW-26"></a>
+### VIEW-26: a call the model is writing is named beside the indicator until it starts
+
+While the model writes a tool call, the interactive terminal's working indicator names it, by the
+word the call's own row will start with and from the same table. A name no tool answers to is drawn
+as that table's word for an unknown tool, never as the model wrote it. The name goes when the call
+starts, at the top of the next round, when the attempt writing it is thrown away and the request
+goes again, and however the turn or aside ends. A delegate's call is not named there, for the reason
+its reply taking shape is not drawn at the turn's tail, and a delegate's phase, words or call do not
+take down the name of the call the turn is writing.
+
+**Why.** An argument can be a whole file, and a service holding it back sends nothing else while
+the model writes it, so the round's own word and a count were all a person had to tell minutes of
+work from a stall. [BACKEND-45](backends.md#BACKEND-45) keeps the count moving; this says what the
+work is.
+
+The name is untrusted model output released for a screen through the gate that releases the reply
+taking shape ([VIEW-6](#VIEW-6)), and nothing else reads it: the turn does not branch on it, and it
+leaves the turn only as a word chosen from a fixed table by matching the name, as dispatch does. The
+word is what an interface is given, so no interface can draw the name as it was written.
+
+`verified-by: bravebot_tui::state::a_call_being_written_names_the_indicator`
+`verified-by: bravebot_tui::state::a_call_being_written_gives_the_word_back`
+`verified-by: bravebot_tui::state::a_delegates_call_being_written_is_not_the_turns`
+`verified-by: bravebot_tui::remote_confirm::questions_and_reports_share_the_channel`
+`verified-by: bravebot_agent::turn::the_call_being_written_reaches_the_interface_before_it_runs`
+`verified-by: bravebot_agent::turn::a_call_named_by_an_attempt_thrown_away_is_taken_back`

@@ -676,6 +676,7 @@ impl<'a> BedrockClient<'a> {
                     progress(Progress {
                         written: Labelled::new("", Label::untrusted_public()),
                         output_tokens: 0,
+                        calling: None,
                         counted_by_server: false,
                         attempt,
                     });
@@ -812,7 +813,8 @@ impl<'a> BedrockClient<'a> {
 
             progress(Progress {
                 written: Labelled::new(&reply.text[written_before..], label),
-                output_tokens: reply.usage.completion_tokens,
+                output_tokens: reply.output_so_far(),
+                calling: reply.calling().map(|name| Labelled::new(name, label)),
                 counted_by_server: reply.counted,
                 attempt,
             });
@@ -990,6 +992,9 @@ struct Reply {
     usage: Usage,
     /// Whether the count is the service's rather than a tally of what arrived.
     counted: bool,
+    /// Pieces of a tool argument, tallied for the live figure and never for what the reply is
+    /// charged, which stays the service's figure or a tally of the words.
+    argument_pieces: u64,
     ended: bool,
     stop_reason: Option<String>,
     /// Whether a known content frame or block could not be decoded.
@@ -1000,6 +1005,24 @@ struct Reply {
 }
 
 impl Reply {
+    /// The name of the last tool call the reply has begun.
+    ///
+    /// Known from the event that opens the call, which is the first thing a service holding the
+    /// argument back sends and the last thing it sends until the argument is whole.
+    fn calling(&self) -> Option<&str> {
+        self.calls.last().map(|(_, _, name, _)| name.as_str())
+    }
+
+    /// Output as best it can be known while the reply arrives: the service's figure once it has
+    /// given one, and until then the pieces of text and of argument that have arrived.
+    fn output_so_far(&self) -> u64 {
+        if self.counted {
+            self.usage.completion_tokens
+        } else {
+            self.usage.completion_tokens + self.argument_pieces
+        }
+    }
+
     fn absorb(&mut self, event: StreamEvent) {
         match event {
             StreamEvent::ContentBlockStart { index, start } => {
@@ -1032,6 +1055,12 @@ impl Reply {
                 protocol::Delta::ToolUse { tool_use } => {
                     if let Some(call) = self.calls.iter_mut().find(|(at, ..)| *at == index) {
                         call.3.push_str(&tool_use.input);
+                        // Tallied for the live figure: an argument is output the model wrote, and
+                        // a long file is written as one, so a tally of text alone stands still for
+                        // all of it.
+                        if !self.counted && !tool_use.input.is_empty() {
+                            self.argument_pieces += 1;
+                        }
                     }
                 }
                 protocol::Delta::Other(value) => {
@@ -1489,6 +1518,54 @@ mod tests {
         });
         assert_eq!(reply.usage.completion_tokens, 99);
         assert!(reply.counted);
+    }
+
+    /// A long file is written as a tool argument, so a tally of text alone stands still for the
+    /// whole of it. The service's own figure still replaces the tally, pieces of argument included.
+    #[test]
+    fn an_argument_is_tallied_as_it_arrives_and_its_call_named_from_the_start() {
+        let mut reply = Reply::default();
+        assert_eq!(reply.calling(), None);
+        reply.absorb(StreamEvent::ContentBlockStart {
+            index: 1,
+            start: opening("call-1", "write_file"),
+        });
+        assert_eq!(reply.calling(), Some("write_file"));
+        assert_eq!(reply.output_so_far(), 0, "a name counted as output");
+        for n in 1..=3 {
+            reply.absorb(StreamEvent::ContentBlockDelta {
+                index: 1,
+                delta: arguments("x"),
+            });
+            assert_eq!(
+                reply.output_so_far(),
+                n,
+                "a piece of argument went uncounted"
+            );
+        }
+        assert_eq!(
+            reply.usage.completion_tokens, 0,
+            "the live tally was charged"
+        );
+
+        reply.absorb(StreamEvent::Metadata {
+            usage: Some(protocol::BedrockUsage {
+                input_tokens: 0,
+                output_tokens: 99,
+                cache_read_input_tokens: 0,
+                cache_write_input_tokens: 0,
+            }),
+        });
+        reply.absorb(StreamEvent::ContentBlockDelta {
+            index: 1,
+            delta: arguments("x"),
+        });
+        assert_eq!(
+            reply.output_so_far(),
+            99,
+            "a tally added to the service's figure"
+        );
+        assert_eq!(reply.usage.completion_tokens, 99);
     }
 
     /// A stream that never said it finished is a reply that was cut off, and returning it as whole
@@ -2426,6 +2503,71 @@ mod tests {
         assert!(
             completion.calls[0].arguments().is_err(),
             "an argument the model never finished became one that parses"
+        );
+    }
+
+    /// A service holding an argument back sends the call's name and then nothing until the argument
+    /// is whole, so the name is what a person waiting can be shown. Once the argument arrives in
+    /// pieces, the count moves with them.
+    #[test]
+    fn progress_names_the_call_being_written_and_counts_its_argument() {
+        use bravebot_core::{
+            capability::{Capability, CapabilitySet},
+            event::RecordingSink,
+            policy::{ReleasePlan, Routing},
+        };
+        let model = "a-model-writing-a-file";
+        let reply = streamed(vec![
+            eventstream::tests::frame(
+                "contentBlockStart",
+                br#"{"contentBlockIndex":1,"start":{"toolUse":{"toolUseId":"a","name":"write_file"}}}"#,
+            ),
+            eventstream::tests::frame(
+                "contentBlockDelta",
+                br#"{"contentBlockIndex":1,"delta":{"toolUse":{"input":"{\"path\""}}}"#,
+            ),
+            eventstream::tests::frame(
+                "contentBlockDelta",
+                br#"{"contentBlockIndex":1,"delta":{"toolUse":{"input":":\"fish.py\"}"}}}"#,
+            ),
+            eventstream::tests::frame("messageStop", br#"{"stopReason":"tool_use"}"#),
+        ]);
+        let config = config_for(model);
+        let egress = Egress::new();
+        let (http, _received) = scripted_with_silences(vec![(reply, false)]);
+        let mut client = BedrockClient::new(&config, &egress);
+        client.test_request = Some(http);
+        let mut sink = RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "test");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .unwrap();
+        let shown = policy.authorise_display_release("the reply as the model writes it");
+
+        let mut seen = Vec::new();
+        let result = client.complete_streaming(&mut policy, &writing_a_file(model), |progress| {
+            seen.push((
+                progress
+                    .calling
+                    .map(|name| name.declassify(&shown).to_string()),
+                progress.output_tokens,
+            ));
+        });
+
+        let completion = result.expect("a reply that asked for a call");
+        assert_eq!(
+            seen.last(),
+            Some(&(Some("write_file".to_string()), 2)),
+            "{seen:?}"
+        );
+        assert_eq!(
+            completion.usage.completion_tokens, 0,
+            "the live tally was charged"
         );
     }
 

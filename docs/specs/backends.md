@@ -1777,6 +1777,31 @@ written.
 `verified-by: bravebot_bedrock::protocol::unparseable_arguments_become_an_empty_object_rather_than_dropping_the_call`
 `verified-by: bravebot_agent::tools::a_call_whose_arguments_do_not_parse_fails_and_writes_nothing`
 
+<a id="BACKEND-45"></a>
+### BACKEND-45: a streamed reply reports the call being written, and its count moves with the argument
+
+While a streamed reply arrives, the output count it reports goes up by one for each piece of a tool
+argument, as it does for each piece of the reply's words, from Brave's endpoint, an OpenAI-compatible gateway
+and Bedrock alike.
+The service's own figure replaces that tally once it arrives, and a piece arriving after it adds
+nothing. The name of the call the model is writing is reported with the same progress from the
+moment the call opens, before any of its argument has arrived, labelled as the reply's words are.
+
+The tally of argument pieces is never charged. A reply is charged the service's figure, and one that
+ends without a figure is charged the tally of its words alone, however much argument it carried.
+The turn counts each round on from what its count last showed where that is more than the round was
+charged, so the count a person watches does not fall between rounds.
+
+**Why.** With [BACKEND-44](#BACKEND-44) an argument arrives in pieces, but a count that moved only
+for words stood still for as long as a file took to write, which on a screen reads as a stall. The
+tally is for that screen. Counting it in the charge as well would raise what every reply without a
+figure costs a person, which is a question about the estimate and not about the screen.
+
+`verified-by: bravebot_bedrock::lib::an_argument_is_tallied_as_it_arrives_and_its_call_named_from_the_start`
+`verified-by: bravebot_bedrock::lib::progress_names_the_call_being_written_and_counts_its_argument`
+`verified-by: bravebot_aichat::protocol::a_call_being_written_is_named_and_counted`
+`verified-by: bravebot_agent::turn::the_call_being_written_reaches_the_interface_before_it_runs`
+
 ## Known costs
 
 - **The refusal is made at startup, and a model chosen mid-session is not checked again.**

@@ -1464,6 +1464,13 @@ pub struct Session {
     /// Held as it arrived. What is drawn from it is [`Session::reply_so_far`], since a model
     /// that has nowhere else to put its working writes it in here.
     streaming: String,
+    /// The call the model is writing, named as the model named it, until the round's calls start.
+    ///
+    /// Beside the spinner rather than in the transcript for the reason the reply taking shape is
+    /// kept apart: it is not a thing that happened yet. A service holding an argument back sends
+    /// nothing else while the model writes it, so this is what says the session is working and on
+    /// what, for as long as a long file takes.
+    composing: Option<&'static str>,
     /// Whose work the reports arriving now describe, where it is a delegate's.
     ///
     /// Set by the driver and never worked out here. Delegates report alongside the turn and
@@ -1670,6 +1677,7 @@ impl Session {
             turn_start: TurnStart::default(),
             pending: crate::remote_confirm::Interjections::new(),
             streaming: String::new(),
+            composing: None,
             attributed_to: None,
             answers: Vec::new(),
             pasted: Vec::new(),
@@ -1827,8 +1835,8 @@ impl Session {
 
     /// What the indicator should call what is happening, most specific first.
     ///
-    /// A check in flight is the most immediate answer, then the task the model says it is on,
-    /// then the phase it is waiting in. `None` only before the first request goes out, when
+    /// A check in flight is the most immediate answer, then the call the model is writing, then
+    /// the phase it is waiting in. `None` only before the first request goes out, when
     /// there is genuinely nothing to say yet and the turn's own word is all there is.
     fn what_is_happening(&self) -> Option<String> {
         // A check first, and ahead of every phase: it is a whole model call inside the tool call
@@ -1843,6 +1851,14 @@ impl Session {
                 Checking::Picture => t!(indicator_checking_picture).to_string(),
                 Checking::Pdf => t!(indicator_checking_pdf).to_string(),
             });
+        }
+
+        // The one call that is not on a line of its own yet. Its argument can take minutes to
+        // write, and a service may send nothing at all until it is whole, so the round's own word
+        // would leave a person looking at a count that stands still and nothing else. Named by the
+        // word its line will carry once it starts, which the turn chose from the same table.
+        if let Some(call) = self.composing {
+            return Some(t!(indicator_composing, call = call).to_string());
         }
 
         // Only the phases that say something a person cannot see elsewhere. Planning is the
@@ -2243,6 +2259,18 @@ impl Session {
         // sent afresh. Either way what was on the screen belongs to a reply that is over or to
         // one that has been thrown away, so the tail starts empty.
         self.streaming.clear();
+        self.drop_composing();
+    }
+
+    /// Forget the call being written, where what ended it was the turn's own.
+    ///
+    /// A delegate works alongside the turn and may announce a phase, say something or start a
+    /// call while the planner is still writing one, and none of that is the planner's call
+    /// starting or its round ending.
+    fn drop_composing(&mut self) {
+        if self.attributed_to.is_none() {
+            self.composing = None;
+        }
     }
 
     /// Record that a check is running over this many lines, or over a picture or a PDF.
@@ -2284,6 +2312,17 @@ impl Session {
         self.streaming.push_str(text);
     }
 
+    /// Record the call the model is writing, or that an attempt thrown away took it back.
+    ///
+    /// A delegate's is dropped for the reason its half-written reply is: there is one model
+    /// writing at a time, and a call named beside the turn's spinner reads as the planner's.
+    pub fn composing(&mut self, call: Option<&'static str>) {
+        if self.attributed_to.is_some() {
+            return;
+        }
+        self.composing = call;
+    }
+
     /// Put the turn's own view back at its tail as a piece of work begins or a command line lands.
     ///
     /// Nothing while the delegate view is open, because `scroll` is that view's position then and
@@ -2320,6 +2359,7 @@ impl Session {
         // has been showing, now on their way into the transcript, so leaving the tail up would
         // draw them twice; and a round that said nothing has nothing to leave up either.
         self.streaming.clear();
+        self.drop_composing();
         let text = text.into();
         let text = crate::reasoning::spoken(&text);
         if text.trim().is_empty() {
@@ -2714,6 +2754,8 @@ impl Session {
 
     /// Show a tool call that has begun.
     pub fn start_activity(&mut self, activity: Activity) {
+        // The call has its own line now, so it is no longer one being written.
+        self.drop_composing();
         self.running = Some(activity.clone());
         let entry = Entry::tool(activity);
         match self.attributed_to.and_then(|id| self.at(id)) {
@@ -6145,6 +6187,7 @@ impl Session {
         // them, so they come down with the stop as they do at every other ending a round has.
         // Left up they are an answer drawn above a prompt that has gone back to the box.
         self.streaming.clear();
+        self.composing = None;
 
         self.forget_cancelled_prompt();
 
@@ -7429,6 +7472,7 @@ impl Session {
         self.checking = None;
         self.running = None;
         self.streaming.clear();
+        self.composing = None;
     }
 
     /// Record a completed turn, and what it cost.
@@ -7699,6 +7743,7 @@ impl Session {
         // said it, which the planner has not: what an aside wrote is the aside's, and the row it
         // becomes is where it is drawn.
         self.streaming.clear();
+        self.composing = None;
         // Read before the timer is cleared. A `/compact` is a model call and nothing else, so all
         // of it is inference: charged to the turn it interrupted, exactly as its tokens are, and to
         // both figures rather than only to the wall clock, or an aside would read as time the
@@ -7732,6 +7777,7 @@ impl Session {
     pub fn end_run(&mut self, tokens: u64, spent: Option<bravebot_agent::timing::Timing>) {
         self.status = Status::Idle;
         self.streaming.clear();
+        self.composing = None;
         // Read before the timer is cleared, as an aside's is.
         let took = u64::try_from(self.elapsed().as_millis()).unwrap_or(u64::MAX);
         self.started = None;
@@ -8371,6 +8417,36 @@ mod tests {
             });
             session.reporting_for(Some(id));
             id
+        }
+
+        /// One model writes at a time, and a delegate's call named beside the turn's spinner reads
+        /// as the planner's.
+        #[test]
+        fn a_delegates_call_being_written_is_not_the_turns() {
+            let mut session = session();
+            session.type_char('a');
+            session.submit();
+            let id = spawn(&mut session, "explore", "look around");
+            session.composing(Some("Write"));
+            assert!(
+                session.composing.is_none(),
+                "a delegate's call named the turn's spinner"
+            );
+
+            // Nor does a delegate's work take back the call the turn is writing.
+            session.reporting_for(None);
+            session.composing(Some("Write"));
+            session.reporting_for(Some(id));
+            session.set_phase(Phase::Planning);
+            session.narrate("looking");
+            session.start_activity(Activity::running("Read", "src/main.rs"));
+            session.composing(None);
+            session.reporting_for(None);
+            assert_eq!(
+                session.composing,
+                Some("Write"),
+                "a delegate's work took back the call the turn is writing"
+            );
         }
 
         /// The key is for looking at what is happening now, and the delegate that is working is
@@ -14111,6 +14187,81 @@ mod tests {
             s.checking(bravebot_core::vetting::Checking::Lines(3));
             s.complete("done", Vec::new(), 0);
             assert!(s.checking.is_none(), "a check outlived the turn");
+        }
+
+        /// A call the model is writing has no line of its own yet, and a service holding its
+        /// argument back sends nothing else, so it is the word beside the spinner. Named by the
+        /// word its line will start with, so a name the model made up is not drawn as it wrote it.
+        #[test]
+        fn a_call_being_written_names_the_indicator() {
+            let mut s = working();
+            s.set_phase(Phase::Planning);
+            s.composing(Some("Write"));
+            assert_eq!(
+                s.indicator().expect("working").verb,
+                "Preparing a call: Write"
+            );
+        }
+
+        /// And gives the word back once the call has a line, and at the top of the next round.
+        /// Left up it would claim a call was being written while that call runs.
+        #[test]
+        fn a_call_being_written_gives_the_word_back() {
+            let mut s = working();
+            s.set_phase(Phase::Planning);
+            s.composing(Some("Write"));
+            s.start_activity(Activity::running("Write", "fish.py"));
+            assert!(
+                s.composing.is_none(),
+                "a call that started was still being written"
+            );
+
+            s.composing(Some("Write"));
+            s.set_phase(Phase::Planning);
+            assert_eq!(s.indicator().expect("working").verb, "Planning");
+
+            s.composing(Some("Write"));
+            s.narrate("");
+            assert!(s.composing.is_none(), "the finished round left its call up");
+
+            s.composing(Some("Write"));
+            s.composing(None);
+            assert!(
+                s.composing.is_none(),
+                "an attempt thrown away left its call up"
+            );
+
+            s.composing(Some("Write"));
+            s.complete("done", Vec::new(), 0);
+            assert!(
+                s.composing.is_none(),
+                "a call being written outlived the turn"
+            );
+
+            let mut failed = working();
+            failed.composing(Some("Write"));
+            failed.fail("error: something went wrong", went_wrong());
+            assert!(failed.composing.is_none(), "a failed turn left its call up");
+
+            let mut stopped = working();
+            stopped.composing(Some("Write"));
+            stopped.restore("what was asked");
+            assert!(
+                stopped.composing.is_none(),
+                "a stopped turn left its call up"
+            );
+
+            let mut aside = session();
+            aside.begin_aside();
+            aside.composing(Some("Write"));
+            aside.end_aside(0);
+            assert!(aside.composing.is_none(), "an aside left its call up");
+
+            let mut run = session();
+            run.begin_aside();
+            run.composing(Some("Write"));
+            run.end_run(0, None);
+            assert!(run.composing.is_none(), "a run left its call up");
         }
 
         /// One turn's calls must not appear under the next one's prompt.

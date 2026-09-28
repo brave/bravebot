@@ -5069,6 +5069,7 @@ fn compact_animated(
             crate::remote_confirm::ToMain::Phase(phase) => session.set_phase(phase),
             crate::remote_confirm::ToMain::Narration(text) => session.narrate(text),
             crate::remote_confirm::ToMain::Streaming(text) => session.streaming(&text),
+            crate::remote_confirm::ToMain::Composing(call) => session.composing(call),
             _ => {}
         });
 
@@ -5552,6 +5553,7 @@ fn manifest_animated(
             crate::remote_confirm::ToMain::Narration(text) => session.narrate(text),
             crate::remote_confirm::ToMain::Notice(text) => session.note_once(text),
             crate::remote_confirm::ToMain::Streaming(text) => session.streaming(&text),
+            crate::remote_confirm::ToMain::Composing(call) => session.composing(call),
             crate::remote_confirm::ToMain::Started(activity) => session.start_activity(activity),
             crate::remote_confirm::ToMain::Finished(activity) => session.finish_activity(activity),
             crate::remote_confirm::ToMain::CheckStarted(checking) => session.checking(checking),
@@ -6409,6 +6411,7 @@ fn run_turn_animated(
             crate::remote_confirm::ToMain::Narration(text) => session.narrate(text),
             crate::remote_confirm::ToMain::Notice(text) => session.note_once(text),
             crate::remote_confirm::ToMain::Streaming(text) => session.streaming(&text),
+            crate::remote_confirm::ToMain::Composing(call) => session.composing(call),
             crate::remote_confirm::ToMain::Started(activity) => session.start_activity(activity),
             crate::remote_confirm::ToMain::Finished(activity) => session.finish_activity(activity),
             crate::remote_confirm::ToMain::CheckStarted(checking) => session.checking(checking),

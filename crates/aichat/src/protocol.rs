@@ -754,6 +754,9 @@ pub struct StreamAccumulator {
     /// Chunks carrying text, which is the only honest live measure of output before the server
     /// reports its own count.
     content_chunks: u64,
+    /// Chunks carrying a piece of a tool argument, counted toward the live figure and never toward
+    /// what the reply is charged.
+    argument_chunks: u64,
     /// Whether the server said the reply was over, rather than the bytes merely stopping.
     ended: bool,
 }
@@ -817,8 +820,11 @@ impl StreamAccumulator {
                     if let Some(name) = function.name {
                         call.name.push_str(&name);
                     }
-                    if let Some(arguments) = function.arguments {
+                    if let Some(arguments) = function.arguments
+                        && !arguments.is_empty()
+                    {
                         call.arguments.push_str(&arguments);
+                        self.argument_chunks += 1;
                     }
                 }
             }
@@ -855,13 +861,23 @@ impl StreamAccumulator {
     /// Output tokens as best they can be known right now.
     ///
     /// The server's own count once it has reported one, and until then the number of chunks that
-    /// carried text. One chunk is one token by convention rather than by guarantee, so this is an
-    /// estimate that gets replaced by the real figure, never one that persists beside it.
+    /// carried text or a piece of a tool argument. One chunk is one token by convention rather than
+    /// by guarantee, so this is an estimate that gets replaced by the real figure, never one that
+    /// persists beside it. An argument is output the model wrote as much as text is, and a count
+    /// that skipped it would stand still for the whole of a long file.
     pub fn output_tokens(&self) -> u64 {
         match self.usage {
             Some(usage) => usage.completion_tokens,
-            None => self.content_chunks,
+            None => self.content_chunks + self.argument_chunks,
         }
+    }
+
+    /// The name of the last tool call the reply has begun, once any of it has arrived.
+    pub fn calling(&self) -> Option<&str> {
+        self.calls
+            .last()
+            .map(|(_, call)| call.name.as_str())
+            .filter(|name| !name.is_empty())
     }
 
     /// Whether the server has reported usage, so the count is now authoritative.
@@ -906,16 +922,18 @@ impl StreamAccumulator {
     }
 
     /// Everything the stream produced, in the shape a one-shot response would have had.
-    /// What the reply cost, or the same estimate the count on the screen was showing.
+    /// What the reply cost, or the estimate from its text that the count on the screen included.
     ///
     /// A server that answers `include_usage` with nothing left this at zero, so a session whose
     /// interface had been counting output all the way through recorded that it had cost nothing.
     /// Zero is not a better answer than an approximate one: it is a wrong answer that reads as a
     /// measurement, and the figure exists to tell somebody what a session cost them.
     ///
-    /// The estimate is chunks of text rather than tokens. It is what
-    /// [`StreamAccumulator::output_tokens`] has always shown live for the same reason, and
-    /// [`StreamAccumulator::usage_is_reported`] is how a caller tells the two apart.
+    /// The estimate is chunks of text rather than tokens, the part of what
+    /// [`StreamAccumulator::output_tokens`] shows live that it has always shown, and
+    /// [`StreamAccumulator::usage_is_reported`] is how a caller tells the two apart. Pieces of a
+    /// tool argument are left out: they keep the live count moving while a long file is written,
+    /// and counting them here would raise what every reply without a figure is charged.
     pub fn finish(self) -> (String, Option<String>, Vec<ToolCall>, Usage) {
         let calls = self.tool_calls();
         let usage = self.usage.unwrap_or(Usage {
@@ -1266,6 +1284,37 @@ mod tests {
                 assert_eq!(acc.output_tokens(), n);
             }
             assert!(!acc.usage_is_reported());
+        }
+
+        /// A long file is written as a tool argument, so a count of text alone stands still for
+        /// the whole of it, and the name is what says which call is taking the time.
+        #[test]
+        fn a_call_being_written_is_named_and_counted() {
+            let mut acc = StreamAccumulator::new();
+            assert_eq!(acc.calling(), None);
+            acc.push(chunk(
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"arguments":""}}]}}]}"#,
+            ));
+            assert_eq!(acc.calling(), None, "a call with no name yet was named");
+            acc.push(chunk(
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"write_file","arguments":""}}]}}]}"#,
+            ));
+            assert_eq!(acc.calling(), Some("write_file"));
+            assert_eq!(acc.output_tokens(), 0, "a name alone counted as output");
+            for n in 1..=3 {
+                acc.push(chunk(
+                    r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"x"}}]}}]}"#,
+                ));
+                assert_eq!(acc.output_tokens(), n, "an argument piece did not count");
+            }
+            assert_eq!(
+                acc.usage().completion_tokens,
+                0,
+                "the live tally was charged"
+            );
+            assert_eq!(acc.calling(), Some("write_file"));
+            let (_, _, _, charged) = acc.finish();
+            assert_eq!(charged.completion_tokens, 0, "the live tally was charged");
         }
 
         /// And the server's figure replaces the estimate rather than sitting beside it, so there is

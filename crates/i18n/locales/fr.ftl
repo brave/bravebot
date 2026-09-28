@@ -1117,6 +1117,7 @@ elapsed-seconds = { $seconds } s
 elapsed-minutes = { $minutes } min { $seconds } s
 indicator-tokens-read = ↓ { $tokens } jetons
 indicator-tokens-written = ↑ { $tokens }
+indicator-composing = Préparation d'un appel : { $call }
 indicator-checking = { $lines ->
     [one] Vérification de { $lines } ligne
    *[other] Vérification de { $lines } lignes

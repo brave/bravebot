@@ -544,6 +544,18 @@ pub trait Reporter {
     /// it drew when the round's finished text arrives, so nothing is said twice.
     fn streaming(&mut self, _text: String) {}
 
+    /// The tool call the model is writing, by the word its row will start with, or `None` once
+    /// there is no longer one.
+    ///
+    /// Released for a screen and nowhere else, as [`Reporter::streaming`] is, and only as a word
+    /// from [`verb_for`]'s fixed table: the name is the model's own output and nothing has been
+    /// dispatched on it yet, so what it spelt never reaches an interface. Sent when it changes,
+    /// from the piece of the reply that opened the call, because a service may send nothing more
+    /// until the argument is whole and this is then the only thing there is to say about a wait
+    /// that can last minutes. `None` follows an attempt the client threw away. An interface keeps
+    /// the last one until then, until the turn's phase is announced, or until its call starts.
+    fn composing(&mut self, _call: Option<&'static str>) {}
+
     /// Say what the turn found before it started: which standing instructions and skills loaded,
     /// and which did not.
     ///
@@ -693,6 +705,8 @@ pub struct RecordingReporter {
     pub narration: Vec<String>,
     /// Every fragment of a reply as it arrived, in order.
     pub streamed: Vec<String>,
+    /// The call being written, each time it changed.
+    pub composing: Vec<Option<&'static str>>,
     /// What loaded and what did not, in order.
     pub notices: Vec<String>,
     /// Quarantined content released for the screen.
@@ -742,6 +756,10 @@ impl Reporter for RecordingReporter {
 
     fn streaming(&mut self, text: String) {
         self.streamed.push(text);
+    }
+
+    fn composing(&mut self, call: Option<&'static str>) {
+        self.composing.push(call);
     }
 
     fn notice(&mut self, text: String) {

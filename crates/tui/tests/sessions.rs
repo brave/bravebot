@@ -3689,6 +3689,7 @@ mod preserved_history {
                 ToMain::Quarantined(shown) => session.show(shown),
                 ToMain::Notice(text) => session.note_once(text),
                 ToMain::Streaming(text) => session.streaming(&text),
+                ToMain::Composing(call) => session.composing(call),
                 ToMain::ReportingFor(delegate) => session.reporting_for(delegate),
                 other => assert!(
                     matches!(

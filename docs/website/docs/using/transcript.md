@@ -11,6 +11,11 @@ description: What is drawn back, and the scroller Ctrl-O opens over it.
 A reply is drawn as it arrives, and the round that ends replaces it. The end of a reply is visible
 when it arrives, so scrolling back is always deliberate. A tiny terminal still renders.
 
+**A call the model is still writing is named beside the working indicator**, as "Preparing a call:
+Write", by the word its own row will start with. The token count beside it moves as the call's
+arguments arrive, so a long file being written reads as work and not as a stall. The name goes once
+the call starts, the round ends, or the request has to be sent again.
+
 A resumed session redraws what the earlier turns did: each one keeps the prompt you sent and how it
 ended, failures and cancellations included, so reading a transcript back does not depend on
 remembering the session. A task list stays on the turn that made it, and a later turn without one
