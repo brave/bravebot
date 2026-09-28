@@ -394,6 +394,7 @@ fn a_delegate_does_not_open_a_wallet_of_its_own() {
             &mut sink,
             // The turn found nothing to lend, which is what an unreadable batch leaves it with.
             None,
+            None,
         );
 
         assert!(

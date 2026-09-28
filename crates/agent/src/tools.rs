@@ -949,8 +949,9 @@ fn table(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<Tool> {
                         "type": "string",
                         "description": "Which kind of agent, narrowest first. \"reader\" reads, \
                                         lists, searches and runs processors: use it to find \
-                                        something out. \"checker\" also runs programs, so it \
-                                        can build, test and lint, but writes nothing: use it to \
+                                        something out. \"checker\" also runs programs and asks \
+                                        a language server, so it can build, test and lint, but \
+                                        writes nothing: use it to \
                                         find out whether something works. \"worker\" also \
                                         writes files: use it to finish a sub-task. Pick the \
                                         narrowest one that can do the job.",
@@ -7840,11 +7841,7 @@ mod tests {
         use bravebot_core::capability::CapabilitySet;
         use bravebot_core::delegate::{Kind, NEVER_DELEGATED, gating_capability};
 
-        let everything = Kind::Worker
-            .capabilities()
-            .iter()
-            .chain([bravebot_core::capability::Capability::LanguageServer])
-            .collect::<CapabilitySet>();
+        let everything = Kind::Worker.capabilities();
 
         for tool in available(
             Scheduling::ArrangingALook,

@@ -329,6 +329,10 @@ starts is kept for the session and answers every later question, and your approv
 It is shut down when the session ends, and killed if it does not go quietly. Indexing is the whole
 cost of a server, so paying it per request would make each call slower than the search it replaces.
 
+A `checker` or `worker` delegate asks the same servers, so a language you approved is not put to you
+again and the tree is not indexed twice. A `reader` delegate is not offered `lsp` at all: starting a
+server runs the project's build tooling, and a reader may not run programs.
+
 ### A location is structure; the text at it is content
 
 A location is a path, a line, a column and the kind of symbol. **Those reach the planner whatever the
@@ -1001,8 +1005,8 @@ of capabilities, and gets back one report.
 | Kind | Holds | For |
 |---|---|---|
 | `reader` | reading | finding something out |
-| `checker` | reading, and running programs | finding out whether something works |
-| `worker` | reading, running programs, and writing files | finishing a sub-task |
+| `checker` | reading, running programs, and asking a language server | finding out whether something works |
+| `worker` | reading, running programs, asking a language server, and writing files | finishing a sub-task |
 
 The call answers as soon as the delegate has been approved, so the planner has its round back while
 the work goes on behind it, and what the delegate says arrives on its own later. Several delegates

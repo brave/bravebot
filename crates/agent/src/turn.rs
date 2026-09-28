@@ -1457,6 +1457,8 @@ pub(crate) fn delegated(
     // The wallet the turn that started this one is spending from, where it found one. A delegate
     // opens none of its own (PREM-5).
     wallet: Option<&dyn crate::shared::Spends>,
+    // The session's language servers, shared with the turn that started this one (LSP-8).
+    servers: Option<&mut crate::lsp::LanguageServers>,
 ) -> Result<Outcome, TurnError> {
     if task.delegate.is_none() {
         return Err(TurnError::Precommit(
@@ -1475,10 +1477,7 @@ pub(crate) fn delegated(
         sink,
         trust,
         programs,
-        // Its own, not the parent session's. A delegate runs on a thread beside the turn that
-        // spawned it and beside its siblings, so a shared set would be one several of them held
-        // at once.
-        None,
+        servers,
         cancel,
         Some(&mut decisions),
         Some(notices),
@@ -3399,6 +3398,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         let spawning_model = turn_model.as_deref();
                         for (id, seeded) in std::mem::take(&mut output.delegate) {
                             let vouched = seeded.vouched.clone();
+                            let shared = servers.as_deref().map(crate::lsp::LanguageServers::share);
                             let handle = scope.spawn(move || {
                                 let mut confirmer = confirming.delegate(id);
                                 let mut reporter = reporting.delegate(id);
@@ -3420,6 +3420,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                     &mut reporter,
                                     &mut sink,
                                     wallet,
+                                    shared,
                                 );
                                 (ended, reporter.last_spent(), reporter.take_inference())
                             });

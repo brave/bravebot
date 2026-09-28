@@ -19838,6 +19838,7 @@ fn a_delegate_spends_the_wallet_the_turn_lent_it() {
         &mut bravebot_agent::IgnoreReports,
         &mut sink,
         Some(&wallet),
+        None,
     );
 
     assert!(

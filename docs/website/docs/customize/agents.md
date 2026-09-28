@@ -62,9 +62,9 @@ back to the turn's model, so an intended cost control cannot be silently bypasse
 answered by a different model than the one named says so, so a misspelt name is not silent.
 
 **`kind` picks what the delegate may do, and your file never describes it.** A `reader` reads,
-lists and searches; a `checker` also runs programs; a `worker` also writes files. Each still asks
-you before every write and every command it runs: delegating saves the agent context, never an
-approval.
+lists and searches; a `checker` also runs programs and asks a language server; a `worker` also
+writes files. Each still asks you before every write and every command it runs: delegating saves
+the agent context, never an approval.
 
 **`tools` can only take things away.** It names a subset of what the kind already reaches, and a
 tool the kind does not reach is one the delegate is started without. There is no spelling of it
