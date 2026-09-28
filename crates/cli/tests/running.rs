@@ -4108,15 +4108,23 @@ fn doctor_names_a_refusing_key_that_is_not_a_boolean() {
 
     let (stdout, stderr) = said(&output);
     assert!(output.status.success(), "doctor did not run: {stderr}");
+    // The sentence that says the value was not obeyed, not merely the key: `doctor` lists the names a
+    // file set as well, so a build that read `"true"` as the restriction would print the key on that
+    // line and pass an assertion about the key alone.
     for key in [
         "permissions.readsStayInWorkspace",
         "permissions.bypassUnreachable",
     ] {
         assert!(
-            stdout.contains(key),
+            stdout.contains(&format!("{key} in ")),
             "{key} was dropped without being named: {stdout}"
         );
     }
+    assert_eq!(
+        stdout.matches("is not a boolean").count(),
+        2,
+        "both mistyped keys have to be reported as not obeyed: {stdout}"
+    );
     assert!(
         stdout.contains(&scratch.settings().display().to_string()),
         "the file holding them was not named: {stdout}"
