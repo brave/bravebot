@@ -51,6 +51,13 @@ impl Confirmer for Answers {
     fn confirm_mcp_call(&mut self, _: &McpCallRequest) -> CallDecision {
         CallDecision::reject()
     }
+
+    fn confirm_move(
+        &mut self,
+        _request: &bravebot_agent::confirm::MoveRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
     fn ask_user(&mut self, _: &bravebot_core::ask::Asking) -> Vec<bravebot_core::ask::Answer> {
         Vec::new()
     }

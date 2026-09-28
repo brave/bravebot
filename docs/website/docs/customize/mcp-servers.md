@@ -396,8 +396,29 @@ the installation its program came from, and it does not get the workspace unless
 only in the `PATH` you named: without `--env PATH` it is not found, and the session says to name it
 or give the program's full path.
 
-A service server is reached through the same network gate as everything else the session sends, and
-a redirect off the host and port you declared is refused.
+A service server is reached through the same network gate as everything else the session sends. A
+redirect off the host and port you declared is not followed. Nothing is sent there, and you are
+asked whether the server moved:
+
+```
+  docs is declared at https://docs.example.com/mcp
+  and its reply points to https://mcp.example.net/mcp
+  reaching mcp.example.net
+  Nothing was sent there. A yes declares the server at that address and sends it what was being
+  sent, and every later request to the server goes there too, in this session and the next. Say
+  no unless you know the server moved.
+
+  declare this server where its reply points? [y/N]
+```
+
+A redirect met during a turn is asked about there. One met as the session starts the server is
+asked at the terminal before the session opens. A yes makes the handshake at the new address and
+only then rewrites the entry in `~/.bravebot/mcp.json` and approves it. Its list of tools is put to
+you again when a session next starts it, since the list you said yes to was read at the old
+address. A yes does not move it to an address a declaration cannot hold, or to a host your
+organization's settings refuse. A no changes nothing: the call is refused, or the server is not
+started. A one-shot run, a session with nobody at the terminal, and
+`--dangerously-skip-permissions` refuse the redirect without asking.
 
 ## Seeing what a session started
 

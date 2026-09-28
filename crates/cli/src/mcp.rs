@@ -12,6 +12,7 @@
 
 use crate::exit::{Ending, fail};
 use crate::progress::printable;
+pub(crate) use bravebot_agent::mcp::{shown, unreadable};
 use bravebot_config::Managed;
 use bravebot_config::import::{Destination, Unwritable};
 use bravebot_config::mcp::{
@@ -1296,20 +1297,6 @@ fn pad(text: &str, width: usize) -> String {
     format!("{text}{}", " ".repeat(gap))
 }
 
-/// A word as it is safe to draw: as it is where every character is one a terminal draws as itself
-/// and none would blur where the word ends, and quoted with its escapes otherwise.
-pub(crate) fn shown(word: &str) -> String {
-    let plain = !word.is_empty()
-        && word.chars().all(|c| match c.is_ascii() {
-            true => c.is_ascii_graphic() && !matches!(c, '"' | '\'' | '\\'),
-            false => c.is_alphanumeric(),
-        });
-    match plain {
-        true => word.to_string(),
-        false => format!("{word:?}"),
-    }
-}
-
 fn already(alias: &str, declaration: &Declaration) -> String {
     t!(
         mcp_already_approved,
@@ -1437,17 +1424,6 @@ pub(crate) fn problem(found: &Problem) -> String {
         Problem::Url => t!(mcp_problem_url).to_string(),
         Problem::Credentials => t!(mcp_problem_credentials).to_string(),
         Problem::Remote(key) => t!(mcp_problem_remote, key = *key).to_string(),
-    }
-}
-
-pub(crate) fn unreadable(why: &Unreadable) -> String {
-    match why {
-        Unreadable::TooLarge => t!(mcp_unreadable_too_large).to_string(),
-        Unreadable::NotRead => t!(mcp_unreadable_not_read).to_string(),
-        Unreadable::NotJson => t!(mcp_unreadable_not_json).to_string(),
-        Unreadable::NotAnObject => t!(mcp_unreadable_not_an_object).to_string(),
-        Unreadable::Servers => t!(mcp_unreadable_servers).to_string(),
-        Unreadable::Key(key) => t!(mcp_unreadable_key, key = shown(key)).to_string(),
     }
 }
 

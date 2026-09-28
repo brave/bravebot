@@ -1373,6 +1373,10 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
         self.refusing.confirm_mcp_call(request)
     }
 
+    fn confirm_move(&mut self, request: &bravebot_agent::confirm::MoveRequest) -> Decision {
+        self.refusing.confirm_move(request)
+    }
+
     /// Declined rather than answered, as everywhere nobody can be asked: a reply invented here would
     /// be reported to the planner as the person's own words.
     fn ask_user(&mut self, asking: &Asking) -> Vec<Answer> {

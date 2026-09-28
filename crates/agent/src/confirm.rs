@@ -659,6 +659,27 @@ impl McpCallRequest {
     }
 }
 
+/// A remote MCP server's request was redirected off where it was declared (SERVERS-11).
+///
+/// The destination is the server's own bytes, out of a `Location` header, released for this prompt
+/// and for nothing after it: the planner is told the declared url and never this one. A yes rewrites
+/// the declaration to it, so what is drawn has to be the url exactly as it would be written, with the
+/// host and port it reaches beside it for the reason [`FetchRequest::host`] is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MoveRequest {
+    /// The alias the person gave the server.
+    pub alias: String,
+    /// The url the declaration names, which is what somebody wrote.
+    pub declared: String,
+    /// Where the reply pointed, as a yes would declare it.
+    pub destination: String,
+    /// The host and port that destination reaches, taken from it rather than from its text.
+    pub authority: String,
+    /// Whether a yes can be written into the declarations, which it cannot where there is no state
+    /// directory or the session writes nothing. Without it the move lasts for this session.
+    pub may_record: bool,
+}
+
 /// What the person decided about a call to a server's tool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CallDecision {
@@ -880,6 +901,14 @@ pub trait Confirmer {
     /// to recording nothing, when they cannot ask.
     fn confirm_mcp_call(&mut self, request: &McpCallRequest) -> CallDecision;
 
+    /// Ask whether a remote MCP server is now where its request was redirected. Implementations must
+    /// refuse when they cannot ask, and bypassing every check refuses too (SERVERS-13).
+    ///
+    /// Separate from [`Confirmer::confirm_fetch`] because a yes is not consent to one request. It
+    /// rewrites what the person declared, so every later call, and every later session, goes to the
+    /// new destination with the server's arguments and its session id.
+    fn confirm_move(&mut self, request: &MoveRequest) -> Decision;
+
     /// Put a series of questions to the person, one answer per question in the order they were
     /// asked.
     ///
@@ -923,6 +952,11 @@ pub struct Unattended;
 impl Confirmer for Unattended {
     /// Refuses. Nothing about a test double is a person agreeing to start a process.
     fn confirm_server(&mut self, _request: &ServerRequest) -> Decision {
+        Decision::Reject
+    }
+
+    /// Refuses. Nobody is there to say a server is where its reply pointed.
+    fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
         Decision::Reject
     }
 
@@ -1047,6 +1081,10 @@ impl Confirmer for ApproveWrites {
         CallDecision::reject()
     }
 
+    fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
+        Decision::Reject
+    }
+
     fn ask_user(&mut self, _asking: &Asking) -> Vec<Answer> {
         Vec::new()
     }
@@ -1107,6 +1145,10 @@ impl Confirmer for ChoosesFirst {
 
     fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
         CallDecision::reject()
+    }
+
+    fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
+        Decision::Reject
     }
 
     fn ask_user(&mut self, asking: &Asking) -> Vec<Answer> {
@@ -1187,6 +1229,10 @@ impl Confirmer for ApproveRuns {
         CallDecision::reject()
     }
 
+    fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
+        Decision::Reject
+    }
+
     fn ask_user(&mut self, _asking: &Asking) -> Vec<Answer> {
         Vec::new()
     }
@@ -1249,6 +1295,10 @@ impl Confirmer for RemembersRuns {
         CallDecision::reject()
     }
 
+    fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
+        Decision::Reject
+    }
+
     fn ask_user(&mut self, _asking: &Asking) -> Vec<Answer> {
         Vec::new()
     }
@@ -1309,6 +1359,10 @@ impl Confirmer for ReadsOutput {
 
     fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
         CallDecision::reject()
+    }
+
+    fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
+        Decision::Reject
     }
 
     fn ask_user(&mut self, _asking: &Asking) -> Vec<Answer> {
@@ -1376,6 +1430,10 @@ impl Confirmer for VetsContent {
 
     fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
         CallDecision::reject()
+    }
+
+    fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
+        Decision::Reject
     }
 
     fn ask_user(&mut self, _asking: &Asking) -> Vec<Answer> {
@@ -1448,6 +1506,10 @@ impl Confirmer for ExposesReads {
         CallDecision::reject()
     }
 
+    fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
+        Decision::Reject
+    }
+
     fn ask_user(&mut self, _asking: &Asking) -> Vec<Answer> {
         Vec::new()
     }
@@ -1507,6 +1569,10 @@ impl Confirmer for ApproveFetches {
 
     fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
         CallDecision::reject()
+    }
+
+    fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
+        Decision::Reject
     }
 
     fn ask_user(&mut self, _asking: &Asking) -> Vec<Answer> {
@@ -1570,6 +1636,10 @@ impl Confirmer for ApprovePlans {
 
     fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
         CallDecision::reject()
+    }
+
+    fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
+        Decision::Reject
     }
 
     fn ask_user(&mut self, _asking: &Asking) -> Vec<Answer> {
@@ -1654,6 +1724,10 @@ impl<C: Confirmer + ?Sized> Confirmer for Timed<'_, C> {
 
     fn confirm_mcp_call(&mut self, request: &McpCallRequest) -> CallDecision {
         self.timing(|inner| inner.confirm_mcp_call(request))
+    }
+
+    fn confirm_move(&mut self, request: &MoveRequest) -> Decision {
+        self.timing(|inner| inner.confirm_move(request))
     }
 
     fn confirm_server(&mut self, request: &ServerRequest) -> Decision {
@@ -1788,6 +1862,11 @@ mod tests {
         fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
             std::thread::sleep(self.0);
             CallDecision::reject()
+        }
+
+        fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
+            std::thread::sleep(self.0);
+            Decision::Reject
         }
 
         fn confirm_server(&mut self, _request: &ServerRequest) -> Decision {

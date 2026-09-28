@@ -671,6 +671,40 @@ mcp-call-path-not-one-line = le chemin du projet ne peut pas s'écrire sur une l
 mcp-record-too-large = il est plus grand qu'un registre de réponses n'a de raison de l'être, il a donc été laissé tel quel
 mcp-record-not-read = il n'a pas pu être lu comme du texte, il a donc été laissé tel quel
 
+## Un serveur MCP distant dont la réponse pointe là où il n'est pas déclaré
+
+mcp-move-title = déclarer ce serveur là où pointe sa réponse ?
+mcp-move-declared = { $alias } est déclaré à { $url }
+mcp-move-destination = et sa réponse pointe vers { $url }
+mcp-move-reaching = qui atteint { $authority }
+mcp-move-explained =
+    Rien n'y a été envoyé. Un oui déclare le serveur à cette adresse et lui envoie ce qui était
+    en cours d'envoi, et chaque requête suivante au serveur y va aussi, dans cette session et la
+    suivante. Répondez non à moins de savoir que le serveur a déménagé.
+mcp-move-this-session-only = rien de ce qui est répondu dans cette session n'est enregistré, un oui dure donc jusqu'à sa fin
+mcp-move-yes = Oui, il a déménagé là
+mcp-move-no = Non
+mcp-move-declined =
+    { $alias } reste là où il est déclaré : sa réponse pointait ailleurs, et rien n'y a été envoyé
+mcp-move-not-started =
+    { $alias } n'a pas été démarré : sa réponse à la poignée de main pointait là où il n'est pas
+    déclaré, et rien n'y a été envoyé
+mcp-move-refused-by-managed = { $alias } n'a pas été déplacé là où pointe sa réponse : { $reason }
+mcp-move-undeclarable =
+    { $alias } n'a pas été déplacé : là où pointe sa réponse ne peut pas être déclaré : { $problem }
+mcp-move-moved = { $alias } a été déplacé là où pointait sa réponse
+mcp-move-edited =
+    { $alias } n'a pas été déplacé : sa déclaration a changé pendant que la question vous était
+    posée, elle a donc été laissée telle quelle
+mcp-move-not-recorded =
+    { $alias } est utilisé là où pointait sa réponse dans cette session seulement, car le
+    déplacement n'a pas pu être enregistré : { $error }
+mcp-move-no-handshake =
+    { $alias } n'a pas terminé sa poignée de main là où pointait sa réponse : { $reason }
+mcp-move-again =
+    { $alias } a été redirigé de nouveau, hors de là où il venait d'être déplacé, cela a donc été
+    refusé
+
 ## Approuver un répertoire, demandé une fois quand une session démarre ailleurs
 
 trust-directory-title = faire confiance à ce répertoire ?

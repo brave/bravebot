@@ -118,7 +118,9 @@ directory is not put either: the workspace is trusted, which is what answering i
 recorded ([trust-map.md](trust-map.md) is what that record means). A directory a settings file
 asked for is opened and vouched for without being put either. So are the three questions about a
 server a checkout asks for: whether to start it, whether to offer its list of tools, and whether to
-make a call to one of them ([SERVERS-13](mcp-servers.md#SERVERS-13)).
+make a call to one of them ([SERVERS-13](mcp-servers.md#SERVERS-13)). Whether a remote server moved
+where its reply pointed is not answered: a yes would rewrite the person's declaration to a url the
+server wrote, so the hop is refused unasked ([SERVERS-11](mcp-servers.md#SERVERS-11)).
 
 The two prompts that promote one slot's bytes are answered yes unless the run also asked for
 auto-vetting ([CHECK-11](vetting.md#CHECK-11)). Where it did, the check's word is what answers in the
@@ -188,6 +190,7 @@ the wrong mode everywhere else, and it is named `--dangerously-skip-permissions`
 `verified-by: bravebot_tui::app::bypassing_opens_the_directories_a_file_named_without_asking`
 `verified-by: bravebot_cli::servers::skipping_permissions_starts_the_server_unasked_and_records_nothing`
 `verified-by: bravebot_agent::mcp::bypassing_answers_both_prompts_and_records_nothing`
+`verified-by: bravebot_agent::permission_mode::bypassing_refuses_to_move_a_server`
 
 ## Choosing one
 

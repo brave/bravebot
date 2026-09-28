@@ -51,8 +51,9 @@ A session reads the aliases its checkout requests ([SERVERS-2](#SERVERS-2)), res
 those declarations, and puts the three-answer question to the person where no answer of theirs
 covers it, naming a runner and an unpinned package as it does ([SERVERS-4](#SERVERS-4),
 [SERVERS-6](#SERVERS-6)). An approved stdio server is started confined, holding the variables it
-names and no others, and an HTTP one is reached through the egress gate
-([SERVERS-10](#SERVERS-10), [SERVERS-11](#SERVERS-11)). Each server started completes its
+names and no others, and an HTTP one is reached through the egress gate, where a hop off its
+declaration is put to the person rather than followed ([SERVERS-10](#SERVERS-10),
+[SERVERS-11](#SERVERS-11)). Each server started completes its
 handshake and is held, with a grant naming it, for as long as the session runs
 ([SERVERS-9](#SERVERS-9)). The session's display names what it started, and how
 each one's tools stand ([SERVERS-14](#SERVERS-14)). `bravebot-cli` starts a server and
@@ -65,9 +66,6 @@ records a digest of the list, so the same list is offered unasked in a later ses
 one is asked about again. Each call is then put to them with three answers, after any permission
 rule naming the server or the tool ([SERVERS-7](#SERVERS-7)). Bypassing answers both questions and
 records neither ([SERVERS-13](#SERVERS-13)).
-
-What is not built: [SERVERS-11](#SERVERS-11)'s question about a hop, which is refused in its place,
-as that clause states.
 
 The desktop application starts no server, and says so as a session opens where one is requested
 ([SERVERS-2](#SERVERS-2)). That is a cost it pays on purpose, and the known costs at the end give the
@@ -966,14 +964,36 @@ a prompt rather than a rule.
 relocation is doing the ordinary thing. A boundary that has no answer but no is one a deployment
 works around, and a boundary everybody works around is off.
 
-**The question is unbuilt.** A session reaches an approved remote server as it opens, and its
-handshake passes the egress gate under a policy holding the fetch capability and the grant naming
-that server, and no other. Every call after it passes the same gate. A hop is detected there, and
-the gate allows or refuses and cannot ask, so an approval has to be a grant minted before the call,
-and there is no prompt to mint one. Until there is, a hop that leaves the declared destination,
-whether a call's or the handshake's, is refused and nothing is sent. That is this clause with its
-question unasked rather than a different rule. What is built reads a destination as a host and a
-port together, as above.
+**How it is built.** A session reaches an approved remote server as it opens, and its handshake
+passes the egress gate under a policy holding the fetch capability and the grant naming that server,
+and no other. Every call after it passes the same gate. The gate allows or refuses and cannot ask,
+so a hop that leaves the declared destination, whether a call's or the handshake's, is refused there
+and nothing is sent. The policy keeps where it pointed, as the server's bytes, for the prompt.
+
+The prompt draws the declared url, where the reply pointed, and the host that reaches, with the
+port where the url names one. A
+call's hop is asked during the turn, in the full-screen interface and in lines alike; a handshake's
+is asked at the terminal as the session opens, and `y` is the only yes. Until the yes, the
+destination decides nothing. After it, the url is read as a declaration like any other, so one that
+cannot be declared is refused, and so is one whose host the managed layer refuses
+([SERVERS-12](#SERVERS-12)). The handshake is then made there, and only once it completes is
+`~/.bravebot/mcp.json` rewritten and the new digest recorded in `mcp-approved` in place of the old
+one, so a destination that does not answer is never written down. A declaration edited while the
+person was asked is left as it is, and the server is not moved. The call is then made again where
+the server now is, once: a second hop off the new destination is refused and not asked about. A
+line then says the server moved, since the move outlasts the prompt.
+
+A project entry in `mcp-projects` answers for what a checkout requests and never for where a server
+went, so it does not answer this question. Where the session writes nothing, the prompt says so and a
+yes moves the server until the session ends. A vouched list is not carried to the new declaration,
+since a list is vouched for beside the digest it was read under. The session that moved the server
+goes on offering the list it already offered, and the next session to start the server puts its
+list to the person again.
+
+A no rewrites nothing and sends nothing. A call's hop then says the server stays where it is
+declared, and a handshake's leaves the server unstarted with a line saying why. A one-shot run, a
+session with nobody at the terminal and the mode that skips prompts refuse it unasked
+([SERVERS-13](#SERVERS-13)).
 
 `verified-by: bravebot_mcp::http::mcp_traffic_passes_through_the_network_gate`
 `verified-by: bravebot_mcp::http::a_redirect_to_another_host_is_refused`
@@ -981,6 +1001,19 @@ port together, as above.
 `verified-by: bravebot_mcp::http::a_failed_server_request_stops_confining_the_turns_other_egress`
 `verified-by: bravebot_core::policy::a_rule_does_not_let_a_servers_request_be_redirected_off_its_host`
 `verified-by: bravebot_core::policy::a_servers_request_cannot_be_redirected_to_another_port_on_the_same_host`
+`verified-by: bravebot_core::policy::a_refused_hop_off_a_server_is_kept_untrusted_for_the_prompt`
+`verified-by: bravebot_core::policy::a_server_move_is_promoted_only_through_an_endorsement`
+`verified-by: bravebot_agent::mcp::a_hop_the_person_says_is_a_move_is_declared_and_the_call_reaches_it`
+`verified-by: bravebot_agent::mcp::a_hop_the_person_refuses_sends_nothing_and_the_refusal_names_the_declaration`
+`verified-by: bravebot_agent::mcp::a_move_the_managed_layer_denies_is_refused_whatever_is_answered`
+`verified-by: bravebot_agent::mcp::a_move_in_a_session_that_writes_nothing_lasts_for_the_session`
+`verified-by: bravebot_agent::mcp::a_move_is_recorded_over_the_declaration_asked_about_and_nothing_else`
+`verified-by: bravebot_cli::servers::a_handshake_redirected_off_its_declaration_is_moved_on_a_yes`
+`verified-by: bravebot_cli::servers::a_handshake_redirected_off_its_declaration_starts_nothing_on_a_no`
+`verified-by: bravebot_cli::servers::a_move_in_a_session_that_writes_nothing_is_for_the_session`
+`verified-by: bravebot_cli::servers::a_project_that_answers_for_its_servers_does_not_answer_a_move`
+`verified-by: bravebot_cli::plain::a_move_is_asked_in_lines_and_only_a_yes_moves_the_server`
+`verified-by: bravebot_tui::confirm::a_move_prompt_shows_the_declaration_the_destination_and_what_it_reaches`
 
 <a id="SERVERS-12"></a>
 ### SERVERS-12: the managed layer may keep a server from starting and never add one
@@ -1097,7 +1130,7 @@ Each of the following holds in that mode exactly as it holds outside it:
 | [SERVERS-1](#SERVERS-1), only the person's own directory declares a server | An undeclared server does not become declared by nobody being asked about it. A checkout's request still resolves against declarations or resolves to nothing. |
 | [SERVERS-9](#SERVERS-9), the capability | A capability is configuration, not a prompt. A server with no grant is called by nobody in this mode either. |
 | [SERVERS-12](#SERVERS-12), the managed allow and deny lists | An administrator's refusal is not a question being put to the person running the program. |
-| [SERVERS-11](#SERVERS-11), the egress gate and the host in the digest | The gate decides on labels. This mode answers three named questions and not every question, and a hop leaving the declared destination is neither of them, so it is refused here rather than followed. |
+| [SERVERS-11](#SERVERS-11), the egress gate and the host in the digest | The gate decides on labels. This mode answers three named questions and not every question. Whether a server moved is a fourth, and a yes to it would rewrite the declaration, the one file a session cannot write, to a url a server wrote and nobody read. So it is refused unasked and nothing is sent where the hop pointed. |
 
 **Nothing is recorded.** A skipped question leaves no approval, no vouched list, no project path and
 no tool entry behind, so a later run outside the mode asks every question as though this one had not happened. That
@@ -1137,7 +1170,9 @@ Each call from then on is asked.
 a check being made, since nobody would read the check's verdict, and no `tools` line is written. A
 call is made without [SERVERS-7](#SERVERS-7)'s question being drawn, as answer 1 and never answer 2,
 so nothing is written to `mcp-tools`, and out of the mode the next call is asked whatever was
-offered in it. A `deny` rule still refuses a call
+offered in it. A hop off a remote server's declaration is refused without
+[SERVERS-11](#SERVERS-11)'s question being drawn, as the call's or the handshake's, and nothing is
+rewritten. A `deny` rule still refuses a call
 ([MODE-6](permission-modes.md#MODE-6)). Confinement, the named variables and the egress gate are the
 same code in either mode. The display names the mode and the servers the session started. It does
 not say beside each one whether it started unasked because of the mode.
@@ -1145,6 +1180,9 @@ not say beside each one whether it started unasked because of the mode.
 `verified-by: bravebot_cli::servers::skipping_permissions_starts_the_server_unasked_and_records_nothing`
 `verified-by: bravebot_agent::mcp::bypassing_answers_both_prompts_and_records_nothing`
 `verified-by: bravebot_agent::mcp::a_list_offered_in_bypass_stays_offered_and_each_later_call_asks`
+`verified-by: bravebot_agent::mcp::bypassing_refuses_a_hop_and_asks_nobody`
+`verified-by: bravebot_agent::permission_mode::bypassing_refuses_to_move_a_server`
+`verified-by: bravebot_cli::servers::a_redirected_handshake_nobody_is_asked_about_starts_nothing`
 
 <a id="SERVERS-14"></a>
 ### SERVERS-14: what is reachable is visible without running anything
@@ -1278,6 +1316,8 @@ what a person reading a marked result sees, not values this program has vouched 
 | Write `"permissions": { "deny": ["Mcp(weather:get_alerts)"] }` in the home settings | A call to it is refused before anybody is asked, and the others still ask. [SERVERS-7](#SERVERS-7) |
 | Declare a stdio server on a machine where confinement is unavailable | Not launched. [MCP-3](mcp.md#MCP-3), in every mode. [SERVERS-13](#SERVERS-13) |
 | Run in the skip-prompts mode, then run again without it | Every question is asked again; the first run recorded nothing. [SERVERS-13](#SERVERS-13) |
+| Declare a remote server whose calls answer with a redirect to another host, and answer no when asked | Nothing is sent to that host, the planner is told the call was refused at the declared one, and `mcp.json` is unchanged. [SERVERS-11](#SERVERS-11) |
+| The same in the skip-prompts mode | Nobody is asked, nothing is sent to that host, and nothing is rewritten. [SERVERS-13](#SERVERS-13) |
 | Give the server a variable it needs without naming it in the declaration | It does not receive it. [SERVERS-10](#SERVERS-10) |
 | Write `{"mcp": {"deny": [{"command": ["/opt/weather-mcp", "--stdio"]}]}}` in the machine's `managed.json`, where `weather` runs that argv | The server is not started in any mode, whatever it is called, the session's line names that file and the entry, and `mcp list` says the same. [SERVERS-12](#SERVERS-12) |
 | Write `{"mcp": {"allow": [{"host": "*.corp.example"}]}}` in the machine's `managed.json` | A server whose url names a host under `corp.example` starts as it did; every other server, local ones included, is not started, and the line says the allow list does not name it. [SERVERS-12](#SERVERS-12) |
@@ -1298,9 +1338,9 @@ This spec cannot land without these. Each is named by what the clause says rathe
 | [backends.md](backends.md) | [BACKEND-24](backends.md#BACKEND-24), settings layers resolve a name at a time | Extended. `mcp.request` is a list, and joins the row where every layer's entries are kept, for that row's reason: an entry only ever names something that then has to be approved separately. **Applied** with the session that reads the key. |
 | [permissions.md](permissions.md) | [PERM-1](permissions.md#PERM-1), a rule names a family of tools and matches on routing only, and "four families exist" | Amended. A fifth family, `Mcp`, with `Mcp(weather)` covering a server and `Mcp(weather:get_current_conditions)` one tool of it. The routing field is the alias and the tool name; the arguments are payload and no specifier matches them, which is [SERVERS-7](#SERVERS-7). **Applied**: `Mcp(weather:*)` is `Mcp(weather)`, and a name is matched whole, so `Mcp(weather)` does not cover `weather2`. |
 | [permissions.md](permissions.md) | [PERM-9](permissions.md#PERM-9), three prompts no rule can answer | Extended to four. A call carrying the person's private data asks whatever the rules say, for that clause's own confidentiality reason. A server is further from the person than a local program is, not closer. **Applied** in the policy, and not reached: nothing labels a planner's arguments private yet. |
-| [permission-modes.md](permission-modes.md) | [MODE-4](permission-modes.md#MODE-4)'s list of what bypassing answers | Extended by three prompts, a server, its list and a call, and by nothing else. **Applied**. [SERVERS-13](#SERVERS-13) is the list of what the mode does not reach, which is [MODE-7](permission-modes.md#MODE-7) applied here. That spec's own rule, that nothing approved this way is recorded, covers the new records by its own argument. |
+| [permission-modes.md](permission-modes.md) | [MODE-4](permission-modes.md#MODE-4)'s list of what bypassing answers | Extended by three prompts, a server, its list and a call, and by nothing else, and told of the fourth it refuses, whether a server moved. **Applied**. [SERVERS-13](#SERVERS-13) is the list of what the mode does not reach, which is [MODE-7](permission-modes.md#MODE-7) applied here. That spec's own rule, that nothing approved this way is recorded, covers the new records by its own argument. |
 | [vetting.md](vetting.md) | [CHECK-10](vetting.md#CHECK-10), a check before every prompt that would promote quarantined content | Extended by a fourth prompt, a server's tool list, whose check reads the whole list as it is drawn. **Applied**. |
-| [labels.md](labels.md) | [LABEL-8](labels.md#LABEL-8)'s roads in | Extended by one row: a server's tool list a person vouched for, or the mode that answers for them, is trusted and public. **Applied**. |
+| [labels.md](labels.md) | [LABEL-8](labels.md#LABEL-8)'s roads in | Extended by two rows: a server's tool list a person vouched for, or the mode that answers for them, is trusted and public, and so is where a server's reply pointed once a person says it moved there. **Applied**. |
 | [vetting.md](vetting.md) | the table of routes: `~/.bravebot/vetting` holding one word, and `"vetting": { "auto": true }` read from the home layer only | **Unchanged**, and the precedent this spec's storage copies rather than a spec to amend. A standing answer in the person's own directory, and the key that changes behaviour readable from one layer, are both already settled there. |
 
 ## What is deliberately not adopted
