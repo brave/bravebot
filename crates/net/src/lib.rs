@@ -75,6 +75,10 @@ pub struct Timeouts {
     /// its time, and none of that is a fault. It is the only bound on the wait before the reply
     /// starts, since nothing has arrived yet for a gap to be measured between, and it bounds the
     /// body again from the moment the headers arrive rather than counting the two together.
+    ///
+    /// A request that knows how long its reply can run states its own in place of this one
+    /// ([`Request::reply_within`], [`Request::stream_within`]), since no one figure fits a reply
+    /// of every length.
     pub reply: Duration,
     /// The longest gap between two pieces of a reply that is still arriving.
     ///
@@ -330,6 +334,20 @@ pub struct Request {
     pub url: String,
     pub headers: Vec<(String, String)>,
     pub body: Option<Vec<u8>>,
+    /// How long the reply may take, where the request says. Otherwise [`Timeouts::reply`].
+    pub reply: Option<ReplyBound>,
+}
+
+/// How long a reply may take, stated by the request that asks for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplyBound {
+    /// The wait for the reply to begin, and then the whole of it: a reply written in full before
+    /// any of it is sent.
+    Whole(Duration),
+    /// The reply from the moment it begins: a stream, whose first bytes are sent at once. The wait
+    /// for them stays [`Timeouts::reply`], so a server that never answers is given up on no later
+    /// than any other.
+    Begun(Duration),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -345,6 +363,7 @@ impl Request {
             url: url.into(),
             headers: Vec::new(),
             body: None,
+            reply: None,
         }
     }
 
@@ -354,6 +373,7 @@ impl Request {
             url: url.into(),
             headers: Vec::new(),
             body: Some(body),
+            reply: None,
         }
     }
 
@@ -361,11 +381,30 @@ impl Request {
         self.headers.push((name.into(), value.into()));
         self
     }
+
+    /// Give the reply `bound` rather than [`Timeouts::reply`], and no longer.
+    ///
+    /// For a caller that knows how long its reply can run. The gap allowed between two pieces of
+    /// it stays [`Timeouts::idle`], because what that bound catches is the same connection
+    /// whatever was asked for.
+    pub fn reply_within(mut self, bound: Duration) -> Self {
+        self.reply = Some(ReplyBound::Whole(bound));
+        self
+    }
+
+    /// As [`Request::reply_within`], for a reply that begins at once and may then run for `bound`.
+    pub fn stream_within(mut self, bound: Duration) -> Self {
+        self.reply = Some(ReplyBound::Begun(bound));
+        self
+    }
 }
 
 /// The one way out of the process.
 pub struct Egress {
     agent: ureq::Agent,
+    /// What the agent was configured with, so a request stating its own reply bound can have the
+    /// phases that carry it worked out again the same way.
+    timeouts: Timeouts,
 }
 
 impl Default for Egress {
@@ -429,6 +468,7 @@ impl Egress {
             .build();
         Self {
             agent: config.into(),
+            timeouts,
         }
     }
 
@@ -544,7 +584,7 @@ impl Egress {
 
             let response = match cancel {
                 Some(cancel) => self.send_watching(request, &url, cancel)?,
-                None => send(&self.agent, request, &url)?,
+                None => send(&self.agent, self.timeouts, request, &url)?,
             };
             let status = response.0;
 
@@ -579,7 +619,7 @@ impl Egress {
     /// name resolution, the connection, the request going out and the endpoint's first byte all
     /// happen inside a single call that cannot be asked to return. Left on this thread, a stop
     /// pressed while an endpoint is still quiet could not be noticed until it answered or the
-    /// bound on the reply ran out, which is ten minutes.
+    /// bound on the reply ran out, which is ten minutes or more.
     ///
     /// Nothing on the other thread holds a policy or a workspace: every gate has been passed
     /// before it starts, and it sends bytes and hands back a reader. So a request walked away
@@ -593,9 +633,10 @@ impl Egress {
     ) -> Result<Sent, EgressError> {
         let (answered, waiting) = std::sync::mpsc::channel();
         let (agent, hop, target) = (self.agent.clone(), request.clone(), url.to_string());
+        let timeouts = self.timeouts;
         std::thread::spawn(move || {
             // A send that fails means the caller stopped, so there is nobody left to answer.
-            let _ = answered.send(send(&agent, &hop, &target));
+            let _ = answered.send(send(&agent, timeouts, &hop, &target));
         });
 
         loop {
@@ -633,7 +674,12 @@ type Sent = (
 ///
 /// Owns nothing of the caller's, so the whole of it can be handed to a thread that is allowed to
 /// outlive the wait for it.
-fn send(agent: &ureq::Agent, request: &Request, url: &str) -> Result<Sent, EgressError> {
+fn send(
+    agent: &ureq::Agent,
+    timeouts: Timeouts,
+    request: &Request,
+    url: &str,
+) -> Result<Sent, EgressError> {
     // GET and POST builders have different types in ureq, so the header loop is
     // repeated rather than abstracted over them.
     let result = match request.method {
@@ -642,13 +688,14 @@ fn send(agent: &ureq::Agent, request: &Request, url: &str) -> Result<Sent, Egres
             for (name, value) in &request.headers {
                 builder = builder.header(name, value);
             }
-            builder.call()
+            within(builder, timeouts, request.reply).call()
         }
         Method::Post => {
             let mut builder = agent.post(url);
             for (name, value) in &request.headers {
                 builder = builder.header(name, value);
             }
+            let builder = within(builder, timeouts, request.reply);
             match &request.body {
                 Some(bytes) => builder.send(&bytes[..]),
                 None => builder.send_empty(),
@@ -686,6 +733,31 @@ fn send(agent: &ureq::Agent, request: &Request, url: &str) -> Result<Sent, Egres
         content_type,
         Box::new(response.into_body().into_reader()),
     ))
+}
+
+/// `builder` with the bound the request states on its reply, where it states one.
+///
+/// A whole reply sets the same three phases [`Egress::with_transport`] sets from
+/// [`Timeouts::reply`], for the reason given there: each bounds the phases after it, so leaving one
+/// at the agent's figure would cut the reply off there. A begun one sets only the last, which ureq
+/// counts from the headers arriving, and the two before it keep the wait for them at the agent's.
+fn within<B>(
+    builder: ureq::RequestBuilder<B>,
+    timeouts: Timeouts,
+    reply: Option<ReplyBound>,
+) -> ureq::RequestBuilder<B> {
+    match reply {
+        None => builder,
+        Some(ReplyBound::Whole(bound)) => builder
+            .config()
+            .timeout_send_request(Some(timeouts.send + bound))
+            .timeout_send_body(Some(bound))
+            .timeout_recv_response(Some(bound))
+            .build(),
+        Some(ReplyBound::Begun(bound)) => {
+            builder.config().timeout_recv_response(Some(bound)).build()
+        }
+    }
 }
 
 /// How often a thread waiting on a reply looks at whether the caller has stopped.

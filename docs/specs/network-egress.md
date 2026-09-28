@@ -103,13 +103,28 @@ Connecting, starting to reply, and continuing to reply are timed apart. A reply 
 arriving is not cut off for having taken a while to start, and one that stops arriving is given
 up on rather than waited for indefinitely.
 
+A request that knows how long its reply can run says so, and is given that long and no longer in
+place of the bound on a reply of unstated length. A reply written in full before any of it is sent
+is given it for the wait and again for the whole. A stream, which begins at once, is given it from
+the moment it begins, and waits to begin no longer than any other reply. The gap allowed between
+two pieces of a reply is the same whatever the request says.
+
 **Why.** One timeout over the whole call cannot tell a slow answer from a dead connection, and
-choosing a single number makes one of those two cases wrong.
+choosing a single number makes one of those two cases wrong. The same holds between replies: a
+model writing 128,000 tokens takes about half an hour, and a bound that long on every reply would
+leave a request nothing is answering waiting as long. A stream's first bytes come at once, so
+waiting longer for them buys nothing. A connection that has gone quiet is the same connection
+however long its reply was going to be.
 
 `verified-by: bravebot_net::egress::a_reply_still_arriving_is_not_cut_off_for_taking_longer_than_it_took_to_start`
 `verified-by: bravebot_net::egress::a_reply_that_takes_longer_than_the_send_bound_to_start_is_not_a_failed_send`
 `verified-by: bravebot_net::egress::a_reply_that_never_comes_gives_up`
 `verified-by: bravebot_net::egress::a_reply_that_stops_arriving_is_given_up_on`
+`verified-by: bravebot_net::egress::a_request_stating_how_long_its_reply_may_take_is_given_that_long`
+`verified-by: bravebot_net::egress::a_reply_outlasting_the_time_its_request_stated_is_given_up_on`
+`verified-by: bravebot_net::egress::a_reply_written_before_any_of_it_is_sent_is_waited_on_as_long_as_its_request_stated`
+`verified-by: bravebot_net::egress::a_stream_is_waited_on_to_begin_no_longer_whatever_its_request_said`
+`verified-by: bravebot_net::egress::a_reply_that_stops_arriving_is_given_up_on_however_long_its_request_said_it_may_take`
 
 <a id="NET-6"></a>
 ### NET-6: a failure that means "not now" may be retried, and nothing else may
@@ -299,3 +314,10 @@ into plaintext and hand a third party what only it had.
   favour of the later phase, because that is what the clause is for. A slow answer must not be
   read as a dead connection, and timing the phase before it precisely at the price of cutting the
   answer short would be exactly the failure this clause forbids.
+
+- **The bound on a whole reply can be overrun by a second at a time.** The transport ends a reply
+  when its deadline passes during a read. A read that begins after the deadline is given one more
+  second instead of none, so a reply whose pieces come less than a second apart, and whose deadline
+  passes between two reads rather than during one, runs on. A reply streamed by a model is waiting
+  on its next piece almost all the time, so its deadline nearly always passes during a read. What
+  would close it is checking the deadline between reads here, which is not done.

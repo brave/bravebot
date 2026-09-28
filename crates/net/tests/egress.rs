@@ -432,6 +432,85 @@ fn a_reply_still_arriving_is_not_cut_off_for_taking_longer_than_it_took_to_start
     assert_eq!(String::from_utf8_lossy(&body), "one two three four five");
 }
 
+/// A caller that knows how long its reply can run, a model writing to its ceiling, needs that
+/// long, and one bound for every reply is too short for the longest of them.
+#[test]
+fn a_request_stating_how_long_its_reply_may_take_is_given_that_long() {
+    for streamed in [false, true] {
+        let base = serve_trickled(
+            vec!["one ", "two ", "three ", "four ", "five"],
+            Duration::from_millis(120),
+        );
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .expect("policy begins");
+
+        // The whole reply takes twice the bound on a reply of unstated length.
+        let egress = Egress::with_timeouts(Timeouts {
+            idle: Duration::from_secs(5),
+            reply: Duration::from_millis(300),
+            ..Timeouts::default()
+        });
+
+        let request = Request::get(&base);
+        let request = if streamed {
+            request.stream_within(Duration::from_secs(10))
+        } else {
+            request.reply_within(Duration::from_secs(10))
+        };
+        let response = egress
+            .fetch(&mut policy, request, Label::untrusted_public())
+            .unwrap_or_else(|e| {
+                panic!("a reply inside its stated bound failed, streamed: {streamed}: {e:?}")
+            });
+
+        // A body cut short is an error rather than a short body, so this is all of it.
+        assert_eq!(response.status, 200);
+        assert!(!response.truncated);
+    }
+}
+
+/// The bound a request states is a bound, not a floor under the default: a caller stating a
+/// shorter one than the default is held to it.
+#[test]
+fn a_reply_outlasting_the_time_its_request_stated_is_given_up_on() {
+    // More than a second between pieces, since ureq gives a read begun after its deadline one
+    // more second: a reply whose pieces came closer than that could run on past it.
+    let base = serve_trickled(vec!["one ", "two"], Duration::from_millis(1_200));
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy begins");
+
+    let egress = Egress::with_timeouts(Timeouts {
+        idle: Duration::from_secs(5),
+        reply: Duration::from_secs(30),
+        ..Timeouts::default()
+    });
+
+    let error = egress
+        .fetch(
+            &mut policy,
+            Request::get(&base).reply_within(Duration::from_millis(600)),
+            Label::untrusted_public(),
+        )
+        .expect_err("a reply outlasting the bound its request stated is not waited on");
+
+    assert!(
+        matches!(error, EgressError::Transport { .. }),
+        "expected a transport failure, got {error:?}"
+    );
+}
+
 /// A server that takes the request, says nothing at all for a while, and only then answers.
 ///
 /// What an endpoint that is thinking looks like on the wire: the request is long gone, the
@@ -519,6 +598,74 @@ fn a_reply_that_takes_longer_than_the_send_bound_to_start_is_not_a_failed_send()
     assert_eq!(
         String::from_utf8_lossy(&body),
         "an answer worth waiting for"
+    );
+}
+
+/// A reply written in full before any of it is sent spends its time before the first byte, so
+/// that wait is what a bound its request states has to lengthen.
+#[test]
+fn a_reply_written_before_any_of_it_is_sent_is_waited_on_as_long_as_its_request_stated() {
+    // Past the send and reply bounds together, by more than the second ureq gives a read begun
+    // after its deadline.
+    let base = serve_after_thinking(Duration::from_millis(2_000));
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy begins");
+
+    let egress = Egress::with_timeouts(Timeouts {
+        send: Duration::from_millis(100),
+        reply: Duration::from_millis(300),
+        ..Timeouts::default()
+    });
+
+    let response = egress
+        .fetch(
+            &mut policy,
+            Request::post(&base, b"{}".to_vec()).reply_within(Duration::from_secs(10)),
+            Label::untrusted_public(),
+        )
+        .expect("a reply that began inside the bound its request stated arrives");
+
+    assert_eq!(response.status, 200);
+    assert!(!response.truncated);
+}
+
+/// A stream sends its first bytes at once, so how long a request says its stream may run says
+/// nothing about how long to wait for them. A server that never begins is given up on as soon as
+/// it would be for any other request.
+#[test]
+fn a_stream_is_waited_on_to_begin_no_longer_whatever_its_request_said() {
+    let base = serve_after_thinking(Duration::from_millis(2_000));
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy begins");
+
+    let egress = Egress::with_timeouts(Timeouts {
+        reply: Duration::from_millis(300),
+        ..Timeouts::default()
+    });
+
+    let error = egress
+        .fetch(
+            &mut policy,
+            Request::post(&base, b"{}".to_vec()).stream_within(Duration::from_secs(10)),
+            Label::untrusted_public(),
+        )
+        .expect_err("a stream that has not begun is not waited on as long as it may run");
+
+    assert!(
+        matches!(error, EgressError::Transport { .. }),
+        "expected a transport failure, got {error:?}"
     );
 }
 
@@ -620,6 +767,58 @@ fn a_reply_that_stops_arriving_is_given_up_on() {
         matches!(error, EgressError::Transport { .. }),
         "expected a transport failure, got {error:?}"
     );
+}
+
+/// A request stating that its reply may take a long time has not said the connection may go
+/// quiet for that long: a dead connection is the same whoever asked.
+#[test]
+fn a_reply_that_stops_arriving_is_given_up_on_however_long_its_request_said_it_may_take() {
+    for streamed in [false, true] {
+        let base = serve_stalled_body();
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .expect("policy begins");
+
+        let egress = Egress::with_timeouts(Timeouts {
+            idle: Duration::from_millis(300),
+            reply: Duration::from_secs(30),
+            ..Timeouts::default()
+        });
+
+        let request = Request::get(&base);
+        let request = if streamed {
+            request.stream_within(Duration::from_secs(20))
+        } else {
+            request.reply_within(Duration::from_secs(20))
+        };
+        let started = std::time::Instant::now();
+        let mut stream = egress
+            .fetch_streaming(&mut policy, request, Label::untrusted_public(), None)
+            .expect("the reply starts arriving");
+
+        let error = loop {
+            match stream.next_chunk() {
+                Ok(Some(_)) => continue,
+                Ok(None) => panic!("the body should not have ended cleanly"),
+                Err(error) => break error,
+            }
+        };
+
+        assert!(
+            matches!(error, EgressError::Transport { .. }),
+            "expected a transport failure, streamed: {streamed}, got {error:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "a silent connection was waited on for {:?}, streamed: {streamed}",
+            started.elapsed()
+        );
+    }
 }
 
 /// A buffered read has to tell the difference too. Silently handing back the part that arrived
