@@ -950,9 +950,10 @@ tree, which is why it is narrower than the answer it keeps.
 not at a directory a settings file named, not at the rules a checkout proposed. The terminal
 interface offers it as a third key, `r`, and the desktop interface as a third button beside the two
 answers. Both read and write one record, under the name a turn resolves the directory to, so an
-answer kept in either is honoured by the other and taken back from either. A session in lines puts
-its question every time and reads no record, since it offers no answer that outlives the session
-([cli.md](cli.md#CLI-14)), and has not been given the record yet.
+answer kept in either is honoured by the other and taken back from either. A session in lines reads
+the same record and honours it, but never offers remembering and never writes the record, since it
+has one answer per question and none of them outlives the session ([cli.md](cli.md#CLI-14)): an `r`
+typed there is a line that is not yes, and declines.
 It is offered only where the answer may be kept and later honoured: there is a state directory, the
 working directory is not a filesystem root, not the user's home and not a directory holding it
 (compared both as named and with links resolved, since `$HOME` is often named through a link the
@@ -971,9 +972,13 @@ line kept before one names no session; the name decides nothing. A line that can
 leaves the answer as a yes for this session, and the session says so and names the file.
 
 **Honoured.** A later session started in that directory, fresh, by `/clear`, by a new session in the
-desktop interface, or by a resume or reopening whose record keeps no map, is not asked. It starts from the rule a yes writes and from nothing else
+desktop interface, by a session in lines, or by a resume or reopening whose record keeps no map, is
+not asked. It starts from the rule a yes writes and from nothing else
 ([TRUST-6](#TRUST-6)), and says as it opens that it is trusting the directory because the person
-said to remember it, when, and how to be asked again. Only the directory itself: a session
+said to remember it, when, and how to be asked again. A session in lines has no `/forget-trust`, so
+it names that command in the interface that draws, and the file holding the answer with the lines
+naming the directory as what to delete, since a directory whose path is spelled alike shares the
+file. Only the directory itself: a session
 started in a directory inside it or above it is asked, since a tree rule covers everything below it
 and an answer kept about `~/projects` would otherwise answer for a session started in every
 repository cloned under it later. A session started in the remembered directory still trusts
@@ -1027,6 +1032,9 @@ yes writes rather than everything the session went on to record.
 `verified-by: bravebot_tui::app::a_remembered_answer_settles_a_fresh_session`
 `verified-by: bravebot_tui::app::bypass_answers_before_a_remembered_answer_is_read`
 `verified-by: bravebot_tui::app::a_resume_starts_with_the_map_its_own_record_kept`
+`verified-by: bravebot_cli::plain::a_remembered_answer_settles_a_session_in_lines_without_asking`
+`verified-by: bravebot_cli::plain::an_answer_in_lines_is_asked_for_and_never_kept`
+`verified-by: bravebot_cli::plain::the_mode_that_asks_about_nothing_is_not_asked_about_the_directory`
 `verified-by: bravebot_tui::trust_prompt::the_prompt_offering_to_remember_names_the_record_it_writes`
 `verified-by: bravebot_tui::trust_prompt::the_keys_stay_on_screen_when_the_offer_lengthens_the_question`
 `verified-by: bravebot_tui::trust_prompt::a_tiny_terminal_offering_to_remember_still_renders`

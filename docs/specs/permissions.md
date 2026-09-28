@@ -554,7 +554,8 @@ about the first one's ([#843](https://github.com/brave/bravebot/issues/843)).
   person's own file, or a file `--settings` names for one run.
 - **A grant outlives the session that gave it, which no other answer here does.** PERM-15's record
   makes a later session in that workspace honour a rule without asking, where the startup trust
-  answer is asked afresh every time ([trust-map.md](trust-map.md#TRUST-6)). The narrowness is what
+  answer is asked afresh unless the person said to remember it, and then only for that one
+  directory ([trust-map.md](trust-map.md#TRUST-23)). The narrowness is what
   makes it sound: an entry covers one rule text from one file in one workspace, so what a second
   session honours unasked is exactly what a person read and accepted. Deleting the line, or the
   file, is the way back, and `doctor` names both.

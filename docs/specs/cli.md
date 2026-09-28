@@ -570,7 +570,11 @@ input. One answer per question and no second key, so the answers that record som
 about these programs and remember this line, are not offered, and nothing answered here outlives
 the session. The startup question about the working directory
 ([trust-map.md](trust-map.md)) is put the same way, and the end of the input in place of an answer
-to that one starts no session at all.
+to that one starts no session at all. It is not put where the person told the interface that draws,
+or the desktop, to remember the answer about this directory
+([TRUST-23](trust-map.md#TRUST-23)): that record is read here as it is there, and the session says
+it is trusting the directory for that reason, when, and how to be asked again. Remembering is still
+not offered here, and nothing here writes the record.
 
 It composes with `--incognito`, `--dangerously-skip-permissions` and the `--settings` file of
 CLI-13, which belong to every way of starting, and with nothing else: it starts a session rather
@@ -620,6 +624,8 @@ needs the terminal put in a state a session in lines does not put it in.
 `verified-by: bravebot_cli::plain::a_run_is_asked_about_one_argument_to_a_row`
 `verified-by: bravebot_cli::plain::the_startup_question_is_asked_in_lines_and_answered_the_same_way`
 `verified-by: bravebot_cli::plain::the_mode_that_asks_about_nothing_is_not_asked_about_the_directory`
+`verified-by: bravebot_cli::plain::a_remembered_answer_settles_a_session_in_lines_without_asking`
+`verified-by: bravebot_cli::plain::an_answer_in_lines_is_asked_for_and_never_kept`
 `verified-by: bravebot_cli::running::a_session_in_lines_is_refused_where_its_input_is_not_a_terminal`
 `verified-by: bravebot_cli::main::a_named_settings_file_composes_with_the_other_flags_before_dispatch`
 

@@ -227,7 +227,10 @@ is the terminal's, so its own interrupt ends the process.
 Every question is put in lines: what it is about, then the question, then how to answer it. **Only the
 affirmative approves**, and any other line refuses, as does the end of the input. One answer per
 question and no second key, so the answers that grant something standing are not offered and nothing
-answered here outlives the session.
+answered here outlives the session. A directory you told the drawing interface or the desktop app to
+[remember](../security/trust.md#remembering-the-answer) is not asked about here either; the session says it is trusting it
+for that reason and names the file that holds the answer: delete the lines about the directory from
+it to be asked again.
 
 stdin must be a terminal, and `--plain` is refused where it is not, naming `-p` as the invocation
 that reads a pipe. It composes with `--incognito`, `--dangerously-skip-permissions` and `--settings`,
