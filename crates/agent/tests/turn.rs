@@ -12381,6 +12381,67 @@ fn a_branch_that_does_not_run_leaves_its_destination_as_it_was() {
     );
 }
 
+/// Discarding output writes no file. `/dev/null` is outside every workspace, so holding it to the
+/// confinement a destination takes refused the commonest redirection there is, and the sandbox that
+/// allows it was never reached.
+///
+/// Nobody vouched for the line, so its output is quarantined and what comes back is its size: five
+/// bytes is the one `printf` that was not discarded, where a discard that leaked would be ten.
+#[test]
+fn a_line_discarding_its_output_runs_and_names_no_file_to_write() {
+    let scratch = Scratch::new("run-discard");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let seen = confirmer.seen.clone();
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request(
+            "run",
+            r#"{"command":"printf dropp > /dev/null && printf kept."}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("run it and discard the output"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn completes");
+
+    let asked = seen.lock().unwrap();
+    assert_eq!(asked.len(), 1, "the line was not put to the person");
+    assert!(
+        asked[0].plan.writes.is_empty(),
+        "the person was asked to let the line write {:?}",
+        asked[0].plan.writes
+    );
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        !second.contains("resolves outside the workspace"),
+        "the discard was refused: {second}"
+    );
+    assert!(
+        second.contains("printed (1 lines, 5 bytes"),
+        "the line did not run, or the discarded output came back: {second}"
+    );
+}
+
 /// A vouched entry for `program` under `args`, given in `tree`.
 ///
 /// `tree`'s canonical spelling, because that is the one a run's directory comes back in: an entry

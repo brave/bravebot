@@ -297,6 +297,17 @@ pub enum Route {
     StderrToStdout,
 }
 
+/// The one redirection target that is not a file: output sent there is discarded.
+pub const NULL_DEVICE: &str = "/dev/null";
+
+/// Whether a redirection target is [`NULL_DEVICE`], spelled as such.
+///
+/// Matched on the spelling, so a link to the device, or `/dev/../dev/null`, is an ordinary path and
+/// is confined as one.
+pub fn is_the_null_device(path: &Path) -> bool {
+    path == Path::new(NULL_DEVICE)
+}
+
 /// One program in a plan, resolved.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Step {

@@ -265,6 +265,11 @@ file's bytes go into a program, so the plan reports it as private input and it t
 standard-input gate of [run.md](run.md#RUN-6) whichever file it names. `2>&1` renames a
 descriptor and touches no file.
 
+Neither does an output redirection to `/dev/null`, spelled exactly so. It discards the stream: the
+route stays in the plan and at the prompt, but the path joins no write set, takes none of the write
+gates, and enters no effect, because there is no file to confine, endorse or distrust. Any other
+spelling of the device, and any link to it, is an ordinary path and is held to all of the above.
+
 Immediately before a destination may be opened for writing, the shared file authority marks
 it untrusted and reserves that path until the process has stopped. Reads during execution cannot
 use the old grant. Other paths remain available, and no lock spans the process wait. Every early
@@ -300,6 +305,10 @@ redirection while allowing pipes would be refusing the easy half.
 `verified-by: bravebot_agent::cmdline::an_input_redirection_is_private_input`
 `verified-by: bravebot_agent::cmdline::a_line_that_only_writes_releases_nothing`
 `verified-by: bravebot_agent::cmdline::joining_the_streams_writes_no_file`
+`verified-by: bravebot_agent::cmdline::discarding_a_stream_writes_no_file`
+`verified-by: bravebot_agent::cmdline::another_spelling_of_the_null_device_is_a_write`
+`verified-by: bravebot_agent::exec::a_discarded_stream_is_dropped_and_opens_nothing`
+`verified-by: bravebot_agent::turn::a_line_discarding_its_output_runs_and_names_no_file_to_write`
 
 <a id="CMDLINE-6"></a>
 ### CMDLINE-6: every branch that could run is endorsed before anything runs

@@ -56,7 +56,7 @@
 
 use bravebot_core::Pipeline;
 use bravebot_core::cancel::Cancel;
-use bravebot_core::command::{Joiner, Plan, Route, Step, Steps};
+use bravebot_core::command::{Joiner, Plan, Route, Step, Steps, is_the_null_device};
 use std::fmt;
 use std::io::{Read, Write};
 use std::process::{Child, Command, Stdio};
@@ -427,8 +427,20 @@ enum Where {
     Collect,
     /// A file the plan named, opened for appending where the line said so.
     File(std::path::PathBuf, bool),
+    /// Nowhere: the line sent the stream to the null device, which is no file effect.
+    Discard,
     /// Wherever standard output is going, as a second handle on the same place.
     AsStdout,
+}
+
+impl Where {
+    fn writing(path: &std::path::Path, append: bool) -> Self {
+        if is_the_null_device(path) {
+            Self::Discard
+        } else {
+            Self::File(path.to_path_buf(), append)
+        }
+    }
 }
 
 /// One line's worth of running: its parts in order, what they printed, and one deadline over all
@@ -601,10 +613,10 @@ impl<'a> Running<'a> {
             for route in &step.routes {
                 match route {
                     Route::Stdin { path } => into = Where::File(path.clone(), false),
-                    Route::Stdout { path, append } => out = Where::File(path.clone(), *append),
-                    Route::Stderr { path, append } => err = Where::File(path.clone(), *append),
+                    Route::Stdout { path, append } => out = Where::writing(path, *append),
+                    Route::Stderr { path, append } => err = Where::writing(path, *append),
                     Route::Both { path } => {
-                        out = Where::File(path.clone(), false);
+                        out = Where::writing(path, false);
                         err = Where::AsStdout;
                     }
                     Route::StderrToStdout => err = Where::AsStdout,
@@ -638,6 +650,7 @@ impl<'a> Running<'a> {
                     let file = for_writing(path, *append)?;
                     (Stdio::from(file), None)
                 }
+                Where::Discard => (Stdio::null(), None),
                 Where::AsStdout => (
                     duplicate.ok_or_else(|| {
                         ExecError::Io(
@@ -759,6 +772,7 @@ fn destination(
             let duplicate = file.try_clone().ok().map(Stdio::from);
             Ok((Stdio::from(file), None, duplicate))
         }
+        Where::Discard => Ok((Stdio::null(), None, Some(Stdio::null()))),
         _ => {
             let (reader, writer) = std::io::pipe().map_err(|e| ExecError::Io(e.to_string()))?;
             let duplicate = writer.try_clone().ok().map(Stdio::from);
