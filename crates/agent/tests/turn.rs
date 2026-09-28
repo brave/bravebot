@@ -86,7 +86,27 @@ fn dropping_mock_requests_releases_each_server_listener() {
     ] {
         drop(requests);
         let address = url.strip_prefix("http://").expect("mock URL");
-        let _listener = TcpListener::bind(address).expect("the previous listener was released");
+        let _listener = bind_once_released(address).expect("the previous listener was released");
+    }
+}
+
+/// Bind `address` once no process holds the listener that was there.
+///
+/// Closing a listener here does not free its port while another process holds a duplicate of it,
+/// and a test running a command alongside this one forks a child that holds every descriptor this
+/// process has until it execs, which on Linux waits for the sandbox to be installed. So a port
+/// still in use is asked for again, up to a bound that a listener this process never closed does
+/// not get past.
+fn bind_once_released(address: &str) -> std::io::Result<TcpListener> {
+    let bound = std::time::Duration::from_secs(10);
+    let began = std::time::Instant::now();
+    loop {
+        match TcpListener::bind(address) {
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse && began.elapsed() < bound => {
+                thread::sleep(std::time::Duration::from_millis(10));
+            }
+            result => return result,
+        }
     }
 }
 
