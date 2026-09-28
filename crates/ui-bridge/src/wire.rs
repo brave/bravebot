@@ -149,6 +149,7 @@ pub fn activity(activity: &Activity) -> Value {
     json!({
         "verb": activity.verb,
         "target": activity.target,
+        "why": activity.why,
         "note": activity.note,
         "failed": activity.failed,
         "untrusted": activity.untrusted,
@@ -218,7 +219,7 @@ fn said(said: &Said) -> Value {
     match said {
         Said::User(text) => json!({ "kind": "user", "text": text }),
         Said::Assistant(text) => json!({ "kind": "assistant", "text": text }),
-        Said::Tool(text) => json!({ "kind": "tool", "text": text }),
+        Said::Tool { line, why } => json!({ "kind": "tool", "text": line, "why": why }),
         Said::Composed {
             why: Composed::Attached { path },
             ..

@@ -100,7 +100,9 @@ Brave Bot asks whether you trust the working directory before anything else.
   first, and files are read into quarantine rather than into the model's context.
 
 The answer belongs to the session, not to the directory: every fresh session asks again, whatever
-you answered last time. `--resume` restores the answer that session's own user gave.
+you answered last time. `--resume` restores the answer that session's own user gave. Press `r`
+instead of `y` and later sessions started in exactly that directory trust it without asking, until
+you run `/forget-trust` ([Remembering the answer](security/trust.md#remembering-the-answer)).
 
 What that answer means in detail, and every other way a path comes to be trusted, is
 [Trusted directories](security/trust.md).

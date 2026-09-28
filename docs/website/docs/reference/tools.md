@@ -6,7 +6,7 @@ description: Every tool the model may call, what it takes, and what it is allowe
 
 # Tools
 
-There are eighteen tools, and no way to add another from a configuration file. Each one splits its
+There are nineteen tools, and no way to add another from a configuration file. Each one splits its
 arguments into **routing**, the part that decides where the effect lands, and **content**, the part
 that is merely carried.
 
@@ -15,11 +15,12 @@ that is merely carried.
 | [`read_file`](#read_file) | `path`, `path_ref`, `offset`, `limit` | none | only to trust a quarantined file |
 | [`list_files`](#list_files) | `directory`, `pattern`, `depth` | none | no |
 | [`search`](#search) | `pattern`, `directory`, `include`, `offset`, `case_sensitive` | none | no |
+| [`read_git`](#read_git) | `query`, `repository`, `revision`, `path`, `pattern`, `count`, `skip`, `messages`, `since`, `until` | none | only if what it would show holds a credential |
 | [`lsp`](#lsp) | `operation`, `path`, `line`, `character`, `query` | none | **yes, to start a language server** |
 | [`write_file`](#write_file) | `path`, `path_ref`, `contents_ref` | `contents` | **yes, every time** |
 | [`edit_file`](#edit_file) | `path`, `path_ref`, `replace_all` | `old_text`, `new_text` | **yes, every time** |
-| [`run`](#run) | the compiled plan, `directory`, `background`, `deadline_seconds`, `stdin_ref` | stdin | **yes, unless vouched for, remembered, ruled on or proven** |
-| [`read_output`](#read_output) | `ref` | none | **yes** |
+| [`run`](#run) | the compiled plan, `directory`, `background`, `deadline_seconds`, `stdin_ref`, `read` | stdin | **yes, unless vouched for, remembered, ruled on or proven** |
+| [`read_output`](#read_output) | `ref`, `offset` | none | **yes, unless the planner may already read it** |
 | [`vet_content`](#vet_content) | `ref` | none | **yes, that is what it is for** |
 | [`job_output`](#job_output) | `job`, `kill`, `wait_seconds` | none | no |
 | [`fetch_url`](#fetch_url) | `url` | none | **yes, unless a rule names the host** |
@@ -36,6 +37,12 @@ it again. Not to a tick of a loop you gave an interval for, not to a delegate, a
 will ask again, which is a one-shot run, the desktop application, or a line the agent wrote itself.
 [`watch_file`](#watch_file) goes to a session that keeps watches, so not to a delegate, a one-shot
 run or a planned run.
+
+Every tool also takes `why`, one line from the planner saying what the call is for. It is content
+on every tool: it is drawn beside the call for you to read, and nothing reads it or decides on it.
+Every tool lists it as required, and a call that leaves it out still runs, drawn with no reason. A
+server's tool is the exception, since it is offered as the server
+describes it.
 
 A number or a flag that shapes a call is routing too, not content: nothing carries it anywhere, so it
 sits on the same footing as the fields beside it. A routing argument naming a **reference** rather
@@ -106,7 +113,7 @@ Lists files under a directory.
 | Parameter | |
 |---|---|
 | `directory` | workspace-relative; `.` for the root |
-| `pattern` | optional glob: `*`, `?`, `**` and brace groups like `**/*.{rs,toml}` |
+| `pattern` | optional glob: `*`, `?`, `**` and brace groups like `**/*.{rs,toml}`. One with a `/` may be written from `directory` or from the workspace root |
 | `depth` | optional; how many directory levels below `directory` to walk, `1` being that directory and no further |
 
 Set a `depth`. Without one the walk reaches every file underneath, which in a real repository is
@@ -134,7 +141,7 @@ Finds lines matching a **regular expression** in workspace files.
 |---|---|
 | `pattern` | a regular expression. May be a list, in which case a line matches if it matches any of them |
 | `directory` | workspace-relative, defaults to `.` |
-| `include` | optional glob limiting which files are searched: `*`, `?`, `**` and brace groups like `**/*.{cc,h,mm}` |
+| `include` | optional glob limiting which files are searched: `*`, `?`, `**` and brace groups like `**/*.{cc,h,mm}`. One with a `/` may be written from `directory` or from the workspace root |
 | `offset` | which match to resume from, to read past the match cap ([below](#a-capped-search-can-be-asked-past-its-cap)) |
 | `case_sensitive` | defaults to true. `(?i)` in the pattern asks for the same thing |
 
@@ -196,6 +203,66 @@ See [Configuration](../customize/configuration.md).
 
 Raising a cap does not unbound a search. The walk still stops at `search.maxFiles`, the reading still
 stops at `search.maxSeconds`, and the match cap holds regardless of both.
+
+## `read_git`
+
+Reads a repository's history from the files under its `.git`, and its status from those and the
+working tree, **without starting git**.
+
+| Parameter | |
+|---|---|
+| `query` | `log`, `show`, `diff`, `status`, `tags` or `search` |
+| `repository` | workspace-relative directory holding `.git`, defaults to `.` |
+| `revision` | in git's syntax: a branch, a tag, `HEAD`, an id or its prefix, then `~N`, `^N` or `^{commit}`. `log` takes one or a range `A..B`; `show` takes one, or `<revision>:<path>` for a file or directory as it was; `diff` takes two, as `A..B` or `A B`; `tags` takes none, or one to list only the tags it reaches; `search` takes one and defaults to `HEAD` |
+| `path` | relative to the repository's root. Limits `log` to commits that changed it, `show`, `diff` and `status` to changes under it, and `search` to files under it |
+| `pattern` | `search` only, and required there: the regular expression to look for, matched against each line |
+| `count` | commits a `log` lists, tags a `tags` lists or lines a `search` prints: 20 unless given, at most 200 |
+| `skip` | `log`, `tags` and `search`: how many to pass over before listing, as `git log --skip` does |
+| `messages` | `log` only: print each commit's whole message beneath its line |
+| `since`, `until` | `log` only: whole days in UTC, written `YYYY-MM-DD`, both ends included |
+
+`log` prints one commit per line: the first ten characters of its id, the day it was authored, its
+author and its subject. With `messages`, the rest of each commit's message follows its line,
+indented. A log that stopped with commits left names the `skip` that lists the next page, and a page
+holds whole commits. `show` prints a commit
+with its message and diff, a tag with its message and then its commit, or a file or directory at a
+revision. `diff` compares two commits. A merge is shown without a diff and says which diff to ask for.
+`tags` lists tags newest version first, as `git tag --sort=-v:refname` does, and given a revision
+only those it reaches, as `--merged` does. `search` prints the lines `pattern` matches in the files
+at a revision, as `git grep -n` does. Both page with `skip` as a log does.
+`status` lists staged, unstaged and untracked paths as `git status --short --no-renames` does. It
+detects no renames, and lists a file an attribute or `core.autocrlf` would convert, or a
+submodule, as not compared.
+
+**Why not just run git.** git runs programs its configuration names: an alias, a pager, a diff
+driver, `core.fsmonitor`, and `include.path` pulls configuration in from any file. That configuration
+lives in the repository being inspected, so [`run`](#run) cannot prove a git command safe and asks
+unless something you set already covers it. `read_git`
+applies nothing the configuration names and returns no remote URL, so the same question needs nobody
+to answer it.
+
+**It opens only a repository you trust in full.** Following history means following what the files
+under `.git` say, so `.git` and everything beneath it has to be trusted before any of it is read.
+Anywhere else it says so, and the planner uses `run`. `status` also reads every file in the working
+tree, so it answers only where you trust the whole of it; log, show and diff still answer where you
+distrust part of it. An answer showing a file you distrust is
+quarantined like a read of that file, since a commit holds that file's bytes, and so is a search
+that read one, whether or not anything in it matched.
+
+**A deny rule on a file covers its history.** Naming a denied file, as a `path` or as
+`HEAD:.env`, is refused. A denied file met in a diff, a listing or a search is left out, and the answer says
+so. A rule over `.git` or anything in it keeps the repository closed.
+
+What it would show is scanned for credentials as a file read is, and held back until you agree. A
+file's lines in a commit are scanned as that file, so agreeing to one file's key is not agreeing to
+another's. A `run` of git whose output the planner could not be shown mentions `read_git`.
+
+Blame, `--follow` and a diff against the working tree go through `run`. A repository laid out in a
+way that changes what a read means, such as borrowed objects, replace refs, an included
+configuration file, `core.worktree`, or a `.git` that is a file, is declined with the same pointer.
+So is a status over a split or sparse index, a bare repository, or ignore and attributes files
+named outside the repository. An answer cut by the count, by 2,000 lines, or by the search
+deadline says it was cut.
 
 ## `lsp`
 
@@ -261,6 +328,10 @@ language starts nothing.
 starts is kept for the session and answers every later question, and your approval is kept with it.
 It is shut down when the session ends, and killed if it does not go quietly. Indexing is the whole
 cost of a server, so paying it per request would make each call slower than the search it replaces.
+
+A `checker` or `worker` delegate asks the same servers, so a language you approved is not put to you
+again and the tree is not indexed twice. A `reader` delegate is not offered `lsp` at all: starting a
+server runs the project's build tooling, and a reader may not run programs.
 
 ### A location is structure; the text at it is content
 
@@ -366,6 +437,7 @@ Runs a command line. **You approve the compiled plan before anything runs.**
 | `deadline_seconds` | how long to wait, defaulting to 300 ([below](#a-line-has-a-deadline)) |
 | `background` | start the line and hand back a job name instead of waiting ([below](#leaving-a-pipeline-running)) |
 | `stdin_ref` | a reference whose contents are fed to the first program ([below](#filtering-something-the-agent-may-not-read)) |
+| `read` | ask for the output in this result; honoured only when [bypassing with no screening](#reading-the-output-in-the-same-result) |
 
 ```
 git log --oneline -50 | head -20
@@ -614,6 +686,10 @@ vouched for every stage of the exact command, and a file through `read_file`. On
 produced it, so a quarantined *read* carries no advice about vouching for a command nobody ran.
 Without those a planner reads one quarantined result as proof that programs are unreadable and stops
 running them, which is not what happened: the label is about who answered for the command.
+[Bypassing with no screening](../security/permissions.md#bypassing) changes the advice, since nobody is
+shown the output and a run the mode approved vouches for nothing: the planner is told that
+`read_output` hands it back as text it can read, and, on a run's result, that `read: true` returns it
+in the same result. The advice does not name the mode, which the planner is told only in plan mode.
 
 **Every result says how the run ended**, in front of what the program printed: that every step
 exited zero, which step did not and with what code, or that the line outstayed
@@ -624,9 +700,30 @@ puts nothing in the planner's context that a program chose.
 
 Output the planner **may** read comes back as text, capped at 16 KiB unless
 [`run.maxOutput`](../customize/configuration.md#runmaxoutput) names another figure. Past the cap the
-head and the tail are kept and the middle dropped, with a line in between saying how much went. The
-cap is on what enters the conversation rather than on what the command printed, and the whole of it
-stays available as a reference.
+head and the tail are kept and the middle dropped, with a line in between saying how much went and
+the byte it starts at. The cap is on what enters the conversation rather than on what the command
+printed, and the whole of it stays available as a reference, which
+[`read_output`](#read_output) reads back a page at a time without asking you.
+
+### Reading the output in the same result
+
+`read: true` asks for what the line printed in the result that ran it. When you
+[bypass permissions](../security/permissions.md#bypassing) and have not asked for screening,
+`read_output` is always answered yes and nobody is shown anything, so the answer is given at once: the
+output comes back as text the planner may read, with the same label and the same entry in the audit
+trail that `read_output` would have written, and the reference it was kept under beside it. That saves
+the model round a `read_output` call would have cost. Output longer than the
+[`run.maxOutput`](../customize/configuration.md#runmaxoutput) cap is the exception: the planner asked
+before it could see the size, so it gets the reference, which states the size, and is told the output
+was too long for one result. It is told where the rest is too: `read_output` hands back the whole of
+it, and a filter such as `tail` given the reference as `stdin_ref` reads part of it without the line
+being run again.
+
+In every other mode `read` changes nothing: the output is quarantined as usual, and you are asked, or
+a check reads it, only when the planner calls `read_output`. The same holds for an
+[agent definition](../customize/agents.md) whose `tools` leave out `read_output`. `read` must be
+`true` or `false`, and it is refused beside `background: true`, since the result that starts a job
+holds nothing the job has printed.
 
 ### Filtering something the agent may not read
 
@@ -723,14 +820,24 @@ the planner as text.
 | Parameter | |
 |---|---|
 | `ref` | the reference a `run` handed back |
+| `offset` | for output the planner may read that was too long for one result, the byte to start from; defaults to 0 |
 
 It works only for output from `run`. A quarantined *file* is not readable this way. This is why
-`which`, `find` and `uname` tell the planner nothing until it asks.
+`which`, `find` and `uname` tell the planner nothing until it asks. When you bypass permissions with no
+screening, nobody is shown it and it comes back at once, and [`read` on `run`](#reading-the-output-in-the-same-result)
+makes the same release without the extra call.
 
 **A confined check reads the output before you are asked**, and the word it gave and the sentence it
 wrote are on the screen beside the bytes. The check runs before the question rather than after your
 answer, and nothing it wrote goes back to the planner either way. No expectation is sent with it: the
 planner asked for the output to be read, not for it to be judged. See [Vetting](../security/vetting.md).
+
+**Output the planner may already read is not asked about.** Where a command's output was one the
+planner may read and too long for one result, it saw the beginning and the end, and `read_output`
+hands back the rest a page at a time from `offset`. Each page is no longer than
+[`run.maxOutput`](../customize/configuration.md#runmaxoutput) and ends with the offset of the next.
+Nobody is asked, since there is nothing for you to decide: only the length kept it out. An `offset`
+on output the planner may not read is refused before you are asked anything.
 
 ## `vet_content`
 
@@ -898,8 +1005,8 @@ of capabilities, and gets back one report.
 | Kind | Holds | For |
 |---|---|---|
 | `reader` | reading | finding something out |
-| `checker` | reading, and running programs | finding out whether something works |
-| `worker` | reading, running programs, and writing files | finishing a sub-task |
+| `checker` | reading, running programs, and asking a language server | finding out whether something works |
+| `worker` | reading, running programs, asking a language server, writing files, and calling the [MCP servers](../customize/mcp-servers.md) its parent may | finishing a sub-task |
 
 The call answers as soon as the delegate has been approved, so the planner has its round back while
 the work goes on behind it, and what the delegate says arrives on its own later. Several delegates
@@ -916,23 +1023,30 @@ what it is doing.
 path per entry, say) is repeated. Every delegate it starts is one like any other: it is approved on
 its own, takes its own number, and holds its own copy of what you vouched for, so a fan-out is
 several runs rather than one run several times. A call naming more than eight, or naming none, is
-refused and starts nothing.
+refused and starts nothing. A call that reaches the turn's ceiling of 32 delegates part-way starts
+the ones that fit and says how many did not start, and why.
 
 The delegate cannot see the conversation the task came from, so a task that leaves something out is a
 delegate that never learns it. It cannot come back for more, since there is no channel to ask
 along. A run whose own context has met something untrusted cannot delegate at all.
 
 **Delegation saves context, never an approval.** Every write and every run a delegate makes reaches you
-with its own single-use endorsement, so you see the path and the diff whoever proposed them. What you
+with its own single-use endorsement, so you see the path and the diff whoever proposed them, and every
+call a worker makes to a server's tool is put to you as the turn's own is. What you
 vouched for inside one comes back to the session, because that answer was about your machine rather
 than about the run that happened to be going.
 
 Nothing but the report crosses back: the exchange, the tool results and the quarantine end with the
 delegate, and a reference minted inside one names nothing afterwards. A delegate is offered none of
-this tool, [`ask_user`](#ask_user), a task list, or [`fetch_url`](#fetch_url), so it cannot delegate
-again, puts no question of its own to you, replaces nothing on your screen, and reaches no host.
+[`ask_user`](#ask_user), a task list, or [`fetch_url`](#fetch_url), so it puts no question of its own
+to you, replaces nothing on your screen, and reaches no host.
 Naming one of them anyway is refused rather than run, since a model naming a tool it was never offered
 is ordinary. What it could not settle goes in the report, and the planner asks.
+
+A delegate is offered this tool itself, down to three levels below the turn. One at the bottom is
+not offered it, and nor is one whose [definition](../customize/agents.md) names its tools and
+leaves this one out. A call from either anyway is refused. Every delegate in the tree counts against the
+turn's one ceiling, and each is approved and narrowed by the run that started it.
 
 Fetching is out because a delegate reaching a website would stop you to approve a host for a sub-task
 you never set up. Every kind does reach the network, since a planner is a model call and that request

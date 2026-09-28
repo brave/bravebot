@@ -6,6 +6,7 @@ governs:
   - crates/agent/src/home.rs
   - crates/agent/src/granted.rs
   - crates/agent/src/remembered.rs
+  - crates/agent/src/trusted.rs
   - crates/config/src/settings.rs
   - crates/session/src/store.rs
   - crates/tui/src/update.rs
@@ -27,11 +28,13 @@ documented-by: docs/website/docs/customize/configuration.md
 is written into it. The prompt history, the model, theme, effort and editing choices, the answer to
 the update question, session records, a language server's index of a workspace, skills, standing
 instructions, an imported subscription, the command lines somebody asked to be remembered past a
-session and the permission rules somebody granted a checkout all live here.
+session, the permission rules somebody granted a checkout and the answers to the startup question
+somebody asked to be kept all live here.
 
 What each of those files means belongs to the spec for that subject:
 [sessions.md](sessions.md) for a session record, [tools/run.md](tools/run.md) for the remembered
 command lines, [permissions.md](permissions.md) for the granted rules,
+[trust-map.md](trust-map.md) for the kept answers to the startup question,
 [skills.md](skills.md) and [instructions.md](instructions.md) for what is read out of
 the directory,
 [premium-credentials.md](premium-credentials.md) for the subscription,

@@ -31,7 +31,13 @@
 //! that a name the server does not recognise is reset to [`bravebot_config::DEFAULT_MODEL`] rather
 //! than obeyed.
 
-use bravebot_aichat::protocol::Effort;
+/// Re-exported so a caller can hold what [`effort`] answered with.
+///
+/// The level is a field of the protocol that carries it, and the crates that resolve one do not all
+/// speak that protocol: `bravebot-cli` reaches a model through `bravebot-agent` and names nothing of
+/// the wire format ([layering](../../../docs/specs/layering.md)). It already takes this type from
+/// here and hands it back; naming it through the same door is what lets it keep one.
+pub use bravebot_aichat::protocol::Effort;
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -409,6 +415,38 @@ pub fn parse_effort(contents: &str) -> Option<Effort> {
     Effort::named(contents.lines().next()?)
 }
 
+/// The saved model pick, where it is in force over the settings.
+///
+/// The pick ranks as the person's own settings file does: above what that file names, below what a
+/// checkout's file or the one `--settings` named does
+/// ([BACKEND-11](../../../docs/specs/backends.md#BACKEND-11)). A pick recorded once per person
+/// cannot tell two checkouts apart, so a checkout that names a model is the one that knows.
+///
+/// Both answers are arguments rather than read here, so nothing about the rule depends on what is on
+/// the machine running the test.
+pub fn model(recorded: Option<String>, settings: &bravebot_config::Settings) -> Option<String> {
+    recorded.filter(|_| !settings.model_outranks_a_pick())
+}
+
+/// The level in force, given the pick that was recorded and the settings in force.
+///
+/// Ranked as [`model`] is: a checkout's file, or the one `--settings` named, answers over the pick,
+/// and the pick answers over the person's own file. Where neither says anything the request carries
+/// no level at all ([BACKEND-43](../../../docs/specs/backends.md#BACKEND-43)).
+///
+/// A word neither this program nor the protocol defines is no choice at all, whichever of the two
+/// spelled it: both come out of a file somebody may have edited by hand, so both are read by the one
+/// rule here rather than each being trusted where it came from. A checkout's file naming nonsense
+/// therefore leaves the request carrying nothing, rather than putting a word a service has never
+/// heard of into a request field or handing the question back to the pick it outranks.
+pub fn effort(recorded: Option<Effort>, settings: &bravebot_config::Settings) -> Option<Effort> {
+    let configured = || Effort::named(settings.effort()?);
+    match settings.effort_outranks_a_pick() {
+        true => configured(),
+        false => recorded.or_else(configured),
+    }
+}
+
 /// Record the effort level the user chose, or forget the choice where they asked for none.
 ///
 /// Written to a temporary file and renamed, so an interrupted write leaves the previous choice
@@ -771,6 +809,113 @@ and this?
     #[test]
     fn only_the_first_effort_line_is_read() {
         assert_eq!(parse_effort("low\nmax\n"), Some(Effort::Low));
+    }
+
+    /// Settings read from a scratch home and checkout, the person's own file saying `home` and the
+    /// checkout's saying `project`, for the rules that turn on which of the two named a key.
+    fn layered(name: &str, home: &str, project: &str) -> bravebot_config::Settings {
+        let root = crate::testutil::scratch_dir(&format!("bravebot-store-{name}"));
+        let _ = std::fs::remove_dir_all(&root);
+        let checkout = root.join("cwd").join(".bravebot");
+        std::fs::create_dir_all(&checkout).expect("scratch checkout");
+        std::fs::create_dir_all(root.join("home")).expect("scratch home");
+        std::fs::write(root.join("home").join("settings.json"), home).expect("home layer");
+        std::fs::write(checkout.join("settings.json"), project).expect("project layer");
+        bravebot_config::Settings::layered(Some(root.join("home")), Some(&root.join("cwd")), None)
+    }
+
+    /// BACKEND-11. A checkout that names a model outranks the pick, which is recorded once per
+    /// person and cannot tell two checkouts apart; the person's own file does not, the pick being
+    /// the later thing they said there.
+    #[test]
+    fn a_checkouts_model_outranks_the_saved_pick_and_the_home_file_does_not() {
+        let picked = || Some("picked".to_string());
+        let checkout = layered(
+            "model-checkout",
+            r#"{"model": "mine"}"#,
+            r#"{"model": "its"}"#,
+        );
+        assert_eq!(
+            model(picked(), &checkout),
+            None,
+            "the pick outranked a checkout"
+        );
+
+        let own = layered("model-own", r#"{"model": "mine"}"#, "{}");
+        assert_eq!(model(picked(), &own).as_deref(), Some("picked"));
+
+        let blank = layered("model-blank", "{}", r#"{"model": "  "}"#);
+        assert_eq!(
+            model(picked(), &blank).as_deref(),
+            Some("picked"),
+            "a blank key outranked the pick"
+        );
+        assert_eq!(
+            checkout.model(),
+            Some("its"),
+            "the checkout's key is not what answers in the pick's place"
+        );
+    }
+
+    /// BACKEND-43, on BACKEND-11's footing: a checkout's level outranks the pick, the pick outranks
+    /// the person's own file, and with nothing recorded the file answers, which on a machine where
+    /// nobody opens the interface is every run.
+    #[test]
+    fn a_checkouts_level_outranks_the_saved_pick_and_the_home_file_does_not() {
+        let checkout = layered(
+            "effort-checkout",
+            r#"{"effort": "low"}"#,
+            r#"{"effort": "max"}"#,
+        );
+        assert_eq!(
+            effort(Some(Effort::Low), &checkout),
+            Some(Effort::Max),
+            "the pick outranked a checkout"
+        );
+
+        let own = layered("effort-own", r#"{"effort": "max"}"#, "{}");
+        assert_eq!(
+            effort(Some(Effort::Low), &own),
+            Some(Effort::Low),
+            "the person's own file outranked their pick"
+        );
+        assert_eq!(effort(None, &own), Some(Effort::Max));
+        assert_eq!(effort(None, &bravebot_config::Settings::default()), None);
+
+        let blank = layered("effort-blank", r#"{"effort": "max"}"#, r#"{"effort": ""}"#);
+        assert_eq!(
+            effort(Some(Effort::Low), &blank),
+            Some(Effort::Low),
+            "a blank key outranked the pick"
+        );
+    }
+
+    /// A word the protocol does not define must not reach a request field, wherever it was spelled.
+    /// A settings file gets the reading a hand-edited record gets, because both are a file somebody
+    /// may have typed into. A checkout naming one still outranks the pick: the closest layer that
+    /// named the key answers, and its answer is no level.
+    #[test]
+    fn a_settings_file_naming_no_level_asks_for_none() {
+        for word in ["highest", "9", "MAXIMUM"] {
+            let own = bravebot_config::Settings::parse(&format!(r#"{{"effort": "{word}"}}"#));
+            assert_eq!(effort(None, &own), None, "{word:?} became a choice");
+            let checkout = layered(
+                "effort-nonsense",
+                "{}",
+                &format!(r#"{{"effort": "{word}"}}"#),
+            );
+            assert_eq!(
+                effort(Some(Effort::Low), &checkout),
+                None,
+                "{word:?} handed the question back to the pick"
+            );
+        }
+        let capitals = bravebot_config::Settings::parse(r#"{"effort": "HIGH"}"#);
+        assert_eq!(
+            effort(None, &capitals),
+            Some(Effort::High),
+            "a level spelled in capitals is the same request"
+        );
     }
 
     /// Both answers round-trip, and off is an answer rather than absence: somebody who turned

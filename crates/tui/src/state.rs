@@ -19,6 +19,12 @@ use std::time::{Duration, Instant};
 /// past what a prompt is meant to look like.
 const FOLD_AT_NEWLINES: usize = 3;
 
+/// How many changes back `u` reaches, which is vim's `undolevels` as it ships.
+///
+/// Each step is a copy of the line as it stood, so this is what bounds what undo holds: a thousand
+/// copies of a prompt, where a prompt is sentences rather than a file.
+const UNDO_DEPTH: usize = 1000;
+
 /// Text with the line endings every clipboard uses turned into the one the box draws.
 fn normalised(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
@@ -229,6 +235,18 @@ pub struct Entry {
     /// once, so lines interleaved with the turn's could not be read in either direction: whose
     /// each one was would be a guess from the words, and the words are prose a model wrote.
     pub delegate: Option<Delegate>,
+    /// The definition a person addressed the turn this reply ends, for a [`Speaker::Assistant`]
+    /// entry.
+    ///
+    /// The name the driver matched against the set it resolved, never anything read out of the
+    /// reply: which definition answered is a fact the driver holds, and the reply is model output
+    /// that could claim to be any of them (ADDRESS-12).
+    pub answered_as: Option<String>,
+    /// Why the planner made the call, for a [`Speaker::Tool`] entry read back off disk.
+    ///
+    /// A live call carries its reason on its [`Activity`]; a recalled one has no activity, and
+    /// the reason is still what the person watching was shown beside it the first time round.
+    pub why: String,
 }
 
 impl Entry {
@@ -243,6 +261,8 @@ impl Entry {
             returned: None,
             activity: None,
             delegate: None,
+            answered_as: None,
+            why: String::new(),
         }
     }
 
@@ -257,6 +277,8 @@ impl Entry {
             returned: None,
             activity: None,
             delegate: None,
+            answered_as: None,
+            why: String::new(),
         }
     }
 
@@ -286,6 +308,8 @@ impl Entry {
             returned: None,
             activity: None,
             delegate: None,
+            answered_as: None,
+            why: String::new(),
         }
     }
 
@@ -301,6 +325,8 @@ impl Entry {
             returned: None,
             activity: None,
             delegate: None,
+            answered_as: None,
+            why: String::new(),
         }
     }
 
@@ -316,6 +342,8 @@ impl Entry {
             returned: None,
             activity: None,
             delegate: None,
+            answered_as: None,
+            why: String::new(),
         }
     }
 
@@ -334,6 +362,8 @@ impl Entry {
             returned: None,
             activity: Some(activity),
             delegate: None,
+            answered_as: None,
+            why: String::new(),
         }
     }
 
@@ -343,7 +373,7 @@ impl Entry {
     /// of it. Giving it one would mean choosing an outcome, and every choice available is a
     /// claim the record does not support: `running` says it never finished, and `done` says it
     /// succeeded. The line alone is what is known, and the interface draws it as such.
-    pub fn recalled_tool(line: impl Into<String>) -> Self {
+    pub fn recalled_tool(line: impl Into<String>, why: impl Into<String>) -> Self {
         Self {
             speaker: Speaker::Tool,
             text: line.into(),
@@ -354,12 +384,20 @@ impl Entry {
             returned: None,
             activity: None,
             delegate: None,
+            answered_as: None,
+            why: why.into(),
         }
     }
 
     /// Attach the task list the turn finished with.
     pub fn with_todos(mut self, todos: Vec<bravebot_core::todo::Row>) -> Self {
         self.todos = todos;
+        self
+    }
+
+    /// Say which definition answered, where a person addressed one.
+    pub fn answered_as(mut self, name: Option<String>) -> Self {
+        self.answered_as = name;
         self
     }
 }
@@ -376,7 +414,7 @@ fn recalled_entry(line: &bravebot_agent::conversation::Said) -> Entry {
     match line {
         Said::User(text) | Said::Composed { text, .. } => Entry::user(text),
         Said::Assistant(text) => Entry::assistant(text, Vec::new()),
-        Said::Tool(text) => Entry::recalled_tool(text),
+        Said::Tool { line, why } => Entry::recalled_tool(line, why),
     }
 }
 
@@ -541,13 +579,19 @@ pub fn failure_reason(diagnosis: bravebot_agent::Diagnosis) -> String {
 
 /// What a half-typed line could still become.
 ///
-/// One kind at a time: a command is the whole line and a file reference is its last word, so the
-/// list is never a mixture and the keys that walk it never have to ask which they are walking.
+/// One kind at a time: a word opening with a slash is a command or a skill's name, and one opening
+/// with an `@` is a file reference, so the keys that walk the list never have to ask which of the
+/// two they are walking.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Offered {
     /// Nothing is being typed towards, so the list is closed.
     Nothing,
-    Commands(Vec<crate::app::Command>),
+    /// The commands first and then the skills, walked as one list. Commands only where the word is
+    /// the whole line, since anywhere else a command is a prompt.
+    Slash {
+        commands: Vec<crate::app::Command>,
+        skills: Vec<crate::skills::Skill>,
+    },
     Files(Vec<crate::entries::Entry>),
     /// Every key and marker, listed under the box. Not a completion: there is nothing to choose,
     /// which is why the keys that walk a list leave this one alone.
@@ -556,15 +600,39 @@ pub enum Offered {
 
 /// What kind of character one is, for working out where a word begins and ends.
 ///
-/// Three kinds rather than two, because vi's `w` treats punctuation as a word of its own: in
-/// `src/main.rs` the slashes are not part of either name, which is what makes `diw` on one of them
-/// take the slash alone. `W` uses the same machinery with punctuation folded into `Word`, and that is
-/// the whole of the difference between the two.
+/// Blanks, words and punctuation rather than blanks and the rest, because vi's `w` treats punctuation
+/// as a word of its own: in `src/main.rs` the slashes are not part of either name, which is what makes
+/// `diw` on one of them take the slash alone. `W` uses the same machinery with punctuation folded into
+/// `Word`, and that is the whole of the difference between the two.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Class {
     Blank,
     Word,
     Punctuation,
+    /// A marker, to the word motions of `w`, `e`, `b` and `ge`. It stands for one picture or paste,
+    /// so it is a word by itself and joins no run, not even that of a marker beside it.
+    Marker,
+}
+
+/// The kind of character `c` is to `w` and `iw`.
+fn word_class(c: char) -> Class {
+    if c.is_whitespace() {
+        Class::Blank
+    } else if c.is_alphanumeric() || c == '_' {
+        Class::Word
+    } else {
+        Class::Punctuation
+    }
+}
+
+/// The kind of character `c` is to `W` and `iW`, where anything but a blank is one thing: that is
+/// what makes a path or a flag a single word.
+fn bigword_class(c: char) -> Class {
+    if c.is_whitespace() {
+        Class::Blank
+    } else {
+        Class::Word
+    }
 }
 
 /// What a yank or a delete took, and whether it was whole lines.
@@ -576,6 +644,63 @@ enum Class {
 pub struct Yanked {
     text: String,
     lines: bool,
+}
+
+/// A selection that has ended, as the row and the column each of its ends was at, counting from
+/// zero and a column in characters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Marked {
+    anchor: (usize, usize),
+    caret: (usize, usize),
+    lines: bool,
+}
+
+/// One character typed in REPLACE mode, and the one it took the place of.
+///
+/// `None` where it took the place of nothing: at the end of a row, over a marker, and for a newline,
+/// each of which it went in beside rather than over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TypedOver {
+    at: usize,
+    typed: char,
+    was: Option<char>,
+}
+
+/// A change `.` can make again, with what was typed after it where it opened INSERT mode.
+///
+/// What was typed is part of the instruction, as it is in vi: `cw` then `X` is "change the word to
+/// X", and repeating only the `cw` would leave the next word gone and nothing in its place.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Change {
+    /// An operator over an extent. `typed` is empty for every operator but `c`.
+    Operated {
+        operator: crate::vim::Operator,
+        extent: crate::vim::Extent,
+        count: Option<u32>,
+        typed: String,
+    },
+    /// One of the keys that open INSERT mode, which take no count.
+    Opened {
+        opening: crate::vim::Opening,
+        typed: String,
+    },
+    /// `p` or `P`.
+    Put { before: bool, count: Option<u32> },
+    /// `J` or `gJ`.
+    Joined { spaced: bool, count: Option<u32> },
+}
+
+/// An INSERT session a change or an opening began, until Escape ends it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Inserting {
+    /// The line and the caret before the change or the opening, which become the step to undo if
+    /// the line comes out of the session changed.
+    before: (String, usize),
+    /// The line and the caret the session began from, which what is on the line at Escape is read
+    /// against to find what was typed.
+    opened_on: (String, usize),
+    /// What `.` will make again, or `None` where the session did something it cannot.
+    change: Option<Change>,
 }
 
 /// A binding vi spells with a letter, which the key handler answers as though the key had arrived.
@@ -887,6 +1012,18 @@ pub struct TurnStart {
     pub transcript_len: usize,
 }
 
+/// The definition a person's `/agent` line named, and the model its turn will ask for.
+///
+/// The model travels with the name because the session's is the wrong one for everything asked
+/// about the turn before and after it: a sign-in for a model nothing will use, and a reply from the
+/// definition's model read as the session's substituted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Addressed {
+    pub name: String,
+    /// Resolved as the driver resolves it, or `None` where the definition names no model.
+    pub model: Option<String>,
+}
+
 /// What the rewind points are holding in memory, which is what the budget is spent on.
 fn held_bytes(points: &[RewindPoint]) -> usize {
     points
@@ -990,6 +1127,21 @@ pub struct Session {
     /// `None` outside VISUAL mode, since a selection nobody can see is a stretch the next operator would
     /// act on for reasons the person has no way to account for.
     anchor: Option<usize>,
+    /// The selection that ended last, for `gv` to mark out again.
+    ///
+    /// Rows and columns rather than the offsets the anchor is held as, because what ends a selection
+    /// is usually an edit. After `V>` every offset past the first row has moved by the indent, and
+    /// the rows put back by offset would come back one short.
+    last_selection: Option<Marked>,
+    /// What each character typed since `R` took the place of, the latest last, for Backspace to put
+    /// back.
+    ///
+    /// Emptied by every other edit of the line, since each entry is an offset into the line as it
+    /// stood when that character went in.
+    typed_over: Vec<TypedOver>,
+    /// Whether the next character typed over the line begins a change, which it does after `R` and
+    /// after any other edit of the line.
+    typing_over_begins_a_change: bool,
     /// What the last yank or delete took, for the keys that put it back.
     ///
     /// Vi's unnamed register, and the only one: the named ones are a filing system, and a box holding
@@ -998,15 +1150,20 @@ pub struct Session {
     register: Option<Yanked>,
     /// The last change, for the key that does it again.
     ///
-    /// The instruction rather than what it produced, so `.` acts at the caret wherever that now is.
-    /// That is the whole of why the key is worth having: the change is repeated somewhere else. The
-    /// count is part of the instruction, and a count typed in front of `.` replaces it.
-    last_change: Option<(crate::vim::Operator, crate::vim::Extent, Option<u32>)>,
-    /// The line as it stood before the last change, for the key that puts it back.
+    /// The instruction and what was typed into it, rather than the line it produced, so `.` acts at
+    /// the caret wherever that now is. That is the whole of why the key is worth having: the change
+    /// is repeated somewhere else. The count is part of the instruction, and a count typed in front
+    /// of `.` replaces it.
+    last_change: Option<Change>,
+    /// The line and the caret as they stood before each change, the latest last, for the key that
+    /// puts them back.
     ///
-    /// One step rather than a stack, on the same footing as the stash: the key that undoes and the
-    /// keystroke that will be regretted are one press apart, and a depth is a thing to remember.
-    before_last_change: Option<(String, usize)>,
+    /// As deep as vim's, so a run of `x` and `.` comes back one press at a time. Emptied by a line
+    /// that arrives whole, which is not the line these were taken of: a step kept across a send
+    /// would put back a prompt that has already gone.
+    undo: std::collections::VecDeque<(String, usize)>,
+    /// The INSERT session a change or an opening began, while it is open.
+    inserting: Option<Inserting>,
     pub status: Status,
     /// Whether the audit trail is shown alongside replies.
     pub show_trail: bool,
@@ -1272,6 +1429,12 @@ pub struct Session {
     /// conversation somebody resumed to read and keep working it, with nothing in the transcript
     /// to say why.
     goal: Option<crate::goals::Running>,
+    /// The definition the turn about to start was addressed to, from a `/agent` line a person typed.
+    ///
+    /// Taken by the one turn it was set for, so the next line is the session's own planner again
+    /// with no mode to leave (ADDRESS-10). Private, because only [`Session::address`] may set it:
+    /// that is what keeps a loop's tick, a goal or a watch from ever carrying one (ADDRESS-3).
+    addressing: Option<Addressed>,
     /// The standing watches this session holds, where a turn armed any.
     ///
     /// Private for the reason the loop and the goal are: a watch is looked at, fires, and has the
@@ -1382,6 +1545,11 @@ pub struct Session {
     /// whatever happened to be in the process's working directory. The real session names it with
     /// [`Session::in_workspace`].
     workspace: std::path::PathBuf,
+    /// The skills a turn would advertise, held while a slash word is being typed.
+    ///
+    /// Resolved as one starts and let go once it ends, so a skill written mid-session is offered
+    /// the next time, and constructing a session reads no directory.
+    skills: Option<Vec<crate::skills::Skill>>,
     /// Files dropped on the box, by the marker standing for each in the line.
     ///
     /// Kept until the line is sent, and read back out of the line at that point rather than sent
@@ -1409,6 +1577,8 @@ pub struct Servers {
     pub confined: bool,
     /// Why each requested server that is not among them is absent, said on the opening screen.
     pub notes: Vec<String>,
+    /// The servers themselves, with their lists, for each turn to settle and call.
+    pub session: Option<bravebot_agent::mcp::Session>,
 }
 
 impl Session {
@@ -1434,9 +1604,13 @@ impl Session {
             typed_so_far: String::new(),
             last_find: None,
             anchor: None,
+            last_selection: None,
+            typed_over: Vec::new(),
+            typing_over_begins_a_change: false,
             register: None,
             last_change: None,
-            before_last_change: None,
+            undo: std::collections::VecDeque::new(),
+            inserting: None,
             status: Status::Idle,
             show_trail: false,
             scroll: 0,
@@ -1491,6 +1665,7 @@ impl Session {
             looping: None,
             watches: watch::Watches::new(),
             goal: None,
+            addressing: None,
             rewind_points: Vec::new(),
             turn_start: TurnStart::default(),
             pending: crate::remote_confirm::Interjections::new(),
@@ -1508,6 +1683,7 @@ impl Session {
             model_reads_effort: true,
             completion: 0,
             workspace: std::path::PathBuf::new(),
+            skills: None,
             attached: Vec::new(),
             sent: Vec::new(),
             attachments_made: 0,
@@ -1574,11 +1750,14 @@ impl Session {
     /// What comes back is not trusted: the file can be edited, so a recalled prompt goes into the
     /// input box for the user to read and submit. That keystroke is what makes it trusted, exactly
     /// as typing it would have been.
+    ///
+    /// Not the model or the effort level, which a settings file may also name and which are
+    /// therefore settled by [`Session::adopt_model`] and [`Session::adopt_effort`], the way the
+    /// style of editing is: reading the record here as well would put the rule that ranks the two
+    /// in two places.
     pub fn with_stored_history(mut self) -> Self {
         self.history =
             crate::history::History::from_entries(bravebot_session::store::load_history());
-        self.model = bravebot_session::store::load_model();
-        self.effort = bravebot_session::store::load_effort();
         self.persist = true;
         self
     }
@@ -2683,6 +2862,10 @@ impl Session {
             self.shell = true;
             return;
         }
+        if self.typing_over() {
+            self.type_over(c);
+            return;
+        }
         // Editing a recalled prompt makes it the working line rather than a view of history,
         // so the position indicator goes away as soon as a key is pressed.
         self.history.leave();
@@ -2700,6 +2883,10 @@ impl Session {
     /// mode and would let the character be typed by any path that thinks it is typing text. A
     /// newline in the prompt is one deliberate keystroke.
     pub fn type_newline(&mut self) {
+        if self.typing_over() {
+            self.type_over('\n');
+            return;
+        }
         self.abandon_the_selection();
         self.history.leave();
         self.input.insert(self.caret, '\n');
@@ -2707,6 +2894,84 @@ impl Session {
         // A command is one line by definition, and a reference ends at whitespace, so a newline
         // closes whatever was being offered rather than narrowing it.
         self.completion = 0;
+    }
+
+    /// Whether a character typed now goes over the line rather than into it, which is REPLACE mode.
+    fn typing_over(&self) -> bool {
+        self.vi_mode() == Some(crate::vim::Mode::Replace)
+    }
+
+    /// Put a character typed in REPLACE mode where the one under the caret was.
+    ///
+    /// In beside it instead where there is no one character to take the place of: at the end of a
+    /// row, and on a marker, which stands for an attachment and would name nothing with its first
+    /// bracket typed over. A newline goes in beside as well, as it does in vi, so a new line breaks
+    /// the row rather than eating into it.
+    ///
+    /// The first character after `R` is where the change begins, so everything typed until Escape
+    /// is one change and `u` puts the line back as it stood before it. Not the `R` itself: one left
+    /// with nothing typed has changed nothing, and a step taken there would be a press of `u` that
+    /// puts back nothing. `.` repeats none of it, since what was typed over is not kept.
+    fn type_over(&mut self, c: char) {
+        if std::mem::take(&mut self.typing_over_begins_a_change) {
+            self.begin_a_change();
+        }
+        let was = self.input[self.caret..]
+            .chars()
+            .next()
+            .filter(|&was| was != '\n' && c != '\n' && self.marker_at_caret().is_none());
+        self.history.leave();
+        self.input.replace_range(
+            self.caret..self.caret + was.map_or(0, char::len_utf8),
+            c.encode_utf8(&mut [0; 4]),
+        );
+        self.typed_over.push(TypedOver {
+            at: self.caret,
+            typed: c,
+            was,
+        });
+        self.caret += c.len_utf8();
+        self.completion = 0;
+    }
+
+    /// Take back the last character typed in REPLACE mode and put back the one it took the place
+    /// of, which is what Backspace does there.
+    ///
+    /// Only what was typed since `R`, and only while the caret is at the end of it. What is behind
+    /// the caret otherwise is the line the person came to, which Backspace steps over without
+    /// taking, as it does in vi: the mode is for typing over a line, and a key that ate into it
+    /// would be INSERT's Backspace under another name.
+    fn take_back_what_was_typed_over(&mut self) {
+        let last = self.typed_over.last().copied();
+        match last {
+            Some(TypedOver { at, typed, was })
+                if self.input.get(at..self.caret) == Some(typed.encode_utf8(&mut [0; 4])) =>
+            {
+                self.typed_over.pop();
+                self.history.leave();
+                let mut spelled = [0; 4];
+                let put_back = match was {
+                    Some(was) => &*was.encode_utf8(&mut spelled),
+                    None => "",
+                };
+                self.input.replace_range(at..self.caret, put_back);
+                self.caret = at;
+                self.completion = 0;
+            }
+            _ => {
+                self.typed_over.clear();
+                self.move_left();
+            }
+        }
+    }
+
+    /// Backspace in REPLACE mode until the caret is back at `start`, which is what Ctrl-W and Ctrl-U
+    /// do there, as they do in vim: a word or a row of typing taken back at once, with the line from
+    /// before the `R` stepped over rather than deleted.
+    fn take_back_as_far_as(&mut self, start: usize) {
+        while self.caret > start {
+            self.take_back_what_was_typed_over();
+        }
     }
 
     /// Which style of editing the box does.
@@ -2741,6 +3006,44 @@ impl Session {
             .and_then(crate::vim::Editing::named)
             .or_else(|| configured.and_then(crate::vim::Editing::named))
             .unwrap_or_default();
+    }
+
+    /// Settle the model this session opens on, given the settings in force.
+    ///
+    /// The saved pick where [`bravebot_session::store::model`] leaves it in force, and otherwise
+    /// `None`, which is the configured model: a checkout's settings that outrank the pick named
+    /// the model the configuration already resolved to (BACKEND-11). The rule is in the store for
+    /// the reason [`Session::adopt_effort`]'s is.
+    ///
+    /// The pick is read only for a session that persists, for the reason given there.
+    pub fn adopt_model(&mut self, settings: &bravebot_config::Settings) {
+        let recorded = self
+            .persist
+            .then(bravebot_session::store::load_model)
+            .flatten();
+        self.model = bravebot_session::store::model(recorded, settings);
+    }
+
+    /// Settle how hard this session asks the model to think, given the settings in force.
+    ///
+    /// The rule is [`bravebot_session::store::effort`] and the whole of it is there, so the terminal,
+    /// a session in lines and a one-shot run cannot come to disagree about which of the two answers
+    /// (BACKEND-43). What that decides is the level the picker opens on and the level a turn sends;
+    /// a level the model in force reads none of is still not sent, by
+    /// [`Session::effort_in_force`], and is still not forgotten.
+    ///
+    /// Nothing is written: a level a file named is not a pick, and recording one would make reading
+    /// a settings file once enough to outlive it.
+    ///
+    /// The recorded pick is read only for a session that persists, the rule
+    /// [`Session::adopt_editing`] follows: a test must not be handed the developer's own choice, or
+    /// what it asks for would depend on the machine it ran on.
+    pub fn adopt_effort(&mut self, settings: &bravebot_config::Settings) {
+        let recorded = self
+            .persist
+            .then(bravebot_session::store::load_effort)
+            .flatten();
+        self.effort = bravebot_session::store::effort(recorded, settings);
     }
 
     /// Settle whether a check that finds nothing may promote a slot without anybody being asked.
@@ -2808,19 +3111,26 @@ impl Session {
         if self.persist {
             bravebot_session::store::save_editing(editing.as_str());
         }
+        let changed = self.editing != editing;
         self.editing = editing;
-        self.mode = crate::vim::Mode::Insert;
         // The selection goes with the mode that showed it, the way Escape out of VISUAL mode
         // abandons it. INSERT mode has no stretch to act on, and the ordinary box has nowhere to
         // draw one: what is left otherwise is a reversed run of characters in a box whose keys
-        // cannot account for it.
-        self.anchor = None;
+        // cannot account for it. Let go of while the mode still says which kind it was.
+        self.let_go_of_the_selection();
+        self.mode = crate::vim::Mode::Insert;
         // An instruction waiting for its next key goes with the mode it was typed in, for the same
         // reason: INSERT mode would draw it beside a box that is typing its letters. A count is the
         // front of such an instruction and goes with it.
         self.half_typed = None;
         self.count = None;
         self.held_count = None;
+        // The ordinary box keeps no steps, so what it types is in none of them, and `u` back in vi
+        // would put back a line from before that typing and lose it.
+        if changed {
+            self.inserting = None;
+            self.undo.clear();
+        }
     }
 
     /// Which vi mode the box is in, or `None` where vi is not the style.
@@ -2866,10 +3176,19 @@ impl Session {
     /// `d` take two characters rather than one. Whole lines in the line-wise mode however far along a
     /// line either end happens to sit.
     pub fn vi_selection(&self) -> Option<(usize, usize)> {
+        self.marked_out(matches!(
+            self.vi_mode(),
+            Some(crate::vim::Mode::Visual { lines: true })
+        ))
+    }
+
+    /// The stretch between the anchor and the caret, as the whole rows it crosses where `rows` says
+    /// so, or `None` where VISUAL mode is not open.
+    fn marked_out(&self, rows: bool) -> Option<(usize, usize)> {
         // The mode as well as the anchor: the anchor is what the stretch is, and the mode is whether
         // there is one at all. Read from the anchor alone, a box that had left VISUAL mode without
         // dropping it would draw a stretch its keys can no longer act on.
-        let Some(crate::vim::Mode::Visual { lines }) = self.vi_mode() else {
+        let Some(crate::vim::Mode::Visual { .. }) = self.vi_mode() else {
             return None;
         };
         // Clamped to the line as it stands rather than trusted to be within it, the way `wrap`
@@ -2879,7 +3198,7 @@ impl Session {
         // panics out of the draw with the terminal still in raw mode.
         let anchor = crate::wrap::boundary_at_or_before(&self.input, self.anchor?);
         let (from, to) = (anchor.min(self.caret), anchor.max(self.caret));
-        if lines {
+        if rows {
             let starts = self.input[..from].rfind('\n').map_or(0, |at| at + 1);
             let ends = self.input[to..]
                 .find('\n')
@@ -2916,10 +3235,12 @@ impl Session {
         if self.editing != crate::vim::Editing::Vi {
             return false;
         }
-        self.mode = crate::vim::Mode::Normal;
+        // Before the caret steps back, since where it stands is where the typing ended.
+        self.finish_inserting();
         // The selection goes with the mode that showed it. Escape out of VISUAL mode abandons the
         // stretch, so what the next operator acts on is what the caret is on and nothing invisible.
-        self.anchor = None;
+        self.let_go_of_the_selection();
+        self.mode = crate::vim::Mode::Normal;
         // Where vi leaves it. The caret in NORMAL mode sits on a character rather than between two,
         // so the position one past the end of the line is not one it can hold, and Escape at the end
         // of a line somebody has just typed lands on the last character they typed.
@@ -2979,7 +3300,21 @@ impl Session {
     }
 
     /// Act on an instruction that has everything it needs.
+    ///
+    /// A selection the instruction ends is kept for `gv` as it stood before the instruction rather
+    /// than after, since most of the ones that end it have moved the caret off the end it was at by
+    /// then: `vjU` leaves the caret at the start of what it raised, and a selection kept from there
+    /// would come back as one character.
     fn carry_out(&mut self, command: crate::vim::Command) {
+        let open = self.marked_now();
+        self.act_on(command);
+        if self.anchor.is_none() && open.is_some() {
+            self.last_selection = open;
+        }
+    }
+
+    /// Act on an instruction, leaving what it does to a selection to [`Session::carry_out`].
+    fn act_on(&mut self, command: crate::vim::Command) {
         use crate::vim::Command;
 
         // An operator that is still waiting keeps the count typed in front of it, since the one in
@@ -2998,17 +3333,25 @@ impl Session {
             Command::Move(motion) => self.move_by_counted(motion, count, false),
             Command::Change(operator, extent) => self.change(operator, extent, count),
             Command::Wait(_) => unreachable!("a wait is answered above"),
-            Command::Undo => self.undo_last_change(),
-            // A count in front of `.` replaces the one the change was made with, which is vi's rule
-            // and the useful one: `3.` is how a repeat is made bigger than what it repeats.
-            Command::Again => {
-                if let Some((operator, extent, recorded)) = self.last_change {
-                    self.change(operator, extent, count.or(recorded));
+            // A count is how many changes back, as `3u` is in vim.
+            Command::Undo => {
+                for _ in 0..count.unwrap_or(1) {
+                    if !self.undo_last_change() {
+                        break;
+                    }
                 }
             }
+            Command::Again => self.make_the_last_change_again(count),
             Command::Paste { before } => self.put_the_register_back(before, count),
-            Command::Join => self.join_the_line_below(count),
+            Command::PutOver { keep } => self.put_over_the_selection(keep, count),
+            Command::Join { spaced } => self.join_the_line_below(count, spaced),
             Command::Select { lines } => self.select(lines),
+            Command::Reselect => self.mark_out_the_last_selection_again(),
+            Command::TypeOver => {
+                self.typing_over_begins_a_change = true;
+                self.typed_over.clear();
+                self.mode = crate::vim::Mode::Replace;
+            }
             Command::SwapEnds => self.swap_the_ends_of_the_selection(),
             Command::Replace(c) => self.replace_the_selection_with(c),
             Command::Case(case) => self.change_the_case_of_the_selection(case),
@@ -3058,8 +3401,8 @@ impl Session {
 
     /// Do something to the stretch of the line an extent names.
     ///
-    /// The one place a vi instruction changes the line, so the register, the undo step and the record
-    /// of what `.` repeats are all kept here. Three copies of that bookkeeping, one per operator, is
+    /// The one place an operator changes the line, so the register, the undo step and the record of
+    /// what `.` repeats are kept here for all of them. A copy of that bookkeeping for each operator is
     /// how one of them would come to be missing.
     fn change(
         &mut self,
@@ -3069,29 +3412,65 @@ impl Session {
     ) {
         use crate::vim::Operator;
 
-        let Some((from, to)) = self.stretch(self.as_vi_reads_it(operator, extent), count) else {
+        let (read, read_count) = self.as_vi_reads_it(operator, extent, count);
+        let Some((from, to)) = self.stretch(read, read_count) else {
             return;
         };
-
-        if !operator.reads_only() {
-            self.before_last_change = Some((self.input.clone(), self.caret));
-            self.last_change = Some((operator, extent, count));
-            self.history.leave();
-            self.completion = 0;
+        // All of the characters asked for or none, which is vim's rule: `5rx` with three left on the
+        // line is a count nobody meant, and replacing the three would be a guess at what they did
+        // mean. A marker is not characters to overwrite, for the reason it is not in a selection.
+        if let Operator::Replace(_) = operator
+            && (self.input[from..to].chars().count() < count.unwrap_or(1) as usize
+                || self
+                    .marker_spans()
+                    .any(|(start, end)| start < to && from < end))
+        {
+            return;
         }
 
-        // A line-wise selection is whole lines as much as `dd` is, so the newline is handled the same way
-        // and what goes into the register goes back as a line.
-        let whole_lines = extent == crate::vim::Extent::Line
-            || (extent == crate::vim::Extent::Selection
-                && matches!(
-                    self.vi_mode(),
-                    Some(crate::vim::Mode::Visual { lines: true })
-                ));
-        self.register = Some(Yanked {
-            text: self.input[from..to].to_string(),
-            lines: whole_lines,
-        });
+        let whole_lines = self.takes_whole_lines(extent);
+        let mut repeated = None;
+        let before = (self.input.clone(), self.caret);
+        if !operator.reads_only() {
+            // `c` takes its step at Escape instead, since one that typed back what it took has
+            // changed nothing and a step there would be a press of `u` that puts back nothing.
+            if operator == Operator::Change {
+                self.begin_an_edit();
+            } else {
+                self.begin_a_change();
+            }
+            let (extent, count) = match extent {
+                // The selection is gone by the time `.` is pressed, so the rows it crossed are kept
+                // as that many rows from the caret, which is what vim repeats.
+                crate::vim::Extent::Selection | crate::vim::Extent::SelectedRows if whole_lines => {
+                    (
+                        crate::vim::Extent::Line,
+                        Some(self.input[from..to].matches('\n').count() as u32 + 1),
+                    )
+                }
+                _ => (extent, count),
+            };
+            let change = Change::Operated {
+                operator,
+                extent,
+                count,
+                typed: String::new(),
+            };
+            // `c` is not the change to make again until what is typed after it is known, which is
+            // at Escape.
+            if operator == Operator::Change {
+                repeated = Some(change);
+            } else {
+                self.last_change = Some(change);
+            }
+        }
+
+        if operator.fills_the_register() {
+            self.register = Some(Yanked {
+                text: self.input[from..to].to_string(),
+                lines: whole_lines,
+            });
+        }
 
         match operator {
             // Nothing moves, so the caret has no reason to be anywhere but where the yank began, which
@@ -3101,6 +3480,11 @@ impl Session {
                 self.input.replace_range(from..to, "");
                 self.caret = from;
                 self.mode = crate::vim::Mode::Insert;
+                self.inserting = Some(Inserting {
+                    before,
+                    opened_on: (self.input.clone(), self.caret),
+                    change: repeated,
+                });
             }
             Operator::Delete => {
                 // A whole line takes the newline that ends it, so the gap closes rather than leaving a
@@ -3125,6 +3509,25 @@ impl Session {
             Operator::Indent | Operator::Dedent => {
                 self.shift_the_lines(from, to, operator == Operator::Indent)
             }
+            Operator::Case(case) => {
+                let end = self.change_the_case(from, to, case);
+                // `~` moves on past what it changed, so pressing it again walks along the line, and
+                // stops on the last character rather than past it. The operator spelled after `g`
+                // leaves the caret at the start of its stretch, as a yank does.
+                self.caret = if extent == crate::vim::Extent::Character {
+                    end
+                } else {
+                    from
+                };
+                self.step_back_off_the_end();
+            }
+            Operator::Replace(with) => {
+                let replaced = self.input[from..to].chars().count();
+                self.input
+                    .replace_range(from..to, &with.to_string().repeat(replaced));
+                // On the last character replaced, which is where vi leaves it.
+                self.caret = from + (replaced - 1) * with.len_utf8();
+            }
         }
         // Every operator ends the selection, the stretch it named having been acted on. A change has
         // already put the box into INSERT mode, so only the others go back to NORMAL.
@@ -3132,6 +3535,24 @@ impl Session {
             self.mode = crate::vim::Mode::Normal;
             self.step_back_off_the_end();
         }
+    }
+
+    /// Whether an operator over this extent takes whole lines: the doubled letter, the row keys under
+    /// an operator, a line-wise selection and the rows of any selection.
+    ///
+    /// Decided here once, because it settles two things that have to agree: what happens to the
+    /// newline and how the register puts the stretch back, and whether a stretch of no characters is
+    /// still one to act on. An empty row is a row, so `dd` there takes it, where `dl` at the end of a
+    /// line has nothing to take.
+    fn takes_whole_lines(&self, extent: crate::vim::Extent) -> bool {
+        extent == crate::vim::Extent::Line
+            || extent == crate::vim::Extent::SelectedRows
+            || matches!(extent, crate::vim::Extent::To(motion) if motion.line_wise())
+            || (extent == crate::vim::Extent::Selection
+                && matches!(
+                    self.vi_mode(),
+                    Some(crate::vim::Mode::Visual { lines: true })
+                ))
     }
 
     /// The extent an operator actually acts on, which is not always the one the keys spelled.
@@ -3142,24 +3563,37 @@ impl Session {
     /// never wants it run into the next one, and typing the space back every time is what `cw` would
     /// otherwise cost. On a blank there is no word to change, and it means `dw` again.
     ///
+    /// On the last character of a word, `ce` would reach the end of the next word, and vim's `cw`
+    /// changes that character alone, so the first of the count is the word the caret is already at
+    /// the end of. That is every one-character word, which a slash or a dot in a path is.
+    ///
     /// Measured against vim itself rather than reasoned about, since a special case is a fact about
     /// what people's hands expect and not something the rest of this can predict.
     fn as_vi_reads_it(
         &self,
         operator: crate::vim::Operator,
         extent: crate::vim::Extent,
-    ) -> crate::vim::Extent {
+        count: Option<u32>,
+    ) -> (crate::vim::Extent, Option<u32>) {
         use crate::vim::{Extent, Motion, Operator};
 
-        let on_a_blank = self.input[self.caret..]
-            .chars()
-            .next()
-            .is_some_and(char::is_whitespace);
-        match (operator, extent) {
-            (Operator::Change, Extent::To(Motion::WordRight)) if !on_a_blank => {
-                Extent::To(Motion::WordEnd)
-            }
-            _ => extent,
+        let (big, end) = match (operator, extent) {
+            (Operator::Change, Extent::To(Motion::WordRight)) => (false, Motion::WordEnd),
+            (Operator::Change, Extent::To(Motion::BigwordRight)) => (true, Motion::BigwordEnd),
+            _ => return (extent, count),
+        };
+        let Some(here) = self
+            .class_at(self.caret, big)
+            .filter(|class| *class != Class::Blank)
+        else {
+            return (extent, count);
+        };
+        let at_its_end =
+            here == Class::Marker || self.class_at(self.past(self.caret), big) != Some(here);
+        match (at_its_end, count.unwrap_or(1)) {
+            (false, _) => (Extent::To(end), count),
+            (true, 1) => (Extent::Character, None),
+            (true, words) => (Extent::To(end), Some(words - 1)),
         }
     }
 
@@ -3178,6 +3612,7 @@ impl Session {
         extent: crate::vim::Extent,
         count: Option<u32>,
     ) -> Option<(usize, usize)> {
+        let whole_lines = self.takes_whole_lines(extent);
         let (from, to) = self.stretch_unchecked(extent, count)?;
         // Widened to whole markers rather than refused, so an object that reached into one takes it with
         // what it was already taking. Refusing would leave `daw` over a marker doing nothing at all,
@@ -3190,14 +3625,14 @@ impl Session {
             .marker_spans()
             .find(|(start, end)| *start < to && to < *end)
             .map_or(to, |(_, end)| end);
-        Some((from, to)).filter(|(from, to)| from < to)
+        Some((from, to)).filter(|(from, to)| from < to || whole_lines)
     }
 
     /// The stretch an extent names, before the markers are taken into account.
     ///
     /// The count is how many of the extent to take: `3dd` is three lines, `3x` three characters and
-    /// `d3w` three words. The three that name no quantity of anything take no count, since there is
-    /// no second end of the line to reach, no second object the keys named and no second selection:
+    /// `d3w` three words. Those that name no quantity of anything take no count, since there is no
+    /// second end of the line to reach, no second object the keys named and no second selection:
     /// `3D`, `d3iw` and a counted operator in VISUAL mode act on what the uncounted one would.
     fn stretch_unchecked(
         &mut self,
@@ -3206,6 +3641,7 @@ impl Session {
     ) -> Option<(usize, usize)> {
         use crate::vim::Extent;
 
+        let whole_lines = self.takes_whole_lines(extent);
         let was = self.caret;
         let span = match extent {
             // The line's own characters, and not the newline that ends it. What happens to that
@@ -3242,6 +3678,24 @@ impl Session {
                 }
                 Some((self.caret, to))
             }
+            // Every row from the caret's to the one landed on, and not the newline after the last,
+            // which is the operator's business for the reason it is for `dd`. `dG` on the last row
+            // still takes that row, where `dj` there is a row that is not there to take.
+            Extent::To(motion) if motion.line_wise() => {
+                self.move_by_counted(motion, count, true);
+                let landed = self.caret;
+                if landed == was
+                    && matches!(motion, crate::vim::Motion::Down | crate::vim::Motion::Up)
+                {
+                    None
+                } else {
+                    self.caret = landed.min(was);
+                    let (start, _) = self.caret_line();
+                    self.caret = landed.max(was);
+                    let (_, end) = self.caret_line();
+                    Some((start, end))
+                }
+            }
             Extent::To(motion) => {
                 self.move_by_counted(motion, count, true);
                 let landed = self.caret;
@@ -3259,14 +3713,28 @@ impl Session {
                     }
                     // Backwards, where the character the caret started on is the one not asked for:
                     // `db` takes back to the start of the word and leaves what the caret was on.
-                    std::cmp::Ordering::Less => Some((landed, was)),
+                    // Except for the motions that take it, where `dge` takes that character too.
+                    // Not the newline of an empty row, which is no character the caret was on.
+                    std::cmp::Ordering::Less => {
+                        let end = if motion.takes_what_it_lands_on()
+                            && !self.input[was..].starts_with('\n')
+                        {
+                            self.past(was)
+                        } else {
+                            was
+                        };
+                        Some((landed, end))
+                    }
                 }
             }
             Extent::Object(object) => self.object_span(object),
             Extent::Selection => self.vi_selection(),
+            Extent::SelectedRows => self.marked_out(true),
         };
         self.caret = was;
-        span.filter(|(from, to)| from < to)
+        // A stretch of no characters names nothing, unless it is rows: an empty row is still one for
+        // `dd` to take and `cc` to type on.
+        span.filter(|(from, to)| from < to || whole_lines)
     }
 
     /// The stretch a text object names, on the line the caret is on.
@@ -3278,23 +3746,8 @@ impl Session {
         use crate::vim::Kind;
 
         match object.kind {
-            Kind::Word => self.run_span(object.around, |c| {
-                if c.is_whitespace() {
-                    Class::Blank
-                } else if c.is_alphanumeric() || c == '_' {
-                    Class::Word
-                } else {
-                    Class::Punctuation
-                }
-            }),
-            // Anything but a blank is one thing, which is what makes a path or a flag a single object.
-            Kind::Bigword => self.run_span(object.around, |c| {
-                if c.is_whitespace() {
-                    Class::Blank
-                } else {
-                    Class::Word
-                }
-            }),
+            Kind::Word => self.run_span(object.around, false),
+            Kind::Bigword => self.run_span(object.around, true),
             Kind::Pair(opens, closes) => self.pair_span(opens, closes, object.around),
         }
     }
@@ -3303,50 +3756,64 @@ impl Session {
     ///
     /// A run of blanks is itself a run, which is what makes `diw` on a space take the spaces: the caret
     /// is in something, and the object is whatever it is in.
-    fn run_span(&self, around: bool, class: impl Fn(char) -> Class) -> Option<(usize, usize)> {
+    ///
+    /// Read with the word motions' classes, markers included, so an object and a motion never
+    /// disagree about where a word is: a marker is a word by itself to `iw` as it is to `w`.
+    fn run_span(&self, around: bool, big: bool) -> Option<(usize, usize)> {
         let (line_start, line_end) = self.caret_line();
-        let line = &self.input[line_start..line_end];
-        let at = self.caret.min(line_end) - line_start;
-        let here = class(line[at..].chars().next()?);
-
-        let from = line[..at]
-            .char_indices()
-            .rev()
-            .take_while(|(_, c)| class(*c) == here)
-            .last()
-            .map_or(at, |(index, _)| index);
-        let mut to = at
-            + line[at..]
+        let at = self.caret.min(line_end);
+        if at == line_end {
+            return None;
+        }
+        let class = |at: usize| self.class_at(at, big);
+        let here = class(at)?;
+        let forward = |from: usize| {
+            self.input[from..line_end]
                 .char_indices()
-                .take_while(|(_, c)| class(*c) == here)
-                .map(|(index, c)| index + c.len_utf8())
-                .last()
-                .unwrap_or(0);
+                .map(move |(index, c)| (from + index, c))
+        };
+        let backward = |to: usize| {
+            self.input[line_start..to]
+                .char_indices()
+                .rev()
+                .map(|(index, c)| (line_start + index, c))
+        };
+
+        let (from, mut to) = match self.marker_at(at) {
+            Some(marker) if here == Class::Marker => marker,
+            _ => (
+                backward(at)
+                    .take_while(|(index, _)| class(*index) == Some(here))
+                    .last()
+                    .map_or(at, |(index, _)| index),
+                forward(at)
+                    .take_while(|(index, _)| class(*index) == Some(here))
+                    .last()
+                    .map_or(at, |(index, c)| index + c.len_utf8()),
+            ),
+        };
 
         // `aw` takes the blanks after the word as well, which is what makes it the whole word rather
         // than the word alone: deleting one and leaving two spaces behind is not what was asked for.
         if around {
-            let after = to
-                + line[to..]
-                    .char_indices()
-                    .take_while(|(_, c)| class(*c) == Class::Blank && here != Class::Blank)
-                    .map(|(index, c)| index + c.len_utf8())
-                    .last()
-                    .unwrap_or(0);
+            let after = forward(to)
+                .take_while(|(index, _)| {
+                    class(*index) == Some(Class::Blank) && here != Class::Blank
+                })
+                .last()
+                .map_or(to, |(index, c)| index + c.len_utf8());
             // Nothing after it, so the blanks before it are what `aw` takes instead: on the last word
             // of a line, taking nothing extra would make `daw` the same as `diw`.
             if after == to && here != Class::Blank {
-                let before = line[..from]
-                    .char_indices()
-                    .rev()
-                    .take_while(|(_, c)| class(*c) == Class::Blank)
+                let before = backward(from)
+                    .take_while(|(index, _)| class(*index) == Some(Class::Blank))
                     .last()
                     .map_or(from, |(index, _)| index);
-                return Some((line_start + before, line_start + to));
+                return Some((before, to));
             }
             to = after;
         }
-        Some((line_start + from, line_start + to))
+        Some((from, to))
     }
 
     /// The stretch a pair of delimiters names, with or without the delimiters themselves.
@@ -3483,6 +3950,11 @@ impl Session {
         // with the terminal still in raw mode.
         for start in starts.into_iter().rev() {
             if further {
+                // An empty row stays empty, as it does in vi: spaces there are nothing anybody can
+                // see, and they would go out with the prompt.
+                if self.input[start..].starts_with('\n') || start == self.input.len() {
+                    continue;
+                }
                 self.input.insert_str(start, &" ".repeat(STEP));
                 if start <= self.caret {
                     self.caret += STEP;
@@ -3512,12 +3984,11 @@ impl Session {
             return;
         };
         // A count is how many copies, and they go in together: one insertion is one change and one
-        // step to undo, where putting it back N times over would leave N-1 of them unreachable.
+        // step to undo, where putting it back N times over would take N presses of `u` to take back.
         let copies = count.unwrap_or(1) as usize;
-        self.before_last_change = Some((self.input.clone(), self.caret));
+        self.begin_a_change();
+        self.last_change = Some(Change::Put { before, count });
         self.abandon_the_selection();
-        self.history.leave();
-        self.completion = 0;
 
         if yanked.lines {
             // A yanked line goes back as a line rather than into the middle of the one the caret is
@@ -3548,6 +4019,56 @@ impl Session {
         self.step_back_off_the_end();
     }
 
+    /// Put the register where the selection is, which is what `p` and `P` ask for there.
+    ///
+    /// `p` leaves what the selection held in the register, so two stretches trade places in two
+    /// presses, and `P` leaves the register as it was, so one yank can go over several. Rows stay
+    /// rows: over rows they replace them, and over a stretch within a row they split it, so neither
+    /// half of the line runs into them. Measured against vim, caret included.
+    ///
+    /// Nothing where nothing has been yanked, and the selection stays. vim takes the stretch out and
+    /// then finds nothing to put, which is a delete nobody asked for.
+    fn put_over_the_selection(&mut self, keep: bool, count: Option<u32>) {
+        let Some(yanked) = self.register.clone() else {
+            return;
+        };
+        // A selection on the empty last row holds no character, and the register still goes there,
+        // as it does in vim. The register keeps what it held, nothing having been taken out.
+        let (from, to) = self
+            .stretch(crate::vim::Extent::Selection, None)
+            .unwrap_or((self.caret, self.caret));
+        let rows = self.takes_whole_lines(crate::vim::Extent::Selection);
+        self.begin_a_change();
+        if !keep && (from < to || rows) {
+            self.register = Some(Yanked {
+                text: self.input[from..to].to_string(),
+                lines: rows,
+            });
+        }
+
+        // How many copies, as beside the caret, and in one insertion for the same reason. Where
+        // either side is rows, every copy is a row of its own.
+        let copies = vec![yanked.text.as_str(); count.unwrap_or(1) as usize];
+        let text = match (rows, yanked.lines) {
+            (true, _) => copies.join("\n"),
+            (false, true) => format!("\n{}\n", copies.join("\n")),
+            (false, false) => copies.concat(),
+        };
+        self.input.replace_range(from..to, &text);
+        if rows || yanked.lines {
+            self.caret = if rows { from } else { from + 1 };
+            self.move_to_first_non_blank();
+        } else if yanked.text.contains('\n') {
+            // Characters that run over rows leave the caret where they begin, as vim does, since
+            // their last one is on another row from the place they were put.
+            self.caret = from;
+        } else {
+            self.caret = from + text.len();
+            self.move_left();
+        }
+        self.leave_visual_mode();
+    }
+
     /// The position just past the character the caret is on, which is where `p` inserts.
     fn after_the_caret(&self) -> usize {
         if let Some((_, end)) = self.marker_at_caret() {
@@ -3559,20 +4080,25 @@ impl Session {
         }
     }
 
-    /// Make this line and the one below into one, which is what `J` asks for.
+    /// Make this line and the one below into one, which is what `J` and `gJ` ask for.
     ///
-    /// The newline becomes a single space, which is what vi does: two sentences run together with no
-    /// gap is not what somebody joining lines wants, and the blanks the next line was indented with are
-    /// part of the shape it no longer has.
-    fn join_the_line_below(&mut self, count: Option<u32>) {
+    /// Spaced, the newline becomes a single space, which is what vi does: two sentences run together
+    /// with no gap is not what somebody joining lines wants, and the blanks the next line was indented
+    /// with are part of the shape it no longer has. Unspaced is `gJ`, for the line that was broken in
+    /// the middle of a word or a path, where any space would be one the text never had.
+    fn join_the_line_below(&mut self, count: Option<u32>, spaced: bool) {
         let (_, end) = self.caret_line();
         if end >= self.input.len() {
             return;
         }
-        self.before_last_change = Some((self.input.clone(), self.caret));
+        // Pressed over a selection it is not made again, as nothing else pressed over one is but an
+        // operator.
+        let selected = self.anchor.is_some();
+        self.begin_a_change();
+        if !selected {
+            self.last_change = Some(Change::Joined { spaced, count });
+        }
         self.abandon_the_selection();
-        self.history.leave();
-        self.completion = 0;
 
         // A count is how many rows end up as one, so it is one join fewer than the number typed and
         // `2J` is the bare key: joining two rows is what one press does. One snapshot for the lot,
@@ -3580,14 +4106,21 @@ impl Session {
         for _ in 1..count.unwrap_or(2).max(2) {
             let (_, end) = self.caret_line();
             if end >= self.input.len() {
-                return;
+                break;
             }
             let below = end + 1;
-            let text = self.input[below..].to_string();
-            let blanks = text.len() - text.trim_start_matches([' ', '\t']).len();
-            self.input.replace_range(end..below + blanks, " ");
+            if spaced {
+                let text = self.input[below..].to_string();
+                let blanks = text.len() - text.trim_start_matches([' ', '\t']).len();
+                self.input.replace_range(end..below + blanks, " ");
+            } else {
+                self.input.replace_range(end..below, "");
+            }
             self.caret = end;
         }
+        // Where the row joined on was empty, `gJ` leaves the caret where the newline was, which is
+        // the column after the line.
+        self.step_back_off_the_end();
     }
 
     /// Open VISUAL mode, or change which kind it is, or leave it.
@@ -3639,9 +4172,7 @@ impl Session {
             self.leave_visual_mode();
             return;
         }
-        self.before_last_change = Some((self.input.clone(), self.caret));
-        self.history.leave();
-        self.completion = 0;
+        self.begin_a_change();
 
         let replaced: String = self.input[from..to]
             .chars()
@@ -3652,29 +4183,41 @@ impl Session {
         self.leave_visual_mode();
     }
 
-    /// Change the case of the selection, which is what `~`, `u` and `U` ask for there.
+    /// Change the case of the selection, which is what `~`, `u` and `U` ask for there, and `g~`, `gu`
+    /// and `gU`.
     fn change_the_case_of_the_selection(&mut self, case: crate::vim::Case) {
-        use crate::vim::Case;
-
         let Some((from, to)) = self.vi_selection() else {
             return;
         };
-        self.before_last_change = Some((self.input.clone(), self.caret));
-        self.history.leave();
-        self.completion = 0;
+        self.begin_a_change();
 
-        let changed: String = self.input[from..to]
-            .chars()
-            .map(|c| match case {
-                Case::Lower => c.to_lowercase().next().unwrap_or(c),
-                Case::Upper => c.to_uppercase().next().unwrap_or(c),
-                Case::Swapped if c.is_lowercase() => c.to_uppercase().next().unwrap_or(c),
-                Case::Swapped => c.to_lowercase().next().unwrap_or(c),
-            })
-            .collect();
-        self.input.replace_range(from..to, &changed);
+        self.change_the_case(from, to, case);
         self.caret = from;
         self.leave_visual_mode();
+    }
+
+    /// Change the case of a stretch of the line, and return where the stretch now ends.
+    ///
+    /// Around the markers in it rather than through them: a marker is found by its text, so `[IMAGE
+    /// #1]` names no picture, and the picture would be left off the prompt while the line still
+    /// read as though it carried one. The end moves because a letter can become two, as `ß` does.
+    fn change_the_case(&mut self, from: usize, to: usize, case: crate::vim::Case) -> usize {
+        let mut markers: Vec<(usize, usize)> = self
+            .marker_spans()
+            .filter(|(start, end)| from < *end && *start < to)
+            .collect();
+        markers.sort_unstable();
+        let mut changed = String::new();
+        let mut at = from;
+        for (start, end) in markers {
+            let (start, end) = (start.max(from), end.min(to));
+            changed.push_str(&case.applied_to(&self.input[at..start]));
+            changed.push_str(&self.input[start..end]);
+            at = end;
+        }
+        changed.push_str(&case.applied_to(&self.input[at..to]));
+        self.input.replace_range(from..to, &changed);
+        from + changed.len()
     }
 
     /// Back to NORMAL mode with no selection, which is where every operator leaves VISUAL mode.
@@ -3703,25 +4246,233 @@ impl Session {
     /// Nothing else about the press changes: the caret is left where the edit put it, which is where
     /// the same key leaves it in NORMAL mode, rather than stepped off the end of the line the way
     /// `leave_visual_mode` steps it after an operator has acted on the stretch.
+    ///
+    /// What `R` has typed over goes as well, being offsets into the line for the same reason, and
+    /// with it the change `R` was making: what is typed over the line from here is a change of its
+    /// own, so `u` after it cannot put back a prompt that has since been sent.
     fn abandon_the_selection(&mut self) {
-        if self.anchor.take().is_some() {
+        self.typed_over.clear();
+        self.typing_over_begins_a_change = true;
+        if self.let_go_of_the_selection() {
             self.mode = crate::vim::Mode::Normal;
         }
     }
 
-    /// Put the line back as it stood before the last change.
+    /// Drop the selection, keeping where it was for `gv`, and say whether there was one.
     ///
-    /// Nothing where no change has been made. One step rather than a stack, on the same footing as the
-    /// stash: the press that undoes and the keystroke that will be regretted are one apart.
-    fn undo_last_change(&mut self) {
-        let Some((line, caret)) = self.before_last_change.take() else {
+    /// Before the mode changes, which is what says whether the selection was rows.
+    fn let_go_of_the_selection(&mut self) -> bool {
+        let Some(marked) = self.marked_now() else {
+            return false;
+        };
+        self.anchor = None;
+        self.last_selection = Some(marked);
+        true
+    }
+
+    /// The selection open now, as the rows and columns its ends are at, or `None` where none is.
+    fn marked_now(&self) -> Option<Marked> {
+        Some(Marked {
+            anchor: self.row_and_column(self.anchor?),
+            caret: self.row_and_column(self.caret),
+            lines: self.mode == crate::vim::Mode::Visual { lines: true },
+        })
+    }
+
+    /// Mark out the selection that ended last, which is what `gv` asks for.
+    ///
+    /// The selection open now, if there is one, becomes the one to come back to, so a second `gv`
+    /// goes back to it as it does in vi. Nothing where no selection has ended.
+    ///
+    /// Each end is found again by its row and its column in the line as it now stands, which may
+    /// be shorter than the line it was marked on: the last row past the end of the input, and the
+    /// last character past the end of a row, which are where a count past either end stops. An end
+    /// that now falls inside a marker is the marker.
+    fn mark_out_the_last_selection_again(&mut self) {
+        let Some(last) = self.last_selection else {
             return;
+        };
+        if let Some(open) = self.marked_now() {
+            self.last_selection = Some(open);
+        }
+        self.put_the_caret_at(last.anchor);
+        let anchor = self.caret;
+        self.put_the_caret_at(last.caret);
+        self.anchor = Some(anchor);
+        self.mode = crate::vim::Mode::Visual { lines: last.lines };
+    }
+
+    /// The row and the column a position in the line is at, counting from zero and a column in
+    /// characters.
+    ///
+    /// Clamped to the line for the reason [`Session::marked_out`] clamps the anchor: this is read on
+    /// every Escape, and an anchor left past the end would panic with the terminal in raw mode.
+    fn row_and_column(&self, at: usize) -> (usize, usize) {
+        let before = &self.input[..crate::wrap::boundary_at_or_before(&self.input, at)];
+        let start = before.rfind('\n').map_or(0, |newline| newline + 1);
+        (
+            before.matches('\n').count(),
+            before[start..].chars().count(),
+        )
+    }
+
+    /// Put the caret at a row and a column, or as near as the line now reaches, on a character the
+    /// way NORMAL mode's caret is.
+    fn put_the_caret_at(&mut self, (row, column): (usize, usize)) {
+        let start = self
+            .input
+            .match_indices('\n')
+            .take(row)
+            .last()
+            .map_or(0, |(newline, _)| newline + 1);
+        let end = self.input[start..]
+            .find('\n')
+            .map_or(self.input.len(), |newline| start + newline);
+        self.caret = start + along(&self.input[start..end], column);
+        self.settle_onto_a_marker();
+        self.step_back_off_the_end();
+    }
+
+    /// Keep the line for `u` and forget what `.` repeats, since this edit is now the last change.
+    fn begin_a_change(&mut self) {
+        self.keep_for_undo((self.input.clone(), self.caret));
+        self.begin_an_edit();
+    }
+
+    /// Forget what `.` repeats, the prompt recalled and the completion offered, since the line is
+    /// about to be edited and none of them describe it any more.
+    fn begin_an_edit(&mut self) {
+        self.last_change = None;
+        self.history.leave();
+        self.completion = 0;
+    }
+
+    /// Keep a line and a caret as the latest step to undo, letting the oldest go past the depth.
+    fn keep_for_undo(&mut self, step: (String, usize)) {
+        if self.undo.len() == UNDO_DEPTH {
+            self.undo.pop_front();
+        }
+        self.undo.push_back(step);
+    }
+
+    /// Put the line back as it stood before the last change, and say whether there was one.
+    fn undo_last_change(&mut self) -> bool {
+        let Some((line, caret)) = self.undo.pop_back() else {
+            return false;
         };
         self.input = line;
         self.caret = caret;
         self.history.leave();
         self.completion = 0;
         self.step_back_off_the_end();
+        true
+    }
+
+    /// Make the last change again at the caret, typing again what was typed into it.
+    ///
+    /// A count in front of `.` replaces the one the change was made with, which is vi's rule and the
+    /// useful one: `3.` is how a repeat is made bigger than what it repeats. The keys that open
+    /// INSERT mode take no count, so there it is spent.
+    fn make_the_last_change_again(&mut self, count: Option<u32>) {
+        let Some(change) = self.last_change.clone() else {
+            return;
+        };
+        match change {
+            Change::Operated {
+                operator,
+                extent,
+                count: recorded,
+                typed,
+            } => {
+                self.change(operator, extent, count.or(recorded));
+                self.type_again(&typed);
+            }
+            Change::Opened { opening, typed } => {
+                self.open_insert(opening);
+                self.type_again(&typed);
+            }
+            Change::Put {
+                before,
+                count: recorded,
+            } => self.put_the_register_back(before, count.or(recorded)),
+            Change::Joined {
+                spaced,
+                count: recorded,
+            } => self.join_the_line_below(count.or(recorded), spaced),
+        }
+    }
+
+    /// Type again what a change typed, where making it again has opened INSERT mode, and leave.
+    ///
+    /// Put in whole rather than a character at a time, since typed one at a time a `?` or a `!` on
+    /// an empty line would be the key list or shell mode rather than the character it was.
+    fn type_again(&mut self, typed: &str) {
+        if self.mode != crate::vim::Mode::Insert {
+            return;
+        }
+        // As a character typed does, so a recalled prompt made again is the person's own line and
+        // `j` does not walk away from it.
+        self.history.leave();
+        self.completion = 0;
+        self.input.insert_str(self.caret, typed);
+        self.caret += typed.len();
+        self.enter_vi_normal();
+    }
+
+    /// End the INSERT session a change or an opening began, keeping it for `u` and for `.`.
+    ///
+    /// What was typed is read off the line rather than recorded key by key: it is whatever stands
+    /// between the two halves of the line the session began from, with the caret at its end. A line
+    /// that does not read that way was edited somewhere other than where the typing went, by an arrow
+    /// and a Delete, and typing the same characters again would not make the same change, so `.` is
+    /// left with nothing to make. So is a session whose typing holds a marker or an `@`: made again,
+    /// either would attach the same thing a second time, which nobody asked for.
+    fn finish_inserting(&mut self) {
+        let Some(Inserting {
+            before,
+            opened_on: (line, at),
+            change,
+        }) = self.inserting.take()
+        else {
+            return;
+        };
+        // A session that changed nothing is no step, as an `R` that typed nothing is not: the step
+        // would be a press of `u` that put back nothing.
+        let changed = self.input != before.0;
+        if changed {
+            self.keep_for_undo(before);
+        }
+        let ends = line.len() - at;
+        let typed = self
+            .input
+            .len()
+            .checked_sub(line.len())
+            .filter(|_| self.caret + ends == self.input.len())
+            .filter(|_| self.input.get(..at) == line.get(..at))
+            .filter(|_| self.input.get(self.caret..) == line.get(at..))
+            .and_then(|_| self.input.get(at..self.caret))
+            .filter(|typed| !typed.contains('@') && !self.markers().any(|m| typed.contains(m)))
+            .map(str::to_string);
+        self.last_change = match (change, typed) {
+            (
+                Some(Change::Operated {
+                    operator,
+                    extent,
+                    count,
+                    ..
+                }),
+                Some(typed),
+            ) => Some(Change::Operated {
+                operator,
+                extent,
+                count,
+                typed,
+            }),
+            (Some(Change::Opened { opening, .. }), Some(typed)) => {
+                Some(Change::Opened { opening, typed })
+            }
+            _ => None,
+        };
     }
 
     /// The key a press in NORMAL mode stands for, where vi spells an existing binding with a letter.
@@ -3762,18 +4513,42 @@ impl Session {
     /// means somewhere else entirely rather than more of the same: `3G` and `3gg` are both the third
     /// row, which is what the count is for on a key that already goes as far as it can go.
     /// Told whether it is moving the caret or measuring a stretch, the way [`Session::move_by_for`]
-    /// is: the stretch `d2G` names is the one `2G` would reach, so the count has to be read the same
+    /// is: the stretch `d2G` names reaches the row `2G` would, so the count has to be read the same
     /// way on both sides or the operator takes the whole input where the motion took two rows.
+    ///
+    /// `w` measured for an operator is the other exception: the last word of the count ends where
+    /// its line does, as vim's does, so `dw` on the last word of a row takes that word and leaves
+    /// the newline, where the caret moving on would have crossed it to the next row.
     fn move_by_counted(&mut self, motion: crate::vim::Motion, count: Option<u32>, measuring: bool) {
         use crate::vim::Motion;
 
         match (motion, count) {
             (Motion::InputStart | Motion::InputEnd, Some(row)) => self.move_to_row(row),
+            // The row the count names, counting this one as the first, so `_` alone is this row.
+            (Motion::FirstNonBlankBelow, _) => {
+                self.move_rows(true, Some(count.unwrap_or(1).saturating_sub(1)));
+                self.move_to_first_non_blank();
+            }
+            (Motion::Column, _) => self.move_to_column(count.unwrap_or(1)),
+            // In vi a count makes `%` a different key, the row that many hundredths of the way
+            // through the file, and a prompt's handful of rows is what `G` already names. Spent and
+            // moving nothing, where a count taken as more of the same would bounce between the two
+            // brackets and land on the one it happened to be odd or even for.
+            (Motion::MatchingBracket, Some(_)) => {}
+            (Motion::WordRight | Motion::BigwordRight, _) if measuring => {
+                let big = motion == Motion::BigwordRight;
+                let before_the_last = count.unwrap_or(1).saturating_sub(1);
+                self.repeatedly(Some(before_the_last), |session| {
+                    session.move_word_start_right(big, false);
+                });
+                self.move_word_start_right(big, true);
+            }
             _ => self.repeatedly(count, |session| session.move_by_for(motion, measuring)),
         }
     }
 
-    /// Put the caret at the first column of a row, counting the first row as one.
+    /// Put the caret on the first character of a row that is not a blank, counting the first row as
+    /// one.
     ///
     /// Past the last row is the last row, the way every counted thing here stops where the input
     /// does rather than doing nothing at all.
@@ -3784,7 +4559,88 @@ impl Session {
                 break;
             }
         }
+        self.move_to_first_non_blank();
+    }
+
+    /// Put the caret on a column of its row, counting the first as one, which is what `|` asks for.
+    ///
+    /// A column is a character, as it is to `gr`, and a column inside a marker is the marker, since
+    /// there is no position inside one for the caret to rest at. Past the end of the row is its last
+    /// character, as it is in vi.
+    fn move_to_column(&mut self, column: u32) {
         self.move_to_line_start();
+        let (_, end) = self.caret_line();
+        let mut reached = 0;
+        while self.caret < end {
+            reached += self.input[self.caret..self.past(self.caret)]
+                .chars()
+                .count();
+            if reached >= column as usize {
+                break;
+            }
+            self.move_right();
+        }
+        self.step_back_off_the_end();
+    }
+
+    /// Move to the bracket that pairs with the first one at or after the caret on its row, which is
+    /// what `%` asks for, and nowhere where the row holds no such pair.
+    ///
+    /// Only brackets of the kind found are counted, so a `]` between two parentheses is text. The
+    /// row rather than the input, for the reason a jump to a character stays on its own row.
+    ///
+    /// Read over the caret's own positions, where a marker is one position and no bracket at all. A
+    /// marker is spelled with brackets, and searched as characters one would pair with itself and
+    /// land the caret inside a picture.
+    fn move_to_the_matching_bracket(&mut self) {
+        let (start, end) = self.caret_line();
+        let mut steps = Vec::new();
+        let mut at = start;
+        while at < end {
+            let bracket = match self.marker_at(at) {
+                Some(_) => None,
+                None => self.input[at..]
+                    .chars()
+                    .next()
+                    .filter(|c| "()[]{}".contains(*c)),
+            };
+            steps.push((at, bracket));
+            at = self.past(at);
+        }
+        let Some((first, bracket)) =
+            steps
+                .iter()
+                .enumerate()
+                .find_map(|(index, &(at, bracket))| {
+                    Some((index, bracket.filter(|_| at >= self.caret)?))
+                })
+        else {
+            return;
+        };
+        let (partner, forwards) = match bracket {
+            '(' => (')', true),
+            ')' => ('(', false),
+            '[' => (']', true),
+            ']' => ('[', false),
+            '{' => ('}', true),
+            _ => ('{', false),
+        };
+        let mut ahead = steps[first..].iter();
+        let mut behind = steps[..=first].iter().rev();
+        let walk: &mut dyn Iterator<Item = &(usize, Option<char>)> =
+            if forwards { &mut ahead } else { &mut behind };
+        let mut depth = 0usize;
+        for &(at, c) in walk {
+            if c == Some(bracket) {
+                depth += 1;
+            } else if c == Some(partner) {
+                depth -= 1;
+                if depth == 0 {
+                    self.caret = at;
+                    return;
+                }
+            }
+        }
     }
 
     /// Move the caret where a motion says, told whether it is moving the caret or measuring a
@@ -3820,9 +4676,14 @@ impl Session {
                     self.step_back_off_the_end();
                 }
             }
-            Motion::WordRight => self.move_word_start_right(),
-            Motion::WordEnd => self.move_word_end_right(),
-            Motion::WordLeft => self.move_word_left(),
+            Motion::WordRight => self.move_word_start_right(false, false),
+            Motion::WordEnd => self.move_word_end_right(false),
+            Motion::WordLeft => self.move_word_start_left(false),
+            Motion::WordEndLeft => self.move_word_end_left(false),
+            Motion::BigwordRight => self.move_word_start_right(true, false),
+            Motion::BigwordEnd => self.move_word_end_right(true),
+            Motion::BigwordLeft => self.move_word_start_left(true),
+            Motion::BigwordEndLeft => self.move_word_end_left(true),
             Motion::LineStart => self.move_to_line_start(),
             // The last character rather than the position after it, since that is not one the caret
             // can hold in NORMAL mode.
@@ -3830,11 +4691,24 @@ impl Session {
                 self.move_to_line_end();
                 self.step_back_off_the_end();
             }
-            Motion::FirstNonBlank => self.move_to_first_non_blank(),
-            Motion::InputStart => self.caret = 0,
+            Motion::FirstNonBlank | Motion::FirstNonBlankBelow => self.move_to_first_non_blank(),
+            Motion::Column => self.move_to_column(1),
+            Motion::MatchingBracket => self.move_to_the_matching_bracket(),
+            // On the first character that is not a blank, as vi does: the row's indent is not
+            // where anything a person would reach for begins.
+            Motion::InputStart => {
+                self.caret = 0;
+                self.move_to_first_non_blank();
+            }
             Motion::InputEnd => {
                 self.caret = self.input.len();
-                self.move_to_line_start();
+                self.move_to_first_non_blank();
+            }
+            Motion::Down => {
+                self.move_down_a_line();
+            }
+            Motion::Up => {
+                self.move_up_a_line();
             }
             Motion::ToChar(find) => {
                 self.last_find = Some(find);
@@ -3892,76 +4766,166 @@ impl Session {
         self.step_back_off_the_end();
     }
 
-    /// Move to the start of the next word, which is what `w` asks for.
+    /// The kind of thing at `at` to the word motions, or nothing at the end of the input.
+    ///
+    /// `big` asks for the capital motions' answer, where a marker is part of the run of non-blanks
+    /// beside it as any other character would be. The small motions see a marker as a word by itself.
+    fn class_at(&self, at: usize, big: bool) -> Option<Class> {
+        if self.marker_at(at).is_some() {
+            return Some(if big { Class::Word } else { Class::Marker });
+        }
+        let c = self.input.get(at..)?.chars().next()?;
+        Some(if big { bigword_class(c) } else { word_class(c) })
+    }
+
+    /// Whether the character at the caret carries on a run of `run`.
+    ///
+    /// A marker carries on nothing, not even a marker beside it: each is one picture or paste.
+    fn run_continues(&self, run: Class, big: bool) -> bool {
+        run != Class::Marker && self.class_at(self.caret, big) == Some(run)
+    }
+
+    /// Move to the start of the next word, which is what `w` and `W` ask for.
     ///
     /// Different from the word motion the arrows use under Ctrl: that one lands after the word it
     /// crossed, and this one lands on the first character of the next. Both are wanted, and vi's is
     /// the one an instruction typed as `w` has to mean.
-    fn move_word_start_right(&mut self) {
+    ///
+    /// Every step is a caret step, so a marker is crossed whole and never landed inside. An empty
+    /// row is a word to `w`, `b` and `ge`, as it is in vim, so none of them crosses a paragraph
+    /// break unnoticed and `db` at the start of a paragraph leaves the one above alone.
+    ///
+    /// `ends_the_operand` is the last `w` of an operator's count, which stops at the end of the
+    /// line it started on rather than crossing it: the stretch ends there, and the newline stays.
+    /// From an empty row it crosses the one newline, which is the row `dw` there takes.
+    fn move_word_start_right(&mut self, big: bool, ends_the_operand: bool) {
+        let (_, line_end) = self.caret_line();
         let was = self.caret;
-        // Out of the word the caret is in, then over the blanks after it. A caret already on a blank
-        // skips the first loop and lands on the next word, which is the same answer.
-        while !self.at_input_end()
-            && self.input[self.caret..]
-                .chars()
-                .next()
-                .is_some_and(|c| !c.is_whitespace())
-        {
+        // Out of the run the caret is in, then over the blanks after it. A caret already on a blank
+        // skips the first part and lands on the next word, which is the same answer.
+        let Some(here) = self.class_at(self.caret, big) else {
+            return;
+        };
+        self.move_right();
+        if here != Class::Blank {
+            while self.run_continues(here, big) {
+                self.move_right();
+            }
+        }
+        while self.class_at(self.caret, big) == Some(Class::Blank) && !self.on_an_empty_row() {
             self.move_right();
         }
-        while !self.at_input_end()
-            && self.input[self.caret..]
-                .chars()
-                .next()
-                .is_some_and(char::is_whitespace)
-        {
-            self.move_right();
-        }
-        // At the end of the input there is no next word, so the caret stays where it was rather than
-        // coming to rest past the last character.
-        if self.at_input_end() {
-            self.caret = was;
-            self.move_to_line_end();
+        if ends_the_operand {
+            self.caret = self.caret.min(if was < line_end {
+                line_end
+            } else {
+                self.past(line_end)
+            });
+        } else if self.at_input_end() {
+            // At the end of the input there is no next word, so the caret stays on the last
+            // character rather than coming to rest past it.
             self.step_back_off_the_end();
         }
     }
 
+    /// Whether the caret is on a row with nothing on it.
+    fn on_an_empty_row(&self) -> bool {
+        let (start, end) = self.caret_line();
+        start == end
+    }
+
     /// Move to the end of this word, or of the next one where the caret is already at an end.
     ///
-    /// Which is what `e` asks for, and why it is not `w` stepped back: on the last character of a
-    /// word it has to reach the end of the following one.
-    fn move_word_end_right(&mut self) {
+    /// Which is what `e` and `E` ask for, and why it is not `w` stepped back: on the last character
+    /// of a word it has to reach the end of the following one.
+    fn move_word_end_right(&mut self, big: bool) {
         let was = self.caret;
+        let Some(started) = self.class_at(self.caret, big) else {
+            return;
+        };
         self.move_right();
-        while !self.at_input_end()
-            && self.input[self.caret..]
-                .chars()
-                .next()
-                .is_some_and(char::is_whitespace)
-        {
-            self.move_right();
+        if started == Class::Blank || !self.run_continues(started, big) {
+            // At an end already, so the end wanted is that of the next word.
+            while self.class_at(self.caret, big) == Some(Class::Blank) {
+                self.move_right();
+            }
+            if let Some(word) = self.class_at(self.caret, big) {
+                self.move_right();
+                while self.run_continues(word, big) {
+                    self.move_right();
+                }
+            }
+        } else {
+            while self.run_continues(started, big) {
+                self.move_right();
+            }
         }
-        while !self.at_input_end()
-            && self.input[self.caret..]
-                .chars()
-                .nth(1)
-                .is_some_and(|c| !c.is_whitespace())
-        {
-            self.move_right();
-        }
-        if self.at_input_end() {
-            // There is no further word end, so the caret comes back to the last position it can
-            // hold. Reached by stepping back from the end of the input rather than by subtracting
-            // the final character's width: where the line ends in a marker that byte offset is a
-            // position inside it, and `move_left` is the step that knows a marker is one character.
-            self.caret = self.input.len();
-            self.move_left();
+        // One step past the end found, so back one. Stepped rather than subtracted: where the word
+        // ends in a marker that byte offset is a position inside it, and `move_left` is the step that
+        // knows a marker is one character.
+        let reached_the_end = self.at_input_end();
+        self.move_left();
+        if reached_the_end {
             // The final character of the input is a newline where the input ends with one, and that
             // is the column after the line above it rather than a character to land on.
             self.step_back_off_the_end();
             // Never behind where the motion started: a key that reaches forwards and finds nothing
             // leaves the caret alone rather than walking it back a word.
             self.caret = self.caret.max(was);
+        }
+    }
+
+    /// Move to the start of this word, or of the one before where the caret is already at a start,
+    /// which is what `b` and `B` ask for.
+    fn move_word_start_left(&mut self, big: bool) {
+        if self.caret == 0 {
+            return;
+        }
+        self.move_left();
+        while self.class_at(self.caret, big) == Some(Class::Blank) {
+            if self.caret == 0 || self.on_an_empty_row() {
+                return;
+            }
+            self.move_left();
+        }
+        let Some(word) = self.class_at(self.caret, big) else {
+            return;
+        };
+        // Back to the first character of the run, which is where the step behind it leaves it.
+        while self.caret > 0 {
+            let here = self.caret;
+            self.move_left();
+            if !self.run_continues(word, big) {
+                self.caret = here;
+                return;
+            }
+        }
+    }
+
+    /// Move to the end of the word before, which is what `ge` and `gE` ask for.
+    ///
+    /// Out of the word the caret is in, then back over the blanks before it, stopping on an empty
+    /// row. In the first word there is no word before, and the caret goes to the start of the input
+    /// as vim's does.
+    fn move_word_end_left(&mut self, big: bool) {
+        let started = self.class_at(self.caret, big).unwrap_or(Class::Blank);
+        if self.caret == 0 {
+            return;
+        }
+        self.move_left();
+        if started != Class::Blank {
+            while self.run_continues(started, big) {
+                if self.caret == 0 {
+                    return;
+                }
+                self.move_left();
+            }
+        }
+        while self.class_at(self.caret, big) == Some(Class::Blank) {
+            if self.caret == 0 || self.on_an_empty_row() {
+                return;
+            }
+            self.move_left();
         }
     }
 
@@ -4024,9 +4988,13 @@ impl Session {
     }
 
     /// Take the letters as letters again, with the caret where the key asked for it.
+    ///
+    /// The session this begins is one change, `o`'s new row with what is typed on it, so one `u`
+    /// takes back the lot and `.` makes it again ([`Session::finish_inserting`]).
     fn open_insert(&mut self, opening: crate::vim::Opening) {
         use crate::vim::Opening;
 
+        let before = (self.input.clone(), self.caret);
         self.mode = crate::vim::Mode::Insert;
         match opening {
             Opening::Here => {}
@@ -4047,6 +5015,14 @@ impl Session {
                 self.move_left();
             }
         }
+        self.inserting = Some(Inserting {
+            before,
+            opened_on: (self.input.clone(), self.caret),
+            change: Some(Change::Opened {
+                opening,
+                typed: String::new(),
+            }),
+        });
     }
 
     /// The line being typed.
@@ -4075,8 +5051,22 @@ impl Session {
     /// a line that arrived whole is a new list and an index into the one before it stands for a row
     /// nobody walked to. Recalling `look at @test` under a cursor an arrow had moved sent nothing
     /// and left `look at @tests/` in the box, because a finished name loses to a chosen row.
+    ///
+    /// The steps to undo go too, being copies of a line that is no longer the one in the box. Kept,
+    /// `u` after a send would put back the prompt that had just gone.
     fn set_input(&mut self, line: impl Into<String>) {
+        self.put_in_the_box(line);
+        self.undo.clear();
+        self.inserting = None;
+    }
+
+    /// Replace the line as [`Session::set_input`] does, keeping what `u` can take back.
+    ///
+    /// For a completion, which finishes the line being typed rather than bringing another.
+    fn put_in_the_box(&mut self, line: impl Into<String>) {
         self.abandon_the_selection();
+        // A line that arrives whole has none of the rows the last selection was kept by.
+        self.last_selection = None;
         self.input = line.into();
         self.caret = self.input.len();
         self.shortcuts = false;
@@ -4298,6 +5288,13 @@ impl Session {
         if self.caret == 0 {
             return;
         }
+        if self.typing_over() {
+            let was = self.caret;
+            self.move_word_left();
+            let start = std::mem::replace(&mut self.caret, was);
+            self.take_back_as_far_as(start);
+            return;
+        }
         self.abandon_the_selection();
         self.history.leave();
         let was = self.caret;
@@ -4313,6 +5310,10 @@ impl Session {
     pub fn delete_to_line_start(&mut self) {
         let (start, _) = self.caret_line();
         if start == self.caret {
+            return;
+        }
+        if self.typing_over() {
+            self.take_back_as_far_as(start);
             return;
         }
         self.abandon_the_selection();
@@ -4337,10 +5338,28 @@ impl Session {
         self.completion = 0;
     }
 
-    /// What the half-typed line could still become: a command, or a file reference.
+    /// Hold the skills a slash word could become while one is being typed, and let them go once
+    /// nothing is.
+    pub fn settle_skills(&mut self, resolve: impl FnOnce() -> Vec<crate::skills::Skill>) {
+        let typing = !self.shell
+            && self.status != Status::Working
+            && crate::skills::typed(&self.input).is_some();
+        match (typing, self.skills.is_some()) {
+            (true, false) => self.skills = Some(resolve()),
+            (false, true) => self.skills = None,
+            _ => {}
+        }
+    }
+
+    /// The skills held while a slash word is being typed, and none otherwise.
+    pub fn held_skills(&self) -> &[crate::skills::Skill] {
+        self.skills.as_deref().unwrap_or_default()
+    }
+
+    /// What the half-typed line could still become: a command or a skill, or a file reference.
     ///
-    /// One of the two at most. A command is the whole line and a reference is its last word, so
-    /// nothing can be both.
+    /// One of the two at most. Both are the last word, and a word opens with a slash or with an
+    /// `@`, so nothing can be both.
     pub fn offered(&self) -> Offered {
         // First, before either guard below. The list of keys is documentation somebody asked for by
         // pressing a key, not machinery for finishing the line, so neither a turn in flight nor a
@@ -4366,8 +5385,12 @@ impl Session {
             return Offered::Nothing;
         }
         let commands = crate::app::completions(&self.input);
-        if !commands.is_empty() {
-            return Offered::Commands(commands);
+        let skills = match (crate::skills::typed(&self.input), &self.skills) {
+            (Some(typed), Some(held)) => crate::skills::matching(held, typed),
+            _ => Vec::new(),
+        };
+        if !commands.is_empty() || !skills.is_empty() {
+            return Offered::Slash { commands, skills };
         }
         match crate::entries::typed_reference(&self.input) {
             Some(typed) => {
@@ -4385,7 +5408,7 @@ impl Session {
     /// The commands the half-typed line could still become.
     pub fn completions(&self) -> Vec<crate::app::Command> {
         match self.offered() {
-            Offered::Commands(commands) => commands,
+            Offered::Slash { commands, .. } => commands,
             _ => Vec::new(),
         }
     }
@@ -4396,11 +5419,21 @@ impl Session {
     /// input: typing a letter can shorten it, and a cursor past the end would otherwise choose
     /// nothing at the moment Tab was pressed.
     pub fn highlighted_completion(&self) -> Option<crate::app::Command> {
-        let offered = self.completions();
-        if offered.is_empty() {
+        let Offered::Slash { commands, skills } = self.offered() else {
             return None;
-        }
-        Some(offered[self.completion.min(offered.len() - 1)])
+        };
+        let at = self.completion.min(commands.len() + skills.len() - 1);
+        commands.get(at).copied()
+    }
+
+    /// Which offered skill is under the cursor, or `None` when the cursor is on a command or no
+    /// skill is offered.
+    pub fn highlighted_skill(&self) -> Option<crate::skills::Skill> {
+        let Offered::Slash { commands, skills } = self.offered() else {
+            return None;
+        };
+        let at = self.completion.min(commands.len() + skills.len() - 1);
+        skills.get(at.checked_sub(commands.len())?).cloned()
     }
 
     /// Which offered file is under the cursor, or `None` when no file is offered.
@@ -4418,7 +5451,7 @@ impl Session {
     /// The shortcuts are not: there is nothing to choose among them, so Tab and the arrows keep
     /// meaning what they mean everywhere else while the list is up.
     pub fn is_completing(&self) -> bool {
-        matches!(self.offered(), Offered::Commands(_) | Offered::Files(_))
+        matches!(self.offered(), Offered::Slash { .. } | Offered::Files(_))
     }
 
     /// Whether taking what is offered would change the line.
@@ -4430,9 +5463,23 @@ impl Session {
     pub fn completion_would_change_the_line(&self) -> bool {
         match self.offered() {
             Offered::Nothing | Offered::Shortcuts => false,
-            Offered::Commands(_) => self
-                .highlighted_completion()
-                .is_some_and(|command| command.name != self.input.trim()),
+            Offered::Slash { skills, .. } => {
+                let typed = crate::skills::typed(&self.input);
+                // A skill's name typed in full is a finished sentence, as a file's is, whatever
+                // the untouched cursor is on: `/review` names a skill of its own while `/review-pr`
+                // or a command sharing the letters is listed above it.
+                if self.completion == 0
+                    && typed.is_some_and(|typed| skills.iter().any(|skill| skill.name == typed))
+                {
+                    return false;
+                }
+                if let Some(command) = self.highlighted_completion() {
+                    return command.name != self.input.trim();
+                }
+                self.highlighted_skill()
+                    .zip(typed)
+                    .is_some_and(|(skill, typed)| skill.name != typed)
+            }
             Offered::Files(_) => {
                 let Some(typed) = crate::entries::typed_reference(&self.input) else {
                     return false;
@@ -4458,7 +5505,7 @@ impl Session {
     /// How many things are offered, which is what bounds the cursor that walks them.
     pub fn offered_count(&self) -> usize {
         match self.offered() {
-            Offered::Commands(commands) => commands.len(),
+            Offered::Slash { commands, skills } => commands.len() + skills.len(),
             Offered::Files(entries) => entries.len(),
             Offered::Nothing | Offered::Shortcuts => 0,
         }
@@ -4477,24 +5524,32 @@ impl Session {
 
     /// Take what is under the cursor.
     ///
-    /// A command replaces the whole line, since a command *is* the line. A file replaces only the
-    /// half-typed reference, because the rest is the sentence it was written into.
+    /// A command replaces the whole line, since a command *is* the line. A skill or a file
+    /// replaces only the half-typed word, because the rest is the sentence it was written into.
     ///
-    /// Neither adds a trailing space when there is more to type: a command expecting an argument
-    /// gets one, and so does a file, while a directory does not, so the path can be typed onwards
-    /// into it.
+    /// None adds a trailing space where there is more to type: a command expecting an argument
+    /// gets one, and so do a skill and a file, while a directory does not, so the path can be
+    /// typed onwards into it.
     pub fn accept_completion(&mut self) {
         match self.offered() {
-            Offered::Commands(_) => {
-                let Some(command) = self.highlighted_completion() else {
-                    return;
-                };
-                let line = if command.argument.is_empty() {
-                    command.name.to_string()
+            Offered::Slash { .. } => {
+                if let Some(command) = self.highlighted_completion() {
+                    let line = if command.argument.is_empty() {
+                        command.name.to_string()
+                    } else {
+                        format!("{} ", command.name)
+                    };
+                    self.put_in_the_box(line);
+                } else if let Some(skill) = self.highlighted_skill() {
+                    let start = self.last_word_starts_at();
+                    if !self.input[start..].starts_with('/') {
+                        return;
+                    }
+                    let kept = self.input[..start].to_string();
+                    self.put_in_the_box(format!("{kept}/{} ", skill.name));
                 } else {
-                    format!("{} ", command.name)
-                };
-                self.set_input(line);
+                    return;
+                }
             }
             Offered::Files(_) => {
                 let Some(entry) = self.highlighted_entry() else {
@@ -4504,22 +5559,31 @@ impl Session {
                 // not the last `@` in the line. A file may have one in its name, and cutting
                 // there rebuilds the line around a path nobody chose: `@logo@2` plus the
                 // offered `logo@2x.png` becomes `@logo@logo@2x.png`.
-                let start = self
-                    .input
-                    .char_indices()
-                    .rev()
-                    .find(|(_, c)| c.is_whitespace())
-                    .map_or(0, |(at, c)| at + c.len_utf8());
+                let start = self.last_word_starts_at();
                 if !self.input[start..].starts_with('@') {
                     return;
                 }
                 let kept = self.input[..start].to_string();
                 let trailing = if entry.is_directory { "" } else { " " };
-                self.set_input(format!("{kept}@{}{trailing}", entry.path));
+                self.put_in_the_box(format!("{kept}@{}{trailing}", entry.path));
             }
             Offered::Nothing | Offered::Shortcuts => return,
         }
+        // A choice from a list drawn over the line rather than typing, so `.` does not make it again:
+        // a file chosen this way would be named a second time.
+        if let Some(inserting) = &mut self.inserting {
+            inserting.change = None;
+        }
         self.completion = 0;
+    }
+
+    /// Where the line's last word begins, which is where a completion of it is written.
+    fn last_word_starts_at(&self) -> usize {
+        self.input
+            .char_indices()
+            .rev()
+            .find(|(_, c)| c.is_whitespace())
+            .map_or(0, |(at, c)| at + c.len_utf8())
     }
 
     /// The worker appended the submitted prompt at this recounted position.
@@ -5038,6 +6102,10 @@ impl Session {
             self.shell = false;
             return;
         }
+        if self.typing_over() {
+            self.take_back_what_was_typed_over();
+            return;
+        }
         self.abandon_the_selection();
         self.history.leave();
         if let Some((start, end)) = marker {
@@ -5119,7 +6187,9 @@ impl Session {
         self.set_input(returning);
         // The pictures come back with the words. A line that returned without them would return
         // carrying markers that name nothing, and the user has no way to tell.
-        self.pasted = std::mem::take(&mut self.sent_pasted);
+        // A stashed draft can still name attachments staged while this turn ran.
+        self.attached.append(&mut self.sent);
+        self.pasted.append(&mut self.sent_pasted);
         // Discarded rather than kept: the prompt is going back into the box as though it had never
         // been sent, so a plan for a turn that is being un-sent has nothing to describe.
         self.todos.clear();
@@ -5180,8 +6250,11 @@ impl Session {
             // Overwriting rather than stacking. One slot is what the key promises, and a press that
             // silently pushed a second line would leave the first reachable only by pressing again.
             self.abandon_the_selection();
+            self.last_selection = None;
             self.stashed = Some(std::mem::take(&mut self.input));
             self.caret = 0;
+            self.undo.clear();
+            self.inserting = None;
             true
         }
     }
@@ -5754,6 +6827,27 @@ impl Session {
         }
         self.looping = Some(running);
         self.dispatch_tick()
+    }
+
+    /// Start a turn on a person's task, addressed to the definition they named.
+    ///
+    /// The task is the prompt and goes into the transcript and the conversation like any other,
+    /// because the exchange is the session's own rather than a delegate's to report on
+    /// (ADDRESS-9). Only the name is held apart, for the one turn that takes it.
+    pub fn address(
+        &mut self,
+        addressed: Addressed,
+        task: &str,
+        pasted: Vec<AttachedImage>,
+        attached: Vec<Attached>,
+    ) -> String {
+        self.addressing = Some(addressed);
+        self.begin_turn(task.to_string(), (attached, pasted), Vec::new())
+    }
+
+    /// The definition the turn starting now was addressed to, taken so no later turn inherits it.
+    pub fn take_addressing(&mut self) -> Option<Addressed> {
+        self.addressing.take()
     }
 
     /// Start looking again because the turn that just ended asked to, repeating the person's line.
@@ -6339,12 +7433,27 @@ impl Session {
         trail: Vec<bravebot_session::audit::TrailLine>,
         tokens: u64,
     ) {
+        self.complete_as(reply, trail, tokens, None);
+    }
+
+    /// Record a completed turn, what it cost, and which definition answered where a person
+    /// addressed one.
+    pub fn complete_as(
+        &mut self,
+        reply: impl Into<String>,
+        trail: Vec<bravebot_session::audit::TrailLine>,
+        tokens: u64,
+        answered_as: Option<String>,
+    ) {
         // The list moves onto the entry rather than being dropped, so what the turn set out to do
         // stays in the scrollback next to the answer it produced.
         let todos = std::mem::take(&mut self.todos);
         let reply = reply.into();
-        self.transcript
-            .push(Entry::assistant(crate::reasoning::spoken(&reply), trail).with_todos(todos));
+        self.transcript.push(
+            Entry::assistant(crate::reasoning::spoken(&reply), trail)
+                .with_todos(todos)
+                .answered_as(answered_as),
+        );
         self.status = Status::Idle;
         self.finish_turn(tokens, bravebot_agent::Ending::Done);
         // Accumulated across the session: the figure answers "what has this cost me", which is
@@ -14217,6 +15326,235 @@ mod tests {
         assert_eq!(after("x\n", 0, "e"), 0);
     }
 
+    /// `w`, `e` and `b` end a word where punctuation begins or ends, as `iw` does, so in
+    /// `src/main.rs` each name is a word and so are the slash and the dot. Split on blanks alone,
+    /// `w` there would cross the whole path to the `x`, and `dw` would take the path.
+    #[test]
+    fn the_word_motions_stop_where_punctuation_begins_and_ends() {
+        let path = "src/main.rs x";
+        assert_eq!(after(path, 0, "w"), 3);
+        assert_eq!(after(path, 0, "ww"), 4);
+        assert_eq!(after(path, 0, "3w"), 8);
+        assert_eq!(after(path, 0, "e"), 2);
+        assert_eq!(after(path, 3, "e"), 7);
+        assert_eq!(after(path, 12, "b"), 9);
+        assert_eq!(after(path, 9, "b"), 8);
+        // A run of punctuation is one word, as a run of letters is.
+        assert_eq!(after("a --flag", 2, "w"), 4);
+        assert_eq!(edited(path, 0, "dw"), "/main.rs x");
+        assert_eq!(edited(path, 0, "de"), "/main.rs x");
+        assert_eq!(edited(path, 12, "db"), "src/main.x");
+        assert_eq!(edited(path, 0, "cwX"), "X/main.rs x");
+    }
+
+    /// `W`, `E` and `B` count in runs of anything that is not a blank, so a path is one word to
+    /// them. That is the reason to have both kinds: `w` for the names inside a path and `W` for
+    /// crossing it in one press.
+    #[test]
+    fn the_capital_word_motions_cross_a_path_whole() {
+        let path = "src/main.rs x";
+        assert_eq!(after(path, 0, "W"), 12);
+        assert_eq!(after(path, 0, "E"), 10);
+        assert_eq!(after(path, 12, "B"), 0);
+        assert_eq!(after(path, 5, "B"), 0);
+        assert_eq!(edited(path, 0, "dW"), "x");
+        assert_eq!(edited(path, 0, "dE"), " x");
+        assert_eq!(edited(path, 12, "dB"), "x");
+        assert_eq!(edited("a.b c.d e.f", 0, "d2W"), "e.f");
+        // `cW` on a character that is not a blank is `cE`, as `cw` is `ce`.
+        assert_eq!(edited(path, 0, "cWX"), "X x");
+    }
+
+    /// `ge` and `gE` go back to the end of the word before, which is `e` the other way round. In the
+    /// first word there is no end before it, and the caret goes to the start of the input, as vim's
+    /// does. Under an operator both ends are taken, the character landed on and the one the caret
+    /// was on, so `dge` on the first letter of a word joins what is left of it to the word before.
+    #[test]
+    fn ge_goes_back_to_the_end_of_the_word_before() {
+        assert_eq!(after("one two three", 8, "ge"), 6);
+        assert_eq!(after("one two three", 6, "ge"), 2);
+        assert_eq!(after("one two three", 12, "2ge"), 2);
+        assert_eq!(after("one\ntwo", 4, "ge"), 2);
+        assert_eq!(after("one.two three", 4, "ge"), 3);
+        assert_eq!(after("one.two three", 8, "gE"), 6);
+        assert_eq!(after("one.two three", 4, "gE"), 0);
+        assert_eq!(edited("one two", 4, "dge"), "onwo");
+        assert_eq!(edited("one two three", 8, "d2ge"), "onhree");
+        assert_eq!(edited("src/main.rs x", 12, "dgE"), "src/main.r");
+        // From an empty row the caret is on no character, so there is none of its own to take.
+        assert_eq!(edited("one\n\ntwo", 4, "dge"), "on\ntwo");
+    }
+
+    /// A marker is a word of its own to `w`, `e`, `b` and `ge`, whatever is beside it, and to the
+    /// capitals it is part of the word it touches, as any character that is not a blank is.
+    ///
+    /// Each step is read a caret step at a time rather than a byte at a time: the byte after a
+    /// marker's first one is inside the marker, and read as a character it would carry `e` over the
+    /// blank after the marker to the end of the next word.
+    #[test]
+    fn a_marker_is_a_word_of_its_own_to_the_word_motions() {
+        let landed = |at: fn(usize, usize) -> usize, keys: &str| {
+            let mut s = vi();
+            for c in "see.".chars() {
+                s.type_char(c);
+            }
+            s.attach(picture(b"pixels"));
+            for c in " and say".chars() {
+                s.type_char(c);
+            }
+            let opens = s.input.find('[').expect("the marker is in the line");
+            let closes = s.input.find(']').expect("the marker is in the line") + 1;
+            s.enter_vi_normal();
+            s.caret = at(opens, closes);
+            for c in keys.chars() {
+                s.type_char(c);
+            }
+            (s.caret, opens, closes)
+        };
+        let start: fn(usize, usize) -> usize = |_, _| 0;
+        let dot: fn(usize, usize) -> usize = |_, _| 3;
+        let marker: fn(usize, usize) -> usize = |opens, _| opens;
+        let and: fn(usize, usize) -> usize = |_, closes| closes + 1;
+
+        // Onto the marker from either side, and never past it to the word beyond.
+        for (at, keys) in [(dot, "w"), (dot, "e"), (and, "b"), (and, "ge"), (and, "gE")] {
+            let (caret, opens, _) = landed(at, keys);
+            assert_eq!(caret, opens, "{keys} left the caret at {caret}");
+        }
+        // Off it, and onto the dot or the word beside it rather than into it.
+        assert_eq!(landed(marker, "b").0, 3, "b from the marker");
+        assert_eq!(landed(marker, "ge").0, 3, "ge from the marker");
+        let (caret, _, closes) = landed(marker, "w");
+        assert_eq!(caret, closes + 1, "w from the marker");
+        let (caret, _, closes) = landed(marker, "e");
+        assert_eq!(caret, closes + 3, "e from the marker");
+        // The capitals read `see.` and the marker as one word.
+        let (caret, opens, _) = landed(start, "E");
+        assert_eq!(caret, opens, "E from the start");
+        let (caret, _, closes) = landed(start, "W");
+        assert_eq!(caret, closes + 1, "W from the start");
+        assert_eq!(landed(and, "B").0, 0, "B from `and`");
+
+        // Two side by side are two words, since each is one picture.
+        let mut s = vi();
+        s.attach(picture(b"one"));
+        s.attach(picture(b"two"));
+        for c in " x".chars() {
+            s.type_char(c);
+        }
+        let second = s
+            .input
+            .rfind('[')
+            .expect("the second marker is in the line");
+        s.enter_vi_normal();
+        s.caret = 0;
+        s.type_char('w');
+        assert_eq!(s.caret, second, "w from the first of two markers");
+    }
+
+    /// `cw` on the last character of a word changes that character alone, as vim's does, where `ce`
+    /// would run on to the end of the next word. With the punctuation split that is every slash and
+    /// dot in a path, and every marker.
+    #[test]
+    fn cw_on_the_last_character_of_a_word_changes_that_character_alone() {
+        let path = "src/main.rs x";
+        assert_eq!(edited(path, 3, "cwX"), "srcXmain.rs x");
+        assert_eq!(edited(path, 2, "cwX"), "srX/main.rs x");
+        assert_eq!(edited(path, 2, "c2wX"), "srXmain.rs x");
+        assert_eq!(edited(path, 10, "cWX"), "src/main.rX x");
+        assert_eq!(edited("a b", 0, "cwX"), "X b");
+        assert_eq!(edited("one two", 2, "c2wX"), "onX");
+
+        let mut s = vi();
+        for c in "see.".chars() {
+            s.type_char(c);
+        }
+        s.attach(picture(b"pixels"));
+        for c in " and say".chars() {
+            s.type_char(c);
+        }
+        s.enter_vi_normal();
+        s.caret = s.input.find('[').expect("the marker is in the line");
+        s.type_char('c');
+        s.type_char('w');
+        assert_eq!(s.input, "see. and say", "cw on a marker");
+    }
+
+    /// Under an operator the last word `w` counts ends at the end of its line, as vim's does: `dw`
+    /// on the last word of a row takes the whole word and leaves the newline, and on the last word
+    /// of the input takes the word to its last character. From an empty row it takes that row.
+    #[test]
+    fn dw_on_the_last_word_of_a_row_takes_it_and_leaves_the_newline() {
+        assert_eq!(edited("one two", 4, "dw"), "one ");
+        assert_eq!(edited("call f()", 6, "dw"), "call f");
+        assert_eq!(edited("x", 0, "dw"), "");
+        assert_eq!(edited("a src/main.rs", 2, "dW"), "a ");
+        assert_eq!(edited("one two\nthree", 4, "dw"), "one \nthree");
+        assert_eq!(edited("one two\nthree four", 0, "d2w"), "\nthree four");
+        assert_eq!(edited("one two\nthree four", 0, "d3w"), "four");
+        assert_eq!(edited("one\n\n  two", 4, "dw"), "one\n  two");
+    }
+
+    /// An empty row is a stop for `w`, `b` and `ge` and their capitals, as it is in vim, so none of
+    /// them crosses a paragraph break in one press and `db` at the start of a paragraph leaves the
+    /// one above it alone. `e` is vim's exception and crosses it.
+    #[test]
+    fn the_word_motions_stop_on_an_empty_row() {
+        assert_eq!(after("one\n\ntwo", 0, "w"), 4);
+        assert_eq!(after("one\n\ntwo", 4, "w"), 5);
+        assert_eq!(after("one\n\n\ntwo", 4, "w"), 5);
+        assert_eq!(after("one\n", 0, "w"), 4);
+        assert_eq!(after("one\n\ntwo", 5, "b"), 4);
+        assert_eq!(after("one\n\ntwo", 5, "ge"), 4);
+        assert_eq!(after("a.b\n\nc", 0, "W"), 4);
+        assert_eq!(after("a.b\n\nc", 5, "B"), 4);
+        assert_eq!(after("a.b\n\nc", 5, "gE"), 4);
+        assert_eq!(after("one\n\ntwo", 2, "e"), 7);
+        assert_eq!(edited("one\n\ntwo", 5, "db"), "one\ntwo");
+        assert_eq!(edited("one\n\ntwo", 5, "dge"), "one\nwo");
+        assert_eq!(edited("a\n\n\nb", 3, "dge"), "a\n\nb");
+    }
+
+    /// `iw`, `iW` and `aw` read a marker as the motions do: a word by itself to `iw` and `aw`, and
+    /// part of the run it touches to `iW`, never characters of its own. Read as its characters, the
+    /// space inside `[Image #1]` would end an `iW` half way through the picture.
+    #[test]
+    fn a_marker_is_a_word_of_its_own_to_the_word_objects() {
+        let edited_around = |before: &str, after: &str, at: fn(&str) -> usize, keys: &str| {
+            let mut s = vi();
+            for c in before.chars() {
+                s.type_char(c);
+            }
+            s.attach(picture(b"pixels"));
+            for c in after.chars() {
+                s.type_char(c);
+            }
+            s.enter_vi_normal();
+            let typed = s.input.clone();
+            s.caret = at(&s.input);
+            for c in keys.chars() {
+                s.type_char(c);
+            }
+            (typed, s.input)
+        };
+        let marker: fn(&str) -> usize = |input| input.find('[').expect("the marker is in the line");
+        let start: fn(&str) -> usize = |_| 0;
+        let dot: fn(&str) -> usize = |_| 3;
+
+        assert_eq!(
+            edited_around("see.", " and say", marker, "diw").1,
+            "see. and say"
+        );
+        assert_eq!(
+            edited_around("see.", " and say", marker, "daw").1,
+            "see.and say"
+        );
+        // The dot alone, and not the marker beside it.
+        let (typed, left) = edited_around("see.", " and say", dot, "diw");
+        assert_eq!(left, typed.replacen('.', "", 1));
+        assert_eq!(edited_around("a", "b c", start, "diW").1, " c");
+    }
+
     /// The ends of the line, and the first character that is not a blank. `$` lands on the last
     /// character rather than past it, since the column after the line holds nothing for an
     /// instruction to act on.
@@ -14254,12 +15592,18 @@ mod tests {
             "x\n",
             "one\ntwo\n",
             "\n\n",
+            "a.b\n-c",
+            "x/\n",
+            "(a)\n  [b\n{c}",
         ];
         // Every motion of INPUT-26, and the pairs that reach a second line before the motion under
         // test runs.
         let runs = [
-            "h", "l", " ", "w", "e", "b", "0", "$", "^", "gg", "G", "fo", "Fo", "to", "To", "fo;",
-            "fo,", "hh", "ll", "ww", "ee", "bb", "$h", "0l", "^h", "Ge", "Gw", "ggw", "gge",
+            "h", "l", " ", "w", "e", "b", "W", "E", "B", "ge", "gE", "0", "$", "^", "gg", "G",
+            "fo", "Fo", "to", "To", "fo;", "fo,", "hh", "ll", "ww", "ee", "bb", "WW", "EE", "BB",
+            "gege", "gEgE", "$h", "0l", "^h", "Ge", "Gw", "GE", "GW", "ggw", "gge", "ggE", "Gge",
+            "GgE", "%", "%%", "$%", "_", "2_", "9_", "|", "3|", "99|", "G|", "G99|", "2G", "9G",
+            "2gg",
         ];
         for input in inputs {
             for at in 0..=input.len() {
@@ -14287,11 +15631,180 @@ mod tests {
     }
 
     /// `gg` and `G` reach the whole input rather than the line, which is what makes them worth having
-    /// in a box that holds a paragraph. `G` lands at the start of the last line, as vi does.
+    /// in a box that holds a paragraph. Each lands on the first character of its row that is not a
+    /// blank, as vi does, and so does a counted one: a row's indent is not where anything a person
+    /// would reach for begins, and the next `w` from there would stop on the first word rather than
+    /// taking the indent as a word of its own.
     #[test]
     fn the_input_motions_reach_the_first_and_last_line() {
         assert_eq!(after("one\ntwo\nthree", 9, "gg"), 0);
         assert_eq!(after("one\ntwo\nthree", 1, "G"), 8);
+        assert_eq!(after("  one\ntwo\n  three", 12, "gg"), 2);
+        assert_eq!(after("one\ntwo\n  three", 1, "G"), 10);
+        assert_eq!(after("one\n  two\nthree", 0, "2G"), 6);
+        assert_eq!(after("one\n  two\nthree", 0, "2gg"), 6);
+    }
+
+    /// `%` goes to the bracket that pairs with the first one at or after the caret on its row, which
+    /// is how somebody checks what a closing bracket closes without counting. From in front of the
+    /// bracket, where the caret usually is, it goes to the partner rather than to the bracket
+    /// itself, as vi does.
+    ///
+    /// Only brackets of the kind found are counted, and the row is as far as it looks: a row with
+    /// no partner for it leaves the caret where it was, as a jump to a character that is not there
+    /// does.
+    #[test]
+    fn the_bracket_key_goes_to_the_partner_of_the_next_bracket_on_the_row() {
+        assert_eq!(after("call(a, b) ok", 4, "%"), 9);
+        assert_eq!(after("call(a, b) ok", 9, "%"), 4);
+        assert_eq!(after("call(a, b) ok", 0, "%"), 9);
+        // Nested, where the partner is the one at the same depth.
+        assert_eq!(after("f(g(x))", 1, "%"), 6);
+        assert_eq!(after("f(g(x))", 3, "%"), 5);
+        assert_eq!(after("f(g(x))", 6, "%"), 1);
+        // Inside a pair, where the first bracket along is the closing one.
+        assert_eq!(after("(a b) c", 2, "%"), 0);
+        assert_eq!(after("(a]b)", 0, "%"), 4);
+        assert_eq!(after("{a[b}", 0, "%"), 4);
+        // Nothing to go to.
+        assert_eq!(after("no brackets", 3, "%"), 3);
+        assert_eq!(after("(a b", 0, "%"), 0);
+        assert_eq!(after("(a) b", 4, "%"), 4);
+        assert_eq!(after("(a\nb)", 0, "%"), 0);
+        assert_eq!(after("(a\nb)", 4, "%"), 4);
+    }
+
+    /// A count in front of `%` is spent and the caret stays where it was. In vi the count makes it
+    /// a different key, the row that many hundredths of the way through the file, and read as more
+    /// of the same it would bounce between the two brackets and land on whichever one the number
+    /// happened to be odd or even for.
+    #[test]
+    fn a_counted_bracket_key_moves_nothing() {
+        for keys in ["1%", "2%", "50%"] {
+            assert_eq!(after("call(a, b) ok", 4, keys), 4, "{keys}");
+        }
+        assert_eq!(
+            after("call(a, b) ok", 4, "3%%"),
+            9,
+            "the count outlived the key it was typed in front of"
+        );
+        assert_eq!(edited("call(a, b) ok", 4, "d2%"), "call(a, b) ok");
+    }
+
+    /// A marker is spelled with brackets, and `%` must not take either of them for one: the two
+    /// would pair with each other, and the caret would come to rest on the marker's closing
+    /// bracket, inside a picture, where the next character typed splits it and takes the picture
+    /// off the prompt.
+    #[test]
+    fn the_bracket_key_never_pairs_a_bracket_a_marker_is_spelled_with() {
+        for at in [0, 4] {
+            let mut s = vi();
+            for c in "see ".chars() {
+                s.type_char(c);
+            }
+            s.attach(picture(b"pixels"));
+            for c in " (x)".chars() {
+                s.type_char(c);
+            }
+            s.enter_vi_normal();
+            s.caret = at;
+            s.type_char('%');
+            assert_eq!(
+                s.caret,
+                s.input.rfind(')').expect("the bracket is in the line"),
+                "from {at} of {:?}",
+                s.input
+            );
+        }
+    }
+
+    /// `_` is the first character that is not a blank, on the row its count names counting the
+    /// caret's own as the first, so `_` alone is `^`. Its count is rows, which is what makes `d3_`
+    /// the three rows `3dd` is; read as more of the same, `3_` would be `_` three times over and
+    /// stay on its row.
+    #[test]
+    fn the_underscore_key_is_the_first_word_of_the_row_its_count_names() {
+        let rows = "  one\n  two\n  three";
+        assert_eq!(after(rows, 4, "_"), 2);
+        assert_eq!(after(rows, 16, "_"), 14);
+        assert_eq!(after(rows, 0, "2_"), 8);
+        assert_eq!(after(rows, 0, "3_"), 14);
+        assert_eq!(after(rows, 0, "9_"), 14, "it went past the last row");
+    }
+
+    /// An operator over `_` takes rows, as it does in vi, where `dd` is spelled `d_`: the key is
+    /// the doubled letter for every operator at once, and a stretch from the caret to the first
+    /// word would take half a row where the key names all of it.
+    #[test]
+    fn an_operator_over_the_underscore_key_takes_the_rows_the_doubled_letter_does() {
+        let rows = "one\n  two\nthree\nfour";
+        for (keys, doubled) in [
+            ("d_", "dd"),
+            ("d3_", "3dd"),
+            ("2d_", "2dd"),
+            ("c_", "cc"),
+            (">_", ">>"),
+            ("gU2_", "2gUU"),
+            ("y_P", "yyP"),
+        ] {
+            for at in [0, 6] {
+                assert_eq!(
+                    edited(rows, at, keys),
+                    edited(rows, at, doubled),
+                    "{keys} from {at}"
+                );
+            }
+        }
+    }
+
+    /// `|` is the column its count names, counting the first as one, so `|` alone is `0`. A column
+    /// is a character, and one inside a marker is the marker, which has no position inside it for
+    /// the caret to rest at. Past the end of the row is its last character.
+    #[test]
+    fn the_bar_key_is_the_column_its_count_names() {
+        assert_eq!(after("abcdef", 4, "|"), 0);
+        assert_eq!(after("abcdef", 0, "3|"), 2);
+        assert_eq!(after("abcdef", 0, "99|"), 5);
+        assert_eq!(after("ab\ncdef", 3, "3|"), 5);
+
+        let mut s = vi();
+        for c in "look at ".chars() {
+            s.type_char(c);
+        }
+        s.attach(picture(b"pixels"));
+        for c in " and say".chars() {
+            s.type_char(c);
+        }
+        s.enter_vi_normal();
+        let opens = s.input.find('[').expect("the marker is in the line");
+        let closes = s.input.find(']').expect("the marker is in the line") + 1;
+        for (column, lands) in [(opens + 1, opens), (opens + 4, opens), (closes + 1, closes)] {
+            s.caret = 0;
+            for c in format!("{column}|").chars() {
+                s.type_char(c);
+            }
+            assert_eq!(s.caret, lands, "column {column}");
+        }
+    }
+
+    /// An operator over `%` takes both brackets and what lies between them, from either end and
+    /// from in front of the pair, since the motion takes the bracket it lands on. Left out, `d%`
+    /// would leave a closing bracket standing for nothing.
+    #[test]
+    fn an_operator_over_the_bracket_key_takes_both_brackets() {
+        assert_eq!(edited("call(a, b) ok", 4, "d%"), "call ok");
+        assert_eq!(edited("call(a, b) ok", 9, "d%"), "call ok");
+        assert_eq!(edited("call(a, b) ok", 0, "d%"), " ok");
+        assert_eq!(edited("f(x) y", 1, "c%z"), "fz y");
+        assert_eq!(edited("(a b", 0, "d%"), "(a b", "there was no partner");
+    }
+
+    /// An operator over `|` stops short of the column it reaches, as it does in vi, so `d|` is `d0`
+    /// and the character the count names is the one left standing.
+    #[test]
+    fn an_operator_over_the_bar_key_leaves_the_column_it_reaches() {
+        assert_eq!(edited("abcdef", 4, "d|"), "ef");
+        assert_eq!(edited("abcdef", 1, "d4|"), "adef");
     }
 
     /// `g` alone means nothing, and a pair that means nothing must not hold the wait open: one stray
@@ -14309,19 +15822,16 @@ mod tests {
     }
 
     /// A key beginning an instruction this box does not have changes nothing, and nor does the key vi
-    /// would give it: `ma` must not open INSERT mode on the `a`, nor `mw` move on the `w`, nor `rx`
-    /// delete on the `x`. Every prefix, after an operator and after none, against every key that can
-    /// be typed after it, and in VISUAL mode the prefixes that mean there what they mean here.
+    /// would give it: `ma` must not open INSERT mode on the `a`, nor `mw` move on the `w`. Every
+    /// prefix, after an operator and after none, against every key that can be typed after it, and in
+    /// VISUAL mode the prefixes that mean there what they mean here.
     #[test]
     fn a_prefix_this_box_has_no_instruction_for_changes_nothing_whatever_follows_it() {
         let in_both_modes = [
             "\"", "q", "@", "m", "'", "`", "z", "Z", "[", "]", "g'", "g`",
         ];
-        // In VISUAL mode `r` and `gr` replace the selection, and the operators under `g` and `R`
-        // act on it and take no key.
-        let in_normal_mode = [
-            "r", "R", "gr", "gu", "gU", "g~", "g?", "gq", "gw", "g@", "gui", "guf",
-        ];
+        // In VISUAL mode the operators under `g` act on the selection and take no key.
+        let in_normal_mode = ["g?", "gq", "gw", "g@", "g?i", "g?f", "g?'"];
         let after_an_operator = ["d'", "c`", "y[", "d]", "dz", "gu'"];
         for prefix in in_both_modes
             .iter()
@@ -14359,11 +15869,11 @@ mod tests {
         }
     }
 
-    /// With a selection on the screen, an operator under `g` and `R` take no key of their own, so
-    /// the motion after them moves the end of the selection as it would have without them. `gr` is
-    /// `r` there, as it is in vi.
+    /// With a selection on the screen, an operator under `g` takes no key of its own, so the motion
+    /// after it moves the end of the selection as it would have without it. `gr` is `r` there, as it
+    /// is in vi.
     #[test]
-    fn visual_mode_leaves_the_key_after_an_operator_under_g_or_capital_r_to_act_on_its_own() {
+    fn visual_mode_leaves_the_key_after_an_operator_under_g_to_act_on_its_own() {
         let pressed = |keys: &str| {
             let mut s = normal("one two", 0);
             for c in keys.chars() {
@@ -14372,7 +15882,7 @@ mod tests {
             (s.input.clone(), s.caret, s.vi_selection(), s.vi_mode())
         };
         assert_eq!(pressed("vl").1, 1);
-        for prefix in ["gu", "gU", "g~", "g?", "gq", "gw", "g@", "R"] {
+        for prefix in ["g?", "gq", "gw", "g@"] {
             assert_eq!(pressed(&format!("v{prefix}l")), pressed("vl"), "v{prefix}l");
         }
         assert_eq!(pressed("vlgrx").0, "xxe two");
@@ -14386,8 +15896,8 @@ mod tests {
     #[test]
     fn a_prefix_this_box_has_no_instruction_for_takes_the_key_vi_would_give_it_and_no_more() {
         for keys in [
-            "ma", "rx", "\"a", "zz", "]]", "Rx", "g'a", "g`a", "grx", "guw", "guu", "guiw", "gufa",
-            "gugg", "gu'a", "d'a", "dzz", "dm", "c\"", "yq", "d@", "dr", "dZ", "dR",
+            "ma", "\"a", "zz", "]]", "g'a", "g`a", "g?w", "g??", "g?iw", "g?fa", "g?gg", "g?'a",
+            "gu'a", "d'a", "dzz", "dm", "c\"", "yq", "d@", "dr", "dZ", "dR",
         ] {
             assert_eq!(
                 edited("one two", 0, &format!("{keys}x")),
@@ -14482,10 +15992,19 @@ mod tests {
             ("l", true),
             ("w", true),
             ("e", true),
+            ("W", true),
+            ("E", true),
             ("f]", true),
             ("$", true),
+            // Not a crossing, but the other two keys that could come to rest in one: `%` on the
+            // brackets it is spelled with, and `|` on a column it covers.
+            ("%", true),
+            ("12|", true),
             ("h", false),
             ("b", false),
+            ("B", false),
+            ("ge", false),
+            ("gE", false),
             ("F[", false),
             ("0", false),
         ];
@@ -14709,12 +16228,10 @@ mod tests {
             "it went past the last row"
         );
         // An operator reads the count the same way, or `d2G` takes the whole input where `2G`
-        // reached two rows: the stretch a motion names is the one the motion would reach.
-        assert_eq!(
-            edited("one\ntwo\nthree\nfour", 0, "d2G"),
-            "two\nthree\nfour"
-        );
-        assert_eq!(edited("one\ntwo\nthree\nfour", 0, "dG"), "four");
+        // reached two rows: the stretch a motion names reaches the row the motion would.
+        assert_eq!(edited("one\ntwo\nthree\nfour", 0, "d2G"), "three\nfour");
+        assert_eq!(edited("one\ntwo\nthree\nfour", 0, "d3gg"), "four");
+        assert_eq!(edited("one\ntwo\nthree\nfour", 0, "dG"), "");
     }
 
     /// `>` and `<` move every row the stretch reaches, so the caret has to follow every one of them
@@ -14775,8 +16292,8 @@ mod tests {
     #[test]
     fn a_count_says_how_much_of_the_extent_an_operator_takes() {
         assert_eq!(edited("a b c d e f", 0, "d3w"), "d e f");
-        assert_eq!(edited("a b c d e f", 0, "2d3w"), "f");
-        assert_eq!(edited("a b c d e f", 0, "3d2w"), "f");
+        assert_eq!(edited("a b c d e f g", 0, "2d3w"), "g");
+        assert_eq!(edited("a b c d e f g", 0, "3d2w"), "g");
         assert_eq!(edited("hello", 0, "3x"), "lo");
         assert_eq!(edited("hello", 0, "9x"), "", "it stopped short of the line");
         assert_eq!(edited("one\ntwo\nthree\nfour", 0, "2dd"), "three\nfour");
@@ -14794,8 +16311,8 @@ mod tests {
     }
 
     /// A counted change is one change and one step to undo, because the count is part of one
-    /// instruction rather than a way of pressing the key again. Carried out as N changes, the undo
-    /// would put back the last of them and leave the rest gone with nothing left to reach them.
+    /// instruction rather than a way of pressing the key again. Carried out as N changes, it would
+    /// take N presses of `u` to put back what one instruction took.
     #[test]
     fn a_counted_change_is_one_change_and_one_undo_step() {
         let mut s = normal("hello world", 0);
@@ -14919,6 +16436,73 @@ mod tests {
         assert_eq!(edited("one two three", 4, "d$"), "one ");
         assert_eq!(edited("one two three", 0, "dfo"), " three");
         assert_eq!(edited("one two three", 0, "dto"), "o three");
+        // The row keys name whole rows, from the caret's to the one landed on, which is what they
+        // mean in vi. Read by the character, `dG` leaves the last row standing with what was left of
+        // the caret's row joined onto it, and `dj` from the middle of a row splits two rows apart.
+        let rows = "one\ntwo\nthree";
+        assert_eq!(edited(rows, 1, "dj"), "three");
+        assert_eq!(edited(rows, 5, "dk"), "three");
+        assert_eq!(edited(rows, 5, "dG"), "one");
+        assert_eq!(edited(rows, 9, "dgg"), "");
+    }
+
+    /// The row keys under an operator take rows as far as the input has them. The caret's own row is
+    /// one to take, so `dG` on the last row takes it, while `dj` there reaches no row and takes
+    /// nothing, as in vi. A count past the end stops at the end, the way `9dd` does.
+    #[test]
+    fn a_row_key_under_an_operator_takes_the_rows_there_are() {
+        let rows = "one\ntwo\nthree";
+        assert_eq!(edited(rows, 8, "dG"), "one\ntwo");
+        assert_eq!(edited(rows, 0, "dgg"), "two\nthree");
+        assert_eq!(
+            edited(rows, 9, "dj"),
+            rows,
+            "there is no row below the last"
+        );
+        assert_eq!(
+            edited(rows, 1, "dk"),
+            rows,
+            "there is no row above the first"
+        );
+        assert_eq!(edited("a\nb\nc\nd", 0, "d2j"), "d");
+        assert_eq!(edited("a\nb\nc\nd", 0, "2dj"), "d");
+        assert_eq!(edited("a\nb\nc\nd", 2, "d9j"), "a");
+    }
+
+    /// The other operators take the same rows, so what `yj` records goes back as lines, `cj` leaves one
+    /// empty row to type on, and `>j` moves both rows.
+    #[test]
+    fn every_operator_over_a_row_key_takes_the_rows() {
+        assert_eq!(
+            edited("one\ntwo\nthree", 1, "yjp"),
+            "one\none\ntwo\ntwo\nthree"
+        );
+        assert_eq!(edited("one\ntwo\nthree", 5, "cjX"), "one\nX");
+        assert_eq!(edited("one\ntwo\nthree", 1, ">j"), "  one\n  two\nthree");
+    }
+
+    /// An empty row is a row to every operator that takes whole ones. `o` and then Escape leaves the
+    /// caret on one, so `dd` and `dG` there have to take it, `cc` and `S` have to open INSERT on it,
+    /// and `yy` has to put back an empty row. Read as characters there is nothing on it, and every
+    /// one of these did nothing, `cc` leaving the next word typed to run as commands.
+    #[test]
+    fn an_empty_row_is_a_row_to_every_line_wise_operator() {
+        let gap = "one\n\nthree";
+        assert_eq!(edited(gap, 4, "dd"), "one\nthree");
+        assert_eq!(edited(gap, 4, "Vd"), "one\nthree");
+        assert_eq!(edited(gap, 4, "ccX"), "one\nX\nthree");
+        assert_eq!(edited(gap, 4, "SX"), "one\nX\nthree");
+        assert_eq!(edited(gap, 4, "yyp"), "one\n\n\nthree");
+        assert_eq!(edited("one\n", 4, "dG"), "one");
+        assert_eq!(edited("\ntwo", 0, "dgg"), "two");
+    }
+
+    /// `>` leaves an empty row empty, as vi does. Two spaces on a row with nothing else on it are
+    /// nothing anybody can see, and they would go out with the prompt.
+    #[test]
+    fn indenting_leaves_an_empty_row_empty() {
+        assert_eq!(edited("one\n\nthree", 4, ">>"), "one\n\nthree");
+        assert_eq!(edited("a\n\nb", 0, ">G"), "  a\n\n  b");
     }
 
     /// `x` takes the character under the caret and `dd` the whole line, newline and all: a line taken
@@ -15027,12 +16611,37 @@ mod tests {
         assert_eq!(edited("only", 0, "J"), "only", "there was no line to join");
     }
 
+    /// `gJ` joins with nothing where the newline was and the next row's blanks left standing, for
+    /// the line that was broken in the middle of a word or a path: any space there would be one
+    /// the text never had, and so would stripping an indent somebody is keeping. Its count is how
+    /// many rows end up as one, as `J`'s is.
+    #[test]
+    fn the_bare_join_puts_nothing_where_the_newline_was() {
+        assert_eq!(edited("one\ntwo", 0, "gJ"), "onetwo");
+        assert_eq!(edited("one\n  two", 0, "gJ"), "one  two");
+        assert_eq!(
+            edited("one\ntwo\nthree\nfour", 0, "3gJ"),
+            "onetwothree\nfour"
+        );
+        assert_eq!(edited("one\ntwo", 0, "9gJ"), "onetwo");
+        assert_eq!(edited("only", 0, "gJ"), "only", "there was no line to join");
+    }
+
+    /// Joining an empty row on leaves nothing on the joined row past the last character, and the
+    /// caret must not be left there: every other normal-mode key keeps it on a character, and one
+    /// past the end is where `i` would type after the line rather than before its last character.
+    #[test]
+    fn the_bare_join_of_an_empty_row_leaves_the_caret_on_the_line() {
+        assert_eq!(after("one\n", 0, "gJ"), 2);
+        assert_eq!(edited("one\n", 0, "gJ"), "one");
+    }
+
     /// `u` puts back what the last change took. The failure worth ruling out is the one that loses a
     /// paragraph: every operator that writes records the line first, in the one place they all pass
     /// through, so none of them can be the one that forgot.
     #[test]
     fn undo_puts_back_what_a_change_took() {
-        for keys in ["dw", "dd", "D", "x", "cw", "J", ">>", "p"] {
+        for keys in ["dw", "dd", "D", "x", "cw", "J", "gJ", ">>", "p", "d_"] {
             let mut s = normal("one two\nthree", 0);
             // So that `p` has something to put back, and every case starts from the same line.
             s.register = Some(Yanked {
@@ -15065,8 +16674,8 @@ mod tests {
         assert_eq!(s.input, "one two", "the yank got in the way of the undo");
     }
 
-    /// `.` repeats the instruction rather than what it produced, which is the whole reason to have it:
-    /// the change happens again at the caret, wherever that now is.
+    /// `.` makes the last change again at the caret, wherever that now is, which is the whole reason
+    /// to have it: the change happens somewhere else.
     #[test]
     fn the_repeat_key_does_the_last_change_again_at_the_caret() {
         assert_eq!(edited("one two three", 0, "dw."), "three");
@@ -15112,6 +16721,22 @@ mod tests {
         assert_eq!(edited("call(a, b) ok", 5, "di)"), "call() ok");
         assert_eq!(edited("x[1] ok", 2, "di["), "x[] ok");
         assert_eq!(edited("a{b}c", 2, "di{"), "a{}c");
+    }
+
+    /// `b` and `B` are vi's names for the round and the curly pair, the two a block is written in,
+    /// and somebody used to `dib` has no reason to reach for the bracket instead. Left unnamed,
+    /// `dib` ends the wait and changes nothing.
+    #[test]
+    fn a_block_letter_is_a_text_object_over_the_pair_it_names() {
+        assert_eq!(edited("call(a, b) ok", 5, "dib"), "call() ok");
+        assert_eq!(edited("call(a, b) ok", 5, "dab"), "call ok");
+        assert_eq!(edited("a{b}c", 2, "diB"), "a{}c");
+        assert_eq!(edited("a{b}c", 2, "daB"), "ac");
+        assert_eq!(
+            edited("x[1] ok", 2, "dib"),
+            "x[1] ok",
+            "b is not the square pair"
+        );
     }
 
     /// The pair the caret is inside, or else the next one along the line. The second half is what makes
@@ -15217,12 +16842,355 @@ mod tests {
         assert_eq!(edited("one\ntwo\nthree", 5, "Vd"), "one\nthree");
     }
 
-    /// The keys that change case, which mean this only here: `u` in NORMAL mode undoes.
+    /// The capitals take every row the selection crosses, whole, whichever kind of selection it is,
+    /// so `vD` on a character is `dd` and `vYp` puts the row back as a row. A count changes nothing,
+    /// the rows being already named.
+    ///
+    /// Every case here was measured against vim.
+    #[test]
+    fn a_capital_takes_every_row_the_selection_crosses() {
+        for keys in ["vD", "vX", "VD", "v3D"] {
+            assert_eq!(edited("one\ntwo", 1, keys), "two", "{keys}");
+        }
+        assert_eq!(edited("one\ntwo\nthree", 5, "vD"), "one\nthree");
+        assert_eq!(edited("one\ntwo\nthree", 5, "vGD"), "one");
+        assert_eq!(edited("one\ntwo", 1, "vYp"), "one\none\ntwo");
+        for keys in ["vCz", "vSz", "vRz"] {
+            assert_eq!(edited("one\ntwo", 1, keys), "z\ntwo", "{keys}");
+        }
+    }
+
+    /// `.` after a change to the rows a selection crossed makes it again to as many rows from the
+    /// caret, since the selection is gone by the time it is pressed and a stretch it no longer
+    /// marks out would leave the key doing nothing. Measured against vim.
+    #[test]
+    fn a_repeat_takes_as_many_rows_as_the_selection_crossed() {
+        assert_eq!(edited("a\nb\nc\nd\ne", 0, "v1jD."), "e");
+        assert_eq!(edited("a\nb\nc\nd\ne", 0, "V1jd."), "e");
+        assert_eq!(edited("a\nb\nc", 2, "V1k>."), "    a\n    b\nc");
+    }
+
+    /// `.` after a change it cannot make again does nothing, rather than make the change before it,
+    /// which here is the `x`, again at a caret that has since moved on. These are the keys pressed
+    /// over a character-wise selection, whose stretch is gone by the time `.` is, and an opening that
+    /// typed nothing. The third row is there so that a join made again would have a row to take.
+    #[test]
+    fn a_repeat_after_a_change_it_cannot_make_again_does_nothing() {
+        assert_eq!(keyed("oNe two", 0, "xi\x1b.").input, "Ne two");
+        for (keys, line) in [
+            ("vd", "e two\nthree\nfour"),
+            ("vJ", "Ne two three\nfour"),
+            ("vgJ", "Ne twothree\nfour"),
+            ("viwp", "o two\nthree\nfour"),
+            ("viwP", "o two\nthree\nfour"),
+            ("vrz", "ze two\nthree\nfour"),
+            ("viwU", "NE two\nthree\nfour"),
+            ("viwgu", "ne two\nthree\nfour"),
+            ("viw~", "nE two\nthree\nfour"),
+        ] {
+            assert_eq!(
+                edited("oNe two\nthree\nfour", 0, &format!("x{keys}.")),
+                line,
+                "{keys}"
+            );
+        }
+    }
+
+    /// `.` after `c` types again what was typed after it, since in vi what was typed is part of the
+    /// instruction: repeating only the `cw` would take the next word and put nothing in its place.
+    /// The two rows are the ones the issue measured against vim.
+    #[test]
+    fn the_repeat_key_types_again_what_a_change_typed() {
+        assert_eq!(keyed("foo bar baz", 0, "cwX\x1bw.").input, "X X baz");
+        assert_eq!(keyed("foo bar baz", 0, "AZ\x1b0.").input, "foo bar bazZZ");
+        assert_eq!(keyed("one two", 0, "ccnew\x1b.").input, "new");
+        assert_eq!(keyed("a b c d", 0, "cwX\x1bw2.").input, "X X d");
+        let s = keyed("foo bar baz", 0, "cwX\x1bw.");
+        assert_eq!(
+            s.vi_mode(),
+            Some(crate::vim::Mode::Normal),
+            "left in INSERT"
+        );
+    }
+
+    /// Every key that opens INSERT mode is a change `.` makes again, the opening and the typing
+    /// together, and a count in front of the key or of `.` is spent: vim reads it as how many times
+    /// to type the text, which a prompt has no use for.
+    #[test]
+    fn the_repeat_key_opens_again_and_types_again() {
+        for (keys, line) in [
+            ("ix\x1b.", "xxab"),
+            ("Ix\x1b$.", "xxab"),
+            ("$ax\x1b.", "abxx"),
+            ("Ax\x1b0.", "abxx"),
+            ("ox\x1b.", "ab\nx\nx"),
+            ("Ox\x1b.", "x\nx\nab"),
+            ("o\x1b.", "ab\n\n"),
+            ("3ix\x1b", "xab"),
+            ("ix\x1b3.", "xxab"),
+        ] {
+            assert_eq!(keyed("ab", 0, keys).input, line, "{keys:?}");
+        }
+    }
+
+    /// What `.` types again is what the session left, so a letter typed and taken back with
+    /// Backspace is not in it.
+    #[test]
+    fn the_repeat_key_types_what_backspace_left() {
+        assert_eq!(keyed("ab", 0, "ifoo\x7fx\x1b.").input, "foxfoxab");
+    }
+
+    /// A session that edited the line somewhere other than where its typing went is one typing the
+    /// same characters again would not make, so `.` does nothing after it. It is still one change,
+    /// and `u` takes it back.
+    #[test]
+    fn the_repeat_key_does_nothing_after_typing_that_moved_off_its_own_text() {
+        let mut s = keyed("ab", 0, "ifoo");
+        s.move_left();
+        s.enter_vi_normal();
+        s.type_char('.');
+        assert_eq!(s.input, "fooab");
+        s.type_char('u');
+        assert_eq!(s.input, "ab");
+    }
+
+    /// Typing that placed a marker or an `@` is not made again, and nor is the change before it:
+    /// made again, either would attach the same thing a second time. A completion is a choice from a
+    /// list rather than typing, so it is not made again either.
+    #[test]
+    fn the_repeat_key_does_nothing_after_typing_that_attached_something() {
+        assert_eq!(keyed("one", 0, "xi@a\x1b.").input, "@ane");
+
+        let mut s = keyed("one", 0, "xi");
+        s.attach(picture(b"pixels"));
+        s.enter_vi_normal();
+        let placed = s.input.clone();
+        s.type_char('.');
+        assert_eq!(s.input, placed, "the picture was typed again");
+
+        let mut s = keyed("one", 0, "xi");
+        s.paste_text("a\nb\nc\nd");
+        s.enter_vi_normal();
+        let placed = s.input.clone();
+        s.type_char('.');
+        assert_eq!(s.input, placed, "the folded paste was typed again");
+
+        let mut s = keyed("", 0, "i/mo");
+        s.accept_completion();
+        assert_ne!(s.input, "/mo", "nothing was completed");
+        s.enter_vi_normal();
+        let completed = s.input.clone();
+        s.type_char('.');
+        assert_eq!(s.input, completed, "the completion was made again");
+    }
+
+    /// `p`, `P`, `J` and `gJ` are changes `.` makes again, with the count they were made with or the
+    /// one in front of it.
+    #[test]
+    fn the_repeat_key_puts_back_and_joins_again() {
+        assert_eq!(edited("one\ntwo", 0, "yyp."), "one\none\none\ntwo");
+        assert_eq!(edited("one\ntwo", 0, "yyP."), "one\none\none\ntwo");
+        assert_eq!(edited("ab", 0, "ylP."), "aaab");
+        assert_eq!(
+            edited("one\ntwo", 0, "yy2p."),
+            "one\none\none\none\none\ntwo"
+        );
+        assert_eq!(edited("one\ntwo", 0, "yyp2."), "one\none\none\none\ntwo");
+        assert_eq!(edited("a\nb\nc\nd", 0, "J."), "a b c\nd");
+        assert_eq!(edited("a\nb\nc\nd\ne\nf", 0, "3J."), "a b c d e\nf");
+        assert_eq!(edited("a\nb\nc", 0, "gJ."), "abc");
+    }
+
+    /// Undo goes back a change at a time, as far back as vim's does, so `x` pressed twice comes back
+    /// with two presses of `u`, and a count says how many.
+    #[test]
+    fn undo_goes_back_a_change_at_a_time() {
+        assert_eq!(edited("abc", 0, "xxu"), "bc");
+        assert_eq!(edited("abc", 0, "xxuu"), "abc");
+        assert_eq!(edited("abcd", 0, "x..uu"), "bcd");
+        assert_eq!(edited("abcd", 0, "x..uuu"), "abcd");
+        assert_eq!(edited("abcd", 0, "x..2u"), "bcd");
+        assert_eq!(edited("abcd", 0, "x..9u"), "abcd");
+    }
+
+    /// The oldest change goes once a thousand are kept, so what holds the steps is bounded: a
+    /// thousand copies of a prompt rather than one for every key pressed in a session.
+    #[test]
+    fn undo_goes_back_a_thousand_changes_and_no_further() {
+        let mut s = normal(&format!("{}b", "a".repeat(UNDO_DEPTH + 1)), 0);
+        for _ in 0..=UNDO_DEPTH {
+            s.type_char('x');
+        }
+        assert_eq!(s.input, "b");
+        for _ in 0..=UNDO_DEPTH {
+            s.type_char('u');
+        }
+        assert_eq!(s.input, format!("{}b", "a".repeat(UNDO_DEPTH)));
+    }
+
+    /// A line that arrives whole starts with nothing to undo. The steps are copies of the line that
+    /// was in the box, and `u` after a send would put back the prompt that had just gone. Choosing
+    /// the style the box already has brings no line, and keeps them.
+    #[test]
+    fn a_line_that_arrives_whole_has_nothing_to_undo() {
+        let mut s = keyed("one two", 0, "x");
+        assert!(s.submit().is_some());
+        s.type_char('u');
+        assert_eq!(s.input, "");
+
+        let mut s = keyed("one two", 0, "x");
+        assert!(s.submit().is_some());
+        s.recall_older();
+        s.enter_vi_normal();
+        s.type_char('u');
+        assert_eq!(s.input, "ne two");
+
+        let mut s = keyed("one two", 0, "x");
+        s.clear_input();
+        s.type_char('u');
+        assert_eq!(s.input, "", "the step outlived clearing the line");
+
+        let mut s = keyed("one two", 0, "x");
+        assert!(s.stash());
+        s.type_char('u');
+        assert_eq!(s.input, "", "the step outlived putting the line away");
+        assert!(s.stash());
+        s.type_char('u');
+        assert_eq!(
+            s.input, "ne two",
+            "the step outlived bringing the line back"
+        );
+
+        let mut s = keyed("one two", 0, "x");
+        s.take_edited("from the editor");
+        s.type_char('u');
+        assert_eq!(s.input, "from the editor");
+
+        let mut s = keyed("one two", 0, "x");
+        s.choose_editing(crate::vim::Editing::Ordinary);
+        s.choose_editing(crate::vim::Editing::Vi);
+        s.enter_vi_normal();
+        s.type_char('u');
+        assert_eq!(s.input, "ne two", "the step outlived a change of style");
+
+        let mut s = keyed("one two", 0, "x");
+        s.choose_editing(crate::vim::Editing::Vi);
+        s.enter_vi_normal();
+        s.type_char('u');
+        assert_eq!(s.input, "one two", "choosing vi again dropped the step");
+    }
+
+    /// `.` on a recalled prompt makes it the person's own line, as typing on it would. Left
+    /// browsing, the next `j` would walk away from the change and lose it.
+    #[test]
+    fn a_repeat_on_a_recalled_prompt_stops_browsing_history() {
+        let mut s = keyed("one", 0, "AX\x1b");
+        s.history.push("an older prompt".to_string(), None);
+        s.recall_older();
+        assert!(s.history.is_browsing());
+
+        s.type_char('.');
+        assert_eq!(s.input, "an older promptX");
+        assert!(!s.history.is_browsing(), "still browsing after a repeat");
+    }
+
+    /// One INSERT session is one change, so one `u` takes back everything typed in it, and the row
+    /// `o` opened with it. A session that left the line as it was is no change, an opening with
+    /// nothing typed or a `c` that typed back what it took, and the one before it can still be
+    /// taken back.
+    #[test]
+    fn an_insert_session_is_one_change_to_undo() {
+        assert_eq!(keyed("one", 0, "ihello\x1bu").input, "one");
+        assert_eq!(keyed("one", 0, "ofoo\rbar\x1bu").input, "one");
+        assert_eq!(keyed("one", 0, "xi\x1bu").input, "one");
+        assert_eq!(keyed("one two", 0, "xcwne\x1bu").input, "one two");
+        assert_eq!(keyed("one", 0, "Afoo\x1bxu").input, "onefoo");
+        assert_eq!(keyed("one", 0, "Afoo\x1bxuu").input, "one");
+        assert_eq!(keyed("one two", 0, "cwX\x1bw.uu").input, "one two");
+    }
+
+    /// The register yanked at the start of the line and then put over a selection made at `at`,
+    /// with the line and the caret that leaves.
+    fn put_over(line: &str, yank: &str, at: usize, keys: &str) -> (String, usize) {
+        let mut s = normal(line, 0);
+        for c in yank.chars().chain(keys.chars()) {
+            if c == '|' {
+                s.caret = at;
+                continue;
+            }
+            s.type_char(c);
+        }
+        (s.input, s.caret)
+    }
+
+    /// `p` over a selection puts the register there and leaves what the selection held in the
+    /// register, so two stretches trade places in two presses. `P` keeps the register, so one yank
+    /// can go over several. The caret ends on the last character put, or on the first where they
+    /// run over rows, and a count is how many copies. On the empty last row the selection holds
+    /// nothing, and the register goes there all the same and keeps what it held.
+    ///
+    /// Every case here was measured against vim.
+    #[test]
+    fn putting_over_a_selection_replaces_it() {
+        let put = |yank, keys| put_over("one two three", yank, 4, keys);
+        assert_eq!(put("yiw", "|viwp"), ("one one three".to_string(), 6));
+        assert_eq!(put("yiw", "|viwpp").0, "one onetwo three");
+        assert_eq!(put("yiw", "|viwP"), ("one one three".to_string(), 6));
+        assert_eq!(put("yiw", "|viwPp").0, "one oneone three");
+        assert_eq!(put("yiw", "|v2p"), ("one oneonewo three".to_string(), 9));
+        assert_eq!(put("yiw", "|viw2P").0, "one oneone three");
+
+        let across = |keys| put_over("one\ntwo\nthree", "llvey", 8, keys);
+        assert_eq!(across("|viwp"), ("one\ntwo\ne\ntwo".to_string(), 8));
+        assert_eq!(across("|viw2p"), ("one\ntwo\ne\ntwoe\ntwo".to_string(), 8));
+
+        assert_eq!(
+            put_over("one\n", "yiw", 4, "|vp"),
+            ("one\none".to_string(), 6)
+        );
+        assert_eq!(put_over("one\n", "yiw", 4, "|vpp").0, "one\noneone");
+    }
+
+    /// Rows stay rows. Over rows a stretch or rows replace them, a copy to a row, and over a stretch
+    /// within a row they split it, so neither half of the line runs into them. What rows held goes
+    /// into the register as rows. The caret ends on the first character of the first row put that
+    /// is not a blank.
+    ///
+    /// Every case here was measured against vim.
+    #[test]
+    fn rows_put_over_a_selection_stay_rows() {
+        let put = |line, yank, keys| put_over(line, yank, 4, keys).0;
+        assert_eq!(put("one\ntwo", "yy", "|Vp"), "one\none");
+        assert_eq!(put("one\ntwo\nthree", "yy", "|V2p"), "one\none\none\nthree");
+        assert_eq!(put("one\ntwo\nthree", "yiw", "|VGp"), "one\none");
+        assert_eq!(put("one\ntwo", "yiw", "|V2p"), "one\none\none");
+        assert_eq!(put("one\ntwo", "yiw", "|VpP"), "one\ntwo\none");
+        assert_eq!(put("one\ntwo", "yiw", "|VPp"), "one\noonene");
+        assert_eq!(put("one\ntwo", "yy", "|viwp"), "one\n\none\n");
+        assert_eq!(put("one\ntwo", "yy", "|viw2p"), "one\n\none\none\n");
+        assert_eq!(put("one\n\ntwo", "yy", "|vp"), "one\n\none\ntwo");
+        assert_eq!(put("one\n", "yy", "|vp"), "one\n\none\n");
+        assert_eq!(put("one\n", "yiw", "|Vp"), "one\none");
+        assert_eq!(put_over("  one\ntwo", "yy", 6, "|Vp").1, 8);
+        assert_eq!(put_over("  one\ntwo", "yy", 6, "|viwp").1, 9);
+    }
+
+    /// The keys that change case, which mean this only here: `u` in NORMAL mode undoes. The
+    /// operators spelled after `g` are the same keys over a selection, which is already the stretch
+    /// they would otherwise wait for, so `vgU` is `vU` as it is in vi.
     #[test]
     fn the_case_keys_act_on_the_selection() {
         assert_eq!(edited("one two", 0, "vl~"), "ONe two");
         assert_eq!(edited("one two", 0, "vlU"), "ONe two");
         assert_eq!(edited("ONE TWO", 0, "vlu"), "onE TWO");
+        assert_eq!(edited("one two", 0, "vlg~"), "ONe two");
+        assert_eq!(edited("one two", 0, "vlgU"), "ONe two");
+        assert_eq!(edited("ONE TWO", 0, "vlgu"), "onE TWO");
+        assert_eq!(
+            edited("one two", 0, "vlgUx"),
+            "Ne two",
+            "the selection was left open"
+        );
     }
 
     /// `o` puts the caret at the other end, which is how the end that is not being moved gets adjusted
@@ -15239,6 +17207,18 @@ mod tests {
         assert_eq!(edited("one two", 0, "vwd"), "wo");
         assert_eq!(edited("one two", 0, "viwd"), " two");
         assert_eq!(edited("call(a, b) ok", 5, "vi(d"), "call() ok");
+    }
+
+    /// A count moves the end of the selection as far as it moves a bare caret, the motions there
+    /// being the same motions: `v2e` reaches the end of the second word and `v2j` the row two below.
+    ///
+    /// Every case here was measured against vim.
+    #[test]
+    fn a_count_moves_the_end_of_the_selection() {
+        assert_eq!(edited("one two", 0, "v3ld"), "two");
+        assert_eq!(edited("one two", 0, "v2ed"), "");
+        assert_eq!(edited("one\ntwo\nthree", 0, "v2jd"), "hree");
+        assert_eq!(edited("one\ntwo\nthree", 0, "V2jd"), "");
     }
 
     /// One key both ways, read against the mode in force: the press that opens the mode closes it, so
@@ -15327,7 +17307,7 @@ mod tests {
     /// nothing at all to the line it was pressed over.
     #[test]
     fn a_press_that_changes_nothing_leaves_the_selection() {
-        let presses: [(&str, &str, usize, Press); 5] = [
+        let presses: [(&str, &str, usize, Press); 7] = [
             ("Backspace at the start of the line", "hello", 0, |s| {
                 s.backspace()
             }),
@@ -15343,6 +17323,8 @@ mod tests {
             ("stashing an empty line with nothing put away", "", 0, |s| {
                 s.stash();
             }),
+            ("p with nothing yanked", "hello", 0, |s| s.type_char('p')),
+            ("P with nothing yanked", "hello", 0, |s| s.type_char('P')),
         ];
 
         for (press, line, at, press_it) in presses {
@@ -15359,19 +17341,22 @@ mod tests {
 
     /// The keys VISUAL mode maps that are not operators change the line as much as an operator does,
     /// and nothing else ends the selection for them: `J` shortens it by the newline and the blanks the
-    /// line below was indented with, and `p` puts the register back into the middle of it.
+    /// line below was indented with, and `p` and `P` put the register where the selection was.
     #[test]
     fn a_visual_key_that_changes_the_line_abandons_the_selection() {
-        for key in ['J', 'p'] {
+        for key in ['J', 'p', 'P'] {
             let mut s = normal("one\n  two", 0);
-            // Yanked before the selection is opened, so `p` has something to put back. Yanking the
-            // selection would end it, that being what an operator does and these two keys not being
+            // Yanked before the selection is opened, so `p` has something to put back, and a
+            // character other than the one selected, so the put changes the line. Yanking the
+            // selection would end it, that being what an operator does and these keys not being
             // operators.
             s.type_char('y');
             s.type_char('l');
+            s.caret = 1;
             s.type_char('v');
             s.type_char(key);
 
+            assert_ne!(s.input, "one\n  two", "{key} changed nothing");
             assert_eq!(s.vi_selection(), None, "{key} left the selection standing");
             assert_eq!(
                 s.vi_mode(),
@@ -15436,7 +17421,7 @@ mod tests {
     /// acted on again by the next press for reasons nothing on the screen explains.
     #[test]
     fn an_operator_ends_the_selection() {
-        for keys in ["d", "y", "x", ">", "~", "rz"] {
+        for keys in ["d", "y", "x", ">", "~", "rz", "D", "Y"] {
             let mut s = normal("one two", 0);
             s.type_char('v');
             s.type_char('l');
@@ -15526,6 +17511,548 @@ mod tests {
             "the picture is still named by a line that has no marker"
         );
     }
+
+    /// A session in NORMAL mode over `Look `, a marker and ` Now`, with the caret at the start and
+    /// the marker as it was written.
+    fn around_a_marker() -> (Session, String) {
+        let mut s = vi();
+        for c in "Look ".chars() {
+            s.type_char(c);
+        }
+        s.attach(picture(b"pixels"));
+        let marker = s.input["Look ".len()..].to_string();
+        for c in " Now".chars() {
+            s.type_char(c);
+        }
+        s.enter_vi_normal();
+        s.caret = 0;
+        (s, marker)
+    }
+
+    /// A case change goes around a marker rather than through it. A marker is found by its text, so
+    /// one raised to `[IMAGE #1]` names no picture, and the picture would be left off the prompt
+    /// while the line still read as though it carried one. Every key that changes case over the
+    /// line, in NORMAL mode and over a selection.
+    #[test]
+    fn a_case_change_leaves_a_marker_naming_its_picture() {
+        for keys in [
+            "gUU", "guu", "g~~", "gUgU", "10~", "v$U", "v$u", "v$~", "v$gU",
+        ] {
+            let (mut s, marker) = around_a_marker();
+            let before = s.input.clone();
+
+            for c in keys.chars() {
+                s.type_char(c);
+            }
+
+            assert_ne!(s.input, before, "{keys} changed nothing");
+            assert!(
+                s.input.contains(&marker),
+                "{keys} rewrote the marker: {:?}",
+                s.input
+            );
+            assert_eq!(
+                s.pasted_named(&s.input).len(),
+                1,
+                "{keys} left the picture named by nothing"
+            );
+        }
+    }
+
+    /// `r` over a marker is refused, as it is over a selection holding one: a marker is not
+    /// characters to overwrite, and a row of `x` where a picture was is a line nobody can read.
+    #[test]
+    fn replacing_characters_across_a_marker_leaves_the_line_alone() {
+        let (mut s, marker) = around_a_marker();
+        s.caret = "Look ".len();
+        let before = s.input.clone();
+        s.type_char('r');
+        s.type_char('x');
+        assert_eq!(s.input, before, "the marker was overwritten");
+
+        let (mut s, _) = around_a_marker();
+        for c in "9rx".chars() {
+            s.type_char(c);
+        }
+        assert_eq!(s.input, before, "a counted r ran over the marker");
+        assert_eq!(
+            s.pasted_named(&s.input).len(),
+            1,
+            "{marker} lost its picture"
+        );
+    }
+
+    /// `r` makes the character under the caret the next key typed, and a count is how many
+    /// characters from there, left with the caret on the last of them, which is where vim leaves it.
+    /// The key after `r` is the character whatever it is, so `r3` puts a `3` there rather than
+    /// reading a count, and `rr` an `r`. `gr` is the same key, as it is in vim.
+    #[test]
+    fn r_replaces_as_many_characters_as_the_count_says() {
+        assert_eq!(edited("hello world", 0, "rx"), "xello world");
+        assert_eq!(after("hello world", 0, "rx"), 0);
+        assert_eq!(edited("hello world", 0, "3rx"), "xxxlo world");
+        assert_eq!(after("hello world", 0, "3rx"), 2);
+        assert_eq!(edited("hello world", 0, "3grx"), "xxxlo world");
+        assert_eq!(after("hello world", 0, "3grx"), 2);
+        assert_eq!(edited("hello world", 0, "r3"), "3ello world");
+        assert_eq!(edited("hello world", 0, "rr"), "rello world");
+        assert_eq!(edited("héllo", 1, "rx"), "hxllo");
+        assert_eq!(edited("hello", 0, "3ré"), "ééélo");
+        assert_eq!(
+            after("hello", 0, "3ré"),
+            4,
+            "the caret is not on the last é"
+        );
+    }
+
+    /// All of the characters asked for or none, which is vim's rule: `5rx` with two left on the line
+    /// is a count nobody meant, and replacing the two would be a guess at what they did mean. The
+    /// newline is not a character to replace, so a count does not reach the line below, and an
+    /// empty line has nothing under the caret to replace.
+    #[test]
+    fn r_with_fewer_characters_left_than_its_count_changes_nothing() {
+        assert_eq!(edited("hello world", 9, "5rx"), "hello world");
+        assert_eq!(edited("hello world", 9, "2rx"), "hello worxx");
+        assert_eq!(edited("ab\ncd", 0, "3rx"), "ab\ncd");
+        assert_eq!(edited("ab\ncd", 0, "2rx"), "xx\ncd");
+        assert_eq!(edited("ab\n\ncd", 3, "rx"), "ab\n\ncd");
+    }
+
+    /// `r` is one change, so one undo puts every character back, and `.` replaces as many again from
+    /// the caret, or as many as a count in front of it says.
+    #[test]
+    fn r_is_one_change_to_undo_and_to_repeat() {
+        assert_eq!(edited("hello world", 0, "3rxu"), "hello world");
+        assert_eq!(edited("hello world", 0, "3rx."), "xxxxx world");
+        assert_eq!(after("hello world", 0, "3rx."), 4);
+        assert_eq!(edited("hello world", 0, "3rx2."), "xxxxo world");
+    }
+
+    /// A session in NORMAL mode over `line` after `keys`, with Escape written `\x1b`, Backspace
+    /// `\x7f` and Enter `\r`: the three keys that reach the box as something other than a character.
+    fn keyed(line: &str, at: usize, keys: &str) -> Session {
+        let mut s = normal(line, at);
+        for c in keys.chars() {
+            match c {
+                '\x1b' => {
+                    s.enter_vi_normal();
+                }
+                '\x7f' => s.backspace(),
+                '\r' => s.type_newline(),
+                c => s.type_char(c),
+            }
+        }
+        s
+    }
+
+    /// `R` types over the line: each character takes the place of the one under the caret, and the
+    /// letters that are instructions in NORMAL mode are typed like any other, until Escape. An `R`
+    /// read as the prefix it was before, waiting for one key, would have left `dw` to delete a word.
+    #[test]
+    fn capital_r_types_each_character_in_place_of_the_one_under_the_caret() {
+        let s = keyed("one two", 0, "Rxy");
+        assert_eq!(s.input, "xye two");
+        assert_eq!(s.caret, 2);
+        assert_eq!(s.vi_mode(), Some(crate::vim::Mode::Replace));
+
+        assert_eq!(keyed("one two", 0, "Rdw").input, "dwe two");
+
+        let s = keyed("one two", 0, "Rxy\x1b");
+        assert_eq!(s.vi_mode(), Some(crate::vim::Mode::Normal));
+        assert_eq!(s.input, "xye two");
+    }
+
+    /// Past the end of a row there is nothing left to type over, so what is typed there is added,
+    /// and the newline stays where it was rather than being typed over and joining the rows.
+    #[test]
+    fn capital_r_past_the_end_of_a_row_adds_to_it() {
+        assert_eq!(keyed("one\ntwo", 2, "Rxyz").input, "onxyz\ntwo");
+        assert_eq!(keyed("ab", 1, "Rxyz").input, "axyz");
+    }
+
+    /// A new line in REPLACE mode, Shift-Enter's, breaks the row and types over nothing, which is what
+    /// Enter does in vim: a newline taking the place of a letter would lose the letter with nothing on
+    /// the screen to say so. It is still one of the characters typed over the line, so Backspace takes
+    /// it back with the rest.
+    #[test]
+    fn a_new_line_while_typing_over_breaks_the_row_without_taking_a_character() {
+        assert_eq!(keyed("one two", 0, "Rx\ry").input, "x\nye two");
+        assert_eq!(keyed("one two", 0, "Rx\ry\x7f\x7f\x7f").input, "one two");
+    }
+
+    /// A marker is not characters to type over, for the reason `r` refuses one: a letter where part
+    /// of `[Image #1]` was names no picture. What is typed at a marker goes in beside it.
+    #[test]
+    fn typing_over_a_marker_goes_in_beside_it() {
+        let (mut s, marker) = around_a_marker();
+        s.caret = "Look ".len();
+        for c in "Rxy".chars() {
+            s.type_char(c);
+        }
+        assert_eq!(s.input, format!("Look xy{marker} Now"));
+        assert_eq!(
+            s.pasted_named(&s.input).len(),
+            1,
+            "{marker} lost its picture"
+        );
+    }
+
+    /// Backspace in REPLACE mode puts back the character each typed one took the place of, and takes
+    /// away one that took the place of nothing. What was there before the `R`, what an earlier `R`
+    /// typed, and what is behind a caret moved off the end of the typing, it steps over rather than
+    /// deletes, as vim does: an ordinary backspace there would eat the line somebody only meant to
+    /// type over.
+    #[test]
+    fn backspace_while_typing_over_puts_back_what_was_there() {
+        assert_eq!(keyed("one two", 4, "Rxy\x7f").input, "one xwo");
+        let s = keyed("one two", 4, "Rxy\x7f\x7f\x7f");
+        assert_eq!(s.input, "one two");
+        assert_eq!(s.caret, 3);
+
+        assert_eq!(keyed("one", 2, "Rxyz\x7f\x7f").input, "onx");
+        assert_eq!(keyed("one", 2, "Rxyz\x7f\x7f\x7f").input, "one");
+        assert_eq!(keyed("one two", 0, "Rx\x1bRy\x7f\x7f").input, "xne two");
+
+        let mut s = keyed("one two", 4, "Rxy");
+        s.move_left();
+        s.backspace();
+        assert_eq!(s.input, "one xyo");
+        assert_eq!(s.caret, 4);
+    }
+
+    /// Everything typed from `R` to Escape is one change, so one `u` puts the line back as it stood
+    /// before the `R`, newlines and all. An `R` left with nothing typed is no change, and the one
+    /// before it can still be taken back. `.` repeats none of it, and not the change before it either,
+    /// which here is the `x`.
+    #[test]
+    fn typing_over_is_one_change_to_undo_and_none_to_repeat() {
+        assert_eq!(keyed("one two", 0, "Rxy\x1bu").input, "one two");
+        assert_eq!(keyed("one two", 0, "Rx\ry\x1bu").input, "one two");
+        assert_eq!(keyed("one two", 0, "xR\x1bu").input, "one two");
+        assert_eq!(keyed("one two", 0, "xRa\x1b.").input, "ae two");
+    }
+
+    /// What is typed over a line that arrived whole is a change of its own. Continuing the change
+    /// begun on the line before it, `u` would put back a prompt that had already been sent.
+    #[test]
+    fn typing_over_a_line_that_arrived_whole_is_a_change_of_its_own() {
+        let mut s = keyed("one", 0, "Rx");
+        assert!(s.submit().is_some());
+        assert_eq!(s.vi_mode(), Some(crate::vim::Mode::Replace));
+        for c in "new\x1bu".chars() {
+            match c {
+                '\x1b' => {
+                    s.enter_vi_normal();
+                }
+                c => s.type_char(c),
+            }
+        }
+        assert_eq!(s.input, "");
+    }
+
+    /// A count in front of `R` is spent on it: the typing goes in once, and the count does not wait
+    /// for the instruction after Escape.
+    #[test]
+    fn a_count_in_front_of_capital_r_is_spent() {
+        assert_eq!(keyed("one two", 0, "3Rxy\x1b").input, "xye two");
+        assert_eq!(keyed("one two", 0, "3Rx\x1bx").input, "xe two");
+    }
+
+    /// Ctrl-W and Ctrl-U in REPLACE mode are Backspace as far as the start of the word and of the
+    /// row, as they are in vim: what was typed goes, what it took the place of comes back, and the
+    /// line from before the `R` is stepped over rather than deleted.
+    #[test]
+    fn the_keys_that_delete_backwards_take_back_what_was_typed_over() {
+        let mut s = keyed("one two", 4, "Rxy");
+        s.delete_word_before();
+        assert_eq!(s.input, "one two");
+        assert_eq!(s.caret, 4);
+
+        let mut s = keyed("one two", 4, "Rxy");
+        s.delete_to_line_start();
+        assert_eq!(s.input, "one two");
+        assert_eq!(s.caret, 0);
+
+        let mut s = keyed("one\ntwo", 5, "Rx");
+        s.delete_to_line_start();
+        assert_eq!(s.input, "one\ntwo");
+        assert_eq!(s.caret, 4);
+        assert_eq!(s.vi_mode(), Some(crate::vim::Mode::Replace));
+    }
+
+    /// `gv` marks out the last selection again, of the same kind and with the caret at the same end,
+    /// however it was left: by Escape, by its own key, or by an operator acting on it.
+    #[test]
+    fn gv_marks_out_the_last_selection_again() {
+        let chars = keyed("one two three", 4, "vl");
+        for leave in ["\x1b", "v", "y"] {
+            let s = keyed("one two three", 4, &format!("vl{leave}0gv"));
+            assert_eq!(s.vi_selection(), chars.vi_selection(), "vl{leave}");
+            assert_eq!(s.caret, chars.caret, "vl{leave}");
+            assert_eq!(s.vi_mode(), chars.vi_mode(), "vl{leave}");
+        }
+
+        let rows = keyed("one\ntwo\nthree", 0, "V1j");
+        let s = keyed("one\ntwo\nthree", 0, "V1j\x1b1jgv");
+        assert_eq!(s.vi_selection(), rows.vi_selection());
+        assert_eq!(s.vi_mode(), Some(crate::vim::Mode::Visual { lines: true }));
+    }
+
+    /// The selection comes back by row and column, so after `V>` it is the same two rows, now
+    /// shifted. Kept as offsets into the line, its far end would have been shifted back onto the
+    /// first row and `gv` would mark out one.
+    #[test]
+    fn gv_after_a_shift_marks_out_the_rows_that_were_shifted() {
+        let shifted = keyed("one\ntwo\nthree", 0, "V1j>");
+        let rows = keyed(&shifted.input, 0, "V1j");
+        assert_eq!(rows.vi_selection(), Some((0, "  one\n  two".len())));
+        let s = keyed("one\ntwo\nthree", 0, "V1j>gv");
+        assert_eq!(s.vi_selection(), rows.vi_selection());
+    }
+
+    /// The selection is kept as it stood before the key that ended it moved anything. `U` leaves the
+    /// caret at the start of what it changed, so a selection read after it would come back as the
+    /// one character there.
+    #[test]
+    fn gv_marks_out_the_selection_as_it_was_before_the_key_that_ended_it() {
+        let changed = keyed("one two\nthree four", 2, "v1jU");
+        assert_eq!(changed.input, "onE TWO\nTHRee four");
+        let marked = keyed(&changed.input, 2, "v1j");
+        let s = keyed("one two\nthree four", 2, "v1jUgv");
+        assert_eq!(s.vi_selection(), marked.vi_selection());
+        assert_eq!(s.caret, marked.caret);
+    }
+
+    /// `gv` with a selection on the screen trades it for the one before, so pressing it again comes
+    /// back, which is what vim does.
+    #[test]
+    fn gv_in_visual_mode_trades_places_with_the_selection_before() {
+        let first = keyed("one two three", 0, "vl");
+        let second = keyed("one two three", 0, "vl\x1bwve");
+        assert_ne!(first.vi_selection(), second.vi_selection());
+
+        let s = keyed("one two three", 0, "vl\x1bwvegv");
+        assert_eq!(s.vi_selection(), first.vi_selection());
+        let s = keyed("one two three", 0, "vl\x1bwvegvgv");
+        assert_eq!(s.vi_selection(), second.vi_selection());
+    }
+
+    /// With no selection made yet there is nothing to mark out again, so `gv` changes nothing rather
+    /// than opening VISUAL mode over the one character the caret is on.
+    #[test]
+    fn gv_with_no_selection_made_yet_does_nothing() {
+        let s = keyed("one two", 3, "gv");
+        assert_eq!(s.vi_mode(), Some(crate::vim::Mode::Normal));
+        assert_eq!(s.caret, 3);
+        assert_eq!(s.vi_selection(), None);
+    }
+
+    /// A line that arrived whole, sent or put away, has none of the rows a selection was kept by, so
+    /// no selection has ended on it and `gv` does nothing there.
+    #[test]
+    fn gv_on_a_line_that_arrived_whole_does_nothing() {
+        let mut sent = keyed("one two", 0, "vl\x1b");
+        assert!(sent.submit().is_some());
+        let mut put_away = keyed("one two", 0, "vl\x1b");
+        assert!(put_away.stash());
+        for mut s in [sent, put_away] {
+            for c in "ithree\x1bgv".chars() {
+                match c {
+                    '\x1b' => {
+                        s.enter_vi_normal();
+                    }
+                    c => s.type_char(c),
+                }
+            }
+            assert_eq!(s.input, "three");
+            assert_eq!(s.vi_mode(), Some(crate::vim::Mode::Normal));
+            assert_eq!(s.vi_selection(), None);
+        }
+    }
+
+    /// A line that no longer reaches where the selection was has it come back as far along as the
+    /// line goes, on a character, and never inside a marker, since there is no position there for
+    /// the caret to rest on.
+    #[test]
+    fn gv_over_a_line_that_has_changed_comes_back_where_the_caret_can_rest() {
+        let s = keyed("one two three", 8, "ve\x1b0wDgv");
+        assert_eq!(s.input, "one ");
+        assert_eq!(s.vi_selection(), keyed("one ", 3, "v").vi_selection());
+
+        let mut s = keyed("abcdefghij", 6, "vl\x1b0i");
+        s.attach(picture(b"pixels"));
+        s.enter_vi_normal();
+        s.type_char('g');
+        s.type_char('v');
+        let anchor = s.anchor.expect("gv opened no selection");
+        for end in [anchor, s.caret] {
+            assert_eq!(
+                s.marker_at(end).map_or(end, |(start, _)| start),
+                end,
+                "an end of the selection is inside the marker in {:?}",
+                s.input
+            );
+        }
+    }
+
+    /// Up taking back a queued prompt empties the box before writing the whole line back, so a
+    /// selection open over it is let go of with both ends past what is left. They are read clamped
+    /// to the line, where read as they stand they would index nothing and panic.
+    #[test]
+    fn taking_back_a_queued_prompt_with_a_selection_open_lets_go_of_it() {
+        let mut s = vi();
+        s.status = Status::Working;
+        s.input = "first".to_string();
+        assert!(s.queue());
+        for c in "one two".chars() {
+            s.type_char(c);
+        }
+        s.enter_vi_normal();
+        for c in "0wv$".chars() {
+            s.type_char(c);
+        }
+        assert!(s.vi_selection().is_some());
+
+        assert!(s.unqueue());
+
+        assert_eq!(s.input, "first\none two");
+        assert_eq!(s.vi_mode(), Some(crate::vim::Mode::Normal));
+    }
+
+    /// `~` changes the case of the character under the caret and moves on, so pressing it again
+    /// walks along the line. A count is how many characters, stopping at the end of the line with the
+    /// caret on the last character rather than past it, and never reaching the line below.
+    #[test]
+    fn tilde_changes_the_case_under_the_caret_and_moves_on() {
+        assert_eq!(edited("Hello World", 0, "~"), "hello World");
+        assert_eq!(after("Hello World", 0, "~"), 1);
+        assert_eq!(edited("abc", 0, "~~~"), "ABC");
+        assert_eq!(edited("Hello World", 0, "3~"), "hELlo World");
+        assert_eq!(after("Hello World", 0, "3~"), 3);
+        assert_eq!(edited("Hello World", 6, "10~"), "Hello wORLD");
+        assert_eq!(after("Hello World", 6, "10~"), 10);
+        assert_eq!(after("ab", 1, "~"), 1);
+        assert_eq!(edited("ab\ncd", 0, "5~"), "AB\ncd");
+        assert_eq!(after("ab\ncd", 0, "5~"), 1);
+    }
+
+    /// A letter whose other case is a different number of bytes moves the end of what `~` changed, so
+    /// the caret has to land after the changed text and not after the bytes that were there: `ı` is
+    /// two bytes and `I` one, and a caret left where the old end was is on the wrong character.
+    #[test]
+    fn tilde_lands_after_a_letter_whose_other_case_is_shorter() {
+        assert_eq!(edited("ıab", 0, "~"), "Iab");
+        assert_eq!(after("ıab", 0, "~"), 1);
+        assert_eq!(edited("ⱥab", 0, "~"), "Ⱥab");
+        assert_eq!(after("ⱥab", 0, "~"), 2);
+    }
+
+    /// `~` is one change, so one undo puts every character back and `.` changes as many again from
+    /// where it moved to, or as many as a count in front of it says.
+    #[test]
+    fn tilde_is_one_change_to_undo_and_to_repeat() {
+        assert_eq!(edited("hello world", 0, "3~u"), "hello world");
+        assert_eq!(edited("hello world", 0, "2~."), "HELLo world");
+        assert_eq!(edited("hello world", 0, "2~3."), "HELLO world");
+        assert_eq!(after("hello world", 0, "2~3."), 5);
+    }
+
+    /// `X` takes the character before the caret, which is `dh`: a count is how many, stopping at the
+    /// start of the line and never taking the newline before it, and what it took goes into the
+    /// register as `x` puts what it takes there.
+    #[test]
+    fn capital_x_deletes_the_characters_before_the_caret() {
+        assert_eq!(edited("hello world", 5, "X"), "hell world");
+        assert_eq!(after("hello world", 5, "X"), 4);
+        assert_eq!(edited("hello world", 5, "3X"), "he world");
+        assert_eq!(after("hello world", 5, "3X"), 2);
+        assert_eq!(edited("hello world", 2, "10X"), "llo world");
+        assert_eq!(edited("hello world", 0, "X"), "hello world");
+        assert_eq!(edited("ab\ncd", 3, "X"), "ab\ncd");
+        assert_eq!(edited("hello world", 5, "3Xp"), "he lloworld");
+        assert_eq!(edited("hello world", 5, "X."), "hel world");
+    }
+
+    /// `gu`, `gU` and `g~` are operators, so they change the case of whatever stretch a motion or an
+    /// object names, and leave the caret at its start, as a yank does. A count multiplies with the
+    /// motion's as it does for `d`.
+    #[test]
+    fn the_case_operators_change_the_stretch_a_motion_names() {
+        assert_eq!(edited("hello world", 2, "gUiw"), "HELLO world");
+        assert_eq!(after("hello world", 2, "gUiw"), 0);
+        assert_eq!(edited("hello world foo", 2, "gUw"), "heLLO world foo");
+        assert_eq!(after("hello world foo", 2, "gUw"), 2);
+        assert_eq!(edited("hello world foo", 8, "gUb"), "hello WOrld foo");
+        assert_eq!(after("hello world foo", 8, "gUb"), 6);
+        assert_eq!(edited("hello world", 3, "gU$"), "helLO WORLD");
+        assert_eq!(edited("hello world", 3, "gU0"), "HELlo world");
+        assert_eq!(edited("hello world", 0, "gUfo"), "HELLO world");
+        assert_eq!(edited("hello world", 2, "2gUl"), "heLLo world");
+        assert_eq!(edited("a b c d", 0, "gU3w"), "A B C d");
+        assert_eq!(edited("HELLO WORLD", 0, "guiw"), "hello WORLD");
+        assert_eq!(edited("Hello World", 0, "g~iw"), "hELLO World");
+        assert_eq!(edited("Straße", 0, "gUiw"), "STRASSE");
+    }
+
+    /// Each case operator doubled is the line, and so is it spelled with its `g` again, which vi
+    /// takes as well: `guu` and `gugu`. A count is how many lines, and the row keys take the row
+    /// above or below with this one, as `dj` does.
+    #[test]
+    fn a_case_operator_doubled_is_the_line() {
+        for keys in ["gUU", "gUgU"] {
+            assert_eq!(
+                edited("one\ntwo\nthree", 5, keys),
+                "one\nTWO\nthree",
+                "{keys}"
+            );
+            assert_eq!(after("one\ntwo\nthree", 5, keys), 4, "{keys}");
+        }
+        for keys in ["guu", "gugu"] {
+            assert_eq!(edited("ONE\nTWO", 5, keys), "ONE\ntwo", "{keys}");
+        }
+        for keys in ["g~~", "g~g~"] {
+            assert_eq!(edited("One\nTwo", 5, keys), "One\ntWO", "{keys}");
+        }
+        assert_eq!(edited("one\ntwo\nthree", 0, "3gUU"), "ONE\nTWO\nTHREE");
+        assert_eq!(edited("one\ntwo\nthree", 0, "gUj"), "ONE\nTWO\nthree");
+        assert_eq!(edited("one\ntwo\nthree", 5, "gUk"), "ONE\nTWO\nthree");
+        assert_eq!(edited("one\ntwo\nthree", 0, "gUG"), "ONE\nTWO\nTHREE");
+    }
+
+    /// A case change is one change, so one undo puts the stretch back, and `.` changes the case of
+    /// the same kind of stretch wherever the caret has gone.
+    #[test]
+    fn a_case_operator_is_one_change_to_undo_and_to_repeat() {
+        assert_eq!(edited("hello world", 0, "gUiwu"), "hello world");
+        assert_eq!(edited("hello world", 0, "gUiww."), "HELLO WORLD");
+        assert_eq!(edited("one\ntwo", 0, "gUUG."), "ONE\nTWO");
+    }
+
+    /// Only a key that takes the stretch away or copies it fills the register, which is vi's rule. A
+    /// replaced character, a case change and a shift leave what they acted on in the line, and a
+    /// register they filled would lose the word somebody had yanked to put back. `x` is the control:
+    /// it does fill the register, so the same keys with it put back what it took.
+    #[test]
+    fn a_key_that_leaves_the_stretch_in_the_line_leaves_the_register_alone() {
+        assert_eq!(edited("one two", 0, "yiwx$p"), "ne twoo");
+        for (keys, left) in [
+            ("rx", "xne two"),
+            ("~", "One two"),
+            ("gUiw", "ONE two"),
+            ("g~~", "ONE TWO"),
+            ("guu", "one two"),
+            (">>", "  one two"),
+            ("vlU", "ONe two"),
+            ("vlrx", "xxe two"),
+        ] {
+            assert_eq!(
+                edited("one two", 0, &format!("yiw{keys}$p")),
+                format!("{left}one"),
+                "{keys} filled the register"
+            );
+        }
+    }
+
     /// A stopped turn still occupies wall time when no request has completed.
     #[test]
     fn unanswered_turns_keep_the_session_clock_and_the_completed_breakdown() {

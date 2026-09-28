@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+bravebot-config = { path = "../config" }
 bravebot-core = { path = "../core" }
 bravebot-net = { path = "../net" }
 bravebot-sandbox = { path = "../sandbox" }

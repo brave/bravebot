@@ -15,26 +15,26 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 |---|---|---|---|
 | [labels.md](labels.md) | `LABEL` | 10 | the lattice, taint, who may read what, and how a first label is assigned |
 | [routing.md](routing.md) | `ROUTE` | 8 | where an effect may land and what may decide it |
-| [trust-map.md](trust-map.md) | `TRUST` | 21 | which paths the user vouched for, what a write does to that record, and how long an answer lasts |
+| [trust-map.md](trust-map.md) | `TRUST` | 23 | which paths the user vouched for, what a write does to that record, and how long an answer lasts |
 | [permissions.md](permissions.md) | `PERM` | 15 | rules written in advance about what to ask about and what to refuse |
 | [processors.md](processors.md) | `PROC` | 12 | the one component that reads untrusted content, and what it may do with it |
-| [vetting.md](vetting.md) | `CHECK` | 14 | checking quarantined content for an injection attempt before every prompt that would promote it, so a person deciding has a second opinion |
-| [delegation.md](delegation.md) | `DELEGATE` | 22 | a second planner, narrower than the first, and what crosses back from one |
+| [vetting.md](vetting.md) | `CHECK` | 15 | checking quarantined content for an injection attempt before every prompt that would promote it, so a person deciding has a second opinion |
+| [delegation.md](delegation.md) | `DELEGATE` | 23 | a second planner, narrower than the first, and what crosses back from one |
 | [addressing-a-definition.md](addressing-a-definition.md) | `ADDRESS` | 12 | running one of those definitions yourself, in place of describing the work and hoping the planner picks it |
-| [turns.md](turns.md) | `TURN` | 5 | how long a turn may go on, what happens when it does not stop, and what is said when it produces nothing or checks nothing |
+| [turns.md](turns.md) | `TURN` | 6 | how long a turn may go on, what happens when it does not stop, and what is said when it produces nothing or checks nothing |
 | [prompting.md](prompting.md) | `PROMPT` | 10 | every moment the system stops and puts something to a human, and what an answer grants |
 | [permission-modes.md](permission-modes.md) | `MODE` | 10 | a standing answer to those prompts: accepting edits, planning, or asking about nothing at all |
 | [naming-files.md](naming-files.md) | `NAME` | 7 | writing `@path` in a prompt: what it puts into the turn and what it vouches for |
 | [pasting.md](pasting.md) | `PASTE` | 9 | what Ctrl-V puts into a turn, text or picture, and on what footing |
 | [dropping.md](dropping.md) | `DROP` | 10 | what dragging a file onto a window puts into a turn, and on what footing |
 | [shell-mode.md](shell-mode.md) | `SHELL` | 5 | the `!` prompt: a line the user typed, and why the planner can never reach it |
-| [skills.md](skills.md) | `SKILL` | 11 | `AGENTS.md` and skills: what a skill file is and what each source is trusted for |
+| [skills.md](skills.md) | `SKILL` | 12 | `AGENTS.md` and skills: what a skill file is and what each source is trusted for |
 | [instructions.md](instructions.md) | `INSTR` | 9 | which instruction files are looked for, where, in what order, and where what they say ends up |
-| [cli.md](cli.md) | `CLI` | 15 | running without the interactive interface: one-shot tasks, piped input, and `doctor` |
+| [cli.md](cli.md) | `CLI` | 16 | running without the interactive interface: one-shot tasks, piped input, and `doctor` |
 | [manifest.md](manifest.md) | `MANIFEST` | 11 | plan the whole run first, then execute it with no model in the control path |
-| [terminal-input.md](terminal-input.md) | `INPUT` | 36 | what the user types into: the box, the keys, and where a terminal's own limits show through |
-| [commands.md](commands.md) | `CMD` | 8 | a line beginning with `/`: where one may come from, when a line is one, and what it does to the line |
-| [terminal-transcript.md](terminal-transcript.md) | `VIEW` | 24 | what is drawn back: the transcript, a resumed session, and how content reaches the screen |
+| [terminal-input.md](terminal-input.md) | `INPUT` | 37 | what the user types into: the box, the keys, and where a terminal's own limits show through |
+| [commands.md](commands.md) | `CMD` | 9 | a line beginning with `/`: where one may come from, when a line is one, what it does to the line, and what a slash word is offered |
+| [terminal-transcript.md](terminal-transcript.md) | `VIEW` | 25 | what is drawn back: the transcript, a resumed session, and how content reaches the screen |
 | [watching.md](watching.md) | `WATCH` | 21 | work done outside the transcript: a delegate's own lines, what a command printed, a question asked beside it, and the mode Ctrl-L opens over them |
 | [scroller.md](scroller.md) | `SCROLL` | 9 | reading back through what happened: the mode Ctrl-O opens over the transcript, and the keys inside it |
 | [credential-protection.md](credential-protection.md) | `CRED` | 25 | where credentials come from, which of them may be held at all, and what each tier owes |
@@ -44,7 +44,8 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [mcp-servers.md](mcp-servers.md) | `SERVERS` | 14 | how a person declares one of those servers, what that declaration is trusted for, and what is asked before a tool from one runs |
 | [hooks.md](hooks.md) | `HOOK` | 8 | a command a person asked to have run when something happens |
 | [network-egress.md](network-egress.md) | `NET` | 9 | every request that leaves this process, and what comes back |
-| [backends.md](backends.md) | `BACKEND` | 42 | which service answers a request, and what a person may choose between |
+| [backends.md](backends.md) | `BACKEND` | 44 | which service answers a request, and what a person may choose between |
+| [import.md](import.md) | `IMPORT` | 9 | a first start with nothing configured: what Claude Code and opencode set up, and what of it may be copied here |
 | [compaction.md](compaction.md) | `COMPACT` | 12 | shortening a long conversation into a summary of itself, in the request only |
 | [loop.md](loop.md) | `LOOP` | 15 | sending one prompt again and again until somebody stops it |
 | [goal.md](goal.md) | `GOAL` | 17 | one condition a person set, judged after every turn, until it holds |
@@ -65,19 +66,20 @@ the routing-versus-content split they share.
 
 | Spec | Id | Clauses | Tool |
 |---|---|---|---|
-| [tools/tool-surface.md](tools/tool-surface.md) | `TOOL` | 4 | the surface every tool shares |
+| [tools/tool-surface.md](tools/tool-surface.md) | `TOOL` | 5 | the surface every tool shares |
 | [tools/read-file.md](tools/read-file.md) | `READ` | 7 | `read_file` |
 | [tools/list-files.md](tools/list-files.md) | `LIST` | 5 | `list_files` |
 | [tools/search.md](tools/search.md) | `SEARCH` | 9 | `search` |
+| [tools/read-git.md](tools/read-git.md) | `GIT` | 14 | `read_git` |
 | [tools/lsp.md](tools/lsp.md) | `LSP` | 10 | `lsp` |
 | [tools/write-file.md](tools/write-file.md) | `WRITE` | 4 | `write_file` |
 | [tools/edit-file.md](tools/edit-file.md) | `EDIT` | 4 | `edit_file` |
 | [tools/spawn-processor.md](tools/spawn-processor.md) | `SPAWN` | 4 | `spawn_processor` |
 | [tools/spawn-agent.md](tools/spawn-agent.md) | `AGENT` | 5 | `spawn_agent` |
-| [tools/run.md](tools/run.md) | `RUN` | 21 | `run` |
+| [tools/run.md](tools/run.md) | `RUN` | 22 | `run` |
 | [tools/command-line.md](tools/command-line.md) | `CMDLINE` | 16 | `run`'s command line, compiled rather than interpreted |
-| [tools/read-output.md](tools/read-output.md) | `OUTPUT` | 3 | `read_output` |
-| [tools/vet-content.md](tools/vet-content.md) | `VET` | 3 | `vet_content` |
+| [tools/read-output.md](tools/read-output.md) | `OUTPUT` | 4 | `read_output` |
+| [tools/vet-content.md](tools/vet-content.md) | `VET` | 4 | `vet_content` |
 | [tools/fetch-url.md](tools/fetch-url.md) | `FETCH` | 6 | `fetch_url` |
 | [tools/load-skill.md](tools/load-skill.md) | `LOAD` | 3 | `load_skill` |
 | [tools/todo-write.md](tools/todo-write.md) | `TODO` | 2 | `todo_write` |

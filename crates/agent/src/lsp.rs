@@ -29,20 +29,32 @@ use bravebot_core::policy::Policy;
 use bravebot_core::value::Labelled;
 use bravebot_lsp::{Answer, Location, LspResult, Operation, Servers};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 /// The language servers a session has started.
 ///
 /// Built once for a session and carried by the turn, because indexing is the whole cost and paying it
 /// per question would make this slower than the search it replaces.
+///
+/// A handle rather than the set itself, so a delegate asks the servers its session started instead
+/// of starting its own (LSP-8). Delegates run on threads beside the turn and beside each other, so
+/// the set is behind a lock held for the whole of one question, prompt included. Every handle but
+/// the session's belongs to a delegate, and a delegate has ended before the turn that spawned it
+/// does, so dropping the session's handle still stops every server.
 pub struct LanguageServers {
-    servers: Servers,
+    servers: Arc<Mutex<Servers>>,
     root: PathBuf,
 }
 
 impl std::fmt::Debug for LanguageServers {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let running = self
+            .servers
+            .try_lock()
+            .ok()
+            .map(|servers| servers.running());
         f.debug_struct("LanguageServers")
-            .field("running", &self.servers.running())
+            .field("running", &running)
             .finish_non_exhaustive()
     }
 }
@@ -85,14 +97,25 @@ impl LanguageServers {
             // person approved and another to a question put to a server. And the same withheld
             // credentials, which is RUN-12: a person approving a server did not approve handing it
             // what this agent authenticates with.
-            servers: Servers::new(
+            servers: Arc::new(Mutex::new(Servers::new(
                 root.clone(),
                 state,
                 resolve_program,
                 incognito,
                 bravebot_config::scrub::names(&bravebot_config::Settings::load()),
-            ),
+            ))),
             root,
+        }
+    }
+
+    /// The same servers, for a delegate to ask.
+    ///
+    /// What a delegate may ask is still its own policy's to decide: the capability is checked
+    /// against the set the question comes with, not against whoever started the server.
+    pub(crate) fn share(&self) -> Self {
+        Self {
+            servers: Arc::clone(&self.servers),
+            root: self.root.clone(),
         }
     }
 
@@ -103,9 +126,10 @@ impl LanguageServers {
 
     /// Ask one question, starting a server for the file's language if none is running.
     ///
-    /// The person is asked before a server starts, once per language per session. A refusal comes
-    /// back as an error the planner is told about, since what it needs to know is that no server
-    /// answered and that asking again will not change it.
+    /// The person is asked before a server starts, once per language per session, through the
+    /// confirmer of whichever run asked. A refusal comes back as an error the planner is told
+    /// about, since what it needs to know is that no server answered and that asking again will
+    /// not change it.
     pub fn ask<S: Sink, C: Confirmer + ?Sized>(
         &mut self,
         policy: &mut Policy<'_, S>,
@@ -113,10 +137,13 @@ impl LanguageServers {
         question: &bravebot_lsp::Question<'_>,
         workspace: &crate::Workspace,
     ) -> LspResult<Answer> {
-        if self.servers.running() != 0 {
+        // A run that panicked mid-question leaves the lock poisoned and the map whole: a server is
+        // in it only once it has started.
+        let mut servers = self.servers.lock().unwrap_or_else(|held| held.into_inner());
+        if servers.running() != 0 {
             workspace.mark_rewind_gap(crate::rewind::CoverageGap::LanguageServer);
         }
-        self.servers.ask(policy, question, &mut |starting| {
+        servers.ask(policy, question, &mut |starting| {
             let request = ServerRequest {
                 language: starting.language.as_str(),
                 program: starting.resolved.display().to_string(),
@@ -837,29 +864,22 @@ mod tests {
         }
     }
 
-    /// LSP-9: a delegate gets this only where its capability set says so, and no kind grants it
-    /// today, so no delegate is offered the tool.
+    /// LSP-9: a delegate gets this only where its capability set says so. The kinds that may run a
+    /// program hold it, because starting a server runs the project's build tooling, and a reader
+    /// holds neither.
     #[test]
-    fn a_delegate_without_the_capability_is_refused() {
-        for name in bravebot_core::delegate::Kind::NAMES {
-            let kind = bravebot_core::delegate::Kind::from_name(name).expect("enumerated");
-            let granted = kind.capabilities();
-            let offered: Vec<String> = crate::tools::for_delegate(&granted, None)
-                .iter()
-                .map(|tool| tool.function.name.clone())
-                .collect();
+    fn a_checker_and_a_worker_are_offered_lsp_and_a_reader_is_not() {
+        use bravebot_core::delegate::Kind;
 
-            if granted.contains(&Capability::LanguageServer) {
-                assert!(
-                    offered.iter().any(|tool| tool == "lsp"),
-                    "{name} holds the capability and must be offered the tool"
-                );
-            } else {
-                assert!(
-                    !offered.iter().any(|tool| tool == "lsp"),
-                    "{name} was offered lsp without holding the capability"
-                );
-            }
+        for (kind, offered_lsp) in [
+            (Kind::Reader, false),
+            (Kind::Checker, true),
+            (Kind::Worker, true),
+        ] {
+            let offered = crate::tools::for_delegate(&kind.capabilities(), None, None)
+                .iter()
+                .any(|tool| tool.function.name == "lsp");
+            assert_eq!(offered, offered_lsp, "a {kind} and lsp");
         }
     }
 

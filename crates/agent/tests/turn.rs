@@ -4,6 +4,8 @@
 //! a reply. The injection test is the important one: it asserts that a file whose
 //! contents try to redirect the turn cannot do so.
 
+mod repository;
+
 use bravebot_agent::Workspace;
 use bravebot_agent::turn::{
     self, MAX_TOOL_ROUNDS, PastedImage, ROUNDS_AFTER_WRITING_BEFORE_RUNNING, ROUNDS_BEFORE_WRITING,
@@ -1943,6 +1945,20 @@ fn time_spent_waiting_for_an_approval_is_not_charged_to_the_tool() {
             bravebot_agent::confirm::Decision::Reject
         }
 
+        fn confirm_tool_list(
+            &mut self,
+            _request: &bravebot_agent::confirm::ToolListRequest,
+        ) -> bravebot_agent::confirm::Decision {
+            bravebot_agent::confirm::Decision::Reject
+        }
+
+        fn confirm_mcp_call(
+            &mut self,
+            _request: &bravebot_agent::confirm::McpCallRequest,
+        ) -> bravebot_agent::confirm::CallDecision {
+            bravebot_agent::confirm::CallDecision::reject()
+        }
+
         fn ask_user(
             &mut self,
             _asking: &bravebot_core::ask::Asking,
@@ -2314,6 +2330,20 @@ impl bravebot_agent::Confirmer for RecordingConfirmer {
         _request: &bravebot_agent::confirm::ExposureRequest,
     ) -> bravebot_agent::Decision {
         bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_tool_list(
+        &mut self,
+        _request: &bravebot_agent::confirm::ToolListRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_mcp_call(
+        &mut self,
+        _request: &bravebot_agent::confirm::McpCallRequest,
+    ) -> bravebot_agent::confirm::CallDecision {
+        bravebot_agent::confirm::CallDecision::reject()
     }
 
     /// These tests are about writes. A question they did not set up gets no answer.
@@ -3107,6 +3137,20 @@ impl bravebot_agent::Confirmer for SaysOnce {
         bravebot_agent::Decision::Reject
     }
 
+    fn confirm_tool_list(
+        &mut self,
+        _request: &bravebot_agent::confirm::ToolListRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_mcp_call(
+        &mut self,
+        _request: &bravebot_agent::confirm::McpCallRequest,
+    ) -> bravebot_agent::confirm::CallDecision {
+        bravebot_agent::confirm::CallDecision::reject()
+    }
+
     fn ask_user(
         &mut self,
         _asking: &bravebot_core::ask::Asking,
@@ -3539,6 +3583,87 @@ fn each_tool_call_is_announced_before_it_runs_and_summarised_after() {
     assert!(!finished.failed);
 }
 
+/// A round of calls made for different reasons used to be explained by one line that fitted
+/// only one of them. Each call carries its own reason to its own line, from the moment it starts
+/// to the moment it is summarised, refused or not: the finished line replaces the running one,
+/// so a reason on only one of them is a reason that vanishes as the call ends.
+#[test]
+fn each_call_is_announced_and_summarised_with_its_own_reason() {
+    let scratch = Scratch::new("announced-why");
+    std::fs::write(scratch.path.join("target.txt"), "one\ntwo\nthree\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        two_tool_requests(
+            (
+                "read_file",
+                r#"{"path":"target.txt","why":"see what the file holds"}"#,
+            ),
+            (
+                "read_file",
+                r#"{"path":"../outside.txt","why":"compare it with the copy outside"}"#,
+            ),
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read them"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let reasons = |lines: &[bravebot_agent::report::Activity]| {
+        lines
+            .iter()
+            .map(|activity| (activity.line(), activity.why.clone()))
+            .collect::<Vec<_>>()
+    };
+    let expected = vec![
+        (
+            "Read(target.txt)".to_string(),
+            "see what the file holds".to_string(),
+        ),
+        (
+            "Read(../outside.txt)".to_string(),
+            "compare it with the copy outside".to_string(),
+        ),
+    ];
+    assert_eq!(reasons(&reporter.started), expected);
+    assert_eq!(reasons(&reporter.finished), expected);
+    assert!(
+        reporter.finished[1].failed,
+        "the read outside the workspace was not refused"
+    );
+
+    let body = received.recv().expect("request body");
+    let request: serde_json::Value = serde_json::from_str(&body).expect("json");
+    let read = request["tools"]
+        .as_array()
+        .expect("tools offered")
+        .iter()
+        .find(|tool| tool["function"]["name"] == "read_file")
+        .expect("read_file offered");
+    assert!(
+        read["function"]["parameters"]["required"]
+            .as_array()
+            .expect("required")
+            .contains(&serde_json::json!("why")),
+        "the planner was offered a read it could make without saying why"
+    );
+}
+
 /// A refused call has to read as a refusal, or the transcript shows work that never happened.
 #[test]
 fn a_refused_call_is_reported_as_one() {
@@ -3882,6 +4007,20 @@ fn a_stale_edit_is_refused() {
             _request: &bravebot_agent::confirm::ExposureRequest,
         ) -> bravebot_agent::Decision {
             bravebot_agent::Decision::Reject
+        }
+
+        fn confirm_tool_list(
+            &mut self,
+            _request: &bravebot_agent::confirm::ToolListRequest,
+        ) -> bravebot_agent::confirm::Decision {
+            bravebot_agent::confirm::Decision::Reject
+        }
+
+        fn confirm_mcp_call(
+            &mut self,
+            _request: &bravebot_agent::confirm::McpCallRequest,
+        ) -> bravebot_agent::confirm::CallDecision {
+            bravebot_agent::confirm::CallDecision::reject()
         }
         fn ask_user(
             &mut self,
@@ -5859,6 +5998,20 @@ fn a_cancelled_turn_stops_before_running_a_tool() {
             bravebot_agent::Decision::Reject
         }
 
+        fn confirm_tool_list(
+            &mut self,
+            _request: &bravebot_agent::confirm::ToolListRequest,
+        ) -> bravebot_agent::confirm::Decision {
+            bravebot_agent::confirm::Decision::Reject
+        }
+
+        fn confirm_mcp_call(
+            &mut self,
+            _request: &bravebot_agent::confirm::McpCallRequest,
+        ) -> bravebot_agent::confirm::CallDecision {
+            bravebot_agent::confirm::CallDecision::reject()
+        }
+
         fn ask_user(
             &mut self,
             _asking: &bravebot_core::ask::Asking,
@@ -6134,6 +6287,7 @@ fn take_a_turn(
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
 }
 
 /// The point of a session. Asked to try something again, the model has to know what it was
@@ -6270,8 +6424,10 @@ fn a_turn_that_failed_is_still_part_of_the_conversation() {
     let scratch = Scratch::new("session-after-failure");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    // A reply with no content at all: an error, and not one worth sending again.
+    // Two replies with no content at all: the turn asks once after the first and ends on the
+    // second (TURN-6).
     let (endpoint, received) = serve_sequence(vec![
+        r#"{"model":"test-model","choices":[]}"#.to_string(),
         r#"{"model":"test-model","choices":[]}"#.to_string(),
         reply_with("four"),
     ]);
@@ -6297,10 +6453,15 @@ fn a_turn_that_failed_is_still_part_of_the_conversation() {
     .expect("the second turn runs");
 
     let _first = received.recv().expect("a first request");
-    let second = received.recv().expect("a second request");
+    let _asked_again = received.recv().expect("the failing turn's second request");
+    let next_turn = received.recv().expect("the next turn's request");
     assert!(
-        second.contains("what is 2 + 2?"),
-        "the failed turn was forgotten: {second}"
+        next_turn.contains("try that again"),
+        "the third request was not the next turn's: {next_turn}"
+    );
+    assert!(
+        next_turn.contains("what is 2 + 2?"),
+        "the failed turn was forgotten: {next_turn}"
     );
 }
 
@@ -6998,6 +7159,7 @@ fn a_file_nobody_may_name_is_fixed_through_its_reference() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
     assert!(outcome.clean, "no gate should have refused");
 
@@ -7062,6 +7224,7 @@ fn every_write_through_a_reference_is_shown() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     assert_eq!(
@@ -7303,6 +7466,7 @@ fn quarantined_content_reaches_the_person_and_not_the_planner() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     let shown: String = reporter
@@ -7384,6 +7548,7 @@ fn the_terminal_names_the_file_and_says_who_read_it() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     let read = reporter
@@ -7461,6 +7626,7 @@ fn a_file_a_processor_left_alone_stays_exactly_as_it_was() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     assert_eq!(
@@ -7531,6 +7697,7 @@ fn each_result_says_whether_the_model_can_read_it() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     use bravebot_agent::report::Landing;
@@ -7564,6 +7731,7 @@ fn each_result_says_whether_the_model_can_read_it() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     assert_eq!(
@@ -7622,6 +7790,7 @@ fn a_result_the_planner_read_is_glimpsed_under_its_call() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     let [glimpse] = reporter.returned.as_slice() else {
@@ -7673,6 +7842,7 @@ fn a_sentence_the_driver_wrote_about_a_call_is_not_glimpsed() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     let [glimpse] = reporter.returned.as_slice() else {
@@ -7726,6 +7896,7 @@ fn a_command_the_planner_read_is_glimpsed_from_its_end() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let [glimpse] = reporter.returned.as_slice() else {
@@ -7801,6 +7972,7 @@ fn what_a_processor_says_reaches_the_person_and_no_model() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     // The person is shown it, and told it is the processor speaking.
@@ -7889,6 +8061,7 @@ fn what_a_processor_said_is_put_beside_the_write_it_describes() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     let asked = confirmer
@@ -7955,6 +8128,7 @@ fn a_write_the_planner_wrote_itself_carries_no_claim() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     let asked = confirmer
@@ -8013,6 +8187,7 @@ fn an_answer_about_nothing_in_particular_can_be_written_nowhere() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     assert_eq!(
@@ -8110,6 +8285,7 @@ fn an_answer_that_names_no_document_is_written_nowhere() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     assert_eq!(
@@ -8165,6 +8341,7 @@ fn a_processors_output_cannot_be_a_destination() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     assert!(
@@ -8349,6 +8526,7 @@ fn a_turn_that_wrote_and_ran_is_not_asked_about_it() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn finishes");
 
     let bodies: Vec<String> = received.try_iter().collect();
@@ -8411,6 +8589,7 @@ fn spending_an_ambient_authority_is_recorded_in_the_trail_and_an_ordinary_line_i
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn finishes");
 
     let recorded: Vec<&String> = sink
@@ -8640,6 +8819,7 @@ fn a_run_the_person_refused_leaves_the_change_reported_as_never_built() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn finishes");
 
     assert!(
@@ -8976,6 +9156,178 @@ fn a_turn_that_has_written_is_not_told_to_write() {
             .iter()
             .any(|body| body.contains("nothing written yet")),
         "a turn that wrote on its first round was told it had written nothing"
+    );
+}
+
+/// A turn continuing one that was stopped after a write is not told that nothing is written yet.
+///
+/// A stop is usually not the end of the task. The next prompt is `continue`, and the change the
+/// stopped turn wrote is the change being continued, so telling the planner to start delivering
+/// would answer something nobody asked. Two turns over one conversation, which is how every front
+/// end holds a session, and the second reads past the threshold without writing.
+#[test]
+fn a_turn_after_a_stopped_turn_that_wrote_is_not_told_to_write() {
+    /// Stops the turn once its write has finished, standing in for Escape pressed after it.
+    struct StopAfterTheWrite(bravebot_core::cancel::Cancel);
+
+    impl bravebot_agent::report::Reporter for StopAfterTheWrite {
+        fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+        fn tool_finished(&mut self, activity: bravebot_agent::report::Activity) {
+            if activity.tool == "write_file" {
+                self.0.cancel();
+            }
+        }
+    }
+
+    let scratch = Scratch::new("stopped-after-writing");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request(
+            "write_file",
+            r#"{"path":"notes.txt","contents":"first slice"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let cancel = bravebot_core::cancel::Cancel::new();
+    let stopped = turn::resume(
+        &config_for(&endpoint),
+        &egress,
+        &workspace,
+        &Task::new("add a toggle"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut StopAfterTheWrite(cancel.clone()),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &cancel,
+    )
+    .outcome
+    .expect_err("a stopped turn must not succeed");
+    assert!(
+        matches!(stopped, turn::TurnError::Cancelled { .. }),
+        "the first turn ended some other way, so this says nothing about a stop: {stopped:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("notes.txt")).unwrap(),
+        "first slice",
+        "the first turn wrote nothing, so this says nothing about continuing one that did"
+    );
+
+    let mut replies: Vec<String> = (0..ROUNDS_BEFORE_WRITING + 1)
+        .map(|_| tool_request("list_files", r#"{"directory":"."}"#))
+        .collect();
+    replies.push(reply_with("done"));
+    let (endpoint, received) = serve_sequence(replies);
+    turn::resume(
+        &config_for(&endpoint),
+        &egress,
+        &workspace,
+        &Task::new("continue"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the second turn finishes");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(
+        bodies.len(),
+        ROUNDS_BEFORE_WRITING + 2,
+        "the second turn never read past the threshold, so it could not have been told"
+    );
+    assert!(
+        !bodies
+            .iter()
+            .any(|body| body.contains("nothing written yet")),
+        "a turn continuing a stopped one that wrote was told it had written nothing"
+    );
+}
+
+/// A turn after one that wrote and answered starts from nothing written.
+///
+/// The converse, and the reason the count does not simply run for the whole session. An answer is
+/// where a task usually ends, so the next prompt is usually a new task, and a planner reading its
+/// way through that one without writing is in exactly the state the line is for.
+#[test]
+fn a_turn_after_a_completed_turn_that_wrote_is_still_told_to_write() {
+    let scratch = Scratch::new("answered-after-writing");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request(
+            "write_file",
+            r#"{"path":"notes.txt","contents":"first slice"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    turn::resume(
+        &config_for(&endpoint),
+        &egress,
+        &workspace,
+        &Task::new("add a toggle"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the first turn finishes");
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("notes.txt")).unwrap(),
+        "first slice",
+        "the first turn wrote nothing, so this says nothing about a turn after one that did"
+    );
+
+    let mut replies: Vec<String> = (0..ROUNDS_BEFORE_WRITING + 1)
+        .map(|_| tool_request("list_files", r#"{"directory":"."}"#))
+        .collect();
+    replies.push(reply_with("here is what I found"));
+    let (endpoint, received) = serve_sequence(replies);
+    turn::resume(
+        &config_for(&endpoint),
+        &egress,
+        &workspace,
+        &Task::new("add a second toggle"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the second turn finishes");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    let fired = bodies
+        .iter()
+        .position(|body| body.contains("nothing written yet"))
+        .expect("a new task after an answered one was never told it had written nothing");
+    assert_eq!(
+        fired, ROUNDS_BEFORE_WRITING,
+        "the line came on the wrong round"
     );
 }
 
@@ -9988,6 +10340,48 @@ fn the_planner_is_told_to_build_and_test_what_it_changed() {
     );
 }
 
+/// The screen shows every call a turn makes and nothing of why it made it, so a session reads as
+/// a list of commands. What the model writes before a round of calls is already drawn; a model
+/// that is never asked for it mostly sends the calls bare.
+#[test]
+fn the_planner_is_told_to_say_why_before_each_round_of_calls() {
+    let scratch = Scratch::new("say-why-before-calls");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(&reply_with("the answer"));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("do the work"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let body = received.recv().expect("request body");
+    assert!(
+        body.contains("Before each round of tool calls, write one short line saying why"),
+        "the planner was not told to say why before its calls"
+    );
+    // Kept to a line so it costs a few tokens a round rather than a paragraph.
+    assert!(
+        body.contains("One line, not a plan"),
+        "the planner was not told to keep the reason to one line"
+    );
+    // Each call says its own reason too, so the line before the round is about the step and the
+    // two do not say the same thing twice.
+    assert!(
+        body.contains("Each call's own why says what that call is for"),
+        "the planner was not told the line and each call's reason differ"
+    );
+}
+
 /// A project without one is the ordinary case, and it must not cost a notice or a refusal.
 #[test]
 fn a_missing_agents_file_is_not_an_error() {
@@ -10090,6 +10484,7 @@ fn the_preamble_is_not_stored_in_the_conversation() {
             None,
             &bravebot_core::cancel::Cancel::new(),
         )
+        .outcome
         .expect("turn runs");
     }
 
@@ -10452,6 +10847,20 @@ impl bravebot_agent::Confirmer for AnswersWith {
         _request: &bravebot_agent::confirm::ExposureRequest,
     ) -> bravebot_agent::Decision {
         bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_tool_list(
+        &mut self,
+        _request: &bravebot_agent::confirm::ToolListRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_mcp_call(
+        &mut self,
+        _request: &bravebot_agent::confirm::McpCallRequest,
+    ) -> bravebot_agent::confirm::CallDecision {
+        bravebot_agent::confirm::CallDecision::reject()
     }
 
     /// Refuses. A test double is not a person agreeing to start a process.
@@ -10944,6 +11353,20 @@ impl bravebot_agent::Confirmer for AskedAboutRuns {
         bravebot_agent::Decision::Reject
     }
 
+    fn confirm_tool_list(
+        &mut self,
+        _request: &bravebot_agent::confirm::ToolListRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_mcp_call(
+        &mut self,
+        _request: &bravebot_agent::confirm::McpCallRequest,
+    ) -> bravebot_agent::confirm::CallDecision {
+        bravebot_agent::confirm::CallDecision::reject()
+    }
+
     fn ask_user(
         &mut self,
         _asking: &bravebot_core::ask::Asking,
@@ -11002,6 +11425,7 @@ fn a_run_turn_with_trust(
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
 }
 
 /// The same, for a session that keeps the record of lines somebody asked to be remembered past it.
@@ -11037,6 +11461,7 @@ fn a_run_turn_remembering(
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
 }
 
 /// The record for a workspace, as the turn resolves it.
@@ -11149,6 +11574,7 @@ fn a_run_turn_carrying(
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs")
     .asked_about
 }
@@ -11413,6 +11839,7 @@ fn a_quarantined_result_from_a_remembered_line_says_nothing_about_vouching() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert!(
@@ -11514,6 +11941,7 @@ fn an_unattended_turn_runs_no_program() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn completes");
 
     assert!(
@@ -11852,6 +12280,7 @@ fn what_a_program_printed_does_not_reach_the_planner() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     // The first request is the one that asked for the call; the second carries its result.
@@ -11979,6 +12408,7 @@ fn a_quarantined_reference_is_fed_to_a_program_the_planner_may_not_read() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert_eq!(
@@ -12044,6 +12474,7 @@ fn a_private_reference_fed_to_a_vouched_line_is_still_put_to_a_person() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let asked = seen.lock().unwrap();
@@ -12092,6 +12523,7 @@ fn a_background_line_cannot_be_fed_a_reference() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let _first = received.recv().expect("the first round");
@@ -12142,6 +12574,7 @@ fn a_line_naming_a_file_for_standard_input_cannot_also_name_a_reference() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let _first = received.recv().expect("the first round");
@@ -12190,6 +12623,7 @@ fn a_quarantined_run_says_what_would_make_it_visible() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let _first = received.recv().expect("first request");
@@ -12247,6 +12681,7 @@ fn a_line_that_only_reads_vouched_for_files_needs_no_prompt() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert!(
@@ -12333,6 +12768,7 @@ fn a_run_turn_from_a_home(
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
 }
 
 /// CMDLINE-4: a `~` the planner writes stands for the person's home directory, not for the state
@@ -12482,6 +12918,7 @@ fn a_vouched_commands_output_reaches_the_planner() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let _first = received.recv().expect("first request");
@@ -12530,6 +12967,7 @@ fn the_planner_is_told_how_a_run_it_may_read_ended() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let _first = received.recv().expect("first request");
@@ -12570,6 +13008,7 @@ fn the_planner_is_told_how_a_run_it_may_not_read_ended() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let _first = received.recv().expect("first request");
@@ -12621,6 +13060,7 @@ fn vouching_for_one_command_does_not_trust_another_of_the_same_program() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let _first = received.recv().expect("first request");
@@ -12720,6 +13160,20 @@ impl bravebot_agent::Confirmer for ShownAfterAVet {
         bravebot_agent::Decision::Reject
     }
 
+    fn confirm_tool_list(
+        &mut self,
+        _request: &bravebot_agent::confirm::ToolListRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_mcp_call(
+        &mut self,
+        _request: &bravebot_agent::confirm::McpCallRequest,
+    ) -> bravebot_agent::confirm::CallDecision {
+        bravebot_agent::confirm::CallDecision::reject()
+    }
+
     fn ask_user(
         &mut self,
         _asking: &bravebot_core::ask::Asking,
@@ -12775,6 +13229,7 @@ fn content_a_person_reads_after_a_check_reaches_the_planner() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let asked = shown.lock().unwrap();
@@ -12844,6 +13299,7 @@ fn the_prompt_says_where_a_checked_slots_bytes_came_from() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let asked = shown.lock().unwrap();
@@ -12898,6 +13354,7 @@ fn content_a_person_refuses_after_a_check_stays_out_of_the_planner() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let asked = shown.lock().unwrap();
@@ -12961,6 +13418,7 @@ fn a_check_that_could_not_be_made_falls_back_to_the_question() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let asked = shown.lock().unwrap();
@@ -13026,6 +13484,7 @@ fn with_auto_vetting_a_safe_verdict_reaches_the_planner_unasked() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert!(
@@ -13092,6 +13551,7 @@ fn with_auto_vetting_an_unsafe_verdict_still_asks() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let asked = shown.lock().unwrap();
@@ -13150,6 +13610,7 @@ fn with_auto_vetting_a_check_that_could_not_be_made_still_asks() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let asked = shown.lock().unwrap();
@@ -13214,6 +13675,7 @@ fn bypassing_makes_no_check_before_promoting_content() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let sent: Vec<String> = received.try_iter().collect();
@@ -13281,6 +13743,7 @@ fn bypassing_fills_in_a_verdict_that_claims_nothing() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let sent: Vec<String> = received.try_iter().collect();
@@ -13348,6 +13811,7 @@ fn bypassing_with_no_screening_still_refuses_to_promote_a_picture() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let wait = std::time::Duration::from_secs(5);
@@ -13456,6 +13920,7 @@ fn an_unscreened_unattended_run_credits_the_mode_for_the_output() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert!(
@@ -13528,6 +13993,7 @@ fn an_unscreened_unattended_run_credits_the_mode_for_a_promoted_slot() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert!(
@@ -13553,6 +14019,780 @@ fn an_unscreened_unattended_run_credits_the_mode_for_a_promoted_slot() {
     assert!(
         !released.contains("the check found nothing"),
         "the trail credits a check that was never made: {released}"
+    );
+}
+
+/// Every release `read_output` makes in the trail, picked out by the sentence one writes, so a test
+/// can say none was made without the helper above panicking on the count.
+fn releases_of_output(sink: &RecordingSink) -> Vec<String> {
+    sink.events()
+        .iter()
+        .filter_map(|event| match event {
+            Event::GatePassed {
+                gate: "read_output",
+                detail,
+            } if detail.contains("so the planner is given") => Some(detail.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A run asking to read what it printed, bypassing permissions with no screening asked for, gets it
+/// in the same result: `docs/specs/tools/run.md` RUN-22. The answer `read_output` would get a round
+/// later is already given, so the round is the only thing taken away: the label is `(T,priv)`, the
+/// trail credits the mode exactly as OUTPUT-1 has it, and nobody is shown anything.
+///
+/// Two requests and not three is what says no `read_output` round was spent. The double refuses
+/// every read and is never reached, and the script answers a check with a safe verdict, so a check
+/// that did run would be answered rather than failing on an unscripted request.
+#[test]
+fn an_unscreened_unattended_run_that_asks_to_read_is_handed_its_output_in_the_same_result() {
+    let scratch = Scratch::new("run-read-bypass");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, received) = serve_sequence_answering_checks_with(
+        vec![reply_with(
+            r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
+        )],
+        vec![
+            tool_request("run", r#"{"command":"cat where.txt","read":true}"#),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut reading = ReadsWhatItRan::new(false);
+    let asked = std::sync::Arc::clone(&reading.shown);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut reading, bravebot_agent::PermissionMode::Bypass, false);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out").with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    assert!(
+        !sent.iter().any(|body| body.contains(A_CHECK_ASKING)),
+        "a check was made in the mode that reads no verdict"
+    );
+    let [_asked_to_run, after_the_run] = sent.as_slice() else {
+        panic!("the turn took {} requests, not two: {sent:#?}", sent.len());
+    };
+    assert!(
+        after_the_run.contains("SENTINEL-XYZZY"),
+        "the output did not come back in the result that ran it: {after_the_run}"
+    );
+    assert!(
+        !after_the_run.contains("could not be shown to you"),
+        "the result still says the output was kept back: {after_the_run}"
+    );
+    assert!(
+        after_the_run.contains("The same output is ref:1"),
+        "the planner was not given the reference the output is still kept under: {after_the_run}"
+    );
+    assert!(
+        asked.lock().unwrap().is_empty(),
+        "a prompt reached somebody, so this is not the release the mode makes"
+    );
+
+    let released = how_a_slot_was_released(&sink, "read_output");
+    assert!(
+        released.contains("permissions are being bypassed with no screening asked for"),
+        "the trail does not credit the mode with the release: {released}"
+    );
+    assert!(
+        released.contains("so the planner is given (T,priv)"),
+        "the output reached the planner at a label read_output would not give it: {released}"
+    );
+    assert!(
+        reporter
+            .printed
+            .first()
+            .is_some_and(|printed| printed.read_by_the_planner),
+        "the person is told the planner did not read output it was handed: {:?}",
+        reporter.printed
+    );
+}
+
+/// The ask is the planner's, and without it a run bypassing permissions hands back a reference as
+/// it always has. Output the planner did not ask for stays out of its context, which is what keeps
+/// a large or unwanted result from spending the conversation.
+///
+/// What the reference comes with is true of the mode, `docs/specs/tools/run.md` RUN-14: nobody is
+/// shown the output, and no vouch can stop an asking that is not happening, so neither is said, and
+/// the one thing that would save the next round is.
+#[test]
+fn an_unscreened_unattended_run_that_does_not_ask_to_read_hands_back_a_reference_and_says_how_to() {
+    let scratch = Scratch::new("run-no-read-bypass");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cat where.txt"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reading = ReadsWhatItRan::new(true);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut reading, bravebot_agent::PermissionMode::Bypass, false);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out").with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    let after_the_run = sent.last().expect("the round after the run");
+    assert!(
+        !after_the_run.contains("SENTINEL-XYZZY"),
+        "output nobody asked to read reached the planner: {after_the_run}"
+    );
+    assert!(
+        after_the_run.contains("could not be shown to you"),
+        "the result does not say the output is behind a reference: {after_the_run}"
+    );
+    assert!(
+        after_the_run.contains("call run with read: true"),
+        "the planner was not told how to have the output in the result that ran it: \
+         {after_the_run}"
+    );
+    assert!(
+        !after_the_run.contains("the user is shown it"),
+        "the planner was told a person will read output nobody is shown: {after_the_run}"
+    );
+    assert!(
+        !after_the_run.contains("vouching for every stage"),
+        "the planner was told a vouch would stop an asking the mode does not do: {after_the_run}"
+    );
+    let asked_to_run = sent.first().expect("the request that asked to run");
+    assert_eq!(
+        after_the_run.to_lowercase().matches("bypass").count(),
+        asked_to_run.to_lowercase().matches("bypass").count(),
+        "the result told the planner which mode it is in, which only plan mode's system prompt \
+         does: {after_the_run}"
+    );
+    assert!(
+        releases_of_output(&sink).is_empty(),
+        "the trail records a release nobody asked for: {:?}",
+        releases_of_output(&sink)
+    );
+}
+
+/// Everywhere somebody or something still answers for reading a run's output, asking to read it
+/// in the same result changes nothing: the output is quarantined, nobody is asked, and no check is
+/// made. A person asked would be a prompt the planner did not request with `read_output`, and a
+/// check would be one it did not request either.
+///
+/// The double would let every read through, so a release made in any of these modes shows up as
+/// the output reaching the planner rather than being refused on the way.
+#[test]
+fn asking_to_read_a_runs_output_changes_nothing_where_anybody_still_answers_for_it() {
+    for (mode, auto_vetting) in [
+        (bravebot_agent::PermissionMode::Ask, false),
+        (bravebot_agent::PermissionMode::AcceptEdits, false),
+        (bravebot_agent::PermissionMode::Plan, false),
+        (bravebot_agent::PermissionMode::Ask, true),
+        (bravebot_agent::PermissionMode::Bypass, true),
+    ] {
+        let scratch = Scratch::new("run-read-elsewhere");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+        let (endpoint, received) = serve_sequence_answering_checks_with(
+            vec![reply_with(
+                r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
+            )],
+            vec![
+                tool_request("run", r#"{"command":"cat where.txt","read":true}"#),
+                reply_with("done"),
+            ],
+        );
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut reading = ReadsWhatItRan::new(true);
+        let asked = std::sync::Arc::clone(&reading.shown);
+        let mut confirmer = bravebot_agent::Confining::new(&mut reading, mode, auto_vetting);
+
+        turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("find out")
+                .with_permission_mode(mode)
+                .with_auto_vetting(auto_vetting),
+            &mut bravebot_agent::Conversation::new(),
+            &mut confirmer,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("the turn runs");
+
+        let sent: Vec<String> = received.try_iter().collect();
+        assert!(
+            !sent.iter().any(|body| body.contains(A_CHECK_ASKING)),
+            "{mode:?} with auto-vetting {auto_vetting}: a check was made nobody asked for"
+        );
+        let after_the_run = sent.last().expect("the round after the run");
+        assert!(
+            !after_the_run.contains("SENTINEL-XYZZY"),
+            "{mode:?} with auto-vetting {auto_vetting}: the output reached the planner unasked \
+             for by read_output: {after_the_run}"
+        );
+        assert!(
+            after_the_run.contains("could not be shown to you"),
+            "{mode:?} with auto-vetting {auto_vetting}: the result does not say the output is \
+             behind a reference: {after_the_run}"
+        );
+        assert!(
+            !after_the_run.contains("call run with read: true"),
+            "{mode:?} with auto-vetting {auto_vetting}: the planner was pointed at an argument that \
+             changes nothing in this mode: {after_the_run}"
+        );
+        assert!(
+            asked.lock().unwrap().is_empty(),
+            "{mode:?} with auto-vetting {auto_vetting}: somebody was asked about output the \
+             planner never called read_output for"
+        );
+        assert!(
+            releases_of_output(&sink).is_empty(),
+            "{mode:?} with auto-vetting {auto_vetting}: the trail records a release: {:?}",
+            releases_of_output(&sink)
+        );
+    }
+}
+
+/// A background line has printed nothing into the result that starts it, so there is nothing in it
+/// to read. Refused rather than ignored, as a reference fed to one is (RUN-3): a planner that asked
+/// is told which of the two it cannot have.
+#[test]
+fn a_background_line_cannot_ask_to_read_what_it_printed() {
+    let scratch = Scratch::new("run-read-background");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request(
+            "run",
+            r#"{"command":"cat where.txt","background":true,"read":true}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reading = ReadsWhatItRan::new(true);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut reading, bravebot_agent::PermissionMode::Bypass, false);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it").with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    let after_the_run = sent.last().expect("the round after the run");
+    assert!(
+        after_the_run.contains("nothing in it to read"),
+        "a background call asking to read was not told it cannot have both: {after_the_run}"
+    );
+    assert!(
+        !after_the_run.contains("started in the background"),
+        "a job was started for a call that asked to read a result it would not have: \
+         {after_the_run}"
+    );
+}
+
+/// A definition that left its turn without `read_output` confined it to reading nothing a program
+/// printed, and `read` is not a way round that: RUN-22 releases only where `read_output` is
+/// offered. Nor is the planner pointed at an argument that would do nothing for it.
+#[test]
+fn asking_to_read_does_not_hand_output_to_a_definition_left_without_read_output() {
+    let scratch = Scratch::new("run-read-confined");
+    let home = Scratch::new("run-read-confined-home");
+    define(&home, "runner", "kind: worker\ntools: run\n", "RUN-IT");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cat where.txt","read":true}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reading = ReadsWhatItRan::new(true);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut reading, bravebot_agent::PermissionMode::Bypass, false);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &addressed("find out", &home, "runner")
+            .with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    let asked_to_run = sent.first().expect("the request that asked to run");
+    assert!(
+        !asked_to_run.contains(r#""name":"read_output""#),
+        "the definition was offered read_output, so this says nothing: {asked_to_run}"
+    );
+    let after_the_run = sent.last().expect("the round after the run");
+    assert!(
+        !after_the_run.contains("SENTINEL-XYZZY"),
+        "a turn confined away from read_output was handed what a program printed: \
+         {after_the_run}"
+    );
+    assert!(
+        after_the_run.contains("could not be shown to you"),
+        "the result does not say the output is behind a reference: {after_the_run}"
+    );
+    assert!(
+        !after_the_run.contains("call run with read: true"),
+        "a turn that cannot read output was pointed at an argument that reads it: {after_the_run}"
+    );
+    assert!(
+        releases_of_output(&sink).is_empty(),
+        "the trail records a release the definition left no tool for: {:?}",
+        releases_of_output(&sink)
+    );
+}
+
+/// The cap on a run's result holds for output asked to be read in it (RUN-21): the planner asked
+/// before it could see the size, so what it asked for is left behind the reference, where the size
+/// is stated, and the result says why rather than pointing it at `read` again.
+#[test]
+fn asking_to_read_more_than_one_result_may_hold_hands_back_the_reference_and_says_why() {
+    let scratch = Scratch::new("run-read-capped");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(
+        scratch.path.join("where.txt"),
+        format!("SENTINEL-XYZZY {}\n", "x".repeat(200)),
+    )
+    .unwrap();
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cat where.txt","read":true}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reading = ReadsWhatItRan::new(true);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut reading, bravebot_agent::PermissionMode::Bypass, false);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out")
+            .with_permission_mode(bravebot_agent::PermissionMode::Bypass)
+            .with_output_cap(Some(64)),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    let after_the_run = sent.last().expect("the round after the run");
+    assert!(
+        !after_the_run.contains("SENTINEL-XYZZY"),
+        "output past the cap came back in the result: {after_the_run}"
+    );
+    // The run tool's description says some of this too, so only the result is read.
+    let result = tool_results(after_the_run);
+    assert!(
+        result.contains("longer than a run's result may hold"),
+        "the planner was not told why what it asked to read is not here: {result}"
+    );
+    // Told only that it was too long, a planner took read_output to be held to the same size and
+    // ran the whole command again to grep it.
+    assert!(
+        result.contains("read_output is not held to that size"),
+        "the planner was not told read_output hands back the whole of it: {result}"
+    );
+    assert!(
+        result.contains("stdin_ref set to the reference"),
+        "the planner was not told how to read part of it without running it again: {result}"
+    );
+    assert!(
+        !after_the_run.contains("call run with read: true"),
+        "the planner was told to ask for what it had just asked for: {after_the_run}"
+    );
+    assert!(
+        releases_of_output(&sink).is_empty(),
+        "the trail records a release past the cap: {:?}",
+        releases_of_output(&sink)
+    );
+}
+
+/// The route that advice names, taken: output too long for its run's result is read in part by a
+/// filter fed its reference, released by the same path as any other read.
+#[test]
+fn output_too_long_for_its_result_is_read_in_part_by_a_filter_fed_its_reference() {
+    let scratch = Scratch::new("run-read-capped-filtered");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(
+        scratch.path.join("where.txt"),
+        format!("SENTINEL-XYZZY {}\n", "x".repeat(200)),
+    )
+    .unwrap();
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cat where.txt","read":true}"#),
+        tool_request(
+            "run",
+            r#"{"command":"head -c 14","stdin_ref":"ref:1","read":true}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reading = ReadsWhatItRan::new(true);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut reading, bravebot_agent::PermissionMode::Bypass, false);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out")
+            .with_permission_mode(bravebot_agent::PermissionMode::Bypass)
+            .with_output_cap(Some(64)),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    let [_, after_the_run, after_the_filter] = sent.as_slice() else {
+        panic!("expected three rounds, got {}", sent.len());
+    };
+    assert!(
+        !after_the_run.contains("SENTINEL-XYZZY"),
+        "output past the cap came back in the result: {after_the_run}"
+    );
+    assert!(
+        after_the_filter.contains("SENTINEL-XYZZY"),
+        "the filter fed the reference did not hand back what it kept: {after_the_filter}"
+    );
+    assert_eq!(
+        releases_of_output(&sink).len(),
+        1,
+        "the filter's output was not released, or the capped run's was: {:?}",
+        releases_of_output(&sink)
+    );
+}
+
+/// The one message in a request body that starts with `from`, up to the end of the JSON string
+/// holding it, so an assertion about it is not answered by another result in the same body.
+fn message_from<'a>(body: &'a str, from: &str) -> &'a str {
+    let start = body
+        .find(from)
+        .unwrap_or_else(|| panic!("no message starts with {from:?}: {body}"));
+    let rest = &body[start..];
+    let end = rest
+        .char_indices()
+        .find(|&(at, c)| c == '"' && !rest[..at].ends_with('\\'))
+        .map_or(rest.len(), |(at, _)| at);
+    &rest[..end]
+}
+
+/// A job's output is read with nobody asked where a run's is (RUN-14), so its result says so, and
+/// not that the user is shown it. `read` is an argument of run, so a job's result does not name it.
+#[test]
+fn what_a_job_printed_says_how_to_read_it_where_nobody_is_asked() {
+    let scratch = Scratch::new("background-bypass-advice");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let script = scratch.path.join("noisy");
+    std::fs::write(&script, "#!/bin/sh\necho SENTINEL-BACKGROUND\nsleep 30\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./noisy","background":true}"#),
+        tool_request("run", r#"{"command":"sleep 0.5"}"#),
+        tool_request("job_output", r#"{"job":"job:1","kill":true}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut reading = ReadsWhatItRan::new(true);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut reading, bravebot_agent::PermissionMode::Bypass, false);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it").with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    let told = message_from(
+        sent.last().expect("the round after job_output"),
+        "Result of job_output could not be shown to you",
+    );
+    assert!(
+        told.contains("call read_output with the reference and it comes back as text you can read"),
+        "the planner was not told how to read what the job printed: {told}"
+    );
+    assert!(
+        !told.contains("the user is shown it"),
+        "the planner was told a person will read output nobody is shown: {told}"
+    );
+    assert!(
+        !told.contains("call run with read: true"),
+        "a job's result pointed the planner at an argument job_output does not take: {told}"
+    );
+}
+
+/// The same for a job whose end the turn reports unasked.
+#[test]
+fn what_an_ended_job_printed_says_how_to_read_it_where_nobody_is_asked() {
+    let scratch = Scratch::new("background-finish-bypass-advice");
+    let script = scratch.path.join("noisy");
+    std::fs::write(&script, "#!/bin/sh\necho SENTINEL-UNASKED-PLUGH\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./noisy","background":true}"#),
+        tool_request("run", r#"{"command":"sleep 1"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut reading = ReadsWhatItRan::new(true);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut reading, bravebot_agent::PermissionMode::Bypass, false);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it").with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    let body = sent
+        .iter()
+        .find(|body| body.contains("you started as job:1 has finished"))
+        .expect("the turn was never told the job ended");
+    let told = message_from(body, "you started as job:1 has finished");
+    assert!(
+        told.contains(
+            "To see it, call read_output with the reference and it comes back as text you can read."
+        ),
+        "the planner was not told how to read what the job printed: {told}"
+    );
+    assert!(
+        !told.contains("the user is shown it"),
+        "the planner was told a person will read output nobody is shown: {told}"
+    );
+}
+
+/// A release asked for with `read` and refused leaves the output behind the reference, and the
+/// planner is not told to ask for it the same way again. The confirmer here was given a mode that
+/// asks while the turn bypasses, which a caller must not do; it is the one way to make the release
+/// the mode would answer come back refused.
+#[test]
+fn a_read_that_was_refused_is_not_asked_for_again() {
+    let scratch = Scratch::new("run-read-refused");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cat where.txt","read":true}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut reading = ReadsWhatItRan::new(false);
+    let asked = std::sync::Arc::clone(&reading.shown);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut reading, bravebot_agent::PermissionMode::Ask, false);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out").with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    assert!(
+        !asked.lock().unwrap().is_empty(),
+        "no release was put to the confirmer, so none was refused and this says nothing"
+    );
+    let sent: Vec<String> = received.try_iter().collect();
+    let after_the_run = sent.last().expect("the round after the run");
+    assert!(
+        !after_the_run.contains("SENTINEL-XYZZY"),
+        "a refused release reached the planner: {after_the_run}"
+    );
+    assert!(
+        !after_the_run.contains("call run with read: true"),
+        "the planner was told to ask again for what was refused: {after_the_run}"
+    );
+}
+
+/// `read` is a yes or a no, and anything else is refused before the line runs, as a mistyped
+/// `stdin_ref` is: a planner that believed it had asked would be handed a reference instead.
+#[test]
+fn a_read_that_is_not_true_or_false_is_refused_before_the_line_runs() {
+    let scratch = Scratch::new("run-read-mistyped");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cat where.txt","read":"true"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut reading = ReadsWhatItRan::new(true);
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut reading, bravebot_agent::PermissionMode::Bypass, false);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out").with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    let after_the_run = sent.last().expect("the round after the run");
+    assert!(
+        after_the_run.contains("'read' must be true or false"),
+        "a mistyped read was not refused: {after_the_run}"
+    );
+    assert!(
+        reporter.printed.is_empty(),
+        "the line ran although its arguments were refused: {:?}",
+        reporter.printed
     );
 }
 
@@ -13610,6 +14850,7 @@ fn screening_an_unattended_run_keeps_back_content_a_check_objected_to() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert!(
@@ -13679,6 +14920,7 @@ fn the_trail_records_the_verdict_of_a_check_that_could_not_be_made() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert!(
@@ -13742,6 +14984,7 @@ fn screening_an_unattended_run_promotes_content_a_check_found_nothing_in() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert!(
@@ -13803,6 +15046,7 @@ fn screening_an_unattended_run_keeps_back_output_a_check_objected_to() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert!(
@@ -13866,6 +15110,7 @@ fn screening_an_unattended_run_keeps_back_output_no_check_could_be_made_about() 
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let sent: Vec<String> = received.try_iter().collect();
@@ -13941,6 +15186,7 @@ fn screening_reaches_a_delegate_of_an_unattended_run() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert!(
@@ -14005,6 +15251,7 @@ fn with_auto_vetting_a_safe_verdict_releases_command_output_unasked() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert!(
@@ -14067,6 +15314,7 @@ fn a_check_says_how_many_lines_it_is_reading_and_then_that_it_is_over() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert_eq!(
@@ -14120,6 +15368,7 @@ fn what_a_check_cost_reaches_the_row_the_call_drew() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let row = |tool: &str| {
@@ -14179,6 +15428,7 @@ fn a_check_whose_call_fails_still_says_it_is_over() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert!(
@@ -14238,6 +15488,7 @@ fn with_auto_vetting_an_unsafe_verdict_still_asks_about_command_output() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let asked = shown.lock().unwrap();
@@ -14293,6 +15544,7 @@ fn with_auto_vetting_a_broken_check_still_asks_about_command_output() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let asked = shown.lock().unwrap();
@@ -14395,6 +15647,20 @@ impl bravebot_agent::Confirmer for ReadsWhatItRan {
         bravebot_agent::Decision::Reject
     }
 
+    fn confirm_tool_list(
+        &mut self,
+        _request: &bravebot_agent::confirm::ToolListRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_mcp_call(
+        &mut self,
+        _request: &bravebot_agent::confirm::McpCallRequest,
+    ) -> bravebot_agent::confirm::CallDecision {
+        bravebot_agent::confirm::CallDecision::reject()
+    }
+
     fn ask_user(
         &mut self,
         _asking: &bravebot_core::ask::Asking,
@@ -14444,6 +15710,7 @@ fn output_a_person_reads_and_approves_reaches_the_planner() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     // The person was shown the bytes themselves, and which command printed them.
@@ -14503,6 +15770,7 @@ fn output_a_person_refuses_stays_out_of_the_planner() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let _first = received.recv().expect("first request");
@@ -14562,6 +15830,7 @@ fn an_output_offer_carries_what_a_check_said() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let asked = shown.lock().unwrap();
@@ -14629,6 +15898,7 @@ fn a_quarantined_file_cannot_be_read_through_the_output_route() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert!(
@@ -14841,6 +16111,20 @@ impl bravebot_agent::Confirmer for VouchesForFiles {
         bravebot_agent::Decision::Reject
     }
 
+    fn confirm_tool_list(
+        &mut self,
+        _request: &bravebot_agent::confirm::ToolListRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_mcp_call(
+        &mut self,
+        _request: &bravebot_agent::confirm::McpCallRequest,
+    ) -> bravebot_agent::confirm::CallDecision {
+        bravebot_agent::confirm::CallDecision::reject()
+    }
+
     fn ask_user(
         &mut self,
         _asking: &bravebot_core::ask::Asking,
@@ -14886,6 +16170,7 @@ fn a_quarantined_read_offers_the_user_the_chance_to_vouch() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     // The person was shown the path and enough of the file to know what it is.
@@ -14958,6 +16243,7 @@ fn a_vouch_offer_carries_what_a_check_said_about_the_whole_file() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     let asked = offered.lock().unwrap();
@@ -15031,6 +16317,7 @@ fn auto_vetting_does_not_answer_the_vouch_offer() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     let asked = offered.lock().unwrap();
@@ -15083,6 +16370,7 @@ fn vouching_for_a_project_file_named_absolutely_records_its_relative_rule() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     let rules: Vec<(&str, Option<bravebot_core::label::Integrity>)> =
@@ -15123,6 +16411,7 @@ fn declining_to_vouch_leaves_the_file_quarantined() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     assert!(
@@ -15172,6 +16461,7 @@ fn a_trusted_file_is_not_offered_for_vouching() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     assert!(
@@ -15213,6 +16503,7 @@ fn the_same_file_is_offered_once_per_turn() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     assert_eq!(
@@ -15256,6 +16547,7 @@ fn a_quarantined_file_with_nothing_in_it_is_still_offered_for_vouching() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     let asked = offered.lock().unwrap();
@@ -15311,6 +16603,7 @@ fn a_path_that_names_no_file_is_not_offered_for_vouching() {
             None,
             &bravebot_core::cancel::Cancel::new(),
         )
+        .outcome
         .expect("turn runs");
 
         assert!(
@@ -15378,6 +16671,7 @@ fn a_picture_is_not_offered_for_vouching() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     assert!(
@@ -16480,6 +17774,7 @@ fn the_trail_says_which_round_a_compaction_landed_on() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     let recorded: Vec<String> = sink
@@ -17153,6 +18448,170 @@ fn a_delegate_answered_by_a_model_other_than_its_definitions_says_so() {
     );
 }
 
+/// A definition naming skills gives its delegate those and no others: the rest of what the turn
+/// found is neither listed for it nor loadable by it, where a definition naming none is offered
+/// the whole of it and one whose line is empty is offered nothing. A name nothing found selects
+/// nothing and is said, so a misspelt one does not read to its author as a skill the delegate has.
+#[test]
+fn a_definition_offers_its_delegate_only_the_skills_it_names() {
+    let scratch = Scratch::new("delegate-definition-skills");
+    let home = Scratch::new("delegate-definition-skills-home");
+    for (dir, body) in [
+        ("review-style", "REVIEW-STYLE-BODY"),
+        ("commit-style", "COMMIT-STYLE-BODY"),
+    ] {
+        let at = home.path.join("skills").join(dir);
+        std::fs::create_dir_all(&at).expect("create a skill directory");
+        std::fs::write(
+            at.join("SKILL.md"),
+            format!("---\nname: {dir}\ndescription: when to use {dir}\n---\n\n{body}\n"),
+        )
+        .expect("write a skill");
+    }
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("styled-reviewer.md"),
+        "---\nname: styled-reviewer\ndescription: Reviews in one style.\nkind: reader\nskills: \
+         review-style, no-such-skill\n---\n\nREVIEW\n",
+    )
+    .expect("write the definition naming skills");
+    std::fs::write(
+        home.path.join("agents").join("plain-reviewer.md"),
+        "---\nname: plain-reviewer\ndescription: Reviews.\nkind: reader\n---\n\nREVIEW\n",
+    )
+    .expect("write the definition naming none");
+    std::fs::write(
+        home.path.join("agents").join("bare-reviewer.md"),
+        "---\nname: bare-reviewer\ndescription: Reviews unguided.\nkind: reader\nskills:\n---\n\n\
+         REVIEW\n",
+    )
+    .expect("write the definition with an empty skills line");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "DELEGATE-THREE-REVIEWERS",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"styled-reviewer","task":"REVIEW-WITH-NAMED-SKILLS"}"#,
+                ),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"plain-reviewer","task":"REVIEW-WITH-EVERY-SKILL"}"#,
+                ),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"bare-reviewer","task":"REVIEW-WITH-NO-SKILLS"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("delegates finished"),
+            ],
+        ),
+        (
+            "REVIEW-WITH-NAMED-SKILLS",
+            vec![
+                tool_request("load_skill", r#"{"name":"commit-style"}"#),
+                tool_request("load_skill", r#"{"name":"review-style"}"#),
+                reply_with("reviewed"),
+            ],
+        ),
+        ("REVIEW-WITH-EVERY-SKILL", vec![reply_with("reviewed")]),
+        ("REVIEW-WITH-NO-SKILLS", vec![reply_with("reviewed")]),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-THREE-REVIEWERS").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let delegate = |task: &str| -> Vec<&String> {
+        requests
+            .iter()
+            .filter(|body| body.contains(task) && !body.contains("DELEGATE-THREE-REVIEWERS"))
+            .collect()
+    };
+    let listed = |body: &str| -> Vec<&str> {
+        ["review-style", "commit-style", "loop"]
+            .into_iter()
+            .filter(|skill| body.contains(&format!("- {skill}: ")))
+            .collect()
+    };
+
+    let styled = delegate("REVIEW-WITH-NAMED-SKILLS");
+    let first = styled
+        .first()
+        .expect("the delegate whose definition names skills never ran");
+    assert_eq!(
+        listed(first),
+        ["review-style"],
+        "the delegate was not listed only the skills its definition named"
+    );
+    let last = styled.last().expect("asked at least once");
+    assert!(
+        last.contains("no skill named 'commit-style'"),
+        "a skill the definition did not name was not refused to its delegate"
+    );
+    assert!(
+        !last.contains("COMMIT-STYLE-BODY"),
+        "a skill the definition did not name reached its delegate"
+    );
+    assert!(
+        last.contains("REVIEW-STYLE-BODY"),
+        "the skill the definition named could not be loaded by its delegate"
+    );
+
+    let plain = delegate("REVIEW-WITH-EVERY-SKILL");
+    let plain = plain
+        .first()
+        .expect("the delegate whose definition names none never ran");
+    assert_eq!(
+        listed(plain),
+        ["review-style", "commit-style", "loop"],
+        "a definition naming no skills was not offered every skill the turn found"
+    );
+
+    let bare = delegate("REVIEW-WITH-NO-SKILLS");
+    let bare = bare
+        .first()
+        .expect("the delegate whose definition has an empty skills line never ran");
+    assert_eq!(
+        listed(bare),
+        Vec::<&str>::new(),
+        "a definition with an empty skills line was offered skills"
+    );
+
+    let about_skills: Vec<&String> = reporter
+        .notices
+        .iter()
+        .filter(|notice| notice.contains("did not find"))
+        .collect();
+    assert_eq!(
+        about_skills.len(),
+        1,
+        "the missing skill was not said exactly once: {about_skills:?}"
+    );
+    assert!(
+        about_skills[0].contains("styled-reviewer.md")
+            && about_skills[0].ends_with(": no-such-skill"),
+        "the notice did not name the definition and the one name nothing found: {}",
+        about_skills[0]
+    );
+}
+
 /// A definition's model that needs a sign-in is not swapped for the turn's, which would spend past
 /// a boundary the definition drew: the delegate does not run and the person is told why.
 #[test]
@@ -17243,6 +18702,571 @@ fn a_delegate_whose_model_needs_a_sign_in_does_not_run_and_says_so() {
     );
 }
 
+/// Writes one definition into a home directory's `agents/`, as a person keeps one.
+fn define(home: &Scratch, name: &str, fields: &str, body: &str) {
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join(format!("{name}.md")),
+        format!("---\nname: {name}\ndescription: Checks a diff.\n{fields}---\n\n{body}\n"),
+    )
+    .expect("write the definition");
+}
+
+/// A turn addressed to one of the person's definitions, with everything else as a session sets it.
+fn addressed(prompt: &str, home: &Scratch, name: &str) -> Task {
+    Task::new(prompt)
+        .with_home(Some(home.path.clone()))
+        .with_model(Some("custom-parent-model".to_string()))
+        .addressing(Some(name.to_string()))
+}
+
+/// ADDRESS-1, ADDRESS-7 and ADDRESS-8 as one request shows them. The definition supplies the
+/// prompt, the model and the narrowing, and nothing that makes the turn a delegate: a reader holds
+/// no write and no shell, and still holds the question, the task list and the spawn the person's
+/// own turn holds.
+#[test]
+fn an_addressed_turn_runs_under_its_definitions_prompt_model_and_kind() {
+    let scratch = Scratch::new("address-runs");
+    let home = Scratch::new("address-runs-home");
+    define(
+        &home,
+        "rule-reviewer",
+        "kind: reader\nmodel: haiku\n",
+        "REVIEW-BY-THE-RULES",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) =
+        serve_by_marker(vec![("ADDRESSED-TASK", vec![reply_with("reviewed")])]);
+    let config = config_for(&endpoint);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let outcome = turn::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &addressed("ADDRESSED-TASK", &home, "rule-reviewer"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        outcome.addressed.as_ref().map(|addressed| addressed.name()),
+        Some("rule-reviewer"),
+        "the outcome does not say which definition answered"
+    );
+    let requests: Vec<String> = received.try_iter().collect();
+    let [request] = requests.as_slice() else {
+        panic!("one request, for one round: {requests:?}");
+    };
+    let haiku = config.model_named("haiku");
+    assert!(
+        request.contains(&format!(r#""model":"{haiku}""#)),
+        "the turn did not run on the definition's model: {request}"
+    );
+    assert!(
+        request.contains("REVIEW-BY-THE-RULES")
+            && request.contains("addressed this turn to rule-reviewer"),
+        "the turn was not told what its definition is for: {request}"
+    );
+    let offered = |tool: &str| request.contains(&format!(r#""name":"{tool}""#));
+    for tool in [
+        "read_file",
+        "list_files",
+        "ask_user",
+        "todo_write",
+        "spawn_agent",
+    ] {
+        assert!(offered(tool), "a reader addressed by a person lost {tool}");
+    }
+    for tool in ["write_file", "edit_file", "run"] {
+        assert!(!offered(tool), "a reader was offered {tool}: {request}");
+    }
+}
+
+/// ADDRESS-8's exception. A later look and a watch each start a turn of the session's planner,
+/// which holds what the definition took away, so an addressed turn is offered neither and its
+/// other tools do not tell it to use them. The first turn is the control: the same line with
+/// nobody addressed is offered both.
+#[test]
+fn an_addressed_turn_arranges_no_later_look_and_arms_no_watch() {
+    let scratch = Scratch::new("address-no-later");
+    let home = Scratch::new("address-no-later-home");
+    define(&home, "rule-reviewer", "kind: reader\n", "REVIEW");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        ("UNADDRESSED-TASK", vec![reply_with("looked")]),
+        ("ADDRESSED-TASK", vec![reply_with("reviewed")]),
+    ]);
+    let config = config_for(&endpoint);
+    let free = bravebot_agent::watch::Arming::Allowed { free: 8 };
+    for task in [
+        Task::new("UNADDRESSED-TASK").with_home(Some(home.path.clone())),
+        addressed("ADDRESSED-TASK", &home, "rule-reviewer"),
+    ] {
+        turn::run_cancellable(
+            &config,
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &task.looking_again(true).arming(free),
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut RecordingSink::new(),
+            trusting_the_workspace(),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("turn runs");
+    }
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let [open, confined] = requests.as_slice() else {
+        panic!("one request a turn: {requests:?}");
+    };
+    let tools = ["schedule_next", "watch_file"];
+    for tool in tools {
+        assert!(
+            open.contains(&format!(r#""name":"{tool}""#)),
+            "the unaddressed turn was not offered {tool}, so this says nothing: {open}"
+        );
+    }
+    let leaked: Vec<&str> = tools
+        .into_iter()
+        .filter(|tool| confined.contains(tool))
+        .collect();
+    assert!(
+        leaked.is_empty(),
+        "an addressed turn was offered or told of {leaked:?}: {confined}"
+    );
+}
+
+/// ADDRESS-7 as the turn is told it. The planner's own paragraphs are written for a turn that
+/// can edit and run, so an addressed one is told what its definition left it, as a delegate is,
+/// and not the sentence about an agent that asked it, since a person did. The same line with
+/// nobody addressed is the control.
+#[test]
+fn an_addressed_turn_is_told_what_its_definition_left_it() {
+    let scratch = Scratch::new("address-told");
+    let home = Scratch::new("address-told-home");
+    define(
+        &home,
+        "rule-fixer",
+        "kind: worker\ntools: read_file, edit_file\n",
+        "FIX",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        ("UNADDRESSED-TASK", vec![reply_with("looked")]),
+        ("ADDRESSED-TASK", vec![reply_with("fixed")]),
+    ]);
+    let config = config_for(&endpoint);
+    for task in [
+        Task::new("UNADDRESSED-TASK").with_home(Some(home.path.clone())),
+        addressed("ADDRESSED-TASK", &home, "rule-fixer"),
+    ] {
+        turn::run_cancellable(
+            &config,
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &task,
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut RecordingSink::new(),
+            trusting_the_workspace(),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("turn runs");
+    }
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let [open, confined] = requests.as_slice() else {
+        panic!("one request a turn: {requests:?}");
+    };
+    let told = "You cannot run a program.";
+    assert!(
+        !open.contains(told),
+        "the unaddressed turn was told it cannot run, so this says nothing: {open}"
+    );
+    assert!(
+        confined.contains(told),
+        "an addressed turn holding no shell was not told so: {confined}"
+    );
+    assert!(
+        !confined.contains("the agent that asked you"),
+        "an addressed turn was told a delegate's sentence: {confined}"
+    );
+}
+
+/// ADDRESS-11 one level down. A delegate whose definition names no model inherits the model of
+/// the turn that spawned it, and an addressed turn's is its definition's, so the cost boundary
+/// the definition drew holds for what it delegates too.
+#[test]
+fn a_delegate_an_addressed_turn_spawns_inherits_the_definitions_model() {
+    let scratch = Scratch::new("address-delegate-model");
+    let home = Scratch::new("address-delegate-model-home");
+    define(
+        &home,
+        "rule-reviewer",
+        "kind: reader\nmodel: haiku\n",
+        "REVIEW",
+    );
+    define(&home, "plain-reader", "kind: reader\n", "READ-PLAIN");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "ADDRESSED-TASK",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"plain-reader","task":"CHECK-ONE-LEVEL-DOWN"}"#,
+                ),
+                reply_with("nothing to add while it works"),
+                reply_with("reviewed"),
+            ],
+        ),
+        ("CHECK-ONE-LEVEL-DOWN", vec![reply_with("clear")]),
+    ]);
+    let config = config_for(&endpoint);
+
+    turn::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &addressed("ADDRESSED-TASK", &home, "rule-reviewer"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let delegate = requests
+        .iter()
+        .find(|body| body.contains("CHECK-ONE-LEVEL-DOWN") && !body.contains("ADDRESSED-TASK"))
+        .expect("the delegate sent a request");
+    let haiku = config.model_named("haiku");
+    assert!(
+        delegate.contains(&format!(r#""model":"{haiku}""#)),
+        "the delegate did not inherit the addressed definition's model: {delegate}"
+    );
+}
+
+/// ADDRESS-9 and ADDRESS-10. The addressed exchange is the session's own, so the next turn is
+/// answered from a context holding it whole rather than a report of it. And the definition lasted
+/// the one turn: the next is the session's planner on the session's model, with no word of the body.
+#[test]
+fn the_turn_after_an_addressed_one_holds_the_exchange_and_not_the_definition() {
+    let scratch = Scratch::new("address-then-not");
+    let home = Scratch::new("address-then-not-home");
+    define(
+        &home,
+        "rule-reviewer",
+        "kind: reader\nmodel: haiku\n",
+        "REVIEW-BY-THE-RULES",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        reply_with("THE-DIFF-HAS-TWO-FAULTS"),
+        reply_with("fixed"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        trusting_the_workspace(),
+        addressed("ADDRESSED-TASK", &home, "rule-reviewer"),
+    )
+    .expect("the addressed turn runs");
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        trusting_the_workspace(),
+        Task::new("NEXT-TASK")
+            .with_home(Some(home.path.clone()))
+            .with_model(Some("custom-parent-model".to_string())),
+    )
+    .expect("the next turn runs");
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let [_, next] = requests.as_slice() else {
+        panic!("one request a turn: {requests:?}");
+    };
+    assert!(
+        next.contains("ADDRESSED-TASK") && next.contains("THE-DIFF-HAS-TWO-FAULTS"),
+        "the next turn was not answered from the addressed exchange: {next}"
+    );
+    assert!(
+        !next.contains("REVIEW-BY-THE-RULES") && !next.contains("addressed this turn to"),
+        "the definition outlived the turn it was addressed in: {next}"
+    );
+    assert!(
+        next.contains(r#""model":"custom-parent-model""#),
+        "the next turn stayed on the definition's model: {next}"
+    );
+}
+
+/// ADDRESS-5. A name matching nothing this session resolved spends nothing and says what it did
+/// resolve, and a definition in a checkout nobody vouched for is not reached by naming it: it
+/// never entered the set, so it is neither run nor listed.
+#[test]
+fn a_name_this_session_did_not_resolve_sends_nothing_and_lists_what_it_did() {
+    let scratch = Scratch::new("address-miss");
+    let home = Scratch::new("address-miss-home");
+    define(&home, "rule-reviewer", "kind: reader\n", "REVIEW");
+    let project = scratch.path.join(".bravebot").join("agents");
+    std::fs::create_dir_all(&project).expect("create the project's definitions");
+    std::fs::write(
+        project.join("auditor.md"),
+        "---\nname: auditor\ndescription: Audits.\nkind: worker\n---\n\nAUDIT\n",
+    )
+    .expect("write the project's definition");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) =
+        serve_by_marker(vec![("ADDRESSED-TASK", vec![reply_with("audited")])]);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let ran = turn::run_cancellable(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &addressed("ADDRESSED-TASK", &home, "auditor"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    );
+
+    assert!(
+        matches!(ran, Err(bravebot_agent::turn::TurnError::Precommit(_))),
+        "a name matching nothing ran a turn"
+    );
+    assert_eq!(
+        received.try_iter().count(),
+        0,
+        "a name matching nothing spent a request"
+    );
+    let said = "there is no definition called auditor; this session resolved reader, checker, \
+                worker, rule-reviewer";
+    assert!(
+        reporter.notices.iter().any(|notice| notice == said),
+        "the person was not told what they could have typed: {:?}",
+        reporter.notices
+    );
+}
+
+/// ADDRESS-11. A definition's model needing a sign-in is not swapped for the session's, which
+/// would spend past a boundary the definition drew: nothing is sent and the person is told which
+/// definition asked for which model.
+#[test]
+fn an_addressed_definition_whose_model_needs_a_sign_in_sends_nothing_and_says_so() {
+    let scratch = Scratch::new("address-sign-in");
+    let home = Scratch::new("address-sign-in-home");
+    define(
+        &home,
+        "bedrock-reviewer",
+        "kind: reader\nmodel: haiku\n",
+        "REVIEW",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) =
+        serve_by_marker(vec![("ADDRESSED-TASK", vec![reply_with("reviewed")])]);
+    let config = Config::from_lookup(|key| match key {
+        "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+        "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+        "BRAVE_AI_CHAT_ENDPOINT" => Some(endpoint.clone()),
+        bravebot_config::env_var::USE_BEDROCK => Some("1".into()),
+        bravebot_config::env_var::AWS_REGION => Some("us-west-2".into()),
+        bravebot_config::env_var::BEDROCK_HAIKU_MODEL => Some("haiku-arn".into()),
+        // A profile no machine has, so no session exists whoever runs this.
+        bravebot_config::env_var::AWS_PROFILE => Some("a-profile-no-machine-has".into()),
+        _ => None,
+    })
+    .expect("config");
+    assert!(
+        bravebot_agent::backend::Backend::needs_sign_in(&config, &config.model_named("haiku")),
+        "the definition's model would not have needed a sign-in"
+    );
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let ran = turn::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &addressed("ADDRESSED-TASK", &home, "bedrock-reviewer"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    );
+
+    assert!(
+        matches!(ran, Err(bravebot_agent::turn::TurnError::Precommit(_))),
+        "the definition ran on some other model"
+    );
+    assert_eq!(
+        received.try_iter().count(),
+        0,
+        "a request was sent on the session's model instead"
+    );
+    let said = "bedrock-reviewer asked for haiku, which needs a sign-in first, so it did not run";
+    assert!(
+        reporter.notices.iter().any(|notice| notice == said),
+        "nobody watching was told why nothing ran: {:?}",
+        reporter.notices
+    );
+}
+
+/// ADDRESS-7's second term, held where the call arrives rather than only in the offer. A worker
+/// naming `edit_file` holds the capability to write, so the only thing standing between a model
+/// that names `write_file` anyway and the file is the list its definition wrote. The first turn is
+/// the control: the same kind with no list writes the file, so the refusal is the list's.
+#[test]
+fn a_tool_an_addressed_definition_left_out_is_refused_when_the_model_calls_it() {
+    let scratch = Scratch::new("address-confined");
+    let home = Scratch::new("address-confined-home");
+    define(&home, "writer", "kind: worker\n", "WRITE");
+    define(
+        &home,
+        "confined",
+        "kind: worker\ntools: read_file, edit_file\n",
+        "READ",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "WRITE-OPEN",
+            vec![
+                tool_request("write_file", r#"{"path":"open.txt","contents":"written"}"#),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "WRITE-CONFINED",
+            vec![
+                tool_request(
+                    "write_file",
+                    r#"{"path":"confined.txt","contents":"written"}"#,
+                ),
+                reply_with("done"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    for (prompt, name) in [("WRITE-OPEN", "writer"), ("WRITE-CONFINED", "confined")] {
+        turn::run_cancellable(
+            &config,
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &addressed(prompt, &home, name),
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut RecordingSink::new(),
+            trusting_the_workspace(),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("turn runs");
+    }
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("open.txt")).ok(),
+        Some("written".to_string()),
+        "a worker with no list could not write, so this says nothing about the list"
+    );
+    assert!(
+        !scratch.path.join("confined.txt").exists(),
+        "a definition naming only read_file wrote a file"
+    );
+    let requests: Vec<String> = received.try_iter().collect();
+    assert!(
+        requests
+            .iter()
+            .any(|body| body.contains("WRITE-CONFINED")
+                && body.contains("no such tool 'write_file'")),
+        "the model was not told the tool is not there: {requests:?}"
+    );
+}
+
+/// ADDRESS-11's second half. The endpoint substitutes a model it will not serve rather than
+/// refusing, so a definition naming one is told so, by the definition's name and the model it
+/// named. The first turn is the control: a reply from the model that was asked for says nothing.
+#[test]
+fn an_addressed_definition_answered_by_another_model_says_so() {
+    let scratch = Scratch::new("address-substituted");
+    let home = Scratch::new("address-substituted-home");
+    define(
+        &home,
+        "haiku-reviewer",
+        "kind: reader\nmodel: haiku\n",
+        "REVIEW",
+    );
+    define(
+        &home,
+        "typo-reviewer",
+        "kind: reader\nmodel: a-model-the-service-does-not-hold\n",
+        "REVIEW",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let haiku = config_for("http://unused.invalid").model_named("haiku");
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "ON-HAIKU",
+            vec![reply_with("clear").replace("test-model", &haiku)],
+        ),
+        ("ON-TYPO", vec![reply_with("clear")]),
+    ]);
+    let config = config_for(&endpoint);
+
+    let mut said = Vec::new();
+    for (prompt, name) in [("ON-HAIKU", "haiku-reviewer"), ("ON-TYPO", "typo-reviewer")] {
+        let mut reporter = bravebot_agent::report::RecordingReporter::default();
+        let outcome = turn::run_cancellable(
+            &config,
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &addressed(prompt, &home, name),
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut reporter,
+            &mut RecordingSink::new(),
+            trusting_the_workspace(),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("turn runs");
+        let about_models = |notices: &[String]| -> Vec<String> {
+            notices
+                .iter()
+                .filter(|notice| notice.contains("asked for"))
+                .cloned()
+                .collect()
+        };
+        assert_eq!(
+            about_models(&reporter.notices),
+            about_models(&outcome.notices),
+            "the turn's account and the screen disagree"
+        );
+        said.extend(about_models(&reporter.notices));
+    }
+
+    assert_eq!(
+        said,
+        vec![
+            "typo-reviewer asked for a-model-the-service-does-not-hold and was answered by a \
+             different model"
+                .to_string()
+        ],
+        "what the person watching was told"
+    );
+}
+
 /// The figure a settings file named is the one a run is cut to, rather than the one compiled in.
 /// Only a turn shows this: the key can parse, `doctor` can report it, and the output still be cut
 /// where it always was, because the cap is spent three call sites away from where it is read.
@@ -17280,6 +19304,7 @@ fn a_configured_output_cap_is_what_a_run_is_cut_to() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn finishes");
 
     let bodies: Vec<String> = received.try_iter().collect();
@@ -17344,6 +19369,7 @@ fn a_delegate_runs_under_the_output_cap_of_the_turn_that_spawned_it() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     let bodies: Vec<String> = received.try_iter().collect();
@@ -17760,7 +19786,6 @@ fn seeded_reader(task: &str) -> bravebot_agent::delegate::Seeded {
     // kind's capabilities narrowed by the run's, and its kind's bound.
     let spec = policy
         .before_delegate(
-            bravebot_core::delegate::DelegateId::nth(1),
             &bravebot_core::value::Labelled::new("reader".to_string(), Label::untrusted_public()),
             &bravebot_core::value::Labelled::new(task.to_string(), Label::untrusted_public()),
         )
@@ -17808,11 +19833,13 @@ fn a_delegate_spends_the_wallet_the_turn_lent_it() {
         false,
         &bravebot_config::Attribution::default(),
         None,
+        None,
         &bravebot_core::cancel::Cancel::new(),
         &mut bravebot_agent::confirm::ApproveWrites,
         &mut bravebot_agent::IgnoreReports,
         &mut sink,
         Some(&wallet),
+        None,
     );
 
     assert!(
@@ -18139,18 +20166,21 @@ fn what_a_delegate_could_not_read_is_quarantined_from_it_too() {
     );
 }
 
-/// The depth is what bounds a tree of delegates. The tool is not offered inside one, and a call
-/// to it anyway is answered as an unknown name rather than quietly starting a second level.
+/// DELEGATE-7: a delegate above the bottom of the tree is offered `spawn_agent`, the one it starts
+/// runs, and the trail names it by its place beneath the delegate that asked for it.
 #[test]
-fn a_call_to_spawn_agent_from_inside_a_delegate_does_nothing() {
-    let scratch = Scratch::new("delegate-depth");
+fn a_delegate_can_spawn_its_own_delegate_and_the_trail_names_it() {
+    let scratch = Scratch::new("delegate-nesting");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
+    // Each level's marker is in its own requests and never in a level beneath it, because a
+    // delegate's conversation begins with its own task. A parent's requests do replay the task
+    // it handed down, so the parent's rule comes first.
     let (endpoint, received) = serve_by_marker(vec![
         (
             "DELEGATE-THE-WORK",
             vec![
-                tool_request("spawn_agent", r#"{"kind":"worker","task":"DO-THE-WORK"}"#),
+                tool_request("spawn_agent", r#"{"kind":"reader","task":"DO-THE-WORK"}"#),
                 reply_with("waiting"),
                 reply_with("done"),
             ],
@@ -18158,14 +20188,12 @@ fn a_call_to_spawn_agent_from_inside_a_delegate_does_nothing() {
         (
             "DO-THE-WORK",
             vec![
-                // The delegate asks for one of its own.
-                tool_request(
-                    "spawn_agent",
-                    r#"{"kind":"worker","task":"do it for me instead"}"#,
-                ),
-                reply_with("I could not delegate"),
+                tool_request("spawn_agent", r#"{"kind":"reader","task":"READ-DEEPER"}"#),
+                reply_with("waiting"),
+                reply_with("relayed"),
             ],
         ),
+        ("READ-DEEPER", vec![reply_with("DEEPER-REPORT")]),
     ]);
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
@@ -18182,29 +20210,50 @@ fn a_call_to_spawn_agent_from_inside_a_delegate_does_nothing() {
     .expect("turn runs");
 
     let asked = every_request(&received);
-    let delegates: Vec<&String> = asked
+    let first: Vec<&String> = asked
         .iter()
-        .filter(|body| !body.contains("DELEGATE-THE-WORK"))
+        .filter(|body| body.contains("DO-THE-WORK") && !body.contains("DELEGATE-THE-WORK"))
         .collect();
-    // A second level would be a run holding that task and not the one this delegate was given:
-    // a delegate's conversation begins with its own task and holds no other.
+    // Its own first request, before it had called anything: what is under test is the tool list.
+    let offered = first.first().expect("the delegate asked for nothing");
     assert!(
-        !asked
+        offered.contains("\"spawn_agent\""),
+        "a delegate above the bottom of the tree was not offered a way to delegate"
+    );
+    assert!(
+        asked
             .iter()
-            .any(|body| body.contains("do it for me instead") && !body.contains("DO-THE-WORK")),
-        "a second level of delegation ran"
+            .any(|body| body.contains("READ-DEEPER") && !body.contains("DO-THE-WORK")),
+        "the delegate's own delegate never ran"
+    );
+    assert!(
+        first.iter().any(|body| body.contains("DEEPER-REPORT")),
+        "the nested delegate's report did not reach the delegate that asked for it"
     );
 
-    // The delegate's own first request, before it had called anything: the tool list is what is
-    // under test, and every request after this one replays the call it made and the refusal.
-    let offered = delegates.first().expect("the delegate asked for nothing");
+    let approved: Vec<String> = sink
+        .events()
+        .iter()
+        .filter_map(|e| match e {
+            Event::GatePassed { gate, detail } if *gate == "delegate" => Some(detail.clone()),
+            _ => None,
+        })
+        .collect();
     assert!(
-        !offered.contains("spawn_agent"),
-        "a delegate was offered a way to delegate"
+        approved.iter().any(|d| d.starts_with("d1.1 ")),
+        "the trail does not number the nested delegate beneath the one that asked: {approved:?}"
+    );
+    let whose: Vec<String> = sink
+        .recorded()
+        .filter_map(|(from, _)| from.map(|id| id.to_string()))
+        .collect();
+    assert!(
+        whose.iter().any(|id| id == "d1.1"),
+        "nothing the nested delegate did was recorded as its own: {whose:?}"
     );
     assert!(
-        delegates.iter().any(|body| body.contains("no such tool")),
-        "a delegate's call to spawn_agent was not refused: {delegates:?}"
+        !whose.iter().any(|id| id == "d2"),
+        "the nested delegate was numbered as the turn's second: {whose:?}"
     );
 }
 
@@ -18697,6 +20746,86 @@ fn a_fan_out_past_the_ceiling_is_refused_and_starts_nothing() {
     );
 }
 
+/// DELEGATE-7: a fan-out that reaches the turn's ceiling part-way starts the delegates that fit,
+/// and the planner is told how many did not start and why, rather than losing the ones that did.
+#[test]
+fn a_fan_out_that_meets_the_turns_ceiling_starts_what_fits_and_says_what_did_not() {
+    use bravebot_core::delegate::MAX_DELEGATES;
+
+    let scratch = Scratch::new("delegate-tree-ceiling");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let fan_out = |n: u32| {
+        let each: Vec<String> = (1..=n).map(|i| format!("\"{i}\"")).collect();
+        tool_request(
+            "spawn_agent",
+            &format!(
+                r#"{{"kind":"reader","task":"FILL-SHARED","each":[{}]}}"#,
+                each.join(",")
+            ),
+        )
+    };
+    // Two short of the ceiling, eight at a time, then a call for four.
+    let mut asked = Vec::new();
+    let mut left = MAX_DELEGATES - 2;
+    while left > 0 {
+        asked.push(fan_out(left.min(8)));
+        left -= left.min(8);
+    }
+    asked.push(fan_out(4));
+    asked.push(reply_with("waiting"));
+    asked.push(reply_with("done"));
+
+    let (endpoint, received) = serve_by_marker(vec![
+        ("FILL-THE-TREE", asked),
+        (
+            "FILL-SHARED",
+            (0..MAX_DELEGATES).map(|_| reply_with("ok")).collect(),
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = Watched::default();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("FILL-THE-TREE"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert!(
+        reporter
+            .position(&format!("delegate d{MAX_DELEGATES} finished failed=false"))
+            .is_some(),
+        "the delegates that fit under the ceiling were not all started: {:?}",
+        reporter.lines()
+    );
+    let past = MAX_DELEGATES + 1;
+    assert!(
+        reporter
+            .position(&format!("delegate d{past} finished"))
+            .is_none(),
+        "a delegate past the turn's ceiling ran: {:?}",
+        reporter.lines()
+    );
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert!(
+        bodies
+            .iter()
+            .any(|body| body.contains("The other 2 were not started")
+                && body.contains(&format!("already started {MAX_DELEGATES} delegates"))),
+        "the planner was not told which of its delegates did not start, or why"
+    );
+}
+
 /// The transcript has room for a preview and a count, and a person who owns the directory is
 /// entitled to the rest. Every report the turn makes goes through the shim that lends one reporter
 /// to the turn and its delegates, so a report that shim does not carry reaches no screen at all.
@@ -18728,6 +20857,7 @@ fn what_a_command_printed_reaches_the_person_watching() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let printed = reporter
@@ -18789,6 +20919,7 @@ fn what_is_reported_about_a_line_says_which_directory_it_ran_in() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn completes");
 
     let printed = &reporter.printed;
@@ -18855,6 +20986,7 @@ fn the_middle_of_a_capped_output_stays_reachable() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
@@ -18877,6 +21009,182 @@ fn the_middle_of_a_capped_output_stays_reachable() {
         log,
         "the middle of the output existed nowhere but the sample"
     );
+}
+
+/// OUTPUT-4. Output the planner may read is kept out of a result by its length alone, so the rest
+/// of it comes back a page at a time from any offset, each page no longer than a run's result, and
+/// nobody is asked. The confirmer here refuses every request to read output, so a page reaching
+/// the planner is one no prompt was drawn for.
+#[test]
+fn output_too_long_for_its_result_is_read_page_by_page_with_nobody_asked() {
+    let scratch = Scratch::new("run-paged");
+    let mut log = String::new();
+    for line in 0..2000 {
+        if line == 1000 {
+            log.push_str("MIDDLE-MARKER-XYZZY\n");
+        }
+        log.push_str(&format!("line {line} of a long build log\n"));
+    }
+    std::fs::write(scratch.path.join("build.log"), &log).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let total = log.len();
+    let start = log.find("MIDDLE-MARKER-XYZZY").expect("marker") - 7;
+    let cap = 4096;
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cat build.log"}"#),
+        tool_request(
+            "read_output",
+            &format!(r#"{{"ref":"ref:1","offset":{start}}}"#),
+        ),
+        tool_request(
+            "read_output",
+            &format!(r#"{{"ref":"ref:1","offset":{}}}"#, total - 20),
+        ),
+        tool_request(
+            "read_output",
+            &format!(r#"{{"ref":"ref:1","offset":{total}}}"#),
+        ),
+        tool_request("read_output", r#"{"ref":"ref:1","offset":-1}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("build it").with_output_cap(Some(cap)),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let results: Vec<String> = std::iter::from_fn(|| received.try_recv().ok())
+        .skip(1)
+        .map(newest_tool_result)
+        .collect();
+    let [sample, middle, end, past, unusable] = &results[..] else {
+        panic!("the turn made {} rounds after the first", results.len());
+    };
+    assert!(
+        sample.contains(&format!("from byte {}", cap / 2)),
+        "the sample does not say where its middle begins: {sample}"
+    );
+    assert!(
+        sample.contains("read_output with ref:1 and an offset"),
+        "the planner was not told how to read the rest: {sample}"
+    );
+    assert!(!sample.contains("Quarantined"), "{sample}");
+    assert!(!sample.contains("MIDDLE-MARKER-XYZZY"));
+
+    assert!(
+        middle.contains("MIDDLE-MARKER-XYZZY"),
+        "the page from the offset did not reach the planner: {middle}"
+    );
+    let next = start + cap;
+    assert!(
+        middle.contains(&format!(
+            "(bytes {start} to {next} of {total} in ref:1; read_output with offset {next} gives \
+             the next part.)"
+        )),
+        "{middle}"
+    );
+    let page = &log[start..next];
+    assert!(
+        middle.contains(
+            &serde_json::to_string(page)
+                .unwrap()
+                .trim_matches('"')
+                .to_owned()
+        ),
+        "the page is not the bytes from the offset to the cap"
+    );
+    assert!(
+        !middle.contains(&log[next..next + 40]),
+        "a page ran past the cap"
+    );
+    assert!(!middle.contains("kept back"), "{middle}");
+
+    assert!(
+        end.contains(&format!(
+            "(bytes {} to {total} of {total} in ref:1; which is the end of it.)",
+            total - 20
+        )),
+        "{end}"
+    );
+    assert!(
+        past.contains(&format!(
+            "(ref:1 holds {total} bytes, so nothing starts at byte {total}.)"
+        )),
+        "{past}"
+    );
+    assert!(
+        unusable.contains("'offset' must be a whole number of bytes"),
+        "{unusable}"
+    );
+}
+
+/// OUTPUT-4. An offset is for output the planner may already read. On output nobody vouched for it
+/// is refused before anybody is asked or any check is made, since the page it expects is not what
+/// read_output would hand it.
+#[test]
+fn an_offset_into_output_nobody_vouched_for_is_refused_and_nobody_is_asked() {
+    let scratch = Scratch::new("read-output-offset");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cat where.txt"}"#),
+        tool_request("read_output", r#"{"ref":"ref:1","offset":0}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ReadsWhatItRan::new(true);
+    let shown = confirmer.shown.clone();
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    assert!(
+        shown.lock().unwrap().is_empty(),
+        "the user was asked about output the planner asked to page through"
+    );
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    assert_eq!(bodies.len(), 3, "a check was made about the output");
+    let refused = newest_tool_result(bodies[2].clone());
+    assert!(
+        refused.contains(
+            "an offset pages through output you may already read, and ref:1 is \
+                          quarantined"
+        ),
+        "{refused}"
+    );
+    assert!(!refused.contains("SENTINEL-XYZZY"));
 }
 
 /// A page server, for the fetch tests. Answers each request with the next reply it was given and
@@ -19610,6 +21918,20 @@ impl bravebot_agent::Confirmer for ApprovesFetchesAndWrites {
         bravebot_agent::Decision::Reject
     }
 
+    fn confirm_tool_list(
+        &mut self,
+        _request: &bravebot_agent::confirm::ToolListRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_mcp_call(
+        &mut self,
+        _request: &bravebot_agent::confirm::McpCallRequest,
+    ) -> bravebot_agent::confirm::CallDecision {
+        bravebot_agent::confirm::CallDecision::reject()
+    }
+
     fn ask_user(
         &mut self,
         _asking: &bravebot_core::ask::Asking,
@@ -19674,6 +21996,7 @@ fn a_background_server_is_still_running_when_the_next_call_is_made() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
     assert!(outcome.clean, "no gate should have refused");
 
@@ -19744,6 +22067,7 @@ fn a_program_a_turn_runs_is_told_where_the_sessions_directory_is() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert_eq!(
@@ -19793,6 +22117,7 @@ fn what_a_background_job_printed_is_quarantined_like_any_other_output() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
@@ -19867,6 +22192,7 @@ fn the_middle_of_a_capped_job_output_stays_reachable() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
@@ -19936,6 +22262,7 @@ fn one_job_output_call_that_waits_is_handed_output_arriving_after_it_was_made() 
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
@@ -19999,6 +22326,7 @@ fn a_job_output_call_reports_the_code_a_finished_job_exited_with() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
@@ -20061,6 +22389,7 @@ fn a_background_jobs_finish_reaches_the_turn_without_the_planner_asking() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
@@ -20118,6 +22447,7 @@ fn a_silent_background_jobs_exit_code_reaches_the_turn_by_itself() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
@@ -20179,6 +22509,7 @@ fn what_an_ended_job_printed_is_quarantined_where_nobody_vouched_for_the_line() 
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
@@ -20253,6 +22584,7 @@ fn what_an_ended_job_printed_is_capped_with_the_whole_of_it_kept() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
@@ -20271,6 +22603,10 @@ fn what_an_ended_job_printed_is_capped_with_the_whole_of_it_kept() {
     assert!(
         told.contains("The whole of this output, middle included, is a reference"),
         "the middle of what the job printed exists nowhere but the sample: {told}"
+    );
+    assert!(
+        told.contains("and an offset in bytes"),
+        "the planner was not told it may page through the rest: {told}"
     );
 }
 
@@ -20453,6 +22789,7 @@ fn a_command_line_and_its_directory_are_read_through_the_argument_gate() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
     assert!(outcome.clean, "no gate should have refused");
 
@@ -20510,6 +22847,7 @@ fn a_background_command_must_be_one_pipeline() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let _first = received.recv().expect("first request");
@@ -20553,6 +22891,7 @@ fn a_background_line_is_refused_for_any_redirection_it_carries() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let _first = received.recv().expect("first request");
@@ -20606,6 +22945,7 @@ fn a_refused_background_run_starts_nothing() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     assert_eq!(seen.lock().unwrap().len(), 1, "the user was not asked");
@@ -20751,6 +23091,7 @@ fn the_outcome_of_a_run(scratch: &Scratch, arguments: &str) -> bravebot_agent::r
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn completes");
 
     reporter
@@ -20845,6 +23186,7 @@ fn a_non_integer_deadline_is_refused() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn completes");
 
     // The command was never asked about because the deadline was refused before compilation.
@@ -20909,6 +23251,7 @@ fn the_working_directory_persists_across_calls() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn completes");
 
     let asked = seen.lock().unwrap();
@@ -20989,6 +23332,7 @@ fn the_working_directory_can_be_an_added_directory() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn completes");
 
     let asked = seen.lock().unwrap();
@@ -21042,6 +23386,7 @@ fn a_directory_escaping_the_workspace_is_refused() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn completes");
 
     // Only the second run was valid and asked about.
@@ -21099,6 +23444,7 @@ fn a_nonexistent_directory_is_an_error_and_does_not_mutate() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn completes");
 
     let asked = seen.lock().unwrap();
@@ -21152,6 +23498,7 @@ fn a_directory_that_is_not_a_string_is_refused() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn completes");
 
     let asked = seen.lock().unwrap();
@@ -21210,6 +23557,7 @@ fn a_refused_run_directory_does_not_persist() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn completes");
 
     let asked = seen.lock().unwrap();
@@ -21262,6 +23610,7 @@ fn a_vouched_line_is_asked_about_again_when_a_directory_is_named() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn completes");
 
     let asked = seen.lock().unwrap();
@@ -21343,6 +23692,7 @@ fn a_line_vouched_for_outside_the_root_is_asked_about_again_at_the_root() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn completes");
 
     assert!(
@@ -21414,6 +23764,7 @@ fn a_symlinked_spelling_of_the_vouched_tree_is_the_same_entry() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn completes");
 
     let asked = seen.lock().unwrap();
@@ -21466,6 +23817,7 @@ fn a_second_spelling_of_the_vouched_tree_is_the_same_entry() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn completes");
 
     let asked = seen.lock().unwrap();
@@ -21626,6 +23978,7 @@ fn take_a_turn_reporting(
         None,
         cancel,
     )
+    .outcome
 }
 
 fn why_it_failed(error: &turn::TurnError) -> bravebot_agent::Diagnosis {
@@ -21969,6 +24322,7 @@ fn a_failed_processor_reports_a_category_and_nothing_the_service_or_the_setting_
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .unwrap();
     let requests: Vec<_> = received.try_iter().collect();
     assert_eq!(
@@ -22029,6 +24383,7 @@ fn a_stop_counts_the_requests_that_were_sent_and_no_others() {
         None,
         &cancel,
     )
+    .outcome
     .unwrap_err();
     assert_eq!(received.try_iter().count(), 1);
     let ending = error.ending();
@@ -22048,6 +24403,7 @@ fn a_stop_counts_the_requests_that_were_sent_and_no_others() {
         None,
         &cancelled_before_request,
     )
+    .outcome
     .unwrap_err();
     assert_eq!(received.try_iter().count(), 0);
     let before_ending = before.ending();
@@ -22101,6 +24457,7 @@ fn a_stop_while_a_processor_runs_is_reported_as_a_stop_with_what_it_sent() {
         None,
         &cancel,
     )
+    .outcome
     .unwrap_err();
     waiter.join().unwrap();
     assert_eq!(
@@ -22722,7 +25079,8 @@ mod usage {
                     bravebot_core::programs::TrustedPrograms::new(),
                     None,
                     &token,
-                );
+                )
+                .outcome;
                 drop(_scratch);
                 let _ = tx.send((
                     result,
@@ -22808,7 +25166,8 @@ mod usage {
                     bravebot_core::programs::TrustedPrograms::new(),
                     None,
                     &bravebot_core::cancel::Cancel::new(),
-                );
+                )
+                .outcome;
                 finished_tx.send(result).unwrap();
             });
             let request = || {
@@ -22964,7 +25323,8 @@ mod usage {
                     bravebot_core::programs::TrustedPrograms::new(),
                     None,
                     &stop,
-                );
+                )
+                .outcome;
                 finished_tx.send(result).unwrap();
             });
             let request = || {
@@ -23180,6 +25540,144 @@ mod usage {
     #[test]
     fn compaction_progress_survives_cancellation() {
         compaction_usage(true);
+    }
+
+    /// Decisions made by an outstanding child survive every ordinary parent ending.
+    #[test]
+    fn ordinary_parent_endings_retain_delegate_file_and_program_decisions() {
+        for ending in ["success", "failure", "cancel"] {
+            let scratch = Scratch::new(&format!("retained-delegate-{ending}"));
+            const SENTINEL: &str = "UNTRUSTED_DELEGATE_INTERRUPTION_85119";
+            std::fs::write(scratch.path.join("source.txt"), SENTINEL).unwrap();
+            std::fs::write(scratch.path.join("target.txt"), "original").unwrap();
+            let workspace = Workspace::new(&scratch.path).unwrap();
+            let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+            trust.trust(".");
+            trust.distrust("source.txt");
+            let (endpoint, pending) = controlled_server();
+            let cancel = bravebot_core::cancel::Cancel::new();
+            let (tx, done) = mpsc::channel();
+            let token = cancel.clone();
+            let (completed, mut conversation) = thread::scope(|scope| {
+                struct StopOnExit(bravebot_core::cancel::Cancel);
+                impl Drop for StopOnExit {
+                    fn drop(&mut self) {
+                        self.0.cancel();
+                    }
+                }
+                let _stop_on_exit = StopOnExit(cancel.clone());
+                let worker = scope.spawn(|| {
+                    let mut conversation = bravebot_agent::Conversation::new();
+                    let completed = turn::resume(
+                        &config_for(&endpoint),
+                        &bravebot_net::Egress::new(),
+                        &workspace,
+                        &Task::new("PARENT-RETENTION"),
+                        &mut conversation,
+                        &mut retention_answers::Answers::new(
+                            bravebot_agent::RunDecision::approve_always(),
+                        ),
+                        &mut bravebot_agent::IgnoreReports,
+                        &mut RecordingSink::new(),
+                        trust,
+                        bravebot_core::programs::TrustedPrograms::new(),
+                        None,
+                        &token,
+                    );
+                    tx.send((completed, conversation)).unwrap();
+                });
+                let request = || pending.recv_timeout(WAIT).expect("next request");
+                request().answer(&tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"CHILD-RETENTION"}"#,
+                ));
+                let first = request();
+                let second = request();
+                let (parent, child) = if first.body.contains("PARENT-RETENTION") {
+                    (first, second)
+                } else {
+                    (second, first)
+                };
+                assert!(parent.body.contains("PARENT-RETENTION"));
+                assert!(child.body.contains("CHILD-RETENTION"));
+                child.answer(&tool_request("read_file", r#"{"path":"source.txt"}"#));
+                request().answer(&tool_request(
+                    "write_file",
+                    r#"{"path":"target.txt","contents_ref":"ref:1"}"#,
+                ));
+                request().answer(&tool_request(
+                    "run",
+                    r#"{"command":"touch child-approved.txt"}"#,
+                ));
+                let child_done = request();
+                assert_eq!(
+                    std::fs::read_to_string(scratch.path.join("target.txt")).unwrap(),
+                    SENTINEL
+                );
+                assert!(scratch.path.join("child-approved.txt").exists());
+                match ending {
+                    "success" => {
+                        parent.answer(&reply_with("collect"));
+                        child_done.answer(&reply_with("done"));
+                        request().answer(&reply_with("done"));
+                    }
+                    "failure" => {
+                        parent.refuse();
+                        child_done.refuse();
+                    }
+                    _ => {
+                        cancel.cancel();
+                        parent.interrupted_stream();
+                        child_done.interrupted_stream();
+                    }
+                }
+                let completed = done
+                    .recv_timeout(WAIT)
+                    .expect("parent must join child and end");
+                worker.join().unwrap();
+                completed
+            });
+            if ending == "cancel" {
+                assert!(matches!(
+                    completed.outcome,
+                    Err(turn::TurnError::Cancelled { .. })
+                ));
+            } else {
+                assert_eq!(completed.outcome.is_ok(), ending == "success");
+            }
+            assert_eq!(completed.decisions.programs.len(), 1);
+            assert_eq!(
+                completed.decisions.asked_about,
+                bravebot_core::programs::AskedAbout::new(),
+                "child advice must not enter parent history"
+            );
+            let (endpoint, requests) = serve_sequence(vec![
+                tool_request("read_file", r#"{"path":"target.txt"}"#),
+                reply_with("done"),
+            ]);
+            turn::resume(
+                &config_for(&endpoint),
+                &bravebot_net::Egress::new(),
+                &workspace,
+                &Task::new("continue"),
+                &mut conversation,
+                &mut bravebot_agent::confirm::ApproveWrites,
+                &mut bravebot_agent::IgnoreReports,
+                &mut RecordingSink::new(),
+                completed.decisions.trust,
+                completed.decisions.programs,
+                None,
+                &bravebot_core::cancel::Cancel::new(),
+            )
+            .outcome
+            .unwrap();
+            let planner: Vec<_> = requests
+                .try_iter()
+                .filter(|body| !body.contains(A_CHECK_ASKING))
+                .collect();
+            assert_eq!(planner.len(), 2);
+            assert!(!planner[1].contains(SENTINEL));
+        }
     }
 
     fn outstanding_delegate_usage(ending: &str) {
@@ -23800,12 +26298,16 @@ mod usage {
     }
 }
 
-/// Completed requests remain charged once when their reply cannot be used.
+/// Completed requests remain charged once when their reply cannot be used. Two empty replies,
+/// because one is asked about again (TURN-6) and it is the second that ends the turn.
 #[test]
 fn completed_empty_reply_keeps_reported_usage_on_failure() {
     let scratch = Scratch::new("completed-empty-usage");
     let workspace = Workspace::new(&scratch.path).unwrap();
-    let (url, received) = serve_script(vec![Served::Reply(reply_with_usage("", 100, 7))]);
+    let (url, received) = serve_script(vec![
+        Served::Reply(reply_with_usage("", 100, 7)),
+        Served::Reply(reply_with_usage("", 120, 9)),
+    ]);
     let mut conversation = bravebot_agent::Conversation::new();
     let mut reporter = bravebot_agent::report::RecordingReporter::default();
     let error = take_a_turn_reporting(
@@ -23821,13 +26323,84 @@ fn completed_empty_reply_keeps_reported_usage_on_failure() {
         why_it_failed(&error).category,
         bravebot_agent::Category::Undecodable
     );
-    assert_eq!(received.try_iter().count(), 1);
-    assert_eq!(reporter.spent.last().unwrap().tokens, 107);
+    assert_eq!(received.try_iter().count(), 2);
+    assert_eq!(reporter.spent.last().unwrap().tokens, 236);
     assert_eq!(
         conversation.last_request_tokens(),
-        100,
+        120,
         "completed prompt measurement"
     );
+}
+
+const ASKED_AFTER_AN_EMPTY_REPLY: &str =
+    "(from the system, not the user) Your last reply was empty.";
+
+/// A model that finishes a reply having said nothing is asked to carry on, and the person never
+/// sees it. Ending the turn instead leaves the work half done behind "the reply could not be
+/// read", and all the person can do about that is ask again, which the turn can do for them.
+///
+/// Two empty replies with an answered round between them, so that being asked once per turn
+/// rather than once per empty reply fails the turn on the second.
+#[test]
+fn an_empty_reply_is_asked_about_and_the_turn_carries_on() {
+    let scratch = Scratch::new("empty-reply-continues");
+    let workspace = Workspace::new(&scratch.path).unwrap();
+    let (url, received) = serve_script(vec![
+        Served::Reply(reply_with_usage("", 10, 1)),
+        Served::Reply(tool_request("list_files", r#"{"directory":"."}"#)),
+        Served::Reply(reply_with_usage("", 20, 2)),
+        Served::Reply(reply_with_usage("done", 30, 3)),
+    ]);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let outcome = take_a_turn_reporting(
+        &config_for(&url),
+        &workspace,
+        &mut conversation,
+        Task::new("work"),
+        &mut reporter,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn carries on past an empty reply");
+
+    assert_eq!(outcome.reply_for_display(), "done");
+    let bodies: Vec<String> = received.try_iter().collect();
+    let asked = bodies
+        .iter()
+        .map(|body| body.matches(ASKED_AFTER_AN_EMPTY_REPLY).count())
+        .collect::<Vec<_>>();
+    assert_eq!(asked, [0, 1, 1, 2], "{bodies:#?}");
+    assert_eq!(reporter.spent.last().unwrap().tokens, 66);
+}
+
+/// Asked once and no more. A second empty reply in a row is a model with nothing to say here, and
+/// asking again would spend a request per round finding that out for as long as it went on.
+#[test]
+fn two_empty_replies_in_a_row_end_the_turn() {
+    let scratch = Scratch::new("empty-reply-twice");
+    let workspace = Workspace::new(&scratch.path).unwrap();
+    let (url, received) = serve_script(vec![
+        Served::Reply(reply_with_usage("", 10, 1)),
+        Served::Reply(reply_with_usage("", 20, 2)),
+        Served::Reply(reply_with_usage("never asked for", 30, 3)),
+    ]);
+    let error = take_a_turn_reporting(
+        &config_for(&url),
+        &workspace,
+        &mut bravebot_agent::Conversation::new(),
+        Task::new("work"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        why_it_failed(&error).category,
+        bravebot_agent::Category::Undecodable
+    );
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 2, "{bodies:#?}");
+    assert_eq!(bodies[1].matches(ASKED_AFTER_AN_EMPTY_REPLY).count(), 1);
 }
 
 /// Completed requests remain charged once when their reply cannot be used.
@@ -23894,6 +26467,7 @@ fn rejected_processor_keeps_completed_usage_when_the_parent_fails() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .unwrap_err();
     let requests: Vec<_> = received.try_iter().collect();
     assert_eq!(
@@ -23996,7 +26570,8 @@ fn completed_stream_keeps_usage_when_cancelled_before_socket_closes() {
             bravebot_core::programs::TrustedPrograms::new(),
             None,
             &cancel,
-        );
+        )
+        .outcome;
         drop(release);
         server.join().unwrap();
         assert!(matches!(
@@ -24068,6 +26643,7 @@ fn rejected_subrequests_are_counted_once_when_the_parent_succeeds() {
             None,
             &bravebot_core::cancel::Cancel::new(),
         )
+        .outcome
         .unwrap();
         let expected = (if processor { 173 } else { 118 }) + if retry { 45 } else { 0 };
         assert_eq!(outcome.tokens, expected);
@@ -24091,6 +26667,9 @@ fn rejected_subrequests_are_counted_once_when_the_parent_succeeds() {
 }
 
 /// Retry costs are cumulative, while the measured prompt belongs only to the final attempt.
+///
+/// An empty reply is asked about once (TURN-6), so the empty ending is preceded by an empty reply
+/// the turn has already asked about, which leaves the retried request as the one that ends it.
 #[test]
 fn planner_retry_costs_do_not_replace_the_last_prompt_measurement() {
     for ending in ["success", "empty", "incomplete"] {
@@ -24101,11 +26680,16 @@ fn planner_retry_costs_do_not_replace_the_last_prompt_measurement() {
             "empty" => Served::Reply(reply_with_usage("", 10, 1)),
             _ => Served::Unfinished,
         };
-        let (url, received) = serve_script(vec![
+        let mut script = Vec::new();
+        if ending == "empty" {
+            script.push(Served::Reply(reply_with_usage("", 30, 4)));
+        }
+        script.extend([
             Served::BrokenReply(reply_with_usage("first", 100, 7)),
             Served::BrokenReply(reply_with_usage("second", 23, 3)),
             last,
         ]);
+        let (url, received) = serve_script(script);
         let mut conversation = bravebot_agent::Conversation::new();
         conversation.measured(55);
         let mut reporter = bravebot_agent::report::RecordingReporter::default();
@@ -24117,7 +26701,11 @@ fn planner_retry_costs_do_not_replace_the_last_prompt_measurement() {
             &mut reporter,
             &bravebot_core::cancel::Cancel::new(),
         );
-        let expected = if ending == "incomplete" { 133 } else { 144 };
+        let expected = match ending {
+            "success" => 144,
+            "empty" => 178,
+            _ => 133,
+        };
         match ending {
             "success" => assert_eq!(result.unwrap().tokens, expected),
             _ => {
@@ -24134,11 +26722,18 @@ fn planner_retry_costs_do_not_replace_the_last_prompt_measurement() {
                 assert_eq!(diagnosis.attempts, Some(3));
             }
         }
-        assert_eq!(received.try_iter().count(), 3);
+        assert_eq!(
+            received.try_iter().count(),
+            if ending == "empty" { 4 } else { 3 }
+        );
         assert_eq!(reporter.spent.last().unwrap().tokens, expected);
         assert_eq!(
             reporter.spent.last().unwrap().output_tokens,
-            if ending == "incomplete" { 10 } else { 11 }
+            match ending {
+                "success" => 11,
+                "empty" => 15,
+                _ => 10,
+            }
         );
         assert_eq!(
             conversation.last_request_tokens(),
@@ -24234,6 +26829,20 @@ impl bravebot_agent::confirm::Confirmer for RemembersWrites {
         request: &bravebot_agent::confirm::ExposureRequest,
     ) -> bravebot_agent::confirm::Decision {
         bravebot_agent::confirm::ApproveWrites.confirm_exposing_read(request)
+    }
+
+    fn confirm_tool_list(
+        &mut self,
+        _request: &bravebot_agent::confirm::ToolListRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_mcp_call(
+        &mut self,
+        _request: &bravebot_agent::confirm::McpCallRequest,
+    ) -> bravebot_agent::confirm::CallDecision {
+        bravebot_agent::confirm::CallDecision::reject()
     }
 
     fn ask_user(&mut self, asking: &bravebot_core::ask::Asking) -> Vec<bravebot_core::ask::Answer> {
@@ -24487,6 +27096,20 @@ impl bravebot_agent::confirm::Confirmer for RemembersExposures {
             true => bravebot_agent::confirm::Decision::Approve,
             false => bravebot_agent::confirm::Decision::Reject,
         }
+    }
+
+    fn confirm_tool_list(
+        &mut self,
+        _request: &bravebot_agent::confirm::ToolListRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_mcp_call(
+        &mut self,
+        _request: &bravebot_agent::confirm::McpCallRequest,
+    ) -> bravebot_agent::confirm::CallDecision {
+        bravebot_agent::confirm::CallDecision::reject()
     }
 
     fn confirm_write(
@@ -25158,6 +27781,7 @@ fn a_run_turn_scanning(
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
     let _first = received.recv().expect("first request");
     let second = received.recv().expect("second request");
@@ -25238,6 +27862,54 @@ fn a_credential_a_run_line_redirects_into_the_tree_does_not_stay_there() {
     assert!(
         !told.contains(DECLARED_KEY),
         "the value itself was put on the screen: {told}"
+    );
+}
+
+/// Putting a destination back is confined the way a write is. The line runs between the moment
+/// its destination is noted and the moment what it held goes back, and a line that turns the
+/// directory above the destination into a link out of the workspace would have the put-back
+/// follow it: here, deleting the credentials file a person keeps outside the tree.
+///
+/// So the destination is named as one that could not be put back, and the file outside is left
+/// as it was.
+#[cfg(unix)]
+#[test]
+fn a_refused_line_is_not_put_back_through_a_directory_it_linked_out_of_the_workspace() {
+    let scratch = Scratch::new("credential-run-relinked");
+    let elsewhere = Scratch::new("credential-run-relinked-elsewhere");
+    let env = format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n");
+    std::fs::write(scratch.path.join(".env"), &env).unwrap();
+    std::fs::create_dir(scratch.path.join("d")).unwrap();
+    std::fs::write(elsewhere.path.join("credentials"), &env).unwrap();
+    let away = elsewhere.path.to_str().expect("a UTF-8 scratch path");
+    let program = |name: &str| {
+        bravebot_agent::programs::resolve(name, &scratch.path).expect("the program exists")
+    };
+    let programs = bravebot_core::programs::TrustedPrograms::from_iter([
+        vouched_in(&program("cat"), &[".env"], &scratch.path),
+        vouched_in(&program("rm"), &["-r", "d"], &scratch.path),
+        vouched_in(&program("ln"), &["-s", away, "d"], &scratch.path),
+    ]);
+
+    let (_home, _reporter, answered) = a_run_turn_scanning(
+        &scratch,
+        &format!("cat .env > d/credentials && rm -r d && ln -s {away} d"),
+        programs,
+    );
+
+    assert!(
+        scratch.path.join("d").is_symlink(),
+        "the line did not leave its destination behind a link, so nothing here asks where the \
+         put-back goes: {answered}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(elsewhere.path.join("credentials")).ok(),
+        Some(env),
+        "putting the destination back deleted a file outside the workspace"
+    );
+    assert!(
+        answered.contains("d/credentials could not be put back"),
+        "the planner was not told the destination did not go back: {answered}"
     );
 }
 
@@ -25656,6 +28328,7 @@ fn the_lines_an_output_prompt_states_are_counted_inside_the_kernel() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let asked = shown.lock().unwrap();
@@ -25726,6 +28399,7 @@ fn the_lines_a_vetting_prompt_states_are_counted_inside_the_kernel() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("the turn runs");
 
     let asked = shown.lock().unwrap();
@@ -25934,3 +28608,834 @@ fn a_finding_is_written_outside_the_tree_and_outlives_the_turn() {
         );
     }
 }
+
+/// GIT-1. Where the whole of `.git` is vouched for, its history reaches the planner as it would
+/// through `git log`, with nobody asked: that is what the tool is for, and a result the planner
+/// never saw would leave it running git anyway.
+#[test]
+fn read_git_shows_the_planner_the_history_of_a_trusted_repository() {
+    const SUBJECT: &str = "SUBJECT-OF-A-TRUSTED-COMMIT";
+    let scratch = Scratch::new("read-git-trusted");
+    repository::commit_files(&scratch.path, &[("README", "hello\n")], SUBJECT);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_git", r#"{"query":"log"}"#),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what changed"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let answered = tool_results(&received.recv().expect("second request"));
+    assert!(
+        answered.contains(&format!("2023-11-14 A U Thor {SUBJECT}")),
+        "the log of a trusted repository did not reach the planner: {answered}"
+    );
+}
+
+/// GIT-2. Following history means following ids the files under `.git` hold, so a repository
+/// nobody vouched for is not opened, and the planner is told to use run instead. Its configuration
+/// names a format read_git would decline too, so the refusal naming trust rather than the format
+/// is what shows the decision was taken before any file there was read.
+#[test]
+fn read_git_does_not_open_a_repository_nobody_vouched_for() {
+    const SUBJECT: &str = "SUBJECT-OF-AN-UNVOUCHED-COMMIT";
+    let scratch = Scratch::new("read-git-untrusted");
+    repository::commit_files(&scratch.path, &[("README", "hello\n")], SUBJECT);
+    std::fs::write(
+        scratch.path.join(".git/config"),
+        "[core]\n\trepositoryformatversion = 9\n",
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_git", r#"{"query":"log"}"#),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what changed"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let answered = tool_results(&received.recv().expect("second request"));
+    assert!(
+        !answered.contains(SUBJECT),
+        "an unvouched repository's history reached the planner: {answered}"
+    );
+    assert!(
+        answered.contains("read_git does not open it") && answered.contains("Use run"),
+        "the planner was not told why the repository was not read, or what to use: {answered}"
+    );
+}
+
+/// GIT-3. A blob holds the bytes of the file it committed, so an answer showing a path the map
+/// distrusts is as untrusted as that file, however trusted the `.git` it came out of. Narrowed to a
+/// path the map trusts, the same commit is shown.
+#[test]
+fn a_history_answer_showing_a_distrusted_path_is_quarantined() {
+    const THEIRS: &str = "LINE-FROM-A-DISTRUSTED-FILE";
+    const OURS: &str = "LINE-FROM-A-TRUSTED-FILE";
+    let scratch = Scratch::new("read-git-distrusted-path");
+    repository::commit_files(
+        &scratch.path,
+        &[
+            ("README", &format!("{OURS}\n")),
+            ("vendor/b.js", &format!("{THEIRS}\n")),
+        ],
+        "add both",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_git", r#"{"query":"show"}"#),
+        tool_request_2("read_git", r#"{"query":"show","path":"README"}"#),
+        reply_with("understood"),
+    ]);
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    trust.distrust("vendor");
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what changed"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let whole = tool_results(&received.recv().expect("second request"));
+    assert!(
+        !whole.contains(THEIRS) && !whole.contains(OURS),
+        "a commit showing a distrusted file reached the planner: {whole}"
+    );
+    assert!(
+        whole.contains("could not be shown to you"),
+        "the planner was not told the answer was withheld: {whole}"
+    );
+    let narrowed = tool_results(&received.recv().expect("third request"));
+    assert!(
+        narrowed.contains(&format!("+{OURS}")) && !narrowed.contains(THEIRS),
+        "the commit narrowed to a trusted path was not shown: {narrowed}"
+    );
+}
+
+/// GIT-4. A deny rule over a file covers what history holds of it, or `git show HEAD:.env` would
+/// be the way round every rule. Named, it is refused as every read refuses it, before anything
+/// under `.git` is opened; met in a commit's diff, it is left out and the answer says so.
+#[test]
+fn a_deny_rule_over_a_file_refuses_reading_its_history() {
+    const DENIED: &str = "LINE-A-RULE-DENIES";
+    let scratch = Scratch::new("read-git-denied-path");
+    repository::commit_files(
+        &scratch.path,
+        &[(".env", &format!("{DENIED}\n")), ("README", "hello\n")],
+        "add env",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_git", r#"{"query":"show","revision":"HEAD:.env"}"#),
+        tool_request_2("read_git", r#"{"query":"log","path":".env"}"#),
+        tool_request_2("read_git", r#"{"query":"show"}"#),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what is in .env").with_permissions(rules(&["Read(./.env)"], &[], &[])),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let shown = tool_results(&received.recv().expect("second request"));
+    assert!(
+        !shown.contains(DENIED) && shown.contains("deny rule"),
+        "a denied file's history was shown, or the refusal did not say why: {shown}"
+    );
+    let logged = tool_results(&received.recv().expect("third request"));
+    assert_eq!(
+        logged.matches("deny rule").count(),
+        2,
+        "a log of a denied file was not refused: {logged}"
+    );
+    let commit = tool_results(&received.recv().expect("fourth request"));
+    assert!(
+        !commit.contains(DENIED)
+            && commit.contains("+hello")
+            && commit.contains("was left out of this answer"),
+        "a commit's diff showed a denied file, or did not say it was left out: {commit}"
+    );
+}
+
+/// GIT-4. read_git reads every file under `.git` or none, so a rule over one of them keeps the
+/// whole repository closed rather than leaving a history with holes in it.
+#[test]
+fn a_repository_holding_a_file_a_deny_rule_covers_is_not_opened() {
+    const SUBJECT: &str = "SUBJECT-BEHIND-A-DENIED-FILE";
+    let scratch = Scratch::new("read-git-fenced");
+    repository::commit_files(&scratch.path, &[("README", "hello\n")], SUBJECT);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_git", r#"{"query":"log"}"#),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what changed").with_permissions(rules(&["Read(./.git/config)"], &[], &[])),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let answered = tool_results(&received.recv().expect("second request"));
+    assert!(
+        !answered.contains(SUBJECT) && answered.contains("a deny rule covers"),
+        "a repository holding a denied file was read: {answered}"
+    );
+}
+
+/// CRED-15. A commit that added a key puts the key in the diff, so what read_git would show is
+/// scanned as a file read is, and held back until the person agrees. Both directions, since a scan
+/// that held every such answer back would make a repository with a `.env` in its history unreadable.
+#[test]
+fn a_credential_in_history_is_held_back_until_the_person_agrees() {
+    for (name, agrees) in [("declined", false), ("approved", true)] {
+        let scratch = Scratch::new(&format!("read-git-credential-{name}"));
+        repository::commit_files(
+            &scratch.path,
+            &[(".env", &format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n"))],
+            "add env",
+        );
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request_2("read_git", r#"{"query":"show"}"#),
+            reply_with("understood"),
+        ]);
+        let mut sink = RecordingSink::new();
+        let task = Task::new("what changed");
+        if agrees {
+            turn::run_with_trust(
+                &config_for(&endpoint),
+                &bravebot_net::Egress::new(),
+                &workspace,
+                &task,
+                &mut bravebot_agent::confirm::ExposesReads,
+                &mut sink,
+                trusting_the_workspace(),
+            )
+        } else {
+            turn::run_with_trust(
+                &config_for(&endpoint),
+                &bravebot_net::Egress::new(),
+                &workspace,
+                &task,
+                &mut bravebot_agent::confirm::Unattended,
+                &mut sink,
+                trusting_the_workspace(),
+            )
+        }
+        .expect("turn runs");
+
+        let _first = received.recv().expect("first request");
+        let answered = tool_results(&received.recv().expect("second request"));
+        if agrees {
+            assert!(
+                answered.contains(DECLARED_KEY),
+                "a history the person agreed to show was held back: {answered}"
+            );
+        } else {
+            assert!(
+                !answered.contains(DECLARED_KEY) && answered.contains("refused"),
+                "a history the person declined still put the credential in the planner's \
+                 context: {answered}"
+            );
+        }
+    }
+}
+
+/// CRED-15. A file's lines in an answer are scanned as a read of that file, so the question names
+/// the file, and agreeing to one file's key is not agreeing to another's: the second file is asked
+/// about, and the first is not asked about twice.
+#[test]
+fn agreeing_to_one_files_key_in_history_is_not_agreeing_to_anothers() {
+    let scratch = Scratch::new("read-git-credential-per-file");
+    repository::commit_files(
+        &scratch.path,
+        &[
+            (".env", &format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n")),
+            ("deploy/master.key", &format!("{GENERATED_SECRET}\n")),
+        ],
+        "add keys",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_git", r#"{"query":"show","path":".env"}"#),
+        tool_request_2("read_git", r#"{"query":"show","path":"deploy/master.key"}"#),
+        tool_request_2("read_git", r#"{"query":"show","path":".env"}"#),
+        reply_with("understood"),
+    ]);
+    let mut confirmer = RemembersExposures {
+        allow: true,
+        ..Default::default()
+    };
+    let asked = confirmer.asked.clone();
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what changed"),
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let env = tool_results(&received.recv().expect("second request"));
+    let key = tool_results(&received.recv().expect("third request"));
+    let again = tool_results(&received.recv().expect("fourth request"));
+    assert!(
+        env.contains(DECLARED_KEY)
+            && key.contains(GENERATED_SECRET)
+            && again.contains(DECLARED_KEY),
+        "a history the person agreed to show was held back: {env}\n{key}\n{again}"
+    );
+    let asked = asked.lock().unwrap();
+    let named: Vec<String> = asked.iter().map(|a| a.credentials.join("; ")).collect();
+    assert_eq!(
+        named.len(),
+        2,
+        "each file with a key is asked about once, and only once: {named:?}"
+    );
+    assert!(
+        named[0].contains(".env:1") && named[1].contains("deploy/master.key:1"),
+        "the question did not name the file and line the key is on: {named:?}"
+    );
+}
+
+/// CRED-15. A value that is the whole of a new file is recognised in the commit that added it as
+/// it is in the file, which it could not be if the answer were read as one document.
+#[test]
+fn a_key_that_is_the_whole_of_a_file_is_caught_in_the_commit_that_added_it() {
+    let scratch = Scratch::new("read-git-credential-alone");
+    repository::commit_files(
+        &scratch.path,
+        &[
+            ("README", "hello\n"),
+            ("master.key", &format!("{GENERATED_SECRET}\n")),
+        ],
+        "add a key",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_git", r#"{"query":"show"}"#),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what changed"),
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let answered = tool_results(&received.recv().expect("second request"));
+    assert!(
+        !answered.contains(GENERATED_SECRET) && answered.contains("refused"),
+        "a key standing as the whole of a new file reached the planner: {answered}"
+    );
+}
+
+/// GIT-5 and GIT-10. status is answered the way git status --short prints it, from the index and
+/// the working tree, and a word off the list is refused by name.
+#[test]
+fn read_git_answers_status_and_refuses_a_query_off_the_list() {
+    let scratch = Scratch::new("read-git-queries");
+    repository::commit_files(
+        &scratch.path,
+        &[("README", "hello\n"), ("src/lib.rs", "fn f() {}\n")],
+        "first",
+    );
+    repository::check_out(
+        &scratch.path,
+        &[("README", "hello\n"), ("src/lib.rs", "fn f() {}\n")],
+    );
+    std::fs::write(scratch.path.join("README"), "hello again\n").unwrap();
+    std::fs::write(scratch.path.join("notes.txt"), "mine\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_git", r#"{"query":"status"}"#),
+        tool_request_2("read_git", r#"{"query":"blame"}"#),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what changed"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let status = tool_results(&received.recv().expect("second request"));
+    assert!(
+        status.contains(r" M README\n?? notes.txt") && !status.contains("lib.rs"),
+        "status was not answered as git status --short prints it: {status}"
+    );
+    let blame = tool_results(&received.recv().expect("third request"));
+    assert!(
+        blame.contains("answers log, show, diff, status, tags and search, not blame"),
+        "a query off the list was not refused by name: {blame}"
+    );
+}
+
+/// GIT-11. status compares every file in the working tree, so it answers only where the map trusts
+/// all of it; with one directory distrusted it names run, while log, which reads only `.git`,
+/// still answers.
+#[test]
+fn status_is_answered_only_where_the_whole_working_tree_is_trusted() {
+    const SUBJECT: &str = "SUBJECT-OF-A-TRUSTED-HISTORY";
+    let scratch = Scratch::new("read-git-status-untrusted-tree");
+    repository::commit_files(&scratch.path, &[("README", "hello\n")], SUBJECT);
+    repository::check_out(&scratch.path, &[("README", "hello\n")]);
+    std::fs::create_dir_all(scratch.path.join("vendor")).unwrap();
+    std::fs::write(
+        scratch.path.join("vendor/NAME-IN-A-DISTRUSTED-DIRECTORY"),
+        "x\n",
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_git", r#"{"query":"status"}"#),
+        tool_request_2("read_git", r#"{"query":"log"}"#),
+        reply_with("understood"),
+    ]);
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    trust.distrust("vendor");
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what changed"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let status = tool_results(&received.recv().expect("second request"));
+    assert!(
+        !status.contains("NAME-IN-A-DISTRUSTED-DIRECTORY")
+            && status.contains("not a working tree this session trusts in full")
+            && status.contains("Use run"),
+        "status read a working tree the map does not trust in full: {status}"
+    );
+    let log = tool_results(&received.recv().expect("third request"));
+    assert!(log.contains(SUBJECT), "log was not answered: {log}");
+}
+
+/// GIT-6. `since` and `until` are whole days in UTC, so a commit made late on the day `until`
+/// names is inside it, and anything that is not a calendar day is refused with the form it takes
+/// rather than read as some other day.
+#[test]
+fn since_and_until_are_whole_days_and_anything_else_is_refused() {
+    const SUBJECT: &str = "SUBJECT-LATE-ON-ITS-DAY";
+    let scratch = Scratch::new("read-git-days");
+    // 22:13 UTC on 2023-11-14.
+    repository::commit_files(&scratch.path, &[("README", "hello\n")], SUBJECT);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_git", r#"{"query":"log","until":"2023-11-14"}"#),
+        tool_request_2("read_git", r#"{"query":"log","since":"2023-11-15"}"#),
+        tool_request_2("read_git", r#"{"query":"log","since":"2023-02-30"}"#),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what changed"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let until = tool_results(&received.recv().expect("second request"));
+    assert!(
+        until.contains(SUBJECT),
+        "a commit made on the day until names was left out: {until}"
+    );
+    let since = tool_results(&received.recv().expect("third request"));
+    assert!(
+        since.contains("(no commits match)"),
+        "a commit made before the day since names was listed: {since}"
+    );
+    let invalid = tool_results(&received.recv().expect("fourth request"));
+    assert!(
+        invalid.contains("'since' must be a day written YYYY-MM-DD"),
+        "a day that is not on the calendar was not refused: {invalid}"
+    );
+}
+
+/// GIT-12. A log that stopped with commits left tells the planner the skip that lists the next of
+/// them, and asking with it lists them rather than the same page again. Asked for messages, a
+/// commit's body reaches the planner beneath its line, which is where a commit says what it closes.
+#[test]
+fn read_git_pages_through_a_log_and_shows_whole_messages_when_asked() {
+    const BODY: &str = "BODY-OF-THE-OLDER-COMMIT Closes #84";
+    let scratch = Scratch::new("read-git-pages");
+    repository::commit_files(
+        &scratch.path,
+        &[("README", "hello\n")],
+        &format!("OLDER\n\n{BODY}"),
+    );
+    repository::commit_files(&scratch.path, &[("README", "hello\nworld\n")], "NEWER");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_git", r#"{"query":"log","count":1}"#),
+        tool_request_2("read_git", r#"{"query":"log","count":1,"skip":1}"#),
+        tool_request_2("read_git", r#"{"query":"log","skip":1,"messages":true}"#),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what changed"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let newest = newest_tool_result;
+    let _first = received.recv().expect("first request");
+    let first = newest(received.recv().expect("second request"));
+    assert!(
+        first.contains("NEWER") && !first.contains("OLDER"),
+        "the first page was not the newest commit alone: {first}"
+    );
+    assert!(
+        first.contains("ask again with skip 1"),
+        "a log that stopped with a commit left did not say how to list it: {first}"
+    );
+    let second = newest(received.recv().expect("third request"));
+    assert!(
+        second.contains("OLDER") && !second.contains("NEWER"),
+        "the skip did not move the log on to the next commit: {second}"
+    );
+    assert!(
+        !second.contains("ask again with skip") && !second.contains(BODY),
+        "a log that reached its end, or was not asked for messages, said otherwise: {second}"
+    );
+    let third = newest(received.recv().expect("fourth request"));
+    assert!(
+        third.contains(&format!("    {BODY}")),
+        "the message asked for did not reach the planner: {third}"
+    );
+}
+
+/// The newest tool result in one request the planner was sent.
+fn newest_tool_result(request: String) -> String {
+    let parsed: serde_json::Value = serde_json::from_str(&request).expect("a request");
+    parsed["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .rev()
+        .find(|message| message["role"] == "tool")
+        .map(|message| message["content"].to_string())
+        .expect("a tool result")
+}
+
+/// GIT-13. Which release came last is the newest version a revision's history holds, so tags reach
+/// the planner newest version first, only those the revision reaches when one is named, and paged
+/// as a log is.
+#[test]
+fn read_git_lists_the_tags_a_revision_reaches_newest_version_first() {
+    let scratch = Scratch::new("read-git-tags");
+    let git = scratch.path.join(".git");
+    repository::commit_files(&scratch.path, &[("README", "hello\n")], "OLDER");
+    std::fs::create_dir_all(git.join("refs/tags")).expect("tags");
+    std::fs::copy(git.join("refs/heads/main"), git.join("refs/tags/v0.9.0")).expect("tag");
+    repository::commit_files(&scratch.path, &[("README", "hello\nworld\n")], "NEWER");
+    std::fs::copy(git.join("refs/heads/main"), git.join("refs/tags/v0.10.0")).expect("tag");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_git", r#"{"query":"tags","count":1}"#),
+        tool_request_2("read_git", r#"{"query":"tags","revision":"HEAD~1"}"#),
+        tool_request_2("read_git", r#"{"query":"tags","path":"README"}"#),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("which release came last"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let newest = newest_tool_result(received.recv().expect("second request"));
+    assert!(
+        newest.contains("v0.10.0 ") && newest.contains("NEWER") && !newest.contains("v0.9.0"),
+        "the first tag listed was not the newest version alone: {newest}"
+    );
+    assert!(
+        newest.contains("this list of tags stopped with more tags to list; ask again with skip 1"),
+        "a list of tags that stopped with one left did not say how to list it: {newest}"
+    );
+    let merged = newest_tool_result(received.recv().expect("third request"));
+    assert!(
+        merged.contains("v0.9.0 ") && !merged.contains("v0.10.0"),
+        "a tag the revision does not reach was listed, or one it does was not: {merged}"
+    );
+    let refused = newest_tool_result(received.recv().expect("fourth request"));
+    assert!(
+        refused.contains("tags lists the repository's tags and takes no path"),
+        "a path on a list of tags was not refused: {refused}"
+    );
+}
+
+/// GIT-14. A search reaches the planner as `git grep` prints it, paged by its lines, and a pattern
+/// that is missing, empty or not a regular expression is refused rather than searched for.
+#[test]
+fn read_git_searches_the_files_at_a_revision_and_pages_the_lines() {
+    let scratch = Scratch::new("read-git-search");
+    repository::commit_files(
+        &scratch.path,
+        &[
+            ("README", "hello NEEDLE\n"),
+            ("src/lib.rs", "fn f() {}\nlet NEEDLE = 1;\n"),
+        ],
+        "add both",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "read_git",
+            r#"{"query":"search","pattern":"NEEDLE","count":1}"#,
+        ),
+        tool_request_2(
+            "read_git",
+            r#"{"query":"search","pattern":"NEEDLE","skip":1}"#,
+        ),
+        tool_request_2("read_git", r#"{"query":"search"}"#),
+        tool_request_2("read_git", r#"{"query":"search","pattern":""}"#),
+        tool_request_2("read_git", r#"{"query":"search","pattern":"("}"#),
+        tool_request_2("read_git", r#"{"query":"log","pattern":"NEEDLE"}"#),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("where is NEEDLE"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let first = newest_tool_result(received.recv().expect("second request"));
+    assert!(
+        first.contains("README:1: hello NEEDLE") && !first.contains("src/lib.rs"),
+        "the first page was not the first matching line alone: {first}"
+    );
+    assert!(
+        first.contains(
+            "this search stopped with more matching lines to list; ask again with skip 1"
+        ),
+        "a search that stopped with a line left did not say how to list it: {first}"
+    );
+    let second = newest_tool_result(received.recv().expect("third request"));
+    assert!(
+        second.contains("src/lib.rs:2: let NEEDLE = 1;")
+            && !second.contains("README")
+            && !second.contains("ask again with skip"),
+        "the skip did not move the search on to the next line: {second}"
+    );
+    for (request, refusal) in [
+        ("fourth", "search needs a pattern"),
+        ("fifth", "the search pattern was empty"),
+        ("sixth", "the search pattern is not usable"),
+        ("seventh", "a pattern is what search looks for"),
+    ] {
+        let refused = newest_tool_result(received.recv().expect(request));
+        assert!(
+            refused.contains(refusal),
+            "the {request} question was not refused with {refusal:?}: {refused}"
+        );
+    }
+}
+
+/// GIT-14. A search that found nothing in a file still read it, so a file the map distrusts makes
+/// the whole answer untrusted whether or not it matched. Narrowed to a trusted path, the same
+/// search is shown.
+#[test]
+fn a_search_that_read_a_distrusted_file_is_quarantined_matched_or_not() {
+    const OURS: &str = "LINE-FROM-A-TRUSTED-FILE";
+    let scratch = Scratch::new("read-git-search-distrusted");
+    repository::commit_files(
+        &scratch.path,
+        &[
+            ("README", &format!("{OURS}\n")),
+            ("vendor/b.js", "nothing here\n"),
+        ],
+        "add both",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "read_git",
+            &format!(r#"{{"query":"search","pattern":"{OURS}"}}"#),
+        ),
+        tool_request_2(
+            "read_git",
+            &format!(r#"{{"query":"search","pattern":"{OURS}","path":"README"}}"#),
+        ),
+        reply_with("understood"),
+    ]);
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    trust.distrust("vendor");
+    let mut sink = RecordingSink::new();
+    turn::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("where is it"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let whole = newest_tool_result(received.recv().expect("second request"));
+    assert!(
+        !whole.contains(&format!("README:1: {OURS}")),
+        "a search that read a distrusted file reached the planner: {whole}"
+    );
+    assert!(
+        whole.contains("could not be shown to you"),
+        "the planner was not told the answer was withheld: {whole}"
+    );
+    let narrowed = newest_tool_result(received.recv().expect("third request"));
+    assert!(
+        narrowed.contains(&format!("README:1: {OURS}")),
+        "the search narrowed to a trusted path was not shown: {narrowed}"
+    );
+}
+
+/// GIT-7. A git run's sealed output names read_git, which answers the same question with nobody
+/// asked where the repository is trusted. Any other program's does not, where the sentence would
+/// be noise.
+#[test]
+fn a_sealed_git_run_names_read_git_and_another_programs_does_not() {
+    const SENTENCE: &str = "To read a repository's history, use read_git";
+    let scratch = Scratch::new("read-git-named-by-a-run");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    for program in ["git", "other"] {
+        let script = scratch.path.join(program);
+        std::fs::write(&script, "#!/bin/sh\necho SENTINEL-SEALED\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./git log"}"#),
+        tool_request("run", r#"{"command":"./other"}"#),
+        reply_with("done"),
+    ]);
+    let mut sink = RecordingSink::new();
+    // Approves each run without vouching, so the output is sealed.
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what changed"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let _first = received.recv().expect("first request");
+    let git = tool_results(&received.recv().expect("second request"));
+    assert!(
+        git.contains("could not be shown to you") && git.contains(SENTENCE),
+        "a sealed git run did not name read_git: {git}"
+    );
+    let both = tool_results(&received.recv().expect("third request"));
+    assert_eq!(
+        both.matches(SENTENCE).count(),
+        1,
+        "another program's sealed run named read_git: {both}"
+    );
+}
+
+#[path = "turn/retention.rs"]
+mod retention;
+
+#[path = "../test-support/answers.rs"]
+mod retention_answers;

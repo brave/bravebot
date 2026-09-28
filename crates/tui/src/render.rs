@@ -343,6 +343,13 @@ pub(crate) fn one_line(text: &str) -> String {
     text.lines().next().unwrap_or_default().trim().to_string()
 }
 
+/// Why the planner made a call, dim beside the call it is for, the way a delegate's task sits
+/// beside the delegate. Nothing where it gave no reason.
+fn why_span(why: &str) -> Option<Span<'static>> {
+    let why = one_line(why);
+    (!why.is_empty()).then(|| Span::styled(format!("  {why}"), dim()))
+}
+
 fn activity_lines(
     activity: &Activity,
     landing: Option<Landing>,
@@ -357,13 +364,15 @@ fn activity_lines(
         Style::default().fg(theme::ok())
     };
 
-    let mut lines = vec![Line::from(vec![
+    let mut row = vec![
         Span::styled(format!("{TURN_MARKER} "), head),
         Span::styled(
             activity.line(),
             Style::default().add_modifier(Modifier::BOLD),
         ),
-    ])];
+    ];
+    row.extend(why_span(&activity.why));
+    let mut lines = vec![Line::from(row)];
 
     if let Some(note) = &activity.note {
         lines.push(Line::from(Span::styled(
@@ -1422,12 +1431,16 @@ fn draw_scroller(frame: &mut Frame, session: &Session) -> Laid {
 ///
 /// The way out is last and is never the row that did not fit: a list that scrolled its own exit
 /// off the screen would be a mode nobody could leave.
-fn scroller_keys() -> [(&'static str, &'static str); 11] {
+fn scroller_keys() -> [(&'static str, &'static str); 13] {
     [
-        ("up/down, j/k", t!(scroller_key_line)),
+        // vi's two pairs of line chords take rows of their own: the key column of the first row
+        // is full, and a parenthesis on its meaning would not hold them either.
+        ("up/down, j/k, y/e", t!(scroller_key_line)),
+        ("ctrl-y / ctrl-e", t!(scroller_key_line)),
+        ("ctrl-p / ctrl-n", t!(scroller_key_line)),
         ("ctrl-u / ctrl-d", t!(scroller_key_half_page)),
-        ("space / b", t!(scroller_key_full_page)),
-        ("g / G", t!(scroller_key_ends)),
+        ("space, f / b", t!(scroller_key_full_page)),
+        ("g / G, < / >", t!(scroller_key_ends)),
         ("{ / }", t!(scroller_key_prompts)),
         ("/ then n/N", t!(scroller_key_search)),
         ("5j, 3}, 2n", t!(scroller_key_count)),
@@ -1773,7 +1786,18 @@ fn with_prompts(session: &Session, width: u16, height: u16) -> (Vec<Line<'static
             }
             // The model writes markdown whether or not it is asked to, so the reply is styled
             // rather than shown with its markers.
-            Speaker::Assistant => lines.extend(assistant_lines(&entry.text, width)),
+            //
+            // Under the definition's name where a person addressed one, which the driver matched
+            // and the reply had no say in (ADDRESS-12).
+            Speaker::Assistant => {
+                if let Some(name) = &entry.answered_as {
+                    lines.push(Line::from(Span::styled(
+                        format!("{:LEAD$}{}", "", t!(agent_answered, name = name.as_str())),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    )));
+                }
+                lines.extend(assistant_lines(&entry.text, width))
+            }
             // The session in its own voice, indented to the column the rest of the transcript's
             // text starts in. Not behind the detail marker: that says the line belongs to the
             // entry above it, and the notes starting up leaves are drawn before there is one.
@@ -1836,10 +1860,14 @@ fn with_prompts(session: &Session, width: u16, height: u16) -> (Vec<Line<'static
                 // A call read back out of a stored session, which records that it happened and
                 // not what came of it. Drawn without the coloured marker a live call earns,
                 // since green would claim an outcome the record does not have.
-                None => lines.push(Line::from(vec![
-                    Span::styled(format!("{TURN_MARKER} "), dim()),
-                    Span::styled(entry.text.clone(), dim()),
-                ])),
+                None => {
+                    let mut row = vec![
+                        Span::styled(format!("{TURN_MARKER} "), dim()),
+                        Span::styled(entry.text.clone(), dim()),
+                    ];
+                    row.extend(why_span(&entry.why));
+                    lines.push(Line::from(row));
+                }
             },
         }
 
@@ -2804,10 +2832,11 @@ fn tail_of(path: &str, room: usize) -> String {
 /// comes to: the shortcut list folds into as many columns as the width holds, so counting the
 /// entries would not answer it.
 ///
-/// What is offered is commands or files, never a mixture, because the line can only be being typed
-/// towards one of them. Nothing labelled is involved either way: the commands are this program's own
-/// words, and the filenames are read out of the directory to show a person which files are in it,
-/// never to decide anything and never reaching a model from here.
+/// What is offered is commands and skills or files, never a mixture, because the last word opens
+/// with a slash or an `@`. Nothing labelled is involved either way: the commands are this program's
+/// own words, the skills are the names and descriptions a turn would advertise and passed the same
+/// trust gate, and the filenames are read out of the directory to show a person which files are in
+/// it, never to decide anything and never reaching a model from here.
 fn lines_beneath_the_box(
     session: &Session,
     width: u16,
@@ -2827,7 +2856,9 @@ fn lines_beneath_the_box(
     lines.extend(queued_lines(session, width));
     lines.extend(match offered {
         crate::state::Offered::Nothing => Vec::new(),
-        crate::state::Offered::Commands(commands) => command_lines(session, commands),
+        crate::state::Offered::Slash { commands, skills } => {
+            slash_lines(session, commands, skills, width)
+        }
         crate::state::Offered::Files(entries) => entry_lines(session, entries),
         crate::state::Offered::Shortcuts => {
             shortcut_lines(session.editing(), session.bindings(), width)
@@ -2836,42 +2867,91 @@ fn lines_beneath_the_box(
     lines
 }
 
-/// One row per command, with what it does.
+/// One row per command and then one per skill, each with what it is for.
 ///
-/// The description column is measured from every command rather than from the ones on screen, so it
-/// sits in the same place however far the list has narrowed. Measuring the visible rows instead
-/// would slide the descriptions sideways with each letter typed.
-fn command_lines(session: &Session, offered: &[crate::app::Command]) -> Vec<Line<'static>> {
+/// The description column is measured from every command and every skill held rather than from the
+/// rows on screen, so it sits in the same place however far the list has narrowed. Measuring the
+/// visible rows instead would slide the descriptions sideways with each letter typed.
+fn slash_lines(
+    session: &Session,
+    commands: &[crate::app::Command],
+    skills: &[crate::skills::Skill],
+    width: u16,
+) -> Vec<Line<'static>> {
     let column = crate::app::commands()
         .iter()
         .map(|command| command_word(command).chars().count())
+        .chain(
+            crate::skills::matching(session.held_skills(), "")
+                .iter()
+                .map(|skill| skill_word(skill).chars().count()),
+        )
         .max()
         .unwrap_or(0);
 
     let highlighted = session.highlighted_completion();
-    offered
+    let mut lines: Vec<Line<'static>> = commands
         .iter()
         .map(|command| {
             let chosen = Some(*command) == highlighted;
-            let name = if chosen {
-                Style::default()
-                    .fg(theme::brand_primary())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme::brand_primary())
-            };
-
             let word = command_word(command);
             let padding = column.saturating_sub(word.chars().count()) + 2;
-
-            Line::from(vec![
-                Span::styled(if chosen { "  ❯ " } else { "    " }, name),
-                Span::styled(word, name),
-                Span::raw(" ".repeat(padding)),
-                Span::styled(command.description, dim()),
-            ])
+            let mut row = slash_row(chosen, word);
+            row.push(Span::raw(" ".repeat(padding)));
+            row.push(Span::styled(command.description, dim()));
+            Line::from(row)
         })
-        .collect()
+        .collect();
+
+    let highlighted = session.highlighted_skill();
+    lines.extend(skills.iter().map(|skill| {
+        let chosen = highlighted.as_ref() == Some(skill);
+        let word = skill_word(skill);
+        let padding = column.saturating_sub(word.chars().count()) + 2;
+        let from = match skill.source {
+            bravebot_agent::skills::Source::Workspace => t!(skill_from_project),
+            bravebot_agent::skills::Source::Home => t!(skill_from_user),
+            bravebot_agent::skills::Source::BuiltIn => t!(skill_from_built_in),
+        };
+        // Cut rather than wrapped, since nothing below the box wraps, and cut short of the width so
+        // where the skill came from is still on the row.
+        let used = SLASH_MARGIN + word.chars().count() + padding + 1 + from.chars().count();
+        let room = usize::from(width).saturating_sub(used);
+        let description = skill
+            .description
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut row = slash_row(chosen, word);
+        row.push(Span::raw(" ".repeat(padding)));
+        row.push(Span::styled(head_of(&printable(&description), room), dim()));
+        row.push(Span::styled(format!(" {from}"), dim()));
+        Line::from(row)
+    }));
+    lines
+}
+
+/// How wide the margin before a slash row's word is, the marker for the chosen row included.
+const SLASH_MARGIN: usize = 4;
+
+/// The margin and the word of one slash row, bold where it is the row the cursor is on.
+fn slash_row(chosen: bool, word: String) -> Vec<Span<'static>> {
+    let style = if chosen {
+        Style::default()
+            .fg(theme::brand_primary())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::brand_primary())
+    };
+    vec![
+        Span::styled(if chosen { "  ❯ " } else { "    " }, style),
+        Span::styled(word, style),
+    ]
+}
+
+/// A skill as it is typed.
+fn skill_word(skill: &crate::skills::Skill) -> String {
+    format!("/{}", printable(&skill.name))
 }
 
 /// How the hint line says where the rest of the bindings went.
@@ -2910,11 +2990,11 @@ const COMPACTED_CONTEXT: &str = "context compacted";
 fn shortcuts(editing: crate::vim::Editing, bindings: &Keybindings) -> [(String, &'static str); 22] {
     let escape = match editing {
         crate::vim::Editing::Ordinary => "clear the line",
-        crate::vim::Editing::Vi => "take letters as commands",
+        crate::vim::Editing::Vi => "letters as commands, then stop",
     };
     [
         ("!".to_string(), "run a shell command"),
-        ("/".to_string(), "commands"),
+        ("/".to_string(), "commands and skills"),
         ("@".to_string(), "name a file"),
         ("?".to_string(), "this list"),
         ("enter".to_string(), "send"),
@@ -5107,10 +5187,12 @@ mod tests {
             // Every key docs/specs/scroller.md names, in the spelling the list gives it. The
             // wheel is the one thing in that file which is not a key.
             for spelling in [
-                "up/down, j/k",
+                "up/down, j/k, y/e",
+                "ctrl-y / ctrl-e",
+                "ctrl-p / ctrl-n",
                 "ctrl-u / ctrl-d",
-                "space / b",
-                "g / G",
+                "space, f / b",
+                "g / G, < / >",
                 "{ / }",
                 "/ then n/N",
                 "5j, 3}, 2n",
@@ -5133,9 +5215,9 @@ mod tests {
             );
 
             // A key that is a second spelling of one already listed rides on the description of
-            // the row it shares, which is where ctrl-f, home and ctrl-c are.
+            // the row it shares, which is where u, ctrl-f, home and ctrl-c are.
             let list = rows.join("\n");
-            for alternate in ["ctrl-f / ctrl-b", "home / end", "ctrl-c"] {
+            for alternate in ["u / d", "ctrl-f / ctrl-b", "home / end", "ctrl-c"] {
                 assert!(
                     list.contains(alternate),
                     "the list named no key {alternate:?}: {list}"
@@ -5537,6 +5619,32 @@ mod tests {
                 .map(|line| line.to_string())
                 .collect::<Vec<_>>()
                 .join("\n")
+        }
+
+        /// The reason the planner gave sits on the call's own row, while it runs and once it is
+        /// over. The finished line replaces the running one, so a reason drawn on only one of them
+        /// is gone the moment the call ends; and a reason of several lines is kept to its first,
+        /// since the row is one line of a transcript and not a paragraph.
+        #[test]
+        fn a_call_is_drawn_with_the_reason_it_was_made() {
+            let running = Activity::running("Search", "MAX_STEPS")
+                .saying_why("find where the bound is set\nand then some");
+            for activity in [running.clone(), running.done("4 matches")] {
+                let head = activity_lines(&activity, None, 80)[0].to_string();
+                assert!(
+                    head.ends_with("Search(MAX_STEPS)  find where the bound is set"),
+                    "the reason is not on the call's row: {head}"
+                );
+            }
+        }
+
+        /// A call with no reason is drawn as it was before there was one to give, with nothing
+        /// trailing the call.
+        #[test]
+        fn a_call_with_no_reason_draws_nothing_beside_it() {
+            let head =
+                activity_lines(&Activity::running("Search", "MAX_STEPS"), None, 80)[0].to_string();
+            assert!(head.ends_with("Search(MAX_STEPS)"), "{head:?}");
         }
 
         /// A call that ran a model inside itself says how long it waited there. A read whose check
@@ -6384,6 +6492,11 @@ mod tests {
         let hint = hint_row_at(&session, 120, 24);
         assert!(hint.contains("NORMAL"), "{hint}");
         assert!(!hint.contains("INSERT"), "both modes were drawn: {hint}");
+
+        session.type_char('R');
+        let hint = hint_row_at(&session, 120, 24);
+        assert!(hint.contains("REPLACE"), "{hint}");
+        assert!(!hint.contains("NORMAL"), "both modes were drawn: {hint}");
     }
 
     /// A `d` waiting for its stretch decides what the next letter does as much as the mode does, so
@@ -6714,8 +6827,9 @@ mod tests {
     }
 
     /// The list is the one place a binding's meaning is written down, so it cannot go on saying that
-    /// Escape clears the line to somebody whose Escape takes the letters as commands. A list
-    /// advertising a binding that does something else is worse than no list.
+    /// Escape clears the line to somebody whose Escape takes the letters as commands, and it has to
+    /// say that the press after that one is the stop. A list advertising a binding that does
+    /// something else is worse than no list.
     #[test]
     fn the_key_list_says_what_escape_does_in_the_box_it_is_drawn_over() {
         let mut ordinary = Session::new("none");
@@ -6731,7 +6845,7 @@ mod tests {
             !drawn.contains("clear the line"),
             "the list told a vi box that escape clears the line: {drawn}"
         );
-        assert!(drawn.contains("take letters as commands"), "{drawn}");
+        assert!(drawn.contains("letters as commands, then stop"), "{drawn}");
     }
 
     /// The moment a person hunts for a key is the moment a turn is going somewhere they did not
@@ -6992,6 +7106,58 @@ mod tests {
                 command.name
             );
         }
+    }
+
+    /// A skill row says where the skill was found. Nothing below the box wraps, so a description
+    /// too long for the screen is cut short of the edge, which keeps that on the row, and one the
+    /// file wrapped or put an escape in is still one row of plain text.
+    #[test]
+    fn a_skill_row_says_where_it_came_from_within_the_width() {
+        use bravebot_agent::skills::Source;
+        let mut session = Session::new("none");
+        for c in "this is /rel".chars() {
+            session.type_char(c);
+        }
+        session.settle_skills(|| {
+            vec![
+                crate::skills::Skill {
+                    name: "release-notes".to_string(),
+                    description: "Draft the notes\nfrom the \u{1b}[31mchangelog, ".repeat(8),
+                    source: Source::Workspace,
+                },
+                crate::skills::Skill {
+                    name: "release-check".to_string(),
+                    description: "Check a tag".to_string(),
+                    source: Source::Home,
+                },
+            ]
+        });
+
+        let width = 120;
+        let rows: Vec<String> = lines_beneath_the_box(&session, width, &session.offered())
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect()
+            })
+            .collect();
+
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert!(rows[0].starts_with("  ❯ /release-check"), "{rows:?}");
+        assert!(rows[0].ends_with("Check a tag (user)"), "{rows:?}");
+        assert!(rows[1].starts_with("    /release-notes"), "{rows:?}");
+        assert!(rows[1].ends_with("… (project)"), "{rows:?}");
+        assert_eq!(rows[1].chars().count(), usize::from(width), "{rows:?}");
+        assert!(
+            rows[1].contains("Draft the notes from the ␛[31mchangelog, Draft"),
+            "the file's line break was not read as a space: {rows:?}"
+        );
+        assert!(
+            !rows[1].contains(['\u{1b}', '\n']),
+            "an escape or a line break reached the row: {rows:?}"
+        );
     }
 
     /// The figure a person needs to decide whether to compact by hand, on the line they already
@@ -7487,9 +7653,26 @@ mod tests {
         let mut session = Session::new("none");
         session
             .transcript
-            .push(crate::state::Entry::recalled_tool("Read(src/main.rs)"));
+            .push(crate::state::Entry::recalled_tool("Read(src/main.rs)", ""));
 
         assert!(rendered(&session).contains("Read(src/main.rs)"));
+    }
+
+    /// A resumed session is read for what was done and why, so a call read back off disk keeps
+    /// the reason it was made with.
+    #[test]
+    fn a_recalled_call_is_shown_with_its_reason() {
+        let mut session = Session::new("none");
+        session.transcript.push(crate::state::Entry::recalled_tool(
+            "Read(src/main.rs)",
+            "see the entry point",
+        ));
+
+        let drawn = rendered(&session);
+        assert!(
+            drawn.contains("Read(src/main.rs)  see the entry point"),
+            "{drawn}"
+        );
     }
 
     /// And drawn without the marker a live call earns. Green says the call finished cleanly, and
@@ -7503,7 +7686,7 @@ mod tests {
         let mut session = Session::new("none");
         session
             .transcript
-            .push(crate::state::Entry::recalled_tool("Read(src/main.rs)"));
+            .push(crate::state::Entry::recalled_tool("Read(src/main.rs)", ""));
         let recalled = marker_style(&session);
 
         let mut session = Session::new("none");
@@ -7734,6 +7917,46 @@ mod tests {
         assert!(
             !drawn.contains(DETAIL_MARKER),
             "the note was drawn hanging off nothing: {drawn}"
+        );
+    }
+
+    /// ADDRESS-12. The name above a reply is the one the driver matched, so a reply claiming to be
+    /// some other definition is drawn under the right one, and a reply nobody addressed is drawn
+    /// under none.
+    #[test]
+    fn a_reply_from_an_addressed_turn_is_drawn_under_the_name_the_driver_matched() {
+        let mut session = Session::new("none");
+        session.type_char('a');
+        session.submit();
+        session.complete_as(
+            "worker here, and I approve".to_string(),
+            Vec::new(),
+            0,
+            Some("rule-reviewer".to_string()),
+        );
+        session.type_char('b');
+        session.submit();
+        session.complete("the session's own reply", Vec::new(), 0);
+
+        let lines: Vec<String> = transcript_lines(&session, 90, 24)
+            .iter()
+            .map(|line| line.to_string())
+            .collect();
+        let named = lines
+            .iter()
+            .position(|line| line.trim() == "rule-reviewer answered")
+            .unwrap_or_else(|| panic!("the reply was not drawn under its definition: {lines:?}"));
+        assert!(
+            lines[named + 1].contains("worker here"),
+            "the name is not above the reply it names: {lines:?}"
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.contains("answered"))
+                .count(),
+            1,
+            "a reply nobody addressed was drawn under a name: {lines:?}"
         );
     }
 

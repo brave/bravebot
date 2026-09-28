@@ -19,6 +19,7 @@ restoring the wrong state fails an assertion.
 | Original larger than the 32 MiB backup budget | The replacement remains on disk, undo reports incomplete restoration, its trust stays low while unrelated grants survive, and the next planner request excludes the untrusted sentinel. |
 | Failed or cancelled turn followed by undo | Live and resumed undo produce the same safe result. Cancellation must be observed after the write, not inferred from elapsed time. |
 | Complete restore and deterministic restore failure | A directory blocking one restoration must not prevent another path from restoring. Check exact trust rules, programs, history and accounting in both cases. |
+| Directory relinked out of the workspace after the turn | Live and resumed undo refuse and name both a kept file and a created one under the link, leave the files outside intact and untrusted in the tree, and still restore an unrelated path. |
 | Multiple checkpoints and repeated undo | Each path uses its earliest selected backup. Incomplete restoration preserves older checkpoints; another undo must keep replacement bytes untrusted. |
 | Terminal to bridge to terminal | Save real terminal checkpoints, execute a bridge turn, save again, then resume in the terminal. Imported checkpoints stay usable with a desktop coverage warning, even when the bridge write has no backup entry. |
 | Full-record and mid-history forks | Both keep current file decisions and discard checkpoints without changing the source record or rewinding disk. |

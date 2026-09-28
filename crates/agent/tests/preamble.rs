@@ -706,6 +706,41 @@ fn a_turn_under_a_goal_is_told_the_condition_is_what_to_work_on() {
     );
 }
 
+/// The box completes a skill's name after a slash and sends the line as a prompt, so the only thing
+/// that makes `/release-notes` a request for that skill is the planner being told it is one.
+#[test]
+fn a_turn_offered_skills_is_told_a_slash_name_is_the_user_asking_for_one() {
+    let scratch = Scratch::new("skill-by-name");
+    let workspace = Workspace::new(scratch.directory("project")).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let preamble = {
+        let mut policy = policy(&mut sink, &["."]);
+        let (catalogue, _) = bravebot_agent::skills::discover(&mut policy, &workspace, None);
+        assert!(
+            !catalogue.is_empty(),
+            "the control: a built-in is always offered"
+        );
+        preamble::compose(
+            &mut policy,
+            &workspace,
+            None,
+            &catalogue,
+            None,
+            None,
+            &Attribution::default(),
+        )
+    };
+
+    assert!(
+        preamble
+            .text
+            .contains("A prompt naming one as /name is the user asking for it."),
+        "the planner was not told what a slash name means: {}",
+        preamble.text
+    );
+}
+
 /// Empty is the value the block exists to carry, so a planner that is told nothing when a person
 /// wrote `""` has had the one thing they configured discarded on the way to the only context it
 /// could have acted in. The other half matters as much: `pr` was left unwritten, and saying

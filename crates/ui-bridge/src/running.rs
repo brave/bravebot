@@ -42,6 +42,9 @@ pub struct State {
     /// off the record when a session resumes: a vouch is a standing answer about a command,
     /// so re-asking about one already answered — or forgetting one — would both be wrong.
     pub programs: TrustedPrograms,
+    /// Live prompt history; neither field is stored in a session record.
+    pub asked_about: bravebot_core::programs::AskedAbout,
+    pub exposed: bravebot_core::credentials::Exposed,
     /// Which directories beyond the project this session has open, canonical.
     ///
     /// This front-end opens none: there is no `/add-dir` in the protocol, so a session begun
@@ -87,6 +90,8 @@ impl State {
             conversation: Conversation::new(),
             trust,
             programs: TrustedPrograms::new(),
+            asked_about: Default::default(),
+            exposed: Default::default(),
             directories: Vec::new(),
             handle: None,
             turns: 0,
@@ -119,6 +124,8 @@ impl State {
             conversation: Conversation::restored(record.conversation.clone()),
             trust,
             programs: record.trusted_programs(project),
+            asked_about: Default::default(),
+            exposed: Default::default(),
             directories: record.directories.iter().map(PathBuf::from).collect(),
             handle: Some(Handle::resuming(
                 project,
@@ -178,6 +185,8 @@ impl State {
             conversation: Conversation::restored(before),
             trust,
             programs,
+            asked_about: Default::default(),
+            exposed: Default::default(),
             directories,
             handle: Some(handle),
             turns,

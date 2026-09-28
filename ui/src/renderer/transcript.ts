@@ -107,7 +107,7 @@ export type Entry = (
   | { kind: 'error'; id: string; text: string; category?: string | null; attempts?: number | null; status?: number | null }
   | { kind: 'watch'; id: string; text: string }
   /** A replayed tool line from a stored session: no outcome, because none was kept. */
-  | { kind: 'replayed-tool'; id: string; text: string }
+  | { kind: 'replayed-tool'; id: string; text: string; why: string }
 ) & { interrupted?: boolean; turn?: number }
 
 let counter = 0
@@ -132,7 +132,7 @@ export function fromSaid(said: Said[]): Entry[] {
       case 'tool':
         // The record does not store what came of a call, so this must not be drawn as
         // though it had an outcome. See docs/phase-0-rpc-protocol.md §7.1.
-        return { kind: 'replayed-tool', id: nextId(), text: entry.text } as const
+        return { kind: 'replayed-tool', id: nextId(), text: entry.text, why: entry.why } as const
       // The two the agent composed, and the one this app composes. Drawn from the fields rather
       // than from any text, which is the whole point of the tags: the words of an attached
       // message are the file's own, so a window that read them back to decide what row to draw
@@ -436,7 +436,7 @@ export function searchableText(entry: Entry): string {
     case 'turn-start': return ''
     case 'attached': return entry.path
     case 'consolidation': return 'Updating persistent memory'
-    case 'tool': return [entry.activity.verb, entry.activity.target, entry.activity.note, ...entry.activity.changes.map((change) => 'text' in change ? change.text : '')].join(' ')
+    case 'tool': return [entry.activity.verb, entry.activity.target, entry.activity.why, entry.activity.note, ...entry.activity.changes.map((change) => 'text' in change ? change.text : '')].join(' ')
     case 'quarantined': return [entry.shown.origin, entry.shown.label, ...entry.shown.preview].join(' ')
     case 'confirm': return [entry.request.path, entry.request.intent, ...entry.request.changes.map((change) => 'text' in change ? change.text : '')].join(' ')
     case 'run': return [entry.request.summary, entry.request.directory, entry.request.line ?? '', ...entry.request.stages.map((stage) => stage.display)].join(' ')

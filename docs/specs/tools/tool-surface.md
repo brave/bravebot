@@ -7,10 +7,10 @@ governs:
 guards:
   - symbol: Produced::problem
     sites:
-      - crates/agent/src/tools.rs: 138
+      - crates/agent/src/tools.rs: 160
   - symbol: Produced::refused_with_a_note
     sites:
-      - crates/agent/src/tools.rs: 6
+      - crates/agent/src/tools.rs: 7
 documented-by: docs/website/docs/reference/tools.md
 ---
 
@@ -32,6 +32,7 @@ may be untrusted. No argument is both, and nothing at run time reclassifies one.
 | [`read_file`](read-file.md) | `path`, `path_ref`, `offset`, `limit` | none | the lines, or a reference |
 | [`list_files`](list-files.md) | `directory`, `pattern`, `depth` | none | the paths, or a reference per entry |
 | [`search`](search.md) | `pattern`, `directory`, `include`, `offset`, `case_sensitive` | none | matching lines, or a reference |
+| [`read_git`](read-git.md) | `query`, `repository`, `revision`, `path`, `pattern`, `count`, `skip`, `messages`, `since`, `until` | none | the answer, or a reference |
 | [`lsp`](lsp.md) | `operation`, `path`, `line`, `character`, `query` | none | locations, with their text shown or referenced |
 | [`write_file`](write-file.md) | `path`, `path_ref`, `contents_ref` | `contents` | confirmation |
 | [`edit_file`](edit-file.md) | `path`, `path_ref`, `replace_all` | `old_text`, `new_text` | confirmation |
@@ -47,6 +48,9 @@ may be untrusted. No argument is both, and nothing at run time reclassifies one.
 | [`schedule_next`](schedule-next.md) | `delay_seconds`, `noop` | `reason` | the wait that will happen |
 | [`watch_file`](watch-file.md) | `path` | none | confirmation that the watch exists |
 | [`ask_user`](ask-user.md) | `questions` | none | what the user answered |
+
+Every tool also takes `why`, which is content on every one of them and is left out of the table for
+that reason. [TOOL-5](#TOOL-5) is where that is settled.
 
 Reads return content when it is trusted and a reference when it is not. Writes are silent or shown
 according to the trust map.
@@ -127,3 +131,26 @@ and whoever reviews it is asked what footing its text is on.
 `verified-by: bravebot_agent::turn::a_failed_fetch_names_the_url_that_was_asked_for_and_not_where_a_redirect_went`
 `verified-by: bravebot_agent::turn::a_fetch_refused_for_leaving_its_host_names_no_host_the_server_chose`
 `verified-by: bravebot_agent::turn::a_credential_created_as_a_whole_file_is_not_created_and_the_planner_is_told_so`
+
+<a id="TOOL-5"></a>
+### TOOL-5: every tool asks why it is called, and only a screen reads the answer
+
+Every tool the planner or a delegate is offered takes `why`, one line in the planner's own words
+saying what the call is for, and lists it as required. It is asked of each call rather than of each
+round, because a round of calls made for different reasons is explained by one line before it only
+as far as the reason that line happened to give.
+
+`why` is content. It is labelled as the planner's own output and released to the screen that draws
+the call, on the line the call starts with and on the line it finishes with, and it is kept with the
+call for a resumed transcript to draw. No tool reads it and nothing decides on it: a call runs the
+same with any reason or with none, and whether there is anything to draw is the screen's question to
+ask of the text. [VIEW-25](../terminal-transcript.md#VIEW-25) is what each screen draws.
+
+A server's tool is offered as the server describes it and is not asked for a reason, because the
+server is sent the arguments as they stand and the person approving the call reads them.
+
+**Why.** A person watching sees every call and what it touches, and without this nothing of what it
+was for, so a session reads as a list of commands.
+
+`verified-by: bravebot_agent::tools::every_tool_offered_asks_why_it_is_being_called`
+`verified-by: bravebot_agent::turn::each_call_is_announced_and_summarised_with_its_own_reason`

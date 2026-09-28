@@ -11,13 +11,16 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Empty, EmptyDescription } from '@/components/ui/empty'
+import type { KeptTrust } from '../../shared/protocol'
 
 interface Grants {
   paths: { path: string; integrity: string }[]
   commands: { program: string; args: string[]; display: string }[]
+  /** The yes kept about this directory for later sessions (TRUST-23), read when this was asked. */
+  remembered?: KeptTrust | null
 }
 
-export function Permissions({ session, onClose }: { session: string; onClose: () => void }): React.JSX.Element {
+export function Permissions({ session, onClose, onRemembered }: { session: string; onClose: () => void; onRemembered?: (kept: KeptTrust | null) => void }): React.JSX.Element {
   const [grants, setGrants] = useState<Grants | null>(null)
   const [problem, setProblem] = useState('')
   const [busy, setBusy] = useState(false)
@@ -26,7 +29,10 @@ export function Permissions({ session, onClose }: { session: string; onClose: ()
     try {
       const answer = await window.bravebot.request<Grants>(method, { session, ...params })
       if (answer.error) setProblem(answer.error.message)
-      else if (answer.ok) setGrants(answer.ok)
+      else if (answer.ok) {
+        setGrants(answer.ok)
+        if ('remembered' in answer.ok) onRemembered?.(answer.ok.remembered ?? null)
+      }
     } catch { setProblem('Permissions could not be loaded. Try again.') }
     finally { setBusy(false) }
   }
@@ -66,6 +72,25 @@ export function Permissions({ session, onClose }: { session: string; onClose: ()
             {grants?.commands.length === 0 && (
               <Empty className="min-h-0 flex-none items-start gap-0 border-0 p-0 text-left">
                 <EmptyDescription className="text-left text-inherit">No remembered command grants.</EmptyDescription>
+              </Empty>
+            )}
+          </div>
+          <div className="flex flex-col gap-2">
+            <h3>Remembered for this directory</h3>
+            <p className="bot-note text-muted-foreground">
+              Kept outside this conversation: sessions started in exactly this directory are trusted without asking. Forgetting it makes the next one ask; this conversation keeps its own grants.
+            </p>
+            {grants?.remembered && (
+              <div className="permission-row flex items-center justify-between gap-3 border-b border-border py-2.5">
+                <code className="min-w-0 text-xs wrap-anywhere">{grants.remembered.path}</code>
+                <Button variant="outline" size="sm" disabled={busy} onClick={() => void request('permissions.revoke', { kind: 'remembered' })}>
+                  Forget
+                </Button>
+              </div>
+            )}
+            {grants && !grants.remembered && (
+              <Empty className="min-h-0 flex-none items-start gap-0 border-0 p-0 text-left">
+                <EmptyDescription className="text-left text-inherit">No answer is remembered for this directory.</EmptyDescription>
               </Empty>
             )}
           </div>

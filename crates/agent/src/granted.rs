@@ -253,20 +253,20 @@ fn bytes_of(path: &Path) -> Vec<u8> {
 /// [`Spelling`]: bravebot_core::command::Spelling
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
-enum WrittenPath {
+pub(crate) enum WrittenPath {
     Text(String),
     Bytes(Vec<u8>),
 }
 
 impl WrittenPath {
-    fn of(path: &Path) -> Self {
+    pub(crate) fn of(path: &Path) -> Self {
         match bravebot_core::command::Spelling::of(path) {
             bravebot_core::command::Spelling::Text(text) => Self::Text(text),
             bravebot_core::command::Spelling::Bytes(bytes) => Self::Bytes(bytes),
         }
     }
 
-    fn to_path(&self) -> Option<PathBuf> {
+    pub(crate) fn to_path(&self) -> Option<PathBuf> {
         match self {
             Self::Text(text) => bravebot_core::command::Spelling::Text(text.clone()),
             Self::Bytes(bytes) => bravebot_core::command::Spelling::Bytes(bytes.clone()),

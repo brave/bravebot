@@ -124,10 +124,17 @@ fn a_new_session_must_be_given_a_real_directory() {
 }
 
 /// Opening a fresh session asks about trust and writes nothing.
+///
+/// In a directory made for it: this runs in the developer's home, where a yes kept about the system
+/// temporary directory would settle it, and none can be kept about a directory made since.
 #[test]
 fn a_new_session_asks_about_trust_and_leaves_no_trace() {
     let (mut bridge, events) = harness();
-    let directory = std::env::temp_dir();
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/test-scratch/bravebot-ui-bridge-dispatch-asks");
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).expect("a scratch directory");
+    let directory = directory.canonicalize().expect("a real scratch directory");
 
     let opened = call(
         &mut bridge,
@@ -147,6 +154,7 @@ fn a_new_session_asks_about_trust_and_leaves_no_trace() {
     // Nothing is written until the first turn, so an abandoned window leaves nothing.
     let after = bravebot_ui_bridge::store::list_project(&directory);
     assert!(after.is_empty(), "session.new must not write a record");
+    let _ = std::fs::remove_dir_all(&directory);
 }
 
 #[test]

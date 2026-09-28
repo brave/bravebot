@@ -206,8 +206,9 @@ refused.
 ```
 
 `/clear` begins a new session in the same directory and keeps the current one resumable. Because it
-is a new session it asks the trust question again, restores no standing permissions, and closes any
-directory `/add-dir` had opened.
+is a new session it asks the trust question again, unless you said to
+[remember the answer](../security/trust.md#remembering-the-answer) there, restores no standing
+permissions, and closes any directory `/add-dir` had opened.
 
 ## Starting a plan-then-execute run
 
@@ -355,7 +356,10 @@ from before stays resumable. It stops being updated for as long as the incognito
 your skills and your imported credentials are all read as usual, so the session is the one you
 configured rather than a fresh install. The record of command lines you asked to be remembered past a
 session is read on the same terms: a line already in it still stops the asking, and the key that would
-add one is not offered.
+add one is not offered. So is the record of directories you told the startup question to
+[remember](../security/trust.md#remembering-the-answer): a kept answer still trusts the directory,
+the session says so as it opens, `r` is not offered, and `/forget-trust` changes nothing and names
+the file so you can remove it yourself.
 
 **One thing is not read: your standing answer about [vetting](../security/vetting.md).** If you have
 pressed the key that stops bravebot asking before content nobody vouched for reaches the planner,
@@ -369,7 +373,7 @@ bare invocation alike. It cannot be turned off once the session has started.
 
 ### What it does not cover
 
-Five things still reach the filesystem:
+Six things still reach the filesystem:
 
 - **Your project.** `write_file` and `edit_file` go on editing it. Those edits are the work rather
   than a trace of it.
@@ -384,6 +388,10 @@ Five things still reach the filesystem:
   directory on the same terms as the editor's file and goes with the session. Its name says which
   program made it and nothing about which project or which session, so an empty one records only that
   this program ran at this time.
+- **A local MCP server's home.** A [server](../customize/mcp-servers.md) is given a directory of its
+  own to keep its files in, such as a runner's cache. Here it sits in the system temporary directory
+  on the same terms and goes once the server stops, so a runner fetches its package again each
+  session.
 - **A credential you spent.** With a [Leo Premium](../customize/premium.md) subscription imported,
   the session spends credentials from it as any session does, and records which ones it spent in the
   file the import created under `~/.bravebot`. A credential is single use and presenting it to the

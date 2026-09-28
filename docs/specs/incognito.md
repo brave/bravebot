@@ -6,6 +6,7 @@ governs:
   - crates/core/src/incognito.rs
   - crates/agent/src/home.rs
   - crates/agent/src/remembered.rs
+  - crates/agent/src/trusted.rs
   - crates/agent/src/subscription.rs
   - crates/session/src/store.rs
   - crates/session/src/sessions.rs
@@ -91,7 +92,10 @@ the skills and the imported credentials, exactly as an ordinary one does. What i
 writing, apart from the one file [INCOG-8](#INCOG-8) names, and one read, named below. The record of
 command lines somebody asked to be remembered past a session, which [tools/run.md](tools/run.md)
 governs, is read here on the same terms: a line already in it stops the asking as it does anywhere,
-and the key that would add one is not offered.
+and the key that would add one is not offered. So is the record of answers to the startup question
+somebody asked to be kept, which [trust-map.md](trust-map.md#TRUST-23) governs: a kept answer settles
+the question here as anywhere, the session says so as it opens, the key that would keep one is not
+offered, and `/forget-trust` writes nothing and names the file.
 
 **The one read refused is the standing answer about whether a check answers in somebody's place.**
 The word a person's own directory holds about that is not read in this mode, so a session here asks
@@ -157,7 +161,7 @@ mode points.
 <a id="INCOG-8"></a>
 ### INCOG-8: what the mode does not cover, and says so
 
-Six things still reach the filesystem in an incognito session, each because refusing it would cost
+Seven things still reach the filesystem in an incognito session, each because refusing it would cost
 more than what it leaves behind:
 
 - **The workspace.** `write_file` and `edit_file` go on editing the project. Those edits are the
@@ -181,6 +185,10 @@ more than what it leaves behind:
   terms as the two above, and goes with the session, so the next one indexes again. What it must
   not do instead is land in the workspace, which is [LSP-10](tools/lsp.md#LSP-10)'s rule and holds
   in this mode as in any other.
+- **A local MCP server's home.** A runner keeps its cache under `HOME`, and one with nowhere to
+  write it does not start. It is not kept: it goes to a directory of its own in the system temporary
+  directory, on the same terms as the three above, and goes once the server has stopped, so a runner
+  fetches its package again each session. [SERVERS-10](mcp-servers.md#SERVERS-10) governs it.
 - **A credential that was spent.** An imported subscription is read and spent as in any session, and
   the spent markers reach the file the import created under `~/.bravebot` when the session ends. A
   credential is single use and presenting one to the service spends it there, so a marker that never
@@ -193,6 +201,10 @@ more than what it leaves behind:
   one, which [INCOG-7](#INCOG-7) refuses outright, and the file itself is governed by
   [premium-credentials.md](premium-credentials.md).
 
+A built [VET-4](tools/vet-content.md#VET-4) would add an eighth, which nothing writes yet: the copy
+of a picture a person is asked to open, in a directory of its own under their cache directory and
+removed when the prompt closes.
+
 **Why.** A stated limit is worth more than an unstated one. Someone who knows the third of these
 can decide not to open an editor; someone who assumed the mode covered it has been misled by their
 own tool.
@@ -200,3 +212,4 @@ own tool.
 `verified-by: bravebot_tui::editor::the_scratch_file_does_not_outlive_the_edit`
 `verified-by: bravebot_lsp::server::an_index_a_session_keeps_nothing_of_goes_with_the_session`
 `verified-by: bravebot_agent::incognito_credentials::a_spent_credential_is_written_back_in_a_private_session`
+`verified-by: bravebot_cli::servers::a_started_server_in_a_session_that_keeps_nothing_has_a_home_that_goes_with_it`

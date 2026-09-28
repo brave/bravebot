@@ -567,6 +567,93 @@ pub struct ManifestRequest {
     pub steps: Vec<String>,
 }
 
+/// The tools an MCP server offers, put to the person before any of them is offered (SERVERS-8).
+///
+/// The list as the client drew it and nothing else of the server's reply: each tool's name, its
+/// arguments and its description. A yes promotes exactly this text into the planner's context and
+/// records a digest of it, so what is drawn has to be all of it, the description included, and
+/// that is why the description is here uncut and marked by whoever draws it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolListRequest {
+    /// The alias the person gave the server.
+    pub alias: String,
+    /// Each tool, in the order the list holds them.
+    pub tools: Vec<ListedTool>,
+    /// How many tools the server listed that are not drawn, because this client refused them.
+    pub refused: usize,
+    /// Whether a list for this declaration was vouched for before and this one is not it.
+    pub changed: bool,
+    /// What a check said about the list, or that none was made.
+    pub verdict: Verdict,
+    /// The check's own sentence about why, where it wrote one.
+    pub reason: Option<String>,
+}
+
+/// One tool on a server's list, as it is drawn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListedTool {
+    /// `alias:word`, the name a person reads and a rule matches.
+    pub name: String,
+    /// Each argument, as its name with its type and whether it is required after it.
+    pub arguments: Vec<String>,
+    /// The server's own sentence about the tool, where it wrote one.
+    pub description: Option<String>,
+}
+
+/// A call to an MCP server's tool the planner has asked for (SERVERS-7).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpCallRequest {
+    /// The alias the person gave the server.
+    pub alias: String,
+    /// The tool's word on the server's list.
+    pub tool: String,
+    /// Each argument the planner wrote, as its name and its value in JSON.
+    pub arguments: Vec<(String, String)>,
+    /// The description of the tool on the list the person vouched for.
+    pub description: Option<String>,
+    /// Whether answer 2 can be recorded, which it cannot where there is no state directory to
+    /// write it into or the session writes nothing.
+    pub may_stand: bool,
+}
+
+impl McpCallRequest {
+    /// `weather:get_forecast`.
+    pub fn name(&self) -> String {
+        format!("{}:{}", self.alias, self.tool)
+    }
+}
+
+/// What the person decided about a call to a server's tool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CallDecision {
+    pub decision: Decision,
+    /// Whether they said to stop asking for this tool in this project. Never set with a refusal.
+    pub stand: bool,
+}
+
+impl CallDecision {
+    pub fn approve() -> Self {
+        Self {
+            decision: Decision::Approve,
+            stand: false,
+        }
+    }
+
+    pub fn approve_and_stand() -> Self {
+        Self {
+            decision: Decision::Approve,
+            stand: true,
+        }
+    }
+
+    pub fn reject() -> Self {
+        Self {
+            decision: Decision::Reject,
+            stand: false,
+        }
+    }
+}
+
 /// What the user decided about a run.
 ///
 /// Two answers rather than one, because "yes" and "yes, and stop asking" are different things and
@@ -745,6 +832,18 @@ pub trait Confirmer {
     /// needed it for.
     fn confirm_exposing_read(&mut self, request: &ExposureRequest) -> Decision;
 
+    /// Ask whether the tools an MCP server offers may be offered to the planner. Implementations
+    /// must default to refusal when they cannot ask.
+    ///
+    /// A yes promotes the list as drawn, descriptions and all, and records a digest of it, so an
+    /// unchanged list asks nothing next session. That makes it a standing decision, like the vouch
+    /// offer, and a verdict travels with it on the same footing.
+    fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision;
+
+    /// Ask about one call to an MCP server's tool. Implementations must default to refusal, and
+    /// to recording nothing, when they cannot ask.
+    fn confirm_mcp_call(&mut self, request: &McpCallRequest) -> CallDecision;
+
     /// Put a series of questions to the person, one answer per question in the order they were
     /// asked.
     ///
@@ -835,6 +934,14 @@ impl Confirmer for Unattended {
         Decision::Reject
     }
 
+    fn confirm_tool_list(&mut self, _request: &ToolListRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
+        CallDecision::reject()
+    }
+
     fn ask_user(&mut self, _asking: &Asking) -> Vec<Answer> {
         Vec::new()
     }
@@ -896,6 +1003,14 @@ impl Confirmer for ApproveWrites {
         Decision::Reject
     }
 
+    fn confirm_tool_list(&mut self, _request: &ToolListRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
+        CallDecision::reject()
+    }
+
     fn ask_user(&mut self, _asking: &Asking) -> Vec<Answer> {
         Vec::new()
     }
@@ -948,6 +1063,14 @@ impl Confirmer for ChoosesFirst {
 
     fn confirm_exposing_read(&mut self, _request: &ExposureRequest) -> Decision {
         Decision::Reject
+    }
+
+    fn confirm_tool_list(&mut self, _request: &ToolListRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
+        CallDecision::reject()
     }
 
     fn ask_user(&mut self, asking: &Asking) -> Vec<Answer> {
@@ -1020,6 +1143,14 @@ impl Confirmer for ApproveRuns {
         Decision::Reject
     }
 
+    fn confirm_tool_list(&mut self, _request: &ToolListRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
+        CallDecision::reject()
+    }
+
     fn ask_user(&mut self, _asking: &Asking) -> Vec<Answer> {
         Vec::new()
     }
@@ -1074,6 +1205,14 @@ impl Confirmer for RemembersRuns {
         Decision::Reject
     }
 
+    fn confirm_tool_list(&mut self, _request: &ToolListRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
+        CallDecision::reject()
+    }
+
     fn ask_user(&mut self, _asking: &Asking) -> Vec<Answer> {
         Vec::new()
     }
@@ -1126,6 +1265,14 @@ impl Confirmer for ReadsOutput {
 
     fn confirm_exposing_read(&mut self, _request: &ExposureRequest) -> Decision {
         Decision::Reject
+    }
+
+    fn confirm_tool_list(&mut self, _request: &ToolListRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
+        CallDecision::reject()
     }
 
     fn ask_user(&mut self, _asking: &Asking) -> Vec<Answer> {
@@ -1185,6 +1332,14 @@ impl Confirmer for VetsContent {
 
     fn confirm_exposing_read(&mut self, _request: &ExposureRequest) -> Decision {
         Decision::Reject
+    }
+
+    fn confirm_tool_list(&mut self, _request: &ToolListRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
+        CallDecision::reject()
     }
 
     fn ask_user(&mut self, _asking: &Asking) -> Vec<Answer> {
@@ -1249,6 +1404,14 @@ impl Confirmer for ExposesReads {
         Decision::Approve
     }
 
+    fn confirm_tool_list(&mut self, _request: &ToolListRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
+        CallDecision::reject()
+    }
+
     fn ask_user(&mut self, _asking: &Asking) -> Vec<Answer> {
         Vec::new()
     }
@@ -1300,6 +1463,14 @@ impl Confirmer for ApproveFetches {
 
     fn confirm_exposing_read(&mut self, _request: &ExposureRequest) -> Decision {
         Decision::Reject
+    }
+
+    fn confirm_tool_list(&mut self, _request: &ToolListRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
+        CallDecision::reject()
     }
 
     fn ask_user(&mut self, _asking: &Asking) -> Vec<Answer> {
@@ -1355,6 +1526,14 @@ impl Confirmer for ApprovePlans {
 
     fn confirm_exposing_read(&mut self, _request: &ExposureRequest) -> Decision {
         Decision::Reject
+    }
+
+    fn confirm_tool_list(&mut self, _request: &ToolListRequest) -> Decision {
+        Decision::Reject
+    }
+
+    fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
+        CallDecision::reject()
     }
 
     fn ask_user(&mut self, _asking: &Asking) -> Vec<Answer> {
@@ -1431,6 +1610,14 @@ impl<C: Confirmer + ?Sized> Confirmer for Timed<'_, C> {
 
     fn confirm_exposing_read(&mut self, request: &ExposureRequest) -> Decision {
         self.timing(|inner| inner.confirm_exposing_read(request))
+    }
+
+    fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision {
+        self.timing(|inner| inner.confirm_tool_list(request))
+    }
+
+    fn confirm_mcp_call(&mut self, request: &McpCallRequest) -> CallDecision {
+        self.timing(|inner| inner.confirm_mcp_call(request))
     }
 
     fn confirm_server(&mut self, request: &ServerRequest) -> Decision {
@@ -1555,6 +1742,16 @@ mod tests {
         fn confirm_exposing_read(&mut self, _request: &ExposureRequest) -> Decision {
             std::thread::sleep(self.0);
             Decision::Reject
+        }
+
+        fn confirm_tool_list(&mut self, _request: &ToolListRequest) -> Decision {
+            std::thread::sleep(self.0);
+            Decision::Reject
+        }
+
+        fn confirm_mcp_call(&mut self, _request: &McpCallRequest) -> CallDecision {
+            std::thread::sleep(self.0);
+            CallDecision::reject()
         }
 
         fn confirm_server(&mut self, _request: &ServerRequest) -> Decision {

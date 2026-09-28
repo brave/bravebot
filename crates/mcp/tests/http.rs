@@ -113,19 +113,20 @@ fn a_handshake_and_tool_list_round_trip() {
         .initialize(&mut policy, &egress, "bravebot", "0.1.0")
         .expect("handshake");
 
-    let tools = server
+    let listing = server
         .list_tools(&mut policy, &egress)
         .expect("tools listed");
-    assert_eq!(tools.len(), 1);
-    // The alias this server was declared under, not the word it reported.
-    assert_eq!(tools[0].name(), "remote:lookup");
-    assert_eq!(tools[0].on_the_wire(), "lookup");
+    assert_eq!((listing.offered(), listing.refused()), (1, 0));
+    // The alias this server was declared under, not a name it reported.
+    assert_eq!(listing.alias(), "remote");
+    assert!(!listing.list().label().is_trusted());
+    let proof = policy.authorise_display_release("test reads the list a person is shown");
     assert!(
-        !tools[0]
-            .description()
-            .expect("a description")
-            .label()
-            .is_trusted()
+        listing
+            .list()
+            .clone()
+            .declassify(&proof)
+            .contains(r#""name":"lookup""#)
     );
 
     let first = received.recv().expect("initialize body");

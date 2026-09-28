@@ -17,6 +17,15 @@ if command -v direnv >/dev/null 2>&1; then
     eval "$(direnv export bash)"
 fi
 
+# A commit made through bravebot's own `run` has these withheld (RUN-12), and direnv, having
+# loaded this directory already, does not put them back. Clippy lints the same code without them.
+# Set only when one is missing: a change to this switch rebuilds every crate above the config.
+if [ -z "$SERVICES_KEY_AICHAT" ] || [ -z "$BRAVE_SERVICES_KEY_ID" ] ||
+    [ -z "$BRAVE_AI_CHAT_ENDPOINT" ]; then
+    BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1
+    export BRAVEBOT_ALLOW_UNCONFIGURED_BUILD
+fi
+
 if ! cargo fmt --all -- --check; then
     echo >&2
     echo "pre-commit: formatting. Run 'make fmt' and stage the result." >&2

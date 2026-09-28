@@ -244,3 +244,73 @@ fn a_finding_an_earlier_session_recorded_is_still_read() {
         "an incognito session read no finding back"
     );
 }
+
+/// The record of a kept startup answer for a directory that exists, and that directory's identity.
+///
+/// `None` on a filesystem that cannot say when a directory was made, where nothing is ever kept.
+fn a_kept_directory(
+    scratch: &Scratch,
+) -> Option<(
+    bravebot_agent::trusted::Store,
+    bravebot_agent::trusted::Identity,
+)> {
+    let identity = bravebot_agent::trusted::Identity::of(&scratch.home)?;
+    Some((
+        bravebot_agent::trusted::Store::new(&scratch.home, &scratch.home),
+        identity,
+    ))
+}
+
+/// INCOG-5, TRUST-23: a private session keeps no answer to the startup question, so the key that
+/// would keep one is not offered and a front end answering with it anyway writes no file. Withdrawing
+/// one is a write too, so it is refused rather than made.
+#[test]
+fn no_trusted_directory_is_written_down() {
+    let scratch = Scratch::new("trusts-nothing");
+    assert!(
+        !bravebot_agent::trusted::may_be_written(),
+        "the question would still have offered to keep the answer"
+    );
+    let Some((store, identity)) = a_kept_directory(&scratch) else {
+        return;
+    };
+
+    assert!(!store.keep(&identity, "a-private-session", 1));
+    assert!(
+        !store.path().exists(),
+        "an incognito session kept an answer in the record"
+    );
+    assert!(
+        store.forget().is_err(),
+        "an incognito session withdrew an answer"
+    );
+}
+
+/// INCOG-5, TRUST-23: reading is unchanged here too. An answer an earlier ordinary session kept for
+/// this directory still answers, and the session says so where it starts.
+#[test]
+fn a_directory_an_earlier_session_kept_is_still_trusted() {
+    let scratch = Scratch::new("still-reads-trusted");
+    let Some((store, identity)) = a_kept_directory(&scratch) else {
+        return;
+    };
+
+    // Seeded as an ordinary session would have left it, past the write this mode declines.
+    std::fs::create_dir_all(store.path().parent().expect("a parent")).expect("seed the directory");
+    std::fs::write(
+        store.path(),
+        format!(
+            r#"{{"directory":{},"identity":{},"session":"an-earlier-session","at":1}}{}"#,
+            serde_json::to_string(&scratch.home).expect("a path"),
+            serde_json::to_string(&identity).expect("an identity"),
+            "\n"
+        ),
+    )
+    .expect("seed a record");
+
+    assert_eq!(
+        store.kept(&identity).map(|kept| kept.session),
+        Some("an-earlier-session".to_string()),
+        "an incognito session read no kept answer back"
+    );
+}

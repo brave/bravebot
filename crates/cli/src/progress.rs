@@ -163,7 +163,12 @@ impl<W: Write> Reporter for Progress<W> {
     /// Printed as the call begins, which is the whole point: a slow call should be visible
     /// while it is slow rather than only once it is over.
     fn tool_started(&mut self, activity: Activity) {
-        self.say(&format!("{CALL_MARKER} {}", activity.line()));
+        let why = activity.why.lines().next().unwrap_or_default().trim();
+        if why.is_empty() {
+            self.say(&format!("{CALL_MARKER} {}", activity.line()));
+        } else {
+            self.say(&format!("{CALL_MARKER} {}  {why}", activity.line()));
+        }
     }
 
     fn tool_finished(&mut self, activity: Activity) {
@@ -244,6 +249,23 @@ mod tests {
     fn a_call_is_printed_when_it_begins() {
         let written = log(|p| p.tool_started(Activity::running("Read", "src/main.rs")));
         assert!(written.contains("Read(src/main.rs)"), "got: {written}");
+    }
+
+    /// The line says what the call is for as well as what it touches. A run read from a terminal
+    /// otherwise shows every call and nothing of why it was made.
+    #[test]
+    fn a_call_is_printed_with_the_reason_it_was_made() {
+        let written = log(|p| {
+            p.tool_started(
+                Activity::running("Search", "MAX_STEPS")
+                    .saying_why("find where the bound is set\nand a second line"),
+            )
+        });
+        assert!(
+            written.contains("Search(MAX_STEPS)  find where the bound is set"),
+            "got: {written}"
+        );
+        assert!(!written.contains("a second line"), "got: {written}");
     }
 
     #[test]

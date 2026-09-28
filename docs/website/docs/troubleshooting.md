@@ -59,7 +59,7 @@ capability probes.
 | the service rejected the request | the request was refused as invalid |
 | the request did not get through | nothing reached the service: network, proxy or TLS roots |
 | the reply stopped before it was finished | the reply was cut off part way |
-| the reply could not be read | a reply arrived that could not be decoded |
+| the reply could not be read | a reply arrived that could not be decoded, or the model sent back nothing twice in a row |
 | the model reached its output limit | the reply hit a ceiling, which `BRAVEBOT_OUTPUT_BUDGET` raises |
 | nothing here was configured to send the request | no model service is set up |
 | a gate here would not let the request out | a gate refused it before it left, so it never went |
@@ -123,9 +123,9 @@ instructions are read through the trust map, so they load when you vouched for t
 matter, since a file missing either is skipped. Then check the description: it is the only part the
 planner sees before loading, so it should say *when* to use the skill.
 
-**`/commit-style` did not run my skill.** Skills are not slash commands here. Say what you want and
-the planner loads the skill when the description matches. See
-[Skills](customize/skills.md#skills-are-not-slash-commands).
+**`/commit-style` is not listed after a slash.** The list holds the skills the planner is offered, so
+a skill missing from it was not found: check its front matter, and that a project skill is in a
+directory you trusted. See [Skills](customize/skills.md#naming-a-skill-after-a-slash).
 
 **A write asked for approval on a file in a directory I trusted.** Untrusted data going into a trusted
 path asks, because approving it also marks that path untrusted. That is the round trip being closed.

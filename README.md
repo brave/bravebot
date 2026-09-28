@@ -72,6 +72,10 @@ all of that, so the session is the one you configured rather than a fresh instal
 project as usual, since that is the work rather than a trace of it. See
 [docs/specs/incognito.md](docs/specs/incognito.md) for what it covers and what it does not.
 
+## Reporting a Vulnerability
+
+See [https://hackerone.com/brave](https://hackerone.com/brave) for details.
+
 ## Development
 
 `cargo build` and `make check`, which runs fmt, clippy and the tests. See

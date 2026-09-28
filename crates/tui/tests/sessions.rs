@@ -2305,6 +2305,14 @@ mod completed_usage {
         script: Vec<String>,
         stopping: Option<(usize, bravebot_core::cancel::Cancel)>,
     ) -> (String, mpsc::Receiver<String>) {
+        endpoint_stopping_after_acceptance(script, stopping, None)
+    }
+
+    pub(super) fn endpoint_stopping_after_acceptance(
+        script: Vec<String>,
+        stopping: Option<(usize, bravebot_core::cancel::Cancel)>,
+        acceptance: Option<mpsc::Receiver<()>>,
+    ) -> (String, mpsc::Receiver<String>) {
         use std::io::{BufRead, Read};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
@@ -2330,6 +2338,9 @@ mod completed_usage {
                 if let Some((at, cancel)) = &stopping
                     && index == *at
                 {
+                    if let Some(acceptance) = &acceptance {
+                        acceptance.recv_timeout(Duration::from_secs(5)).unwrap();
+                    }
                     cancel.cancel();
                     return;
                 }
@@ -2391,6 +2402,7 @@ mod completed_usage {
                 None,
                 &bravebot_core::cancel::Cancel::new(),
             )
+            .outcome
             .unwrap_err();
             for at in reporter.prompts {
                 session.prompt_recorded(at);
@@ -3570,7 +3582,8 @@ mod preserved_history {
             TrustedPrograms::new(),
             None,
             cancel,
-        );
+        )
+        .outcome;
         for message in inbound.try_iter() {
             match message {
                 ToMain::PromptRecorded(at) => session.prompt_recorded(at),
@@ -3601,6 +3614,538 @@ mod preserved_history {
             },
         }
         session.record_turn(start, conversation);
+    }
+
+    // The real worker must take queued corrections and report them before cancellation settles.
+    fn run_submitted(
+        session: &mut Session,
+        conversation: &mut Conversation,
+        root: &Path,
+        endpoint: &str,
+        cancel: &bravebot_core::cancel::Cancel,
+        prompt: &str,
+        acceptance: Option<std::sync::mpsc::Sender<()>>,
+    ) -> Vec<String> {
+        use bravebot_tui::remote_confirm::{RemoteConfirmer, RemoteReporter, ToMain};
+        let start = conversation.recounted().len();
+        let task = bravebot_tui::app::with_submitted_attachments(
+            bravebot_agent::Task::new(prompt),
+            session,
+        );
+        let (outbound, inbound) = std::sync::mpsc::channel();
+        let (answers, replies) = std::sync::mpsc::channel();
+        // These fixtures need no approvals. An unexpected question must fail, not hang.
+        drop(answers);
+        let mut running_conversation = std::mem::take(conversation);
+        let root = root.to_path_buf();
+        let config = config_for(endpoint);
+        let worker_cancel = cancel.clone();
+        let typed = session.interjections();
+        let worker = std::thread::spawn(move || {
+            let mut confirmer = RemoteConfirmer::new(outbound.clone(), replies, typed);
+            let mut reporter = RemoteReporter::new(outbound);
+            let outcome = bravebot_agent::turn::resume(
+                &config,
+                &bravebot_net::Egress::new(),
+                &Workspace::new(&root).unwrap(),
+                &task,
+                &mut running_conversation,
+                &mut confirmer,
+                &mut reporter,
+                &mut bravebot_core::event::RecordingSink::new(),
+                TrustStore::new(&root),
+                TrustedPrograms::new(),
+                None,
+                &worker_cancel,
+            );
+            (outcome, running_conversation)
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut accepted = Vec::new();
+        loop {
+            let message = match inbound
+                .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+            {
+                Ok(message) => message,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    cancel.cancel();
+                    panic!("worker did not finish before the deadline");
+                }
+            };
+            match message {
+                ToMain::PromptRecorded(at) => session.prompt_recorded(at),
+                ToMain::Spent(spent) => session.progressed(spent),
+                ToMain::Narration(text) => session.narrate(text),
+                ToMain::Started(activity) => session.start_activity(activity),
+                ToMain::Finished(activity) => session.finish_activity(activity),
+                ToMain::Interjected(text) => {
+                    accepted.push(text);
+                    session.interjected();
+                    if let Some(acceptance) = &acceptance {
+                        acceptance.send(()).unwrap();
+                    }
+                }
+                ToMain::Quarantined(shown) => session.show(shown),
+                ToMain::Notice(text) => session.note_once(text),
+                ToMain::Streaming(text) => session.streaming(&text),
+                ToMain::ReportingFor(delegate) => session.reporting_for(delegate),
+                other => assert!(
+                    matches!(
+                        other,
+                        ToMain::Phase(_)
+                            | ToMain::Written(_)
+                            | ToMain::Returned(_)
+                            | ToMain::Landed(_)
+                    ),
+                    "unexpected worker event: {other:?}"
+                ),
+            }
+        }
+        let (result, continued) = worker.join().unwrap();
+        *conversation = continued;
+        match result.outcome {
+            Ok(outcome) => {
+                session.complete(outcome.reply_for_display(), vec![], outcome.tokens);
+                session.spent_time(outcome.timing);
+            }
+            Err(error) => {
+                let Ending::Stopped { attempts } = error.ending() else {
+                    panic!("expected cancellation, got {error:?}");
+                };
+                session.stopped(attempts);
+                session.restore(prompt);
+            }
+        }
+        session.record_turn(start, conversation);
+        accepted
+    }
+
+    fn user_lines(session: &Session) -> Vec<&str> {
+        session
+            .transcript
+            .iter()
+            .filter(|entry| entry.speaker == Speaker::User)
+            .map(|entry| entry.text.as_str())
+            .collect()
+    }
+
+    /// Resending a restored marker must send the same file or picture, once, through the TUI builder.
+    #[test]
+    fn cancelled_attachments_return_to_the_editor_and_the_next_request() {
+        use super::completed_usage::{an_endpoint, endpoint_stopping_at};
+        use base64::Engine;
+        use bravebot_core::cancel::Cancel;
+        let scratch = Scratch::new("cancelled-attachments");
+        let root = &scratch.project;
+        // Valid one-pixel PNGs with different pixels make a swapped store observable.
+        let dropped = base64::engine::general_purpose::STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=").unwrap();
+        let pasted = base64::engine::general_purpose::STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=").unwrap();
+        std::fs::write(root.join("dropped.png"), &dropped).unwrap();
+        std::fs::write(root.join("notes.txt"), "DISTINCT_DROPPED_TEXT").unwrap();
+        for (files, images, pastes) in [
+            (false, false, false),
+            (true, false, false),
+            (false, true, false),
+            (false, false, true),
+            (true, true, true),
+        ] {
+            let mut session = Session::new("test").in_workspace(root);
+            // Paste first to pin the documented drops-before-pastes request order too.
+            if pastes {
+                session.attach(bravebot_tui::clipboard::Image {
+                    media_type: "image/png",
+                    bytes: pasted.clone(),
+                });
+            }
+            if files {
+                assert!(session.drop_files(root.join("notes.txt").to_str().unwrap()));
+            }
+            if images {
+                assert!(session.drop_files(root.join("dropped.png").to_str().unwrap()));
+            }
+            session.paste("inspect these");
+            let expected_drops = session.attached().to_vec();
+            let expected_pastes = session.pasted_named(session.input());
+            let prompt = session.submit().unwrap();
+            let cancel = Cancel::new();
+            let (endpoint, requests) =
+                endpoint_stopping_at(vec![String::new()], Some((0, cancel.clone())));
+            let mut conversation = Conversation::new();
+            run_submitted(
+                &mut session,
+                &mut conversation,
+                root,
+                &endpoint,
+                &cancel,
+                &prompt,
+                None,
+            );
+            let first: serde_json::Value = serde_json::from_str(
+                &requests
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap(),
+            )
+            .unwrap();
+            assert!(matches!(
+                session.turn_history()[0].outcome,
+                Some(sessions::StoredOutcome::Cancelled { .. })
+            ));
+            assert_eq!(session.input(), prompt);
+            assert!(user_lines(&session).is_empty());
+            let restored_drops = session.attached().to_vec();
+            let restored_pastes = session.pasted_named(session.input());
+            let sent_drops_empty = session.sent_attachments().is_empty();
+            let sent_pastes_empty = session.sent_pasted().is_empty();
+            // Editor stores are not restored from disk, even when the sent conversation has bytes.
+            let record = save(root, &session, &conversation);
+            let reopened = reopen(root, &record);
+            assert!(reopened.input().is_empty());
+            assert!(reopened.attached().is_empty());
+            assert_eq!(reopened.pasted_count(), 0);
+            assert!(user_lines(&reopened).is_empty());
+            let again = session.submit().unwrap();
+            assert_eq!(again, prompt);
+            let (endpoint, requests) = an_endpoint(vec![answer_reply()]);
+            run_submitted(
+                &mut session,
+                &mut conversation,
+                root,
+                &endpoint,
+                &Cancel::new(),
+                &again,
+                None,
+            );
+            let second: serde_json::Value = serde_json::from_str(
+                &requests
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap(),
+            )
+            .unwrap();
+            // Cancelled requests remain in planner history. Compare the newly appended input,
+            // not that earlier turn's copy, to detect duplication within the resubmission.
+            let first_messages = first["messages"].as_array().unwrap();
+            let second_messages = second["messages"].as_array().unwrap();
+            let input_count = first_messages
+                .iter()
+                .filter(|m| m["role"] != "system")
+                .count();
+            let messages = &second_messages[second_messages.len() - input_count..];
+            assert_eq!(
+                messages,
+                &first_messages[first_messages.len() - input_count..],
+                "restoration changed request content"
+            );
+            let urls: Vec<_> = messages
+                .iter()
+                .filter_map(|m| m["content"].as_array())
+                .flatten()
+                .filter_map(|part| part["image_url"]["url"].as_str())
+                .collect();
+            let mut expected_urls = Vec::new();
+            if images {
+                expected_urls.push(format!(
+                    "data:image/png;base64,{}",
+                    base64::engine::general_purpose::STANDARD.encode(&dropped)
+                ));
+            }
+            if pastes {
+                expected_urls.push(format!(
+                    "data:image/png;base64,{}",
+                    base64::engine::general_purpose::STANDARD.encode(&pasted)
+                ));
+            }
+            assert_eq!(urls, expected_urls);
+            assert_eq!(restored_drops, expected_drops);
+            assert_eq!(restored_pastes, expected_pastes);
+            assert!(sent_drops_empty);
+            assert!(sent_pastes_empty);
+            assert_eq!(
+                serde_json::to_string(messages)
+                    .unwrap()
+                    .matches("DISTINCT_DROPPED_TEXT")
+                    .count(),
+                usize::from(files)
+            );
+            assert_eq!(user_lines(&session), [prompt.as_str()]);
+            assert!(matches!(
+                session.turn_history()[1].outcome,
+                Some(sessions::StoredOutcome::Completed)
+            ));
+        }
+    }
+
+    /// Returning a cancelled prompt must preserve the attachments a stashed draft still names.
+    #[test]
+    fn cancelled_attachments_preserve_a_stashed_draft() {
+        use super::completed_usage::endpoint_stopping_at;
+        use bravebot_core::cancel::Cancel;
+        let scratch = Scratch::new("cancelled-stashed-attachments");
+        let root = &scratch.project;
+        std::fs::write(root.join("sent.txt"), "sent file").unwrap();
+        std::fs::write(root.join("draft.txt"), "draft file").unwrap();
+        let mut session = Session::new("test").in_workspace(root);
+        assert!(session.drop_files(root.join("sent.txt").to_str().unwrap()));
+        session.attach(bravebot_tui::clipboard::Image {
+            media_type: "image/png",
+            bytes: vec![1, 2, 3],
+        });
+        let prompt = session.submit().unwrap();
+        let sent_drops = session.sent_attachments().to_vec();
+        let sent_pastes = session.sent_pasted().to_vec();
+        assert!(session.drop_files(root.join("draft.txt").to_str().unwrap()));
+        session.attach(bravebot_tui::clipboard::Image {
+            media_type: "image/png",
+            bytes: vec![4, 5, 6],
+        });
+        let draft = session.input().to_string();
+        let draft_drops = session.attachments_named(&draft);
+        let draft_pastes = session.pasted_named(&draft);
+        assert!(session.stash());
+        let cancel = Cancel::new();
+        let (endpoint, requests) =
+            endpoint_stopping_at(vec![String::new()], Some((0, cancel.clone())));
+        run_submitted(
+            &mut session,
+            &mut Conversation::new(),
+            root,
+            &endpoint,
+            &cancel,
+            &prompt,
+            None,
+        );
+        requests
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(session.input(), prompt);
+        assert_eq!(session.attachments_named(&prompt), sent_drops);
+        assert_eq!(session.pasted_named(&prompt), sent_pastes);
+        session.clear_input();
+        assert!(session.stash());
+        assert_eq!(session.input(), draft);
+        assert_eq!(session.attachments_named(&draft), draft_drops);
+        assert_eq!(session.pasted_named(&draft), draft_pastes);
+        assert_eq!(session.submit().unwrap(), draft);
+        assert_eq!(session.sent_attachments(), draft_drops);
+        assert_eq!(session.sent_pasted(), draft_pastes);
+    }
+
+    /// Cancellation must not move old attachments onto a draft, queued prompt, or recorded turn.
+    #[test]
+    fn cancellation_keeps_attachment_ownership_when_the_prompt_stays_sent() {
+        use super::completed_usage::endpoint_stopping_at;
+        use bravebot_core::cancel::Cancel;
+        let scratch = Scratch::new("cancelled-attachment-owners");
+        let root = &scratch.project;
+        std::fs::write(root.join("sent.txt"), "sent file").unwrap();
+        std::fs::write(root.join("draft.txt"), "draft file").unwrap();
+        std::fs::create_dir(root.join("empty")).unwrap();
+        for control in ["busy editor", "queued prompt", "recorded work"] {
+            let mut session = Session::new("test").in_workspace(root);
+            assert!(session.drop_files(root.join("sent.txt").to_str().unwrap()));
+            session.attach(bravebot_tui::clipboard::Image {
+                media_type: "image/png",
+                bytes: vec![1, 2, 3],
+            });
+            let prompt = session.submit().unwrap();
+            let sent_drops = session.sent_attachments().to_vec();
+            let sent_pastes = session.sent_pasted().to_vec();
+            if control == "busy editor" {
+                assert!(session.drop_files(root.join("draft.txt").to_str().unwrap()));
+                session.attach(bravebot_tui::clipboard::Image {
+                    media_type: "image/png",
+                    bytes: vec![4, 5, 6],
+                });
+                session.paste("unsent private draft");
+            } else if control == "queued prompt" {
+                session.paste("waiting for another turn");
+                assert!(session.queue());
+            }
+            let draft = session.input().to_string();
+            let draft_drops = session.attached().to_vec();
+            let draft_pastes = session.pasted_named(&draft);
+            let replies = if control == "recorded work" {
+                vec![
+                    tool_reply("list_files", r#"{"directory":"empty"}"#, 7),
+                    String::new(),
+                ]
+            } else {
+                vec![String::new()]
+            };
+            let cancel = Cancel::new();
+            let stop_at = replies.len() - 1;
+            let (endpoint, requests) =
+                endpoint_stopping_at(replies, Some((stop_at, cancel.clone())));
+            let mut conversation = Conversation::new();
+            run_submitted(
+                &mut session,
+                &mut conversation,
+                root,
+                &endpoint,
+                &cancel,
+                &prompt,
+                None,
+            );
+            for _ in 0..=stop_at {
+                requests
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap();
+            }
+            assert_eq!(session.input(), draft);
+            assert_eq!(session.attached(), draft_drops);
+            assert_eq!(session.pasted_named(&draft), draft_pastes);
+            assert_eq!(session.sent_attachments(), sent_drops);
+            assert_eq!(session.sent_pasted(), sent_pastes);
+            assert_eq!(user_lines(&session), [prompt.as_str()]);
+            assert_eq!(session.transcript.last().unwrap().speaker, Speaker::Stopped);
+            if control == "queued prompt" {
+                assert_eq!(session.queued.len(), 1);
+                assert_eq!(session.queued[0].prompt, "waiting for another turn");
+            }
+            let record = save(root, &session, &conversation);
+            assert_eq!(
+                serde_json::to_value(&record.conversation).unwrap(),
+                serde_json::to_value(conversation.snapshot()).unwrap()
+            );
+            assert!(
+                !serde_json::to_string(&record)
+                    .unwrap()
+                    .contains("unsent private draft")
+            );
+            let reopened = reopen(root, &record);
+            assert!(reopened.input().is_empty());
+            assert!(reopened.attached().is_empty());
+            assert_eq!(reopened.pasted_count(), 0);
+            assert_eq!(
+                user_lines(&reopened),
+                [prompt.as_str(), "Contents of sent.txt:\n\nsent file"]
+            );
+        }
+    }
+
+    /// Corrections belong to the cancelled turn after reload and must not become another turn's prompt.
+    #[test]
+    fn accepted_corrections_survive_cancellation_storage_export_and_the_next_turn() {
+        use super::completed_usage::endpoint_stopping_after_acceptance;
+        use bravebot_core::cancel::Cancel;
+        let scratch = Scratch::new("cancelled-corrections");
+        let root = &scratch.project;
+        std::fs::create_dir(root.join("empty")).unwrap();
+        for editor in ["", "unrelated draft"] {
+            let mut session = Session::new("test");
+            let mut conversation = Conversation::new();
+            submit(&mut session, "initial request");
+            session.paste("accepted correction");
+            assert!(session.queue());
+            session.paste(editor);
+            let cancel = Cancel::new();
+            // A tool-only reply reaches the correction boundary without an assistant display entry.
+            let reply = tool_reply("list_files", r#"{"directory":"empty"}"#, 11)
+                .replace("\"content\":\"working\",", "");
+            let (acceptance, observed) = std::sync::mpsc::channel();
+            let (endpoint, requests) = endpoint_stopping_after_acceptance(
+                vec![reply, String::new()],
+                Some((1, cancel.clone())),
+                Some(observed),
+            );
+            let accepted = run_submitted(
+                &mut session,
+                &mut conversation,
+                root,
+                &endpoint,
+                &cancel,
+                "initial request",
+                Some(acceptance),
+            );
+            assert_eq!(accepted, ["accepted correction"]);
+            assert_eq!(session.input(), editor);
+            assert_eq!(
+                user_lines(&session),
+                ["initial request", "accepted correction"]
+            );
+            assert_eq!(session.transcript.last().unwrap().speaker, Speaker::Stopped);
+            assert!(
+                !session
+                    .transcript
+                    .iter()
+                    .any(|entry| entry.speaker == Speaker::Assistant)
+            );
+            assert!(session.queued.is_empty());
+            let first = requests
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            let second = requests
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            assert!(!first.contains("accepted correction"));
+            assert_eq!(second.matches("accepted correction").count(), 1);
+            let expected_history = serde_json::to_value(session.turn_history()).unwrap();
+            for reload in 0..2 {
+                let record = save(root, &session, &conversation);
+                assert_eq!(
+                    serde_json::to_value(&record.history).unwrap(),
+                    expected_history
+                );
+                session = reopen(root, &record);
+                conversation = Conversation::restored(record.conversation);
+                assert_eq!(session.turns, 1);
+                assert_eq!(
+                    user_lines(&session),
+                    ["initial request", "accepted correction"]
+                );
+                assert!(session.input().is_empty());
+                let markdown = bravebot_tui::render::as_markdown(&session, "correction");
+                let name = format!("correction-{}-{reload}.md", editor.len());
+                let path = sessions::export(root, "correction", Some(&name), &markdown).unwrap();
+                let text = std::fs::read_to_string(path).unwrap();
+                assert_eq!(text.matches("initial request").count(), 1);
+                assert_eq!(text.matches("accepted correction").count(), 1);
+                assert!(
+                    text.find("initial request").unwrap()
+                        < text.find("accepted correction").unwrap()
+                );
+                assert_eq!(text.matches("## Cancelled").count(), 1);
+                assert_eq!(text.matches("**Outcome:** cancelled").count(), 1);
+            }
+            let (endpoint, requests) = super::completed_usage::an_endpoint(vec![answer_reply()]);
+            run_task(
+                &mut session,
+                &mut conversation,
+                root,
+                &config_for(&endpoint),
+                &bravebot_agent::Task::new("next request"),
+                &Cancel::new(),
+            );
+            let request = requests
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            for text in ["initial request", "accepted correction", "next request"] {
+                assert_eq!(request.matches(text).count(), 1);
+            }
+            let record = save(root, &session, &conversation);
+            let reopened = reopen(root, &record);
+            assert_eq!(reopened.turns, 2);
+            assert_eq!(
+                user_lines(&reopened),
+                ["initial request", "accepted correction", "next request"]
+            );
+            assert_eq!(
+                serde_json::to_value(&reopened.turn_history()[0]).unwrap(),
+                expected_history[0]
+            );
+            assert_eq!(
+                reopened.turn_history()[1].start,
+                reopened.turn_history()[0].end
+            );
+            assert_eq!(
+                reopened.turn_history()[1].prompt.as_deref(),
+                Some("next request")
+            );
+            assert!(matches!(
+                reopened.turn_history()[1].outcome,
+                Some(sessions::StoredOutcome::Completed)
+            ));
+        }
     }
 
     /// Real context loading must identify the prompt for both plain and multipart requests.

@@ -28,6 +28,9 @@
 //!   deployment.
 //! - `model`, for the same reason: it is where both Claude Code and opencode put that choice, and a
 //!   key those tools honour that this one silently dropped is worse than one nobody writes.
+//! - `effort`, this program's own name, beside `model` because it answers the same kind of question
+//!   about the same request: how hard the model is asked to think. Nothing else reads it, so there
+//!   was no spelling to borrow.
 //! - `permissions`, whose rules Claude Code spells the same way.
 //! - `provider`, in opencode's shape, read by [`crate::provider`].
 //! - `attribution`, Claude Code's name for what a commit message or a pull request may carry, so
@@ -96,7 +99,7 @@ const VETTING_BLOCK: &str = "vetting";
 ///
 /// A settings file is a handful of short strings. Bounded so a file that grew by accident, or was
 /// replaced by something else entirely, is refused rather than parsed.
-const MAX_BYTES: u64 = 64 * 1024;
+pub(crate) const MAX_BYTES: u64 = 64 * 1024;
 
 /// The file the command line named, for the layer that sits above the three that are found.
 ///
@@ -149,6 +152,20 @@ pub struct Settings {
     /// Separate from `env` because it is not a variable: nothing exports `model`, and folding it
     /// into that map would make it collide with a name someone's shell already uses.
     model: Option<String>,
+    /// What the top-level `effort` key named, if it named anything.
+    ///
+    /// The word as the file spelled it, for the reason `editor_mode` below keeps one: which words
+    /// name a level is a question for the protocol that carries the field, and this crate
+    /// configures a backend. A word this program does not define is dropped where the level is
+    /// settled rather than here, so one spelling rule answers for a hand-edited settings file and a
+    /// hand-edited record alike.
+    effort: Option<String>,
+    /// Whether `model` was named by a layer above the person's own file, which a saved `/model`
+    /// pick ranks as (BACKEND-11). Settled by [`Settings::layered`], the one caller that knows which
+    /// file a key came from.
+    model_outranks_a_pick: bool,
+    /// Whether `effort` was, on the same footing (BACKEND-43).
+    effort_outranks_a_pick: bool,
     /// What the top-level `editorMode` key named, if it named anything.
     ///
     /// The word as the file spelled it, not a mode. Which words name an editing style is a question
@@ -360,6 +377,10 @@ impl Settings {
         let mut allow_ignored = Vec::new();
         let mut mcp_declared = Vec::new();
         let mut mcp_requested: Vec<(PathBuf, String)> = Vec::new();
+        // Which kind of layer spelled each key last, which is the layer the merge lets answer for
+        // it. The merged root cannot say, and it decides whether a saved pick outranks the answer.
+        let mut model_above_home = false;
+        let mut effort_above_home = false;
         for path in paths.into_iter().flatten() {
             // A file already read as a layer above is not read again. Naming one of the three
             // explicitly is an ordinary thing to do, and reading it twice would report every name
@@ -371,11 +392,18 @@ impl Settings {
             let Some(mut root) = read(&path) else {
                 continue;
             };
+            let own = Some(&path) == home_layer.as_ref();
             if root.contains_key(VETTING_BLOCK) {
-                match Some(&path) == home_layer.as_ref() {
+                match own {
                     true => vetting = auto_vetting(&root),
                     false => vetting_ignored.push(path.clone()),
                 }
+            }
+            if root.contains_key("model") {
+                model_above_home = !own;
+            }
+            if root.contains_key("effort") {
+                effort_above_home = !own;
             }
             // Every layer, the person's own among them: what a settings file names about a server
             // is never a declaration, so which file said it decides only what the report names.
@@ -424,6 +452,10 @@ impl Settings {
         settings.allow_ignored = allow_ignored;
         settings.mcp_declared = mcp_declared;
         settings.mcp_requested = mcp_requested;
+        // A layer above that spelled the key blank, or as something other than a word, named
+        // nothing, and a pick is not outranked by nothing.
+        settings.model_outranks_a_pick = model_above_home && settings.model.is_some();
+        settings.effort_outranks_a_pick = effort_above_home && settings.effort.is_some();
         // `merged` goes here, and clears what every layer stated as it does: the settings hold what
         // they keep of it by now, so the rest is a spare copy of a gateway token.
         settings
@@ -472,6 +504,11 @@ impl Settings {
             scrub: scrub_list(root),
             permissions: permission_lists(root),
             model: word(root, "model"),
+            effort: word(root, "effort"),
+            // False here, one root being read as the person's own until [`Settings::layered`]
+            // says which file it was.
+            model_outranks_a_pick: false,
+            effort_outranks_a_pick: false,
             editor_mode: word(root, "editorMode"),
             // Read here so one file's worth can be parsed on its own, and overwritten by
             // [`Settings::layered`], which is the only caller that knows which layer this came
@@ -509,10 +546,31 @@ impl Settings {
 
     /// The model the settings in force asked for, if they asked for one.
     ///
-    /// A default rather than the model: `/model` records a choice that outlives the session making
-    /// it, and that choice wins. This is what answers for somebody who has never made one.
+    /// Not always the model: a choice `/model` saved ranks as the person's own file does, so it
+    /// outranks this where the person's own file is what named it.
+    /// [`Settings::model_outranks_a_pick`] says which.
     pub fn model(&self) -> Option<&str> {
         self.model.as_deref()
+    }
+
+    /// Whether [`Settings::model`] came from a file above the person's own: a checkout's, or the
+    /// one `--settings` named. Such a file outranks a saved pick (BACKEND-11).
+    pub fn model_outranks_a_pick(&self) -> bool {
+        self.model_outranks_a_pick
+    }
+
+    /// How hard the settings in force asked the model to think, if they asked for anything.
+    ///
+    /// The word the file spelled, unrecognised words and all, for the reason
+    /// [`Settings::editor_mode`] answers with one. Ranked against a saved `/effort` pick the way
+    /// [`Settings::model`] is, which [`Settings::effort_outranks_a_pick`] settles.
+    pub fn effort(&self) -> Option<&str> {
+        self.effort.as_deref()
+    }
+
+    /// Whether [`Settings::effort`] came from a file above the person's own (BACKEND-43).
+    pub fn effort_outranks_a_pick(&self) -> bool {
+        self.effort_outranks_a_pick
     }
 
     /// The editing style the settings in force asked for, if they asked for one.
@@ -611,6 +669,7 @@ impl Settings {
             && self.scrub.is_empty()
             && self.permissions.is_empty()
             && self.model.is_none()
+            && self.effort.is_none()
             && self.editor_mode.is_none()
             && self.vetting.is_none()
             && self.keybindings.is_empty()
@@ -679,6 +738,7 @@ impl Settings {
             .is_some()
             .then_some("model")
             .into_iter()
+            .chain(self.effort.is_some().then_some("effort"))
             .chain(self.editor_mode.is_some().then_some("editorMode"))
             .chain(self.vetting.is_some().then_some("vetting.auto"))
             .chain((!self.keybindings.is_empty()).then_some("keybindings"))
@@ -848,7 +908,7 @@ impl Drop for Document {
 /// Strings only, on the footing everything else here reads them: a number or a boolean where a word
 /// belongs would have to be given a spelling nobody chose. Blank is absence rather than a choice of
 /// nothing, since a key set to `""` is how somebody comments one out without deleting the line.
-fn word(root: &serde_json::Map<String, serde_json::Value>, key: &str) -> Option<String> {
+pub(crate) fn word(root: &serde_json::Map<String, serde_json::Value>, key: &str) -> Option<String> {
     match root.get(key) {
         Some(serde_json::Value::String(word)) => Some(word.trim())
             .filter(|word| !word.is_empty())
@@ -922,10 +982,11 @@ fn inside(cwd: Option<&Path>, path: &Path) -> bool {
 /// The keys one layer names a server under, as `doctor` should spell them back.
 ///
 /// `mcpServers` is Claude Code's key, and a block copied from `.mcp.json` arrives under it. The `mcp`
-/// block is where a checkout will request an alias (SERVERS-2), so `request` there names nothing to
-/// run, and neither does `deny`, which only ever removes one (SERVERS-12). Every other key in the
-/// block is a server, which is opencode's shape for the same declaration. A block that is not an
-/// object at all is itself the key, since whatever it holds is not a request.
+/// block is where a checkout requests an alias (SERVERS-2), so `request` there names nothing to
+/// run, and neither do `allow` and `deny`, which only keep a server from starting and are read from
+/// the managed layer alone (SERVERS-12). Every other key in the block is a server, which is
+/// opencode's shape for the same declaration. A block that is not an object at all is itself the
+/// key, since whatever it holds is not a request.
 fn server_keys(root: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
     let mut keys = Vec::new();
     if root.contains_key("mcpServers") {
@@ -935,7 +996,7 @@ fn server_keys(root: &serde_json::Map<String, serde_json::Value>) -> Vec<String>
         Some(serde_json::Value::Object(block)) => keys.extend(
             block
                 .keys()
-                .filter(|key| !matches!(key.as_str(), "request" | "deny"))
+                .filter(|key| !matches!(key.as_str(), "request" | "allow" | "deny"))
                 .map(|key| format!("mcp.{key}")),
         ),
         Some(_) => keys.push("mcp".to_string()),
@@ -1271,9 +1332,9 @@ fn strings(block: &serde_json::Map<String, serde_json::Value>, name: &str) -> Ve
 /// has been told where the profile is. `USERPROFILE` is the one stock Windows sets, and is read there
 /// only, since on Unix it is not a name the platform states anything in.
 #[cfg(windows)]
-const PROFILE_VARIABLES: &[&str] = &["HOME", "USERPROFILE"];
+pub(crate) const PROFILE_VARIABLES: &[&str] = &["HOME", "USERPROFILE"];
 #[cfg(not(windows))]
-const PROFILE_VARIABLES: &[&str] = &["HOME"];
+pub(crate) const PROFILE_VARIABLES: &[&str] = &["HOME"];
 
 /// The global state directory, or `None` when the platform names no profile directory to look in.
 ///
@@ -1619,6 +1680,50 @@ mod tests {
         let settings = Settings::parse(r#"{"model": "opus"}"#);
         assert!(!settings.is_empty());
         assert_eq!(settings.names().collect::<Vec<_>>(), ["model"]);
+    }
+
+    /// The whole point of the key (BACKEND-43): a machine where nobody ever opens the interface has
+    /// no other route to a level, and two checkouts cannot ask for different ones through a record
+    /// stored once per person.
+    #[test]
+    fn a_top_level_effort_key_is_read() {
+        let settings = Settings::parse(r#"{"effort": "high"}"#);
+        assert_eq!(settings.effort(), Some("high"));
+        assert!(!settings.is_empty());
+        assert_eq!(settings.names().collect::<Vec<_>>(), ["effort"]);
+    }
+
+    /// The word as written, because which words name a level is not this crate's question: a name it
+    /// does not recognise has to reach the place the level is settled to be dropped by the one rule
+    /// that drops an unrecognised recorded word too.
+    #[test]
+    fn an_effort_word_is_read_as_the_file_spelled_it() {
+        assert_eq!(
+            Settings::parse(r#"{"effort": "HIGHEST"}"#).effort(),
+            Some("HIGHEST")
+        );
+    }
+
+    /// A blank is how a line is commented out everywhere else here, and surrounding space is the
+    /// shape a hand-edited file has. Every other shape is absence on the footing the `model` key's
+    /// is, which leaves whatever was recorded in force rather than stopping a session.
+    #[test]
+    fn an_effort_that_is_blank_or_not_a_string_names_nothing() {
+        for text in [
+            r#"{"effort": ""}"#,
+            r#"{"effort": "   "}"#,
+            r#"{"effort": 1}"#,
+            r#"{"effort": true}"#,
+            r#"{"effort": null}"#,
+            r#"{"effort": ["high"]}"#,
+            r#"{"effort": {"level": "high"}}"#,
+        ] {
+            assert_eq!(Settings::parse(text).effort(), None, "{text} named a level");
+        }
+        assert_eq!(
+            Settings::parse("{\"effort\": \" high\\n\"}").effort(),
+            Some("high")
+        );
     }
 
     /// A variable is a string. Coercing a number or a boolean would invent a spelling the writer
@@ -2060,6 +2165,12 @@ mod tests {
             let path = self.cwd.join("tooling.json");
             std::fs::write(&path, text).expect("named layer inside the workspace");
             self.named = Some(path);
+            self
+        }
+
+        /// The command line naming the person's own file.
+        fn naming_the_home_layer(mut self) -> Self {
+            self.named = Some(self.home.join(SETTINGS_FILE));
             self
         }
 
@@ -2561,12 +2672,18 @@ mod tests {
         assert!(!settings.is_empty());
     }
 
-    /// A request names an alias and grants nothing (SERVERS-2), and a denial only removes one, so
-    /// neither is reported as a server somebody tried to declare.
+    /// A request names an alias and grants nothing (SERVERS-2), and an allow or a deny list only
+    /// keeps a server from starting, so none is reported as a server somebody tried to declare.
     #[test]
-    fn a_request_or_a_denial_in_the_mcp_block_is_not_a_declaration() {
+    fn a_request_or_a_server_list_in_the_mcp_block_is_not_a_declaration() {
         let settings = Layers::new("mcp-requested")
-            .project(r#"{"mcp": {"request": ["weather"], "deny": ["docs"]}}"#)
+            .project(
+                r#"{"mcp": {
+                    "request": ["weather"],
+                    "allow": [{"command": ["/usr/local/bin/weather-mcp"]}],
+                    "deny": [{"host": "docs.example"}]
+                }}"#,
+            )
             .read();
         assert_eq!(settings.mcp_declared().count(), 0);
     }
@@ -2901,6 +3018,104 @@ mod tests {
             .project(r#"{"model": "this-checkout"}"#)
             .read();
         assert_eq!(settings.model(), Some("this-checkout"));
+    }
+
+    /// The argument CLI-9 makes for `--model`, for a level: two checkouts in one account cannot ask
+    /// for different ones through a record stored once per person, so the nearer layer has to win,
+    /// and a layer that says nothing has to leave the level a weaker one named.
+    #[test]
+    fn the_closest_layer_that_named_an_effort_wins() {
+        let settings = Layers::new("effort-override")
+            .global(r#"{"effort": "low"}"#)
+            .project(r#"{"effort": "max"}"#)
+            .read();
+        assert_eq!(settings.effort(), Some("max"));
+
+        let only_global = Layers::new("effort-survives")
+            .global(r#"{"effort": "low"}"#)
+            .project(r#"{"model": "this-checkout"}"#)
+            .read();
+        assert_eq!(only_global.effort(), Some("low"));
+    }
+
+    /// A saved `/model` or `/effort` pick ranks as the person's own file does, so any file above
+    /// that one outranks it: a checkout that names a model or a level is choosing one for the work
+    /// in it, and a pick recorded once per person cannot tell two checkouts apart.
+    #[test]
+    fn a_layer_above_the_home_one_outranks_a_saved_pick() {
+        let above = [
+            (
+                Layers::new("pick-project")
+                    .global(r#"{"model": "personal", "effort": "low"}"#)
+                    .project(r#"{"model": "this-checkout", "effort": "max"}"#),
+                Some("this-checkout"),
+            ),
+            (
+                Layers::new("pick-local").local(r#"{"model": "mine-here", "effort": "high"}"#),
+                Some("mine-here"),
+            ),
+            (
+                Layers::new("pick-named").named(r#"{"model": "from-the-flag", "effort": "high"}"#),
+                Some("from-the-flag"),
+            ),
+            // A word that is no level still answers, as no level, on BACKEND-34's footing.
+            (
+                Layers::new("pick-nonsense").project(r#"{"effort": "fastest"}"#),
+                None,
+            ),
+        ];
+        for (layers, model) in &above {
+            let settings = layers.read();
+            let seen = settings.layers().collect::<Vec<_>>();
+            assert_eq!(settings.model(), *model, "{seen:?}");
+            assert_eq!(
+                settings.model_outranks_a_pick(),
+                model.is_some(),
+                "{seen:?}"
+            );
+            assert!(settings.effort_outranks_a_pick(), "{seen:?}");
+        }
+    }
+
+    /// The person's own file is where the pick ranks, and the pick is the later of the two things
+    /// they said there, so it stands. Naming that file with `--settings` does not move it up.
+    #[test]
+    fn the_home_layer_does_not_outrank_a_saved_pick() {
+        let own = [
+            Layers::new("pick-home")
+                .global(r#"{"model": "personal", "effort": "low"}"#)
+                .project(r#"{"env": {"AWS_PROFILE": "this-checkout"}}"#),
+            Layers::new("pick-home-named")
+                .global(r#"{"model": "personal", "effort": "low"}"#)
+                .naming_the_home_layer(),
+        ];
+        for layers in &own {
+            let settings = layers.read();
+            assert_eq!(settings.model(), Some("personal"));
+            assert!(
+                !settings.model_outranks_a_pick(),
+                "{:?}",
+                settings.layers().collect::<Vec<_>>()
+            );
+            assert!(
+                !settings.effort_outranks_a_pick(),
+                "{:?}",
+                settings.layers().collect::<Vec<_>>()
+            );
+        }
+    }
+
+    /// A blank value, or one that is not a word, names nothing, and a pick is not outranked by
+    /// nothing.
+    #[test]
+    fn a_layer_above_that_names_nothing_does_not_outrank_a_saved_pick() {
+        let settings = Layers::new("pick-blank")
+            .global(r#"{"model": "personal", "effort": "low"}"#)
+            .project(r#"{"model": "  ", "effort": 3}"#)
+            .read();
+        assert_eq!(settings.model(), None);
+        assert!(!settings.model_outranks_a_pick());
+        assert!(!settings.effort_outranks_a_pick());
     }
 
     /// A layer that says nothing about the model leaves the one a weaker layer named, on the same

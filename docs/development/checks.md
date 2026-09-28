@@ -30,8 +30,11 @@ Choose how much to run:
 |---|---|
 | `make check-all-local` | Script selftests, host formatting, Clippy and Rust tests, specs, security rules, locales, versions, toolchain age, docs, npm lockfiles, dependency policy, desktop UI and reviewdog. No Docker. |
 | `make check-all` | Everything in `check-all-local`, plus Docker checks for minimum Rust, Windows Clippy and Linux. |
+| `make check-affected` | Script selftests, specs, security rules, locales, versions and reviewdog, plus each host check this branch's changes need, chosen the way CI chooses its jobs. No Docker. |
+| `make check-affected-containers` | The Docker checks this branch's changes need: minimum Rust, Windows Clippy and Linux for a change to Rust, and none otherwise. |
 
 Before a PR, run the checks relevant to your change and state which command passed.
+`make check-affected` and `make check-affected-containers` are those checks as CI decides them.
 If you use `check-all-local`, leave the platform checks to CI and say they were not run
 locally. You can also run an individual target, such as `make check-reviewdog`, or check
 formatting with `cargo fmt --all -- --check`.
@@ -39,6 +42,25 @@ formatting with `cargo fmt --all -- --check`.
 If the checkout has no backend credentials, use
 `BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 make check-all-local` (or `check-all`) to allow
 the Rust build.
+
+CI runs its heavier jobs only where a change could fail them.
+[contrib/affected-checks.py](../../contrib/affected-checks.py) reads the paths a pull request
+touches and says which of Rust, the desktop app, the cross-builds, the website, the npm lockfiles
+and the dependency policy they could affect. The specs, security, locales and versions jobs take
+seconds and run on every change. A change to a crate needs the desktop jobs when the desktop app
+builds that crate, which is any crate the two bridge crates name, however far down. A job skipped
+by its condition reports success, and branch protection counts that as passing, so every doubt runs
+the job: a path no rule names runs everything, and so do a change to the workflows, the Makefile or
+the classifier, any run that is not a pull request, and a run where the classifier itself failed.
+Main and every tag are checked whole. A file outside `crates/` that a Rust test reads belongs in
+the classifier's `READ_BY_RUST`; its selftest scans the crates for strings naming such a file and
+stops on one that is in neither that list nor `NAMED_NOT_READ`.
+
+`make check-affected` makes that choice locally, against the merge base with `upstream/main`, or
+`origin/main` where there is no upstream remote, or `BASE=<ref>`, which `check-reviewdog` is
+measured from as well. The branch is its commits, its uncommitted edits and its untracked files. It prints each area and the path that needs it before
+running the checks it names, keeps going past a failed check, and stops without running any when
+the classifier cannot answer. It is for iterating on a branch; `make check-all` is still the whole.
 
 `make check-all` requires Docker for the platform checks. A missing prerequisite fails
 the target; it does not count as a pass. Add `-k`, for example `make -k check-all-local`,
@@ -70,7 +92,9 @@ Run `npm --prefix ui run build` afterwards to restore a configured development b
 failures reach the caller, and that scanner failures cannot pass as empty scans. The installer
 half also holds `check-npm` to reaching the installer test before anything installs a dependency
 for it to depend on, and to failing rather than passing when that test is no longer there. It runs
-`check-all-selftest` and `check-reviewdog-selftest`, which can also run separately.
+`check-all-selftest`, `check-reviewdog-selftest` and `check-affected-selftest`, which can also run
+separately. The last holds each rule of the classifier, and holds every workflow condition reading
+it to running its job on anything but an explicit `false`.
 To also exercise the installed reviewdog binary, set `REVIEWDOG_TEST_BINARY` to its
 absolute path when running the target. Without it, that integration test is reported as skipped.
 
@@ -157,8 +181,9 @@ clause of [../specs/releases.md](../specs/releases.md) as code, so run this targ
 the published wrapper as well as to a lockfile. `make check-deps` decides
 `deny.toml`: an advisory against anything in the tree, a licence the binary cannot ship, a crate the
 build compiles at two versions without a recorded reason, and a dependency from anywhere but
-crates.io. CI runs this same target on every pull request, on main, and once a day, since an
-advisory arrives without a commit. `make check-reviewdog` is the [security scan](security-scan.md).
+crates.io. CI runs this same target on a pull request that touches a manifest, the lockfile or
+`deny.toml`, on main, and once a day, since an advisory arrives without a commit.
+`make check-reviewdog` is the [security scan](security-scan.md).
 
 `make check-windows` lints the target that ships to Windows, `x86_64-pc-windows-gnu`, over every
 target including the tests. Nothing else compiles the `#[cfg(windows)]` arms of this tree for a

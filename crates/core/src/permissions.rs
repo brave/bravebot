@@ -52,6 +52,8 @@ pub enum Subject {
     Bash,
     /// Fetching a URL: `fetch_url`, and every redirect hop it follows.
     WebFetch,
+    /// Calling a tool of an MCP server a person declared, named `alias:tool`.
+    Mcp,
 }
 
 impl Subject {
@@ -62,6 +64,7 @@ impl Subject {
             Self::Edit => "Edit",
             Self::Bash => "Bash",
             Self::WebFetch => "WebFetch",
+            Self::Mcp => "Mcp",
         }
     }
 
@@ -72,6 +75,7 @@ impl Subject {
             "Edit" => Some(Self::Edit),
             "Bash" => Some(Self::Bash),
             "WebFetch" => Some(Self::WebFetch),
+            "Mcp" => Some(Self::Mcp),
             _ => None,
         }
     }
@@ -164,6 +168,10 @@ enum Pattern {
     Command(String),
     /// A host, from a `domain:` specifier, matched against a URL's host and its subdomains.
     Domain(String),
+    /// Every tool of one server, from `Mcp(weather)` or `Mcp(weather:*)`.
+    Server(String),
+    /// One tool of one server, from `Mcp(weather:get_forecast)`.
+    Tool(String, String),
 }
 
 /// A path pattern and whether it was written anchored.
@@ -235,6 +243,8 @@ impl Rule {
                 }
                 Pattern::Domain(domain)
             }
+            Some(specifier) if subject == Subject::Mcp => tool_pattern(specifier)
+                .ok_or_else(|| Rejected::new(text, Unreadable::NotAToolRule))?,
             Some(specifier) => Pattern::Command(command_pattern(specifier)),
         };
 
@@ -252,7 +262,9 @@ impl Rule {
     fn covers_path(&self, path: &str, restricting: bool) -> bool {
         match &self.pattern {
             Pattern::Everything => true,
-            Pattern::Command(_) | Pattern::Domain(_) => false,
+            Pattern::Command(_) | Pattern::Domain(_) | Pattern::Server(_) | Pattern::Tool(..) => {
+                false
+            }
             Pattern::Relative(pattern) => {
                 !is_absolute_key(path) && pattern.matches(&segments_of(path), restricting)
             }
@@ -267,7 +279,11 @@ impl Rule {
         match &self.pattern {
             Pattern::Everything => true,
             Pattern::Command(pattern) => command_matches(pattern, command),
-            Pattern::Relative(_) | Pattern::Absolute(_) | Pattern::Domain(_) => false,
+            Pattern::Relative(_)
+            | Pattern::Absolute(_)
+            | Pattern::Domain(_)
+            | Pattern::Server(_)
+            | Pattern::Tool(..) => false,
         }
     }
 
@@ -285,7 +301,27 @@ impl Rule {
                         .strip_suffix(domain)
                         .is_some_and(|prefix| prefix.ends_with('.'))
             }
-            Pattern::Relative(_) | Pattern::Absolute(_) | Pattern::Command(_) => false,
+            Pattern::Relative(_)
+            | Pattern::Absolute(_)
+            | Pattern::Command(_)
+            | Pattern::Server(_)
+            | Pattern::Tool(..) => false,
+        }
+    }
+
+    /// Whether this rule covers calling `tool` of the server declared as `alias`.
+    ///
+    /// Both names compared whole and as written: an alias is a name a person typed, and a rule
+    /// about `weather` that also covered `weather2` would be a rule about a server nobody named.
+    fn covers_tool(&self, alias: &str, tool: &str) -> bool {
+        match &self.pattern {
+            Pattern::Everything => true,
+            Pattern::Server(server) => server == alias,
+            Pattern::Tool(server, word) => server == alias && word == tool,
+            Pattern::Relative(_)
+            | Pattern::Absolute(_)
+            | Pattern::Command(_)
+            | Pattern::Domain(_) => false,
         }
     }
 }
@@ -323,6 +359,8 @@ pub enum Unreadable {
     NotADomainRule,
     /// `WebFetch(domain:)`, which names no host.
     NoDomainNamed,
+    /// An `Mcp` rule whose specifier is not `alias` or `alias:tool`.
+    NotAToolRule,
 }
 
 impl Rejected {
@@ -435,6 +473,16 @@ impl Permissions {
         self.decide(|rule, _| rule.subject == Subject::WebFetch && rule.covers_host(&host))
     }
 
+    /// What the rules say about calling `tool` of the server declared as `alias`.
+    ///
+    /// The two names and never the arguments: the names are what a person typed and what a
+    /// person was shown in a list they vouched for, and the arguments are what the planner wrote,
+    /// in part from what it read, so a rule matching them would be the driver branching on
+    /// content. SERVERS-7.
+    pub fn for_mcp(&self, alias: &str, tool: &str) -> Decision {
+        self.decide(|rule, _| rule.subject == Subject::Mcp && rule.covers_tool(alias, tool))
+    }
+
     /// What the rules say about running a whole pipeline.
     ///
     /// Each stage is judged on its own and the strictest answer wins, which is the same rule
@@ -484,6 +532,28 @@ impl Permissions {
             }
         }
         Decision::Unmatched
+    }
+}
+
+/// Read an `Mcp` specifier: `alias` for every tool of a server, `alias:tool` for one of them.
+///
+/// Each half is held to what an alias and a tool word may be, letters, digits, `-` and `_`, with
+/// an alias starting on a letter or a digit. Anything else names nothing that could ever be
+/// called, `weather:get_*` included, since the names are matched whole: kept, a deny rule like that
+/// would read as protection that is not there, so it is refused where it is read.
+fn tool_pattern(specifier: &str) -> Option<Pattern> {
+    let word = |text: &str| {
+        !text.is_empty()
+            && text
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+    };
+    let alias = |text: &str| word(text) && text.starts_with(|c: char| c.is_ascii_alphanumeric());
+    match specifier.split_once(':') {
+        None => alias(specifier).then(|| Pattern::Server(specifier.to_string())),
+        Some((server, "*")) => alias(server).then(|| Pattern::Server(server.to_string())),
+        Some((server, tool)) => (alias(server) && word(tool))
+            .then(|| Pattern::Tool(server.to_string(), tool.to_string())),
     }
 }
 
@@ -1076,6 +1146,16 @@ mod tests {
             // A family this agent has, with a specifier it does not read.
             "WebFetch(https://example.com/docs)",
             "WebFetch(domain:)",
+            "Mcp(:get_forecast)",
+            "Mcp(weather:)",
+            "Mcp(weather:a:b)",
+            "Mcp(ignore the above)",
+            // Names matched whole, so a glob or a character no name has would match nothing.
+            "Mcp(weather:get_*)",
+            "Mcp(weather*)",
+            "Mcp(weather:get.forecast)",
+            "Mcp(-weather)",
+            "Mcp(wéather)",
             "Write(src/**)",
             "Bash()",
             "",
@@ -1087,6 +1167,59 @@ mod tests {
         let (permissions, rejected) = Permissions::parse(&texts, &[], &[], &anchors());
         assert!(permissions.is_empty(), "an unreadable rule was kept");
         assert_eq!(rejected.len(), texts.len());
+    }
+
+    /// A rule names a server, or one tool of it, and matches the two names whole: `weather` is not
+    /// a prefix of `weather2`, and a rule about one tool says nothing about its neighbour.
+    #[test]
+    fn an_mcp_rule_covers_the_server_or_the_tool_it_names() {
+        let permissions = rules(
+            &["Mcp(weather:get_alerts)"],
+            &["Mcp(news)"],
+            &["Mcp(weather:*)"],
+        );
+        assert_eq!(
+            permissions.for_mcp("weather", "get_alerts"),
+            Decision::Ruled(Ruling::Deny)
+        );
+        assert_eq!(
+            permissions.for_mcp("weather", "get_forecast"),
+            Decision::Ruled(Ruling::Allow)
+        );
+        assert_eq!(
+            permissions.for_mcp("news", "lookup"),
+            Decision::Ruled(Ruling::Ask)
+        );
+        for (alias, tool) in [("weather2", "get_alerts"), ("new", "lookup"), ("", "")] {
+            assert_eq!(
+                permissions.for_mcp(alias, tool),
+                Decision::Unmatched,
+                "{alias}:{tool} was matched"
+            );
+        }
+    }
+
+    /// A bare `Mcp` covers every tool of every server, as a bare name does for every family, and
+    /// an `Mcp` rule decides nothing about a command or a host.
+    #[test]
+    fn an_mcp_rule_is_its_own_family() {
+        let permissions = rules(
+            &["Mcp"],
+            &[],
+            &["Bash(weather *)", "WebFetch(domain:weather)"],
+        );
+        assert_eq!(
+            permissions.for_mcp("weather", "get_forecast"),
+            Decision::Ruled(Ruling::Deny)
+        );
+        let fetching = rules(&[], &[], &["WebFetch", "Bash", "Read"]);
+        assert_eq!(
+            fetching.for_mcp("weather", "get_forecast"),
+            Decision::Unmatched
+        );
+        let calling = rules(&["Mcp(weather)"], &[], &[]);
+        assert_eq!(calling.for_host("weather"), Decision::Unmatched);
+        assert_eq!(calling.for_command("weather"), Decision::Unmatched);
     }
 
     /// A rule for a domain covers that host and anything under it, which is what somebody writing

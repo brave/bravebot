@@ -327,6 +327,13 @@ nobody reads, so it is not made. This is the only exemption, and `--vet` is what
 two prompts that release one slot: with that flag the check's word is what answers in your place, and a
 word that objects refuses. The vouch offer reads no word in this mode either way.
 
+**Command output can come back in the result that ran it.** What a run prints is still quarantined in
+this mode, but with no check asked for, `read_output` releases it without showing it to anybody. So a
+run that sets [`read: true`](../reference/tools.md#reading-the-output-in-the-same-result) gets the
+output at once, unless it is longer than one result may hold, and the audit trail records the release
+as the mode's, as it would for `read_output`.
+With `--vet` the check still reads it first, through `read_output`, and `read` changes nothing.
+
 What stays is the structural guarantee, that untrusted content cannot *decide* what happens. What
 goes is the narrower protection of not showing the planner bytes nobody vouched for. **This is a mode
 for a container with no network and nothing in it worth losing**, which is what its spelling is

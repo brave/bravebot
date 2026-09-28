@@ -20,8 +20,9 @@
 //! decision taken against a question nobody matched is worse than no decision at all.
 
 use bravebot_agent::confirm::{
-    Confirmer, Decision, ExposureRequest, FetchRequest, ManifestRequest, OutputRequest,
-    RunDecision, RunRequest, ServerRequest, VetRequest, VouchRequest, WriteRequest,
+    CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, ManifestRequest,
+    McpCallRequest, OutputRequest, RunDecision, RunRequest, ServerRequest, ToolListRequest,
+    VetRequest, VouchRequest, WriteRequest,
 };
 use bravebot_agent::report::{
     Activity, DelegateId, Delegation, Landing, Phase, Printed, Reported, Reporter, Returned, Shown,
@@ -103,6 +104,11 @@ pub enum ToMain {
     Server(ServerRequest),
     /// A frozen plan that will not run until somebody approves it. The main thread must reply.
     Manifest(ManifestRequest),
+    /// The tools an MCP server offers, before any is offered to the planner. The main thread must
+    /// reply.
+    ToolList(ToolListRequest),
+    /// A call to an MCP server's tool. The main thread must reply.
+    McpCall(McpCallRequest),
     /// The planner is asking the user something. The main thread must reply.
     Ask(Asking),
     /// The task list changed. No reply.
@@ -165,6 +171,8 @@ pub enum Reply {
     Exposure(Decision),
     Server(Decision),
     Manifest(Decision),
+    ToolList(Decision),
+    McpCall(CallDecision),
     Ask(Vec<Answer>),
 }
 
@@ -272,6 +280,21 @@ impl Confirmer for RemoteConfirmer {
         match self.exchange(ToMain::Manifest(request.clone())) {
             Some(Reply::Manifest(decision)) => decision,
             _ => Decision::Reject,
+        }
+    }
+
+    fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision {
+        match self.exchange(ToMain::ToolList(request.clone())) {
+            Some(Reply::ToolList(decision)) => decision,
+            _ => Decision::Reject,
+        }
+    }
+
+    /// A yes to a list is not a yes to one of its tools' calls, nor the other way round.
+    fn confirm_mcp_call(&mut self, request: &McpCallRequest) -> CallDecision {
+        match self.exchange(ToMain::McpCall(request.clone())) {
+            Some(Reply::McpCall(decision)) => decision,
+            _ => CallDecision::reject(),
         }
     }
 
@@ -509,6 +532,83 @@ mod tests {
             confirmer.confirm_manifest(&a_plan()),
             Decision::Reject,
             "consent to a write was taken as consent to a whole plan"
+        );
+        responder.join().expect("responder finished");
+    }
+
+    fn a_list() -> ToolListRequest {
+        ToolListRequest {
+            alias: "weather".into(),
+            tools: Vec::new(),
+            refused: 0,
+            changed: false,
+            verdict: bravebot_core::vetting::Verdict::Safe,
+            reason: None,
+        }
+    }
+
+    fn a_call() -> McpCallRequest {
+        McpCallRequest {
+            alias: "weather".into(),
+            tool: "get_forecast".into(),
+            arguments: vec![("city".into(), "\"Paris\"".into())],
+            description: None,
+            may_stand: true,
+        }
+    }
+
+    /// Answer 2 at a call crosses back whole, so the stand is the person's and nobody else's.
+    #[test]
+    fn a_call_answer_travels_back_with_its_stand() {
+        let (outbound, inbound) = channel::<ToMain>();
+        let (answer_tx, answer_rx) = channel();
+
+        let responder = thread::spawn(move || {
+            match inbound.recv().expect("a message arrived") {
+                ToMain::McpCall(asked) => assert_eq!(asked.name(), "weather:get_forecast"),
+                other => panic!("expected a call question, got {other:?}"),
+            }
+            answer_tx
+                .send(Reply::McpCall(CallDecision::approve_and_stand()))
+                .expect("answered");
+        });
+
+        let mut confirmer = RemoteConfirmer::new(outbound, answer_rx, Interjections::new());
+        assert_eq!(
+            confirmer.confirm_mcp_call(&a_call()),
+            CallDecision::approve_and_stand()
+        );
+        responder.join().expect("responder finished");
+    }
+
+    /// A yes to a server's list is not a yes to a call of one of its tools, nor the other way round:
+    /// one promotes the server's words and the other sends the planner's to it.
+    #[test]
+    fn a_yes_to_a_list_and_a_yes_to_a_call_do_not_stand_in_for_each_other() {
+        let (outbound, inbound) = channel::<ToMain>();
+        let (answer_tx, answer_rx) = channel();
+
+        let responder = thread::spawn(move || {
+            inbound.recv().expect("the call arrived");
+            answer_tx
+                .send(Reply::ToolList(Decision::Approve))
+                .expect("answered");
+            inbound.recv().expect("the list arrived");
+            answer_tx
+                .send(Reply::McpCall(CallDecision::approve()))
+                .expect("answered");
+        });
+
+        let mut confirmer = RemoteConfirmer::new(outbound, answer_rx, Interjections::new());
+        assert_eq!(
+            confirmer.confirm_mcp_call(&a_call()),
+            CallDecision::reject(),
+            "a yes to a list was taken as a yes to a call"
+        );
+        assert_eq!(
+            confirmer.confirm_tool_list(&a_list()),
+            Decision::Reject,
+            "a yes to a call was taken as a yes to a list"
         );
         responder.join().expect("responder finished");
     }
@@ -838,6 +938,8 @@ mod tests {
                     ToMain::Exposure(_) => seen.push("exposure"),
                     ToMain::Server(_) => seen.push("server"),
                     ToMain::Manifest(_) => seen.push("manifest"),
+                    ToMain::ToolList(_) => seen.push("tool list"),
+                    ToMain::McpCall(_) => seen.push("mcp call"),
                     ToMain::Todos(_) => seen.push("todos"),
                     ToMain::Spent(_) => seen.push("spent"),
                     ToMain::PromptRecorded(_) => seen.push("prompt"),

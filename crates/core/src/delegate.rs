@@ -18,8 +18,9 @@
 //!   spawned it did not already hold.
 //! - **Its prompt**, which is a constant per kind. The planner names a kind and cannot describe
 //!   one, so there is no sentence it can write that changes what a delegate is.
-//! - **Its bound**, which is its kind's. Nobody is watching a delegate the way a person watches
-//!   a turn, and the thing being bounded is futility rather than danger.
+//! - **Its bound**, which its definition may choose beneath its kind's ceiling and the call never
+//!   can. Nobody is watching a delegate the way a person watches a turn, and the thing being
+//!   bounded is futility rather than danger.
 //!
 //! It still asks. Every write and every run a delegate performs passes the same gates with the
 //! same single-use endorsements, so a person sees the path and the diff whoever proposed them.
@@ -45,7 +46,7 @@ pub enum Kind {
     /// The shape whose value is mostly independence: a question about a tree, answered without
     /// the tree arriving in the asker's context.
     Reader,
-    /// A reader that may also run programs, so it can build and test.
+    /// A reader that may also run programs and ask a language server, so it can build and test.
     ///
     /// Writes nothing, which is what makes it worth having separately: reporting that the tests
     /// fail does not need permission to change them, and a build log is the single most
@@ -90,6 +91,9 @@ impl Kind {
     /// the request out is egress like any other. It is not a tool a delegate can point anywhere:
     /// nothing in any kind's tool set reaches it, so what it buys is the driver's ability to ask
     /// the endpoint on this delegate's behalf. A kind without it is a kind that cannot think.
+    ///
+    /// A language server goes with running programs, and never without: starting one runs the
+    /// project's build tooling (LSP-5), so a kind that may not run a program may not start one.
     pub fn capabilities(self) -> CapabilitySet {
         match self {
             Self::Reader => CapabilitySet::from_iter([Capability::WebFetch, Capability::FileRead]),
@@ -97,17 +101,29 @@ impl Kind {
                 Capability::WebFetch,
                 Capability::FileRead,
                 Capability::ShellExec,
+                Capability::LanguageServer,
             ]),
             Self::Worker => CapabilitySet::from_iter([
                 Capability::WebFetch,
                 Capability::FileRead,
                 Capability::FileWrite,
                 Capability::ShellExec,
+                Capability::LanguageServer,
             ]),
         }
     }
 
-    /// How many rounds of tool calls this kind may make before it has to answer.
+    /// Whether this kind holds every MCP server its parent holds.
+    ///
+    /// A worker only. What a server's tool does is the server's to say, so a call to one may write
+    /// or run anything, and a worker is the one kind already let write and run. No kind names a
+    /// server, since which servers a session reached is not known until it starts.
+    pub fn holds_servers(self) -> bool {
+        matches!(self, Self::Worker)
+    }
+
+    /// How many rounds of tool calls this kind may make before it has to answer, where its
+    /// definition named no number of its own.
     ///
     /// Bounded for every kind, and the bound rises with what the kind can do rather than with
     /// how much anybody trusts it: a delegate that may not write has less to be part-way
@@ -121,6 +137,20 @@ impl Kind {
         }
     }
 
+    /// The most rounds a definition of this kind may ask for.
+    ///
+    /// Twice the kind's own, so a definition written for a long sub-task has room to finish it,
+    /// and never more than a turn nobody is watching may make, since a delegate is one: the
+    /// worker's is that turn's bound. A ceiling rather than whatever the file says, for the reason
+    /// every kind is bounded at all.
+    pub fn most_rounds(self) -> usize {
+        match self {
+            Self::Reader => 120,
+            Self::Checker => 160,
+            Self::Worker => 200,
+        }
+    }
+
     /// What to tell the planner this kind is for, in the tool's own schema.
     pub fn purpose(self) -> &'static str {
         match self {
@@ -128,10 +158,13 @@ impl Kind {
                 "reads, lists, searches and runs processors; writes nothing and runs nothing"
             }
             Self::Checker => {
-                "a reader that may also run programs, so it can build, test and lint; writes \
-                 nothing"
+                "a reader that may also run programs and ask a language server, so it can build, \
+                 test and lint; writes nothing"
             }
-            Self::Worker => "a checker that may also write files, so it can finish a sub-task",
+            Self::Worker => {
+                "a checker that may also write files and call the tools of the MCP servers you \
+                 may, so it can finish a sub-task"
+            }
         }
     }
 }
@@ -145,13 +178,14 @@ impl std::fmt::Display for Kind {
 /// The tools no delegate is ever offered, whatever it holds.
 ///
 /// Named rather than derived, because each is left out for a reason of its own rather than for
-/// want of a capability: `spawn_agent` because a delegate cannot delegate, `fetch_url` because
-/// every kind holds the capability for reaching the network so the driver can make its model
-/// call, and the rest because their audience is the person watching the turn. The list is here
-/// rather than beside the tool table so that a definition naming one of them is answered by the
-/// same set the tool list is built from.
-pub const NEVER_DELEGATED: [&str; 6] = [
-    "spawn_agent",
+/// want of a capability: `fetch_url` because every kind holds the capability for reaching the
+/// network so the driver can make its model call, and the rest because their audience is the
+/// person watching the turn. The list is here rather than beside the tool table so that a
+/// definition naming one of them is answered by the same set the tool list is built from.
+///
+/// `spawn_agent` is not here. Whether a delegate may delegate is a question about where it sits,
+/// not about what it is, so it is answered by [`MAX_DEPTH`] rather than by name.
+pub const NEVER_DELEGATED: [&str; 5] = [
     "ask_user",
     "todo_write",
     "schedule_next",
@@ -178,9 +212,12 @@ pub fn gating_capability(tool: &str) -> Option<Capability> {
         // LSP-9: asking a server is its own grant, so a delegate holding file reads has not
         // thereby been given one.
         "lsp" => Some(Capability::LanguageServer),
-        "read_file" | "list_files" | "search" | "spawn_processor" | "load_skill" => {
+        "read_file" | "list_files" | "search" | "read_git" | "spawn_processor" | "load_skill" => {
             Some(Capability::FileRead)
         }
+        // A delegate is a model call, and every kind holds this so it can make its own. What a
+        // delegate it spawns may hold is its own set narrowed again, so this adds nothing to it.
+        "spawn_agent" => Some(Capability::WebFetch),
         _ => None,
     }
 }
@@ -249,6 +286,17 @@ pub struct Definition {
     /// is intersected with the kind's, so a name the kind does not reach is a name this
     /// definition loaded without.
     tools: Option<Vec<String>>,
+    /// The skills the definition asked to be offered, where it asked for any.
+    ///
+    /// `None` is every skill the turn found. `Some` selects out of those by name, so a name the
+    /// turn did not find selects nothing: a skill is guidance a planner may load, and a list of
+    /// them chooses what a delegate is told about rather than anything it may do.
+    skills: Option<Vec<String>>,
+    /// The rounds the definition asked for, where it asked for a number.
+    ///
+    /// `None` is the kind's own bound. Held to the kind's ceiling where it is read rather than
+    /// where it is set, so a replacement loaded as a narrower kind is held to that kind's.
+    rounds: Option<usize>,
     /// The standing part of what a delegate of this name is told about itself.
     ///
     /// Empty where the file had no body. Carried rather than read: the kernel never branches on
@@ -268,6 +316,8 @@ impl Definition {
             kind,
             model: None,
             tools: None,
+            skills: None,
+            rounds: None,
             prompt: String::new(),
             origin: "built-in".to_string(),
         }
@@ -288,6 +338,8 @@ impl Definition {
             kind,
             model: None,
             tools,
+            skills: None,
+            rounds: None,
             prompt: prompt.into(),
             origin: origin.into(),
         }
@@ -324,6 +376,38 @@ impl Definition {
         self
     }
 
+    /// The skills it asked to be offered, before the turn's own catalogue narrows them.
+    pub fn skills(&self) -> Option<&[String]> {
+        self.skills.as_deref()
+    }
+
+    /// Offer this delegate only the skills of these names that the turn found.
+    pub fn with_skills(mut self, skills: Vec<String>) -> Self {
+        self.skills = Some(skills);
+        self
+    }
+
+    /// How many rounds its delegate may make: the number it asked for held to its kind's
+    /// ceiling, or its kind's own where it asked for none.
+    pub fn rounds(&self) -> usize {
+        match self.rounds {
+            Some(asked) => asked.min(self.kind.most_rounds()),
+            None => self.kind.rounds(),
+        }
+    }
+
+    /// The number it asked for where that is above its kind's ceiling, for whoever wrote it to
+    /// be told the delegate is held to less.
+    pub fn rounds_beyond_its_kind(&self) -> Option<usize> {
+        self.rounds.filter(|&asked| asked > self.kind.most_rounds())
+    }
+
+    /// Ask for this many rounds, which its kind's ceiling still holds.
+    pub fn with_rounds(mut self, rounds: usize) -> Self {
+        self.rounds = Some(rounds);
+        self
+    }
+
     /// The standing instruction, empty where the file had no body.
     pub fn prompt(&self) -> &str {
         &self.prompt
@@ -354,6 +438,32 @@ impl Definition {
                     || tools
                         .iter()
                         .any(|tool| reachable_by(tool).as_ref() == Some(capability))
+            })
+            .collect()
+    }
+
+    /// Whether a run of this definition holds the MCP servers of the run it is carved from.
+    ///
+    /// Where its kind does and it named no tools. A `tools:` line names this program's tools and
+    /// no server's, so a definition that wrote one asked for none of them.
+    pub fn holds_servers(&self) -> bool {
+        self.kind.holds_servers() && self.tools.is_none()
+    }
+
+    /// What a run of this definition holds out of `parent`, the set of the run it is carved from.
+    ///
+    /// What [`Definition::capabilities`] asks for that `parent` holds, and every server `parent`
+    /// holds where [`Definition::holds_servers`]. Only ever a part of `parent`, so a definition
+    /// takes away and never adds, and a server nobody put to the person for the parent is one
+    /// this run cannot hold either.
+    pub fn held_out_of(&self, parent: &CapabilitySet) -> CapabilitySet {
+        let wanted = self.capabilities();
+        let servers = self.holds_servers();
+        parent
+            .iter()
+            .filter(|capability| match capability {
+                Capability::McpCall(_) => servers,
+                other => wanted.contains(other),
             })
             .collect()
     }
@@ -445,14 +555,22 @@ impl Definitions {
     /// [INSTR-4]: https://github.com/brave/bravebot/blob/main/docs/specs/instructions.md
     ///
     /// **Last word about what a name is for, and never about what it may do.** A replacement
-    /// takes over the description, the body and the model, and is cut down on the two fields
-    /// that decide what it may do: it is loaded as the narrower of the two kinds, and its
+    /// takes over the description, the body, the model, the skills and the rounds, and is cut
+    /// down on the two fields that decide what it may do: it is loaded as the narrower of the two kinds, and its
     /// `tools:` line is met with the one it replaced. So a project cannot turn a `reader` a
     /// person wrote into a `worker`, and cannot hand back a tool that person's own `tools:` line
     /// had taken away. Widening it would make the checked-in file the author of authority rather
     /// than the person who vouched for the checkout, which is the sentence [`Definition`] is
     /// built around, and the vouch that let the file be read at all is a decision about the
     /// project rather than about this name.
+    ///
+    /// The skills are taken over rather than met because a skill is guidance, as the body is: a
+    /// list of them chooses which of the turn's own skills a delegate is told about, and the turn
+    /// found every one of those whichever file named them.
+    ///
+    /// The rounds are taken over because a bound is not authority: a gate refuses on the last
+    /// round what it refuses on the first. They are still held to the ceiling of the kind the
+    /// replacement is loaded as, so a narrower kind brings its lower ceiling with it.
     ///
     /// **Both fields rather than a ceiling beside them**, so that what a definition holds is
     /// still read off the definition, and the trail a delegate leaves names the kind and the
@@ -542,27 +660,72 @@ impl Definitions {
     }
 }
 
+/// How far below the turn a delegate may sit.
+///
+/// A delegate this deep is offered no way to delegate, and the kernel refuses one that asks
+/// anyway. Three because that is as deep as a sub-task of a sub-task needs to go to fan out its
+/// reads.
+pub const MAX_DEPTH: usize = 3;
+
+/// How many delegates one turn's whole tree may hold, however they are arranged.
+///
+/// On the tree rather than on each node, so the bound on a turn's delegated work is this many
+/// delegates at their kinds' rounds and not a product of fan-outs at every level. Four full
+/// fan-outs of a single call.
+pub const MAX_DELEGATES: u32 = 32;
+
 /// Which delegate a record is about.
 ///
-/// Minted by the driver, one per delegate, counting from one in the order they were spawned. It
-/// is the driver's own number and nothing a model wrote: several delegates run at once, and an
-/// interface or a trail working out whose line it was holding would be taking that decision from
-/// prose.
+/// Minted by the kernel, one per delegate, counting from one in the order its parent spawned
+/// them. It is the driver's own number and nothing a model wrote: several delegates run at once,
+/// and an interface or a trail working out whose line it was holding would be taking that
+/// decision from prose.
+///
+/// A path rather than a count, so a delegate's number says where it sits: `d2.1` is the first
+/// delegate the turn's second spawned. Two nested delegates with one count each would both be
+/// `d1`.
 ///
 /// Small and copyable because everything carrying one is on a hot path, and ordered because the
-/// order they were spawned in is the order anything showing them uses.
+/// order they were spawned in is the order anything showing them uses. A position counts from
+/// one, so the zeros past a path's end sort a parent before its children.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct DelegateId(u32);
+pub struct DelegateId {
+    path: [u32; MAX_DEPTH],
+    depth: u8,
+}
 
 impl DelegateId {
     /// The `n`th delegate of a turn, counting from one.
     pub fn nth(n: u32) -> Self {
-        Self(n)
+        let mut path = [0; MAX_DEPTH];
+        path[0] = n;
+        Self { path, depth: 1 }
     }
 
-    /// Its position, counting from one.
+    /// The `n`th delegate this one spawned, or nothing where this one sits at [`MAX_DEPTH`].
+    pub fn child(self, n: u32) -> Option<Self> {
+        let at = usize::from(self.depth);
+        let mut path = self.path;
+        *path.get_mut(at)? = n;
+        Some(Self {
+            path,
+            depth: self.depth + 1,
+        })
+    }
+
+    /// How far below the turn it sits: one for a delegate the turn itself spawned.
+    pub fn depth(self) -> usize {
+        usize::from(self.depth)
+    }
+
+    /// Its position among the delegates its parent spawned, counting from one.
     pub fn position(self) -> u32 {
-        self.0
+        self.path[self.depth() - 1]
+    }
+
+    /// Whether this one was spawned by `other`, or by a delegate beneath it.
+    pub fn is_beneath(self, other: Self) -> bool {
+        self.depth > other.depth && self.path[..other.depth()] == other.path[..other.depth()]
     }
 }
 
@@ -573,7 +736,47 @@ impl DelegateId {
 /// argument reads as a count of something.
 impl std::fmt::Display for DelegateId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "d{}", self.0)
+        write!(f, "d{}", self.path[0])?;
+        for position in &self.path[1..self.depth()] {
+            write!(f, ".{position}")?;
+        }
+        Ok(())
+    }
+}
+
+/// The places left in one turn's tree of delegates.
+///
+/// One count, shared by every run in the tree, so siblings running at once draw on the same
+/// [`MAX_DELEGATES`] rather than each on its own. Carried in a [`DelegateSpec`] and nowhere
+/// else, so a run can only reach its tree's count through the kernel that spawned it.
+#[derive(Clone, Default)]
+pub(crate) struct Tree(std::sync::Arc<std::sync::atomic::AtomicU32>);
+
+impl Tree {
+    /// Take one place, or nothing where the tree is full.
+    pub(crate) fn claim(&self) -> bool {
+        use std::sync::atomic::Ordering;
+        self.0
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |held| {
+                (held < MAX_DELEGATES).then_some(held + 1)
+            })
+            .is_ok()
+    }
+}
+
+/// The same tree, not the same count: two turns that each spawned one hold different trees.
+impl PartialEq for Tree {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for Tree {}
+
+impl std::fmt::Debug for Tree {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let held = self.0.load(std::sync::atomic::Ordering::SeqCst);
+        write!(f, "Tree({held} of {MAX_DELEGATES})")
     }
 }
 
@@ -596,11 +799,15 @@ pub struct DelegateSpec {
     /// The tools its definition named, where it named any, already without the ones its kind
     /// does not reach.
     tools: Option<Vec<String>>,
+    /// The skills its definition named, where it named any, not yet met with what the turn found.
+    skills: Option<Vec<String>>,
     /// The standing part of what it is told about itself, from the definition that selected it.
     prompt: String,
     task: String,
     capabilities: CapabilitySet,
     rounds: usize,
+    /// The tree it belongs to, which is the one the delegates it spawns draw on.
+    tree: Tree,
 }
 
 impl DelegateSpec {
@@ -610,6 +817,7 @@ impl DelegateSpec {
         task: impl Into<String>,
         capabilities: CapabilitySet,
         rounds: usize,
+        tree: Tree,
     ) -> Self {
         let kind = definition.kind();
         let tools = definition.tools().map(|named| {
@@ -627,11 +835,33 @@ impl DelegateSpec {
             definition: definition.name().to_string(),
             model: definition.model().map(str::to_string),
             tools,
+            skills: definition.skills().map(<[String]>::to_vec),
             prompt: definition.prompt().to_string(),
             task: task.into(),
             capabilities,
             rounds,
+            tree,
         }
+    }
+
+    /// Whether it may spawn a delegate of its own: it sits above [`MAX_DEPTH`], and a definition
+    /// that named its tools named `spawn_agent` among them.
+    ///
+    /// Where it may not, it is offered no way to, and [`crate::policy::Policy::before_delegate`]
+    /// refuses the call anyway.
+    pub fn may_delegate(&self) -> bool {
+        self.id.depth() < MAX_DEPTH && !self.named_out_delegating()
+    }
+
+    /// Whether its definition named the tools it may use and left `spawn_agent` out.
+    pub(crate) fn named_out_delegating(&self) -> bool {
+        self.tools
+            .as_ref()
+            .is_some_and(|named| !named.iter().any(|tool| tool == "spawn_agent"))
+    }
+
+    pub(crate) fn tree(&self) -> &Tree {
+        &self.tree
     }
 
     /// What the planner named to get this, and what the person watching is shown.
@@ -654,6 +884,12 @@ impl DelegateSpec {
     /// what a caller reads is a decision the kernel took.
     pub fn tools(&self) -> Option<&[String]> {
         self.tools.as_deref()
+    }
+
+    /// The skills its definition named, where it named any, and `None` where every skill the
+    /// turn found is offered.
+    pub fn skills(&self) -> Option<&[String]> {
+        self.skills.as_deref()
     }
 
     /// The standing instruction its definition carried, empty where there was none.
@@ -698,7 +934,7 @@ impl DelegateSpec {
     /// The delegate as the audit trail describes it: what it is and what it holds, never the
     /// task, which can be long.
     pub fn describe(&self) -> String {
-        let held: Vec<&str> = self.capabilities.iter().map(|c| c.as_str()).collect();
+        let held: Vec<String> = self.capabilities.iter().map(|c| c.to_string()).collect();
         let held = if held.is_empty() {
             "nothing".to_string()
         } else {
@@ -719,9 +955,75 @@ impl DelegateSpec {
     }
 }
 
+/// The routing field a person's line names a definition under, where the line addressed one.
+///
+/// A routing field because routing is fixed before a turn observes anything, from what the
+/// person submitted, and a keystroke is the only thing that may name a definition to address
+/// (ADDRESS-3). No tool and no reply writes to the routing table.
+pub const ADDRESSED: &str = "addressed";
+
+/// What the kernel fixed about a turn a person addressed to a definition, before it ran.
+///
+/// Only [`crate::policy::Policy::address`] constructs one. It describes the person's own turn
+/// working under a definition's prompt, narrowing and model, and not a second run: there is no
+/// id, no task and no bound here, because the turn keeps its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Addressed {
+    name: String,
+    kind: Kind,
+    model: Option<String>,
+    prompt: String,
+    held: CapabilitySet,
+    tools: Vec<String>,
+}
+
+impl Addressed {
+    pub(crate) fn new(definition: &Definition, held: CapabilitySet, tools: Vec<String>) -> Self {
+        Self {
+            name: definition.name().to_string(),
+            kind: definition.kind(),
+            model: definition.model().map(str::to_string),
+            prompt: definition.prompt().to_string(),
+            held,
+            tools,
+        }
+    }
+
+    /// What this turn holds once the definition has narrowed it.
+    pub fn capabilities(&self) -> &CapabilitySet {
+        &self.held
+    }
+
+    /// The name the kernel matched, which is what the reply is drawn under (ADDRESS-12).
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn kind(&self) -> Kind {
+        self.kind
+    }
+
+    /// The model the definition named, where it named one.
+    pub fn model(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
+
+    /// The definition's standing instruction, empty where its file had no body.
+    pub fn prompt(&self) -> &str {
+        &self.prompt
+    }
+
+    /// Every tool this turn is offered, already narrowed by what it holds and by what the
+    /// definition named.
+    pub fn tools(&self) -> &[String] {
+        &self.tools
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::capability::ServerAlias;
 
     /// The planner selects from the driver's list. Anything else has to resolve to nothing, or
     /// `kind` would be a field the model could write a capability set into.
@@ -785,6 +1087,35 @@ mod tests {
         }
     }
 
+    /// LSP-9: starting a language server runs the project's build tooling (LSP-5), so the kinds
+    /// that hold one are exactly the kinds that may already run a program.
+    #[test]
+    fn a_kind_holds_a_language_server_exactly_where_it_may_run_programs() {
+        for name in Kind::NAMES {
+            let held = Kind::from_name(name).expect("advertised").capabilities();
+            assert_eq!(
+                held.contains(&Capability::LanguageServer),
+                held.contains(&Capability::ShellExec),
+                "{name}"
+            );
+        }
+        assert!(
+            !Kind::Reader
+                .capabilities()
+                .contains(&Capability::LanguageServer)
+        );
+        assert!(
+            Kind::Checker
+                .capabilities()
+                .contains(&Capability::LanguageServer)
+        );
+        assert!(
+            Kind::Worker
+                .capabilities()
+                .contains(&Capability::LanguageServer)
+        );
+    }
+
     /// A planner is a model call, so every kind can reach the endpoint and no kind can reach
     /// anything else off this machine. Without the first a delegate cannot think; with more than
     /// the first, a grant would exist that nothing a person approved asked for.
@@ -798,7 +1129,9 @@ mod tests {
                 "a {name} could not have made its own requests"
             );
             // No server, rather than no particular one: a grant names the server it is
-            // about, so asking about a single alias would leave every other one unasked.
+            // about, so asking about a single alias would leave every other one unasked. A
+            // kind's own set names none because which servers a session reached is not known
+            // until it starts; which of its parent's a run holds is `held_out_of`'s to say.
             assert!(
                 !held
                     .iter()
@@ -809,6 +1142,90 @@ mod tests {
         }
     }
 
+    /// Every capability that is not a server's.
+    fn built_in() -> impl Iterator<Item = Capability> {
+        Capability::all()
+            .into_iter()
+            .filter(|capability| !matches!(capability, Capability::McpCall(_)))
+    }
+
+    /// A parent holding everything, two servers among it.
+    fn holding_two_servers() -> CapabilitySet {
+        built_in()
+            .chain([
+                Capability::McpCall(ServerAlias::new("weather")),
+                Capability::McpCall(ServerAlias::new("notes")),
+            ])
+            .collect()
+    }
+
+    fn servers_in(held: &CapabilitySet) -> Vec<String> {
+        held.iter()
+            .filter(|capability| matches!(capability, Capability::McpCall(_)))
+            .map(|capability| capability.to_string())
+            .collect()
+    }
+
+    /// A worker carries every server its parent holds, and a reader and a checker carry none: a
+    /// server's tool may write or run anything, which neither of the two may.
+    #[test]
+    fn only_a_worker_holds_the_servers_of_the_run_it_is_carved_from() {
+        let parent = holding_two_servers();
+        for name in Kind::NAMES {
+            let kind = Kind::from_name(name).expect("advertised");
+            let definition = Definition::from_file(name, "built in", kind, None, "", "test");
+            let held = definition.held_out_of(&parent);
+            let expected: Vec<String> = match kind {
+                Kind::Worker => vec!["mcp_call:notes".into(), "mcp_call:weather".into()],
+                Kind::Reader | Kind::Checker => Vec::new(),
+            };
+            assert_eq!(servers_in(&held), expected, "{name}");
+            assert_eq!(kind.holds_servers(), kind == Kind::Worker, "{name}");
+            // What the kind asks for is unchanged by the servers beside it.
+            for capability in held.iter() {
+                assert!(
+                    matches!(capability, Capability::McpCall(_))
+                        || definition.capabilities().contains(&capability),
+                    "a {name} holds {capability}, which it never asked for"
+                );
+            }
+        }
+    }
+
+    /// A server is carried from the parent and never granted: a worker spawned by a run holding
+    /// one server holds that one, and one spawned by a run holding none holds none.
+    #[test]
+    fn a_worker_holds_no_server_its_parent_does_not() {
+        let worker = Definition::from_file("worker", "built in", Kind::Worker, None, "", "test");
+        let weather: CapabilitySet = built_in()
+            .chain([Capability::McpCall(ServerAlias::new("weather"))])
+            .collect();
+        assert_eq!(
+            servers_in(&worker.held_out_of(&weather)),
+            ["mcp_call:weather"]
+        );
+        let none: CapabilitySet = built_in().collect();
+        assert!(servers_in(&worker.held_out_of(&none)).is_empty());
+    }
+
+    /// A `tools:` line names this program's tools and no server's, so a worker that wrote one
+    /// asked for no server, however wide the line is.
+    #[test]
+    fn a_worker_naming_its_tools_holds_no_server() {
+        let named = Definition::from_file(
+            "editor",
+            "edits",
+            Kind::Worker,
+            Some(vec!["read_file".into(), "write_file".into(), "run".into()]),
+            "",
+            "test",
+        );
+        assert!(!named.holds_servers());
+        assert!(servers_in(&named.held_out_of(&holding_two_servers())).is_empty());
+        let empty = Definition::from_file("idle", "idles", Kind::Worker, Some(vec![]), "", "test");
+        assert!(servers_in(&empty.held_out_of(&holding_two_servers())).is_empty());
+    }
+
     /// Every kind is bounded. An unbounded delegate has nothing watching it: the person is
     /// watching the turn, and the turn is blocked.
     #[test]
@@ -817,6 +1234,124 @@ mod tests {
             let kind = Kind::from_name(name).expect("advertised");
             assert!(kind.rounds() > 0, "{name} must be bounded");
         }
+    }
+
+    /// A ceiling at the kind's own bound would let a definition shorten a delegate and never
+    /// lengthen one, which leaves the long sub-task cut off exactly where it was.
+    #[test]
+    fn a_definition_may_ask_its_kind_for_more_rounds_than_its_own() {
+        for name in Kind::NAMES {
+            let kind = Kind::from_name(name).expect("advertised");
+            assert!(
+                kind.most_rounds() > kind.rounds(),
+                "a {name} definition cannot ask for more than the {} a {name} gets anyway",
+                kind.rounds()
+            );
+        }
+        assert!(Kind::Reader.most_rounds() < Kind::Checker.most_rounds());
+        assert!(Kind::Checker.most_rounds() < Kind::Worker.most_rounds());
+    }
+
+    /// The figures the specification and the page on definitions give, so a change to one is a
+    /// change to what a person was told they may write.
+    #[test]
+    fn each_kinds_bound_and_ceiling_are_the_figures_a_person_is_told() {
+        let bounds = Kind::NAMES.map(|name| {
+            let kind = Kind::from_name(name).expect("advertised");
+            (kind.rounds(), kind.most_rounds())
+        });
+        assert_eq!(bounds, [(60, 120), (80, 160), (120, 200)]);
+    }
+
+    /// A definition that asks for nothing is bounded as its kind is.
+    #[test]
+    fn a_definition_naming_no_rounds_keeps_its_kinds_own() {
+        for name in Kind::NAMES {
+            let kind = Kind::from_name(name).expect("advertised");
+            let definition = Definition::from_file("helper", "helps", kind, None, "", "test");
+            assert_eq!(definition.rounds(), kind.rounds(), "{name}");
+            assert_eq!(definition.rounds_beyond_its_kind(), None, "{name}");
+        }
+    }
+
+    /// Below the ceiling the file's number is the bound, in either direction from the kind's.
+    #[test]
+    fn a_definition_may_set_its_own_bound_beneath_its_kinds_ceiling() {
+        for asked in [1, 10, Kind::Worker.rounds() + 1, Kind::Worker.most_rounds()] {
+            let definition =
+                Definition::from_file("fixer", "fixes", Kind::Worker, None, "", "test")
+                    .with_rounds(asked);
+            assert_eq!(definition.rounds(), asked);
+            assert_eq!(definition.rounds_beyond_its_kind(), None, "{asked}");
+        }
+    }
+
+    /// The ceiling is what keeps a delegate nobody is watching from running as long as a file
+    /// says, so a number above it is held to it, and what was asked is kept to be said.
+    #[test]
+    fn a_definition_asking_past_its_kinds_ceiling_is_held_to_it() {
+        for name in Kind::NAMES {
+            let kind = Kind::from_name(name).expect("advertised");
+            for asked in [kind.most_rounds() + 1, usize::MAX] {
+                let definition = Definition::from_file("long", "runs long", kind, None, "", "test")
+                    .with_rounds(asked);
+                assert_eq!(
+                    definition.rounds(),
+                    kind.most_rounds(),
+                    "{name} asking {asked}"
+                );
+                assert_eq!(definition.rounds_beyond_its_kind(), Some(asked), "{name}");
+            }
+        }
+    }
+
+    /// A bound is not authority, so a replacement's own number is the one in force, as its body
+    /// is. It is held to the ceiling of the kind it is loaded as, so a project that could not
+    /// widen a `reader` to a `worker` cannot have a worker's ceiling either.
+    #[test]
+    fn a_later_definition_takes_over_the_rounds_under_the_kind_it_is_loaded_as() {
+        let mut definitions = Definitions::default();
+        definitions.insert(
+            Definition::from_file("reviewer", "global", Kind::Reader, None, "", "home")
+                .with_rounds(30),
+        );
+        definitions.insert(
+            Definition::from_file("reviewer", "project", Kind::Reader, None, "", "project")
+                .with_rounds(90),
+        );
+        assert_eq!(
+            definitions.get("reviewer").expect("selectable").rounds(),
+            90
+        );
+
+        definitions.insert(
+            Definition::from_file("reviewer", "wider", Kind::Worker, None, "", "wider")
+                .with_rounds(Kind::Worker.most_rounds()),
+        );
+        let found = definitions.get("reviewer").expect("selectable");
+        assert_eq!(found.kind(), Kind::Reader);
+        assert_eq!(
+            found.rounds(),
+            Kind::Reader.most_rounds(),
+            "a replacement kept the ceiling of a kind it was not loaded as"
+        );
+        assert_eq!(
+            found.rounds_beyond_its_kind(),
+            Some(Kind::Worker.most_rounds())
+        );
+
+        definitions.insert(Definition::from_file(
+            "reviewer",
+            "again",
+            Kind::Reader,
+            None,
+            "",
+            "again",
+        ));
+        assert_eq!(
+            definitions.get("reviewer").expect("selectable").rounds(),
+            Kind::Reader.rounds()
+        );
     }
 
     /// A definition narrows its kind and there is no spelling of `tools:` that adds anything.
@@ -1333,6 +1868,7 @@ mod tests {
             "find out whether the tests pass",
             Kind::Checker.capabilities(),
             80,
+            Tree::default(),
         );
 
         let described = spec.describe();
@@ -1364,6 +1900,7 @@ mod tests {
             "check the diff",
             Kind::Reader.capabilities(),
             60,
+            Tree::default(),
         );
 
         let described = spec.describe();
@@ -1399,6 +1936,7 @@ mod tests {
             "check the diff",
             Kind::Reader.capabilities(),
             60,
+            Tree::default(),
         );
 
         assert_eq!(spec.tools(), Some(["read_file".to_string()].as_slice()));
@@ -1425,7 +1963,156 @@ mod tests {
             "read something",
             Kind::Reader.capabilities(),
             60,
+            Tree::default(),
         );
         assert_eq!(spec.model(), Some("haiku"));
+    }
+
+    /// A definition may name the skills its delegate is offered, and the spec carries the list
+    /// as written: which of them exist is the turn's to answer, since the turn found them.
+    #[test]
+    fn a_definition_may_name_skills_and_the_spec_carries_them() {
+        let named = |skills: Option<Vec<String>>| {
+            let definition =
+                Definition::from_file("reviewer", "reviews", Kind::Reader, None, "", "test");
+            let definition = match skills {
+                Some(skills) => definition.with_skills(skills),
+                None => definition,
+            };
+            DelegateSpec::new(
+                DelegateId::nth(1),
+                &definition,
+                "review something",
+                Kind::Reader.capabilities(),
+                60,
+                Tree::default(),
+            )
+        };
+
+        let listed = vec!["review-style".to_string(), "no-such-skill".to_string()];
+        assert_eq!(
+            named(Some(listed.clone())).skills(),
+            Some(listed.as_slice())
+        );
+        assert_eq!(named(Some(Vec::new())).skills(), Some([].as_slice()));
+        assert_eq!(named(None).skills(), None);
+    }
+
+    /// A skill is guidance, as the body is, so a replacement's own `skills:` line is the one in
+    /// force, and one that names none offers every skill the turn found. Nothing it names can be
+    /// something the turn did not find, so taking it over hands back no authority.
+    #[test]
+    fn a_later_definition_takes_over_the_skills_the_one_it_replaces_named() {
+        let mut definitions = Definitions::default();
+        definitions.insert(
+            Definition::from_file("reviewer", "global", Kind::Reader, None, "", "home")
+                .with_skills(vec!["review-style".to_string()]),
+        );
+        let admitted = definitions.insert(
+            Definition::from_file("reviewer", "project", Kind::Reader, None, "", "project")
+                .with_skills(vec!["commit-style".to_string()]),
+        );
+        assert_eq!(admitted, Admitted::AsWritten);
+        assert_eq!(
+            definitions.get("reviewer").expect("selectable").skills(),
+            Some(["commit-style".to_string()].as_slice())
+        );
+
+        definitions.insert(Definition::from_file(
+            "reviewer",
+            "again",
+            Kind::Reader,
+            None,
+            "",
+            "again",
+        ));
+        assert_eq!(
+            definitions.get("reviewer").expect("selectable").skills(),
+            None
+        );
+    }
+
+    /// A number says where its delegate sits, so a trail and a screen can name a grandchild
+    /// without reading anything it wrote, and two delegates at different depths with the same
+    /// position are never one run.
+    #[test]
+    fn a_delegates_number_is_its_path_from_the_turn() {
+        let second = DelegateId::nth(2);
+        let beneath = second.child(1).expect("one below the turn may delegate");
+        let deepest = beneath.child(3).expect("two below the turn may delegate");
+
+        assert_eq!(
+            [second, beneath, deepest].map(|id| id.to_string()),
+            ["d2", "d2.1", "d2.1.3"]
+        );
+        assert_eq!([second, beneath, deepest].map(DelegateId::depth), [1, 2, 3]);
+        assert_eq!(deepest.position(), 3);
+        assert_eq!(
+            deepest.child(1),
+            None,
+            "a delegate {MAX_DEPTH} below the turn was given a number for a child"
+        );
+
+        assert_ne!(beneath, DelegateId::nth(1), "d2.1 and d1 are one number");
+        assert_ne!(
+            deepest,
+            DelegateId::nth(2).child(3).expect("in range"),
+            "d2.1.3 and d2.3 are one number"
+        );
+        assert!(second < beneath && beneath < DelegateId::nth(3));
+    }
+
+    /// Beneath means spawned by, at any distance. A sibling, the run itself and anything above
+    /// it are not, and those are the three a handle relaying attribution must refuse to name.
+    #[test]
+    fn only_a_descendant_is_beneath_a_delegate() {
+        let first = DelegateId::nth(1);
+        let child = first.child(2).expect("in range");
+        let grandchild = child.child(1).expect("in range");
+
+        assert!(child.is_beneath(first));
+        assert!(grandchild.is_beneath(first));
+        assert!(grandchild.is_beneath(child));
+
+        assert!(!first.is_beneath(first), "a delegate is beneath itself");
+        assert!(!first.is_beneath(child), "a parent is beneath its child");
+        assert!(
+            !DelegateId::nth(2).is_beneath(first),
+            "a sibling is beneath"
+        );
+        assert!(
+            !DelegateId::nth(2)
+                .child(2)
+                .expect("in range")
+                .is_beneath(first),
+            "a sibling's child is beneath"
+        );
+        assert!(
+            !first.child(1).expect("in range").is_beneath(child),
+            "a sibling at the same depth is beneath"
+        );
+    }
+
+    /// One count for the tree, shared by every handle on it, and it stops at the bound rather
+    /// than wrapping or going over.
+    #[test]
+    fn a_tree_holds_at_most_its_bound_across_every_handle() {
+        let tree = Tree::default();
+        let sibling = tree.clone();
+        let claimed = (0..MAX_DELEGATES * 2)
+            .filter(|n| {
+                if n % 2 == 0 {
+                    tree.claim()
+                } else {
+                    sibling.claim()
+                }
+            })
+            .count();
+        assert_eq!(claimed, MAX_DELEGATES as usize);
+        assert!(!tree.claim() && !sibling.claim());
+        assert!(
+            Tree::default().claim(),
+            "another turn's tree shared this one's count"
+        );
     }
 }

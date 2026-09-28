@@ -91,6 +91,29 @@ target itself.
 passes on this tree today and would have passed on the tree that shipped the front end at 0.1.0.
 `--root` points it at another tree, which is what the selftest uses.
 
+## affected-checks.py
+
+Says which checks a change needs, from the paths it touches. CI's `Affected checks` job runs it on
+each pull request, and the heavier jobs in `ci.yml` and `dependencies.yml` read its answer, so a
+change to a skill's prose no longer waits on three cargo runs, two desktop builds and six
+cross-builds, none of which read a byte of it.
+
+A job skipped by its condition reports success, so every doubt resolves toward running: a path no
+rule names needs everything, a change to the workflows, the Makefile or this file needs
+everything, anything but a pull request needs everything, and a job runs unless this answered
+`false`, which a failed run of it never does.
+
+```sh
+make check-affected              # the host checks this branch needs, and runs them
+make check-affected-containers   # the Docker ones
+contrib/affected-checks.py       # print the host targets and why, and run nothing
+```
+
+`--base <ref>` measures from somewhere other than `upstream/main`, or `origin/main` without an
+upstream remote; `make` takes it as `BASE=<ref>`. `--selftest` holds every rule, the answer for a
+real merge and a move out of `crates/`, and each workflow condition reading the answer, and
+`make check-scripts` runs it.
+
 ## measure-flakes.py
 
 Names every test that does not agree with itself, and how often.

@@ -375,16 +375,21 @@ indistinguishable from a session that was lost, and the way to reach an older on
 <a id="SESSION-15"></a>
 ### SESSION-15: the effort level is stored globally, like the model
 
-How hard the model is asked to think is written under `~/.bravebot` and read back at the next
-start. It is not a property of a checkout: the same choice applies in every directory, and a blank
-file, or one naming a level this program does not define, is no choice at all, leaving the request
-to carry none. Asking for no level removes the record rather than writing an empty one, so somebody
-who unsets it is back where they were before they ever chose.
+How hard the model is asked to think is written under `~/.bravebot` and read back at the next start.
+It is not a property of a checkout: the same choice applies in every directory whose settings do not
+name a level of their own, and a blank file, or one naming a level this program does not define, is
+no choice at all, leaving the request to carry none. Asking for no level removes the record rather
+than writing an empty one, so somebody who unsets it is back where they were before they ever chose.
 
-**Why.** Asking again in every project for the same preference is answering it repeatedly, and
-nothing about how hard to think depends on which files are open. Refusing to store a word this
-program does not define is what keeps an edited file from putting an unrecognised level into a
-request field.
+This is not the only route to a level ([BACKEND-43](backends.md#BACKEND-43)). A checkout's settings
+file may name one, which outranks whatever is recorded here, and the person's own file may name one,
+which answers only where nothing is recorded. With either written, somebody back where they were
+before they ever chose is somebody a file answers for.
+
+**Why.** Asking again in every project for the same preference is answering it repeatedly, and a
+project whose work does call for a level of its own says so in its settings rather than in a record
+that cannot tell one checkout from another. Refusing to store a word this program does not define is
+what keeps an edited file from putting an unrecognised level into a request field.
 
 `verified-by: bravebot_tui::persist::a_chosen_effort_is_read_back_next_session`
 `verified-by: bravebot_tui::persist::asking_for_no_effort_is_read_back_as_no_choice`
@@ -428,6 +433,7 @@ or success. All of it sits under the prompt's own heading, beside the headings t
 and how the turn ended rather than in place of any of them.
 
 `verified-by: bravebot_tui::sessions::reopening_keeps_failure_and_cancellation_in_export`
+`verified-by: bravebot_tui::sessions::accepted_corrections_survive_cancellation_storage_export_and_the_next_turn`
 
 **Why.** The transcript belongs to the person who had the conversation, which
 [compaction.md](compaction.md) says in as many words, and without this the only way to exercise
@@ -754,6 +760,7 @@ interface composed, never a message from the backend. A prompt handed back to th
 cancellation stays out of the transcript on resume while that turn's spend and timing stay with its
 number; whether those words remain available to recall is SESSION-6, and the two are independent of
 each other. None of this is sent to the planner.
+Accepted corrections remain within the cancelled turn through reload, export and later turns.
 
 **Why.** Turn boundaries cannot be recovered from the conversation afterwards, because a
 user-role message is as likely to be loaded context, a correction or a shell line as a prompt.
@@ -766,6 +773,7 @@ closes.
 `verified-by: bravebot_tui::sessions::reopening_keeps_task_ownership_and_recorded_measurements`
 `verified-by: bravebot_tui::sessions::failure_after_work_keeps_its_prompt_and_safe_reason_without_changing_context`
 `verified-by: bravebot_tui::sessions::hidden_cancellation_then_corrections_keeps_plan_ownership`
+`verified-by: bravebot_tui::sessions::accepted_corrections_survive_cancellation_storage_export_and_the_next_turn`
 `verified-by: bravebot_tui::sessions::processor_cancellation_preserves_its_plan_and_measurements_on_resume`
 `verified-by: bravebot_tui::sessions::reopening_does_not_restore_an_unsent_prompt`
 `verified-by: bravebot_tui::sessions::a_request_after_resume_excludes_the_display_failure`

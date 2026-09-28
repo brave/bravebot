@@ -15,7 +15,8 @@ documented-by: docs/website/docs/reference/tools.md
 Finding lines in the workspace that match a pattern. `pattern`, `directory`, `include`, `offset` and
 `case_sensitive` are routing: the first three name where to look and what to look for, the offset
 names which page of the matches to return, and the flag decides which of the lines there match.
-There are no content arguments. The result is the matching lines, or a reference.
+The only content argument is the `why` every tool takes ([TOOL-5](tool-surface.md#TOOL-5)). The result is
+the matching lines, or a reference.
 
 ## Clauses
 
@@ -50,7 +51,9 @@ Hand-written rather than a dependency, for the reason the conventions give.
 
 Brace groups in `include` are **expanded before the walk**, not matched during it. Each alternative
 is an ordinary pattern applied once per path, so a group costs a multiple of the work rather than a
-power of it, and an expansion past the cap falls back to matching the pattern literally.
+power of it, and an expansion past the cap falls back to matching the pattern literally. A glob
+with a `/` in it may be written from `directory` or from the workspace root, as
+[LIST-3](list-files.md#LIST-3) reads a listing's.
 
 `verified-by: bravebot_agent::regex::a_pattern_built_to_backtrack_catastrophically_still_returns_promptly`
 `verified-by: bravebot_agent::regex::a_pattern_past_the_length_cap_is_refused`

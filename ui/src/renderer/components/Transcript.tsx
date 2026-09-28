@@ -3,7 +3,7 @@ import type { FileAttachment } from '../../shared/files'
 import { Permissions } from './Permissions'
 import { useLayoutEffect, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, CircleAlertIcon, TriangleAlertIcon, XIcon } from 'lucide-react'
-import { isConfined, type AskAnswer, type AskPrompt, type Phase, type Shown, type TodoRow } from '../../shared/protocol'
+import { isConfined, type AskAnswer, type AskPrompt, type KeptTrust, type Phase, type Shown, type TodoRow } from '../../shared/protocol'
 import * as t from '../transcript'
 import type { Side } from '../columns'
 import type { Asked } from '../App'
@@ -12,7 +12,7 @@ import { Diff } from './Diff'
 import { Fold } from './Fold'
 import { ModelPicker } from './ModelPicker'
 import { ForkIcon } from './ForkIcon'
-import { contextMenu } from './Sessions'
+import { ago, contextMenu } from './Sessions'
 import { Markdown } from './Markdown'
 import { PopMenu, type PopItem } from './PopMenu'
 import { BotAvatar, type Doing } from './BotAvatar'
@@ -77,6 +77,7 @@ interface Live {
   forkedFrom: { directory: string; id: string; title: string; prompt: number } | null
   focus: number | null
   autoVetting?: boolean
+  trustRemembered?: KeptTrust | null
 }
 
 /**
@@ -141,6 +142,8 @@ interface Props {
   includeTools: boolean
   onToggleTools: () => void
   onExport: (format: ExportFormat) => void
+  /** The kept yes about this directory as Permissions last read it, which another session may have changed. */
+  onTrustRemembered: (session: string, kept: KeptTrust | null) => void
 }
 
 /**
@@ -240,6 +243,7 @@ export function Transcript({
   includeTools,
   onToggleTools,
   onExport,
+  onTrustRemembered,
 }: Props): React.JSX.Element {
   const bottom = useRef<HTMLDivElement>(null)
   const marked = useRef<HTMLDivElement>(null)
@@ -488,6 +492,7 @@ export function Transcript({
           </InputGroupAddon>
         </InputGroup>
       </div>}
+      {live?.trustRemembered && <RememberedBanner kept={live.trustRemembered} />}
       {live?.autoVetting && <VettingBanner />}
       {live?.forkedFrom && <ForkBanner from={live.forkedFrom} onOpen={onOpenParent} />}
     </header>
@@ -689,7 +694,7 @@ export function Transcript({
             if (el.textContent === 'Permissions') { (el as HTMLButtonElement).focus(); break }
           }
         })
-      }} />}
+      }} onRemembered={(kept) => onTrustRemembered(live.handle, kept)} />}
       {previewPath && <FilePreview session={live.handle} path={previewPath} onClose={() => setPreviewPath(null)} />}
     </main>
   )
@@ -1163,6 +1168,24 @@ function VettingBanner(): React.JSX.Element {
 }
 
 /**
+ * That a yes about this directory is kept for later sessions (TRUST-23), and where.
+ *
+ * A session it settled was never asked, so this is the one thing on screen that says where its
+ * trust came from and how to take it back.
+ */
+function RememberedBanner({ kept }: { kept: KeptTrust }): React.JSX.Element {
+  return (
+    <Alert className="fork-banner mt-1.5 text-[11px]" role="note">
+      <AlertTitle>Trust is remembered for this directory.</AlertTitle>
+      <AlertDescription>
+        You said to remember it {ago(kept.at)}, so sessions started here are not asked. Kept in{' '}
+        <code>{kept.path}</code>; Permissions takes it back.
+      </AlertDescription>
+    </Alert>
+  )
+}
+
+/**
  * Where the controls were on a question the turn ended before anybody answered.
  *
  * The same slot as the `decided` line, because it is the same kind of statement: what became of
@@ -1372,7 +1395,12 @@ function EntryCard({
       // No outcome, because the record does not keep one. Drawn quietly for the same
       // reason: a call the agent could not even name reads as "Tool", and giving that
       // the prominence of a real line would be worse than the gap.
-      return <div className="tool replayed my-0.5 border-l-2 border-border px-2 py-0.75 font-mono text-[11px] text-muted-foreground opacity-55">{entry.text}</div>
+      return (
+        <div className="tool replayed my-0.5 flex flex-wrap items-baseline gap-1.5 border-l-2 border-border px-2 py-0.75 font-mono text-[11px] text-muted-foreground opacity-55">
+          <span>{entry.text}</span>
+          {entry.why && <span className="why italic">{entry.why}</span>}
+        </div>
+      )
 
     case 'tool': {
       const { activity, landing } = entry
@@ -1385,6 +1413,7 @@ function EntryCard({
         )}>
           <span className="verb font-semibold text-foreground">{activity.verb}</span>
           {activity.target && <span className="target font-mono text-[11px]">({activity.target})</span>}
+          {activity.why && <span className="why italic">{activity.why}</span>}
           {running ? (
             <span className="ellipsis text-primary">…</span>
           ) : (

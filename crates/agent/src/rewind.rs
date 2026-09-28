@@ -1,5 +1,5 @@
 //! Undo coverage and restoration. Decisions use metadata, never backup contents.
-use crate::workspace::{Backup, Before, put_back};
+use crate::workspace::{Backup, Before, Workspace, WorkspaceError};
 use bravebot_core::{label::Integrity, trust::TrustStore};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -100,7 +100,11 @@ impl RewindCoverage {
 
 /// Restore every available backup and reconcile only the paths whose bytes went back.
 /// Call after turn workers have joined and session language servers have stopped.
+///
+/// Each path goes back through `workspace`, so one that now resolves outside it is refused like
+/// one that would not write.
 pub fn restore(
+    workspace: &Workspace,
     backups: Vec<Backup>,
     current: &mut TrustStore,
     target: &TrustStore,
@@ -108,14 +112,16 @@ pub fn restore(
 ) -> Vec<PathBuf> {
     // The owning turn has joined. Stop tracked servers before any file restoration.
     drop(servers.take());
-    restore_with(backups, current, target, put_back)
+    restore_with(backups, current, target, |path, was| {
+        workspace.put_back(path, was)
+    })
 }
 
 fn restore_with(
     backups: Vec<Backup>,
     current: &mut TrustStore,
     target: &TrustStore,
-    mut write: impl FnMut(&Path, &Before) -> std::io::Result<()>,
+    mut write: impl FnMut(&Path, &Before) -> Result<(), WorkspaceError>,
 ) -> Vec<PathBuf> {
     *current = current.meet(target);
     let mut refused = Vec::new();
@@ -176,6 +182,7 @@ mod tests {
     fn failed_restore_leaves_distrust_and_attempts_other_files() {
         let root = crate::testutil::scratch_dir("rewind-partial-write");
         std::fs::create_dir_all(&root).unwrap();
+        let workspace = Workspace::new(&root).unwrap();
         let mut current = TrustStore::new(&root);
         current.trust(".");
         current.distrust("untouched");
@@ -205,10 +212,13 @@ mod tests {
         });
         let refused = restore_with(backups.into(), &mut current, &target, |path, before| {
             if path == root.join("broken") {
-                std::fs::write(path, "partial")?;
-                return Err(std::io::Error::other("failure after truncation"));
+                std::fs::write(path, "partial").unwrap();
+                return Err(WorkspaceError::Io {
+                    path: path.display().to_string(),
+                    detail: "failure after truncation".to_string(),
+                });
             }
-            put_back(path, before)
+            workspace.put_back(path, before)
         });
         assert_eq!(refused, [root.join("broken"), root.join("unavailable")]);
         assert_eq!(std::fs::read(root.join("broken")).unwrap(), b"partial");

@@ -33,13 +33,14 @@
 //! against it, which decides nothing an attacker steers only because nothing an attacker wrote
 //! ever entered the set.
 
-use crate::skills::Notice;
+use crate::skills::{Catalogue, Notice};
 use crate::workspace::Workspace;
 use bravebot_core::capability::Capability;
 use bravebot_core::delegate::{Admitted, Definition, Definitions, Kind, Narrowing};
 use bravebot_core::event::Sink;
 use bravebot_core::policy::Policy;
 use bravebot_core::value::Labelled;
+use bravebot_i18n::t;
 use std::path::Path;
 
 /// The directory holding definitions, inside the user's own directory and inside a project.
@@ -60,6 +61,11 @@ enum Read {
     NotOne,
     /// A file claiming to be a definition and failing to be one, with what it is missing.
     Skipped(&'static str),
+    /// A definition whose `rounds:` is not a whole number above zero, which is also not loaded.
+    ///
+    /// Apart from [`Read::Skipped`] because it is said as a message of the catalogue's, whole,
+    /// rather than as an English reason placed into one.
+    NotACount,
 }
 
 /// Read one definition out of the text of a file.
@@ -95,7 +101,7 @@ fn read_definition(text: &str, origin: &str) -> Read {
         name,
         description,
         kind,
-        declared.get("tools").map(|named| tools_in(named)),
+        declared.get("tools").map(|named| names_in(named)),
         crate::skills::body_after_frontmatter(text),
         origin,
     );
@@ -110,7 +116,37 @@ fn read_definition(text: &str, origin: &str) -> Read {
         definition = definition.with_model(model);
     }
 
+    if let Some(skills) = declared.get("skills") {
+        definition = definition.with_skills(names_in(skills));
+    }
+
+    // Refused rather than left at the kind's own, because its author believes the number is in
+    // force. Zero goes with the rest: the bound is checked after a round, so it would be one.
+    if let Some(written) = declared
+        .get("rounds")
+        .map(|r| r.trim())
+        .filter(|r| !r.is_empty())
+    {
+        let Some(rounds) = rounds_in(written) else {
+            return Read::NotACount;
+        };
+        definition = definition.with_rounds(rounds);
+    }
+
     Read::Definition(Box::new(definition))
+}
+
+/// The count a `rounds:` value names, or nothing where it names none above zero.
+///
+/// A number too large to hold is still a number past every kind's ceiling, so it is read as the
+/// largest one rather than refused as though it were a word.
+fn rounds_in(written: &str) -> Option<usize> {
+    match written.parse::<usize>() {
+        Ok(0) => None,
+        Ok(rounds) => Some(rounds),
+        Err(e) if *e.kind() == std::num::IntErrorKind::PosOverflow => Some(usize::MAX),
+        Err(_) => None,
+    }
 }
 
 /// Whether this is a name a definition may go by.
@@ -141,7 +177,7 @@ const FOLDS_TO_A_COLON: [char; 5] = [
     '\u{ff1a}', // FULLWIDTH COLON
 ];
 
-/// The tool names a `tools:` value lists.
+/// The names a `tools:` or a `skills:` value lists.
 ///
 /// A comma and a space both separate, so a YAML scalar (`read_file, list_files`) and a YAML
 /// sequence (`- read_file` on its own line) both arrive here as something this splits the same
@@ -150,9 +186,9 @@ const FOLDS_TO_A_COLON: [char; 5] = [
 /// match nothing.
 ///
 /// `*` is not special. It is a widening spelling, and a definition may not widen anything, so it
-/// is a name matching no tool like any other.
-fn tools_in(value: &str) -> Vec<String> {
-    let mut tools = Vec::new();
+/// is a name matching nothing like any other.
+fn names_in(value: &str) -> Vec<String> {
+    let mut names = Vec::new();
     let mut current = String::new();
     let mut depth = 0usize;
 
@@ -168,21 +204,21 @@ fn tools_in(value: &str) -> Vec<String> {
             }
             ',' | ' ' | '\t' | '\n' if depth == 0 => {
                 if !current.is_empty() {
-                    tools.push(std::mem::take(&mut current));
+                    names.push(std::mem::take(&mut current));
                 }
             }
             _ => current.push(c),
         }
     }
     if !current.is_empty() {
-        tools.push(current);
+        names.push(current);
     }
 
     // The bullet of a YAML sequence, which the one dialect joins into the value along with the
     // entry it introduces. Dropped here rather than in the parser, where a `-` opening a line is
     // not always a bullet.
-    tools.retain(|tool| tool != "-");
-    tools
+    names.retain(|name| name != "-");
+    names
 }
 
 /// Find the kinds of delegate available to this turn.
@@ -206,8 +242,38 @@ pub fn discover<S: Sink>(
         discover_home(policy, &home.join(AGENTS), &mut definitions, &mut notices);
     }
     discover_workspace(policy, workspace, &mut definitions, &mut notices);
+    notices.extend(rounds_held_to_their_kind(&definitions));
 
     (definitions, notices)
+}
+
+/// The set a turn starting now would resolve, for an interface about to start one.
+///
+/// Read the way a turn reads it, through a policy holding only the read, so a name a person
+/// typed is compared against the set the turn will compare it against. The turn resolves the set
+/// again and its kernel decides; this is what lets a miss be said before anything starts, where a
+/// turn refused later is drawn as a failure whose reason nobody is shown.
+pub fn resolved<S: Sink>(
+    workspace: &Workspace,
+    home: Option<&Path>,
+    trust: bravebot_core::trust::TrustStore,
+    sink: &mut S,
+) -> Definitions {
+    let mut routing = bravebot_core::policy::Routing::new();
+    routing.insert_trusted("agents", WORKSPACE_AGENTS);
+    let Ok(policy) = Policy::begin(
+        routing,
+        bravebot_core::policy::ReleasePlan::new(),
+        bravebot_core::capability::CapabilitySet::from_iter([Capability::FileRead]),
+        sink,
+    ) else {
+        return Definitions::default();
+    };
+    let mut policy = policy
+        .with_trust(trust)
+        .with_root(workspace.root())
+        .with_backslash_separates(crate::workspace::BACKSLASH_SEPARATES);
+    discover(&mut policy, workspace, home).0
 }
 
 /// Definitions from `~/.bravebot/agents`, labelled from where they sit.
@@ -318,9 +384,37 @@ fn admit(read: Read, origin: &str, definitions: &mut Definitions, notices: &mut 
             Admitted::Refused => "its name is one of the kinds' own",
         },
         Read::NotOne => return,
+        Read::NotACount => {
+            notices.push(Notice::from_message(t!(
+                delegate_rounds_not_a_count,
+                definition = origin
+            )));
+            return;
+        }
         Read::Skipped(why) => why,
     };
     notices.push(Notice::from_message(format!("{origin} was skipped: {why}")));
+}
+
+/// What to tell whoever wrote a definition asking for more rounds than its kind may make.
+///
+/// Its delegate is given the ceiling, and silence would leave the number reading to its author as
+/// the bound in force. Asked once every file is in, because a replacement is held to the kind it
+/// was loaded as rather than the one it named.
+fn rounds_held_to_their_kind(definitions: &Definitions) -> Vec<Notice> {
+    definitions
+        .iter()
+        .filter_map(|definition| {
+            let asked = definition.rounds_beyond_its_kind()?;
+            Some(Notice::from_message(t!(
+                delegate_rounds_held,
+                definition = definition.origin(),
+                asked = asked,
+                most = definition.rounds(),
+                kind = definition.kind()
+            )))
+        })
+        .collect()
 }
 
 /// What to tell whoever wrote a definition that the one of the same name before it cut down.
@@ -347,6 +441,35 @@ fn narrowed(origin: &str, narrowing: &Narrowing) -> String {
         narrowing.replaced,
         said.join(", and ")
     )
+}
+
+/// What to tell whoever wrote a definition naming a skill this turn did not find.
+///
+/// Such a name selects nothing, as a `tools:` name that is not a tool does, and silence would
+/// leave a misspelt one reading to its author as a skill the delegate is offered. Named, because
+/// the name is the definition's own words and the definition came from a source somebody vouched
+/// for.
+pub fn skills_not_found(definitions: &Definitions, skills: &Catalogue) -> Vec<Notice> {
+    definitions
+        .iter()
+        .filter_map(|definition| {
+            let mut missing: Vec<&str> = Vec::new();
+            for name in definition.skills()? {
+                if skills.get(name).is_none() && !missing.contains(&name.as_str()) {
+                    missing.push(name);
+                }
+            }
+            if missing.is_empty() {
+                return None;
+            }
+            Some(Notice::from_message(t!(
+                delegate_skills_not_found,
+                definition = definition.origin(),
+                count = missing.len(),
+                skills = missing.join(", ")
+            )))
+        })
+        .collect()
 }
 
 /// A count of definitions, and the verb that agrees with it.
@@ -387,6 +510,7 @@ mod tests {
         match read_definition(text, "test") {
             Read::Definition(definition) => *definition,
             Read::NotOne => panic!("not read as a definition at all"),
+            Read::NotACount => panic!("skipped: its rounds are not a count"),
             Read::Skipped(why) => panic!("skipped: {why}"),
         }
     }
@@ -502,7 +626,7 @@ mod tests {
             "- read_file\n- list_files",
         ] {
             assert_eq!(
-                tools_in(value),
+                names_in(value),
                 ["read_file", "list_files"],
                 "'{value}' did not read as two tools"
             );
@@ -516,10 +640,10 @@ mod tests {
     #[test]
     fn a_parenthesised_argument_stays_one_token() {
         assert_eq!(
-            tools_in("read_file, Bash(git log --oneline), list_files"),
+            names_in("read_file, Bash(git log --oneline), list_files"),
             ["read_file", "Bash(git log --oneline)", "list_files"]
         );
-        assert_eq!(tools_in("Bash(a(b) c)"), ["Bash(a(b) c)"]);
+        assert_eq!(names_in("Bash(a(b) c)"), ["Bash(a(b) c)"]);
     }
 
     /// `*` is a widening spelling and a definition may not widen anything, so it is a name
@@ -592,6 +716,54 @@ mod tests {
         assert_eq!(definition.model(), None);
     }
 
+    /// `skills:` is read the way `tools:` is, so both spellings of a list arrive as the same
+    /// names. An empty line names none, which is a delegate offered no skills, and an absent one
+    /// is every skill the turn found: the two have to stay apart, or a definition written to be
+    /// told nothing would be told everything.
+    #[test]
+    fn a_definition_reads_the_skills_it_names() {
+        let skills_of = |line: &str| {
+            definition_of(&format!(
+                "---\nname: reviewer\ndescription: reviews\nkind: reader\n{line}---\n\nbody\n"
+            ))
+            .skills()
+            .map(<[String]>::to_vec)
+        };
+        let both = Some(vec!["review-style".to_string(), "commit-style".to_string()]);
+
+        assert_eq!(skills_of("skills: review-style, commit-style\n"), both);
+        assert_eq!(
+            skills_of("skills:\n  - review-style\n  - commit-style\n"),
+            both
+        );
+        assert_eq!(skills_of("skills:\n"), Some(Vec::new()));
+        assert_eq!(skills_of(""), None);
+    }
+
+    /// One misspelt name written twice is one name nothing found, so it is said once and in the
+    /// singular rather than as two skills.
+    #[test]
+    fn a_skill_named_twice_and_found_nowhere_is_said_once() {
+        let mut definitions = Definitions::default();
+        definitions.insert(definition_of(
+            "---\nname: reviewer\ndescription: reviews\nkind: reader\nskills: rule-reveiw, \
+             rule-reveiw\n---\n\nbody\n",
+        ));
+
+        let said: Vec<String> = skills_not_found(&definitions, &Catalogue::default())
+            .into_iter()
+            .map(|notice| notice.message)
+            .collect();
+
+        assert_eq!(
+            said,
+            [
+                "test names a skill this session did not find, so its delegate is offered without \
+              it: rule-reveiw"
+            ]
+        );
+    }
+
     #[test]
     fn a_definition_naming_inherit_names_no_model() {
         for written in ["inherit", "Inherit"] {
@@ -602,5 +774,96 @@ mod tests {
 
             assert_eq!(definition.model(), None, "model: {written}");
         }
+    }
+
+    /// `rounds:` is the delegate's bound. An absent or empty line leaves it at the kind's own, and
+    /// a number too large to hold is still a number, held to the ceiling like any other past it.
+    #[test]
+    fn a_definition_reads_the_rounds_it_names() {
+        let read = |line: &str| {
+            definition_of(&format!(
+                "---\nname: migrator\ndescription: a staged refactor\nkind: worker\n{line}---\n\n\
+                 body\n"
+            ))
+        };
+
+        assert_eq!(read("rounds: 180\n").rounds(), 180);
+        assert_eq!(read("rounds: \"30\"\n").rounds(), 30);
+        assert_eq!(read("rounds:\n").rounds(), Kind::Worker.rounds());
+        assert_eq!(read("").rounds(), Kind::Worker.rounds());
+
+        let huge = read("rounds: 99999999999999999999999999\n");
+        assert_eq!(huge.rounds(), Kind::Worker.most_rounds());
+        assert_eq!(huge.rounds_beyond_its_kind(), Some(usize::MAX));
+    }
+
+    /// A value that is no count above zero is refused rather than left at the kind's own, since
+    /// whoever wrote it believes it is in force, and the notice names the file.
+    #[test]
+    fn a_rounds_line_that_is_not_a_count_is_not_a_definition() {
+        for written in ["0", "-5", "lots", "1.5", "12 rounds", "1e3"] {
+            let text = format!(
+                "---\nname: migrator\ndescription: a staged refactor\nkind: worker\nrounds: \
+                 {written}\n---\n"
+            );
+            assert!(
+                matches!(read_definition(&text, "test"), Read::NotACount),
+                "'{written}' was read as a number of rounds"
+            );
+        }
+
+        let mut definitions = Definitions::default();
+        let mut notices = Vec::new();
+        admit(
+            read_definition(
+                "---\nname: migrator\ndescription: d\nkind: worker\nrounds: 0\n---\n",
+                ".bravebot/agents/migrator.md",
+            ),
+            ".bravebot/agents/migrator.md",
+            &mut definitions,
+            &mut notices,
+        );
+        assert!(definitions.get("migrator").is_none());
+        let said: Vec<&str> = notices.iter().map(|n| n.message.as_str()).collect();
+        assert_eq!(
+            said,
+            [
+                ".bravebot/agents/migrator.md was skipped: its rounds must be a whole number above \
+              zero"
+            ]
+        );
+    }
+
+    /// A number past the kind's ceiling is said with what the delegate is given instead, and a
+    /// number beneath it says nothing.
+    #[test]
+    fn a_definition_asking_past_its_kinds_ceiling_says_what_it_is_given() {
+        let mut definitions = Definitions::default();
+        definitions.insert(definition_of(
+            "---\nname: long-reader\ndescription: reads a lot\nkind: reader\nrounds: 500\n---\n",
+        ));
+        definitions.insert(
+            Definition::from_file(
+                "short-reader",
+                "reads a little",
+                Kind::Reader,
+                None,
+                "",
+                "x",
+            )
+            .with_rounds(Kind::Reader.most_rounds()),
+        );
+
+        let said: Vec<String> = rounds_held_to_their_kind(&definitions)
+            .into_iter()
+            .map(|notice| notice.message)
+            .collect();
+        assert_eq!(
+            said,
+            [
+                "test asks for 500 rounds, more than the 120 a reader may make, so its delegate is \
+              given 120"
+            ]
+        );
     }
 }

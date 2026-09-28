@@ -18,8 +18,8 @@ documented-by: docs/website/docs/reference/tools.md
 ## Scope
 
 Asking a language server where a symbol is defined, what refers to it, and what it is. The
-operation, the file, the position, and the query a whole-tree question carries are routing; there
-are no content arguments. The result is a set of locations, or a refusal.
+operation, the file, the position, and the query a whole-tree question carries are routing; the
+only content argument is the `why` every tool takes ([TOOL-5](tool-surface.md#TOOL-5)). The result is a set of locations, or a refusal.
 
 Confinement of the server process is [sandboxing.md](../sandboxing.md). Why the built-in tools are
 not MCP servers is [mcp.md](../mcp.md), and this tool is native for exactly that reason: a call
@@ -53,8 +53,9 @@ for. A field that decides that is routing, so it is promoted and recorded the wa
 read for that operation alone, since a promotion recorded against a call that sends no query would
 put a choice in the trail that nobody made.
 
-There are no content arguments at all, which makes this the only tool besides `read_file` and
-`list_files` whose call carries nothing untrusted.
+Its one content argument is the `why` every tool takes ([TOOL-5](tool-surface.md#TOOL-5)), which is the planner's own
+words, so this is the only tool besides `read_file` and `list_files` whose call carries nothing
+untrusted.
 
 **Why the list is closed.** LSP is an open protocol and a server advertises methods of its own,
 including ones that apply a workspace edit. Forwarding a method name would make the tool's blast
@@ -340,6 +341,14 @@ of a language starts nothing.
 The process is killed if it does not exit on request, so a server that ignores `shutdown` does not
 outlive the agent that started it.
 
+A delegate asks the servers of the session that spawned it, not a set of its own. A server one
+started answers the session's next turn, and a start a delegate causes is put to the person through
+the one confirmer every run shares ([DELEGATE-16](../delegation.md#DELEGATE-16)). What it may ask
+is still decided by its own capability set ([LSP-9](#LSP-9)).
+
+**Why shared with delegates.** A set of its own would ask the person about a language they already
+approved, and index the same tree a second time beside the server already doing it.
+
 **Why kept rather than per-call.** Indexing is the whole cost, and paying it per request would make
 every call slower than the search it replaces.
 
@@ -352,20 +361,33 @@ nobody asks about spends a person's CPU on nothing.
 `verified-by: bravebot_lsp::server::dropping_the_set_stops_every_server`
 `verified-by: bravebot_agent::lsp::a_server_approved_in_one_turn_answers_the_next`
 `verified-by: bravebot_agent::lsp::a_turn_that_is_handed_no_set_starts_a_server_of_its_own`
+`verified-by: bravebot_agent::lsp::a_delegate_asks_the_server_its_session_started`
+`verified-by: bravebot_agent::lsp::a_server_a_delegate_started_answers_the_sessions_next_turn`
 
 <a id="LSP-9"></a>
-### LSP-9: the capability is separate, and a delegate does not inherit it
+### LSP-9: the capability is separate, and a delegate holds it only by its kind
 
 An `lsp` call needs its own capability, so a run that was granted file reads has not thereby been
 granted a language server. A delegate gets it only where its capability set says so.
+
+The `checker` and `worker` kinds hold it ([DELEGATE-4](../delegation.md#DELEGATE-4)), so a delegate
+of either kind, or a turn addressed to one, is offered `lsp` wherever the session holds it. A
+`reader` does not.
 
 **Why separate from `FileRead`.** They are not the same act. A read opens one named file inside the
 tree; a server reads the whole tree and the dependency sources beside it, and keeps a process alive
 doing so. A capability set that could not tell those apart could not describe the narrower one.
 
+**Why not `reader`.** Starting a server runs the project's build tooling ([LSP-5](#LSP-5)), which is
+running a program, and a `reader` may not run one. The kinds that hold a language server are
+exactly the kinds that hold `ShellExec`.
+
 `verified-by: bravebot_lsp::server::a_request_without_the_capability_is_refused`
 `verified-by: bravebot_core::capability::the_lsp_capability_produces_no_routing_safe_output`
-`verified-by: bravebot_agent::lsp::a_delegate_without_the_capability_is_refused`
+`verified-by: bravebot_agent::lsp::a_checker_and_a_worker_are_offered_lsp_and_a_reader_is_not`
+`verified-by: bravebot_agent::lsp::a_reader_delegate_is_not_answered_by_the_sessions_server`
+`verified-by: bravebot_core::delegate::a_kind_holds_a_language_server_exactly_where_it_may_run_programs`
+`verified-by: bravebot_core::policy::a_turn_addressed_to_a_checker_or_a_worker_keeps_the_language_server`
 
 <a id="LSP-10"></a>
 ### LSP-10: the index is cached under `~/.bravebot`, and that directory confers nothing on it

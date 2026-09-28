@@ -1,6 +1,6 @@
 {
   "name": "bravebot-ui",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "A macOS and Linux desktop interface to bravebot",
   "license": "MPL-2.0",
   "private": true,
@@ -25,6 +25,7 @@
     "drive:panels": "npm run bridge && electron-vite build && node scripts/drive-panels.mjs",
     "drive:columns": "npm run bridge && electron-vite build && node scripts/drive-columns.mjs",
     "drive:vetting": "npm run bridge && electron-vite build && node scripts/drive-vetting.mjs",
+    "drive:remembered-trust": "npm run bridge && electron-vite build && node scripts/drive-remembered-trust.mjs",
     "drive:run": "npm run bridge && electron-vite build && node scripts/drive-run.mjs",
     "drive:ask": "npm run bridge && electron-vite build && node scripts/drive-ask.mjs",
     "package": "npm run bridge && electron-vite build && node scripts/package.mjs",

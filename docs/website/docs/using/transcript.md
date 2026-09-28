@@ -35,6 +35,9 @@ note drawn in the wrong one would still be outside a block.
 Where a result went is drawn only where that is not the ordinary answer. A quarantined read says so,
 and an ordinary one does not clutter the transcript saying what always happens.
 
+**Each call says why it was made**, in the model's own words, dim after the call on the same row.
+It stays there once the call is over, and a resumed session draws it too.
+
 **A call the model read shows a few lines of what it found**, drawn under the call behind a plain
 margin. A command shows its last five lines, because that is where a build or a test run says how it
 went. A file, a listing or a search shows its first five. A line under them says how many were left
@@ -202,15 +205,16 @@ footer says how much has arrived below, and that a turn is still running; `G` re
 
 | Keys | Where the view goes |
 |---|---|
-| Up / Down, `k` / `j` | one line back / on |
-| Ctrl-U / Ctrl-D | half a screen back / on |
-| Space / `b`, Ctrl-F / Ctrl-B | a whole screen on / back |
-| `g` / `G`, Home / End | the first row / the last |
+| Up / Down, `k` / `j`, `y` / `e`, Ctrl-Y / Ctrl-E, Ctrl-P / Ctrl-N | one line back / on |
+| Ctrl-U / Ctrl-D, `u` / `d` | half a screen back / on |
+| Space or `f` / `b`, Ctrl-F / Ctrl-B | a whole screen on / back |
+| `g` / `G`, `<` / `>`, Home / End | the first row / the last |
 | `{` / `}` | the prompt before this one / the prompt after |
 | the wheel | as it does at rest |
 
-Both the `less` and the `vi` dialects are there. Each end is a stop rather than a count that keeps
-going, so a held key comes to rest somewhere the next press can move away from.
+Both the `less` and the `vi` dialects are there. Ctrl-N is a line on, and `n` alone is the next
+match. Each end is a stop rather than a count that keeps going, so a held key comes to rest
+somewhere the next press can move away from.
 
 `{` and `}` land on the row a turn begins at, which is a prompt you typed.
 

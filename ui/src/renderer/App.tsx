@@ -5,6 +5,7 @@ import type {
   AskAnswer,
   BridgeEvent,
   ForkedSession,
+  KeptTrust,
   OpenedSession,
   Phase,
   SessionSummary,
@@ -68,6 +69,10 @@ interface Live {
   running: boolean
   /** Set when a fresh session needs the trust question answered before it can run. */
   askingTrust: string | null
+  /** Where remembering the answer would write it, while the question offers that (TRUST-23). */
+  keepingTrust: string | null
+  /** The yes kept about this directory, as last heard: said above the transcript while it lasts. */
+  trustRemembered: KeptTrust | null
   /**
    * Where this session was cut from, for a session that was forked out of another.
    *
@@ -211,6 +216,7 @@ export function App(): React.JSX.Element {
   const liveRef = useRef<Live | null>(null)
   const handleRef = useRef<string | null>(null)
   const openedLives = useRef(new Map<string, Live>())
+  const answeringTrust = useRef(false)
   const [livesRevision, refreshLives] = useState(0)
   const preferences = useExperience()
   const setLive = useCallback((action: React.SetStateAction<Live | null>) => {
@@ -518,7 +524,11 @@ export function App(): React.JSX.Element {
         // A record with no stored map was written before maps were kept. Nothing
         // recorded is not the same as nothing trusted, so it is asked about again.
         contextTokens: opened.contextTokens,
+        // A kept answer settles a record whose map does not, which is all it may settle: a
+        // map the record carries is this session's own and comes first.
         askingTrust: opened.trust.known ? null : opened.record.directory,
+        keepingTrust: opened.keeping ?? null,
+        trustRemembered: opened.remembered ?? null,
         // Looked up rather than carried: this session may have been forked in another launch
         // entirely, and the file the main process keeps is where that is written down.
         forkedFrom: cameFrom(forksRef.current, summary.directory, summary.id, sessionsRef.current),
@@ -549,7 +559,14 @@ export function App(): React.JSX.Element {
     const chosen = directory ?? (await window.bravebot.chooseDirectory())
     if (!chosen) return
     try {
-      const made = await call<{ session: string; branch: string | null; model: string | null; autoVetting: boolean }>('session.new', {
+      const made = await call<{
+        session: string
+        branch: string | null
+        model: string | null
+        autoVetting: boolean
+        remembered?: KeptTrust | null
+        keeping?: string | null
+      }>('session.new', {
         directory: chosen,
       })
       setConversation(conversationKey(chosen, draftId), { botSlug: bot?.slug ?? null })
@@ -573,7 +590,9 @@ export function App(): React.JSX.Element {
         tokens: 0,
         running: false,
         contextTokens: 0,
-        askingTrust: chosen,
+        askingTrust: made.remembered ? null : chosen,
+        keepingTrust: made.keeping ?? null,
+        trustRemembered: made.remembered ?? null,
         forkedFrom: null,
         focus: null,
         bot: bot ? { slug: bot.slug, grounded: false } : null,
@@ -586,14 +605,29 @@ export function App(): React.JSX.Element {
     }
   }, [])
 
-  const answerTrust = useCallback(async (trusted: boolean) => {
+  const answerTrust = useCallback(async (trusted: boolean, remember = false) => {
     const handle = handleRef.current
-    if (!handle) return
+    // One answer per question: a second click would be refused, the offer to remember being spent.
+    if (!handle || answeringTrust.current) return
+    answeringTrust.current = true
+    const path = openedLives.current.get(handle)?.keepingTrust ?? null
     try {
-      await call('trust.reply', { session: handle, trusted })
-      updateSession(handle, (old) => (old ? { ...old, askingTrust: null } : old))
+      const { kept } = await call<{ trusted: boolean; kept: boolean | null }>('trust.reply', { session: handle, trusted, remember })
+      const remembered = kept === true && path ? { at: Math.floor(Date.now() / 1000), path } : null
+      updateSession(handle, (old) => (old ? {
+        ...old,
+        askingTrust: null,
+        keepingTrust: null,
+        trustRemembered: remembered ?? old.trustRemembered,
+      } : old))
+      // Still a yes, for this session. Said, because the next session here will ask after all.
+      if (kept === false) {
+        setProblem(`Trusting this directory for this session only: the answer could not be written to ${path}, so the next session here will ask.`)
+      }
     } catch (error) {
       setProblem(String(error))
+    } finally {
+      answeringTrust.current = false
     }
   }, [])
 
@@ -1089,6 +1123,8 @@ export function App(): React.JSX.Element {
           running: false,
           contextTokens: forked.contextTokens,
           askingTrust: forked.trust.known ? null : forked.directory,
+          keepingTrust: forked.keeping ?? null,
+          trustRemembered: forked.remembered ?? null,
           // A fork is a session and not a bot, even when it was cut out of a bot's. A bot is one
         // conversation resumed forever; a second one carrying its name would be a second bot
         // wearing it, with the same memory file and no way to tell them apart in the list.
@@ -1297,6 +1333,9 @@ export function App(): React.JSX.Element {
         includeTools={includeTools}
         onToggleTools={() => setIncludeTools((on) => !on)}
         onExport={(format) => void exportSession(format)}
+        // Followed but never raised here: the banner says a kept answer settled this session, and
+        // one another session kept since did not.
+        onTrustRemembered={(handle, kept) => updateSession(handle, (old) => (old ? { ...old, trustRemembered: old.trustRemembered && kept } : old))}
         onFork={(id) => void forkFrom(id)}
         onOpenParent={openParent}
         onFocused={clearFocus}
@@ -1336,7 +1375,7 @@ export function App(): React.JSX.Element {
       {unconfigured && <Unconfigured detail={unconfigured} onClose={() => setUnconfigured(null)} />}
       {agentSettings && <AgentSettings session={live?.handle} onClose={() => setAgentSettings(false)} onChanged={() => { void checkBackend() }} />}
       {live?.askingTrust && (
-        <TrustPrompt directory={live.askingTrust} onAnswer={answerTrust} />
+        <TrustPrompt directory={live.askingTrust} keeping={live.keepingTrust} onAnswer={answerTrust} />
       )}
       {picking && (
         <ThemePicker

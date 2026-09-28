@@ -345,13 +345,14 @@ is all that remains of a document nobody can see. The plan never shares stdout w
 ### CLI-9: a one-shot run names its own model, or asks for the one a session would
 
 `--model <name>` names the model for one run and outranks everything else. Where no flag names
-one, the model is the one a session opening in the same directory would ask for: the choice
-`/model` recorded, then the configured model, which is an exported
-`BRAVE_AI_CHAT_DEFAULT_MODEL`, then the settings file's `model` key, then the default the build was
-made with. A name is resolved against the configuration wherever it was written: `opus`, `sonnet`
-and `haiku` name the tier's own model and the older spelling of the routing entry names the current
-one, so the flag and the settings key it outranks accept the same spellings. A `--model` with no
-name after it, or a blank one, is refused rather than read as no choice.
+one, the model is the one a session opening in the same directory would ask for, in the order
+[BACKEND-11](backends.md#BACKEND-11) gives: a `model` key in a checkout's settings or the file
+`--settings` named, then the choice `/model` recorded, then the key in the person's own settings,
+then an exported `BRAVE_AI_CHAT_DEFAULT_MODEL`, then the default the build was made with. A name is
+resolved against the configuration wherever it was written: `opus`, `sonnet` and `haiku` name the
+tier's own model and the older spelling of the routing entry names the current one, so the flag and
+the settings key it outranks accept the same spellings. A `--model` with no name after it, or a
+blank one, is refused rather than read as no choice.
 
 **Why.** A script that cannot name a model has only one route to a particular one, which is for
 somebody to open the interface and pick it, and in a pipeline that is not a route at all. The flag
@@ -361,8 +362,9 @@ records can do.
 
 Below the flag, a run resolves a model the way a session does, so the two surfaces reach the same
 models by the same names and a script needs no interactive step to use the one somebody already
-chose. Ranking configuration above the record instead would mean a person who picked a model could
-not run a script with it, and a script wanting a different one from the picked one has the flag.
+chose. Where the checkout it runs in names a model, that is the one it gets, as a session opened
+there would: a pick is one per person and says nothing about which checkout it was made for, and a
+script wanting a model other than the checkout's has the flag.
 
 Resolving against the configuration rather than at parse, because a tier word names a model only
 the configuration knows: the AWS account's own model for that tier where it named one, and Brave's
@@ -376,6 +378,8 @@ nothing about having done so, which is the substitution the flag exists to make 
 
 `verified-by: bravebot_cli::main::a_model_flag_names_the_model_a_run_asks_for`
 `verified-by: bravebot_cli::main::a_run_that_named_no_model_names_nothing`
+`verified-by: bravebot_cli::running::a_run_asks_for_a_checkouts_model_over_the_recorded_one`
+`verified-by: bravebot_cli::running::a_run_asks_for_the_settings_model_over_an_exported_default`
 `verified-by: bravebot_cli::main::the_command_line_outranks_the_record_a_session_would_read`
 `verified-by: bravebot_cli::main::a_run_that_named_no_model_reads_the_record_a_session_would`
 `verified-by: bravebot_cli::main::a_run_with_nothing_to_go_on_leaves_the_configured_model_in_force`
@@ -665,3 +669,28 @@ a time, and only where a check completed and found nothing.
 `verified-by: bravebot_cli::main::an_invocation_that_only_mentions_vetting_does_not_ask_for_it`
 `verified-by: bravebot_cli::main::vetting_composes_with_the_other_flags_that_lead`
 `verified-by: bravebot_core::vetting::asking_on_the_command_line_is_one_way_and_idempotent`
+
+<a id="CLI-16"></a>
+### CLI-16: a one-shot run names its own effort level, or asks for the one a session would
+
+`--effort <level>` names how hard the model is asked to think for one run, and outranks every
+settings file and the level `/effort` recorded. The word is one `/effort` takes, in any case. Where
+no flag names one, the level is the one a session opening in the same directory would ask for, in
+the order [BACKEND-43](backends.md#BACKEND-43) gives. A `--effort` with no word after it, a blank
+one, or a word that is no level is refused before the run starts, and the refusal names the levels.
+Nothing is recorded: the flag says what one run asks for.
+
+**Why.** The level is the other half of what [CLI-9](#CLI-9) lets a script say about the model, and
+without a flag a script's only routes to one, short of writing a file for `--settings`, are a file
+in the checkout and a pick somebody made in the interface. Neither is the script's to state, and two
+scripts in one checkout cannot want different levels through either.
+
+A word that is no level is refused rather than read as no choice, for the reason CLI-9 refuses a
+blank model and for a stronger one: a model name the service does not know is substituted and
+reported ([CLI-10](#CLI-10)), where a word that is no level would be dropped here with nothing said,
+and the run would go out at whatever level ranks next. Whether a level the flag named then goes out
+at all is [BACKEND-22](backends.md#BACKEND-22)'s question, as it is for any other.
+
+`verified-by: bravebot_cli::main::an_effort_flag_names_the_level_a_run_asks_for`
+`verified-by: bravebot_cli::main::an_effort_flag_naming_no_level_is_refused`
+`verified-by: bravebot_cli::running::a_run_sends_the_level_the_command_line_named_over_every_other`

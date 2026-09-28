@@ -1,8 +1,9 @@
-//! `bravebot mcp`: declaring an MCP server, and approving a declaration (SERVERS-3).
+//! `bravebot mcp`: declaring an MCP server, approving a declaration (SERVERS-3), and forgetting the
+//! standing answers given in a project.
 //!
-//! What this writes is the two files [`bravebot_config::mcp`] reads, and the one question it asks
-//! is whether the person approves a declaration they were just shown. Nothing here starts a server
-//! or offers one to a session.
+//! What this writes is the files [`bravebot_config::mcp`] reads, and the one question it asks is
+//! whether the person approves a declaration they were just shown. Nothing here starts a server or
+//! offers one to a session.
 //!
 //! Typing `add` is not the approval. The line a person typed says what to run; the answer to the
 //! question says they read what it resolved to, and only that answer is recorded. Where nobody can
@@ -10,8 +11,10 @@
 //! an effect nobody could be asked about is refused rather than applied unseen.
 
 use crate::exit::{Ending, fail};
+use bravebot_config::Managed;
 use bravebot_config::mcp::{
-    self, Approvals, Declaration, Declarations, Entry, Field, Problem, Unreadable,
+    self, Approvals, Declaration, Declarations, Entry, Field, Problem, Projects, Standing,
+    Unreadable,
 };
 use bravebot_i18n::t;
 use std::io::{BufRead, IsTerminal, Write};
@@ -51,15 +54,18 @@ pub fn command(args: &[String]) -> ExitCode {
         screen: std::io::stdout().lock(),
         present,
     };
-    match run(args, &home, &mut person) {
+    match run(args, &home, &Managed::load(), &mut person) {
         Ok(()) => ExitCode::SUCCESS,
         Err((ending, message)) => fail(ending, message),
     }
 }
 
+/// `managed` is the machine's layer, read only to say which servers it keeps from starting
+/// (SERVERS-12).
 fn run<R: BufRead, W: Write>(
     args: &[String],
     home: &Home,
+    managed: &Managed,
     person: &mut Person<R, W>,
 ) -> Result<(), Stopped> {
     let Some((command, rest)) = args.split_first() else {
@@ -67,13 +73,18 @@ fn run<R: BufRead, W: Write>(
     };
     match command.as_str() {
         "add" => add(rest, home, person),
-        "get" => get(one_alias(command, rest)?, home, person),
+        "get" => get(one_alias(command, rest)?, home, managed, person),
         "list" => match rest.first() {
-            None => list(home, person),
+            None => list(home, managed, person),
             Some(extra) => Err(unexpected(command, extra)),
         },
         "approve" => approve(one_alias(command, rest)?, home, person),
         "remove" => remove(one_alias(command, rest)?, home, person),
+        "forget" => match rest {
+            [] => forget(None, home, person),
+            [path] => forget(Some(path), home, person),
+            [_, extra, ..] => Err(unexpected(command, extra)),
+        },
         other => Err(refused_with_the_forms(
             t!(mcp_unknown_command, command = shown(other)).to_string(),
         )),
@@ -86,12 +97,13 @@ fn refused_with_the_forms(message: String) -> Stopped {
     said.push('\n');
     said.push_str(t!(mcp_forms_heading));
     for form in [
-        "bravebot mcp add <alias> [--env <name>]... [--dir <path>] --stdio -- <program> [args...]",
+        "bravebot mcp add <alias> [--env <name>]... [--dir <path>] [--stdio] -- <program> [args...]",
         "bravebot mcp add <alias> --http <url>",
         "bravebot mcp get <alias>",
         "bravebot mcp list",
         "bravebot mcp approve <alias>",
         "bravebot mcp remove <alias>",
+        "bravebot mcp forget [path]",
     ] {
         said.push_str("\n  ");
         said.push_str(form);
@@ -209,8 +221,8 @@ impl From<Stopped> for Refusal {
 
 /// The declaration `add`'s flags spell, checked exactly as an entry in the file is.
 ///
-/// Everything after `--stdio --` is the program and its arguments, as words and never as a line,
-/// so a flag of this command written after it is an argument of the server's.
+/// Everything after a bare `--`, or after `--stdio --`, is the program and its arguments, as words
+/// and never as a line, so a flag of this command written after it is an argument of the server's.
 fn declared(flags: &[String]) -> Result<Declaration, Refusal> {
     let mut variables = Vec::new();
     let mut directory = None;
@@ -235,14 +247,16 @@ fn declared(flags: &[String]) -> Result<Declaration, Refusal> {
                 }
                 transport = Some(Transport::Http(url.clone()));
             }
-            "--stdio" => {
+            "--stdio" | "--" => {
                 if transport.is_some() {
                     return Err(argument(t!(mcp_two_transports)).into());
                 }
-                if value.map(String::as_str) != Some("--") {
-                    return Err(argument(t!(mcp_stdio_needs_a_program)).into());
-                }
-                let argv = flags[index + 2..].to_vec();
+                let program = match flag {
+                    "--" => index + 1,
+                    _ if value.map(String::as_str) == Some("--") => index + 2,
+                    _ => return Err(argument(t!(mcp_stdio_needs_a_program)).into()),
+                };
+                let argv = flags[program..].to_vec();
                 if argv.is_empty() {
                     return Err(argument(t!(mcp_stdio_needs_a_program)).into());
                 }
@@ -267,6 +281,11 @@ fn declared(flags: &[String]) -> Result<Declaration, Refusal> {
     match transport {
         None => Err(argument(t!(mcp_needs_a_transport)).into()),
         Some(Transport::Stdio(argv)) => {
+            // A bare name is looked for only in the PATH a declaration names (SERVERS-10), so
+            // one typed without it would be a server that can never start.
+            if is_a_bare_name(&argv[0]) {
+                variables.push("PATH".to_string());
+            }
             Declaration::stdio(argv, variables, directory).map_err(Refusal::Problem)
         }
         Some(Transport::Http(_)) if !variables.is_empty() => {
@@ -277,6 +296,14 @@ fn declared(flags: &[String]) -> Result<Declaration, Refusal> {
         }
         Some(Transport::Http(url)) => Declaration::http(url).map_err(Refusal::Problem),
     }
+}
+
+fn is_a_bare_name(program: &str) -> bool {
+    let mut parts = Path::new(program).components();
+    matches!(
+        (parts.next(), parts.next()),
+        (Some(std::path::Component::Normal(_)), None)
+    )
 }
 
 /// Which transport the flags named, before the rest of the declaration is checked.
@@ -307,6 +334,7 @@ fn place(typed: &str) -> Result<String, Stopped> {
 fn get<R: BufRead, W: Write>(
     alias: &str,
     home: &Home,
+    managed: &Managed,
     person: &mut Person<R, W>,
 ) -> Result<(), Stopped> {
     let (directory, declarations) = readable(home)?;
@@ -341,14 +369,29 @@ fn get<R: BufRead, W: Write>(
             format!("{indent}{}", t!(mcp_unapproved_run_approve, alias = alias)),
         ),
     }
+    if let Some(refused) = refused(managed, &declaration) {
+        say(person, format!("{indent}{refused}"));
+    }
     Ok(())
+}
+
+/// What `get` and `list` add for a server the managed layer keeps from starting, which is the line
+/// that stops an approved server looking reachable when no session will start it (SERVERS-12,
+/// SERVERS-14).
+fn refused(managed: &Managed, declaration: &Declaration) -> Option<String> {
+    crate::servers::refused_declaration(managed, declaration, &|name| std::env::var_os(name))
+        .map(|reason| t!(mcp_refused_by_managed, reason = reason).to_string())
 }
 
 /// SERVERS-14's list half: every declared alias, its transport, and whether it is approved.
 ///
 /// An entry that cannot be used is listed with what is wrong with it rather than left out, since a
 /// list that dropped it would make a declaration somebody wrote look like one nobody read.
-fn list<R: BufRead, W: Write>(home: &Home, person: &mut Person<R, W>) -> Result<(), Stopped> {
+fn list<R: BufRead, W: Write>(
+    home: &Home,
+    managed: &Managed,
+    person: &mut Person<R, W>,
+) -> Result<(), Stopped> {
     let (directory, declarations) = readable(home)?;
     let Some(directory) = directory else {
         say(person, no_state_directory());
@@ -372,6 +415,10 @@ fn list<R: BufRead, W: Write>(home: &Home, person: &mut Person<R, W>) -> Result<
         .unwrap_or_default();
     let mut unusable = 0usize;
     for Entry { alias, declaration } in &entries {
+        let refusal = declaration
+            .as_ref()
+            .ok()
+            .and_then(|declaration| refused(managed, declaration));
         let alias = pad(&shown(alias), width);
         match declaration {
             Ok(declaration) => {
@@ -380,14 +427,18 @@ fn list<R: BufRead, W: Write>(home: &Home, person: &mut Person<R, W>) -> Result<
                     true => &approved,
                     false => &unapproved,
                 };
+                let line = format!(
+                    "  {alias}  {}  {}  {}",
+                    pad(declaration.transport(), 5),
+                    pad(word, state),
+                    digest.short()
+                );
                 say(
                     person,
-                    format!(
-                        "  {alias}  {}  {}  {}",
-                        pad(declaration.transport(), 5),
-                        pad(word, state),
-                        digest.short()
-                    ),
+                    match refusal {
+                        Some(refusal) => format!("{line}  {refusal}"),
+                        None => line,
+                    },
                 );
             }
             Err(found) => {
@@ -473,6 +524,74 @@ fn remove<R: BufRead, W: Write>(
     save(directory, &declarations, &mut approvals)?;
     say(person, t!(mcp_removed, alias = shown(alias)));
     Ok(())
+}
+
+/// Drop the standing answers recorded for a project: answer 2 at a server's question, and each
+/// tool answer 2 at a call's question stopped asking about there.
+///
+/// The project is `path`, or the directory this runs in, as the absolute path it resolves to. A
+/// path that no longer resolves is taken as it was typed, made absolute: a checkout that was
+/// deleted is the one somebody most wants forgotten, and its answers are recorded under a path
+/// nothing exists at any more.
+fn forget<R: BufRead, W: Write>(
+    path: Option<&str>,
+    home: &Home,
+    person: &mut Person<R, W>,
+) -> Result<(), Stopped> {
+    let directory = writable(home)?;
+    let project = project(path)?;
+    let unreadable = |file: PathBuf, why: Unreadable| -> Stopped {
+        (
+            Ending::Failed,
+            t!(
+                mcp_unreadable,
+                path = shown(&file.display().to_string()),
+                reason = bravebot_agent::mcp::unreadable_record(&why)
+            )
+            .to_string(),
+        )
+    };
+    let mut projects = Projects::to_change(directory)
+        .map_err(|why| unreadable(mcp::projects_file(directory), why))?;
+    let mut standing = Standing::to_change(directory)
+        .map_err(|why| unreadable(mcp::tools_file(directory), why))?;
+    let every_server = projects.remove(&project);
+    let tools = standing.in_project(&project);
+    standing.forget(&project);
+
+    if every_server {
+        replace(&mcp::projects_file(directory), &projects.to_text())?;
+    }
+    if !tools.is_empty() {
+        replace(&mcp::tools_file(directory), &standing.to_text())?;
+    }
+
+    let named = shown(&project.display().to_string());
+    if !every_server && tools.is_empty() {
+        say(person, t!(mcp_forgot_nothing, path = &named));
+    }
+    if every_server {
+        say(person, t!(mcp_forgot_servers, path = &named));
+    }
+    for tool in &tools {
+        say(person, t!(mcp_forgot_tool, tool = tool, path = &named));
+    }
+    Ok(())
+}
+
+/// The project `forget` means: the path given, or the directory this runs in.
+fn project(path: Option<&str>) -> Result<PathBuf, Stopped> {
+    let here = std::env::current_dir().map_err(|error| {
+        (
+            Ending::Failed,
+            t!(mcp_no_current_directory, error = error.to_string()).to_string(),
+        )
+    })?;
+    let typed = match path {
+        Some(path) => here.join(path),
+        None => here,
+    };
+    Ok(typed.canonicalize().unwrap_or(typed))
 }
 
 /// What became of the question.
@@ -700,22 +819,17 @@ fn save(
 /// Write `text` over `path` through a temporary file beside it, so an interrupted write leaves the
 /// file as it was rather than half of it.
 pub(crate) fn replace(path: &Path, text: &str) -> Result<(), Stopped> {
-    let mut temporary = path.as_os_str().to_owned();
-    temporary.push(".tmp");
-    let temporary = PathBuf::from(temporary);
-    bravebot_agent::home::write_file(&temporary, text.as_bytes())
-        .and_then(|()| std::fs::rename(&temporary, path))
-        .map_err(|error| {
-            (
-                Ending::Failed,
-                t!(
-                    mcp_not_written,
-                    path = path.display().to_string(),
-                    error = error.to_string()
-                )
-                .to_string(),
+    bravebot_agent::mcp::replace(path, text).map_err(|error| {
+        (
+            Ending::Failed,
+            t!(
+                mcp_not_written,
+                path = path.display().to_string(),
+                error = error.to_string()
             )
-        })
+            .to_string(),
+        )
+    })
 }
 
 pub(crate) fn problem(found: &Problem) -> String {
@@ -769,7 +883,7 @@ mod tests {
     }
 
     fn weather() -> Declaration {
-        Declaration::stdio(words(&["npx", "-y", "weather-mcp"]), Vec::new(), None).unwrap()
+        Declaration::stdio(words(&["npx", "-y", "weather-mcp"]), words(&["PATH"]), None).unwrap()
     }
 
     const ADD: &[&str] = &[
@@ -782,7 +896,8 @@ mod tests {
         "weather-mcp",
     ];
 
-    /// Run a command as a person at a terminal who types `typed`.
+    /// Run a command as a person at a terminal who types `typed`. The machine's layer is
+    /// `managed.json` in `directory`, absent unless a test writes it.
     fn typing(directory: &Path, args: &[&str], typed: &str) -> (Result<(), Stopped>, String) {
         let home = Home {
             directory: Some(directory.to_path_buf()),
@@ -793,8 +908,88 @@ mod tests {
             screen: Vec::new(),
             present: true,
         };
-        let outcome = run(&words(args), &home, &mut person);
+        let managed = Managed::at(&directory.join("managed.json"));
+        let outcome = run(&words(args), &home, &managed, &mut person);
         (outcome, String::from_utf8(person.screen).unwrap())
+    }
+
+    /// No session starts a server the machine's administrator refused, whatever its approval says,
+    /// so `list` and `get` say so beside the approval, and why. Without it an approved server reads
+    /// as one the next session starts, which is the report SERVERS-14 exists to keep true.
+    #[test]
+    fn list_and_get_say_why_the_managed_layer_refuses_a_server_and_no_other() {
+        let directory = scratch("cli-mcp-refused");
+        for add in [
+            &[
+                "add",
+                "weather",
+                "--stdio",
+                "--",
+                "/opt/weather-mcp",
+                "--stdio",
+            ][..],
+            &["add", "docs", "--stdio", "--", "/opt/docs-mcp"],
+            &["add", "maps", "--http", "https://maps.example/mcp"],
+        ] {
+            let (outcome, _) = typing(&directory, add, "y\n");
+            assert!(outcome.is_ok(), "{add:?}: {outcome:?}");
+        }
+        let managed = directory.join("managed.json");
+        std::fs::write(
+            &managed,
+            r#"{"mcp": {
+                "allow": [
+                    {"command": ["/opt/weather-mcp", "--stdio"]},
+                    {"command": ["/opt/docs-mcp"]}
+                ],
+                "deny": [{"command": ["/opt/weather-mcp", "--stdio"]}]
+            }}"#,
+        )
+        .expect("managed.json");
+        let path = managed.display().to_string();
+        let denied = t!(
+            mcp_refused_by_managed,
+            reason = t!(
+                managed_denied,
+                path = path.clone(),
+                entry = "command /opt/weather-mcp --stdio"
+            )
+        )
+        .to_string();
+        let not_allowed = t!(
+            mcp_refused_by_managed,
+            reason = t!(managed_not_allowed, path = path.clone())
+        )
+        .to_string();
+
+        let (outcome, listed) = typing(&directory, &["list"], "");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let row = |alias: &str| {
+            listed
+                .lines()
+                .find(|line| line.split_whitespace().next() == Some(alias))
+                .unwrap_or_else(|| panic!("{alias} is not listed: {listed}"))
+        };
+        assert!(row("weather").ends_with(&denied), "{listed}");
+        assert!(row("maps").ends_with(&not_allowed), "{listed}");
+        let approved = t!(mcp_approved).to_string();
+        assert_eq!(
+            row("weather").split_whitespace().nth(2),
+            Some(approved.as_str()),
+            "the approval is kept beside the refusal: {listed}"
+        );
+        assert_eq!(row("docs").split_whitespace().count(), 4, "{listed}");
+
+        let (outcome, got) = typing(&directory, &["get", "weather"], "");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(got.lines().any(|line| line.trim() == denied), "{got}");
+        let (_, maps) = typing(&directory, &["get", "maps"], "");
+        assert!(
+            maps.lines().any(|line| line.trim() == not_allowed),
+            "{maps}"
+        );
+        let (_, docs) = typing(&directory, &["get", "docs"], "");
+        assert!(!docs.contains(&path), "{docs}");
     }
 
     #[test]
@@ -817,6 +1012,80 @@ mod tests {
         assert!(!approved(&directory, &weather()));
         let (outcome, _) = typing(&directory, &["approve", "weather"], "y\n");
         assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(approved(&directory, &weather()));
+    }
+
+    /// SERVERS-3: a bare `--` starts the program as `--stdio --` does, which is how `claude mcp add`
+    /// spells it, with the flags before it read the same and every word after it the server's.
+    #[test]
+    fn a_bare_double_dash_declares_the_program_after_it() {
+        let directory = scratch("cli-mcp-bare-dashes");
+        let place = std::fs::canonicalize(&directory).unwrap();
+        let place = place.to_str().unwrap();
+        let declared_by = |flags: &[&str]| declared(&words(flags)).ok();
+
+        assert_eq!(
+            declared_by(&["--", "npx", "-y", "weather-mcp"]),
+            Some(weather())
+        );
+        let flagged = Declaration::stdio(
+            words(&["/opt/srv", "--http", "x"]),
+            words(&["TOKEN"]),
+            Some(place.to_string()),
+        )
+        .unwrap();
+        assert_eq!(
+            declared_by(&[
+                "--env", "TOKEN", "--dir", place, "--", "/opt/srv", "--http", "x"
+            ]),
+            Some(flagged)
+        );
+
+        let refused = |flags: &[&str]| match declared(&words(flags)) {
+            Err(Refusal::Said((Ending::Argument, said))) => said,
+            _ => panic!("{flags:?} was not refused as an argument"),
+        };
+        assert_eq!(refused(&["--"]), t!(mcp_stdio_needs_a_program).to_string());
+        assert_eq!(
+            refused(&["--http", "https://mcp.example.com/mcp", "--", "npx"]),
+            t!(mcp_two_transports).to_string()
+        );
+    }
+
+    /// SERVERS-10: a program named by a bare name is looked for only in the `PATH` its declaration
+    /// names, so `add` names `PATH` for one, once, whichever way it was typed. A program given as a
+    /// path is declared with only the variables named.
+    #[test]
+    fn a_program_named_by_a_bare_name_is_declared_with_path() {
+        for (flags, expected) in [
+            (&["--", "npx", "weather-mcp"][..], &["PATH"][..]),
+            (&["--stdio", "--", "npx", "weather-mcp"], &["PATH"]),
+            (&["--env", "PATH", "--", "npx", "weather-mcp"], &["PATH"]),
+            (
+                &["--env", "TOKEN", "--", "npx", "weather-mcp"],
+                &["TOKEN", "PATH"],
+            ),
+            (&["--", "/opt/weather-mcp"], &[]),
+            (&["--", "bin/weather-mcp"], &[]),
+            (&["--env", "TOKEN", "--", "/opt/weather-mcp"], &["TOKEN"]),
+        ] {
+            let Ok(Declaration::Stdio { variables, .. }) = declared(&words(flags)) else {
+                panic!("{flags:?} declared no local server");
+            };
+            assert_eq!(variables, words(expected), "{flags:?}");
+        }
+    }
+
+    /// The `PATH` `add` names is shown at the question like one typed, since the approval is of
+    /// the declaration and the declaration hands the server its value.
+    #[test]
+    fn the_question_shows_the_path_a_bare_name_was_given() {
+        let directory = scratch("cli-mcp-bare-path");
+        let short = ["add", "weather", "--", "npx", "-y", "weather-mcp"];
+        let (outcome, screen) = typing(&directory, &short, "y\n");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let shown = t!(mcp_variables, names = "PATH").to_string();
+        assert!(screen.lines().any(|line| line.trim() == shown), "{screen}");
         assert!(approved(&directory, &weather()));
     }
 
@@ -901,9 +1170,134 @@ mod tests {
         ];
         let (outcome, _) = typing(&directory, &pinned, "n\n");
         assert!(outcome.is_ok());
-        let replaced =
-            Declaration::stdio(words(&["npx", "-y", "weather-mcp@1.2.0"]), Vec::new(), None)
-                .unwrap();
+        let replaced = Declaration::stdio(
+            words(&["npx", "-y", "weather-mcp@1.2.0"]),
+            words(&["PATH"]),
+            None,
+        )
+        .unwrap();
         assert!(Approvals::read(&directory).changed("weather", &replaced.digest()));
+    }
+
+    /// Record answer 2 at a server's question for `project`, and answer 2 at a call's question for
+    /// `weather:get_forecast` there and `weather:get_alerts` somewhere else.
+    fn answered_in(directory: &Path, project: &Path, elsewhere: &Path) {
+        let mut projects = Projects::default();
+        assert!(projects.add(project));
+        std::fs::write(mcp::projects_file(directory), projects.to_text()).expect("projects");
+        let mut standing = Standing::default();
+        assert!(standing.add("weather", "get_forecast", project));
+        assert!(standing.add("weather", "get_alerts", elsewhere));
+        std::fs::write(mcp::tools_file(directory), standing.to_text()).expect("tools");
+    }
+
+    #[test]
+    fn forget_drops_a_projects_standing_answers_and_nobody_elses() {
+        let directory = scratch("cli-mcp-forget");
+        let project = directory.join("project");
+        std::fs::create_dir_all(&project).expect("project");
+        let project = project.canonicalize().expect("canonical");
+        let elsewhere = directory.join("elsewhere");
+        answered_in(&directory, &project, &elsewhere);
+
+        let (outcome, screen) = typing(
+            &directory,
+            &["forget", project.to_str().expect("utf-8")],
+            "",
+        );
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(!Projects::read(&directory).contains(&project));
+        let standing = Standing::read(&directory);
+        assert!(!standing.covers("weather", "get_forecast", &project));
+        assert!(
+            standing.covers("weather", "get_alerts", &elsewhere),
+            "another project's answer went with it"
+        );
+        let named = shown(&project.display().to_string());
+        assert!(
+            screen.contains(&t!(mcp_forgot_servers, path = &named)),
+            "{screen}"
+        );
+        assert!(
+            screen.contains(&t!(
+                mcp_forgot_tool,
+                tool = "weather:get_forecast",
+                path = &named
+            )),
+            "{screen}"
+        );
+
+        let (outcome, screen) = typing(
+            &directory,
+            &["forget", project.to_str().expect("utf-8")],
+            "",
+        );
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert_eq!(
+            screen,
+            format!("{}\n", t!(mcp_forgot_nothing, path = &named))
+        );
+    }
+
+    /// A deleted checkout is the one most worth forgetting, and nothing resolves its path.
+    #[test]
+    fn forget_takes_a_path_that_no_longer_resolves_as_typed() {
+        let directory = scratch("cli-mcp-forget-gone");
+        let gone = directory.join("deleted-checkout");
+        answered_in(&directory, &gone, &directory.join("elsewhere"));
+
+        let (outcome, _) = typing(&directory, &["forget", gone.to_str().expect("utf-8")], "");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(!Projects::read(&directory).contains(&gone));
+        assert!(!Standing::read(&directory).covers("weather", "get_forecast", &gone));
+    }
+
+    /// A record that is there and cannot be read is left as it is and said to be, rather than
+    /// written back as the one line fewer it would be once read as empty.
+    #[test]
+    fn forget_leaves_a_record_it_cannot_read_as_it_is() {
+        let directory = scratch("cli-mcp-forget-unreadable");
+        let project = directory.join("checkout");
+        answered_in(&directory, &project, &directory.join("elsewhere"));
+        let too_large = " ".repeat(64 * 1024 + 1);
+        std::fs::write(mcp::tools_file(&directory), &too_large).unwrap();
+        let projects = std::fs::read_to_string(mcp::projects_file(&directory)).unwrap();
+
+        let (outcome, _) = typing(
+            &directory,
+            &["forget", project.to_str().expect("utf-8")],
+            "",
+        );
+        let (ending, said) = outcome.expect_err("an unreadable record was forgotten from");
+        assert_eq!(ending, Ending::Failed);
+        assert!(said.contains(t!(mcp_record_too_large)), "{said}");
+        assert_eq!(
+            std::fs::read_to_string(mcp::tools_file(&directory)).unwrap(),
+            too_large
+        );
+        assert_eq!(
+            std::fs::read_to_string(mcp::projects_file(&directory)).unwrap(),
+            projects,
+            "a record was written though the other could not be read"
+        );
+    }
+
+    #[test]
+    fn forget_takes_one_path_at_most_and_writes_nothing_incognito() {
+        let directory = scratch("cli-mcp-forget-refused");
+        let (outcome, _) = typing(&directory, &["forget", "a", "b"], "");
+        assert_eq!(outcome.map_err(|(ending, _)| ending), Err(Ending::Argument));
+
+        let home = Home {
+            directory: Some(directory.clone()),
+            writable: false,
+        };
+        let mut person = Person {
+            answers: "".as_bytes(),
+            screen: Vec::new(),
+            present: true,
+        };
+        let outcome = run(&words(&["forget"]), &home, &Managed::default(), &mut person);
+        assert_eq!(outcome.map_err(|(ending, _)| ending), Err(Ending::Failed));
     }
 }

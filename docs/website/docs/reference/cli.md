@@ -19,6 +19,7 @@ Usage:
   bravebot --fork <id>                   Fork a session and start exploring a different path
   bravebot doctor                        Check configuration and confinement
   bravebot import-leo-creds [channel]    Import a Leo Premium subscription
+  bravebot import-providers              Import a model service Claude Code or opencode configured
   bravebot mcp <command>                 Declare, list and approve MCP servers
 ```
 
@@ -35,6 +36,7 @@ Usage:
 | `bravebot --fork <id>`, `-f` | copy a session into one of its own and open that, to try a second approach |
 | `bravebot doctor` | report configuration and confinement, changing nothing |
 | `bravebot import-leo-creds [channel]` | import a Leo Premium subscription |
+| `bravebot import-providers` | import a model service Claude Code or opencode configured, asking first |
 | `bravebot mcp <command>` | declare, list, approve and remove MCP servers ([below](#mcp)) |
 | `bravebot --version`, `-V` | print the build |
 | `bravebot --help`, `-h` | print this |
@@ -51,6 +53,7 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--plain` | a session in lines, taking nothing from the terminal ([below](#--plain)) |
 | `--mode <turn\|manifest>` | how a one-shot is run; `turn` (the default) decides step by step, `manifest` plans the whole run first ([below](#--mode-turnmanifest)) |
 | `--model <name>` | the model this run asks for; outranks every other way one is named ([below](#--model-name)) |
+| `--effort <level>` | how hard this run asks the model to think; outranks every other way one is named ([below](#--effort-level)) |
 | `--settings <path>` | read one more settings file, above every layer found ([below](#--settings-path)) |
 | `--json` | put one result object on stdout in the reply's place ([below](#--json)) |
 | `--trace` | print the audit trail to stderr |
@@ -103,11 +106,13 @@ bravebot --model opus "review the diff on this branch"
 ```
 
 Names the model for one run, and outranks every other way one is named. Where no flag names one, a
-run asks for the model a session opening in the same directory would: the choice
-[`/model`](../customize/configuration.md#choosing-a-model) recorded, then an exported
-`BRAVE_AI_CHAT_DEFAULT_MODEL`, then the settings file's [`model`](../customize/configuration.md#model)
-key, then the model the build was made with. So a script uses the model you picked without your
-having to write it down twice, and the flag is the one route to a different one.
+run asks for the model a session opening in the same directory would: a
+[`model`](../customize/configuration.md#model) key in the checkout's settings or the file
+`--settings` names, then the choice [`/model`](../customize/configuration.md#choosing-a-model)
+recorded, then the key in `~/.bravebot/settings.json`, then an exported
+`BRAVE_AI_CHAT_DEFAULT_MODEL`, then the model the build was made with. So a script uses the model
+you picked without your having to write it down twice, a checkout that names its model gets it, and
+the flag names a different one for a single run.
 
 `opus`, `sonnet` and `haiku` name a **tier** here, exactly as they do in a settings file, and resolve
 the same way. Any other name is sent as you wrote it. `--model` with no name after it, or a blank
@@ -120,6 +125,23 @@ also **exits non-zero**, which is the part a script is certain to read. A run th
 takes whatever was recorded or configured and does not fail over it. Two cases are neither reported
 nor failed: an entry that resolves per request, such as `automatic-bravebot`, and a backend asked by
 an opaque handle, which never reports back the name it was given.
+
+## `--effort <level>`
+
+```sh
+bravebot --effort high "why does this test fail only on the second run?"
+```
+
+Names how hard the model is asked to think for one run, in the words
+[`/effort`](commands.md#effort-level) takes (`low`, `medium`, `high`, `xhigh` and `max`, in any
+case), and outranks every other way one is named. Where no flag names one, a run asks for the level a
+session opening in the same directory would: an [`effort`](../customize/configuration.md#effort) key
+in the checkout's settings or the file `--settings` names, then the level `/effort` recorded, then the
+key in `~/.bravebot/settings.json`. Nothing is recorded, so the next run is back to those.
+
+`--effort` with no word after it, a blank one, or a word that is no level is refused and the run
+stops, naming the levels it takes. A level the model in force reads none of is not sent, as it is
+not from any other source.
 
 ## `--add-dir <path>`
 
@@ -305,23 +327,38 @@ bravebot import-leo-creds [stable|beta|nightly|development] [--forget]
 Without a channel, `stable` is what importing means. `--forget` removes what was imported. See
 [Leo Premium](../customize/premium.md).
 
+## `import-providers`
+
+```sh
+bravebot import-providers
+```
+
+Reads what Claude Code and opencode configured in your home directory, shows what it would add to
+`~/.bravebot/settings.json`, and asks once for each. It takes no arguments, needs a terminal to ask on,
+and refuses in an incognito session. See
+[Importing from Claude Code or opencode](../customize/configuration.md#importing-from-claude-code-or-opencode).
+
 ## `mcp`
 
 ```sh
-bravebot mcp add <alias> [--env <name>]... [--dir <path>] --stdio -- <program> [args...]
+bravebot mcp add <alias> [--env <name>]... [--dir <path>] [--stdio] -- <program> [args...]
 bravebot mcp add <alias> --http <url>
 bravebot mcp get <alias>
 bravebot mcp list
 bravebot mcp approve <alias>
 bravebot mcp remove <alias>
+bravebot mcp forget [path]
 ```
 
 Declares a server in `~/.bravebot/mcp.json`, and approves one. `add` writes the declaration and then
 asks whether to use it; `approve` asks again later. The question is put only where stdin and stdout
 are both a terminal, and only `y` approves. `approve` with nobody to ask, or answered with anything
-else, exits 4. `list` exits 3 where a declaration in the file cannot be used. `add`, `approve` and
-`remove` are refused in an incognito session. No session uses a declared server yet. See
-[MCP servers](../customize/mcp-servers.md).
+else, exits 4. `list` exits 3 where a declaration in the file cannot be used. `list` and `get` name
+the machine-level file beside a server it
+[refuses](../customize/mcp-servers.md#refused-by-an-administrator), and why. `forget` drops the
+standing answers recorded for a project, the current directory unless a path is given, so its
+servers and tools are asked about again. `add`, `approve`, `remove` and `forget` are refused in an
+incognito session. See [MCP servers](../customize/mcp-servers.md).
 
 ## Interactive keys
 

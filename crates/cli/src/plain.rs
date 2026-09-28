@@ -22,8 +22,9 @@
 
 use crate::exit::{Ending, fail};
 use bravebot_agent::confirm::{
-    Confirmer, Decision, ExposureRequest, FetchRequest, ManifestRequest, OutputRequest,
-    RunDecision, RunRequest, ServerRequest, VetRequest, VouchRequest, WriteRequest,
+    CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, ManifestRequest,
+    McpCallRequest, OutputRequest, RunDecision, RunRequest, ServerRequest, ToolListRequest,
+    VetRequest, VouchRequest, WriteRequest,
 };
 use bravebot_agent::diff::Change;
 use bravebot_agent::turn::{self, Task};
@@ -90,18 +91,11 @@ pub fn session(skip_permissions: bool) -> ExitCode {
     // Asked of the model this session will request, which is the recorded one or the configured
     // default: no model can be named on the command line here, since the flag composes with
     // everything except this one.
-    if let bravebot_agent::backend::Serving::NothingConfigured {
-        subscription,
-        a_service_is_configured,
-    } = bravebot_agent::backend::serving(
-        &config,
-        &bravebot_net::Egress::new(),
-        &crate::model_for_this_run(None, &config),
-    ) {
-        return fail(
-            Ending::Configuration,
-            crate::how_to_configure_a_model(subscription.as_deref(), a_service_is_configured),
-        );
+    //
+    // Where nothing is configured at all, what Claude Code or opencode configured is offered first,
+    // in lines, the way this session asks everything (IMPORT-1).
+    if let Some(ended) = crate::import::before_the_session(&mut config) {
+        return ended;
     }
 
     let settings = bravebot_config::Settings::load();
@@ -130,7 +124,7 @@ pub fn session(skip_permissions: bool) -> ExitCode {
         false => PermissionMode::Ask,
     };
 
-    let model = bravebot_session::store::load_model();
+    let model = bravebot_session::store::model(bravebot_session::store::load_model(), &settings);
     let mut asking = Prompting::new(std::io::BufReader::new(std::io::stdin()), std::io::stderr());
 
     asking.say(&t!(
@@ -195,6 +189,12 @@ pub fn session(skip_permissions: bool) -> ExitCode {
         .unwrap_or_else(|| config.default_model.clone());
     let reads_effort = bravebot_tui::app::adopt_listing_for_model(&mut config, &named);
 
+    // The level the turns below ask for: the recorded pick and the settings layers, ranked as
+    // BACKEND-43 ranks them. Resolved once, here, beside the other answers this session reads out
+    // of a file, because a file edited mid-session describes the next one and this mode has no
+    // command that changes the level.
+    let effort = bravebot_session::store::effort(bravebot_session::store::load_effort(), &settings);
+
     // Said where a level was chosen and the model in force reads none, because a level charged for
     // and discarded at the far end answers exactly like one that was honoured, so silence would
     // leave somebody believing every turn of the session thought harder than it did. Said once,
@@ -203,7 +203,7 @@ pub fn session(skip_permissions: bool) -> ExitCode {
     // Nothing is said where no level was chosen: nothing was withheld from somebody who asked for
     // none. What is recorded stays recorded either way, so the choice applies again the moment a
     // model that reads one is in force (BACKEND-22).
-    if !reads_effort && bravebot_session::store::load_effort().is_some() {
+    if !reads_effort && effort.is_some() {
         asking.say(&t!(cli_notice, notice = t!(session_effort_not_read)));
     }
 
@@ -231,6 +231,7 @@ pub fn session(skip_permissions: bool) -> ExitCode {
         model,
         in_force: named,
         reads_effort,
+        effort,
         complained: None,
         home,
         profile,
@@ -238,7 +239,7 @@ pub fn session(skip_permissions: bool) -> ExitCode {
         trust,
         programs: TrustedPrograms::new(),
         servers: None,
-        mcp: reached.grants(),
+        mcp: reached.session(),
         asked_about: AskedAbout::new(),
         exposed: bravebot_core::credentials::Exposed::new(),
         auto_vetting: bravebot_core::vetting::auto(
@@ -365,6 +366,12 @@ struct Running<'a> {
     /// the rest of its life after the requests carrying one had stopped. A turn carries the
     /// recorded level only where this is true (BACKEND-22).
     reads_effort: bool,
+    /// How hard the turns of this session ask the model to think, where anything asked.
+    ///
+    /// The pick `/effort` recorded, and otherwise the level a settings file named (BACKEND-43).
+    /// Resolved once where the session is assembled, for the reason the attribution is: a file
+    /// edited mid-session describes the next one, and this mode has no command that changes it.
+    effort: Option<bravebot_session::store::Effort>,
     /// The last substitution said, so the same complaint is not repeated every turn.
     ///
     /// A session asks the same model over and over, so a substitution said once per turn is one
@@ -400,14 +407,14 @@ struct Running<'a> {
     /// standing answers mean what they mean in a session that draws; what this mode does not have
     /// is the key that turns the mode on, since it offers one answer per question (CLI-14).
     auto_vetting: bool,
-    /// A grant for each MCP server this session started (SERVERS-9).
-    mcp: Vec<bravebot_core::capability::ServerAlias>,
+    /// The MCP servers this session started, where it started any, with their lists (SERVERS-9).
+    mcp: Option<bravebot_agent::mcp::Session>,
 }
 
 impl<C: Confirmer + Send> Turns<C> for Running<'_> {
     fn take(&mut self, prompt: &str, asking: &mut C) -> Said {
         let task = Task::new(prompt.to_string())
-            .with_servers(self.mcp.clone())
+            .with_mcp(self.mcp.clone())
             .with_home(self.home.clone())
             .with_profile(self.profile.clone())
             // No bound on the rounds, as a session passes: there is a person watching, and they
@@ -418,7 +425,7 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
             // Only where the roster describing the model in force says it is read. The choice
             // itself is left on disk, so it applies again under a model that reads one
             // (BACKEND-22).
-            .with_effort(bravebot_session::store::load_effort().filter(|_| self.reads_effort))
+            .with_effort(self.effort.filter(|_| self.reads_effort))
             .with_permissions(self.permissions.clone())
             .with_permission_mode(self.mode)
             .with_attribution(self.attribution.clone())
@@ -443,7 +450,7 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
             )
         });
 
-        let outcome = turn::resume(
+        let completed = turn::resume(
             self.config,
             &self.egress,
             self.workspace,
@@ -464,23 +471,18 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
         // index of the same tree.
         self.servers = Some(servers);
 
-        let mut said = match outcome {
-            Ok(outcome) => {
-                // What the turn changed about what the session carries. Taken back from the
-                // outcome rather than recorded by whoever drew the prompt, so there is one copy of
-                // each answer and nothing to disagree with it.
-                self.trust = outcome.trust.clone();
-                self.programs = outcome.programs.clone();
-                self.asked_about = outcome.asked_about.clone();
-                self.exposed = outcome.exposed.clone();
-                Said {
-                    reply: outcome.reply_for_display().to_string(),
-                    failure: None,
-                    notices: outcome.notices.clone(),
-                    clean: outcome.clean,
-                    not_served: self.substituted(&outcome.model),
-                }
-            }
+        self.trust = completed.decisions.trust;
+        self.programs = completed.decisions.programs;
+        self.asked_about = completed.decisions.asked_about;
+        self.exposed = completed.decisions.exposed;
+        let mut said = match completed.outcome {
+            Ok(outcome) => Said {
+                reply: outcome.reply_for_display().to_string(),
+                failure: None,
+                notices: outcome.notices.clone(),
+                clean: outcome.clean,
+                not_served: self.substituted(&outcome.model),
+            },
             // From the reporter rather than the outcome, there being no outcome: a turn that could
             // not run still said what its hooks did, and those sentences are the person's own to
             // hear (HOOK-7).
@@ -509,8 +511,8 @@ impl Running<'_> {
     /// Said once, on the turn that learned it, for the reason the same sentence is said once at
     /// startup: the condition holds for the rest of the session and repeating it between every
     /// prompt and its reply would bury the work. Nothing is said where no level was chosen, nothing
-    /// having been withheld from somebody who asked for none, and the choice stays on disk either
-    /// way so it applies again under a model that reads one (BACKEND-22).
+    /// having been withheld from somebody who asked for none, and the choice is kept either way so
+    /// it applies again under a model that reads one (BACKEND-22).
     fn a_level_refused_this_turn(&mut self) -> Option<String> {
         if !self.reads_effort
             || !bravebot_agent::backend::refused_a_level(self.config, &self.in_force)
@@ -518,7 +520,7 @@ impl Running<'_> {
             return None;
         }
         self.reads_effort = false;
-        bravebot_session::store::load_effort().map(|_| t!(session_effort_not_read).to_string())
+        self.effort.map(|_| t!(session_effort_not_read).to_string())
     }
 
     /// What to say where the endpoint answered with a model other than the one in force, and
@@ -600,13 +602,13 @@ pub struct Prompting<R: BufRead, W: Write> {
 }
 
 impl<R: BufRead, W: Write> Prompting<R, W> {
-    fn new(input: R, output: W) -> Self {
+    pub(crate) fn new(input: R, output: W) -> Self {
         Self { input, output }
     }
 
     /// Say something beside the work. A failed write is dropped: stderr closed means nobody is
     /// reading, not that the session should end holding what it was going to say.
-    fn say(&mut self, line: &str) {
+    pub(crate) fn say(&mut self, line: &str) {
         let _ = writeln!(self.output, "{line}");
         let _ = self.output.flush();
     }
@@ -663,7 +665,7 @@ impl<R: BufRead, W: Write> Prompting<R, W> {
     }
 
     /// Ask, and read the end of the input as a refusal.
-    fn ask(&mut self, lines: &[String], question: &str) -> Decision {
+    pub(crate) fn ask(&mut self, lines: &[String], question: &str) -> Decision {
         self.put(lines, question).unwrap_or(Decision::Reject)
     }
 }
@@ -935,6 +937,67 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             lines.push(format!("  {}", shown(finding)));
         }
         self.ask(&lines, t!(expose_title))
+    }
+
+    /// The whole list, each description behind the margin and none of it cut.
+    ///
+    /// A yes puts exactly this text in front of the planner for every session the list stays the
+    /// same, so what is read here has to be all of it. The description is behind the margin because
+    /// it is the server's words, and the names and arguments are not because the client drew them
+    /// from a fixed alphabet.
+    fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision {
+        let mut lines = vec![match request.tools.is_empty() {
+            true => t!(mcp_tools_none, alias = shown(&request.alias)),
+            false => t!(
+                mcp_tools_offered,
+                alias = shown(&request.alias),
+                count = request.tools.len()
+            ),
+        }];
+        if request.changed {
+            lines.push(t!(mcp_tools_changed).to_string());
+        }
+        lines.push(checked(request.verdict));
+        for tool in &request.tools {
+            lines.push(format!("  {}", shown(&tool.name)));
+            if !tool.arguments.is_empty() {
+                lines.push(format!("    {}", shown(&tool.arguments.join(", "))));
+            }
+            if let Some(description) = &tool.description {
+                lines.extend(
+                    description
+                        .lines()
+                        .map(|line| format!("{} {}", crate::progress::QUARANTINE_BAR, shown(line))),
+                );
+            }
+        }
+        if request.refused > 0 {
+            lines.push(t!(mcp_tools_not_listed, count = request.refused));
+        }
+        lines.push(t!(mcp_tools_explained).to_string());
+        self.ask(&lines, t!(mcp_tools_title))
+    }
+
+    /// Approves this call once and nothing else, for the reason a run is approved once here: a
+    /// line has room for one answer, and the one that stops asking outlives the session.
+    fn confirm_mcp_call(&mut self, request: &McpCallRequest) -> CallDecision {
+        let mut lines = vec![format!("{} {}", shown(&request.name()), t!(mcp_call_kind))];
+        match request.arguments.is_empty() {
+            true => lines.push(format!("  {}", t!(mcp_call_no_arguments))),
+            false => lines.extend(
+                request
+                    .arguments
+                    .iter()
+                    .map(|(name, value)| format!("  {}: {}", shown(name), shown(value))),
+            ),
+        }
+        if let Some(description) = &request.description {
+            lines.extend(quarantined(description));
+        }
+        match self.ask(&lines, t!(mcp_call_question)) {
+            Decision::Approve => CallDecision::approve(),
+            Decision::Reject => CallDecision::reject(),
+        }
     }
 
     /// The plan, before anything has run.
@@ -1405,3 +1468,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "plain_retention_tests.rs"]
+mod retention_tests;

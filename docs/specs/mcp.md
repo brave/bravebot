@@ -153,8 +153,9 @@ there says only what its failure's code and method say.
 ### MCP-9: a stdio server is started with none of this process's environment
 
 The environment this process holds is emptied before a server starts, on every platform. What the
-server receives is the variables its caller hands it and nothing else, which is none unless its
-declaration names some ([SERVERS-10](mcp-servers.md#SERVERS-10)).
+server receives is the variables its caller hands it and nothing else, which is the variables its
+declaration names and a `HOME` naming a directory of the server's own
+([SERVERS-10](mcp-servers.md#SERVERS-10)).
 
 **Why.** A server is code we did not write, and a credential this process authenticates with sits
 in a variable rather than in a file, so confinement over paths withholds none of it. A program

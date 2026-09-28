@@ -8,6 +8,7 @@
 
 #![forbid(unsafe_code)]
 
+use bravebot_sandbox::swap::LockedText;
 use std::env;
 use std::fmt;
 use std::time::Duration;
@@ -26,13 +27,14 @@ mod settings;
 #[cfg(test)]
 mod testutil;
 
-pub use managed::{Managed, managed_file};
+pub use managed::{Managed, Refusal, Rule, Server, managed_file};
 pub use settings::{
     Attribution, NotADocument, PermissionLists, Settings, check_document, name_a_settings_file,
     named_settings_file, user_settings_file,
 };
 
 pub mod bedrock;
+pub mod import;
 pub mod provider;
 
 include!(concat!(env!("OUT_DIR"), "/baked.rs"));
@@ -211,37 +213,42 @@ const _: () = assert!(DEFAULT_CONTEXT_BUDGET < SMALLEST_USEFUL_WINDOW);
 /// let _ = Secret::new("a") == Secret::new("a");
 /// ```
 ///
-/// Dropping one overwrites its buffer, so a credential is not handed back to the allocator
-/// intact ([CRED-23](../../../docs/specs/credential-protection.md#CRED-23)). Cloning makes a
-/// second buffer that is cleared the same way when it goes.
+/// The value is held in pages of its own, which the kernel is asked to keep out of swap and which
+/// are overwritten before they are handed back
+/// ([CRED-23](../../../docs/specs/credential-protection.md#CRED-23)). The `String` it was made from
+/// is overwritten once the value has been copied out of it. Cloning makes a second copy, held and
+/// cleared the same way.
+///
+/// What this reaches is the value this type holds and a `String` it was handed, which is what
+/// CRED-23 promises and all it promises. Handed a `&str`, it copies it into a `String` of its own
+/// first, so the buffer that borrow points into is the caller's to clear. A value that was copied
+/// on its way in, by an allocator growing a `String` or by a library between here and a socket,
+/// left a copy nothing here holds a pointer to.
 #[derive(Clone)]
-pub struct Secret(String);
+pub struct Secret(LockedText);
 
 impl Secret {
     pub fn new(value: impl Into<String>) -> Self {
-        Self(value.into())
+        let mut value = value.into();
+        Self(hold(&mut value))
     }
 
     /// Read the secret. Call sites should be rare and obvious.
     pub fn expose(&self) -> &str {
-        &self.0
+        self.0.as_str()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.0.as_str().is_empty()
     }
 }
 
-/// Clear the buffer rather than return it to the allocator holding a credential.
-///
-/// What this reaches is the buffer this type owns, which is what
-/// [CRED-23](../../../docs/specs/credential-protection.md#CRED-23) promises and all it promises.
-/// A value that was copied on its way in, by an allocator growing a `String` or by a library
-/// between here and a socket, left a copy nothing here holds a pointer to.
-impl Drop for Secret {
-    fn drop(&mut self) {
-        scrub(&mut self.0);
-    }
+/// Copy a credential into pages of its own and overwrite the string it arrived in, which would
+/// otherwise go back to the allocator holding it on the heap the lock was taken to keep it off.
+fn hold(value: &mut String) -> LockedText {
+    let held = LockedText::new(value);
+    scrub(value);
+    held
 }
 
 /// Overwrite a string's bytes where they lie, leaving the buffer as many zero bytes long as the
@@ -898,16 +905,21 @@ fn resolve(
 /// given, leaving a key that parses, is reported by `doctor`, and changes nothing outside a source
 /// build.
 ///
-/// An exported variable still wins, as it does everywhere else. `env.BRAVE_AI_CHAT_DEFAULT_MODEL`
-/// is read last, below the baked-in value, because that block is variables and is ranked like them.
+/// It sits above an exported variable too, the one place a person's settings file outranks one. The
+/// variable names a default, which is what a `.envrc` that exports it for every checkout means by
+/// it, and a file that names a model is somebody choosing one. A variable ranked above the file
+/// would also rank above a saved `/model` pick, which answers as the person's own file does.
+/// `env.BRAVE_AI_CHAT_DEFAULT_MODEL` is read last, below the baked-in value, because that block is
+/// variables and is ranked like them.
 fn resolve_model(
     from_env: Option<String>,
     settings: &Settings,
     baked: impl Fn(&str) -> Option<String>,
 ) -> Option<String> {
-    from_env
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| settings.model().map(str::to_string))
+    settings
+        .model()
+        .map(str::to_string)
+        .or_else(|| from_env.filter(|value| !value.trim().is_empty()))
         .or_else(|| baked(env_var::DEFAULT_MODEL))
         .or_else(|| settings.get(env_var::DEFAULT_MODEL).map(str::to_string))
 }
@@ -917,8 +929,9 @@ impl Config {
     /// built into this binary.
     ///
     /// The environment wins over both, so a developer can point a released binary at a local
-    /// backend without rebuilding it. What the machine-level file pinned wins over the environment,
-    /// which is the one thing that does.
+    /// backend without rebuilding it. What the machine-level file pinned wins over the environment
+    /// for every value, and a `model` key in a settings file wins over it for the model, since the
+    /// exported model is a default (`resolve_model` says why).
     pub fn from_env() -> Result<Self, ConfigError> {
         Self::from_env_and_settings(&Settings::load(), &Managed::load())
     }
@@ -938,7 +951,8 @@ impl Config {
     /// The `model` key is the other exception, and sits above the baked-in value rather than below
     /// it. Every release bakes in a default model, so a `model` key ranked like the `env` block
     /// would lose to it on every binary anybody was given: the key would parse, be reported by
-    /// `doctor`, and change nothing outside a source build. An exported variable still outranks it.
+    /// `doctor`, and change nothing outside a source build. It outranks an exported variable too,
+    /// for the reason [`resolve_model`] gives.
     pub fn from_env_and_settings(
         settings: &Settings,
         managed: &Managed,
@@ -2574,21 +2588,28 @@ mod tests {
         assert_eq!(chosen.as_deref(), Some("opus"));
     }
 
-    /// A variable exported for one session is still the most specific thing the person said, here as
-    /// everywhere else.
+    /// The variable names a default, and a `.envrc` exports it for every checkout. Ranked above the
+    /// file it would outrank every `model` key and every saved `/model` pick on any machine that
+    /// sources one. Where no file names a model, the variable still decides over the build.
     #[test]
-    fn an_exported_model_outranks_the_settings_file() {
+    fn a_model_in_the_settings_file_outranks_an_exported_one() {
         let settings = Settings::parse(r#"{"model": "opus"}"#);
         let chosen = resolve_model(Some("from-the-env".into()), &settings, |_| None);
+        assert_eq!(chosen.as_deref(), Some("opus"));
+
+        let chosen = resolve_model(Some("from-the-env".into()), &Settings::default(), |_| {
+            Some("baked".into())
+        });
         assert_eq!(chosen.as_deref(), Some("from-the-env"));
     }
 
-    /// A blank variable is a placeholder rather than an instruction to discard what the file said.
+    /// A blank variable is a placeholder rather than an instruction to discard what the build said.
     #[test]
-    fn a_blank_exported_model_does_not_shadow_the_settings_file() {
-        let settings = Settings::parse(r#"{"model": "opus"}"#);
-        let chosen = resolve_model(Some("   ".into()), &settings, |_| None);
-        assert_eq!(chosen.as_deref(), Some("opus"));
+    fn a_blank_exported_model_does_not_shadow_the_baked_in_one() {
+        let chosen = resolve_model(Some("   ".into()), &Settings::default(), |_| {
+            Some("baked".into())
+        });
+        assert_eq!(chosen.as_deref(), Some("baked"));
     }
 
     /// The `env` block is variables, and is ranked like them: below what the build baked in. Only
@@ -2983,6 +3004,25 @@ mod tests {
         assert_eq!(format!("{secret:?}"), "Secret(<redacted>)");
         assert_eq!(format!("{secret}"), "<redacted>");
         assert!(!format!("{secret:?}").contains("live-credential"));
+    }
+
+    /// A credential is handed over in a `String` the caller made, and copying it into locked pages
+    /// protects nothing while that string goes back to the allocator holding it. The value held
+    /// has to read back as what was handed over, so that a hold which cleared the string first is
+    /// not taken for one that cleared it after.
+    #[test]
+    fn the_string_a_secret_is_made_from_is_overwritten_once_it_is_held() {
+        let mut value = String::from("sk-live-0123456789abcdef");
+        let length = value.len();
+
+        let held = hold(&mut value);
+
+        assert_eq!(held.as_str(), "sk-live-0123456789abcdef");
+        assert_eq!(
+            value.as_bytes(),
+            vec![0u8; length],
+            "the string the credential arrived in still holds it"
+        );
     }
 
     /// The credential has to be gone from the allocation, not just from the length.

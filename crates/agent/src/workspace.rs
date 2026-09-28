@@ -77,6 +77,22 @@ pub const MAX_ATTACHMENT_BYTES: usize = 8 * 1024 * 1024;
 /// the budget is what is held at once, not what each turn may add.
 pub const MAX_REWIND_BYTES: usize = 32 * 1024 * 1024;
 
+/// A `read_git` call's arguments: the four the planner spells as text, which are gated as
+/// routing, and the literals the tool already parsed.
+#[derive(Clone, Copy)]
+pub struct GitQuestion<'a> {
+    pub repository: &'a Labelled<String>,
+    pub revision: Option<&'a Labelled<String>>,
+    pub path: Option<&'a Labelled<String>>,
+    pub pattern: Option<&'a Labelled<String>>,
+    pub query: crate::git::Query,
+    pub count: usize,
+    pub skip: usize,
+    pub messages: bool,
+    pub since: Option<i64>,
+    pub until: Option<i64>,
+}
+
 #[derive(Debug)]
 pub enum WorkspaceError {
     /// The policy refused the operation.
@@ -97,6 +113,11 @@ pub enum WorkspaceError {
     TooLarge { path: String, limit: usize },
     /// The search pattern is not a regular expression this engine can match.
     Pattern { detail: String },
+    /// `read_git` did not answer, for the reason carried.
+    Git {
+        path: String,
+        declined: crate::git::Declined,
+    },
 }
 
 impl WorkspaceError {
@@ -140,6 +161,7 @@ impl WorkspaceError {
                 limit / (1024 * 1024)
             ),
             Self::Pattern { detail } => format!("the search pattern is not usable: {detail}"),
+            Self::Git { declined, .. } => declined.describe(named),
         }
     }
 
@@ -159,7 +181,8 @@ impl WorkspaceError {
             | Self::Stale { path }
             | Self::Contended { path }
             | Self::Binary { path }
-            | Self::TooLarge { path, .. } => path,
+            | Self::TooLarge { path, .. }
+            | Self::Git { path, .. } => path,
         }
     }
 }
@@ -1436,6 +1459,47 @@ impl Workspace {
         };
         std::mem::take(&mut *guard)
     }
+
+    /// Put one path back as it stood, or say it could not be.
+    ///
+    /// Confined the way the write it undoes was, and asked now: a file of a directory opened beside
+    /// the project has to land in one, any other has to land in the project, and a directory on
+    /// its path may since have become a link somewhere else. A removal unlinks the name rather than
+    /// what it points at, so for one it is the directory holding the name that is asked.
+    ///
+    /// A path whose file did not exist is removed again, and one already gone counts as removed:
+    /// the state asked for is the state that is there. A path whose contents were not kept is
+    /// refused without being touched, since what it held is not here to write.
+    pub(crate) fn put_back(&self, path: &Path, was: &Before) -> Result<(), WorkspaceError> {
+        let escapes = || WorkspaceError::Escapes {
+            path: path.display().to_string(),
+        };
+        let reached = match was {
+            Before::Nothing => path.parent(),
+            Before::Bytes(_) | Before::NotKept => Some(path),
+        };
+        let lands = reached.and_then(destination).ok_or_else(escapes)?;
+        let confined = if self.is_opened(path) && !path.starts_with(&self.root) {
+            self.is_opened(&lands)
+        } else {
+            lands.starts_with(&self.root)
+        };
+        if !confined {
+            return Err(escapes());
+        }
+        let failed = |detail: String| WorkspaceError::Io {
+            path: path.display().to_string(),
+            detail,
+        };
+        match was {
+            Before::Bytes(bytes) => std::fs::write(path, bytes).map_err(|e| failed(e.to_string())),
+            Before::Nothing => match std::fs::remove_file(path) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                other => other.map_err(|e| failed(e.to_string())),
+            },
+            Before::NotKept => Err(failed("what it held was not kept".to_string())),
+        }
+    }
 }
 
 /// What a path holds before something is about to write over it, up to `room` bytes.
@@ -1457,22 +1521,6 @@ pub(crate) fn kept(resolved: &Path, room: usize) -> Before {
             Ok(bytes) if bytes.len() <= room => Before::Bytes(bytes),
             _ => Before::NotKept,
         },
-    }
-}
-
-/// Put one path back as it stood, or say it could not be.
-///
-/// A path whose file did not exist is removed again, and one already gone counts as removed: the
-/// state asked for is the state that is there. A path whose contents were not kept is refused
-/// without being touched, since what it held is not here to write.
-pub(crate) fn put_back(path: &Path, was: &Before) -> std::io::Result<()> {
-    match was {
-        Before::Bytes(bytes) => std::fs::write(path, bytes),
-        Before::Nothing => match std::fs::remove_file(path) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            other => other,
-        },
-        Before::NotKept => Err(std::io::Error::other("what it held was not kept")),
     }
 }
 
@@ -1638,6 +1686,15 @@ const IGNORED_DIRECTORIES: &[&str] = &[
     "venv",
     ".bundle",
 ];
+
+/// A path inside the repository the planner called `named`, spelled the way it spelled the
+/// repository, so the trust map is asked about the name it would be asked about for a read.
+pub(crate) fn in_repository(named: &str, inside: &str) -> String {
+    match named {
+        "" | "." => inside.to_owned(),
+        _ => format!("{}/{inside}", named.trim_end_matches('/')),
+    }
+}
 
 /// Shorten a string to at most `limit` bytes without splitting a character.
 ///
@@ -1914,6 +1971,30 @@ impl Collected<'_> {
     }
 }
 
+/// Which files a walk reports: a glob already expanded, read from the workspace root and from the
+/// directory the call named.
+///
+/// Both, because a caller that names a directory writes the rest of the path from there, and one
+/// that names none writes it from the root. Read from the root alone, `directory: "projects"` with
+/// `*/profile.json` selects nothing, and a result saying the glob matched no files sends the
+/// planner to guess another glob for a tree that had the file all along.
+#[derive(Clone, Copy)]
+struct Wanted<'a> {
+    patterns: &'a [String],
+    /// The walked directory as [`Workspace::relative_display`] spells it: empty for the root.
+    under: &'a str,
+}
+
+impl Wanted<'_> {
+    fn admits(&self, relative: &str) -> bool {
+        crate::glob::matches_any(self.patterns, relative)
+            || relative
+                .strip_prefix(self.under)
+                .and_then(|rest| rest.strip_prefix('/'))
+                .is_some_and(|rest| crate::glob::matches_any(self.patterns, rest))
+    }
+}
+
 impl Workspace {
     /// List files under a workspace-relative directory.
     ///
@@ -1966,10 +2047,15 @@ impl Workspace {
             // Ignored here: what a listing left out is the entry it drops below, which the count
             // answers exactly.
             let patterns = glob.as_deref().map(crate::glob::expand);
+            let under = self.relative_display(&root);
+            let wanted = patterns.as_deref().map(|patterns| Wanted {
+                patterns,
+                under: &under,
+            });
             let denied = |path: &str| policy.read_is_denied(path);
             let _ = self.walk_filtered(
                 &root,
-                patterns.as_deref(),
+                wanted,
                 depth,
                 MAX_ENTRIES,
                 &denied,
@@ -2121,6 +2207,11 @@ impl Workspace {
             let mut ignored = Vec::new();
             // Expanded once for the whole walk, not once per path.
             let expanded = glob.as_deref().map(crate::glob::expand);
+            let under = self.relative_display(&root);
+            let wanted = expanded.as_deref().map(|patterns| Wanted {
+                patterns,
+                under: &under,
+            });
             let denied = |path: &str| policy.read_is_denied(path);
             let mut collected = Collected {
                 files: &mut paths,
@@ -2129,7 +2220,7 @@ impl Workspace {
             };
             let unvisited = self.walk_filtered(
                 &root,
-                expanded.as_deref(),
+                wanted,
                 None,
                 self.search_files,
                 &denied,
@@ -2216,6 +2307,161 @@ impl Workspace {
         })
     }
 
+    /// The name the trust map holds `.git` under, for the repository the planner called `named`.
+    pub fn git_dir_key(&self, named: &str) -> String {
+        self.trust_key(&in_repository(named, ".git"))
+    }
+
+    /// Answer a question about the history of the repository at `repository`, from the files under
+    /// its `.git` and without starting git.
+    ///
+    /// Every argument is routing, as a search's are. Whether the repository is opened at all rests
+    /// on the name the planner wrote and the rules, and is decided before any file in it is read:
+    /// the map has to trust `.git` and everything beneath it, and no deny rule may cover a file
+    /// there. Following history means following ids the files hold, so doing it over bytes nobody
+    /// vouched for would be the driver branching on them, and a repository whose files are only
+    /// partly readable has no history this could show without reading the rest.
+    ///
+    /// The answer is labelled by the whole of `.git` and by each working-tree path it showed, so a
+    /// blob that committed a file the map distrusts comes back as untrusted as that file.
+    pub fn read_git<S: Sink>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        question: &GitQuestion<'_>,
+    ) -> Result<Labelled<crate::git::Answer>, WorkspaceError> {
+        let GitQuestion {
+            repository,
+            revision,
+            path,
+            pattern,
+            query,
+            count,
+            skip,
+            messages,
+            since,
+            until,
+        } = *question;
+        policy.capture_files(|policy, _capture| {
+            policy.before_capability(Capability::FileRead)?;
+            policy.before_action("read_git", "repository", Role::Routing, repository)?;
+            let trusted = |field: &'static str, value: &Labelled<String>| {
+                value
+                    .clone()
+                    .into_trusted()
+                    .map_err(|_| WorkspaceError::Invalid {
+                        path: "<untrusted>".into(),
+                        reason: match field {
+                            "revision" => "the revision was not trusted",
+                            "path" => "the path was not trusted",
+                            "pattern" => "the pattern was not trusted",
+                            _ => "the repository was not trusted",
+                        },
+                    })
+            };
+            let named = trusted("repository", repository)?;
+            let revision = match revision {
+                Some(revision) => {
+                    policy.before_action("read_git", "revision", Role::Routing, revision)?;
+                    Some(trusted("revision", revision)?)
+                }
+                None => None,
+            };
+            let path = match path {
+                Some(path) => {
+                    policy.before_action("read_git", "path", Role::Routing, path)?;
+                    Some(trusted("path", path)?)
+                }
+                None => None,
+            };
+            // Compiled before anything under `.git` is opened, so an unusable pattern is reported
+            // as itself rather than as a search that found nothing.
+            let pattern = match pattern {
+                Some(pattern) => {
+                    policy.before_action("read_git", "pattern", Role::Routing, pattern)?;
+                    let needle = trusted("pattern", pattern)?;
+                    if needle.is_empty() {
+                        return Err(WorkspaceError::Invalid {
+                            path: named.clone(),
+                            reason: "the search pattern was empty",
+                        });
+                    }
+                    Some(crate::regex::Regex::compile(&needle).map_err(|e| {
+                        WorkspaceError::Pattern {
+                            detail: e.to_string(),
+                        }
+                    })?)
+                }
+                None => None,
+            };
+            let declined = |declined| WorkspaceError::Git {
+                path: named.clone(),
+                declined,
+            };
+
+            let root = self.resolve(&named)?;
+            let git_dir = root.join(".git");
+            let spelled = |inside: &str| in_repository(&named, inside);
+            let git_key = self.git_dir_key(&named);
+            if !policy.trusts_beneath(&git_key) {
+                return Err(declined(crate::git::Declined::Untrusted));
+            }
+            if policy.read_is_denied(&git_key) {
+                return Err(declined(crate::git::Declined::Fenced));
+            }
+            // Status compares every file in the working tree, so all of it is its read set.
+            let read_set = if query == crate::git::Query::Status {
+                let tree_key = self.trust_key(&named);
+                if !policy.trusts_beneath(&tree_key) {
+                    return Err(declined(crate::git::Declined::UntrustedTree));
+                }
+                tree_key
+            } else {
+                git_key.clone()
+            };
+            let deadline = Instant::now() + self.search_time;
+            let files = crate::git::survey(&git_dir, query, deadline).map_err(declined)?;
+            let fenced = files.iter().any(|file| {
+                let below = file.strip_prefix(&root).unwrap_or(file);
+                let below = bravebot_core::spelling::to_slash(
+                    &below.to_string_lossy(),
+                    BACKSLASH_SEPARATES,
+                )
+                .into_owned();
+                policy.read_is_denied(&self.trust_key(&spelled(&below)))
+            });
+            if fenced {
+                return Err(declined(crate::git::Declined::Fenced));
+            }
+
+            let opened = crate::git::Repository::open(&git_dir).map_err(declined)?;
+            let request = crate::git::Request {
+                query,
+                revision: revision.as_deref(),
+                path: path.as_deref(),
+                count,
+                skip,
+                messages,
+                pattern: pattern.as_ref(),
+                since,
+                until,
+                deadline,
+            };
+            let withheld = |inside: &str| policy.read_is_denied(&self.trust_key(&spelled(inside)));
+            let answer = opened.answer(&request, &withheld).map_err(declined)?;
+            let shown: Vec<String> = answer
+                .shown
+                .iter()
+                .map(|inside| self.trust_key(&spelled(inside)))
+                .collect();
+            let label = policy.observe_repository(
+                Capability::FileRead,
+                &read_set,
+                shown.iter().map(String::as_str),
+            )?;
+            Ok(Labelled::new(answer, label))
+        })
+    }
+
     /// Collect workspace-relative paths of regular files beneath `directory`.
     ///
     /// Symlinks are not followed, which is the same escape `resolve` rejects for a named path.
@@ -2224,7 +2470,7 @@ impl Workspace {
     /// caller distinguish a tree that exactly fills the cap from one that overflows it, so
     /// truncation can be reported rather than guessed at.
     ///
-    /// `patterns`, when given, keeps only paths matching at least one of them. They arrive
+    /// `wanted`, when given, keeps only paths it admits. Its patterns arrive
     /// already expanded by [`crate::glob::expand`], because one walk applies the same pattern
     /// to every path it sees and expanding per path would allocate once per file. The filter
     /// is applied before the cap, so the cap bounds *matches* rather than files examined.
@@ -2244,7 +2490,7 @@ impl Workspace {
     ///
     /// `remaining`, when given, is how many more levels may be descended. A directory at the
     /// boundary is collected as one the walk stopped at instead of being walked, so the caller can
-    /// say the tree continues there. The filter does not apply to those: `patterns` narrows which
+    /// say the tree continues there. The filter does not apply to those: `wanted` narrows which
     /// files are reported, and the shape of the tree is not a file.
     ///
     /// Entries are sorted within each directory, and a directory's own files are taken before
@@ -2258,7 +2504,7 @@ impl Workspace {
     fn walk_filtered(
         &self,
         directory: &Path,
-        patterns: Option<&[String]>,
+        wanted: Option<Wanted<'_>>,
         remaining: Option<usize>,
         limit: usize,
         denied: &dyn Fn(&str) -> bool,
@@ -2311,8 +2557,8 @@ impl Workspace {
                 collected.withheld = true;
                 continue;
             }
-            match patterns {
-                Some(patterns) if !crate::glob::matches_any(patterns, &relative) => continue,
+            match wanted {
+                Some(wanted) if !wanted.admits(&relative) => continue,
                 _ => collected.files.push(relative),
             }
         }
@@ -2337,7 +2583,7 @@ impl Workspace {
             // with nothing after it never reaches.
             if self.walk_filtered(
                 &path,
-                patterns,
+                wanted,
                 remaining.map(|left| left - 1),
                 limit,
                 denied,

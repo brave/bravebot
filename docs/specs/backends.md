@@ -252,20 +252,46 @@ rather than a way to get stuck.
 `verified-by: bravebot_bedrock::credentials::forgetting_one_profile_leaves_the_others_alone`
 
 <a id="BACKEND-11"></a>
-### BACKEND-11: a settings file names the model above what the build baked in
+### BACKEND-11: a settings file names the model above the build, and a checkout's above a pick
 
-Where a settings file names a model and an exported variable does not, that name is what a request
-uses, in preference to the model compiled into the binary. A choice already recorded with `/model`
-still wins over all of it.
+Where a settings file names a model, that name is what a request uses, in preference to the model
+compiled into the binary and to one exported as `BRAVE_AI_CHAT_DEFAULT_MODEL`. The exported variable
+answers where no file names one, above the build.
+
+A choice recorded with `/model` ranks as the person's own file, `~/.bravebot/settings.json`, does.
+It outranks the `model` key in that file, and is outranked by one in a checkout's
+`.bravebot/settings.json` or `.bravebot/settings.local.json`, or in the file `--settings` named. A
+key spelled blank, or as something other than a string, names nothing and does not outrank a pick.
+It still displaces the key a lower file named, so with nothing recorded the exported variable or the
+build answers. Above all of it are `--model` and a model picked in the session that is running.
 
 **Why.** Every release bakes a default model in, so this value ranked like the rest of the file would
 lose on every binary anybody was given: the key would parse, `doctor` would report it, and nothing
-would change outside a source build. An exported variable stays above the file because it is the most
-specific thing a person said, and a recorded pick stays above both because it is the more recent one.
+would change outside a source build.
+
+The variable is named as a default, and a default is how it is used: a `.envrc` that exports it for
+every checkout of a project is saying what answers when nothing else does. Ranked above the file it
+would outrank every `model` key on any machine that sources one, the key a checkout wrote to state
+its model included. Claude Code ranks its counterpart, `ANTHROPIC_DEFAULT_MODEL`, last.
+
+A pick is recorded once per person and read back in every checkout. Ranked above a checkout's file,
+it is the one thing a checkout cannot override: two checkouts in one account cannot want different
+models, and a project that states its model is undone by whatever its reader last picked anywhere.
+Claude Code's `/model` writes the person's own settings file, which every other settings file
+outranks, and this is that rung. The pick outranks that file's own key because both are the same
+person speaking at the same rung, and the pick is the later of the two.
 
 `verified-by: bravebot_config::lib::a_model_in_the_settings_file_outranks_the_baked_in_one`
-`verified-by: bravebot_config::lib::an_exported_model_outranks_the_settings_file`
+`verified-by: bravebot_config::lib::a_model_in_the_settings_file_outranks_an_exported_one`
 `verified-by: bravebot_config::lib::the_env_block_spelling_stays_below_the_baked_in_value`
+`verified-by: bravebot_config::settings::a_layer_above_the_home_one_outranks_a_saved_pick`
+`verified-by: bravebot_config::settings::the_home_layer_does_not_outrank_a_saved_pick`
+`verified-by: bravebot_config::settings::a_layer_above_that_names_nothing_does_not_outrank_a_saved_pick`
+`verified-by: bravebot_session::store::a_checkouts_model_outranks_the_saved_pick_and_the_home_file_does_not`
+`verified-by: bravebot_tui::persist::a_recorded_model_answers_between_a_checkouts_file_and_the_persons_own`
+`verified-by: bravebot_cli::running::a_run_asks_for_a_checkouts_model_over_the_recorded_one`
+`verified-by: bravebot_cli::running::a_run_asks_for_the_settings_model_over_an_exported_default`
+`verified-by: bravebot_cli::running::doctor_names_a_checkouts_model_rather_than_the_pick_it_outranks`
 
 <a id="BACKEND-12"></a>
 ### BACKEND-12: a tier word names a model some reachable service serves
@@ -636,13 +662,27 @@ concession has been given up, and a service that refuses it refuses the request 
 any other option it does not take. What is given up is the level somebody chose in the interface,
 that being the one this program decided to send.
 
-**The level is the last concession given up.** A request also carries cache breakpoints nobody asked
-for, and either field is refused with the same status, so the two are given up in order: a request
-still marking a prefix is sent again without the marks first, and the level goes only where that
-request is refused too. Giving up the level first would read a refusal of the caching as the model
-refusing to be told how hard to think, and stop sending a level to a model that reads one. Where the
-request that answered had given up both, both are remembered, the status naming no field: a service
-that reads a breakpoint and refuses a level gives up the caching as well for the life of the process.
+**On a gateway, the level is the last concession given up.** A request to a gateway also carries
+cache breakpoints nobody asked for, and either field is refused with the same status, so the two are
+given up in order: a request still marking a prefix is sent again without the marks first, and the
+level goes only where that request is refused too. Giving up the level first would read a refusal of
+the caching as the model refusing to be told how hard to think, and stop sending a level to a model
+that reads one. Where the request that answered had given up both, both are remembered, the status
+naming no field: a service that reads a breakpoint and refuses a level gives up the caching as well
+for the life of the process.
+
+**On Bedrock, the level goes before the ask.** A Bedrock request carries cache breakpoints too, and a
+streamed one offering a tool asks for its arguments as they are written
+([BACKEND-44](#BACKEND-44)). There the breakpoints are refused with a status of their own, the one an
+expired credential also gets, so they are given up on that status and never for a refusal of either
+field. The level and the ask share one status, so they are given up in order: the level first, and
+the ask only where the request is refused again without it. Either is given up only by a request
+that carried it, so a request that carried no level never records the model as refusing one. The
+order keeps what a model does read: Claude Haiku 4.5 takes the ask and refuses the level, measured,
+and giving up the ask first would cost it the field that keeps a long argument from being cut off
+and still be refused. Where the request that answered had given up both, both are remembered, as on
+a gateway. A request refused with nothing left to give up settles nothing, and what an earlier
+request settled for that model stands.
 
 **Why.** The judgment is the only description these services offer, and throwing it away leaves the
 interface reporting a charge somebody chose and stopped getting, which is the thing this clause
@@ -654,6 +694,9 @@ it, and a settings file cannot state what its author does not know either.
 `verified-by: bravebot_bedrock::lib::what_a_model_refused_outlives_the_client_that_found_out`
 `verified-by: bravebot_bedrock::lib::a_probe_that_settled_nothing_is_not_remembered`
 `verified-by: bravebot_bedrock::lib::one_model_refusing_says_nothing_about_another`
+`verified-by: bravebot_bedrock::lib::the_level_is_given_up_before_the_ask_for_arguments_as_written`
+`verified-by: bravebot_bedrock::lib::a_refused_ask_for_arguments_as_written_is_given_up_and_remembered`
+`verified-by: bravebot_bedrock::lib::a_probe_that_settled_nothing_leaves_what_was_known`
 `verified-by: bravebot_aichat::client::a_level_a_gateway_refuses_costs_the_field_and_not_the_turn`
 `verified-by: bravebot_aichat::client::a_gateway_that_refused_a_level_is_not_sent_one_again`
 `verified-by: bravebot_aichat::client::a_level_refusal_the_retry_did_not_fix_is_not_remembered`
@@ -1246,7 +1289,8 @@ the endpoint, the key id and the signing key included, and a project layer can n
 That is the case the file exists for, and what it costs is under Known costs.
 
 BACKEND-11 is the one exception and says why: a `model` key ranked here would lose to the baked-in
-default on every binary anybody was given. A name a machine-level file pinned is resolved from that
+default on every binary anybody was given, and an exported default would outrank every `model` key
+on a machine whose `.envrc` sets one. A name a machine-level file pinned is resolved from that
 file and from none of these three, which is BACKEND-38.
 
 `verified-by: bravebot_config::lib::the_environment_outranks_the_settings_file`
@@ -1338,8 +1382,15 @@ above the process environment and therefore above every other source. It is
 These names may be pinned, being the ones that decide where a request goes:
 `BRAVE_AI_CHAT_ENDPOINT`, `BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, `BRAVEBOT_USE_BEDROCK`, `AWS_REGION`,
 `AWS_PROFILE`, the three tier models of BACKEND-33's table, and the `provider` block. Every other
-name in the file decides nothing, the signing key and the key id included. A pinned name is resolved
-from this file alone, and a name it does not pin resolves exactly as it would with no such file.
+name in the file decides nothing, the signing key and the key id included, save the server lists
+below. A pinned name is resolved from this file alone, and a name it does not pin resolves exactly
+as it would with no such file.
+
+The file may also keep an MCP server from starting, and that is the one thing it decides that is
+not a destination: `"mcp": { "allow": [...], "deny": [...] }` names servers by the host a url
+reaches or the command a program runs, and a session starts none the lists refuse.
+[SERVERS-12](mcp-servers.md#SERVERS-12) is those keys, and says why the layer may keep a server
+from starting and never add one.
 
 No credential is read from this file. A gateway entry's `apiKey` is dropped, and the entry's host,
 models and variable names are honoured without it.
@@ -1590,6 +1641,112 @@ finished call except the stop reason, and the stop reason says not to trust any 
 `verified-by: bravebot_bedrock::lib::output_limit_keeps_completed_usage`
 `verified-by: bravebot_bedrock::lib::reaching_the_token_ceiling_is_not_retried`
 
+<a id="BACKEND-43"></a>
+### BACKEND-43: a settings file names the effort level, and a checkout's outranks a pick
+
+An `effort` key in the settings files names how hard the model is asked to think, taking the words
+`/effort` takes. A level recorded with `/effort` ranks as the person's own file does, which is the
+rung [BACKEND-11](#BACKEND-11) gives a model pick: it outranks the key in `~/.bravebot/settings.json`,
+and is outranked by one in a checkout's `.bravebot/settings.json` or `.bravebot/settings.local.json`,
+or in the file `--settings` named. Above all of it are `--effort`, for the one run it starts, and a
+level picked with `/effort` in the session that is running. Whatever answers is what every surface
+asks for: the interface, a session in lines, and a one-shot run.
+
+The word is read on the terms [SESSION-15](sessions.md#SESSION-15) reads the recorded one on, by the
+same rule and in one place. A word this program does not define is no level at all rather than a
+level of something, so it never reaches a request field. Named in a layer that outranks the record,
+it still outranks the record, and the run asks for no level: the layer said something, and what it
+said was not a level. A blank, or a value that is not a string, is absence on the footing the
+`model` key's is: it does not outrank a pick, and it still displaces the key a lower file named, so
+with nothing recorded the run asks for no level. `--effort` takes only a word this program defines,
+and refuses any other before a run starts. Whether the level then goes out at all is still
+[BACKEND-22](#BACKEND-22)'s question, and a level the model in force reads none of is withheld and
+not forgotten, whichever of them named it. Nothing is recorded: a level a file named is not a pick,
+and writing one down would make reading a file once enough to outlive the file.
+
+Nothing else names a level: no release bakes one in, no variable is read for one, and the
+machine-level layer of [BACKEND-38](#BACKEND-38) does not pin it.
+
+**Why.** A pick is stored once per person and read back by every run. Ranked above every file, it
+would be the one thing a checkout cannot override: two checkouts in one account cannot want
+different levels, and "the work in this repository is worth thinking hard about" is undone by
+whatever the reader last picked anywhere else. Ranked below every file, a level somebody picked in
+the interface would lose to one they wrote into their own settings once and forgot. The person's own
+file and the pick are the same person at the same rung, so the later of the two answers, and a
+checkout outranks both because it is the one thing that can tell one checkout from another. A script
+that wants its own level for one run says so with `--effort`, the way [CLI-9](cli.md#CLI-9) lets it
+say `--model`.
+
+[BACKEND-11](#BACKEND-11)'s other half does not transfer: the `model` key sits above the baked-in
+default because every release bakes a model in, and a key ranked below it would change nothing on
+any binary anybody was given. Nothing bakes in a level, so there is no such rung here.
+
+**One rule reads both words.** Both come out of a file somebody may have edited by hand, so a
+settings file naming nonsense is read the way a hand-edited record naming nonsense is, rather than
+each being trusted where it came from. Two spellings of that rule is where the two would drift, and
+what drifting costs is a word no service defines in a request field.
+
+`verified-by: bravebot_config::settings::a_top_level_effort_key_is_read`
+`verified-by: bravebot_config::settings::an_effort_word_is_read_as_the_file_spelled_it`
+`verified-by: bravebot_config::settings::an_effort_that_is_blank_or_not_a_string_names_nothing`
+`verified-by: bravebot_config::settings::the_closest_layer_that_named_an_effort_wins`
+`verified-by: bravebot_config::settings::a_layer_above_the_home_one_outranks_a_saved_pick`
+`verified-by: bravebot_config::settings::the_home_layer_does_not_outrank_a_saved_pick`
+`verified-by: bravebot_config::settings::a_layer_above_that_names_nothing_does_not_outrank_a_saved_pick`
+`verified-by: bravebot_session::store::a_checkouts_level_outranks_the_saved_pick_and_the_home_file_does_not`
+`verified-by: bravebot_session::store::a_settings_file_naming_no_level_asks_for_none`
+`verified-by: bravebot_tui::persist::a_recorded_level_answers_between_a_checkouts_file_and_the_persons_own`
+`verified-by: bravebot_cli::running::a_run_sends_the_level_a_settings_file_named_where_nothing_is_recorded`
+`verified-by: bravebot_cli::running::a_run_sends_a_checkouts_level_over_the_recorded_one`
+`verified-by: bravebot_cli::running::a_run_sends_the_level_the_command_line_named_over_every_other`
+`verified-by: bravebot_cli::main::an_effort_flag_names_the_level_a_run_asks_for`
+`verified-by: bravebot_cli::main::an_effort_flag_naming_no_level_is_refused`
+`verified-by: bravebot_config::managed::a_name_outside_the_pinnable_set_pins_nothing`
+
+<a id="BACKEND-44"></a>
+### BACKEND-44: a streamed Bedrock request offering a tool asks for its arguments as they are written
+
+A streamed Bedrock request that offers the model a tool asks for each tool argument as the model
+writes it, in the field that service hands to the model without reading, as the beta the Anthropic
+API names for it. A whole-reply request and a request offering no tool do not ask. A model that
+refuses a request carrying the ask is asked again without it, and no later request carries it to
+that model, on the terms [BACKEND-22](#BACKEND-22) gives the level: what one model refused says
+nothing about another, a request refused without the ask as well settles nothing and is not
+remembered, and the order the concessions are given up in is that clause's to state. So a request
+refused on its contents for a reason of its own, a prompt too long for the model among them, is sent
+once more without the ask before that refusal is reported, and so is the next one.
+
+An argument that arrives this way is handed to the turn loop exactly as the model wrote it. One that
+does not parse is a failed call the planner is told about, and it never runs: nothing repairs it or
+closes it on the way to being dispatched. The conversation sent on the next round carries that call
+with an empty object for its arguments, this service taking nothing but an object there, beside the
+result saying it failed.
+
+**Why.** Without the ask the service holds an argument back until the model has finished writing it,
+so a `write_file` whose contents are a whole program is the tool's name and then silence for as long
+as the program takes to write. The egress layer cuts a connection that has sent nothing for two
+minutes, which a long enough file outlasts, and reports it as a request that did not get through.
+Measured on Bedrock against Claude Opus 5.5, one call writing a file of about 1,900 tokens sent
+nothing for 17 seconds and then all of it; with the ask, no gap in the same call was longer than 2.4
+seconds. The per-tool field the Anthropic API documents for the same thing is not what is sent,
+because this API drops a key it does not define from a tool's description: sent, it left the silence
+as long, and a made-up key in the same place is answered as readily.
+
+Streamed only, because a whole reply arrives at once however its arguments were written, so there
+the ask buys nothing and gives up the service's check that an argument parses. That check is the
+ask's cost where it is sent, which is why a call that does not parse fails where it is dispatched: a
+repaired argument is a call the model never finished, and a file written from one is reported
+written.
+
+`verified-by: bravebot_bedrock::protocol::the_level_and_the_ask_for_arguments_as_written_travel_together`
+`verified-by: bravebot_bedrock::lib::only_a_streamed_request_offering_a_tool_asks_for_arguments_as_they_are_written`
+`verified-by: bravebot_bedrock::lib::a_refused_ask_for_arguments_as_written_is_given_up_and_remembered`
+`verified-by: bravebot_bedrock::lib::the_level_is_given_up_before_the_ask_for_arguments_as_written`
+`verified-by: bravebot_bedrock::lib::a_streamed_argument_that_does_not_parse_is_handed_on_as_written`
+`verified-by: bravebot_bedrock::lib::a_probe_that_settled_nothing_leaves_what_was_known`
+`verified-by: bravebot_bedrock::protocol::unparseable_arguments_become_an_empty_object_rather_than_dropping_the_call`
+`verified-by: bravebot_agent::tools::a_call_whose_arguments_do_not_parse_fails_and_writes_nothing`
+
 ## Known costs
 
 - **The refusal is made at startup, and a model chosen mid-session is not checked again.**
@@ -1601,10 +1758,27 @@ finished call except the stop reason, and the stop reason says not to trust any 
   what they picked.
 
 - **Which model answers is the individual's, and a managed layer cannot pin it.** A pinned default
-  model would lose to a `/model` choice the moment one was recorded, so it would pin nothing, and
+  model would lose to a `/model` choice wherever one is in force, so it would pin nothing, and
   making that choice unavailable is a change to what a person is offered rather than to where a
   request goes. An organisation with a reason to care, a cost or a data-handling consequence
   attached to one model, has the endpoint and the account to say it with and not the name.
+
+- **Asking for no level does not outlive the session against a file that names one.**
+  [SESSION-15](sessions.md#SESSION-15) removes the record rather than writing an empty one, because
+  absence and a chosen absence were the same request while nothing else could name a level. With
+  BACKEND-43 they are not: somebody whose own settings say `high` and who picks no level is asking
+  for none, and the next session reads the file and asks for `high` again. Distinguishing the two
+  needs a recorded absence, which is a change to what that clause writes down and to what reads it,
+  and the level is a preference somebody re-picks in one keystroke rather than an effect. Against a
+  checkout's file a recorded absence would change nothing, since that file outranks any record.
+  `/effort` is what says so for the session in front of them, `--effort` for one run, and the file
+  is what says so for every session.
+
+- **How hard a model thinks is not something an administrator pins.** The machine-level layer reads
+  the names that decide where a request goes, and a level decides what a request costs and how long
+  it takes at a destination already settled. An organisation with a reason to care about the bill has
+  the endpoint and the account to say it with, and a layer that could pin this is a layer somebody
+  uses to pin a preference, which is the argument BACKEND-38 makes about the theme.
 
 - **The layer binds nobody who can write the file, and what that takes differs per platform.** Its
   whole authority is the permissions on the path. On a machine whose user is also its administrator,
@@ -1621,13 +1795,15 @@ finished call except the stop reason, and the stop reason says not to trust any 
   that would say otherwise is the person's own to set, so a machine whose system drive is elsewhere
   has no managed layer at all rather than one that can be redirected.
 
-- **The effort level is the one field in a Bedrock request that a single provider defines.** The
-  body Bedrock states for every provider it hosts has no field for how hard to think, so the level
-  travels in the field that service hands to the model without reading, spelled the way the
-  Anthropic API spells it. A tier naming a model from another provider is reachable and answers,
-  and a level chosen against one is refused by that model on the field name. Nothing here can tell
-  the two apart, an inference-profile ARN not saying which provider serves it, and the alternative
-  is withholding a level from every Bedrock model including the ones that read it.
+- **Two fields in a Bedrock request are ones a single provider defines.** The body Bedrock states
+  for every provider it hosts has no field for how hard to think or for tool arguments as they are
+  written, so the level and the ask (BACKEND-44) travel in the field that service hands to the model
+  without reading, spelled the way the Anthropic API spells them. A tier naming a model from another
+  provider is reachable and answers, and a request carrying either is refused by that model, costing
+  the first streamed request with a tool one refused request per field before the model's answer is
+  remembered. Nothing here can tell the two apart, an inference-profile ARN not saying which
+  provider serves it, and the alternative is withholding both from every Bedrock model including
+  the ones that read them.
 
 - **Which models a product is served is the service's decision, and this holds no copy of it.** The
   roster is whatever the endpoint returns for `bravebot`, so a model becoming unsuitable for agentic
@@ -1673,12 +1849,13 @@ finished call except the stop reason, and the stop reason says not to trust any 
   it does not know, and no listing distinguishes that from honouring it.
 
 - **A blank exported variable reaches the file for the model and for nothing else.** BACKEND-11's
-  resolution treats a blank as absence the whole way down, so a `model` key still answers. BACKEND-35's
-  stops at the build: on a binary built with nothing, exporting a name blank leaves the configuration
-  holding the blank and the value in the file unread. The two orders are the same argument, that a
-  placeholder in a shell profile is not an instruction to discard anything, applied to one more source
-  in one of them than in the other, and which behaviour a person meets depends on which name they
-  blanked.
+  resolution treats a blank as absence the whole way down, so the `env` block's spelling still
+  answers on a binary built with nothing, and a `model` key outranks the variable whatever it holds.
+  BACKEND-35's stops at the build: on a binary built with nothing, exporting a name blank leaves the
+  configuration holding the blank and the value in the file unread. The two orders are the same
+  argument, that a placeholder in a shell profile is not an instruction to discard anything, applied
+  to one more source in one of them than in the other, and which behaviour a person meets depends on
+  which name they blanked.
 
 - **A gateway that wants a credential and was told of none is refused by the service rather than
   here.** BACKEND-16 reads a block naming no credential as the person saying none is wanted, so a

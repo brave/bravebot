@@ -41,6 +41,10 @@ pub enum Kind {
     /// A directory a bounded listing stopped at. There are no bytes behind it, so a planner told
     /// it held a file would spend a processor on a read that cannot work.
     Directory,
+    /// The whole of output the planner was shown a sample of, kept because a cap cut it for the
+    /// room it takes. Its label already let the planner read it. Told these bytes were
+    /// quarantined, one ran `git log` four more times through `awk` rather than read the middle.
+    Kept,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,6 +98,12 @@ impl Reference {
     /// Say this reference is a directory a listing stopped at rather than a file in it.
     pub fn of_a_directory(mut self) -> Self {
         self.kind = Kind::Directory;
+        self
+    }
+
+    /// Say this reference is the whole of output the planner was shown a sample of.
+    pub fn of_kept_output(mut self) -> Self {
+        self.kind = Kind::Kept;
         self
     }
 
@@ -177,6 +187,13 @@ impl Reference {
                 "Quarantined: a directory this listing stopped at rather than a file in it, so \
                  there is nothing behind {} to read, process or write. List the directory you \
                  named again with a greater depth to reach what is inside it.",
+                self.slot
+            ),
+            Kind::Kept => format!(
+                "You may read all of it: only its length kept it out of the result. Call \
+                 read_output with {} and an offset in bytes to be shown the part from there, as \
+                 much as one result holds, without the user being asked. Give it to \
+                 spawn_processor to work on, or write it into a file as contents_ref.",
                 self.slot
             ),
         };
@@ -289,6 +306,34 @@ mod tests {
             described.contains("path_ref"),
             "the planner was not told it is a destination: {described}"
         );
+    }
+
+    /// Output kept whole because a cap cut the sample the planner read is not called
+    /// quarantined, since its label is what let the planner read the sample. Told it would not
+    /// be shown the rest, a planner ran the command again through a filter to see the middle.
+    #[test]
+    fn kept_output_is_offered_page_by_page_and_not_called_quarantined() {
+        let kept = Reference::new(
+            SlotId::new("ref:4"),
+            "git log",
+            900,
+            90_000,
+            Label::trusted_private(),
+        )
+        .of_kept_output()
+        .describe();
+        assert!(!kept.contains("Quarantined"), "{kept}");
+        assert!(!kept.contains("vet_content"), "{kept}");
+        assert!(
+            kept.contains("read_output with ref:4 and an offset"),
+            "the planner is not told how to read the rest: {kept}"
+        );
+        assert!(kept.contains("contents_ref") && kept.contains("spawn_processor"));
+        assert!(kept.contains("90000 bytes"), "{kept}");
+
+        let quarantined = reference().describe();
+        assert!(quarantined.contains("Quarantined: you will not be shown it"));
+        assert!(!quarantined.contains("offset"), "{quarantined}");
     }
 
     /// Content is not a destination. Only a reference to a file is one, and the two must not

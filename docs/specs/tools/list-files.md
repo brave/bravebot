@@ -62,9 +62,21 @@ An expansion past the cap on how many patterns it may produce in all falls back 
 pattern literally, which finds nothing and is reported as finding nothing. Version-control and
 build directories are skipped.
 
+A pattern with no `/` is matched against the file name alone. One with a `/` is matched against
+the path from the directory the call named and against the path from the workspace root, and a
+file either reading matches is kept. `search`'s `include` is read the same way.
+
 **Why.** A backtracking pattern arriving through a turn is a denial-of-service vector. Expanding a
 group before the walk is what keeps that bound: each alternative is an ordinary pattern applied
 once per path, so a group costs a multiple of the work and never a power of it.
+
+**Why both readings.** A caller naming a directory writes the rest of the path from there, and one
+naming none writes it from the root, and planners write both. Read from the root alone,
+`*/profile.json` under `projects` selects nothing, which [SEARCH-5](search.md#SEARCH-5) then
+reports as a glob to rewrite, and the planner rewrites a glob that was right. Kept to either
+reading, every glob that selected a file before still does. A pattern only narrows a walk the
+directory and the permission rules have already bounded, so the wider reading reaches no file the
+call could not have listed.
 
 `verified-by: bravebot_agent::glob::a_path_pattern_anchors_at_the_root`
 `verified-by: bravebot_agent::glob::a_question_mark_matches_one_character`
@@ -75,6 +87,8 @@ once per path, so a group costs a multiple of the work and never a power of it.
 `verified-by: bravebot_agent::workspace::the_original_noise_directories_are_still_skipped`
 `verified-by: bravebot_agent::workspace::noise_directories_from_other_ecosystems_are_skipped`
 `verified-by: bravebot_agent::tools::both_glob_arguments_describe_the_matcher_the_same_way`
+`verified-by: bravebot_agent::workspace::a_listing_glob_may_be_written_from_the_directory_it_names`
+`verified-by: bravebot_agent::workspace::a_search_include_may_be_written_from_the_directory_it_names`
 
 <a id="LIST-4"></a>
 ### LIST-4: a truncated listing says it was truncated

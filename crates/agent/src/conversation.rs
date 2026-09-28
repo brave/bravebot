@@ -132,6 +132,15 @@ pub struct Conversation {
     ///
     /// Trusted metadata: a count the server reported, never anything anyone wrote.
     measured: u64,
+    /// Whether the planner has asked for a write since a turn last ended with an answer.
+    ///
+    /// Kept here rather than in the turn because a stopped turn is usually continued rather than
+    /// replaced: the next prompt is `continue`, and the change the stopped turn wrote is still
+    /// the task's change. An answer is where one task usually ends, so that is where it clears.
+    ///
+    /// Trusted metadata: from the names of the functions the planner called, never their
+    /// arguments or anything a tool returned.
+    asked_to_write: bool,
 }
 
 impl Default for Conversation {
@@ -152,6 +161,7 @@ impl Conversation {
             context: Integrity::Trusted,
             archive: Vec::new(),
             measured: 0,
+            asked_to_write: false,
         }
     }
 
@@ -257,6 +267,21 @@ impl Conversation {
     /// purpose here.
     pub fn last_request_tokens(&self) -> u64 {
         self.measured
+    }
+
+    /// Record that the planner has asked for a write.
+    pub fn write_requested(&mut self) {
+        self.asked_to_write = true;
+    }
+
+    /// Record that a turn ended with an answer, so the next prompt starts from nothing written.
+    pub fn turn_answered(&mut self) {
+        self.asked_to_write = false;
+    }
+
+    /// Whether a write has been asked for since a turn last ended with an answer.
+    pub fn asked_to_write(&self) -> bool {
+        self.asked_to_write
     }
 
     /// Where compaction would cut, or `None` when there is nothing worth summarising.
@@ -437,7 +462,12 @@ pub enum Said {
     ///
     /// What came of it is not here. The record does not say, and inventing an outcome for a call
     /// whose result nobody wrote down would be worse than admitting the line is all there is.
-    Tool(String),
+    Tool {
+        /// The call, as the line announcing it read.
+        line: String,
+        /// Why the planner made it, in its own words. Empty where it gave no reason.
+        why: String,
+    },
     /// A message the agent wrote into the conversation, what it wrote it for, and what it said.
     ///
     /// The tag is what a surface decides from. The text is what a surface draws when it has no row
@@ -497,6 +527,13 @@ pub struct Snapshot {
     /// resume sends the whole conversation again to find out what it already knew.
     #[serde(default)]
     pub measured: u64,
+    /// Whether a write had been asked for since a turn last ended with an answer.
+    ///
+    /// Stored so a stopped turn resumed in a later process is continued the way it would have
+    /// been in this one. Defaulted to false, which costs a record written without it at most one
+    /// needless line to the planner.
+    #[serde(default)]
+    pub asked_to_write: bool,
 }
 
 /// The word for an integrity, as it is written down.
@@ -531,6 +568,7 @@ impl Conversation {
             references: self.references,
             archive: self.archive.clone(),
             measured: self.measured,
+            asked_to_write: self.asked_to_write,
         }
     }
 
@@ -562,6 +600,7 @@ impl Conversation {
             },
             archive: snapshot.archive,
             measured: snapshot.measured,
+            asked_to_write: snapshot.asked_to_write,
         }
     }
 
@@ -632,10 +671,13 @@ impl Conversation {
                         said.push(Said::Assistant(spoken));
                     }
                     for call in message.tool_calls.iter().flatten() {
-                        said.push(Said::Tool(crate::tools::describe_stored_call(
-                            &call.function.name,
-                            &call.function.arguments,
-                        )));
+                        said.push(Said::Tool {
+                            line: crate::tools::describe_stored_call(
+                                &call.function.name,
+                                &call.function.arguments,
+                            ),
+                            why: crate::tools::stored_why(&call.function.arguments),
+                        });
                     }
                 }
                 Role::System | Role::Tool => {}
@@ -796,6 +838,13 @@ mod tests {
                 name: name.to_string(),
                 arguments: arguments.to_string(),
             },
+        }
+    }
+
+    fn said_tool(line: &str, why: &str) -> Said {
+        Said::Tool {
+            line: line.to_string(),
+            why: why.to_string(),
         }
     }
 
@@ -1008,7 +1057,10 @@ mod tests {
         conversation.push(Message::user("what is in main.rs?"));
         conversation.push(Message::assistant_calling(
             "let me look",
-            vec![a_call("read_file", r#"{"path":"src/main.rs"}"#)],
+            vec![a_call(
+                "read_file",
+                r#"{"path":"src/main.rs","why":"to see the entry point"}"#,
+            )],
         ));
         conversation.push(Message::tool_result("call-1", "fn main() {}"));
         conversation.push(Message::assistant("it is a hello world"));
@@ -1018,7 +1070,7 @@ mod tests {
             vec![
                 Said::User("what is in main.rs?".to_string()),
                 Said::Assistant("let me look".to_string()),
-                Said::Tool("Read(src/main.rs)".to_string()),
+                said_tool("Read(src/main.rs)", "to see the entry point"),
                 Said::Assistant("it is a hello world".to_string()),
             ]
         );
@@ -1041,26 +1093,33 @@ mod tests {
         )));
 
         let recounted = conversation.recounted();
-        assert_eq!(recounted, vec![Said::Tool("Read(secrets.txt)".to_string())]);
+        assert_eq!(recounted, vec![said_tool("Read(secrets.txt)", "")]);
     }
 
-    /// A round with several calls is several lines, in the order they were asked for.
+    /// A round with several calls is several lines, in the order they were asked for, each with
+    /// the reason given for it rather than one reason for the round.
     #[test]
     fn every_call_in_a_round_is_recounted() {
         let mut conversation = Conversation::new();
         conversation.push(Message::assistant_calling(
             String::new(),
             vec![
-                a_call("search", r#"{"pattern":"MAX_STEPS"}"#),
-                a_call("list_files", r#"{"directory":"src"}"#),
+                a_call(
+                    "search",
+                    r#"{"pattern":"MAX_STEPS","why":"find where the bound is set"}"#,
+                ),
+                a_call(
+                    "list_files",
+                    r#"{"directory":"src","why":"see the layout"}"#,
+                ),
             ],
         ));
 
         assert_eq!(
             conversation.recounted(),
             vec![
-                Said::Tool("Search(MAX_STEPS)".to_string()),
-                Said::Tool("List(src)".to_string()),
+                said_tool("Search(MAX_STEPS)", "find where the bound is set"),
+                said_tool("List(src)", "see the layout"),
             ]
         );
     }
@@ -1075,10 +1134,7 @@ mod tests {
             vec![a_call("read_file", "{\"path\":")],
         ));
 
-        assert_eq!(
-            conversation.recounted(),
-            vec![Said::Tool("Read".to_string())]
-        );
+        assert_eq!(conversation.recounted(), vec![said_tool("Read", "")]);
     }
 
     /// The note is for the planner. Drawn in a transcript it would read as a prompt the user
@@ -1365,6 +1421,24 @@ mod tests {
         let restored = Conversation::restored(conversation.snapshot());
 
         assert_eq!(restored.last_request_tokens(), 90_000);
+    }
+
+    /// A stopped turn is as likely to be continued from a later process as from this one, and the
+    /// change it asked to write is still the task's. Dropped on the way to disk, a `continue` after
+    /// a resume would be told nothing is written yet about a change that is on disk.
+    #[test]
+    fn a_restored_conversation_remembers_a_write_asked_for_since_the_last_answer() {
+        let mut conversation = four_exchanges();
+        conversation.write_requested();
+
+        let written = serde_json::to_string(&conversation.snapshot()).expect("a record");
+        let restored =
+            Conversation::restored(serde_json::from_str(&written).expect("the record back"));
+
+        assert!(
+            restored.asked_to_write(),
+            "a write asked for before the record was written came back unasked"
+        );
     }
 
     /// The figure said how large the conversation was before it was shortened. Kept, it would
@@ -1671,6 +1745,7 @@ mod tests {
                 references: 0,
                 archive: Vec::new(),
                 measured: 0,
+                asked_to_write: false,
             });
             assert_eq!(
                 restored.context(),

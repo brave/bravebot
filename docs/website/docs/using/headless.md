@@ -206,18 +206,21 @@ success **and on failure**, never behind a flag. A failed plan is printed on std
 
 ## Which model a run asks for
 
-A run with no flag asks for the model a session opening in the same directory would: the choice
-`/model` recorded, then the configured one. Picking a model in a terminal is therefore enough to make
-your scripts use it.
+A run with no flag asks for the model a session opening in the same directory would: a `model` key
+in the checkout's settings, then the choice `/model` recorded, then the configured one. Picking a
+model in a terminal is therefore enough to make your scripts use it, in any checkout that does not
+name its own.
 
 ```sh
-bravebot --model opus "review the diff on this branch"
+bravebot --model opus --effort high "review the diff on this branch"
 ```
 
-`--model` outranks that and everything else, and is the only way two scripts in the same checkout can
-ask for different models. Where the server answers with a different model from the one in force, both
+`--model` outranks that and everything else, and is how two scripts in the same checkout ask for
+different models without a settings file each. Where the server answers with a different model from the one in force, both
 names go to stderr, and a run whose `--model` was substituted exits non-zero. See
-[`--model`](../reference/cli.md#--model-name).
+[`--model`](../reference/cli.md#--model-name). `--effort` names how hard the model is asked to think
+for one run, over the level a checkout or `/effort` named. See
+[`--effort`](../reference/cli.md#--effort-level).
 
 ## A one-shot turn is bounded
 

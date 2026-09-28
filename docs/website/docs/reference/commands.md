@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: Slash commands
-description: The twenty commands the interface acts on itself, and the rules every one of them shares.
+description: The twenty-two commands the interface acts on itself, and the rules every one of them shares.
 ---
 
 # Slash commands
@@ -22,24 +22,29 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/compact` | | Summarise the conversation so far, keeping the recent part |
 | `/btw` | `<question>` | Ask something beside the work, without putting it in the conversation |
 | `/clear` | | Start a new session here, keeping this one resumable |
+| `/forget-trust` | | Stop remembering that this directory is trusted, so later sessions here ask |
 | `/loop` | `[[interval] <prompt> \| stop]` | Send a prompt again and again, say what is repeating, or stop it |
 | `/goal` | `[<condition> \| clear]` | Keep working until a condition you set is judged met |
 | `/watch` | `[stop <n>]` | List the files this session is watching, and stop one by its number |
 | `/manifest` | `<task>` | Plan one task in full, show you the plan, then run it with nothing re-planned |
+| `/agent` | `<name> <task>` | Run one of your definitions on a task, by its name |
 | `/export` | `[path]` | Export the session transcript to a markdown file |
 | `/undo` | | Rewind one turn and put back the files it wrote |
 | `/rewind` | `[turns]` | List the turns a rewind could go back to, or go back that many |
 | `/exit` | | Leave |
 
-Typing `/` offers the list in that order, and Tab completes. The list is one row per command, and a
-terminal without the room for all twenty drops the last of them: every command is still typeable in
-full, but a short terminal costs you the discovery the list is there for.
+Typing `/` offers the list in that order, with your [skills](#skills-after-a-slash) beneath it, and
+Tab completes. The list is one row per command and per skill, and a terminal without the room for all
+of them drops the last ones, skills first: everything is still typeable in full, and a letter or two
+narrows the list back onto the screen, but a short terminal costs you the discovery the list is there
+for.
 
 ## `/status`
 
 Reports everything the session knows about itself:
 
-- the working directory, and anything opened with `/add-dir`;
+- the working directory, and anything opened with `/add-dir`, and whether a later session started
+  there will trust it without asking because you [said to remember](#forget-trust);
 - the model in force, and whether it was chosen or defaulted. Where the server substituted a
   different one, the model that actually answered is shown beside it;
 - the [effort level](#effort-level), and whether this model reads one;
@@ -84,7 +89,9 @@ what it is read for.
 
 Opens a picker on the model in use. The list comes from the endpoint rather than a set compiled in, so
 it is whatever the backend offers today. The choice is written to `~/.bravebot`, so it outlives the
-session and applies in every directory.
+session and applies in every directory, except one whose own settings name a
+[`model`](../customize/configuration.md#model): that key outranks the choice, and the one in your own
+`~/.bravebot/settings.json` does not.
 
 Typing narrows the list rather than walking it, and rows are grouped under the service that answers
 them. See [Configuration](../customize/configuration.md#choosing-a-model).
@@ -110,7 +117,11 @@ asking for no level at all, so a first pick is not permanent. With a word, `/eff
 directly, and a word that names no level changes nothing and says so rather than reaching a request
 field.
 
-The choice is written to `~/.bravebot`, so it outlives the session and applies in every directory. See
+The choice is written to `~/.bravebot`, so it outlives the session and applies in every directory,
+except one whose own settings name an [`effort`](../customize/configuration.md#effort): that key
+outranks the choice, and the one in your own `~/.bravebot/settings.json` answers only while no level
+is recorded. Picking the row for none removes the record, so from the next session your own file's
+level answers again. See
 [Choosing how hard to think](../customize/configuration.md#choosing-how-hard-to-think), which is also
 where the two cases worth knowing are: the models that read no level, and the Brave endpoint, which
 accepts one and discards it.
@@ -160,6 +171,18 @@ Your permission rules do not come with you. The new directory's rules are read, 
 checkout proposes is put to you in the box a session opening there would show, so a rule you granted
 for the directory you left answers nothing here. See
 [Rules you write down in advance](../security/permissions.md#rules-you-write-down-in-advance).
+
+## `/forget-trust`
+
+Takes back the answer you said to remember at the question a session asks about its directory, with
+`r` here or **Trust and remember** in the desktop app, which keep it in one place. The next session
+started in this directory asks again, in either. This session keeps the answer it already has;
+[`/clear`](#clear) starts one that asks.
+
+It removes every answer kept about the path, including one given about a directory that was deleted
+and made again there. In an incognito session it changes nothing, since nothing is written there
+either, and it names the file so you can remove it yourself. See
+[Remembering the answer](../security/trust.md#remembering-the-answer).
 
 ## `/loop [interval] <prompt>`
 
@@ -318,7 +341,8 @@ That is what makes a goal steerable. Stop the turn, say something else, and the 
 there; the press that ends the goal is the one you make with nothing running.
 
 A check already in flight is one request and does not stop, but Escape and Ctrl-C still take the
-goal off, and nothing more is sent. A verdict about a goal you have just taken off is neither acted
+goal off, and nothing more is sent. With vi editing, an Escape from INSERT mode enters NORMAL mode
+first, as it does while a turn runs. A verdict about a goal you have just taken off is neither acted
 on nor reported.
 
 **A goal is never written down.** It is not in the session record, so `--resume` restores none and it
@@ -390,6 +414,63 @@ own record and the session records its name, so the session still resumes as a c
 In [plan mode](../security/permissions.md#answering-in-advance-modes) a plan with a write in it does
 not run at all, decided from the frozen plan before the plan is put to anybody. See
 [Non-interactive use](../using/headless.md) for the `--mode manifest` form.
+
+## `/agent <name> <task>`
+
+Runs one of your [delegate definitions](../customize/agents.md) on a task yourself, rather than
+describing the work and hoping the planner picks it.
+
+```
+/agent rule-reviewer check the diff on this branch
+```
+
+**It is your turn, run under the definition.** The definition supplies three things: the
+instruction in its body, its `model`, and its narrowing (its `kind` and its `tools` line). Nothing
+else changes. The run can still ask you a question, keep a task list and ask before every write, and
+what it reads and answers stays in the conversation, exactly as any turn of yours does. The line
+after it goes to the session's own planner again. There is no mode to leave. Stopping the turn
+before it did anything puts the whole `/agent` line back in the box, so Enter addresses the same
+definition again.
+
+**It can only take away.** The turn holds what the session holds, cut down to the definition's kind
+and its `tools` line. A `reader` addressed from a session that may write is a turn that may not. A
+`worker` addressed from a session that may only read gets no write, and a tool the definition names
+that the session is not offered is dropped and said in the trail. A tool the definition left out is
+refused if the model calls it anyway. Five tools a delegate never gets (asking you, the task list,
+fetching a URL, vetting content and spawning a delegate) are offered here, because each is withheld
+from a delegate for a reason about nobody watching it. Scheduling a next turn and watching a file are
+not: the turn either one starts is the session's planner's, holding everything the definition took
+away. To have a definition look again, address it again.
+
+**The name is compared against what this session resolved**, from `~/.bravebot/agents` and from a
+project you vouched for. The bare word lists those names, and so does a name that matches nothing:
+
+```
+/agent
+this session resolved reader, checker, worker, rule-reviewer; address one with /agent <name> <task>
+
+/agent auditor check the diff
+there is no definition called auditor; this session resolved reader, checker, worker, rule-reviewer
+```
+
+A definition in a project you did not vouch for is not in that list, and no spelling of its name
+reaches it. The names are never offered as completions: you type the whole name every time, because
+a completion row is one keystroke from being sent and a name is text somebody else may have written.
+
+**A definition naming a model you have not signed in to does not run**, and says which definition
+asked for which model, rather than running on the session's model instead:
+
+```
+rule-reviewer asked for haiku, which needs a sign-in first, so it did not run
+```
+
+A reply answered by a different model than the one named says that too. The reply is drawn under
+the definition's name (`rule-reviewer answered`), taken from the name that matched and never from
+anything the reply says about itself. The name is not written into the session record, so a
+resumed session draws the same reply without it.
+
+Only a line you typed into the box addresses a definition. `/agent` in a reply, in a file, or in a
+line this program wrote is text.
 
 ## `/rename <name>`
 
@@ -567,13 +648,13 @@ box like any other line.
 **A command name is written in this program, never read from a directory.** There is no way to add one
 by putting a file somewhere.
 
-## Skills are not slash commands
+## Skills after a slash
 
-`/commit-style` is a prompt like any other sentence, even where a skill of that name exists. Other
-agents let you type a skill's name after a slash. This one does not: a skill is advertised to the
-planner by name and description, and its body is fetched by the planner asking for it. Nothing in the
-input box knows skills exist. See
-[Skills](../customize/skills.md#skills-are-not-slash-commands).
+A skill's name completes after a slash: beneath the commands at the start of a line, and on its own
+later in a sentence, as in `this is /release-no`. Taking one writes `/release-notes ` into the line,
+and the line is still a prompt. The planner is told it is you asking for that skill and loads it, so
+`/commit-style` never runs anything itself, and no skill becomes a command whatever it is called. See
+[Skills](../customize/skills.md#naming-a-skill-after-a-slash).
 
 ## Not a command, but typed in the same place
 

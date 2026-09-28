@@ -43,7 +43,7 @@ lands.
 
 | | |
 |---|---|
-| Tools | its kind's, which are what its capabilities reach, and never a way to delegate |
+| Tools | its kind's, which are what its capabilities reach, and a way to delegate only above the bottom of the tree |
 | Memory | none of its parent's exchange: it begins with the task it was given |
 | Conversation | a loop of its own, bounded |
 | Reads | whatever its capabilities and the paths a person vouched for allow |
@@ -117,12 +117,23 @@ The three kinds are ordered, so choosing a wider one never costs a narrower one'
 | Kind | Holds | For |
 |---|---|---|
 | `reader` | reading | finding something out |
-| `checker` | reading, running programs | finding out whether something works |
-| `worker` | reading, running programs, writing files | finishing a sub-task |
+| `checker` | reading, running programs, asking a language server | finding out whether something works |
+| `worker` | reading, running programs, asking a language server, writing files, calling each MCP server its parent may | finishing a sub-task |
+
+A language server goes with running programs and never without it, because starting one runs the
+project's build tooling ([LSP-9](tools/lsp.md#LSP-9)).
+
+A reader and a checker hold no MCP server's grant ([SERVERS-9](mcp-servers.md#SERVERS-9)). What a
+server's tool does is the server's to say, so a call to one may write or run anything, and a worker
+is the one kind already let write and run. No kind names a server, since which servers a session
+reached is not known until it starts, so a worker holds a server's grant only where its parent
+does. A definition with a `tools:` line holds none: the line names this program's tools and no
+server's.
 
 Every kind additionally reaches the network, because a planner is a model call and the request out
-is egress like any other. No tool a delegate is offered reaches it, so what it buys is the ability
-to ask the endpoint on that delegate's behalf. A kind without it is a kind that cannot think.
+is egress like any other. No tool of this program's that a delegate is offered reaches it, so what
+it buys is the ability to ask the endpoint on that delegate's behalf. A kind without it is a kind
+that cannot think.
 
 A delegate naming a tool that reaches the network anyway is answered the way any other unknown
 name is. The capability is held, so no gate refuses that call, which is why the absence from the
@@ -130,10 +141,18 @@ tool list is written out a second time as a refusal.
 
 `verified-by: bravebot_core::policy::a_delegate_holds_no_more_than_the_run_that_spawned_it`
 `verified-by: bravebot_core::delegate::the_kinds_are_ordered_by_what_they_hold`
+`verified-by: bravebot_core::delegate::a_kind_holds_a_language_server_exactly_where_it_may_run_programs`
+`verified-by: bravebot_agent::lsp::a_checker_and_a_worker_are_offered_lsp_and_a_reader_is_not`
 `verified-by: bravebot_core::delegate::every_kind_can_reach_the_endpoint_and_nothing_else_remote`
 `verified-by: bravebot_agent::tools::no_kind_is_offered_a_tool_that_reaches_the_network`
 `verified-by: bravebot_agent::turn::a_delegate_naming_fetch_url_reaches_no_host`
 `verified-by: bravebot_agent::delegate::no_kind_is_told_it_may_reach_the_network`
+`verified-by: bravebot_core::delegate::only_a_worker_holds_the_servers_of_the_run_it_is_carved_from`
+`verified-by: bravebot_core::delegate::a_worker_holds_no_server_its_parent_does_not`
+`verified-by: bravebot_core::delegate::a_worker_naming_its_tools_holds_no_server`
+`verified-by: bravebot_core::policy::a_worker_delegate_holds_the_servers_its_parent_holds_and_no_other`
+`verified-by: bravebot_agent::mcp::a_reader_or_a_checker_delegate_holds_no_server_and_reaches_none`
+`verified-by: bravebot_agent::mcp::a_worker_is_offered_only_the_servers_its_parent_holds`
 
 <a id="DELEGATE-5"></a>
 ### DELEGATE-5: the prompt belongs to the definition, and the planner writes no word of it
@@ -173,32 +192,109 @@ are asked about separately, and what a delegate is told it can do is what it is 
 `verified-by: bravebot_agent::delegate::a_delegate_holding_no_reading_is_not_told_it_may_read`
 
 <a id="DELEGATE-6"></a>
-### DELEGATE-6: a delegate is bounded, and the bound is its kind's
+### DELEGATE-6: a delegate is bounded, by its definition beneath its kind's ceiling
 
-Every kind carries a round limit and the call cannot set one. On the limiting round the delegate
-loses its tools rather than its run, and answers with what it has.
+Every kind carries a round limit: 60 for a `reader`, 80 for a `checker` and 120 for a `worker`. A
+definition may name its own with `rounds:`, a whole number above zero, and its delegate runs to
+that number instead. Each kind also carries a ceiling no definition passes: 120 for a `reader`
+and 160 for a `checker`, twice their own, and 200 for a `worker`, the bound on a turn nobody is
+watching. The call sets no bound at all. On the limiting round the delegate loses its tools rather
+than its run, and answers with what it has.
+
+A definition asking for more than its kind's ceiling is loaded with the ceiling, and the turn
+says so, naming the definition, the number it asked for and the number it is given. An empty
+`rounds:` line names no number, as an empty `model:` line names no model
+([DELEGATE-22](#DELEGATE-22)), so its delegate runs to its kind's own. One whose value is not a
+whole number above zero is a definition that does not load, and the notice names its file, as [DELEGATE-20](#DELEGATE-20) does for any
+file that claims to be a definition and is not.
 
 **Not a safety property.** A gate refuses on the last round what it refuses on the first. It
 bounds futility, and it applies here because nobody is coming to stop a delegate: the person is
 watching the turn, and a turn that has started several has no more idea than they do which of
 them is making progress.
 
+**Why a definition may choose it.** Whoever wrote down what a delegate is for knows how long that
+takes better than its kind does: a staged migration needs more rounds than a lookup, and a lookup
+still going at sixty has gone wrong. The number comes from a file somebody vouched for
+([DELEGATE-20](#DELEGATE-20)), the same endorsement its body and its model rest on, and the
+planner's call, which nobody vouched for, still sets nothing.
+
+**Why a ceiling.** A delegate is a run nobody is watching, which is why each kind is bounded at
+all, and a number with no ceiling would hand that bound to the file at whatever figure it wrote.
+Twice a kind's own leaves room for a long sub-task, and no kind passes the bound an unwatched turn
+carries ([TURN-2](turns.md#TURN-2)), since a delegate is one: a `worker`'s ceiling is that bound.
+
+**Why hold the number rather than refuse the file.** A number past the ceiling says the task is
+long, which the ceiling can honour as far as it goes, and refusing the file would lose the
+delegate over a figure. It is said, because an author not told would read their number as the
+one in force. A value that is no number has nothing in it to hold, so its file does not load.
+Zero goes with it: the bound is checked after a round, so zero would run as one.
+
 `verified-by: bravebot_core::delegate::every_kind_carries_a_bound`
-`verified-by: bravebot_core::policy::a_delegates_bound_comes_from_its_kind`
+`verified-by: bravebot_core::delegate::each_kinds_bound_and_ceiling_are_the_figures_a_person_is_told`
+`verified-by: bravebot_core::delegate::a_definition_may_ask_its_kind_for_more_rounds_than_its_own`
+`verified-by: bravebot_core::delegate::a_definition_naming_no_rounds_keeps_its_kinds_own`
+`verified-by: bravebot_core::delegate::a_definition_may_set_its_own_bound_beneath_its_kinds_ceiling`
+`verified-by: bravebot_core::delegate::a_definition_asking_past_its_kinds_ceiling_is_held_to_it`
+`verified-by: bravebot_core::policy::a_kind_is_delegated_with_its_own_bound`
+`verified-by: bravebot_core::policy::a_definition_is_delegated_with_the_bound_it_names`
+`verified-by: bravebot_agent::agents::a_definition_reads_the_rounds_it_names`
+`verified-by: bravebot_agent::agents::a_rounds_line_that_is_not_a_count_is_not_a_definition`
+`verified-by: bravebot_agent::agents::a_definition_asking_past_its_kinds_ceiling_says_what_it_is_given`
+`verified-by: bravebot_agent::turn::no_kind_lets_a_definition_run_longer_than_an_unwatched_turn`
 
 <a id="DELEGATE-7"></a>
-### DELEGATE-7: a delegate cannot delegate
+### DELEGATE-7: a delegate may delegate, to a fixed depth and under one ceiling for the turn
 
-No kind is offered the tool, and a call to it from inside a delegate is answered the way any
-other unknown name is. Two refusals rather than one, because the depth is what bounds the whole
-tree and a bound resting on the tool list alone rests on the model reading it.
+A delegate is offered `spawn_agent` and may start delegates of its own, and those theirs, down to
+three levels below the turn. Two bounds hold the tree, and both are the kernel's:
 
-**Why.** The bound on a tree of delegates is the product of the bounds, which is a number nobody
-chose. And a person approving a write at the third level has no way to see which task it belongs
-to.
+- **Depth.** A delegate three levels below the turn is not offered the tool and is told it cannot
+  delegate. A call to it there anyway is refused by the kernel. Two refusals rather than one,
+  because a bound resting on the tool list alone rests on the model reading it.
+- **One ceiling for the whole tree.** At most 32 delegates start in one turn, counted across every
+  level and every branch, not per node. A refused request takes no place under it: only a
+  delegate that started is counted, and the trail records a refused one only as refused. A
+  fan-out ([AGENT-5](tools/spawn-agent.md#AGENT-5)) that meets the ceiling part-way starts the
+  ones that fit, and the run that asked is told how many did not start and why.
 
-`verified-by: bravebot_agent::tools::a_delegate_is_never_offered_a_way_to_delegate`
-`verified-by: bravebot_agent::turn::a_call_to_spawn_agent_from_inside_a_delegate_does_nothing`
+A definition can take the tool away as well. One that names its `tools:`
+([DELEGATE-19](#DELEGATE-19)) and leaves `spawn_agent` out is not offered it, is told it cannot
+delegate, and is refused by the kernel if it calls it anyway, at whatever depth it sits. One that
+names no tools keeps it, as it keeps the rest of its kind's set.
+
+The tool's description names neither bound. Delegates read it too, and a model told how many it
+has left spends them.
+
+Every level is gated as the first is. [DELEGATE-2](#DELEGATE-2) refuses a run whose own context
+has met something untrusted, at whatever depth it sits, and [DELEGATE-4](#DELEGATE-4) narrows
+each delegate by the run that spawned it, so a nested delegate holds nothing its parent did not.
+
+**Why nesting.** A delegate handed a task that needs five files read reads them one after another
+in its own context, which is the cost delegation exists to avoid, paid again one level down.
+
+**Why these bounds.** A ceiling per node makes the bound on the tree the product of the ceilings,
+a number nobody chose. One count shared by the whole tree is chosen directly, however the tree
+is arranged. Rounds do not multiply either: a nested delegate keeps its own definition's bound
+([DELEGATE-6](#DELEGATE-6)), so the rounds one turn's delegates spend are at most 32 of the kinds'
+ceilings, at any depth. The depth keeps each number short enough to read: a delegate's number is
+its path from the turn ([DELEGATE-13](#DELEGATE-13)).
+
+**Why a definition's list decides it.** A child is narrowed by its parent's capabilities, not by
+the tools its parent's file named. A definition naming `read_file` alone would otherwise start a
+reader holding every tool a reader has, and the narrowing a person wrote would last one level.
+
+`verified-by: bravebot_agent::tools::a_delegate_is_offered_a_way_to_delegate_only_above_the_bottom_of_the_tree`
+`verified-by: bravebot_agent::tools::the_way_to_delegate_is_described_without_the_numbers_that_bound_it`
+`verified-by: bravebot_core::policy::a_definition_that_names_its_tools_without_spawn_agent_cannot_delegate`
+`verified-by: bravebot_core::policy::a_delegate_refused_at_the_ceiling_is_recorded_only_as_refused`
+`verified-by: bravebot_agent::delegate::a_delegate_is_told_whether_it_may_delegate_by_where_it_sits`
+`verified-by: bravebot_core::policy::a_delegate_at_the_bottom_of_the_tree_cannot_delegate`
+`verified-by: bravebot_core::policy::a_turns_tree_holds_at_most_its_bound_however_it_is_arranged`
+`verified-by: bravebot_core::policy::a_refused_delegate_takes_no_place_in_the_tree`
+`verified-by: bravebot_core::delegate::a_tree_holds_at_most_its_bound_across_every_handle`
+`verified-by: bravebot_agent::turn::a_delegate_can_spawn_its_own_delegate_and_the_trail_names_it`
+`verified-by: bravebot_agent::turn::a_fan_out_that_meets_the_turns_ceiling_starts_what_fits_and_says_what_did_not`
 
 ## What comes back
 
@@ -230,13 +326,18 @@ its parent's context would have moved the log rather than absorbed it.
 <a id="DELEGATE-10"></a>
 ### DELEGATE-10: a delegate's effects are gated on their own
 
-Every write and every run passes the same gates with its own single-use endorsement, so a person
-sees the path and the diff whoever proposed them. An approval given inside a delegate cannot be
-replayed by its parent, and one the parent already holds does not carry in.
+Every write, every run and every call to a server's tool passes the same gates with its own
+single-use endorsement, so a person sees the path and the diff, or the tool and its arguments,
+whoever proposed them. An approval given inside a delegate cannot be replayed by its parent, and
+one the parent already holds does not carry in. A rule, and an answer that stops asking for one
+server's tool in one project ([SERVERS-7](mcp-servers.md#SERVERS-7)), decide a delegate's call as
+they decide the turn's, since each is a standing decision about the person's machine rather than an
+approval of one call.
 
 Delegation saves context. It never saves an approval.
 
 `verified-by: bravebot_agent::turn::a_delegates_write_is_approved_on_its_own`
+`verified-by: bravebot_agent::mcp::a_workers_call_to_a_servers_tool_is_put_to_the_person`
 
 <a id="DELEGATE-11"></a>
 ### DELEGATE-11: what a person vouched for outlives the delegate
@@ -287,7 +388,7 @@ a rule resting on the tool list alone rests on the model reading it.
 What it could not settle goes in the report, and the parent asks.
 
 `verified-by: bravebot_agent::tools::a_delegate_is_offered_no_task_list_and_no_way_to_ask`
-`verified-by: bravebot_agent::delegate::no_kind_is_told_it_may_ask_a_person_or_delegate`
+`verified-by: bravebot_agent::delegate::no_kind_is_told_it_may_ask_a_person`
 `verified-by: bravebot_agent::turn::a_delegate_naming_ask_user_or_todo_write_reaches_neither_the_person_nor_the_screen`
 
 <a id="DELEGATE-13"></a>
@@ -297,20 +398,29 @@ A delegate's gates report into the same audit trail as the turn that spawned it,
 can be told apart. A nested run recording somewhere else would leave a hole in the record exactly
 over the part of the turn nobody watched.
 
-The name is the delegate's number, minted by the driver in the order the turn spawned them. A
-record says which run took the decision it holds, and the turn's own records are left unnamed.
+The name is the delegate's number, minted by the kernel when it approves the delegate. The number
+is its path from the turn: `d1.2` is the second delegate that `d1` started. A record says which
+run took the decision it holds, and the turn's own records are left unnamed. A nested delegate's
+records reach the trail through every run above it and carry its own number, not the number of
+a run they passed through.
 
 `verified-by: bravebot_agent::turn::one_trail_records_the_delegate_and_the_turn_that_spawned_it`
 `verified-by: bravebot_core::delegate::a_description_names_what_it_holds_but_never_the_task`
 `verified-by: bravebot_core::event::a_record_says_which_run_took_the_decision`
 `verified-by: bravebot_session::audit::a_delegates_records_are_named_and_the_turns_own_are_not`
 `verified-by: bravebot_session::audit::the_written_record_names_the_delegate_that_took_the_decision`
+`verified-by: bravebot_core::delegate::a_delegates_number_is_its_path_from_the_turn`
+`verified-by: bravebot_core::policy::a_delegate_numbers_its_own_delegates_beneath_it`
+`verified-by: bravebot_agent::shared::a_nested_delegates_records_name_it_rather_than_the_delegate_above_it`
+`verified-by: bravebot_agent::shared::a_handle_relays_only_its_own_descendants_and_only_once`
+`verified-by: bravebot_agent::turn::a_delegate_can_spawn_its_own_delegate_and_the_trail_names_it`
 
 <a id="DELEGATE-14"></a>
 ### DELEGATE-14: each delegate is numbered, and every report about one says which
 
-The driver numbers them in the order the turn spawned them and says, before each report, whose
-work it describes: one delegate, or the turn itself. Nothing works it out from the report.
+The kernel numbers each in the order the run above it spawned them
+([DELEGATE-13](#DELEGATE-13)), and the driver says, before each report, whose work it describes:
+one delegate, or the turn itself. Nothing works it out from the report.
 
 A number rather than a position in the sequence. Reports arrive in the order the work happened,
 which is not the order it was asked for, and two delegates of the same kind produce lines that
@@ -330,13 +440,15 @@ holds.
 `verified-by: bravebot_agent::turn::a_delegates_work_is_bracketed_by_the_announcements_the_interface_reads`
 `verified-by: bravebot_agent::turn::a_definition_names_the_delegate_a_turn_runs_and_says_what_it_is_for`
 `verified-by: bravebot_core::delegate::a_description_names_the_definition_and_the_kind_behind_it`
+`verified-by: bravebot_agent::shared::a_nested_delegates_lines_are_reported_as_its_own`
 
 <a id="DELEGATE-15"></a>
 ### DELEGATE-15: delegates run alongside the turn and alongside each other
 
 Starting one does not stop the turn. The call answers as soon as the kernel has approved the
-delegate, the planner has its round back, and the work goes on behind it. A turn may have any
-number going at once, and what one is doing has no bearing on what another may do.
+delegate, the planner has its round back, and the work goes on behind it. A turn may have as
+many going at once as [DELEGATE-7](#DELEGATE-7)'s ceiling allows, and what one is doing has no
+bearing on what another may do.
 
 Each holds its own conversation, quarantine, capabilities, routing grants and prompt history.
 They share live file authority because their effects touch the same filesystem. A capture boundary
@@ -396,7 +508,8 @@ Request intervals span whole planner, processor, vetting and compaction calls, i
 calls. Planner calls include retries and retry waits. Durations are rounded once when the turn
 reports milliseconds. Tokens, cache usage and request counts describe all work performed;
 elapsed time does not change their additive accounting.
-Nested delegates are refused by [DELEGATE-7](#DELEGATE-7).
+A nested delegate's request intervals reach every run above it, so each parent's waits are
+measured against the requests of everything beneath it and not only its own delegates'.
 
 **Why.** Adding concurrent request durations would report time the parent did not spend waiting.
 A delegate's final duration alone cannot say which part fell inside a wait. Retaining intervals
@@ -404,6 +517,7 @@ also lets a later collection account for its requests during earlier joins witho
 again.
 
 `verified-by: bravebot_agent::timing::delegate_requests_cover_only_their_union_inside_a_wait`
+`verified-by: bravebot_agent::shared::a_nested_delegates_requests_reach_every_delegate_above_it`
 `verified-by: bravebot_agent::timing::successive_collections_charge_each_covered_instant_once`
 `verified-by: bravebot_agent::turn::overlapping_delegate_requests_charge_one_elapsed_wait`
 `verified-by: bravebot_agent::turn::failed_parent_keeps_overlapping_delegate_retry_waits`
@@ -436,7 +550,8 @@ A definition may then name `tools:`, and that is a narrowing and only a narrowin
 is intersected with its kind's reach and with the parent's own set, so the intersection
 [DELEGATE-4](#DELEGATE-4) takes gains a third term and keeps its direction: a definition naming a
 tool its kind does not reach is a definition loaded without it, and the trail says what was
-dropped.
+dropped. `spawn_agent` is one of the tools a list may leave out, and a delegate whose list leaves it
+out cannot delegate ([DELEGATE-7](#DELEGATE-7)).
 
 A name that is not a tool selects **nothing**, and is reported dropped like any other. `*` is such
 a name rather than a way to ask for all of them, and so is every name in another agent's
@@ -514,8 +629,9 @@ Two files in one directory resolve by file name, so which of them is live is the
 machine.
 
 **A later definition of the same name replaces the one before it and never widens it.** It has the
-last word about what the name is *for*, taking over the description, the body and the model, and
-none at all about what it may do. Both fields that decide that are met with the one it replaced:
+last word about what the name is *for*, taking over the description, the body, the model, the
+skills ([DELEGATE-23](#DELEGATE-23)) and the rounds ([DELEGATE-6](#DELEGATE-6)), and none at all
+about what it may do. Both fields that decide that are met with the one it replaced:
 
 - It is loaded as the **narrower of the two kinds**, so a project cannot turn a `reader` a person
   wrote in their own directory into a `worker`.
@@ -528,6 +644,11 @@ none at all about what it may do. Both fields that decide that are met with the 
 Met on the fields rather than on the capability set they come to, because two tools one capability
 reaches are two different things a delegate may do, and a meet taken on capabilities alone would
 hand back every other tool that capability reaches.
+
+The rounds are taken over rather than met, because a bound is not authority: a gate refuses on
+the last round what it refuses on the first. They are held to the ceiling of the kind the
+replacement is loaded as, so a project writing a `worker`'s number under the name of a `reader` a
+person wrote gets a `reader`'s ceiling, and is told so ([DELEGATE-6](#DELEGATE-6)).
 
 DELEGATE-19 says a checked-in file granting a capability would make the file the author of
 authority rather than the person who vouched for it, and a wider `kind:` for a name that person
@@ -563,6 +684,9 @@ each came from a source somebody vouched for, which is what separates this from 
 `verified-by: bravebot_core::delegate::a_later_definition_cannot_widen_a_tool_list_within_one_capability`
 `verified-by: bravebot_core::delegate::tool_lists_with_nothing_in_common_meet_at_nothing`
 `verified-by: bravebot_core::delegate::a_narrowing_carries_through_a_third_definition_of_the_same_name`
+`verified-by: bravebot_core::delegate::a_later_definition_takes_over_the_skills_the_one_it_replaces_named`
+`verified-by: bravebot_core::delegate::a_later_definition_takes_over_the_rounds_under_the_kind_it_is_loaded_as`
+`verified-by: bravebot_agent::agents::a_project_replacement_is_held_to_the_ceiling_of_the_kind_it_is_loaded_as`
 
 <a id="DELEGATE-21"></a>
 ### DELEGATE-21: a definition's name may not open with `-` or carry a colon
@@ -624,6 +748,33 @@ definition could ask for one model and have every delegate it starts answered by
 `verified-by: bravebot_agent::turn::a_delegate_whose_model_needs_a_sign_in_does_not_run_and_says_so`
 `verified-by: bravebot_agent::turn::a_delegate_answered_by_a_model_other_than_its_definitions_says_so`
 
+<a id="DELEGATE-23"></a>
+### DELEGATE-23: a definition may name the skills its delegate is offered
+
+`skills:` is optional and is read as `tools:` is, on one line or as a list. A definition naming
+none offers its delegate every skill the turn found. A definition naming some offers the ones of
+those the turn found and no others: the rest are neither listed in the delegate's prompt nor
+loadable by it. An empty line names none, and its delegate is offered no skill.
+
+A name selects out of what the turn found and adds nothing to it, so a skill the turn could not
+load, whether from a directory nobody vouched for or from nowhere, is one no definition can offer.
+A name nothing found selects nothing, and the turn says so with the rest of what it says about what
+it found, naming the definition and the name.
+
+**Why a replacement takes the list over.** A skill is guidance, and loading one is gated by what a
+delegate holds whichever skills it is listed. Which of them it is told about changes what it is
+told and not what it may do, so the list goes with the body rather than with the kind and the
+tools ([DELEGATE-20](#DELEGATE-20)).
+
+**Why say a name nothing found.** It is the reason [DELEGATE-19](#DELEGATE-19) reports a tool name
+that is not a tool: without it a misspelt name reads to whoever wrote it as a skill the delegate
+has.
+
+`verified-by: bravebot_agent::agents::a_definition_reads_the_skills_it_names`
+`verified-by: bravebot_agent::agents::a_skill_named_twice_and_found_nowhere_is_said_once`
+`verified-by: bravebot_core::delegate::a_definition_may_name_skills_and_the_spec_carries_them`
+`verified-by: bravebot_agent::turn::a_definition_offers_its_delegate_only_the_skills_it_names`
+
 ## Known costs
 
 - **A definition is trusted exactly as far as a configuration file somebody pasted is.** That is
@@ -637,6 +788,25 @@ definition could ask for one model and have every delegate it starts answered by
   four, and normalising a name to find them would be a dependency for four code points. A
   character Unicode adds to that set later is one [DELEGATE-21](#DELEGATE-21) would not catch
   until the list is extended.
+
+- **A definition cannot choose which MCP servers its delegate holds.** A worker holds every server
+  its parent holds, and a reader, a checker and a definition with a `tools:` line hold none
+  ([DELEGATE-4](#DELEGATE-4)). An `mcpServers:` key is ignored like any other key this does not
+  read, so a definition written to talk to one server is either a worker offered every other
+  server's tools too or a delegate offered none. Each call still passes the gates the turn's own
+  would ([DELEGATE-10](#DELEGATE-10)), so the cost is tools offered that the definition never meant
+  to use, and not a call nobody decided.
+
+- **A `skills:` line is split the way a `tools:` line is.** Commas and spaces separate names and a
+  list's bullets are dropped, so a skill whose name holds a space cannot be named, and a YAML flow
+  list (`[a, b]`) or a quoted entry arrives as names no skill goes by. Each is said as a name
+  nothing found ([DELEGATE-23](#DELEGATE-23)), so what it costs is a line to rewrite rather than a
+  delegate quietly told the wrong things. A name spelt like `commit-style` splits cleanly.
+
+- **Another agent's bound does not carry over.** Claude Code writes it `maxTurns:` and opencode
+  `steps:`, and each is a key this does not read, so a definition ported from either runs at its
+  kind's own limit until somebody adds a `rounds:` line ([DELEGATE-6](#DELEGATE-6)). Reading them
+  would give one number three names here, each meaning what another agent defines it to.
 
 - **A definition's model is checked by using it.** Whether the endpoint serves a name is learned
   from its reply, so a definition naming one it does not serve has its delegate run on a substitute

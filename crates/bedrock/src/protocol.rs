@@ -89,11 +89,20 @@ pub struct ConverseRequest {
     pub tool_config: Option<ToolConfig>,
     /// What the service hands to the model without reading it.
     ///
-    /// Absent unless somebody asked for a level, so a build nobody has asked sends the body it
-    /// always sent and the model keeps its own default.
+    /// Absent unless somebody asked for a level or the request streams tool arguments, so a
+    /// whole-reply request nobody asked a level of sends the body it always sent.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub additional_model_request_fields: Option<Value>,
+    pub additional_model_request_fields: Option<serde_json::Map<String, Value>>,
 }
+
+/// The beta that has a Claude model stream a tool's arguments as it writes them.
+///
+/// Without it the service holds each argument back until the model has finished writing it, so a
+/// long file is minutes of silence on a connection that may only go quiet for two. The per-tool
+/// field that says the same thing is not this: this API drops a key it does not define from a
+/// tool's description, measured by a made-up key being answered as readily as that one and the
+/// silence being the same length either way.
+pub const ARGUMENTS_AS_WRITTEN: &str = "fine-grained-tool-streaming-2025-05-14";
 
 /// The parameters every model this API serves takes.
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -427,11 +436,29 @@ impl ConverseRequest {
     /// Ask for a particular amount of thinking, or leave the model to its own default.
     ///
     /// This API's own parameters have no field for it, so the level goes in the passthrough under
-    /// the name the model reading it gives the field.
+    /// the name the model reading it gives the field, beside whatever else is there.
     pub fn with_effort(mut self, effort: Option<Effort>) -> Self {
-        self.additional_model_request_fields =
-            effort.map(|effort| json!({ "output_config": { "effort": effort } }));
+        if let Some(effort) = effort {
+            self.passthrough()
+                .insert("output_config".to_string(), json!({ "effort": effort }));
+        }
         self
+    }
+
+    /// Ask for each tool argument as the model writes it, rather than once it is finished.
+    ///
+    /// In the passthrough beside the level, since neither is a parameter this API defines. The
+    /// service stops checking an argument before sending it on, so what arrives is whatever the
+    /// model wrote, and one that does not parse is the turn loop's to answer as a failed call.
+    pub fn with_arguments_as_written(mut self) -> Self {
+        self.passthrough()
+            .insert("anthropic_beta".to_string(), json!([ARGUMENTS_AS_WRITTEN]));
+        self
+    }
+
+    fn passthrough(&mut self) -> &mut serde_json::Map<String, Value> {
+        self.additional_model_request_fields
+            .get_or_insert_with(serde_json::Map::new)
     }
 
     /// The same request without its cache breakpoints.
@@ -767,6 +794,38 @@ mod tests {
         assert_eq!(
             json["additionalModelRequestFields"]["output_config"]["effort"],
             "max"
+        );
+    }
+
+    /// The level and the ask for arguments as they are written share one passthrough object, so
+    /// setting either leaves the other in place. Replaced wholesale, a turn given a level loses the
+    /// ask and its long file is silent again.
+    #[test]
+    fn the_level_and_the_ask_for_arguments_as_written_travel_together() {
+        let tools = vec![Tool::function("write_file", "Write a file", json!({}))];
+        let asked = || request_from(&[Message::user("hello")], Some(&tools));
+        for request in [
+            asked()
+                .with_arguments_as_written()
+                .with_effort(Some(Effort::Max)),
+            asked()
+                .with_effort(Some(Effort::Max))
+                .with_arguments_as_written(),
+        ] {
+            let fields = &body_of(&request)["additionalModelRequestFields"];
+            assert_eq!(fields["output_config"]["effort"], "max", "{fields}");
+            assert_eq!(
+                fields["anthropic_beta"],
+                json!([ARGUMENTS_AS_WRITTEN]),
+                "{fields}"
+            );
+        }
+
+        // No level leaves the ask alone rather than clearing the object it shares.
+        let request = asked().with_arguments_as_written().with_effort(None);
+        assert_eq!(
+            body_of(&request)["additionalModelRequestFields"],
+            json!({ "anthropic_beta": [ARGUMENTS_AS_WRITTEN] })
         );
     }
 

@@ -125,7 +125,7 @@ reading.
 
 | | |
 |---|---|
-| Tools | its kind's, and never a way to delegate again, ask you something, or fetch a URL |
+| Tools | its kind's, a way to delegate again above the bottom of the tree, and never a way to ask you something or fetch a URL |
 | Memory | none of its parent's exchange: it begins with the task it was given |
 | Conversation | a loop of its own, bounded |
 | Reads | whatever its capabilities and the paths you vouched for allow |
@@ -144,6 +144,12 @@ wanting a write approved while you are reading another delegate's diff waits for
 A turn does not answer while something it started is still working. If it would otherwise finish
 first, the reports are waited for and put in front of it, and it answers again knowing what came
 back.
+
+**A delegate can start delegates of its own**, so one handed a task that needs five files read can
+hand them out rather than read them one after another. The tree stops three levels below the turn,
+and one turn starts at most 32 delegates across every level and branch. Each is numbered by its
+place in the tree: `d1.2` is the second delegate that `d1` started. Every level is approved and
+narrowed exactly as the first is, so a nested delegate holds nothing the delegate above it did not.
 
 **A run whose own context has already met something untrusted cannot delegate at all**, because the
 task it would compose is a function of those bytes. A delegate is not trusted more than its parent.

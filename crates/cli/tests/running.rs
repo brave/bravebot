@@ -71,10 +71,22 @@ impl Scratch {
 
     /// Write one file of the state a home keeps, creating the directory it lives in.
     fn with_state(self, name: &str, contents: &str) -> Self {
-        let directory = self.path.join(".bravebot");
-        std::fs::create_dir_all(&directory).expect("create the state directory");
-        std::fs::write(directory.join(name), contents).expect("write the state file");
+        self.with_file(&format!(".bravebot/{name}"), contents)
+    }
+
+    /// Write a file anywhere under this home, as another program that keeps its configuration there
+    /// would, and return this scratch for chaining.
+    fn with_file(self, relative: &str, contents: &str) -> Self {
+        let path = self.path.join(relative);
+        let directory = path.parent().expect("a file names its directory");
+        std::fs::create_dir_all(directory).expect("create the file's directory");
+        std::fs::write(&path, contents).expect("write the file");
         self
+    }
+
+    /// The user settings file under this home.
+    fn settings(&self) -> PathBuf {
+        self.path.join(".bravebot").join("settings.json")
     }
 }
 
@@ -1444,6 +1456,49 @@ fn in_a_terminal_run(
     environment: &[(&str, &str)],
     arguments: &[&str],
 ) -> Output {
+    let mut terminal = in_a_terminal_command(home, cwd, environment, arguments);
+    terminal
+        .stdin(Stdio::null())
+        .output()
+        .expect("script runs the built binary in a terminal")
+}
+
+/// The same, with `answers` typed at the terminal before the end of the input.
+///
+/// Written whole before the run asks anything. The terminal holds typed lines until something reads
+/// them, which is what a person typing ahead gets too, so each question reads the next line.
+#[cfg(target_os = "linux")]
+fn in_a_terminal_answering(
+    home: &Path,
+    environment: &[(&str, &str)],
+    arguments: &[&str],
+    answers: &str,
+) -> Output {
+    let mut terminal = in_a_terminal_command(home, None, environment, arguments);
+    let mut child = terminal
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("script runs the built binary in a terminal");
+    child
+        .stdin
+        .take()
+        .expect("the terminal's input")
+        .write_all(answers.as_bytes())
+        .expect("type the answers");
+    child
+        .wait_with_output()
+        .expect("script runs the built binary in a terminal")
+}
+
+#[cfg(target_os = "linux")]
+fn in_a_terminal_command(
+    home: &Path,
+    cwd: Option<&Path>,
+    environment: &[(&str, &str)],
+    arguments: &[&str],
+) -> Command {
     let quoted = format!("'{}'", env!("CARGO_BIN_EXE_bravebot"));
     let command = std::iter::once(quoted)
         .chain(arguments.iter().map(|argument| argument.to_string()))
@@ -1458,14 +1513,11 @@ fn in_a_terminal_run(
         // `-q` leaves out the banner script would otherwise write into what is asserted on, `-e`
         // reports the status the binary exited with rather than script's own, and the transcript
         // file is not wanted: what is read here is what script copies to its own stdout.
-        .args(["-qec", &command, "/dev/null"])
-        .stdin(Stdio::null());
+        .args(["-qec", &command, "/dev/null"]);
     if let Some(cwd) = cwd {
         terminal.current_dir(cwd);
     }
     terminal
-        .output()
-        .expect("script runs the built binary in a terminal")
 }
 
 /// A session in lines is a session, so it does not open on a machine with no service configured to
@@ -1941,6 +1993,194 @@ fn a_run_sends_a_level_the_roster_says_the_model_reads() {
     );
 }
 
+/// A level named in a settings file and recorded nowhere reaches the request (BACKEND-43).
+///
+/// The whole point of the key: this run's home has never picked a level, which is the state of a
+/// machine where nobody ever opens the interactive interface, and without the key such a run has no
+/// route to one at all. A property of the process, for the reason the two above are: the run reads
+/// the layers, resolves the level against what is on disk and builds the request, and only what went
+/// out on the wire says whether those were joined up.
+#[test]
+fn a_run_sends_the_level_a_settings_file_named_where_nothing_is_recorded() {
+    let gateway = a_gateway_listing(r#"["tools", "reasoning", "reasoning_effort"]"#);
+    let settings = settings_for(&gateway).replace(
+        r#""model": "openrouter/reasons-only""#,
+        r#""model": "openrouter/reasons-only", "effort": "high""#,
+    );
+    let scratch = Scratch::new("cli-running-effort-configured").with_settings(&settings);
+
+    bravebot(&scratch.path, AT_A_GATEWAY, &["-p", "say something"]);
+
+    let asked = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the run reached the gateway");
+    assert!(
+        asked.contains(r#""reasoning_effort":"high""#),
+        "the level the settings named never reached the request: {asked}"
+    );
+    // Nothing is recorded for it: a level a file named is not a pick, and a run that wrote one down
+    // would make reading the file once enough to outlive the file.
+    assert!(
+        !scratch.path.join(".bravebot").join("effort").exists(),
+        "the run recorded a level nobody picked"
+    );
+}
+
+/// A checkout under `scratch` whose own settings file says `json`, for a run started in it.
+fn a_checkout_saying(scratch: &Scratch, json: &str) -> PathBuf {
+    let cwd = scratch.path.join("checkout");
+    let project = cwd.join(".bravebot");
+    std::fs::create_dir_all(&project).expect("create the project directory");
+    std::fs::write(project.join("settings.json"), json).expect("write the project layer");
+    cwd
+}
+
+/// A checkout that names a level outranks the one recorded in the store (BACKEND-43), because a
+/// pick is recorded once per person and cannot tell two checkouts apart. The recorded level is
+/// left where it was: the next checkout that names none is answered by it again.
+#[test]
+fn a_run_sends_a_checkouts_level_over_the_recorded_one() {
+    let gateway = a_gateway_listing(r#"["tools", "reasoning", "reasoning_effort"]"#);
+    let scratch = Scratch::new("cli-running-effort-checkout")
+        .with_settings(&settings_for(&gateway))
+        .with_effort("max");
+    let cwd = a_checkout_saying(&scratch, r#"{"effort": "low"}"#);
+
+    bravebot_started_in(&scratch.path, &cwd, AT_A_GATEWAY, &["-p", "say something"]);
+
+    let asked = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the run reached the gateway");
+    assert!(
+        asked.contains(r#""reasoning_effort":"low""#),
+        "the recorded level outranked the checkout's: {asked}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".bravebot").join("effort"))
+            .expect("the recorded level")
+            .trim(),
+        "max"
+    );
+}
+
+/// `--effort` names a level for one run, above the checkout, the recorded pick and the person's
+/// own file alike, which is the only way a script can pin one against all three. Given first, so
+/// the flag is also one a command line may lead with.
+#[test]
+fn a_run_sends_the_level_the_command_line_named_over_every_other() {
+    let gateway = a_gateway_listing(r#"["tools", "reasoning", "reasoning_effort"]"#);
+    let settings = settings_for(&gateway).replace(
+        r#""model": "openrouter/reasons-only""#,
+        r#""model": "openrouter/reasons-only", "effort": "high""#,
+    );
+    let scratch = Scratch::new("cli-running-effort-flag")
+        .with_settings(&settings)
+        .with_effort("max");
+    let cwd = a_checkout_saying(&scratch, r#"{"effort": "medium"}"#);
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        AT_A_GATEWAY,
+        &["--effort", "low", "-p", "say something"],
+    );
+
+    let (_, stderr) = said(&output);
+    let asked = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .unwrap_or_else(|_| panic!("the run never reached the gateway: {stderr}"));
+    assert!(
+        asked.contains(r#""reasoning_effort":"low""#),
+        "the flag was outranked: {asked}"
+    );
+    // For this run alone: nothing is recorded, so the next run is answered as it would have been.
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".bravebot").join("effort"))
+            .expect("the recorded level")
+            .trim(),
+        "max"
+    );
+}
+
+/// A checkout that names a model outranks the one `/model` recorded (BACKEND-11), for the reason
+/// a checkout's level does.
+#[test]
+fn a_run_asks_for_a_checkouts_model_over_the_recorded_one() {
+    let gateway = a_gateway_listing(r#"["tools", "reasoning"]"#);
+    let scratch = Scratch::new("cli-running-model-checkout")
+        .with_settings(&settings_for(&gateway).replace(
+            r#""model": "openrouter/reasons-only""#,
+            r#""model": "openrouter/somebody-elses""#,
+        ))
+        .with_state("model", "openrouter/picked-before\n");
+    let cwd = a_checkout_saying(&scratch, r#"{"model": "openrouter/reasons-only"}"#);
+
+    bravebot_started_in(&scratch.path, &cwd, AT_A_GATEWAY, &["-p", "say something"]);
+
+    let asked = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the run reached the gateway");
+    assert!(
+        asked.contains(r#""model":"reasons-only""#),
+        "the checkout's model was outranked: {asked}"
+    );
+}
+
+/// The settings key outranks an exported `BRAVE_AI_CHAT_DEFAULT_MODEL` (BACKEND-11). The variable
+/// names a default, which is what a `.envrc` exporting it for every checkout means by it; ranked
+/// above the file it would outrank every `model` key on a machine that sources one.
+#[test]
+fn a_run_asks_for_the_settings_model_over_an_exported_default() {
+    let gateway = a_gateway_listing(r#"["tools", "reasoning"]"#);
+    let scratch =
+        Scratch::new("cli-running-model-over-export").with_settings(&settings_for(&gateway));
+    let mut environment = AT_A_GATEWAY.to_vec();
+    environment.push(("BRAVE_AI_CHAT_DEFAULT_MODEL", "openrouter/exported"));
+
+    bravebot(&scratch.path, &environment, &["-p", "say something"]);
+
+    let asked = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the run reached the gateway");
+    assert!(
+        asked.contains(r#""model":"reasons-only""#),
+        "the exported variable outranked the settings file: {asked}"
+    );
+}
+
+/// `doctor` says a model was chosen with `/model` only where that choice is the one in force. Where
+/// a checkout outranks it, naming it would send somebody looking for why their checkout's model
+/// was ignored when it was not.
+#[test]
+fn doctor_names_a_checkouts_model_rather_than_the_pick_it_outranks() {
+    let scratch =
+        Scratch::new("cli-running-doctor-model-checkout").with_state("model", "picked-before\n");
+    let cwd = a_checkout_saying(&scratch, r#"{"model": "the-checkouts"}"#);
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(stdout.contains("the-checkouts"), "{stdout}{stderr}");
+    assert!(
+        !stdout.contains("picked-before"),
+        "doctor named a pick the checkout outranks: {stdout}"
+    );
+}
+
 /// A one-shot run takes one turn and exits, so nothing is left holding the line to send it again:
 /// a tool for arranging a later look is not offered here (SCHED-6).
 ///
@@ -2145,26 +2385,26 @@ fn approvals(scratch: &Scratch) -> String {
 
 /// SERVERS-3: typing `mcp add` writes the declaration and is not the approval. With nobody at a
 /// terminal to put the question to, the server is declared, left unapproved, and listed as that
-/// rather than left out (SERVERS-14).
+/// rather than left out (SERVERS-14). Typed as `claude mcp add` takes it, it declares the same.
 #[test]
 fn an_added_server_nobody_was_asked_about_is_declared_and_listed_unapproved() {
-    let scratch = Scratch::new("cli-running-mcp-add");
-    let added = bravebot(
-        &scratch.path,
-        &[],
-        &[
-            "mcp",
-            "add",
-            "weather",
-            "--env",
-            "PATH",
-            "--stdio",
-            "--",
-            "npx",
-            "-y",
-            "weather-mcp",
-        ],
-    );
+    for (name, flags) in [
+        (
+            "cli-running-mcp-add",
+            &["--env", "PATH", "--stdio", "--"][..],
+        ),
+        ("cli-running-mcp-add-short", &["--"]),
+    ] {
+        declared_and_listed_unapproved(name, flags);
+    }
+}
+
+fn declared_and_listed_unapproved(name: &str, flags: &[&str]) {
+    let scratch = Scratch::new(name);
+    let mut args = vec!["mcp", "add", "weather"];
+    args.extend(flags);
+    args.extend(["npx", "-y", "weather-mcp"]);
+    let added = bravebot(&scratch.path, &[], &args);
     let (stdout, stderr) = said(&added);
     assert!(added.status.success(), "{stderr}");
     assert!(
@@ -2259,10 +2499,10 @@ fn a_value_in_a_stray_word_or_a_joined_flag_is_never_repeated() {
     );
 }
 
-/// SERVERS-3: everything after `--stdio --` is the server's argv, bravebot's own flags included.
+/// SERVERS-3: everything after a bare `--`, alone or after `--stdio`, is the server's argv,
+/// bravebot's own flags included.
 #[test]
 fn a_flag_of_bravebots_after_the_bare_dashes_is_the_servers_argument() {
-    let scratch = Scratch::new("cli-running-mcp-foreign");
     let argv = [
         "srv",
         "--settings",
@@ -2271,24 +2511,32 @@ fn a_flag_of_bravebots_after_the_bare_dashes_is_the_servers_argument() {
         "--vet",
         "--dangerously-skip-permissions",
     ];
-    let mut args = vec!["mcp", "add", "srv", "--stdio", "--"];
-    args.extend(argv);
-    let output = bravebot(&scratch.path, &[], &args);
-    let (_, stderr) = said(&output);
-    assert!(output.status.success(), "{stderr}");
-    let written = std::fs::read_to_string(scratch.path.join(".bravebot").join("mcp.json"))
-        .expect("the declaration was written");
-    let read = bravebot_config::mcp::Declarations::parse(&written).expect("it reads back");
-    let declared = bravebot_config::mcp::Declaration::stdio(
-        argv.iter().map(|word| word.to_string()).collect(),
-        Vec::new(),
-        None,
-    )
-    .unwrap();
-    assert_eq!(
-        read.get("srv").map(|entry| entry.declaration),
-        Some(Ok(declared))
-    );
+    for (name, dashes) in [
+        ("cli-running-mcp-foreign", &["--stdio", "--"][..]),
+        ("cli-running-mcp-foreign-short", &["--"]),
+    ] {
+        let scratch = Scratch::new(name);
+        let mut args = vec!["mcp", "add", "srv"];
+        args.extend(dashes);
+        args.extend(argv);
+        let output = bravebot(&scratch.path, &[], &args);
+        let (_, stderr) = said(&output);
+        assert!(output.status.success(), "{dashes:?}: {stderr}");
+        let written = std::fs::read_to_string(scratch.path.join(".bravebot").join("mcp.json"))
+            .expect("the declaration was written");
+        let read = bravebot_config::mcp::Declarations::parse(&written).expect("it reads back");
+        let declared = bravebot_config::mcp::Declaration::stdio(
+            argv.iter().map(|word| word.to_string()).collect(),
+            vec!["PATH".into()],
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            read.get("srv").map(|entry| entry.declaration),
+            Some(Ok(declared)),
+            "{dashes:?}"
+        );
+    }
 }
 
 /// SERVERS-5: `remove` takes the approval out with the declaration, since an approval outliving
@@ -2454,5 +2702,353 @@ fn doctor_reports_a_server_declared_in_a_checkouts_settings() {
     assert!(
         !stdout.contains("weather-mcp") && !stdout.contains("hunter2"),
         "the entry's contents were printed: {stdout}"
+    );
+}
+
+/// Brave's own hosts with nothing imported, which is what a released binary arrives as: a machine
+/// BACKEND-39 refuses in the three-route case, where the import is offered.
+const NOTHING_CONFIGURED: &[(&str, &str)] = &[
+    ("SERVICES_KEY_AICHAT", "a-services-key"),
+    ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+    ("BRAVE_AI_CHAT_ENDPOINT", "https://ai-chat.bsg.brave.com"),
+    (
+        "BRAVE_AI_CHAT_PREMIUM_ENDPOINT",
+        "https://ai-chat-premium.bsg.brave.com",
+    ),
+];
+
+/// A Claude Code setup on Bedrock, which is the whole of what a person on one has written down.
+const CLAUDE_CODE_ON_BEDROCK: &str = r#"{
+    "env": {
+        "CLAUDE_CODE_USE_BEDROCK": "1",
+        "AWS_REGION": "us-west-2",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    },
+    "model": "sonnet"
+}"#;
+
+/// IMPORT-1: a first start on a machine where Claude Code is set up asks whether to import it,
+/// before it says anything else, and a start nobody answers is declined and refused as before.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_first_run_with_claude_code_configured_offers_to_import_it() {
+    let scratch = Scratch::new("cli-running-import-offered")
+        .with_file(".claude/settings.json", CLAUDE_CODE_ON_BEDROCK);
+
+    // The interface that draws, whose start is the one most people meet.
+    let output = in_a_terminal(&scratch.path, NOTHING_CONFIGURED, &[]);
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{transcript}");
+    let question = transcript
+        .find("Import this from Claude Code?")
+        .unwrap_or_else(|| panic!("no import was offered: {transcript}"));
+    let refusal = transcript
+        .find("no model service is configured yet")
+        .unwrap_or_else(|| panic!("the declined start was not refused: {transcript}"));
+    assert!(question < refusal, "{transcript}");
+    assert!(
+        transcript[..question].contains(r#"env.AWS_REGION: "us-west-2""#),
+        "what would be written was not shown before the question: {transcript}"
+    );
+    // Nothing was drawn before the question: it is asked in lines, before the interface exists.
+    assert!(!transcript[..question].contains('\x1b'), "{transcript:?}");
+    assert!(
+        !scratch.settings().exists(),
+        "a declined import wrote the file"
+    );
+}
+
+/// IMPORT-1: a machine whose Claude Code and opencode hold nothing bravebot can use is not asked
+/// anything, and gets BACKEND-39's refusal.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_first_run_with_nothing_importable_refuses_as_before() {
+    let scratch = Scratch::new("cli-running-import-nothing")
+        .with_file(".claude/settings.json", r#"{"model": "opus"}"#);
+
+    let output = in_a_terminal(&scratch.path, NOTHING_CONFIGURED, &["--plain"]);
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{transcript}");
+    assert!(!transcript.contains("Import this"), "{transcript}");
+    assert!(!transcript.contains("import-providers"), "{transcript}");
+    assert!(transcript.contains("amazon-bedrock"), "{transcript}");
+}
+
+/// IMPORT-1: the one-line case has a service configured and only a model name missing, so an
+/// import of another service is not what that person needs.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_configured_service_with_a_brave_model_is_not_offered_an_import() {
+    let scratch = Scratch::new("cli-running-import-one-line")
+        .with_file(".claude/settings.json", CLAUDE_CODE_ON_BEDROCK)
+        .with_settings(
+            r#"{"provider": {"openrouter": {"env": ["OPENROUTER_API_KEY"], "models": {"z-ai/glm-4.6": {}}}}}"#,
+        );
+    let environment = [NOTHING_CONFIGURED, &[("OPENROUTER_API_KEY", "a-token")]].concat();
+
+    let output = in_a_terminal(&scratch.path, &environment, &["--plain"]);
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{transcript}");
+    assert!(transcript.contains("`model` key"), "{transcript}");
+    assert!(!transcript.contains("Import this"), "{transcript}");
+    assert!(!transcript.contains("import-providers"), "{transcript}");
+}
+
+/// IMPORT-7: an incognito session writes nothing, so it offers nothing to write.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_incognito_first_run_offers_no_import() {
+    let scratch = Scratch::new("cli-running-import-incognito")
+        .with_file(".claude/settings.json", CLAUDE_CODE_ON_BEDROCK);
+
+    let output = in_a_terminal(
+        &scratch.path,
+        NOTHING_CONFIGURED,
+        &["--incognito", "--plain"],
+    );
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{transcript}");
+    assert!(!transcript.contains("Import this"), "{transcript}");
+    assert!(
+        !scratch.settings().exists(),
+        "an incognito start wrote settings"
+    );
+}
+
+/// IMPORT-9: what was approved is written, read back as a fresh start reads it, and the session
+/// opens on it, which the trust question being put is what says.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_approved_import_opens_the_session_on_the_file_it_wrote() {
+    let scratch = Scratch::new("cli-running-import-approved")
+        .with_file(".claude/settings.json", CLAUDE_CODE_ON_BEDROCK);
+
+    let output = in_a_terminal_answering(&scratch.path, NOTHING_CONFIGURED, &["--plain"], "y\n");
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{transcript}");
+    let imported = transcript
+        .find("imported what Claude Code configured")
+        .unwrap_or_else(|| panic!("the import was not said: {transcript}"));
+    let opened = transcript
+        .find("trust this directory?")
+        .unwrap_or_else(|| panic!("the session did not open: {transcript}"));
+    assert!(imported < opened, "{transcript}");
+    // After the import line, since the question above it shows the same id.
+    assert!(
+        transcript[imported..].contains("in lines, us.anthropic.claude-sonnet-4-5-20250929-v1:0."),
+        "the session did not open on the imported model: {transcript}"
+    );
+    let file = std::fs::read_to_string(scratch.settings()).expect("the file was written");
+    for written in [r#""BRAVEBOT_USE_BEDROCK": "1""#, r#""model": "sonnet""#] {
+        assert!(file.contains(written), "{written} is not in {file}");
+    }
+}
+
+/// IMPORT-9: a written entry whose variable is unset here would open a session every turn of which
+/// fails, so the start ends first and names the variable.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_unset_variable_after_an_import_is_named_before_the_session_opens() {
+    let scratch = Scratch::new("cli-running-import-unset").with_file(
+        ".config/opencode/opencode.json",
+        r#"{"model": "openrouter/z-ai/glm-4.6", "provider": {"openrouter": {"env": ["OPENROUTER_API_KEY"], "models": {"z-ai/glm-4.6": {}}}}}"#,
+    );
+
+    let output = in_a_terminal_answering(&scratch.path, NOTHING_CONFIGURED, &["--plain"], "y\n");
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{transcript}");
+    assert!(
+        transcript.contains("OPENROUTER_API_KEY, which is not set here"),
+        "{transcript}"
+    );
+    assert!(
+        !transcript.contains("trust this directory?"),
+        "{transcript}"
+    );
+    assert!(
+        scratch.settings().exists(),
+        "the approved import was not written"
+    );
+}
+
+/// IMPORT-9: an unset variable ends the start only where the session's own model needs it. A
+/// gateway imported beside the service that answers is said, and the session opens.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_unset_variable_for_another_entry_is_said_and_the_session_opens() {
+    let scratch = Scratch::new("cli-running-import-unset-elsewhere")
+        .with_file(".claude/settings.json", CLAUDE_CODE_ON_BEDROCK)
+        .with_file(
+            ".config/opencode/opencode.json",
+            r#"{"provider": {"openrouter": {"env": ["OPENROUTER_API_KEY"], "models": {"z-ai/glm-4.6": {}}}}}"#,
+        );
+
+    let output = in_a_terminal_answering(&scratch.path, NOTHING_CONFIGURED, &["--plain"], "y\ny\n");
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{transcript}");
+    let unset = transcript
+        .find("OPENROUTER_API_KEY, which is not set here: its models answer once it is exported")
+        .unwrap_or_else(|| panic!("the unset variable was not said: {transcript}"));
+    let opened = transcript
+        .find("in lines, us.anthropic.claude-sonnet-4-5-20250929-v1:0.")
+        .unwrap_or_else(|| panic!("the session did not open on Bedrock: {transcript}"));
+    assert!(unset < opened, "{transcript}");
+    assert!(
+        transcript[opened..].contains("trust this directory?"),
+        "{transcript}"
+    );
+}
+
+/// IMPORT-1: the questions are put on stderr, so where stderr is a file nobody would see them,
+/// and the start refuses naming the command that asks.
+#[cfg(target_os = "linux")]
+#[test]
+fn nothing_is_asked_where_stderr_is_not_a_terminal() {
+    let scratch = Scratch::new("cli-running-import-stderr")
+        .with_file(".claude/settings.json", CLAUDE_CODE_ON_BEDROCK);
+    let captured = scratch.path.join("stderr.txt");
+    let redirect = format!("2>'{}'", captured.display());
+
+    for arguments in [
+        &["--plain", redirect.as_str()][..],
+        &["import-providers", &redirect],
+    ] {
+        let output = in_a_terminal(&scratch.path, NOTHING_CONFIGURED, arguments);
+
+        let (transcript, _) = said(&output);
+        let stderr = std::fs::read_to_string(&captured).expect("stderr was captured");
+        assert!(!stderr.contains("Import this"), "{arguments:?}: {stderr}");
+        assert!(
+            !transcript.contains("Import this"),
+            "{arguments:?}: {transcript}"
+        );
+        match arguments[0] {
+            "import-providers" => {
+                assert_eq!(output.status.code(), Some(2), "{stderr}");
+                assert!(stderr.contains("terminal"), "{stderr}");
+            }
+            _ => {
+                assert_eq!(output.status.code(), Some(3), "{stderr}");
+                assert!(stderr.contains("bravebot import-providers"), "{stderr}");
+            }
+        }
+        assert!(!scratch.settings().exists(), "{arguments:?} wrote settings");
+    }
+}
+
+/// IMPORT-4: a Claude Code user on an Anthropic API key sees that their setup was looked at, by
+/// name and never by value, before the three routes.
+#[test]
+fn what_was_found_and_left_is_said_before_the_routes() {
+    let scratch = Scratch::new("cli-running-import-left").with_file(
+        ".claude/settings.json",
+        r#"{"env": {"ANTHROPIC_API_KEY": "sk-ant-api03-a-key-nobody-may-see"}}"#,
+    );
+
+    let output = bravebot(&scratch.path, NOTHING_CONFIGURED, &["-p", "say something"]);
+
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    let left = stderr
+        .find("ANTHROPIC_API_KEY")
+        .unwrap_or_else(|| panic!("what was left was not said: {stderr}"));
+    let routes = stderr.find("amazon-bedrock").expect("the routes");
+    assert!(left < routes, "{stderr}");
+    assert!(
+        !stderr.contains("a-key-nobody-may-see"),
+        "the value was shown: {stderr}"
+    );
+    assert!(!stderr.contains("import-providers"), "{stderr}");
+}
+
+/// IMPORT-8: a one-shot run has nobody to ask, so it reads no answer and writes nothing, and its
+/// refusal names the command that does ask.
+#[test]
+fn a_one_shot_first_run_names_the_import_command_and_asks_nothing() {
+    let scratch = Scratch::new("cli-running-import-one-shot")
+        .with_file(".claude/settings.json", CLAUDE_CODE_ON_BEDROCK);
+
+    let output = bravebot(&scratch.path, NOTHING_CONFIGURED, &["-p", "say something"]);
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains("Claude Code") && stderr.contains("bravebot import-providers"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("Import this"), "{stderr}");
+    assert!(
+        !scratch.settings().exists(),
+        "a one-shot run wrote settings"
+    );
+}
+
+/// IMPORT-8: the command asks before it writes, and a pipe has nobody behind it to answer.
+#[test]
+fn import_providers_is_refused_where_its_input_is_not_a_terminal() {
+    let scratch = Scratch::new("cli-running-import-piped")
+        .with_file(".claude/settings.json", CLAUDE_CODE_ON_BEDROCK);
+
+    let output = bravebot(&scratch.path, NOTHING_CONFIGURED, &["import-providers"]);
+
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("terminal"), "{stderr}");
+    assert!(
+        !scratch.settings().exists(),
+        "a piped import wrote settings"
+    );
+}
+
+/// IMPORT-8: the command would refuse on a settings file it cannot add to, so a refusal naming it
+/// would send the person to a second refusal. The file is named instead.
+#[test]
+fn a_settings_file_the_import_cannot_write_is_named_in_place_of_the_command() {
+    let broken = r#"{"env": {"AWS_REGION": "eu-central-1",}"#;
+    let scratch = Scratch::new("cli-running-import-unwritable")
+        .with_file(".claude/settings.json", CLAUDE_CODE_ON_BEDROCK)
+        .with_settings(broken);
+
+    let output = bravebot(&scratch.path, NOTHING_CONFIGURED, &["-p", "say something"]);
+
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(
+        stderr.contains("does not hold a settings document"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("import-providers"), "{stderr}");
+    assert_eq!(
+        std::fs::read_to_string(scratch.settings()).expect("read"),
+        broken
+    );
+}
+
+/// IMPORT-8: an import is a write, which an incognito session will not do.
+#[test]
+fn import_providers_is_refused_while_incognito() {
+    let scratch = Scratch::new("cli-running-import-refused-incognito")
+        .with_file(".claude/settings.json", CLAUDE_CODE_ON_BEDROCK);
+
+    let output = bravebot(
+        &scratch.path,
+        NOTHING_CONFIGURED,
+        &["--incognito", "import-providers"],
+    );
+
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("incognito"), "{stderr}");
+    assert!(
+        !scratch.settings().exists(),
+        "an incognito import wrote settings"
     );
 }

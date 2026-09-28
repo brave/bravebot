@@ -361,7 +361,6 @@ fn a_delegate_does_not_open_a_wallet_of_its_own() {
         .expect("a policy");
         let spec = policy
             .before_delegate(
-                bravebot_core::delegate::DelegateId::nth(1),
                 &bravebot_core::value::Labelled::new(
                     "reader".to_string(),
                     bravebot_core::label::Label::untrusted_public(),
@@ -389,11 +388,13 @@ fn a_delegate_does_not_open_a_wallet_of_its_own() {
             false,
             &bravebot_config::Attribution::default(),
             None,
+            None,
             &cancel,
             &mut bravebot_agent::confirm::ApproveWrites,
             &mut reporter,
             &mut sink,
             // The turn found nothing to lend, which is what an unreadable batch leaves it with.
+            None,
             None,
         );
 

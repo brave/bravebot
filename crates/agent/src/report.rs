@@ -28,6 +28,11 @@ pub struct Activity {
     pub verb: &'static str,
     /// What is being acted on, as the model named it. Empty where there is nothing to name.
     pub target: String,
+    /// Why the planner made the call, in its own words. Empty where it gave no reason.
+    ///
+    /// Carried to a screen and nowhere else: the call runs the same with or without it, and
+    /// whether there is anything to draw is the screen's question to ask of the text.
+    pub why: String,
     /// The tool's own name, as dispatch matched it. Empty where nothing set one.
     ///
     /// Beside [`Activity::verb`] rather than instead of it, because the two have different
@@ -69,6 +74,7 @@ impl Activity {
         Self {
             verb,
             target: target.into(),
+            why: String::new(),
             tool: String::new(),
             note: None,
             failed: false,
@@ -81,6 +87,12 @@ impl Activity {
     /// Say which tool this is, by the name dispatch matched rather than the word shown.
     pub fn of_tool(mut self, tool: &str) -> Self {
         self.tool = tool.to_string();
+        self
+    }
+
+    /// Say why the planner made the call.
+    pub fn saying_why(mut self, why: impl Into<String>) -> Self {
+        self.why = why.into();
         self
     }
 
@@ -799,6 +811,7 @@ pub(crate) fn verb_for(tool: &str) -> &'static str {
         "read_file" => t!(verb_read_file),
         "list_files" => t!(verb_list_files),
         "search" => t!(verb_search),
+        "read_git" => t!(verb_read_git),
         "lsp" => t!(verb_lsp),
         "write_file" => t!(verb_write_file),
         "edit_file" => t!(verb_edit_file),
@@ -819,6 +832,8 @@ pub(crate) fn verb_for(tool: &str) -> &'static str {
         "spawn_agent" => t!(verb_spawn_agent),
         "schedule_next" => t!(verb_schedule_next),
         "watch_file" => t!(verb_watch_file),
+        // Every server's tool is offered under a wire name of this shape, and no built-in is.
+        server if server.starts_with("mcp__") => t!(verb_mcp_call),
         _ => t!(verb_unknown),
     }
 }

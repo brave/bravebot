@@ -28,6 +28,10 @@ block copied out of another tool names its models and names no default, so the m
 still the one the build came with. That case gets one line naming the [`model`](#model) key rather
 than the three routes.
 
+**If Claude Code or opencode already reaches a service on this machine,** the first run offers to copy
+that setup instead, showing everything it would write before it asks. See
+[Importing from Claude Code or opencode](#importing-from-claude-code-or-opencode).
+
 Once a service is configured, the rest of this page is what else you can set. What will actually be
 used is reported by:
 
@@ -76,6 +80,7 @@ Everything that should outlive a session lives here:
 | `~/.bravebot/sessions/<directory>/` | session records and audit trails |
 | `~/.bravebot/lsp/<workspace>/` | a language server's index, one per workspace ([`lsp`](../reference/tools.md#the-index-is-cached-and-it-is-not-small)) |
 | `~/.bravebot/findings/<workspace>.jsonl` | the credentials a turn's own writes were found to hold, one per workspace |
+| `~/.bravebot/trusted/<directory>.jsonl` | the answer to the startup question you pressed `r` for, one per directory ([remembering the answer](../security/trust.md#remembering-the-answer)) |
 | `~/.bravebot/history` | prompts you have sent |
 | `~/.bravebot/model` | the model chosen with `/model` |
 | `~/.bravebot/effort` | the effort level chosen with `/effort` |
@@ -136,8 +141,10 @@ rather than obeyed.
 opens a picker on the model currently in use, as a panel in the middle of the screen. The list comes
 from the endpoint rather than from a set compiled in, so it is whatever the backend actually offers
 today. The choice is written to `~/.bravebot/model`, so it outlives the session that made it and
-applies in every directory. A one-shot run reads the same record, so a script uses the model you
-picked unless [`--model`](../reference/cli.md#--model-name) names another.
+applies in every directory, except one whose own settings name a [`model`](#model): a checkout that
+says which model it wants gets that one in the next session. A one-shot run reads the same record,
+so a script uses the model you picked unless [`--model`](../reference/cli.md#--model-name) names
+another.
 
 **Type to narrow the list rather than arrowing through it.** A search matches the name shown, the name
 a request would carry and the service that answers, ignoring case and anywhere in any of them, and
@@ -181,13 +188,17 @@ than instead of it, each under its own heading. See
 
 opens a picker of five levels, cheapest first (`low`, `medium`, `high`, `xhigh` and `max`), above a
 row for asking for no level at all. `/effort high` takes one without opening the panel. The choice is
-written to `~/.bravebot/effort`, so it outlives the session and applies in every directory, and
-`/status` reports it beside the model.
+written to `~/.bravebot/effort`, so it outlives the session and applies in every directory whose own
+settings name no [`effort`](#effort), and `/status` reports it beside the model.
 
 **Nothing infers a level.** Until you choose one the request carries no such field at all and each
 service applies its own default. Taking the row for no level removes the record rather than writing an
 empty one, which puts you back where you were before you ever chose. A word bravebot does not define
 changes nothing and says so.
+
+The picker is not the only route: the [`effort`](#effort) key names a level in a settings file, which
+is how a project asks for one and how an unattended machine has one at all, and
+[`--effort`](../reference/cli.md#--effort-level) names one for a single one-shot run.
 
 **A level goes only where the roster says it is read.** Reasoning is two parameters rather than one on
 a gateway, so a model can reason and still not read a level sent this way. Where the listing describing
@@ -316,7 +327,8 @@ on what the planner does. Switching language changes what you read and never wha
 
 The environment wins when set, over both the built-in values and
 [`settings.json`](#settingsjson). That is how a released binary is pointed at a local backend
-without rebuilding it.
+without rebuilding it. The one exception is `BRAVE_AI_CHAT_DEFAULT_MODEL`, which a
+[`model`](#model) key outranks.
 
 | Variable | What it sets |
 |---|---|
@@ -324,7 +336,7 @@ without rebuilding it.
 | `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` | the premium host, used once a subscription is imported |
 | `SERVICES_KEY_AICHAT` | the services key requests are signed with |
 | `BRAVE_SERVICES_KEY_ID` | the key id that goes with it |
-| `BRAVE_AI_CHAT_DEFAULT_MODEL` | the model to request when nobody has chosen one |
+| `BRAVE_AI_CHAT_DEFAULT_MODEL` | the model to request when no settings file or `/model` choice names one |
 | `BRAVEBOT_CONTEXT_BUDGET` | the token budget before a conversation is compacted |
 | `BRAVEBOT_OUTPUT_BUDGET` | how far one reply may run before the service cuts it off ([below](#how-long-a-reply-may-run)) |
 | `BRAVEBOT_LOCALE` | the language the interface is read in |
@@ -339,8 +351,9 @@ To point a release build at a backend running locally:
 BRAVE_AI_CHAT_ENDPOINT=http://127.0.0.1:8000 bravebot doctor
 ```
 
-`BRAVE_AI_CHAT_DEFAULT_MODEL` is a **default rather than the setting**: `/model` picks one per user
-and that choice wins, so this applies until somebody makes one.
+`BRAVE_AI_CHAT_DEFAULT_MODEL` is a **default rather than the setting**: a [`model`](#model) key in any
+settings file and a choice made with `/model` both win over it, so this applies until somebody names
+one.
 
 `BRAVEBOT_CONTEXT_BUDGET` is never baked into a binary. It is a knob one person turns while working,
 so it has to be set in the environment.
@@ -348,7 +361,8 @@ so it has to be set in the environment.
 **Thirteen names can also go in a settings file's [`env`](#settingsjson) block**, under the same
 spelling: seven of the nine above, plus the six AWS ones. The two exceptions are `BRAVEBOT_LOCALE` and
 `BRAVEBOT_SUBPROCESS_ENV_SCRUB`, which are read from the environment alone. Exporting a name wins over
-the file, except where an [administrator pinned it](#pinned-by-an-administrator).
+the file, except where an [administrator pinned it](#pinned-by-an-administrator), and except for
+`BRAVE_AI_CHAT_DEFAULT_MODEL`, which the top-level [`model`](#model) key outranks.
 
 ## `settings.json`
 
@@ -414,6 +428,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | Key | What it holds |
 |---|---|
 | `model` | the model to request when nobody has chosen one ([below](#model)) |
+| `effort` | how hard the model is asked to think when nobody has chosen ([below](#effort)) |
 | `editorMode` | whether the input box edits the ordinary way or vi's ([below](#editormode)) |
 | `env` | variables, in Claude Code's own shape |
 | `permissions` | which actions to refuse, and which to ask about ([below](#permissions)) |
@@ -486,10 +501,18 @@ from your home file alone and never from a checkout's.
 { "model": "sonnet" }
 ```
 
-The model to request when nobody has chosen one. This is the one key in the file that **outranks the
-model baked into the binary**. An exported `BRAVE_AI_CHAT_DEFAULT_MODEL` still wins over it, a choice
-recorded by `/model` wins over both, and [`--model`](../reference/cli.md#--model-name) on a one-shot
-run wins over everything.
+The model to request. This is the one key in the file that **outranks the model baked into the
+binary**, and it outranks an exported `BRAVE_AI_CHAT_DEFAULT_MODEL` too, since that variable names a
+default.
+
+A choice recorded by `/model` sits **between your own file and a checkout's**: it wins over the key in
+`~/.bravebot/settings.json`, and loses to one in `.bravebot/settings.json`,
+`.bravebot/settings.local.json` or the file `--settings` names. So a project that says which model it
+wants gets that model whatever you last picked elsewhere, and your own default gives way to a pick.
+[`--model`](../reference/cli.md#--model-name) on a one-shot run, and a model picked in the session
+that is running, win over everything. A key left blank names nothing, so a pick still wins over it,
+but it hides the key in a file below it: with nothing picked, the exported variable or the build
+answers.
 
 `opus`, `sonnet` and `haiku` name a **tier** rather than a model, since that is what a settings file
 written for another tool puts here. Each resolves to something reachable: the model your AWS account
@@ -497,6 +520,37 @@ named for that tier, and otherwise that tier's name on the Brave roster. A tier 
 written, because a service has never heard of it. Any other name is used exactly as you wrote it.
 Bedrock refuses a model it does not recognise, and the aichat endpoint silently resets one to
 `automatic-bravebot`, which is the key appearing to work while changing nothing.
+
+### `effort`
+
+```json
+{ "effort": "high" }
+```
+
+How hard the model is asked to think, in the words
+[`/effort`](../reference/commands.md#effort-level) takes: `low`, `medium`, `high`, `xhigh` and `max`,
+read whatever their case. A word bravebot does not define is no level at all, so nothing you mistype
+reaches a request; the request carries no such field and the service applies its own default.
+
+A level recorded by `/effort` ranks as a recorded model does: it wins over the key in
+`~/.bravebot/settings.json`, and loses to one in `.bravebot/settings.json`,
+`.bravebot/settings.local.json` or the file `--settings` names. A word there that is no level still
+wins, and the run asks for none. A blank or a value that is not a string names nothing, so the
+record answers, but it hides the key in a file below it: with nothing recorded, the run asks for no
+level. [`--effort`](../reference/cli.md#--effort-level) on a one-shot run, and a level
+picked in the session that is running, win over everything. Nothing bakes a level in and no
+variable names one.
+
+This is the way a **project** can ask for a level, and the way a machine where nobody ever opens the
+interactive interface gets one at all: `bravebot -p` and `bravebot --plain` read the key just as the
+interface does. A record is stored once per person, so without this two checkouts cannot ask for
+different levels.
+
+Everything under [Choosing how hard to think](#choosing-how-hard-to-think) still applies, including
+the two cases worth knowing: the models that read no level, and the Brave endpoint, which accepts one
+and discards it. Taking the row for no level in the picker removes the record rather than writing an
+empty one, so your own file's level answers again in the next session; unset it there if you want
+none.
 
 ### `editorMode`
 
@@ -554,13 +608,14 @@ That is a budget rather than a rule about what is allowed, which is why you can 
 it when a long test run is worth the room, lower it when you would rather the agent read a summary
 and ask.
 
-One number covers a command's output, a `job_output` page of a background job's output, and the
-account a background job gives when it finishes. Output released with `read_output` is not cut by
-it: that reaches the agent whole.
+One number covers a command's output, a `job_output` page of a background job's output, the account
+a background job gives when it finishes, and a `read_output` page of output the agent was shown the
+beginning and end of. Output you release with `read_output` after being asked is not cut by it: that
+reaches the agent whole.
 
 **What was printed is never lost.** Only what reaches the conversation is cut. The whole output stays
-beside the sample, so the agent can still hand it to a check or write it to a file without running
-the command again.
+beside the sample, so the agent can read the middle a page at a time, hand it to a check or write it
+to a file without running the command again.
 
 **Bytes, not characters**, and a cut always lands between characters rather than inside one.
 
@@ -590,7 +645,7 @@ never trust a command's output, is on
 a `--settings` file outside your project; a project's own entries are proposed to you in a box when
 the session opens, and work once you grant them. See [how the files combine](#settingsjson) for why.
 
-A rule is `Tool` or `Tool(specifier)`, and names one of four **families**:
+A rule is `Tool` or `Tool(specifier)`, and names one of five **families**:
 
 | Family | Covers |
 |---|---|
@@ -598,6 +653,7 @@ A rule is `Tool` or `Tool(specifier)`, and names one of four **families**:
 | `Edit` | every tool that changes one |
 | `Bash` | running a program |
 | `WebFetch` | fetching a URL |
+| `Mcp` | calling a tool of an [MCP server](mcp-servers.md#rules): `Mcp(weather)` or `Mcp(weather:get_alerts)` |
 
 These are categories rather than tool names, as they are in Claude Code, so there is no rule spelled
 `Write` or `Glob`. `Bash` names no shell (there is none), and its specifier is matched against one
@@ -790,8 +846,11 @@ to say so.
 **Only these names may be pinned**, being the ones that decide where a request goes:
 `BRAVE_AI_CHAT_ENDPOINT`, `BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, `BRAVEBOT_USE_BEDROCK`, `AWS_REGION`,
 `AWS_PROFILE`, the three `ANTHROPIC_DEFAULT_*_MODEL` tiers, and the `provider` block. Every other name
-in the file decides nothing, the signing key and key id included. A name it does not pin resolves
-exactly as it would with no such file.
+in the file decides nothing, the signing key and key id included, save the server lists: `"mcp": {
+"allow": [...], "deny": [...] }` name the [MCP servers](mcp-servers.md#refused-by-an-administrator)
+a session on the machine may start and may not, by host or by command. The file can keep a server
+from starting and never add one. A name it does not pin resolves exactly as it would with no such
+file.
 
 A layer that can pin a preference is a layer somebody uses to pin one. What two parties have a
 legitimate say in is where a request goes and whose account pays for it; which theme is on and which
@@ -815,6 +874,65 @@ The authority here is the filesystem's rather than this program's. Nothing check
 what its permissions are: somebody who can write that path can replace the binary. It fails softly like
 any other layer, so a file that is missing, over 64 KB or unparseable pins nothing, and a blank or
 non-string value pins nothing under that name.
+
+## Importing from Claude Code or opencode
+
+A first run with nothing configured, in a terminal, reads what Claude Code and opencode set up in your
+home directory before it names the three routes. Where either reaches a service bravebot can use, it
+shows what it would add to `~/.bravebot/settings.json` and asks:
+
+```
+Claude Code configures a model service bravebot can use, in /home/you/.claude/settings.json.
+Importing it adds these to /home/you/.bravebot/settings.json:
+  env.BRAVEBOT_USE_BEDROCK: "1"
+  env.AWS_REGION: "us-west-2"
+  env.ANTHROPIC_DEFAULT_SONNET_MODEL: "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+  model: "sonnet"
+Import this from Claude Code? [y/N]
+```
+
+Only a yes writes. Anything else, or the end of input, declines, and the start is refused as before. A
+decline is not remembered, so the next start asks again. After a write the settings are read back from
+disk, and the session opens on them. Where the model the session would use reads its key from a
+variable you have not exported, the start names the variable and stops; an unset variable on any other
+imported gateway is named and the session opens anyway. A settings file that changed while you were
+answering is not written over.
+
+**What is read.** Claude Code's `settings.json` in `$CLAUDE_CONFIG_DIR` (by default `~/.claude`), and
+`CLAUDE_CODE_USE_BEDROCK` if you export it. opencode's `opencode.json` and `opencode.jsonc` in
+`$XDG_CONFIG_HOME/opencode` (by default `~/.config/opencode`), the file `OPENCODE_CONFIG` names, and
+its `auth.json` in `$XDG_DATA_HOME/opencode`. A checkout's `.claude/`, `opencode.json` and
+`.opencode/` are never opened: they hold whatever the repository's author wrote, and would otherwise
+decide where your key is sent.
+
+**What can be imported.** A Claude Code Bedrock setup, under bravebot's own names, when a region is
+named. An opencode `provider` entry reached through an OpenAI-compatible SDK, with only the fields
+bravebot reads, and an `auth.json` API key for a gateway whose endpoint bravebot knows. opencode's
+`disabled_providers` and `enabled_providers` are honoured, and a name already set in your settings file,
+or pinned by an administrator, is left as it is. A model opencode's `amazon-bedrock` entry lists that
+one of your Bedrock tiers already names, such as the Claude Code import's
+`ANTHROPIC_DEFAULT_OPUS_MODEL`, is not added to the entry again.
+
+**Keys.** A source that names a variable has only the name written, and opencode's `{env:VAR}` becomes
+`"env": ["VAR"]`. A key the source holds itself is asked about on its own question, which names the host
+it would be sent to and says it is kept in plain text; the key is never shown. Declining writes the
+entry reading the variable opencode reads for it, such as `OPENROUTER_API_KEY`, and says to export it.
+A `{file:path}` key is not followed, and neither is a substitution inside a longer value, such as
+`Bearer {env:TOKEN}`: that entry is named as left.
+
+**What is never imported**: commands, permissions, hooks and MCP servers. What was found and cannot be
+used, such as an Anthropic API key or a Vertex AI setup, is named with the reason before the routes,
+and its value is never shown.
+
+A run that cannot ask (`-p`, `--json`, a pipe or a redirect, `doctor`) imports nothing, and its
+refusal names the command that asks:
+
+```sh
+bravebot import-providers
+```
+
+That command asks the same questions at any time, whether or not a service is configured. It refuses
+without a terminal and in an incognito session.
 
 ## Reaching a model through AWS Bedrock
 

@@ -1,5 +1,7 @@
 //! Tests for the label-aware file tools, exercised against a real temporary directory.
 
+mod repository;
+
 use bravebot_agent::SessionScratch;
 use bravebot_agent::workspace::{Paging, Workspace, WorkspaceError};
 use bravebot_core::capability::{Capability, CapabilitySet};
@@ -19,7 +21,7 @@ fn restore_for_test(
     let mut current = TrustStore::new(workspace.root());
     current.trust(".");
     let target = current.clone();
-    bravebot_agent::rewind::restore(backups, &mut current, &target, &mut None)
+    bravebot_agent::rewind::restore(workspace, backups, &mut current, &target, &mut None)
 }
 
 /// A scratch directory that removes itself, so tests do not leave state behind.
@@ -2144,6 +2146,104 @@ fn a_listing_can_be_narrowed_by_glob() {
     let listing = listing.declassify(&proof);
 
     assert_eq!(listing.files, vec!["src/lib.rs", "src/main.rs"]);
+}
+
+/// A profile in each of two directories under `projects`, and one under a sibling of it.
+fn profiles_tree(name: &str) -> Scratch {
+    let scratch = Scratch::new(name);
+    for dir in ["projects/a", "projects/b", "other/a"] {
+        std::fs::create_dir_all(scratch.path.join(dir)).unwrap();
+        std::fs::write(scratch.path.join(dir).join("profile.json"), "needle\n").unwrap();
+    }
+    std::fs::write(scratch.path.join("projects/b/other.json"), "needle\n").unwrap();
+    scratch
+}
+
+fn list_under(root: &std::path::Path, directory: &str, pattern: &str) -> Vec<String> {
+    let workspace = Workspace::new(root).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+    let listing = workspace
+        .list(
+            &mut policy,
+            &Labelled::trusted(directory.to_string()),
+            Some(&Labelled::trusted(pattern.to_string())),
+            None,
+        )
+        .expect("list succeeds");
+    let proof = policy.authorise_content_release("test", "paths");
+    listing.declassify(&proof).files
+}
+
+/// A caller naming a directory writes the rest of the path from there. Read from the root alone,
+/// `*/profile.json` under `projects` selects nothing and is reported as a glob that matched no
+/// files, which sends the planner guessing globs for files that are there.
+#[test]
+fn a_listing_glob_may_be_written_from_the_directory_it_names() {
+    let scratch = profiles_tree("list-glob-under");
+    let both = vec![
+        "projects/a/profile.json".to_string(),
+        "projects/b/profile.json".to_string(),
+    ];
+
+    assert_eq!(
+        list_under(&scratch.path, "projects", "*/profile.json"),
+        both
+    );
+    assert_eq!(
+        list_under(&scratch.path, "projects", "projects/*/profile.json"),
+        both,
+        "the spelling from the workspace root stopped working"
+    );
+    assert_eq!(
+        list_under(&scratch.path, "projects", "b/*"),
+        vec!["projects/b/other.json", "projects/b/profile.json"]
+    );
+    // From the root the same glob still says one directory level and no more.
+    assert_eq!(
+        list_under(&scratch.path, ".", "*/profile.json"),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_search_include_may_be_written_from_the_directory_it_names() {
+    let scratch = profiles_tree("grep-include-under");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let found = workspace
+        .grep(
+            &mut policy,
+            std::slice::from_ref(&Labelled::trusted("needle".to_string())),
+            &Labelled::trusted("projects".to_string()),
+            Some(&Labelled::trusted("*/profile.json".to_string())),
+            true,
+            1,
+        )
+        .expect("grep succeeds");
+    let proof = policy.authorise_content_release("test", "matches");
+    let found = found.declassify(&proof);
+
+    assert_eq!(found.considered, 2, "the include selected the wrong files");
+    let paths: Vec<&str> = found.matches.iter().map(|m| m.path.as_str()).collect();
+    assert_eq!(
+        paths,
+        ["projects/a/profile.json", "projects/b/profile.json"]
+    );
 }
 
 /// An untrusted pattern must not choose what is looked at, exactly as an untrusted
@@ -4368,6 +4468,299 @@ fn a_file_past_the_rewind_budget_is_remembered_but_not_kept() {
     );
 }
 
+/// The backups a turn leaves after writing each of `files` as trusted content.
+#[cfg(unix)]
+fn backups_of_a_turn_writing(
+    workspace: &Workspace,
+    files: &[(&str, &str)],
+) -> Vec<bravebot_agent::workspace::Backup> {
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+    for (path, body) in files {
+        workspace
+            .write(
+                &mut policy,
+                &Labelled::trusted(path.to_string()),
+                &Labelled::trusted(body.to_string()),
+            )
+            .expect("write succeeds");
+    }
+    workspace.take_backups()
+}
+
+/// A rewind is confined the way a write is. The path a rewind point keeps is a string whose
+/// meaning the tree decides when the rewind runs, and a pull between the turn and the rewind can
+/// turn a directory on it into a link out of the workspace. Following it would put the old bytes
+/// over a file outside the tree that the list shown before the rewind never named.
+#[cfg(unix)]
+#[test]
+fn a_rewind_does_not_write_through_a_directory_since_linked_out_of_the_workspace() {
+    use bravebot_agent::workspace::Before;
+
+    let scratch = Scratch::new("rewind-relinked");
+    let target = outside("rewind-relinked");
+    std::fs::create_dir(scratch.path.join("redirect")).unwrap();
+    std::fs::write(
+        scratch.path.join("redirect/controlled.txt"),
+        "what the checkout held",
+    )
+    .unwrap();
+    std::fs::write(target.path.join("controlled.txt"), "a file outside").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let backups = backups_of_a_turn_writing(
+        &workspace,
+        &[("redirect/controlled.txt", "the turn's edit")],
+    );
+    assert!(
+        matches!(&backups[..], [backup] if backup.was == Before::Bytes(b"what the checkout held".to_vec())),
+        "the point did not keep the bytes, so nothing here asks where they go: {backups:?}"
+    );
+    let named = backups[0].path.clone();
+
+    std::fs::remove_dir_all(scratch.path.join("redirect")).unwrap();
+    std::os::unix::fs::symlink(&target.path, scratch.path.join("redirect")).unwrap();
+
+    let refused = restore_for_test(&workspace, backups);
+
+    assert_eq!(
+        std::fs::read_to_string(target.path.join("controlled.txt")).unwrap(),
+        "a file outside",
+        "the rewind wrote outside the workspace"
+    );
+    assert_eq!(refused, vec![named], "the escaping path was not named");
+}
+
+/// The deletion half of the same case. A turn that created a file is rewound by removing it, and
+/// through a directory since linked out of the workspace that removes a file of the same name
+/// outside the tree.
+#[cfg(unix)]
+#[test]
+fn a_rewind_does_not_delete_through_a_directory_since_linked_out_of_the_workspace() {
+    use bravebot_agent::workspace::Before;
+
+    let scratch = Scratch::new("rewind-relinked-created");
+    let target = outside("rewind-relinked-created");
+    std::fs::create_dir(scratch.path.join("redirect")).unwrap();
+    std::fs::write(target.path.join("fresh.txt"), "a file outside").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let backups =
+        backups_of_a_turn_writing(&workspace, &[("redirect/fresh.txt", "the turn's file")]);
+    assert!(
+        matches!(&backups[..], [backup] if backup.was == Before::Nothing),
+        "the point does not record a created file: {backups:?}"
+    );
+    let named = backups[0].path.clone();
+
+    std::fs::remove_dir_all(scratch.path.join("redirect")).unwrap();
+    std::os::unix::fs::symlink(&target.path, scratch.path.join("redirect")).unwrap();
+
+    let refused = restore_for_test(&workspace, backups);
+
+    assert_eq!(
+        std::fs::read_to_string(target.path.join("fresh.txt")).ok(),
+        Some("a file outside".to_string()),
+        "the rewind deleted a file outside the workspace"
+    );
+    assert_eq!(refused, vec![named], "the escaping path was not named");
+}
+
+/// A directory opened beside the project is not part of it. A file of the project goes back into
+/// the project, so a directory of the project since linked into the opened one is refused like any
+/// other link out, whichever way the rewind would put the file back.
+#[cfg(unix)]
+#[test]
+fn a_rewind_does_not_put_a_project_file_back_through_a_link_into_an_opened_directory() {
+    use bravebot_agent::workspace::Before;
+
+    let scratch = Scratch::new("rewind-relinked-opened");
+    let opened = outside("rewind-relinked-opened");
+    std::fs::create_dir(scratch.path.join("redirect")).unwrap();
+    std::fs::write(
+        scratch.path.join("redirect/controlled.txt"),
+        "what the checkout held",
+    )
+    .unwrap();
+    std::fs::write(opened.path.join("controlled.txt"), "a file beside").unwrap();
+    std::fs::write(opened.path.join("fresh.txt"), "a file beside").unwrap();
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    workspace
+        .add_directory(opened.path.to_str().expect("utf-8 path"))
+        .expect("the directory opens");
+
+    let backups = backups_of_a_turn_writing(
+        &workspace,
+        &[
+            ("redirect/controlled.txt", "the turn's edit"),
+            ("redirect/fresh.txt", "the turn's file"),
+        ],
+    );
+    assert!(
+        matches!(
+            &backups[..],
+            [kept, created] if matches!(kept.was, Before::Bytes(_)) && created.was == Before::Nothing
+        ),
+        "the point did not keep one file and record the other as created: {backups:?}"
+    );
+    let named: Vec<PathBuf> = backups.iter().map(|backup| backup.path.clone()).collect();
+
+    std::fs::remove_dir_all(scratch.path.join("redirect")).unwrap();
+    std::os::unix::fs::symlink(&opened.path, scratch.path.join("redirect")).unwrap();
+
+    let refused = restore_for_test(&workspace, backups);
+
+    assert_eq!(
+        std::fs::read_to_string(opened.path.join("controlled.txt")).unwrap(),
+        "a file beside",
+        "the rewind wrote a project file into the opened directory"
+    );
+    assert_eq!(
+        std::fs::read_to_string(opened.path.join("fresh.txt")).ok(),
+        Some("a file beside".to_string()),
+        "the rewind deleted a file of the opened directory"
+    );
+    assert_eq!(
+        refused, named,
+        "the paths that left the project were not named"
+    );
+}
+
+/// Removing a file the turn created unlinks the name and nothing it points at. A link since left
+/// at that name goes, the file at its far end stays, and nothing is refused, since the name is
+/// gone as it was before the turn.
+#[cfg(unix)]
+#[test]
+fn a_rewind_removes_a_created_file_since_replaced_by_a_link_without_following_it() {
+    use bravebot_agent::workspace::Before;
+
+    let scratch = Scratch::new("rewind-relinked-created-file");
+    let target = outside("rewind-relinked-created-file");
+    std::fs::write(target.path.join("fresh.txt"), "a file outside").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let backups = backups_of_a_turn_writing(&workspace, &[("fresh.txt", "the turn's file")]);
+    assert!(
+        matches!(&backups[..], [backup] if backup.was == Before::Nothing),
+        "the point does not record a created file: {backups:?}"
+    );
+
+    std::fs::remove_file(scratch.path.join("fresh.txt")).unwrap();
+    std::os::unix::fs::symlink(
+        target.path.join("fresh.txt"),
+        scratch.path.join("fresh.txt"),
+    )
+    .unwrap();
+
+    let refused = restore_for_test(&workspace, backups);
+
+    assert_eq!(
+        refused,
+        Vec::<PathBuf>::new(),
+        "a removal that leaves nothing behind was refused"
+    );
+    assert!(
+        std::fs::symlink_metadata(scratch.path.join("fresh.txt")).is_err(),
+        "the link the turn's file became is still there"
+    );
+    assert_eq!(
+        std::fs::read_to_string(target.path.join("fresh.txt")).unwrap(),
+        "a file outside",
+        "the removal followed the link"
+    );
+}
+
+/// The link can be the file itself rather than a directory above it.
+#[cfg(unix)]
+#[test]
+fn a_rewind_does_not_write_through_a_file_since_replaced_by_a_link_out_of_the_workspace() {
+    use bravebot_agent::workspace::Before;
+
+    let scratch = Scratch::new("rewind-relinked-file");
+    let target = outside("rewind-relinked-file");
+    std::fs::write(scratch.path.join("notes.txt"), "what the checkout held").unwrap();
+    std::fs::write(target.path.join("notes.txt"), "a file outside").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let backups = backups_of_a_turn_writing(&workspace, &[("notes.txt", "the turn's edit")]);
+    assert!(
+        matches!(&backups[..], [backup] if matches!(backup.was, Before::Bytes(_))),
+        "the point did not keep the bytes, so nothing here asks where they go: {backups:?}"
+    );
+    let named = backups[0].path.clone();
+
+    std::fs::remove_file(scratch.path.join("notes.txt")).unwrap();
+    std::os::unix::fs::symlink(
+        target.path.join("notes.txt"),
+        scratch.path.join("notes.txt"),
+    )
+    .unwrap();
+
+    let refused = restore_for_test(&workspace, backups);
+
+    assert_eq!(
+        std::fs::read_to_string(target.path.join("notes.txt")).unwrap(),
+        "a file outside",
+        "the rewind wrote outside the workspace"
+    );
+    assert_eq!(refused, vec![named]);
+}
+
+/// Refusing one path is not refusing the rewind. The files that still resolve inside the
+/// workspace go back, and the one that does not is the only one named.
+#[cfg(unix)]
+#[test]
+fn a_rewind_with_one_path_linked_out_still_puts_the_others_back() {
+    let scratch = Scratch::new("rewind-relinked-some");
+    let target = outside("rewind-relinked-some");
+    std::fs::create_dir(scratch.path.join("redirect")).unwrap();
+    std::fs::write(
+        scratch.path.join("redirect/controlled.txt"),
+        "what the checkout held",
+    )
+    .unwrap();
+    std::fs::write(scratch.path.join("notes.md"), "first").unwrap();
+    std::fs::write(target.path.join("controlled.txt"), "a file outside").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let backups = backups_of_a_turn_writing(
+        &workspace,
+        &[
+            ("notes.md", "second"),
+            ("redirect/controlled.txt", "the turn's edit"),
+            ("created.txt", "the turn's file"),
+        ],
+    );
+    let escaping = backups
+        .iter()
+        .find(|backup| backup.path.ends_with("redirect/controlled.txt"))
+        .expect("the turn's write under the directory was backed up")
+        .path
+        .clone();
+
+    std::fs::remove_dir_all(scratch.path.join("redirect")).unwrap();
+    std::os::unix::fs::symlink(&target.path, scratch.path.join("redirect")).unwrap();
+
+    let refused = restore_for_test(&workspace, backups);
+
+    assert_eq!(refused, vec![escaping]);
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("notes.md")).unwrap(),
+        "first"
+    );
+    assert!(!scratch.path.join("created.txt").exists());
+    assert_eq!(
+        std::fs::read_to_string(target.path.join("controlled.txt")).unwrap(),
+        "a file outside"
+    );
+}
+
 /// The media type is decided from the extension, which is part of a path a person can read.
 /// Sniffing the bytes would mean the driver deciding a destination from content nobody vouched for,
 /// since the type ends up in a `data:` URI.
@@ -4906,4 +5299,217 @@ fn shared_file_authority_preserves_aliases_scratch_added_paths_and_independent_w
         );
         assert!(b.trust().is_trusted("independent.txt"));
     }
+}
+
+/// A log of the repository the planner called `repository`, as read_git asks for one.
+fn log_of(repository: &Labelled<String>) -> bravebot_agent::workspace::GitQuestion<'_> {
+    bravebot_agent::workspace::GitQuestion {
+        repository,
+        revision: None,
+        path: None,
+        pattern: None,
+        query: bravebot_agent::git::Query::Log,
+        count: bravebot_agent::git::DEFAULT_COUNT,
+        skip: 0,
+        messages: false,
+        since: None,
+        until: None,
+    }
+}
+
+/// GIT-4. A rule over `.git` itself is a rule over every file there, however the rule was
+/// written, so the repository is not opened. Asked about only file by file, a rule naming the
+/// directory would cover none of the files a read goes through.
+#[test]
+fn a_repository_a_deny_rule_names_is_not_opened() {
+    let scratch = Scratch::new("git-denied-directory");
+    repository::commit_files(&scratch.path, &[("README", "hello\n")], "first");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut trust = TrustStore::new(workspace.root());
+    trust.trust(".");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust)
+    .with_permissions(denying(&["Read(./.git)"]));
+
+    let repository = Labelled::trusted(".".to_string());
+    let refused = workspace.read_git(&mut policy, &log_of(&repository));
+    assert!(
+        matches!(
+            refused,
+            Err(WorkspaceError::Git {
+                declined: bravebot_agent::git::Declined::Fenced,
+                ..
+            })
+        ),
+        "a repository whose .git a rule denies was read: {:?}",
+        refused.map(|answer| answer.label())
+    );
+}
+
+/// GIT-14. A search's pattern decides which lines of which files the answer prints, so it is a
+/// routing field held to (T,pub) like the path beside it. A private one would carry what it holds
+/// into an answer the planner reads, however trusted its author.
+#[test]
+fn a_search_pattern_is_held_to_trusted_public_before_anything_is_read() {
+    let scratch = Scratch::new("git-search-pattern-routing");
+    repository::commit_files(&scratch.path, &[("README", "hello\n")], "first");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut trust = TrustStore::new(workspace.root());
+    trust.trust(".");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust);
+
+    let repository = Labelled::trusted(".".to_string());
+    let public = Labelled::trusted("hello".to_string());
+    let private = Labelled::new("hello".to_string(), Label::trusted_private());
+    let untrusted = Labelled::new("hello".to_string(), Label::untrusted_public());
+    let search = |pattern| bravebot_agent::workspace::GitQuestion {
+        query: bravebot_agent::git::Query::Search,
+        pattern: Some(pattern),
+        ..log_of(&repository)
+    };
+    let found = workspace
+        .read_git(&mut policy, &search(&public))
+        .expect("a trusted public pattern is searched for");
+    assert_eq!(found.label(), Label::trusted_private());
+    for (pattern, refusal) in [
+        (&private, "routing field 'pattern' of 'read_git'"),
+        (&untrusted, "injection blocked"),
+    ] {
+        let label = pattern.label();
+        let refused = workspace.read_git(&mut policy, &search(pattern));
+        let error = refused.map(|answer| answer.label()).expect_err("searched");
+        assert!(
+            error.to_string().contains(refusal),
+            "a {label} pattern was not refused at the routing gate: {error}"
+        );
+    }
+}
+
+/// A repository in a subdirectory answers to the rules on its own path: `sub/.git` is what the map
+/// is asked about, and a file a commit there showed is `sub/<path>`. Asked about under the root's
+/// spelling instead, a map trusting `sub` alone would refuse the repository, and a rule
+/// distrusting `sub/vendor` would not reach the blob that committed a file there.
+#[test]
+fn a_repository_below_the_root_is_read_under_the_rules_on_its_own_path() {
+    let scratch = Scratch::new("git-below-the-root");
+    let sub = scratch.path.join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    repository::commit_files(&sub, &[("vendor/b.js", "theirs\n")], "vendored");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut trust = TrustStore::new(workspace.root());
+    trust.trust("sub");
+    trust.distrust("sub/vendor");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust);
+
+    let repository = Labelled::trusted("sub".to_string());
+    let log = workspace
+        .read_git(&mut policy, &log_of(&repository))
+        .expect("the repository is read under the rule trusting sub");
+    assert_eq!(log.label(), Label::trusted_private());
+
+    let shown = workspace
+        .read_git(
+            &mut policy,
+            &bravebot_agent::workspace::GitQuestion {
+                query: bravebot_agent::git::Query::Show,
+                ..log_of(&repository)
+            },
+        )
+        .expect("the commit is shown");
+    assert_eq!(
+        shown.label(),
+        Label::untrusted_private(),
+        "a commit showing a file under sub/vendor was not labelled by the rule on it"
+    );
+}
+
+/// GIT-11. A status in a repository below the root asks the map about that repository's own
+/// directory: a rule trusting `sub` alone answers it, and one distrusting a directory inside `sub`
+/// declines it. Asked about the root instead, the first would refuse and the second would not.
+#[test]
+fn a_status_below_the_root_is_asked_about_its_own_directory() {
+    let scratch = Scratch::new("git-status-below-the-root");
+    let sub = scratch.path.join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    repository::commit_files(&sub, &[("a.txt", "one\n")], "first");
+    repository::check_out(&sub, &[("a.txt", "one\n")]);
+    std::fs::write(sub.join("a.txt"), "two\n").unwrap();
+    std::fs::create_dir_all(sub.join("vendor")).unwrap();
+    std::fs::write(sub.join("vendor/b.js"), "theirs\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let repository = Labelled::trusted("sub".to_string());
+    let status = bravebot_agent::workspace::GitQuestion {
+        query: bravebot_agent::git::Query::Status,
+        ..log_of(&repository)
+    };
+    let trusting = |distrusted: Option<&str>| {
+        let mut trust = TrustStore::new(workspace.root());
+        trust.trust("sub");
+        if let Some(path) = distrusted {
+            trust.distrust(path);
+        }
+        trust
+    };
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trusting(None));
+    let answer = workspace
+        .read_git(&mut policy, &status)
+        .expect("the status is read under the rule trusting sub");
+    assert_eq!(answer.label(), Label::trusted_private());
+    let proof = policy.authorise_content_release("test", "status");
+    let text = answer.declassify(&proof).text;
+    assert_eq!(text, " M a.txt\n?? vendor/\n");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trusting(Some("sub/vendor")));
+    let refused = workspace.read_git(&mut policy, &status);
+    assert!(
+        matches!(
+            refused,
+            Err(WorkspaceError::Git {
+                declined: bravebot_agent::git::Declined::UntrustedTree,
+                ..
+            })
+        ),
+        "a status read a working tree with a distrusted directory in it: {:?}",
+        refused.map(|answer| answer.label())
+    );
 }

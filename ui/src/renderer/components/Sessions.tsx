@@ -500,7 +500,7 @@ function grouping(sessions: SessionSummary[]): Group[] {
  * Deliberately the same thresholds as the agent's own `how_long_ago`, so a session does
  * not read as "2 hours ago" here and "1 hour ago" in the terminal.
  */
-function ago(then: number): string {
+export function ago(then: number): string {
   const seconds = Math.max(0, Math.floor(Date.now() / 1000) - then)
   if (seconds < 60) return 'just now'
   const [count, unit] =

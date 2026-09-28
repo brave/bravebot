@@ -26,21 +26,36 @@ use std::fmt;
 ///
 /// Short on purpose. An id that is not here is served by naming `baseURL`, which always works, so the
 /// cost of an absent entry is a line of configuration rather than a broken gateway.
-const KNOWN_ENDPOINTS: &[(&str, &str)] = &[("openrouter", "https://openrouter.ai/api/v1")];
+///
+/// The third column is the variable the other tool reads that id's token from. A block copied out of
+/// it relies on that variable without naming it, so an import names it for the block.
+const KNOWN_ENDPOINTS: &[(&str, &str, &str)] = &[(
+    "openrouter",
+    "https://openrouter.ai/api/v1",
+    "OPENROUTER_API_KEY",
+)];
 
 /// The id naming AWS Bedrock, which is reached by signing rather than by a bearer token.
 ///
 /// The same id the other tool uses, so the block that configures it there configures it here. Its
 /// endpoint is not in [`KNOWN_ENDPOINTS`] because there is no one endpoint: the host carries the
 /// region, so it is built from `options.region` rather than looked up.
-const AWS_PROVIDER_ID: &str = "amazon-bedrock";
+pub(crate) const AWS_PROVIDER_ID: &str = "amazon-bedrock";
 
 /// The endpoint compiled in for `id`, where there is one.
-fn known_endpoint(id: &str) -> Option<&'static str> {
+pub(crate) fn known_endpoint(id: &str) -> Option<&'static str> {
     KNOWN_ENDPOINTS
         .iter()
-        .find(|(known, _)| *known == id)
-        .map(|(_, url)| *url)
+        .find(|(known, _, _)| *known == id)
+        .map(|(_, url, _)| *url)
+}
+
+/// The variable the other tool reads `id`'s token from, where the id is one compiled in.
+pub(crate) fn known_variable(id: &str) -> Option<&'static str> {
+    KNOWN_ENDPOINTS
+        .iter()
+        .find(|(known, _, _)| *known == id)
+        .map(|(_, _, variable)| *variable)
 }
 
 /// The context window a gateway model is assumed to have, in prompt tokens.

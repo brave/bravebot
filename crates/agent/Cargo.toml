@@ -14,15 +14,30 @@ bravebot-config = { path = "../config" }
 bravebot-core = { path = "../core" }
 bravebot-i18n = { path = "../i18n" }
 bravebot-lsp = { path = "../lsp" }
+bravebot-mcp = { path = "../mcp" }
 bravebot-net = { path = "../net" }
 bravebot-sandbox = { path = "../sandbox" }
 bravebot-skus = { path = "../skus" }
 # An attachment reaches the endpoint as a data URI, which is base64 by specification.
 base64 = { workspace = true }
+# gitoxide's plumbing, so `read_git` reads a repository's objects and refs in-process instead of
+# starting git, which runs whatever `.git/config` names. Loose objects, pack indexes, packs and
+# their deltas, packed refs and the ref lookup order are what these carry; the object finder over
+# them is `crate::git`'s own and reads no alternates. The history walk, the tree diff and the line
+# diff (`crate::diff`, over raw blob bytes) are written here. None of these starts a process, and
+# `deny.toml` bans the gix crates that do.
+# `gix-glob` and `gix-ignore` give `status` git's own pattern syntax for ignore and attributes
+# files; the walk over the working tree and the index parser are `crate::git::status`'s.
+gix-glob = "0.28"
+gix-hash = { version = "0.27", features = ["sha1"] }
+gix-ignore = "0.23"
+gix-object = { version = "0.65", features = ["sha1"] }
+gix-odb = { version = "0.85", features = ["sha1"] }
+gix-ref = { version = "0.68", features = ["sha1"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
-# uname(2), for the platform and OS version the preamble states. rustix rather than libc so
-# the call does not need unsafe at this crate.
-rustix = { workspace = true, features = ["system"] }
+# uname(2), for the platform and OS version the preamble states, and the no-follow open status
+# reads a file with. rustix rather than libc so the calls do not need unsafe at this crate.
+rustix = { workspace = true, features = ["fs", "system"] }

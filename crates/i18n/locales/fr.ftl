@@ -41,6 +41,7 @@ cli-usage-continue = Reprendre la session la plus récente de ce répertoire
 cli-usage-fork = Dupliquer une session pour explorer une autre voie
 cli-usage-doctor = Vérifier la configuration et le confinement
 cli-usage-import = Importer un abonnement Leo Premium
+cli-usage-import-providers = Importer un service de modèle configuré par Claude Code ou opencode
 cli-usage-mcp = Déclarer, lister et approuver des serveurs MCP
 
 cli-keys-heading = Touches interactives :
@@ -83,6 +84,7 @@ cli-option-add-dir = Accéder à un répertoire hors de celui de travail (répé
 cli-option-settings = Lire ce fichier de réglages pour cette exécution, au-dessus de ceux trouvés sur le disque
 cli-option-mode = turn (par défaut) décide étape par étape ; manifest planifie tout le déroulement d'abord
 cli-option-model = Le modèle demandé par cette exécution, à la place de celui mémorisé ou configuré
+cli-option-effort = L'effort de réflexion demandé par cette exécution, à la place de celui mémorisé ou configuré
 cli-option-print = Non interactif. Lit l'entrée redirigée comme contexte en quarantaine
 cli-option-trace = Afficher le journal d'audit
 cli-option-json = Afficher un objet de résultat sur stdout au lieu de la réponse
@@ -106,6 +108,7 @@ cli-settings-needs-a-path = --settings demande le chemin d'un fichier de réglag
 cli-settings-not-a-file = --settings ne nomme aucun fichier : { $path }
 cli-mode-needs-a-name = --mode demande l'un de : { $names }
 cli-model-needs-a-name = --model demande le nom d'un modèle
+cli-effort-needs-a-level = --effort demande l'un de : { $levels }
 cli-unexpected-argument = argument inattendu : { $argument }
 cli-task-required = une tâche est requise
 cli-configuration-problem = erreur de configuration : { $problem }
@@ -126,6 +129,10 @@ cli-piped-input-too-large =
 
 onboarding-no-model = aucun service de modèle n'est encore configuré
 onboarding-subscription-unusable = l'abonnement enregistré n'a pas pu être utilisé : { $problem }
+onboarding-import-one =
+    { $source } configure un service de modèle que bravebot peut utiliser : lancez `bravebot import-providers` dans un terminal pour l'importer.
+onboarding-import-both =
+    { $first } et { $second } configurent des services de modèle que bravebot peut utiliser : lancez `bravebot import-providers` dans un terminal pour les importer.
 onboarding-name-a-configured-model =
     Un service est configuré, mais le modèle en vigueur est l'un de ceux de Brave : indiquez l'un des vôtres avec la clé `model` dans ~/.bravebot/settings.json, ou avec --model pour une exécution unique. `bravebot doctor` indique ce que propose chaque service configuré.
 onboarding-pick-one = Configurez l'une de ces options, puis relancez bravebot :
@@ -315,11 +322,12 @@ permission-rule-unreadable = '{ $rule }' { $problem }
 permission-rule-not-a-line = n'est pas une règle ; une règle est une ligne de texte
 permission-rule-empty = est vide
 permission-rule-unclosed-bracket = n'a pas sa parenthèse fermante
-permission-rule-unknown-family = ne nomme aucune famille d'outils de cet agent ; utilisez Read, Edit ou Bash
+permission-rule-unknown-family = ne nomme aucune famille d'outils de cet agent ; utilisez Read, Edit, Bash, WebFetch ou Mcp
 permission-rule-empty-brackets = a des parenthèses vides ; enlevez-les pour viser toute utilisation
 permission-rule-unanchored = a besoin d'un répertoire personnel ou d'un répertoire de réglages pour indiquer vers quoi elle pointe
 permission-rule-not-a-domain-rule = a besoin d'un domaine ; écrivez WebFetch(domain:example.com)
 permission-rule-no-domain-named = ne nomme aucun domaine après 'domain:'
+permission-rule-not-a-tool-rule = a besoin d'un serveur, ou d'un serveur et de l'un de ses outils ; écrivez Mcp(weather) ou Mcp(weather:get_forecast)
 
 
 ## Importer un abonnement Leo Premium
@@ -354,6 +362,57 @@ hook-stopped =
     arrêté
 
 
+## Importer un service de modèle configuré par Claude Code ou opencode
+
+import-found = { $source } configure un service de modèle que bravebot peut utiliser, dans { $files }.
+import-found-exported =
+    { $source } configure un service de modèle que bravebot peut utiliser, dans l'environnement de ce processus.
+import-adds = L'import ajoute ceci à { $file } :
+import-adds-gateway = provider.{ $id }, joignable à { $endpoint } : { $entry }
+import-key-held = provider.{ $id } : une clé est détenue pour cette entrée ; elle fait l'objet d'une question à part
+import-key-file =
+    provider.{ $id } : sa clé est lue dans { $path }, un chemin qui n'est pas suivi, donc aucune clé n'est écrite
+import-kept = Laissés tels quels, puisque { $file } les définit déjà :
+import-named = Non ajoutés, puisqu'un niveau les nomme déjà :
+import-named-model = { $model } dans provider.{ $id }, nommé par { $variable }
+import-pinned = Non proposés, puisque { $file } les définit pour tous les utilisateurs de cette machine :
+import-left-heading = Trouvés dans { $source } et non importés :
+import-left-anthropic-api = l'API native d'Anthropic, dont aucun service ici ne parle le format d'échange
+import-left-vertex = Google Vertex AI, qu'aucun service ici ne joint
+import-left-bearer-token =
+    une clé d'API Bedrock ; bravebot signe plutôt les requêtes Bedrock avec la chaîne d'identifiants AWS
+import-left-no-region = Bedrock sans région pour laquelle signer
+import-left-sign-in = une connexion qui appartient à opencode
+import-left-another-sdk = une entrée qui passe par un SDK autre qu'un SDK compatible OpenAI
+import-left-no-endpoint = aucune adresse joignable n'est indiquée ni connue pour cette entrée
+import-left-substitution =
+    sa clé est construite à partir d'une substitution opencode au milieu d'une valeur plus longue, que bravebot ne fait pas
+import-question = Importer ceci depuis { $source } ?
+import-key-question =
+    Écrire la clé de provider.{ $id } dans { $file }, où elle est gardée en clair, pour l'envoyer à { $endpoint } ?
+import-key-export =
+    provider.{ $id } lit sa clé dans { $variables } : exportez-la avant de lancer bravebot.
+import-key-none = provider.{ $id } est écrit sans identifiant.
+import-imported = ce que { $source } configure a été importé dans { $file }
+import-unset-variable =
+    provider.{ $id } dans { $file } lit sa clé dans { $variables }, qui n'est pas définie ici : exportez-la, puis relancez bravebot
+import-unset-variable-later =
+    provider.{ $id } dans { $file } lit sa clé dans { $variables }, qui n'est pas définie ici : ses modèles répondront une fois qu'elle sera exportée
+import-not-written = { $file } n'a pas été écrit : { $problem }
+import-not-a-document =
+    { $file } ne contient pas de document de réglages, donc rien ne peut y être importé sans perdre ce qu'il contient
+import-too-large =
+    { $file } dépasse ce que bravebot lit, ou le dépasserait une fois l'import ajouté ; il n'a donc pas été écrit
+import-changed =
+    { $file } a changé pendant que l'import posait ses questions, il n'a donc pas été écrit : lancez bravebot import-providers pour les reposer
+import-needs-a-terminal = import-providers demande confirmation avant d'écrire quoi que ce soit, il lui faut donc un terminal pour poser la question
+import-not-while-incognito = un import enregistre des réglages sur le disque, ce qu'une session incognito ne fera pas
+import-no-home = il n'y a pas de répertoire personnel où écrire les réglages
+import-nothing-found = ni Claude Code ni opencode ne configure de service de modèle que bravebot puisse utiliser
+import-nothing-new = il ne reste rien à importer : chaque nom trouvé est déjà défini, ou épinglé
+import-takes-nothing-else = import-providers ne prend aucun argument
+
+
 ## Déclarer un serveur MCP, et l'approuver
 
 mcp-forms-heading = bravebot mcp prend l'une de ces formes :
@@ -363,15 +422,14 @@ mcp-needs-an-alias = { $command } a besoin de l'alias d'un serveur
 mcp-unexpected-argument = { $command } ne prend pas { $argument }
 mcp-add-stray-argument =
     le mot { $position } après add n'est pas une option, et n'est pas répété car il peut être une
-    valeur : --env, --dir et --http prennent un mot chacun, et --stdio -- prend le reste
+    valeur : --env, --dir et --http prennent un mot chacun, et -- prend le reste
 mcp-not-an-alias =
     { $alias } ne peut pas nommer un serveur : un alias est fait de lettres, de chiffres, de - et
     de _, commence par une lettre ou un chiffre, et fait au plus 64 caractères
-mcp-needs-a-transport = add a besoin de --stdio -- <programme> [arguments...] ou de --http <url>
-mcp-two-transports = add prend --stdio ou --http, pas les deux
+mcp-needs-a-transport = add a besoin de -- <programme> [arguments...] ou de --http <url>
+mcp-two-transports = add prend un programme après -- ou --http, pas les deux
 mcp-stdio-needs-a-program =
-    --stdio prend le programme et ses arguments après un -- seul, comme dans
-    --stdio -- npx -y weather-mcp
+    un programme et ses arguments viennent après un -- seul, comme dans -- npx -y weather-mcp
 mcp-http-needs-a-url = --http a besoin d'une url
 mcp-env-needs-a-name = --env a besoin du nom d'une variable
 mcp-dir-needs-a-path = --dir a besoin d'un répertoire
@@ -408,7 +466,7 @@ mcp-unreadable-servers = servers n'est pas un objet
 mcp-unreadable-key =
     { $key } n'est pas une clé qu'il possède : il contient servers et rien d'autre
 mcp-not-while-incognito =
-    déclarer ou approuver un serveur écrit sur le disque, ce qu'une session incognito ne fera pas
+    déclarer, approuver ou oublier écrit sur le disque, ce qu'une session incognito ne fera pas
 mcp-no-state-directory =
     il n'y a pas de répertoire d'état, aucun serveur MCP n'est donc déclaré : { $variables } ne
     nomme aucun répertoire de profil
@@ -429,11 +487,16 @@ mcp-nobody-to-ask =
     personne ne peut être interrogé au sujet de { $alias } : lancez
     bravebot mcp approve { $alias } dans un terminal
 mcp-removed = { $alias } retiré, avec toute approbation que lui seul portait
+mcp-forgot-servers = { $path } ne démarre plus sans demander chaque serveur qu'il réclame
+mcp-forgot-tool = { $tool } fait de nouveau l'objet d'une question avant chaque appel dans { $path }
+mcp-forgot-nothing = rien n'était enregistré pour { $path }
+mcp-no-current-directory = le répertoire courant n'a pas pu être lu : { $error }
 mcp-none-declared = aucun serveur MCP n'est déclaré dans { $path }
 mcp-list-declared-in = déclarations dans { $path }
 mcp-approved = approuvé
 mcp-unapproved = non approuvé
 mcp-unapproved-run-approve = non approuvé : lancez bravebot mcp approve { $alias }
+mcp-refused-by-managed = non démarré : { $reason }
 mcp-cannot-be-used = inutilisable : { $problem }
 mcp-unusable = { $alias } est inutilisable : { $problem }
 mcp-list-unusable =
@@ -450,6 +513,17 @@ servers-not-declared =
     { $file } demande le serveur MCP { $alias }, qui n'est pas déclaré : rien n'a été installé ni
     exécuté pour lui, et bravebot mcp add en déclare un
 servers-not-reached = { $alias } n'a pas été démarré : { $reason }
+servers-refused-by-managed =
+    { $alias } n'a pas été démarré, quoi qu'on ait déclaré ou approuvé : { $reason }
+managed-not-allowed =
+    { $path }, que gère l'administrateur de cette machine, n'autorise que les serveurs que nomme
+    son mcp.allow, et pas celui-ci
+managed-denied =
+    { $path }, que gère l'administrateur de cette machine, le refuse par l'entrée { $entry } de
+    son mcp.deny
+managed-host-unread =
+    { $path }, que gère l'administrateur de cette machine, refuse des serveurs par hôte, et cette
+    url écrit son hôte d'une façon qu'aucune entrée ne peut comparer
 servers-nobody-in-a-one-shot =
     { $alias } n'a pas été démarré : une exécution unique n'interroge personne, lancez donc
     bravebot mcp approve { $alias } dans un terminal
@@ -481,8 +555,58 @@ servers-project-not-kept = { $path } n'a pas été enregistré comme un projet d
 servers-not-confined = { $alias } n'a pas été démarré, rien ici ne pouvant le confiner : { $reason }
 servers-no-confinement-here =
     { $alias } n'a pas été démarré : cette plateforme n'a pas encore de confinement pour un serveur MCP local
+servers-no-home =
+    { $alias } n'a pas été démarré : aucun répertoire à lui n'a pu être créé dans { $path } : { $reason }
 servers-no-handshake = { $alias } a été démarré et n'a pas terminé sa poignée de main : { $reason }
 servers-too-slow = { $alias } n'a pas terminé sa poignée de main en { $seconds } secondes
+
+## The tools an MCP server offers, read by the person before any of them is offered to the model
+
+mcp-tools-title = proposer ces outils au modèle ?
+mcp-tools-offered =
+    { $count ->
+        [one] { $alias } propose un outil
+       *[other] { $alias } propose { $count } outils
+    }
+mcp-tools-none = { $alias } ne liste aucun outil qu'il puisse proposer
+mcp-tools-changed = ce n'est pas la liste que vous avez acceptée auparavant : les outils proposés ont changé
+mcp-tools-explained =
+    Le modèle lira le nom de chaque outil, ses arguments et ce qu'en dit le serveur, tels qu'ils
+    sont affichés ici. Chaque appel vous sera encore soumis. Répondez non si une description donne
+    des instructions.
+mcp-tools-not-listed =
+    { $count ->
+        [one] un autre outil n'est pas listé : son nom ou ses arguments ne peuvent pas être proposés
+       *[other] { $count } autres outils ne sont pas listés : leurs noms ou leurs arguments ne peuvent pas être proposés
+    }
+mcp-tools-argument-list-of = { $kind } de { $items }
+mcp-tools-argument-required = requis
+mcp-tools-yes = Oui, les proposer
+mcp-tools-no = Non, continuer sans eux
+mcp-tools-declined = { $alias } ne propose aucun outil dans cette session : sa liste n'a pas été approuvée
+mcp-tools-refused = { $alias } ne propose aucun outil dans cette session : { $reason }
+mcp-tools-not-recorded =
+    les outils de { $alias } sont approuvés pour cette session seulement, car la réponse n'a pas pu
+    être enregistrée : { $error }
+
+## One call to a tool of an MCP server
+
+mcp-call-title = appeler cet outil ?
+mcp-call-kind = (MCP)
+mcp-call-no-arguments = aucun argument
+mcp-call-question = Continuer ?
+mcp-call-yes = Oui
+mcp-call-stand = Oui, et ne plus demander pour { $tool } dans ce projet
+mcp-call-cannot-stand = non proposé : rien de ce qui est répondu dans cette session ne peut être enregistré
+mcp-call-no = Non
+mcp-call-expand = (e pour déplier)
+mcp-call-collapse = (e pour replier)
+mcp-call-not-recorded =
+    { $tool } a été appelé, et votre réponse de ne plus demander n'a pas pu être enregistrée : le
+    prochain appel demandera encore ({ $error })
+mcp-call-path-not-one-line = le chemin du projet ne peut pas s'écrire sur une ligne
+mcp-record-too-large = il est plus grand qu'un registre de réponses n'a de raison de l'être, il a donc été laissé tel quel
+mcp-record-not-read = il n'a pas pu être lu comme du texte, il a donc été laissé tel quel
 
 ## Approuver un répertoire, demandé une fois quand une session démarre ailleurs
 
@@ -497,6 +621,12 @@ trust-directory-regardless =
     montré avant d'être écrit.
 trust-directory-yes = lui faire confiance
 trust-directory-no = me demander à chaque écriture
+trust-directory-remember = faire confiance et retenir
+trust-directory-remember-explained =
+    r : lui faire confiance, et ne plus poser cette question aux sessions démarrées plus tard exactement dans ce répertoire
+trust-directory-remember-exact =
+    La question reste posée à une session démarrée dans un répertoire qu'il contient ou qui le contient, ou dans un répertoire supprimé puis recréé ici.
+trust-directory-remember-where = /forget-trust revient dessus, et c'est noté ici :
 quit = quitter
 trust-quit-again = encore
 
@@ -868,6 +998,9 @@ status-session-id = Id de session
 status-directory = Répertoire
 status-directory-trusted = fiable
 status-directory-untrusted = non fiable, chaque écriture vous est donc montrée
+status-directory-kept = retenu { $when }
+status-directory-kept-note = les sessions démarrées ici plus tard l'approuvent sans demander
+status-directory-kept-where = /forget-trust pour que la question soit reposée ; la réponse est retenue dans { $path }
 status-also-open = Aussi ouvert
 status-added-directory = ajouté avec /add-dir
 status-scratch = Temporaire
@@ -893,7 +1026,13 @@ status-confinement-nothing-confined = cette session ne confine rien
 status-confinement-servers = cette session confine les serveurs MCP qu'elle a démarrés, et rien d'autre de ce qu'elle exécute
 status-mcp-servers = Serveurs MCP
 status-mcp-servers-none = aucun
-status-mcp-servers-no-tools = démarrés ; aucun de leurs outils n'est encore proposé au modèle
+status-mcp-servers-unread = { $alias } : ses outils vous sont présentés avant que le prochain tour ne planifie
+status-mcp-servers-tools =
+    { $count ->
+        [one] { $alias } : un outil proposé au modèle
+       *[other] { $alias } : { $count } outils proposés au modèle
+    }
+status-mcp-servers-declined = { $alias } : aucun outil proposé, selon votre réponse
 status-loop = Boucle
 status-loop-every = toutes les { $every }
 status-loop-self-paced = cadencée par chaque tour
@@ -1048,7 +1187,7 @@ transcript-waited = { $elapsed } auprès du modèle
 
 scroller-title = défilement
 scroller-key-line = ligne haut/bas
-scroller-key-half-page = demi-page
+scroller-key-half-page = demi-page   (aussi u / d)
 scroller-key-full-page = page entière   (aussi ctrl-f / ctrl-b)
 scroller-key-ends = début / fin   (aussi home / end)
 scroller-key-prompts = invite précédente / suivante
@@ -1086,14 +1225,23 @@ command-rename = Appeler cette conversation autrement
 command-compact = Résumer la conversation jusqu'ici, en gardant la partie récente
 command-btw = Demander quelque chose à côté du travail, sans le mettre dans la conversation
 command-clear = Démarrer une nouvelle session ici, celle-ci restant reprenable
+command-forget-trust = Ne plus retenir que ce répertoire est approuvé, pour que les sessions suivantes ici demandent
 command-loop = Renvoyer une consigne encore et encore, dire ce qui se répète, ou l'arrêter
 command-goal = Continuer à travailler jusqu'à ce qu'une condition que vous fixez soit jugée remplie
 command-watch = Lister les fichiers que cette session surveille, et en arrêter un par son numéro
 command-manifest = Planifier une tâche en entier, vous montrer le plan, puis l'exécuter sans rien replanifier
+command-agent = Exécuter l'une de vos définitions sur une tâche, par son nom
 command-export = Exporter la transcription de la session vers un fichier markdown
 command-undo = Rembobiner d'un tour et restaurer les fichiers qu'il a écrits
 command-rewind = Lister les tours qu'un rembobinage peut atteindre, ou reculer d'autant
 command-exit = Partir
+
+
+## Where a skill offered after a slash was found
+
+skill-from-project = (projet)
+skill-from-user = (utilisateur)
+skill-from-built-in = (intégré)
 
 
 ## Ce que la session répond
@@ -1159,6 +1307,18 @@ session-trusting = { $directory } approuvé
 session-trusting-as-left = { $directory } approuvé (comme cette session l'avait laissé)
 session-trusting-unasked =
     { $directory } approuvé (--dangerously-skip-permissions, la question ne vous a pas été posée)
+session-trusting-kept =
+    { $directory } approuvé (vous avez demandé de le retenir { $when } ; /forget-trust pour que la question soit reposée)
+session-trust-kept =
+    { $directory } approuvé, et les sessions démarrées ici plus tard ne demanderont plus ; /forget-trust revient dessus
+session-trust-not-kept =
+    { $directory } approuvé pour cette session seulement : la réponse n'a pas pu être écrite dans { $path }, la prochaine session ici demandera donc
+session-trust-forgotten =
+    la prochaine session démarrée dans { $directory } demandera s'il faut l'approuver ; celle-ci garde sa réponse, et /clear en démarre une qui demande
+session-trust-nothing-to-forget = aucune réponse n'est retenue pour { $directory }, il n'y a donc rien à oublier
+session-trust-not-forgotten = la réponse retenue dans { $path } n'a pas pu être supprimée : { $error }
+session-trust-forget-incognito =
+    une session incognito ne change rien sur le disque, toute réponse retenue pour ce répertoire reste donc dans { $path }
 session-not-trusting =
     ce répertoire n'est pas approuvé ; chaque écriture vous sera montrée
 session-vouched-for = { $path } approuvé pour cette session
@@ -1169,9 +1329,15 @@ session-vetting-on =
 session-vetting-in-force =
     une vérification qui ne trouve rien donne le contenu au modèle sans vous demander
 update-available =
-    bravebot { $version } est disponible (celle-ci est { $running }) ; pour la mettre à jour :
-    { $command }
+    une version plus récente de bravebot est disponible (celle-ci est { $running }) ; pour la
+    mettre à jour : { $command }
 session-started-server = serveur de langage { $language } actif pour cette session ({ $program })
+session-offered-tools =
+    { $count ->
+        [one] l'outil de { $alias } est proposé au modèle
+       *[other] les { $count } outils de { $alias } sont proposés au modèle
+    }
+session-stands-for-tool = { $tool } appelé sans demander dans ce projet
 session-answered-already = déjà répondu : { $question }
 session-something-was-refused =
     un contrôle de la politique a refusé quelque chose pendant ce tour
@@ -1387,6 +1553,16 @@ manifest-ended-unexpectedly = l'exécution s'est terminée de façon inattendue
 manifest-failed = l'exécution s'est arrêtée : { $problem }
 manifest-recorded = enregistré sous { $id } ; à relire avec bravebot --resume { $id }
 
+# Ce que la session dit d'une définition qu'une personne a désignée avec /agent. Chaque nom ici a
+# été résolu par la session depuis une source que quelqu'un a approuvée ; il peut donc être affiché,
+# mais n'est jamais proposé en complétion.
+agent-needs-a-task = /agent { $name } prend la tâche à faire, comme /agent { $name } relis le diff
+agent-resolved = cette session a résolu { $names } ; désignez-en une avec /agent <nom> <tâche>
+agent-no-such-definition = aucune définition ne s'appelle { $name } ; cette session a résolu { $names }
+# Affiché au-dessus d'une réponse d'un tour désigné. Le nom est celui que le pilote a trouvé, jamais
+# ce que la réponse dit d'elle-même.
+agent-answered = { $name } a répondu
+
 
 ## L'écran d'accueil
 
@@ -1399,6 +1575,7 @@ opening-invitation = Posez une question sur cet espace de travail.
 verb-read-file = Lire
 verb-list-files = Lister
 verb-search = Chercher
+verb-read-git = Historique
 verb-lsp = Consulter
 verb-write-file = Écrire
 verb-edit-file = Modifier
@@ -1414,6 +1591,7 @@ verb-job-output = Tâche
 verb-spawn-agent = Déléguer
 verb-schedule-next = Programmer
 verb-watch-file = Surveiller
+verb-mcp-call = MCP
 verb-unknown = Outil
 
 
@@ -1432,6 +1610,15 @@ delegate-more-calls = { $count } appels jusqu'ici
 delegate-model-needs-sign-in =
     { $definition } a demandé { $model }, qui exige d'abord une connexion : il n'a pas été lancé
 delegate-model-substituted = { $definition } a demandé { $model } et un autre modèle a répondu
+delegate-skills-not-found =
+    { $count ->
+        [one] { $definition } nomme une compétence que cette session n'a pas trouvée, si bien qu'elle n'est pas proposée à son délégué : { $skills }
+       *[other] { $definition } nomme des compétences que cette session n'a pas trouvées, si bien qu'elles ne sont pas proposées à son délégué : { $skills }
+    }
+delegate-rounds-not-a-count =
+    { $definition } a été ignoré : son nombre de cycles (rounds) doit être un entier supérieur à zéro
+delegate-rounds-held =
+    { $definition } demande { $asked } cycles, plus que les { $most } permis à un { $kind } : son délégué en reçoit { $most }
 
 ## Regarder ce que fait un delegue
 

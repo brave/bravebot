@@ -18,6 +18,7 @@ use crate::running::{Running, State};
 use crate::turn::{BridgeConfirmer, BridgeReporter, BridgeSink, Reply};
 use crate::{store, wire};
 use bravebot_agent::Workspace;
+use bravebot_agent::trusted;
 use bravebot_agent::turn::{self as agent_turn, Task, TurnError};
 use bravebot_agent::workspace::{WorkspaceError, key_of};
 use bravebot_config::{Config, Settings};
@@ -27,7 +28,7 @@ use bravebot_net::Egress;
 use bravebot_session::sessions::{Handle, Record, Standing};
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -44,6 +45,9 @@ struct Open {
     /// default: defaulting either way answers on behalf of somebody who was never asked,
     /// which is the mistake the whole trust design exists to avoid.
     answered_trust: bool,
+    /// The record a "trust and remember" answer is kept in, while the question that offered it is
+    /// waiting (TRUST-23). `None` where no question is waiting or remembering is not on offer.
+    keeping: Option<(trusted::Store, trusted::Identity)>,
     /// The turn in flight, if there is one.
     running: Option<Running>,
     model: Option<String>,
@@ -214,34 +218,53 @@ impl Bridge {
         // it, and inherits it. One that did not is asked again: nothing recorded is not
         // the same as nothing trusted, and reading an absent map as an empty one would
         // answer on behalf of somebody who was never asked.
-        let inherited = record.trust_map(&directory);
-        let answered_trust = inherited.is_some();
-        let state = State::resumed(
-            &directory,
-            &record,
-            inherited.unwrap_or_else(|| TrustStore::new(key_of(&directory))),
-        );
+        let opening = Opening::of(&directory, record.trust_map(&directory));
+        let reported = opening.json();
+        // A kept answer settles a record that kept no map, and the session then opens known, as a
+        // fork of it does: `known: false` is the one sign that the question was put.
+        let settled = opening
+            .remembered
+            .is_some()
+            .then(|| json!({ "known": true, "rules": rules_json(&opening.trust) }));
+        let state = State::resumed(&directory, &record, opening.trust);
 
         let auto_vetting = self.auto_vetting(&directory);
         let handle = self.mint(Open {
             project: directory.clone(),
             state: Arc::new(Mutex::new(state)),
-            answered_trust,
+            answered_trust: opening.answered,
+            keeping: opening.keeping,
             running: None,
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             model: None,
             auto_vetting,
         });
+        self.ask_about_trust(&handle);
 
-        if !answered_trust {
-            self.emitter.send(Event::new(
-                "trust.request",
-                &handle,
-                json!({ "directory": directory.display().to_string() }),
-            ));
+        let mut opened = self.recount(&handle, &directory, &record, auto_vetting);
+        if let Some(settled) = settled {
+            opened["trust"] = settled;
         }
+        merge(&mut opened, reported);
+        Ok(opened)
+    }
 
-        Ok(self.recount(&handle, &directory, &record, auto_vetting))
+    /// Put the trust question to the window, where the session opened as `handle` is waiting on it.
+    fn ask_about_trust(&self, handle: &str) {
+        let Some(open) = self.open.get(handle) else {
+            return;
+        };
+        if open.answered_trust {
+            return;
+        }
+        self.emitter.send(Event::new(
+            "trust.request",
+            handle,
+            json!({
+                "directory": open.project.display().to_string(),
+                "keeping": open.keeping.as_ref().map(|(store, _)| store.path().display().to_string()),
+            }),
+        ));
     }
 
     fn auto_vetting(&self, project: &std::path::Path) -> bool {
@@ -334,14 +357,16 @@ impl Bridge {
 
         let branch = bravebot_session::sessions::branch_of(&directory);
         let auto_vetting = self.auto_vetting(&directory);
+        // Nothing carried in, whatever an earlier session here answered, unless the person said to
+        // remember that answer. Unanswered, the map is empty until they answer; nothing runs before
+        // then, so it is never the map a turn uses.
+        let opening = Opening::of(&directory, None);
+        let reported = opening.json();
         let handle = self.mint(Open {
             project: directory.clone(),
-            // An empty map until the user answers. Nothing runs before then, so this is
-            // never the map a turn uses.
-            state: Arc::new(Mutex::new(State::fresh(TrustStore::new(key_of(
-                &directory,
-            ))))),
-            answered_trust: false,
+            state: Arc::new(Mutex::new(State::fresh(opening.trust))),
+            answered_trust: opening.answered,
+            keeping: opening.keeping,
             running: None,
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             model: None,
@@ -350,19 +375,17 @@ impl Bridge {
 
         // Nothing is written until the first turn. An opened-and-abandoned window should
         // leave no trace, which is also how `bravebot` behaves.
-        self.emitter.send(Event::new(
-            "trust.request",
-            &handle,
-            json!({ "directory": directory.display().to_string() }),
-        ));
+        self.ask_about_trust(&handle);
 
-        Ok(json!({
+        let mut made = json!({
             "session": handle,
             "model": crate::settings::config(Some(&directory), self.settings.as_deref()).ok().map(|config| config.default_model),
             "directory": directory.display().to_string(),
             "branch": branch,
             "autoVetting": auto_vetting,
-        }))
+        });
+        merge(&mut made, reported);
+        Ok(made)
     }
 
     /// Begin a session from part of another one.
@@ -456,9 +479,12 @@ impl Bridge {
             .filter(|(turn, _)| *turn <= ordinal)
             .collect();
         // The child knows its map exactly when the parent did. A parent still holding the
-        // question — a record written before maps were kept — hands the question down.
-        let known = answered_trust;
-        let rules = rules_json(&trust);
+        // question (a record written before maps were kept) hands the question down, which a
+        // kept answer about the directory settles as it would for the parent.
+        let opening = Opening::of(&project, answered_trust.then_some(trust));
+        let reported = opening.json();
+        let known = opening.answered;
+        let rules = rules_json(&opening.trust);
 
         let mut begun = self.begin_unique(&project)?;
         begun.inherit_rewind_warnings(&parent);
@@ -471,7 +497,7 @@ impl Bridge {
             state: Arc::new(Mutex::new(State::forked(
                 begun,
                 cut.before,
-                trust,
+                opening.trust,
                 programs,
                 directories,
                 ordinal,
@@ -480,7 +506,8 @@ impl Bridge {
             ))),
             // Inherited along with the map itself: the same person, in the same directory, in
             // the same window, so asking again would be asking somebody to answer twice.
-            answered_trust,
+            answered_trust: opening.answered,
+            keeping: opening.keeping,
             running: None,
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             model: None,
@@ -488,14 +515,7 @@ impl Bridge {
             // and the notice at its top says what the parent opened under.
             auto_vetting,
         });
-
-        if !answered_trust {
-            self.emitter.send(Event::new(
-                "trust.request",
-                &child,
-                json!({ "directory": project.display().to_string() }),
-            ));
-        }
+        self.ask_about_trust(&child);
 
         let title = if parent_title.is_empty() {
             store::load(&project, &parent_id).map(|record| record.title)
@@ -503,7 +523,7 @@ impl Bridge {
             Some(parent_title)
         };
 
-        Ok(json!({
+        let mut forked = json!({
             "session": child,
             "id": id,
             "directory": project.display().to_string(),
@@ -522,7 +542,9 @@ impl Bridge {
                 "title": title,
                 "prompt": ordinal,
             },
-        }))
+        });
+        merge(&mut forked, reported);
+        Ok(forked)
     }
 
     fn close_session(&mut self, request: &Request) -> Result<Value, Failure> {
@@ -815,25 +837,55 @@ impl Bridge {
             .get("trusted")
             .and_then(Value::as_bool)
             .ok_or_else(|| Failure::bad_request("`trusted` must be a boolean"))?;
+        let remember = match request.params.get("remember") {
+            None | Some(Value::Null) => false,
+            Some(value) => value
+                .as_bool()
+                .ok_or_else(|| Failure::bad_request("`remember` must be a boolean"))?,
+        };
+        if remember && !trusted {
+            return Err(Failure::bad_request("only a yes can be remembered"));
+        }
 
         let open = self
             .open
             .get_mut(&handle)
             .ok_or_else(Failure::no_such_session)?;
+        // Kept only where the question offered it, so an answer the window was never shown the
+        // record for, or one given where it may not be kept, writes nothing (TRUST-23).
+        if remember && open.keeping.is_none() {
+            return Err(Failure::bad_request(
+                "remembering this answer was not offered for this session",
+            ));
+        }
 
         // Trusting records the workspace root, which covers everything beneath it.
         // Declining records nothing, leaving a map in which no path is trusted. The same
-        // two outcomes the terminal offers, so an answer means the same in both.
+        // outcomes the terminal offers, so an answer means the same in both.
         let mut trust = TrustStore::new(key_of(&open.project));
         if trusted {
             trust.trust(".");
         }
+        // A session that has not had a turn has no name yet, and the name a line carries decides
+        // nothing, so such a line names none.
+        let mut named = String::new();
         if let Ok(mut state) = open.state.lock() {
             state.trust = trust;
+            if let Some(handle) = state.handle.as_ref() {
+                named = handle.id().to_string();
+            }
         }
         open.answered_trust = true;
+        // The question is answered, so what it offered is spent.
+        let keeping = open.keeping.take();
+        let kept = match keeping {
+            Some((store, identity)) if remember => {
+                Some(store.keep(&identity, &named, seconds_now()))
+            }
+            _ => None,
+        };
 
-        Ok(json!({ "trusted": trusted }))
+        Ok(json!({ "trusted": trusted, "kept": kept }))
     }
 
     /// Inspect or reduce existing grants. No operation on this channel can add trust.
@@ -855,7 +907,8 @@ impl Bridge {
             .lock()
             .map_err(|_| Failure::new(ErrorCode::Internal, "Session state unavailable"))?;
         if revoke {
-            match request.string("kind")?.as_str() {
+            let kind = request.string("kind")?;
+            match kind.as_str() {
                 "path" => {
                     let path = request.string("path")?;
                     if !state.trust.rules().any(|(held, integrity)| {
@@ -884,9 +937,13 @@ impl Bridge {
                         })?;
                     state.programs.forget(&command);
                 }
+                // Withdrawn for the directory rather than this session, which keeps the map it
+                // has: the next session started there asks (TRUST-24).
+                "remembered" => forget_trust(&open.project)?,
                 _ => return Err(Failure::bad_request("Unknown permission kind")),
             }
-            if state.handle.is_some() {
+            // The session's own record changes only with its own grants.
+            if state.handle.is_some() && kind != "remembered" {
                 let turn = state.turns;
                 save(
                     &open.project,
@@ -898,7 +955,10 @@ impl Bridge {
         }
         Ok(json!({
             "paths": rules_json(&state.trust),
-            "commands": state.programs.iter().map(|command| json!({"program": command.program, "args": command.args, "display": command.display()})).collect::<Vec<_>>()
+            "commands": state.programs.iter().map(|command| json!({"program": command.program, "args": command.args, "display": command.display()})).collect::<Vec<_>>(),
+            // Read now rather than when the session opened: the record belongs to every session
+            // begun in the directory, and another may have kept or withdrawn the answer since.
+            "remembered": remembered_json(&open.project),
         }))
     }
 
@@ -1260,6 +1320,8 @@ fn work(work: Work) {
     let history =
         bravebot_session::store::Entry::sent(&prompt, Some(project.display().to_string()));
     let mut task = Task::new(&prompt)
+        .already_asked_about(state.asked_about.clone())
+        .already_exposed(state.exposed.clone())
         .with_home(bravebot_agent::home::directory())
         // No bound on the rounds, as the terminal passes: there is a person in front of this
         // window, they see what the turn is doing, and `turn.cancel` reaches it mid-round. A
@@ -1300,7 +1362,7 @@ fn work(work: Work) {
     let file_authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
     let task = task.with_file_authority(file_authority.clone());
     let programs = state.programs.clone();
-    let outcome = agent_turn::resume(
+    let completed = agent_turn::resume(
         &config,
         &egress,
         &workspace,
@@ -1316,7 +1378,11 @@ fn work(work: Work) {
     );
 
     // Cleanup has finished on every return, including cancellation and request errors.
-    state.trust = file_authority.snapshot();
+    state.trust = completed.decisions.trust;
+    state.programs = completed.decisions.programs;
+    state.asked_about = completed.decisions.asked_about;
+    state.exposed = completed.decisions.exposed;
+    let outcome = completed.outcome;
 
     // The prompt joins the history the terminal also reads, so recall works across both
     // front-ends. Best-effort by design upstream, and nothing here depends on it.
@@ -1348,15 +1414,6 @@ fn work(work: Work) {
                     }
                 }
             }
-            // The map after the turn, which may differ from the one it started with: a
-            // turn that writes untrusted data into a trusted path records that path as
-            // untrusted, and the next turn must inherit that or it would read the data
-            // back as trusted.
-            state.trust = outcome.trust.clone();
-            // Taken from the outcome rather than from whatever asked, so there is one copy
-            // of the answer. Nothing is added while this front-end refuses every vouch, but
-            // a set that came back smaller than it went in would be a lost permission.
-            state.programs = outcome.programs.clone();
             state.tokens += outcome.tokens;
             // Added to rather than set: a turn that compacted part way through has already put
             // that cost here under the same number, and the breakdown has to add up to the total.
@@ -1547,6 +1604,130 @@ fn rules_json(trust: &TrustStore) -> Vec<Value> {
         .collect()
 }
 
+/// How a session's trust stands as it opens.
+struct Opening {
+    /// The map it starts with. Empty where nobody has answered, and no turn runs on it then.
+    trust: TrustStore,
+    /// Whether anything has answered: what the session carries, or a kept answer.
+    answered: bool,
+    /// The kept answer that settled it, and the file it is kept in.
+    remembered: Option<(trusted::Kept, PathBuf)>,
+    /// Where the question is put, the record a "trust and remember" answer would be kept in.
+    keeping: Option<(trusted::Store, trusted::Identity)>,
+}
+
+impl Opening {
+    /// A session in `project` carrying `carried`, the map its own record kept or its parent held,
+    /// or `None` where it carries none.
+    ///
+    /// What it carries answers first, since that is the answer this conversation's own user gave.
+    /// Then an answer the person said to remember about this exact directory (TRUST-23), which starts
+    /// the session from the rule a yes writes and nothing else. Then the question, offering to keep
+    /// its answer only where it may be written and later honoured.
+    fn of(project: &Path, carried: Option<TrustStore>) -> Self {
+        if let Some(trust) = carried {
+            return Self {
+                trust,
+                answered: true,
+                remembered: None,
+                keeping: None,
+            };
+        }
+        let record = remembering(project);
+        let kept = record.as_ref().and_then(|(store, identity)| {
+            Some((store.kept(identity)?, store.path().to_path_buf()))
+        });
+        let mut trust = TrustStore::new(key_of(project));
+        match kept {
+            Some(remembered) => {
+                trust.trust(".");
+                Self {
+                    trust,
+                    answered: true,
+                    remembered: Some(remembered),
+                    keeping: None,
+                }
+            }
+            // An incognito session reads the record and adds nothing to it, so it offers nothing.
+            None => Self {
+                trust,
+                answered: false,
+                remembered: None,
+                keeping: record.filter(|_| trusted::may_be_written()),
+            },
+        }
+    }
+
+    /// What the response opening the session adds about it, for the window to say in turn.
+    fn json(&self) -> Value {
+        json!({
+            "remembered": self.remembered.as_ref().map(|(kept, path)| kept_json(kept, path)),
+            "keeping": self.keeping.as_ref().map(|(store, _)| store.path().display().to_string()),
+        })
+    }
+}
+
+/// Add the fields of the object `extra` to the object `into`.
+fn merge(into: &mut Value, extra: Value) {
+    if let (Some(into), Value::Object(extra)) = (into.as_object_mut(), extra) {
+        into.extend(extra);
+    }
+}
+
+/// The record of the answer kept about `project` (TRUST-23), or `None` where none may be kept or
+/// honoured.
+///
+/// Read under the name a turn there resolves the directory to, which is the name the terminal
+/// reads it under, so one directory has one record whichever front end answered.
+fn remembering(project: &Path) -> Option<(trusted::Store, trusted::Identity)> {
+    trusted::record_for(
+        bravebot_agent::home::directory().as_deref(),
+        bravebot_agent::home::profile().as_deref(),
+        &project.canonicalize().ok()?,
+    )
+}
+
+/// A kept answer as a window is told about it: when it was given, and the file it is kept in.
+fn kept_json(kept: &trusted::Kept, path: &Path) -> Value {
+    json!({ "at": kept.at, "path": path.display().to_string() })
+}
+
+/// The answer kept about `project` as the record says now, or null where none answers.
+fn remembered_json(project: &Path) -> Value {
+    remembering(project)
+        .and_then(|(store, identity)| Some(kept_json(&store.kept(&identity)?, store.path())))
+        .unwrap_or(Value::Null)
+}
+
+/// Withdraw every answer kept about `project` (TRUST-24), as the terminal's `/forget-trust` does.
+///
+/// Whichever directory was at the path when each was given: a person taking the answer back means
+/// the name. A failure names the file, so the person can remove the line by hand.
+fn forget_trust(project: &Path) -> Result<(), Failure> {
+    let nothing = || Failure::bad_request("No answer about this directory is kept any longer.");
+    let home = bravebot_agent::home::directory().ok_or_else(nothing)?;
+    let root = project.canonicalize().map_err(|_| nothing())?;
+    let store = trusted::Store::new(&home, &root);
+    match store.forget() {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(nothing()),
+        Err(error) => Err(Failure::new(
+            ErrorCode::NoHome,
+            format!(
+                "The answer kept in {} could not be removed: {error}",
+                store.path().display()
+            ),
+        )),
+    }
+}
+
+/// Seconds since the epoch, which is how a kept answer says when it was given.
+fn seconds_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs())
+}
+
 #[cfg(test)]
 #[path = "../../session/test-support/profile.rs"]
 mod test_profile;
@@ -1581,6 +1762,7 @@ mod coverage_tests {
                 TrustStore::new(root),
             ))),
             answered_trust: true,
+            keeping: None,
             running: None,
             model: None,
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
@@ -1657,6 +1839,7 @@ mod permissions_tests {
             project: "/work".into(),
             state: Arc::new(Mutex::new(State::fresh(trust))),
             answered_trust: true,
+            keeping: None,
             running: None,
             model: None,
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
@@ -1729,6 +1912,7 @@ mod watch_tests {
             project: root.clone(),
             state: Arc::new(Mutex::new(State::fresh(TrustStore::new(&root)))),
             answered_trust: true,
+            keeping: None,
             running: None,
             model: None,
             watches: Arc::clone(&watches),
@@ -1799,6 +1983,7 @@ mod watch_tests {
             project: project.clone(),
             state: Arc::new(Mutex::new(State::fresh(TrustStore::new(&project)))),
             answered_trust: true,
+            keeping: None,
             running: Some(running),
             model: None,
             watches: Arc::clone(&watches),
@@ -1847,6 +2032,7 @@ mod watch_tests {
             project: root.clone(),
             state: Arc::new(Mutex::new(State::fresh(TrustStore::new(&root)))),
             answered_trust: true,
+            keeping: None,
             running: None,
             model: None,
             watches: Arc::clone(&watches),
@@ -1861,3 +2047,7 @@ mod watch_tests {
 #[cfg(test)]
 #[path = "completion_tests.rs"]
 mod completion_tests;
+
+#[cfg(test)]
+#[path = "../tests/retention/worker.rs"]
+mod retention_tests;

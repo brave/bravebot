@@ -375,6 +375,60 @@ fn a_project_cannot_hand_back_a_tool_a_persons_own_definition_took_away() {
     );
 }
 
+/// A project's file takes over the rounds of the person's own of the same name, held to the
+/// ceiling of the kind it is loaded as. A worker's number under a reader's name is a reader's
+/// ceiling, and both cuts are said, so neither line reads to its author as the one in force.
+#[test]
+fn a_project_replacement_is_held_to_the_ceiling_of_the_kind_it_is_loaded_as() {
+    let scratch = Scratch::new("replacement-rounds");
+    let home = scratch.home();
+    let project = scratch.workspace();
+    write_definition(
+        &home,
+        "rule-reviewer",
+        &format!(
+            "{}\nrounds: 30",
+            frontmatter("rule-reviewer", "reads a diff against the rule", "reader")
+        ),
+        "read the diff and report the shape",
+    );
+    write_definition(
+        &project.join(".bravebot"),
+        "rule-reviewer",
+        &format!(
+            "{}\nrounds: {}",
+            frontmatter("rule-reviewer", "reads a diff against the rule", "worker"),
+            Kind::Worker.most_rounds()
+        ),
+        "whatever the checkout wants said here",
+    );
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (definitions, notices) = {
+        let mut policy = policy(&mut sink, &["."]);
+        agents::discover(&mut policy, &workspace, Some(&home))
+    };
+
+    let found = definitions.get("rule-reviewer").expect("selectable");
+    assert_eq!(found.kind(), Kind::Reader);
+    assert_eq!(found.rounds(), Kind::Reader.most_rounds());
+
+    let said: Vec<&str> = notices
+        .iter()
+        .map(|notice| notice.message.as_str())
+        .collect();
+    assert_eq!(
+        said,
+        [
+            ".bravebot/agents/rule-reviewer.md does not widen \
+             ~/.bravebot/agents/rule-reviewer.md: it names kind worker and is loaded as a reader",
+            ".bravebot/agents/rule-reviewer.md asks for 200 rounds, more than the 120 a reader may \
+             make, so its delegate is given 120",
+        ]
+    );
+}
+
 /// A file resolves against another the same way on every machine. An order that came from the
 /// filesystem would make which of two definitions is live differ between machines, which is a
 /// difference nobody can see in the files.
@@ -444,4 +498,54 @@ fn a_file_that_claims_to_be_a_definition_and_is_not_says_so() {
         "the notice did not say what the file is missing: {}",
         notices[0].message
     );
+}
+
+/// ADDRESS-5 from the interface's side. A name a person types is compared, before anything
+/// starts, against the set the interface resolved, so that set has to be the one a turn would
+/// resolve: a definition the turn would run is found, and one in a checkout nobody vouched for is
+/// missing from both. The first case is the control, since a set missing everything would pass
+/// the second.
+#[test]
+fn the_set_an_interface_resolves_is_the_one_a_turn_would() {
+    let scratch = Scratch::new("resolved");
+    let home = scratch.home();
+    let project = scratch.workspace();
+    write_definition(
+        &home,
+        "rule-reviewer",
+        &frontmatter("rule-reviewer", "checks a diff", "reader"),
+        "read the diff",
+    );
+    write_definition(
+        &project.join(".bravebot"),
+        "auditor",
+        &frontmatter("auditor", "audits", "worker"),
+        "audit it",
+    );
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    for trusted in [&["."][..], &[]] {
+        let mut sink = RecordingSink::new();
+        let (turn, _) = {
+            let mut policy = policy(&mut sink, trusted);
+            agents::discover(&mut policy, &workspace, Some(&home))
+        };
+        let mut store = TrustStore::new("/work");
+        for path in trusted {
+            store.trust(path);
+        }
+        let interface = agents::resolved(&workspace, Some(&home), store, &mut sink);
+
+        assert_eq!(
+            interface.names(),
+            turn.names(),
+            "the interface and the turn resolved different sets, trusting {trusted:?}"
+        );
+        let expected: &[&str] = if trusted.is_empty() {
+            &["rule-reviewer"]
+        } else {
+            &["rule-reviewer", "auditor"]
+        };
+        assert_eq!(from_disk(&interface), expected, "trusting {trusted:?}");
+    }
 }

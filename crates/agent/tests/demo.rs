@@ -266,6 +266,7 @@ fn a_background_server_stays_up() {
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
+    .outcome
     .expect("turn runs");
 
     println!("  started ./serve in the background, then ran `sleep 1` in the foreground");
@@ -397,6 +398,20 @@ impl bravebot_agent::Confirmer for ApprovesRuns {
         _r: &bravebot_agent::confirm::ExposureRequest,
     ) -> bravebot_agent::Decision {
         bravebot_agent::Decision::Reject
+    }
+
+    fn confirm_tool_list(
+        &mut self,
+        _request: &bravebot_agent::confirm::ToolListRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
+    fn confirm_mcp_call(
+        &mut self,
+        _request: &bravebot_agent::confirm::McpCallRequest,
+    ) -> bravebot_agent::confirm::CallDecision {
+        bravebot_agent::confirm::CallDecision::reject()
     }
     fn ask_user(&mut self, _a: &bravebot_core::ask::Asking) -> Vec<bravebot_core::ask::Answer> {
         Vec::new()
