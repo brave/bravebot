@@ -1,15 +1,14 @@
 name: Build and Deploy Docs
 
-# main is the only branch this site is ever built from: the deploy job publishes
-# the artifact it produced when the ref is main or a release tag. Nothing is committed
-# to a gh-pages branch, so the served site is always whatever main built.
+# main is the only ref this site is ever built from, and the github-pages environment
+# refuses a deploy from any other. A release tag is not a trigger: it names a commit
+# main has already built and published. Nothing is committed to a gh-pages branch, so
+# the served site is always whatever main built.
 
 on:
   push:
     branches:
       - main
-    tags:
-      - "v*"
   workflow_dispatch:
 
 permissions:
