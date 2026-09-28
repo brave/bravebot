@@ -64,7 +64,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// How long a pipeline may run before it is given up on.
+/// How long a pipeline may run before it is given up on, where nobody named a figure.
 ///
 /// A program that never terminates would otherwise hold the turn open with nothing to show for
 /// it. Generous, because a build or a test run is a reasonable thing to ask for and a limit that
@@ -72,6 +72,9 @@ use std::time::{Duration, Instant};
 ///
 /// Reaching it is not an error. What the stages printed before they were killed comes back the
 /// same way it does from a pipeline that ended by itself, marked with [`Ran::stopped`].
+///
+/// The built-in figure rather than the figure: a settings file may name its own, and what a run is
+/// actually held to is [`Deadlines`] (RUN-23).
 pub const LIMIT: Duration = Duration::from_secs(300);
 
 /// The shortest deadline a call may set for its own run.
@@ -82,12 +85,89 @@ pub const LIMIT: Duration = Duration::from_secs(300);
 /// nothing.
 pub const FLOOR: Duration = Duration::from_secs(1);
 
-/// The longest deadline a call may set for its own run.
+/// The longest deadline a call may set for its own run, where nobody named a figure.
 ///
 /// A call may raise its deadline up to this value and no further. Not a safety property:
 /// a program that finishes in time is no safer than one that does not. It bounds the time
 /// the turn spends waiting on one command, which is a budget decision.
+///
+/// Which is why it is a built-in figure rather than the figure: the budget belongs to whoever is
+/// waiting, and a settings file may name their own. See [`Deadlines`].
 pub const CEILING: Duration = Duration::from_secs(600);
+
+/// The wall-clock figures a run is held to: what a call that names no deadline gets, and the most
+/// one may name for itself.
+///
+/// Resolved once, by whichever caller read the settings, and carried to the call from there. A
+/// figure read where it is spent would answer differently on a machine whose owner had configured
+/// one, which is the one thing a test of a figure cannot have.
+///
+/// Nothing here is a safety property, and nothing here is derived from anything a program printed:
+/// these are two numbers a person chose about their own machine, and how long a command ran decides
+/// nothing about what its output may be read for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Deadlines {
+    /// What a call that names no deadline of its own is given.
+    pub default: Duration,
+    /// The most a call may name for itself.
+    pub ceiling: Duration,
+}
+
+impl Deadlines {
+    /// The figures a caller that read no settings file runs under.
+    pub const BUILT_IN: Self = Self {
+        default: LIMIT,
+        ceiling: CEILING,
+    };
+
+    /// The figures in force, given what a settings file named of each.
+    ///
+    /// A figure nobody wrote never contradicts one somebody did, which is the whole of the
+    /// arithmetic here:
+    ///
+    /// - A default past the built-in ceiling raises it. The default is a deadline a run is actually
+    ///   given, so a ceiling below it would forbid the figure the person just named, and they would
+    ///   get eight minutes of the ten their build takes with nothing saying why.
+    /// - A ceiling under the built-in default lowers it. A default no call could name is not a
+    ///   default, and somebody holding every run to a minute meant every run.
+    /// - Where a file names both, the ceiling it names is the bound and the default is held to it.
+    ///   Both are that person's own words, and of the two the ceiling is the one that says what the
+    ///   most a run may take is.
+    ///
+    /// The floor is not configurable and is not part of this. It is what makes a deadline name a
+    /// wait at all rather than a budget anybody would want to choose, so a ceiling under it is
+    /// raised to it rather than allowed to describe a run that ends before it starts.
+    ///
+    /// Takes what the settings said whole rather than a figure at a time, so the five callers that
+    /// read a settings file hand over one value and none of them takes the block apart.
+    pub fn resolve(named: bravebot_config::RunDeadlines) -> Self {
+        let bravebot_config::RunDeadlines { default, ceiling } = named;
+        let ceiling = ceiling
+            .unwrap_or_else(|| CEILING.max(default.unwrap_or(LIMIT)))
+            .max(FLOOR);
+        Self {
+            default: default.unwrap_or(LIMIT).clamp(FLOOR, ceiling),
+            ceiling,
+        }
+    }
+
+    /// The deadline a call asking for `seconds` is held to.
+    ///
+    /// Clamped rather than refused, which is [`crate::tools`]' decision to explain: what comes back
+    /// from a run says how long it was given, so a deadline shortened is visible in the answer.
+    pub fn held_to(&self, seconds: i64) -> Duration {
+        let floor = FLOOR.as_secs() as i64;
+        // Never below the floor, so that a ceiling somebody built by hand cannot make this a
+        // clamp whose bounds are the wrong way round. Saturating rather than cast, because a
+        // ceiling past `i64::MAX` seconds would wrap to a negative bound and then clamp every
+        // deadline a call named down to the floor: one second for every command, and nothing
+        // anywhere saying why.
+        let ceiling = i64::try_from(self.ceiling.as_secs())
+            .unwrap_or(i64::MAX)
+            .max(floor);
+        Duration::from_secs(seconds.clamp(floor, ceiling) as u64)
+    }
+}
 
 /// The shortest and the longest one look at a background job may wait for it.
 ///

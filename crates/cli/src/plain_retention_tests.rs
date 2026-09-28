@@ -33,6 +33,7 @@ fn running<'a>(config: &'a Config, workspace: &'a Workspace, trust: TrustStore) 
         mode: bravebot_agent::PermissionMode::default(),
         attribution: Default::default(),
         output_cap: None,
+        deadlines: bravebot_agent::exec::Deadlines::BUILT_IN,
         model: None,
         in_force: config.default_model.clone(),
         reads_effort: false,

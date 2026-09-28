@@ -216,6 +216,8 @@ pub struct Settings {
     /// about its own: answering with the number here would make this crate the second place it is
     /// written down.
     run_output: Option<usize>,
+    /// What `run.defaultSeconds` and `run.maxSeconds` said, where they said anything.
+    run_deadlines: RunDeadlines,
     providers: Vec<crate::provider::Provider>,
     layers: Vec<PathBuf>,
     contested: BTreeMap<String, PathBuf>,
@@ -263,6 +265,33 @@ impl SearchCaps {
     /// Whether the block said anything.
     pub fn is_empty(&self) -> bool {
         self.files.is_none() && self.time.is_none()
+    }
+}
+
+/// The `run` block's wall-clock figures: what a command that names no deadline gets, and the most
+/// one may name.
+///
+/// `None` per figure, meaning the built-in one stands, for the reason [`SearchCaps`] answers `None`
+/// per cap: the built-in numbers belong to the crate that runs a command, and repeating one here
+/// would be a second place it is written down.
+///
+/// Two figures rather than one, because raising the default is not the decision raising the ceiling
+/// is. The default is what a call gets for asking nothing, so somebody whose build takes eight
+/// minutes needs that raised. The ceiling is the most a call may ask for, so somebody who wants one
+/// twenty-minute integration run needs that raised and the default left where it is, and a program
+/// that hangs is still given up on in five minutes. One key could not say both.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RunDeadlines {
+    /// How long a command that names no deadline of its own gets, from `defaultSeconds`.
+    pub default: Option<Duration>,
+    /// The longest deadline a call may name for itself, from `maxSeconds`.
+    pub ceiling: Option<Duration>,
+}
+
+impl RunDeadlines {
+    /// Whether the file said anything about either figure.
+    pub fn is_empty(&self) -> bool {
+        self.default.is_none() && self.ceiling.is_none()
     }
 }
 
@@ -526,6 +555,7 @@ impl Settings {
             attribution: attribution_block(root),
             search: search_caps(root),
             run_output: run_output_cap(root),
+            run_deadlines: run_deadlines(root),
             providers: crate::provider::Provider::all(root),
             layers: Vec::new(),
             contested: BTreeMap::new(),
@@ -663,6 +693,16 @@ impl Settings {
         self.run_output
     }
 
+    /// How long the settings in force let a command run, and the most a call may name for itself.
+    ///
+    /// `None` per figure for the reason [`Settings::run_output_cap`] answers `None`: the built-in
+    /// numbers belong to the crate that waits on the program, and answering with one here would put
+    /// a second copy of it in this crate. What the two come to together, once the built-in figures
+    /// are applied, is resolved by the caller that read these settings.
+    pub fn run_deadlines(&self) -> RunDeadlines {
+        self.run_deadlines
+    }
+
     /// Whether anything was set at all.
     pub fn is_empty(&self) -> bool {
         self.env.is_empty()
@@ -676,6 +716,7 @@ impl Settings {
             && self.attribution.is_empty()
             && self.search.is_empty()
             && self.run_output.is_none()
+            && self.run_deadlines.is_empty()
             && self.providers.is_empty()
             // A file that named `vetting.auto` and was not obeyed still said something, and
             // `doctor` reports both facts about it. Reading it as absence would print "no
@@ -752,6 +793,18 @@ impl Settings {
             .chain(self.search.files.is_some().then_some("search.maxFiles"))
             .chain(self.search.time.is_some().then_some("search.maxSeconds"))
             .chain(self.run_output.is_some().then_some("run.maxOutput"))
+            .chain(
+                self.run_deadlines
+                    .default
+                    .is_some()
+                    .then_some("run.defaultSeconds"),
+            )
+            .chain(
+                self.run_deadlines
+                    .ceiling
+                    .is_some()
+                    .then_some("run.maxSeconds"),
+            )
             .chain(self.env.keys().map(String::as_str))
     }
 
@@ -1251,6 +1304,32 @@ fn run_output_cap(root: &serde_json::Map<String, serde_json::Value>) -> Option<u
         .and_then(serde_json::Value::as_u64)
         .filter(|cap| *cap > 0)
         .and_then(|cap| usize::try_from(cap).ok())
+}
+
+/// The `run.defaultSeconds` and `run.maxSeconds` figures: how long a command may run.
+///
+/// Read the way a search cap is, and absent on the same terms: zero is the number somebody writes
+/// meaning "no limit", and read literally it is a command given no time to run at all, which is
+/// every command stopped before it has printed anything. A value that is not a whole count of
+/// seconds is absence too, so a half-typed file leaves the built-in figures in force rather than
+/// stopping a session.
+///
+/// Each is read on its own. A file raising the ceiling says nothing about the default, which is what
+/// lets somebody allow one long run without giving up on noticing a program that hangs.
+fn run_deadlines(root: &serde_json::Map<String, serde_json::Value>) -> RunDeadlines {
+    let Some(serde_json::Value::Object(run)) = root.get("run") else {
+        return RunDeadlines::default();
+    };
+    let seconds = |name: &str| {
+        run.get(name)
+            .and_then(serde_json::Value::as_u64)
+            .filter(|count| *count > 0)
+            .map(Duration::from_secs)
+    };
+    RunDeadlines {
+        default: seconds("defaultSeconds"),
+        ceiling: seconds("maxSeconds"),
+    }
 }
 
 /// The `permissions` block: three lists of rule text, and the directories to open.
@@ -1950,6 +2029,102 @@ mod tests {
             zeroed.run_output_cap(),
             None,
             "a project file that set the cap to zero was handed the home layer's figure"
+        );
+    }
+
+    /// A build a person runs every day outlasts the built-in default on some trees, and the figure
+    /// cannot be changed from anywhere else, so both have to reach the crate that waits on the
+    /// program (RUN-23).
+    #[test]
+    fn a_settings_file_names_how_long_a_command_may_run() {
+        let settings = Settings::parse(r#"{"run": {"defaultSeconds": 900, "maxSeconds": 1800}}"#);
+        assert_eq!(
+            settings.run_deadlines(),
+            RunDeadlines {
+                default: Some(Duration::from_secs(900)),
+                ceiling: Some(Duration::from_secs(1800)),
+            }
+        );
+        assert!(!settings.is_empty());
+        assert_eq!(
+            settings.names().collect::<Vec<_>>(),
+            ["run.defaultSeconds", "run.maxSeconds"]
+        );
+    }
+
+    /// The two are separate decisions, so a file naming one must say nothing about the other:
+    /// somebody allowing one twenty-minute integration run wants a program that hangs given up on
+    /// in five minutes all the same.
+    #[test]
+    fn one_run_deadline_is_read_without_the_other() {
+        assert_eq!(
+            Settings::parse(r#"{"run": {"maxSeconds": 1800}}"#).run_deadlines(),
+            RunDeadlines {
+                default: None,
+                ceiling: Some(Duration::from_secs(1800)),
+            }
+        );
+        assert_eq!(
+            Settings::parse(r#"{"run": {"defaultSeconds": 900}}"#).run_deadlines(),
+            RunDeadlines {
+                default: Some(Duration::from_secs(900)),
+                ceiling: None,
+            }
+        );
+    }
+
+    /// Zero is the number somebody writes meaning "no limit", and read literally it is a command
+    /// given no time to run at all. Every other shape is absence for the reason a search cap's is: a
+    /// half-typed file leaves the built-in figures in force rather than stopping a session.
+    #[test]
+    fn a_run_deadline_of_zero_or_of_nonsense_leaves_the_built_in_ones() {
+        for text in [
+            r#"{"run": {"defaultSeconds": 0, "maxSeconds": 0}}"#,
+            r#"{"run": {"defaultSeconds": "900", "maxSeconds": "1800"}}"#,
+            r#"{"run": {"defaultSeconds": 900.5, "maxSeconds": 1800.5}}"#,
+            r#"{"run": {"defaultSeconds": -1, "maxSeconds": -1}}"#,
+            r#"{"run": {"defaultSeconds": true, "maxSeconds": true}}"#,
+            r#"{"run": {"defaultSeconds": null, "maxSeconds": null}}"#,
+            r#"{"run": {"defaultSeconds": [900], "maxSeconds": [1800]}}"#,
+            r#"{"run": "slow"}"#,
+            r#"{"defaultSeconds": 900, "maxSeconds": 1800}"#,
+        ] {
+            assert_eq!(
+                Settings::parse(text).run_deadlines(),
+                RunDeadlines::default(),
+                "{text:?} named a figure"
+            );
+        }
+    }
+
+    /// Each figure is one number rather than a list, so the nearest layer that named one wins and a
+    /// checkout does not inherit the time somebody allowed for a different tree. The two are
+    /// independent inside that, a file raising the ceiling saying nothing about the default.
+    #[test]
+    fn the_nearest_layer_that_named_a_run_deadline_wins() {
+        let settings = Layers::new("run-deadline-layers")
+            .global(r#"{"run": {"defaultSeconds": 450, "maxSeconds": 900}}"#)
+            .project(r#"{"run": {"defaultSeconds": 900}}"#)
+            .read();
+        assert_eq!(
+            settings.run_deadlines(),
+            RunDeadlines {
+                default: Some(Duration::from_secs(900)),
+                ceiling: Some(Duration::from_secs(900)),
+            },
+            "a project file that raised the default lost the ceiling beside it"
+        );
+
+        // A zero in the nearer layer is absence, and absence is the built-in figure rather than the
+        // one a weaker layer named.
+        let zeroed = Layers::new("run-deadline-zeroed")
+            .global(r#"{"run": {"defaultSeconds": 450}}"#)
+            .project(r#"{"run": {"defaultSeconds": 0}}"#)
+            .read();
+        assert_eq!(
+            zeroed.run_deadlines(),
+            RunDeadlines::default(),
+            "a project file that set the default to zero was handed the home layer's figure"
         );
     }
 

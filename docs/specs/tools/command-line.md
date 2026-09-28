@@ -598,6 +598,11 @@ session somewhere to keep one ([RUN-9](run.md#RUN-9)).
 The default is short enough that a hung program is noticed and long enough for an ordinary build
 step. A call may raise it up to a ceiling it cannot exceed.
 
+Neither figure is fixed at what was compiled in. A settings file may name both, and
+[RUN-23](run.md#RUN-23) is what it names and what the two come to together; the planner is told the
+ones in force, since a ceiling it was not told about is one it never asks for. The floor is not among
+them.
+
 Reaching the deadline ends the run rather than failing it, exactly as the fixed limit does today:
 the stages are killed, what they printed is collected and returned under whatever label it had
 earned, and the stop is reported as structure so a caller can tell the two apart without reading a

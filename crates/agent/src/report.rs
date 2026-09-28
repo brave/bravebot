@@ -991,11 +991,13 @@ mod tests {
         for tool in crate::tools::available(
             crate::tools::Scheduling::ArrangingALook,
             crate::watch::Arming::Allowed { free: 1 },
+            crate::exec::Deadlines::BUILT_IN,
         )
         .into_iter()
         .chain(crate::tools::available(
             crate::tools::Scheduling::PacingALoop,
             crate::watch::Arming::Allowed { free: 1 },
+            crate::exec::Deadlines::BUILT_IN,
         )) {
             let name = &tool.function.name;
             assert_ne!(
