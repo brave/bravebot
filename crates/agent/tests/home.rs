@@ -388,6 +388,7 @@ fn a_delegate_does_not_open_a_wallet_of_its_own() {
             false,
             &bravebot_config::Attribution::default(),
             None,
+            None,
             &cancel,
             &mut bravebot_agent::confirm::ApproveWrites,
             &mut reporter,

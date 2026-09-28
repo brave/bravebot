@@ -121,6 +121,52 @@ fn serve_chat(replies: Vec<String>) -> (String, mpsc::Receiver<String>) {
     (format!("http://127.0.0.1:{port}"), receiver)
 }
 
+/// A mock chat server answering each run by a marker its request carries: the first rule whose
+/// marker the body holds and which has a reply left answers, in order. A turn and a delegate it
+/// spawns are two runs asking the one server, and a delegate's requests never hold its parent's
+/// task, so the parent's rule goes first. Every check is answered that it found nothing.
+fn serve_chat_by_marker(
+    rules: Vec<(&'static str, Vec<String>)>,
+) -> (String, mpsc::Receiver<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let mut rules: Vec<(&str, std::collections::VecDeque<String>)> = rules
+            .into_iter()
+            .map(|(marker, replies)| (marker, replies.into()))
+            .collect();
+        while let Ok((mut stream, _)) = listener.accept() {
+            let body = body_of(&stream);
+            let _ = sender.send(body.clone());
+            let reply = if body.contains(A_CHECK_ASKING) {
+                Some(reply_with(
+                    r#"{\"verdict\": \"safe\", \"reason\": \"nothing addressed to a reader\"}"#,
+                ))
+            } else {
+                rules
+                    .iter_mut()
+                    .find(|(marker, replies)| body.contains(marker) && !replies.is_empty())
+                    .and_then(|(_, replies)| replies.pop_front())
+            };
+            let Some(reply) = reply else {
+                let refusal =
+                    "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                let _ = stream.write_all(refusal.as_bytes());
+                continue;
+            };
+            let frames = as_sse(&reply);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{frames}",
+                frames.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    (format!("http://127.0.0.1:{port}"), receiver)
+}
+
 /// A whole chat response as the SSE stream that would have delivered it.
 fn as_sse(reply: &str) -> String {
     let parsed: Value = serde_json::from_str(reply).expect("a valid reply");
@@ -1133,12 +1179,12 @@ fn a_rule_decides_a_call_before_the_prompt() {
 }
 
 /// A turn the person addressed to one of their definitions holds what the session and the kind both
-/// hold, and no kind holds a server (`addressing-a-definition.md` ADDRESS-7). So the list is not put
-/// to the person, the server's tool is not offered, and the server hears nothing past its handshake.
-/// The addressed turn goes first, because the control's yes would answer the list for it: the same
-/// session with nobody addressed is then put the list and offered the tool.
+/// hold, and a reader holds no server (`addressing-a-definition.md` ADDRESS-7). So the list is not
+/// put to the person, the server's tool is not offered, and the server hears nothing past its
+/// handshake. The addressed turn goes first, because the control's yes would answer the list for
+/// it: the same session with nobody addressed is then put the list and offered the tool.
 #[test]
-fn an_addressed_turn_is_offered_no_servers_tool_and_asks_about_no_list() {
+fn an_addressed_reader_is_offered_no_servers_tool_and_asks_about_no_list() {
     let scratch = Scratch::new("addressed");
     let home = Scratch::new("addressed-home");
     std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
@@ -1206,6 +1252,258 @@ fn an_addressed_turn_is_offered_no_servers_tool_and_asks_about_no_list() {
         open.contains(FORECAST),
         "the control was not offered the tool, so this says nothing: {open}"
     );
+}
+
+/// A turn addressed to a worker of the person's keeps every server the session holds (ADDRESS-7),
+/// so the list is put to the person, the tool is offered beside the definition's own, and a call
+/// to it is put to the person and reaches the server: the definition narrows the tools this
+/// program offers, and a server's tool is not one of them.
+#[test]
+fn an_addressed_worker_is_put_the_list_and_calls_the_servers_tool() {
+    let scratch = Scratch::new("addressed-worker");
+    let home = Scratch::new("addressed-worker-home");
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("fixer.md"),
+        "---\nname: fixer\ndescription: Fixes what the weather broke.\nkind: worker\n---\n\nFIX-BY-DEFINITION\n",
+    )
+    .expect("write the definition");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("looked"),
+    ]);
+
+    let mut asked = Answering::new(Decision::Approve, CallDecision::approve());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is the forecast")
+            .with_home(Some(home.path.clone()))
+            .addressing(Some("fixer".to_string()))
+            .with_mcp(Some(session)),
+        &mut asked,
+    );
+    let sent = rounds(&chat);
+    let [first, second, ..] = sent.as_slice() else {
+        panic!("the addressed turn made {} rounds", sent.len());
+    };
+    assert!(
+        first.contains("FIX-BY-DEFINITION"),
+        "the turn did not run under the definition, so this says nothing: {first}"
+    );
+    assert_eq!(asked.lists.len(), 1, "the list was not put to the person");
+    assert!(
+        first.contains(FORECAST),
+        "an addressed worker was not offered the server's tool: {first}"
+    );
+    let [call] = asked.calls.as_slice() else {
+        panic!("the call was not put to the person once: {:?}", asked.calls);
+    };
+    assert_eq!(call.name(), "weather:get_forecast");
+    assert!(
+        !second.contains("no such tool"),
+        "the definition refused the server's tool: {second}"
+    );
+    assert_eq!(methods(&server), ["tools/call"]);
+}
+
+/// The task a turn is given and the one its planner hands a delegate, each the marker its run's
+/// requests carry.
+const PARENT: &str = "ASK-A-DELEGATE-FOR-THE-FORECAST";
+const DELEGATED: &str = "FORECAST-FOR-PARIS";
+
+/// What one delegation of the forecast left behind.
+struct Delegated {
+    /// The delegate's requests to the chat server, in order.
+    delegate: Vec<String>,
+    /// What the person was asked, by the turn and by the delegate.
+    asked: Answering,
+    /// The MCP methods the server was sent past its handshake.
+    called: Vec<String>,
+}
+
+/// Run a turn whose planner hands [`DELEGATED`] to a delegate of `kind`, whose own planner then
+/// calls the weather server's tool. The turn settles the list first, and the person says yes to it
+/// and to every call.
+fn delegate_the_forecast(name: &str, kind: &str) -> Delegated {
+    let scratch = Scratch::new(name);
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+    let spawn = format!(r#"{{"kind":"{kind}","task":"{DELEGATED}"}}"#);
+    let (endpoint, chat) = serve_chat_by_marker(vec![
+        (
+            PARENT,
+            vec![
+                tool_request("spawn_agent", &spawn),
+                reply_with("waiting"),
+                reply_with("the delegate reported"),
+            ],
+        ),
+        (
+            DELEGATED,
+            vec![
+                tool_request(FORECAST, r#"{"city":"Paris"}"#),
+                reply_with("looked it up"),
+            ],
+        ),
+    ]);
+    let mut asked = Answering::new(Decision::Approve, CallDecision::approve());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new(PARENT).with_mcp(Some(session)),
+        &mut asked,
+    );
+    let delegate = rounds(&chat)
+        .into_iter()
+        .filter(|body| body.contains(DELEGATED) && !body.contains(PARENT))
+        .collect();
+    Delegated {
+        delegate,
+        asked,
+        called: methods(&server),
+    }
+}
+
+/// SERVERS-9 and DELEGATE-10 for a server. A worker holds the servers the turn that spawned it
+/// holds, so it is offered their tools, and its call to one is put to the person as the turn's own
+/// would be before anything reaches the server. The list is put once, by the turn: the delegate
+/// asks no question of its own (DELEGATE-12) and is offered what the turn settled.
+#[test]
+fn a_workers_call_to_a_servers_tool_is_put_to_the_person() {
+    let Delegated {
+        delegate,
+        asked,
+        called,
+    } = delegate_the_forecast("delegate-worker", "worker");
+    let [first, second, ..] = delegate.as_slice() else {
+        panic!("the delegate made {} requests", delegate.len());
+    };
+    assert_eq!(asked.lists.len(), 1, "the list was not put exactly once");
+    assert!(
+        first.contains(FORECAST),
+        "a worker was not offered the server's tool: {first}"
+    );
+    assert!(
+        first.contains("a tool of an MCP server is shown to a person"),
+        "a worker was not told its calls are put to a person: {first}"
+    );
+    let [call] = asked.calls.as_slice() else {
+        panic!(
+            "the delegate's call was not put to the person once: {:?}",
+            asked.calls
+        );
+    };
+    assert_eq!(call.name(), "weather:get_forecast");
+    assert_eq!(
+        call.arguments,
+        [("city".to_string(), "\"Paris\"".to_string())]
+    );
+    assert_eq!(called, ["tools/call"], "the server did not hear the call");
+    assert!(
+        !second.contains(PAYLOAD),
+        "what the server answered reached the delegate's planner: {second}"
+    );
+}
+
+/// A worker holds the servers its parent holds and no other the session reached. The turn is
+/// handed two servers and a grant for one, so neither it nor the worker it spawns is offered the
+/// other's tool, though the session settled both lists.
+#[test]
+fn a_worker_is_offered_only_the_servers_its_parent_holds() {
+    let scratch = Scratch::new("delegate-worker-narrowed");
+    let (weather, _weather) = serve_weather();
+    let (docs, _docs) = serve_tool("lookup");
+    let session = Session::new(
+        vec![reach_as("weather", &weather), reach_as("docs", &docs)],
+        scratch.project(),
+        Some(scratch.state()),
+        true,
+    );
+    let spawn = format!(r#"{{"kind":"worker","task":"{DELEGATED}"}}"#);
+    let (endpoint, chat) = serve_chat_by_marker(vec![
+        (
+            PARENT,
+            vec![
+                tool_request("spawn_agent", &spawn),
+                reply_with("waiting"),
+                reply_with("the delegate reported"),
+            ],
+        ),
+        (DELEGATED, vec![reply_with("nothing to look up")]),
+    ]);
+    let mut asked = Answering::new(Decision::Approve, CallDecision::approve());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new(PARENT)
+            .with_mcp(Some(session))
+            .with_servers(vec![ServerAlias::new("weather")]),
+        &mut asked,
+    );
+    let sent = rounds(&chat);
+    let parent = sent
+        .iter()
+        .find(|body| body.contains(PARENT))
+        .expect("the turn asked");
+    let delegate = sent
+        .iter()
+        .find(|body| body.contains(DELEGATED) && !body.contains(PARENT))
+        .expect("the worker asked");
+    for (run, body) in [("the turn", parent), ("the worker", delegate)] {
+        assert!(
+            body.contains(FORECAST),
+            "{run} was not offered the tool of the server it holds, so this says nothing: {body}"
+        );
+        assert!(
+            !body.contains("mcp__docs__lookup"),
+            "{run} was offered the tool of a server it holds no grant for: {body}"
+        );
+    }
+}
+
+/// A reader and a checker hold no server, so neither is offered a server's tool, and a call to one
+/// anyway is answered as any other unknown name is: nothing is put to the person and the server
+/// hears nothing. The turn settled the list, so the tool was there to be offered.
+#[test]
+fn a_reader_or_a_checker_delegate_holds_no_server_and_reaches_none() {
+    for kind in ["reader", "checker"] {
+        let Delegated {
+            delegate,
+            asked,
+            called,
+        } = delegate_the_forecast(&format!("delegate-{kind}"), kind);
+        let [first, second, ..] = delegate.as_slice() else {
+            panic!("the {kind} made {} requests", delegate.len());
+        };
+        assert_eq!(
+            asked.lists.len(),
+            1,
+            "{kind}: the turn did not settle the list"
+        );
+        assert!(
+            !first.contains(FORECAST),
+            "a {kind} was offered the server's tool: {first}"
+        );
+        assert!(
+            !first.contains("a tool of an MCP server"),
+            "a {kind} was told about calls it cannot make: {first}"
+        );
+        assert!(
+            second.contains("no such tool"),
+            "a {kind}'s call to the server's tool was not refused: {second}"
+        );
+        assert!(
+            asked.calls.is_empty(),
+            "a {kind}'s call was put to the person: {:?}",
+            asked.calls
+        );
+        assert!(called.is_empty(), "the server heard a {kind}: {called:?}");
+    }
 }
 
 /// A home handed to a server in a session that keeps nothing lasts as long as the session holding

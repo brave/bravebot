@@ -376,8 +376,9 @@ The question is put only where stdin and stdout are both a terminal, for [SERVER
 reason. In the full-screen interface it is asked on the plain terminal before that interface takes
 the screen, and in the plain one after the question about trusting the directory. A one-shot run
 asks nobody and says so on stderr, naming `bravebot mcp approve <alias>` as the way to answer at a
-terminal, and a session with no terminal says the same. A delegate holds no server's grant
-([SERVERS-9](#SERVERS-9)), so it reaches none of them. An incognito session asks, and a yes there
+terminal, and a session with no terminal says the same. A delegate asks nobody, and holds a
+server's grant only where the turn that spawned it holds one ([SERVERS-9](#SERVERS-9)), so it
+reaches no server the session did not start. An incognito session asks, and a yes there
 starts the server for that session and records nothing.
 
 A yes whose record cannot be written still starts the server, since the person said yes and a file
@@ -391,7 +392,7 @@ that would not take the answer does not unsay it, and a line says which record w
 `verified-by: bravebot_config::mcp::a_project_reads_back_as_the_path_it_was_recorded_as`
 `verified-by: bravebot_config::mcp::forgetting_a_project_drops_it_and_no_other`
 `verified-by: bravebot_cli::mcp::forget_drops_a_projects_standing_answers_and_nobody_elses`
-`verified-by: bravebot_agent::turn::a_turn_holds_a_grant_per_server_it_was_handed_and_its_delegate_holds_none`
+`verified-by: bravebot_agent::turn::a_turn_holds_a_grant_per_server_it_was_handed_and_only_its_worker_holds_them_too`
 
 <a id="SERVERS-5"></a>
 ### SERVERS-5: an approval binds to a digest of the declaration
@@ -568,7 +569,8 @@ has room for one answer, and the one that stops asking outlives the session. A o
 nobody to ask, so a call there that would ask is refused. An `allow` rule decides nothing there, as
 it decides nothing for any tool in a one-shot run, and answer 2 still does: it was given at this
 question and names one tool in one project, where an `allow` rule is a line of a file that can name
-every server. A delegate is offered no server's tool.
+every server. A delegate's call is put to the person as the turn's own is, after the same rules and
+standing answers ([DELEGATE-10](delegation.md#DELEGATE-10)).
 
 The private-data arm is written and not reached. The policy asks about a call whose arguments are
 labelled private whatever a rule or a standing answer says. The planner's arguments are labelled
@@ -581,6 +583,7 @@ public today, as every tool call's are, so no call is labelled private.
 `verified-by: bravebot_agent::mcp::a_rule_decides_a_call_before_the_prompt`
 `verified-by: bravebot_agent::mcp::a_session_that_writes_nothing_records_neither_answer`
 `verified-by: bravebot_agent::mcp::a_record_that_cannot_be_read_is_not_written_over`
+`verified-by: bravebot_agent::mcp::a_workers_call_to_a_servers_tool_is_put_to_the_person`
 `verified-by: bravebot_core::policy::a_deny_rule_refuses_an_mcp_call_before_anybody_is_asked`
 `verified-by: bravebot_core::policy::an_mcp_call_asks_unless_a_rule_or_a_standing_answer_says_otherwise`
 `verified-by: bravebot_core::policy::private_arguments_ask_even_for_a_tool_a_rule_allows`
@@ -656,7 +659,10 @@ names allow. Its description is a sentence this process writes, naming the alias
 call is put to the person, followed by the server's words with the margin before each line. No
 built-in's name starts with `mcp__`, so none can be shadowed. Two servers whose alias and word
 compose one name are both left without a tool of that name, since which of them a call reached would
-be the order they were listed in. A delegate is offered none of them.
+be the order they were listed in. A delegate, and a turn addressed to a definition, is offered the
+tools of only the servers it holds a grant for ([SERVERS-9](#SERVERS-9)). A delegate is put no list
+and is offered what the turn that spawned it settled, and an addressed turn holding no grant is put
+no list.
 
 `verified-by: bravebot_mcp::protocol::a_tool_list_is_content`
 `verified-by: bravebot_mcp::protocol::the_name_on_the_wire_is_the_alias_and_the_word`
@@ -688,6 +694,8 @@ be the order they were listed in. A delegate is offered none of them.
 `verified-by: bravebot_agent::mcp::a_declined_list_offers_nothing_and_is_not_asked_again`
 `verified-by: bravebot_agent::mcp::a_turn_stopped_at_the_list_leaves_it_to_be_asked_again`
 `verified-by: bravebot_agent::mcp::a_list_vouched_for_before_asks_nothing_and_a_changed_one_asks_again`
+`verified-by: bravebot_agent::mcp::a_workers_call_to_a_servers_tool_is_put_to_the_person`
+`verified-by: bravebot_agent::mcp::a_reader_or_a_checker_delegate_holds_no_server_and_reaches_none`
 `verified-by: bravebot_tui::confirm::a_tool_list_draws_every_description_row_behind_the_margin`
 `verified-by: bravebot_tui::confirm::a_tool_list_answers_by_its_rows`
 `verified-by: bravebot_tui::remote_confirm::a_yes_to_a_list_and_a_yes_to_a_call_do_not_stand_in_for_each_other`
@@ -708,18 +716,26 @@ server should mean.
 
 The capability names the alias, both transports gate on the one naming the server in front of
 them, and a grant can be withdrawn while the run is going. A session holds one grant for each
-server it started and no other, and a delegate it hands work to holds none of them: a delegate's
-set is what its parent held, less every server, since what a delegate may call is a question no
-one was asked about. A call to a server's tool is refused where the turn holds no grant naming that
-server, and a remote server's handshake runs under a policy holding the grant naming that server and
-no other.
+server it started and no other. A delegate it hands work to holds every one of those grants where
+the delegate is a worker whose definition names no tools, and none otherwise
+([DELEGATE-4](delegation.md#DELEGATE-4)): each is a grant for a server a person already said the
+session may use, and a server's tool may do what only a worker may. No delegate holds a grant its
+parent does not. A turn addressed to a definition holds the session's grants on the same terms
+([ADDRESS-7](addressing-a-definition.md#ADDRESS-7)). A call to a server's tool is refused where the
+run holds no grant naming that server, and a remote server's handshake runs under a policy holding
+the grant naming that server and no other.
 
 `verified-by: bravebot_core::capability::a_grant_for_one_server_is_not_a_grant_for_another`
 `verified-by: bravebot_core::capability::withdrawing_one_grant_leaves_the_others`
 `verified-by: bravebot_mcp::stdio::a_grant_for_one_server_does_not_reach_another`
 `verified-by: bravebot_mcp::http::a_grant_for_one_server_does_not_reach_another`
 `verified-by: bravebot_mcp::stdio::a_grant_withdrawn_stops_the_next_call`
-`verified-by: bravebot_agent::turn::a_turn_holds_a_grant_per_server_it_was_handed_and_its_delegate_holds_none`
+`verified-by: bravebot_agent::turn::a_turn_holds_a_grant_per_server_it_was_handed_and_only_its_worker_holds_them_too`
+`verified-by: bravebot_core::delegate::only_a_worker_holds_the_servers_of_the_run_it_is_carved_from`
+`verified-by: bravebot_core::delegate::a_worker_holds_no_server_its_parent_does_not`
+`verified-by: bravebot_core::policy::a_worker_delegate_holds_the_servers_its_parent_holds_and_no_other`
+`verified-by: bravebot_agent::mcp::a_reader_or_a_checker_delegate_holds_no_server_and_reaches_none`
+`verified-by: bravebot_agent::mcp::a_worker_is_offered_only_the_servers_its_parent_holds`
 
 <a id="SERVERS-10"></a>
 ### SERVERS-10: a variable a server needs is named in the declaration, and reaches that server alone

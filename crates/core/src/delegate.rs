@@ -113,6 +113,15 @@ impl Kind {
         }
     }
 
+    /// Whether this kind holds every MCP server its parent holds.
+    ///
+    /// A worker only. What a server's tool does is the server's to say, so a call to one may write
+    /// or run anything, and a worker is the one kind already let write and run. No kind names a
+    /// server, since which servers a session reached is not known until it starts.
+    pub fn holds_servers(self) -> bool {
+        matches!(self, Self::Worker)
+    }
+
     /// How many rounds of tool calls this kind may make before it has to answer, where its
     /// definition named no number of its own.
     ///
@@ -152,7 +161,10 @@ impl Kind {
                 "a reader that may also run programs and ask a language server, so it can build, \
                  test and lint; writes nothing"
             }
-            Self::Worker => "a checker that may also write files, so it can finish a sub-task",
+            Self::Worker => {
+                "a checker that may also write files and call the tools of the MCP servers you \
+                 may, so it can finish a sub-task"
+            }
         }
     }
 }
@@ -426,6 +438,32 @@ impl Definition {
                     || tools
                         .iter()
                         .any(|tool| reachable_by(tool).as_ref() == Some(capability))
+            })
+            .collect()
+    }
+
+    /// Whether a run of this definition holds the MCP servers of the run it is carved from.
+    ///
+    /// Where its kind does and it named no tools. A `tools:` line names this program's tools and
+    /// no server's, so a definition that wrote one asked for none of them.
+    pub fn holds_servers(&self) -> bool {
+        self.kind.holds_servers() && self.tools.is_none()
+    }
+
+    /// What a run of this definition holds out of `parent`, the set of the run it is carved from.
+    ///
+    /// What [`Definition::capabilities`] asks for that `parent` holds, and every server `parent`
+    /// holds where [`Definition::holds_servers`]. Only ever a part of `parent`, so a definition
+    /// takes away and never adds, and a server nobody put to the person for the parent is one
+    /// this run cannot hold either.
+    pub fn held_out_of(&self, parent: &CapabilitySet) -> CapabilitySet {
+        let wanted = self.capabilities();
+        let servers = self.holds_servers();
+        parent
+            .iter()
+            .filter(|capability| match capability {
+                Capability::McpCall(_) => servers,
+                other => wanted.contains(other),
             })
             .collect()
     }
@@ -896,7 +934,7 @@ impl DelegateSpec {
     /// The delegate as the audit trail describes it: what it is and what it holds, never the
     /// task, which can be long.
     pub fn describe(&self) -> String {
-        let held: Vec<&str> = self.capabilities.iter().map(|c| c.as_str()).collect();
+        let held: Vec<String> = self.capabilities.iter().map(|c| c.to_string()).collect();
         let held = if held.is_empty() {
             "nothing".to_string()
         } else {
@@ -985,6 +1023,7 @@ impl Addressed {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::capability::ServerAlias;
 
     /// The planner selects from the driver's list. Anything else has to resolve to nothing, or
     /// `kind` would be a field the model could write a capability set into.
@@ -1090,7 +1129,9 @@ mod tests {
                 "a {name} could not have made its own requests"
             );
             // No server, rather than no particular one: a grant names the server it is
-            // about, so asking about a single alias would leave every other one unasked.
+            // about, so asking about a single alias would leave every other one unasked. A
+            // kind's own set names none because which servers a session reached is not known
+            // until it starts; which of its parent's a run holds is `held_out_of`'s to say.
             assert!(
                 !held
                     .iter()
@@ -1099,6 +1140,90 @@ mod tests {
             );
             assert!(!held.contains(&Capability::GitWrite), "{name}");
         }
+    }
+
+    /// Every capability that is not a server's.
+    fn built_in() -> impl Iterator<Item = Capability> {
+        Capability::all()
+            .into_iter()
+            .filter(|capability| !matches!(capability, Capability::McpCall(_)))
+    }
+
+    /// A parent holding everything, two servers among it.
+    fn holding_two_servers() -> CapabilitySet {
+        built_in()
+            .chain([
+                Capability::McpCall(ServerAlias::new("weather")),
+                Capability::McpCall(ServerAlias::new("notes")),
+            ])
+            .collect()
+    }
+
+    fn servers_in(held: &CapabilitySet) -> Vec<String> {
+        held.iter()
+            .filter(|capability| matches!(capability, Capability::McpCall(_)))
+            .map(|capability| capability.to_string())
+            .collect()
+    }
+
+    /// A worker carries every server its parent holds, and a reader and a checker carry none: a
+    /// server's tool may write or run anything, which neither of the two may.
+    #[test]
+    fn only_a_worker_holds_the_servers_of_the_run_it_is_carved_from() {
+        let parent = holding_two_servers();
+        for name in Kind::NAMES {
+            let kind = Kind::from_name(name).expect("advertised");
+            let definition = Definition::from_file(name, "built in", kind, None, "", "test");
+            let held = definition.held_out_of(&parent);
+            let expected: Vec<String> = match kind {
+                Kind::Worker => vec!["mcp_call:notes".into(), "mcp_call:weather".into()],
+                Kind::Reader | Kind::Checker => Vec::new(),
+            };
+            assert_eq!(servers_in(&held), expected, "{name}");
+            assert_eq!(kind.holds_servers(), kind == Kind::Worker, "{name}");
+            // What the kind asks for is unchanged by the servers beside it.
+            for capability in held.iter() {
+                assert!(
+                    matches!(capability, Capability::McpCall(_))
+                        || definition.capabilities().contains(&capability),
+                    "a {name} holds {capability}, which it never asked for"
+                );
+            }
+        }
+    }
+
+    /// A server is carried from the parent and never granted: a worker spawned by a run holding
+    /// one server holds that one, and one spawned by a run holding none holds none.
+    #[test]
+    fn a_worker_holds_no_server_its_parent_does_not() {
+        let worker = Definition::from_file("worker", "built in", Kind::Worker, None, "", "test");
+        let weather: CapabilitySet = built_in()
+            .chain([Capability::McpCall(ServerAlias::new("weather"))])
+            .collect();
+        assert_eq!(
+            servers_in(&worker.held_out_of(&weather)),
+            ["mcp_call:weather"]
+        );
+        let none: CapabilitySet = built_in().collect();
+        assert!(servers_in(&worker.held_out_of(&none)).is_empty());
+    }
+
+    /// A `tools:` line names this program's tools and no server's, so a worker that wrote one
+    /// asked for no server, however wide the line is.
+    #[test]
+    fn a_worker_naming_its_tools_holds_no_server() {
+        let named = Definition::from_file(
+            "editor",
+            "edits",
+            Kind::Worker,
+            Some(vec!["read_file".into(), "write_file".into(), "run".into()]),
+            "",
+            "test",
+        );
+        assert!(!named.holds_servers());
+        assert!(servers_in(&named.held_out_of(&holding_two_servers())).is_empty());
+        let empty = Definition::from_file("idle", "idles", Kind::Worker, Some(vec![]), "", "test");
+        assert!(servers_in(&empty.held_out_of(&holding_two_servers())).is_empty());
     }
 
     /// Every kind is bounded. An unbounded delegate has nothing watching it: the person is

@@ -186,6 +186,17 @@ fn limits(held: &CapabilitySet) -> String {
                 .to_string(),
         );
     }
+    if held
+        .iter()
+        .any(|capability| matches!(capability, Capability::McpCall(_)))
+    {
+        sentences.push(
+            "Every call to a tool of an MCP server is shown to a person for approval before it \
+             is made as well, so do not retry a call that was refused: say in the answer what \
+             you needed from it."
+                .to_string(),
+        );
+    }
 
     format!("\n\n{}", sentences.join(" "))
 }
@@ -398,6 +409,9 @@ pub fn run(
     // budget is the person's answer about what a command's output is worth spending context on, and
     // it does not stop being their answer because the spending moved.
     output_cap: Option<usize>,
+    // The servers the spawning turn reached. A delegate is offered the tools of the ones its spec
+    // holds a grant for, on the lists that turn already settled (SERVERS-9).
+    mcp: Option<&crate::mcp::Session>,
     cancel: &bravebot_core::cancel::Cancel,
     confirmer: &mut (dyn Confirmer + Send),
     reporter: &mut (dyn Reporter + Send),
@@ -454,7 +468,8 @@ pub fn run(
         .with_permission_mode(permission_mode)
         .with_auto_vetting(auto_vetting)
         .with_attribution(attribution.clone())
-        .with_output_cap(output_cap);
+        .with_output_cap(output_cap)
+        .with_mcp(mcp.cloned());
 
     task.file_authority = Some(seeded.file_authority.clone());
 

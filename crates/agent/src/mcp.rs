@@ -19,7 +19,7 @@ use crate::report::Reporter;
 use crate::scratch::SessionScratch;
 use bravebot_aichat::protocol::{Tool, Usage};
 use bravebot_config::mcp::{self as records, Approvals, Digest, Standing};
-use bravebot_core::capability::ServerAlias;
+use bravebot_core::capability::{Capability, CapabilitySet, ServerAlias};
 use bravebot_core::event::Sink;
 use bravebot_core::policy::Policy;
 use bravebot_core::value::Labelled;
@@ -669,6 +669,14 @@ impl Offer {
                 )
             })
             .collect()
+    }
+
+    /// This offer less the tools of every server `held` names no grant for (SERVERS-9).
+    pub fn holding(mut self, held: &CapabilitySet) -> Self {
+        self.tools.retain(|tool| {
+            held.contains(&Capability::McpCall(ServerAlias::new(tool.alias.as_str())))
+        });
+        self
     }
 
     /// The tool offered under this wire name, as its alias and its word.

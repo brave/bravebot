@@ -938,9 +938,10 @@ fn table(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<Tool> {
              sub-task is separable enough to describe in a paragraph. It cannot ask the user \
              anything, so give it everything it needs in the task. It may hand parts of that \
              task to delegates of its own, though not without end: the tree stops a few levels \
-             down, and one turn starts only so many however they are arranged. Its writes and \
-             its runs are still shown to the user for approval, so this saves you context and \
-             never an approval. Do not use it for something one read would answer: it is a \
+             down, and one turn starts only so many however they are arranged. Its writes, its \
+             runs and its calls to an MCP server's tools are still shown to the user for \
+             approval, so this saves you context and never an approval. Do not use it for \
+             something one read would answer: it is a \
              whole second agent and costs like one.",
             json!({
                 "type": "object",
@@ -953,8 +954,9 @@ fn table(scheduling: Scheduling, arming: crate::watch::Arming) -> Vec<Tool> {
                                         a language server, so it can build, test and lint, but \
                                         writes nothing: use it to \
                                         find out whether something works. \"worker\" also \
-                                        writes files: use it to finish a sub-task. Pick the \
-                                        narrowest one that can do the job.",
+                                        writes files and calls the tools of the MCP servers you \
+                                        may: use it to finish a sub-task. Pick the narrowest \
+                                        one that can do the job.",
                         "enum": ["reader", "checker", "worker"]
                     },
                     "task": {
@@ -1452,9 +1454,9 @@ pub struct Tools<'a> {
     /// host that cannot confine a subprocess: LSP-5 is MCP-3 applied here, so no confinement means
     /// no process, and the tool answers by saying so.
     pub servers: Option<&'a mut LanguageServers>,
-    /// The tools of the MCP servers this session reached whose lists somebody vouched for, and
-    /// the session they are called through. `None` for a delegate and for a session that reached
-    /// no server.
+    /// The tools of the MCP servers this run holds a grant for whose lists somebody vouched for,
+    /// and the session they are called through. `None` for a run that holds no server's grant
+    /// and for a session that reached no server.
     pub mcp: Option<&'a crate::mcp::Offer>,
     /// The pipelines this turn left running, by the reference each was given.
     ///
@@ -2412,15 +2414,14 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
 
     // Announced before the call runs, so a slow one is visible while it is slow. This is the
     // difference between a turn that looks stuck and one that is plainly working.
-    // A server's tool is found by the wire name it was offered under, and only in a turn that
-    // offered it: a delegate holds no grant to call one, and a name this turn did not offer is
+    // A server's tool is found by the wire name it was offered under, and only in a run that
+    // offered it, which is one holding a grant for its server. A name this run did not offer is
     // answered as any other unknown name is.
-    let server_tool = match tools.mcp {
-        Some(offer) if !tools.delegated => offer
+    let server_tool = tools.mcp.and_then(|offer| {
+        offer
             .find(&name)
-            .map(|(alias, tool)| (offer, alias.to_string(), tool.to_string())),
-        _ => None,
-    };
+            .map(|(alias, tool)| (offer, alias.to_string(), tool.to_string()))
+    });
     let target = match &server_tool {
         Some((_, alias, tool)) => format!("{alias}:{tool}"),
         None => target_of(policy, &name, tools.slots, &arguments),
@@ -2433,10 +2434,13 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
     );
 
     let produced = match name.as_str() {
+        // A server's tool is not one of this program's, so no definition's `tools:` line names
+        // it, and it was offered only where the run holds its server.
         unoffered
-            if tools
-                .confined_to
-                .is_some_and(|offered| !offered.iter().any(|tool| tool == unoffered)) =>
+            if server_tool.is_none()
+                && tools
+                    .confined_to
+                    .is_some_and(|offered| !offered.iter().any(|tool| tool == unoffered)) =>
         {
             Produced::problem(format!("error: no such tool '{unoffered}'"))
         }

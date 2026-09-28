@@ -63,14 +63,19 @@ answered by a different model than the one named says so, so a misspelt name is 
 
 **`kind` picks what the delegate may do, and your file never describes it.** A `reader` reads,
 lists and searches; a `checker` also runs programs and asks a language server; a `worker` also
-writes files. Each still asks you before every write and every command it runs: delegating saves
-the agent context, never an approval.
+writes files and calls the tools of the [MCP servers](mcp-servers.md) the turn that spawned it may.
+Each still asks you before every write, every command it runs and every call to a server's tool:
+delegating saves the agent context, never an approval.
 
 **`tools` can only take things away.** It names a subset of what the kind already reaches, and a
 tool the kind does not reach is one the delegate is started without. There is no spelling of it
 that adds a capability, including `*`, which is read as a tool name matching nothing rather than as
 "all of them". That is the deliberate difference from tools where the same key *is* the permission
 list: a file in a repository you cloned cannot hand an agent a shell it was never granted.
+
+A server's tools are not bravebot's, so no `tools` line names one, and a `worker` whose definition
+has a `tools` line calls no server. An `mcpServers` line is one of the keys ignored: which servers a
+session reached is not known until it starts, so a definition cannot choose among them.
 
 That includes `spawn_agent`, the tool a delegate starts delegates of its own with. A definition
 that names its tools and leaves it out, like `rule-reviewer` above, does its work itself and hands

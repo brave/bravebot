@@ -244,9 +244,13 @@ bravebot writes, saying which server it belongs to and that every call is put to
 server's own words. No built-in tool can be shadowed by one, since no built-in's name starts with
 `mcp__`.
 
+A [delegate](../reference/tools.md#spawn_agent) is offered the same tools where it is a `worker`
+whose [definition](agents.md) names no tools, and is put no list of its own. A `reader` or a
+`checker` is offered none of them, and nor is a delegate of a turn that holds none.
+
 ## Each call
 
-Every call is put to you, with the arguments the model wrote:
+Every call is put to you, a delegate's as well, with the arguments the model wrote:
 
 ```
   weather:get_current_conditions    (MCP)
