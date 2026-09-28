@@ -122,6 +122,13 @@ pub enum EgressError {
         /// timeout, a reset, or a name that did not resolve are facts about the connection.
         transient: bool,
     },
+    /// The reply was still arriving when the time it was given ran out.
+    ///
+    /// Not a transport failure, because the two are answered differently: a connection that went
+    /// quiet may be dead and another attempt may get past it, where a reply cut at its deadline was
+    /// being written, and another attempt writes it as long and is billed for it again. Decided
+    /// from which of the transport's bounds ended the read, never from anything a server sent.
+    OutOfTime { url: String },
     /// The server returned a non-success status.
     Status { url: String, status: u16 },
     /// The caller asked to stop while the request was still being waited on.
@@ -145,6 +152,9 @@ impl fmt::Display for EgressError {
             Self::Transport { url, detail, .. } => {
                 write!(f, "request to {url} failed: {detail}")
             }
+            Self::OutOfTime { url } => {
+                write!(f, "the reply from {url} ran past the time it was given")
+            }
             Self::Status { url, status } => write!(f, "{url} returned HTTP {status}"),
             Self::Stopped { url } => write!(f, "the request to {url} was stopped"),
         }
@@ -167,6 +177,8 @@ impl EgressError {
             | Self::InvalidUrl { .. }
             // The same chain answers the same way, so another attempt is the same downgrade.
             | Self::InsecureRedirect { .. }
+            // The same reply takes as long again and is billed again.
+            | Self::OutOfTime { .. }
             // The one error that says the reply is not wanted. Sending it again would be
             // answering a request somebody withdrew.
             | Self::Stopped { .. } => false,
@@ -190,6 +202,7 @@ impl EgressError {
             Self::TooManyRedirects { .. } => Self::TooManyRedirects { url },
             Self::MissingLocation { .. } => Self::MissingLocation { url },
             Self::Stopped { .. } => Self::Stopped { url },
+            Self::OutOfTime { .. } => Self::OutOfTime { url },
             Self::Status { status, .. } => Self::Status { url, status },
             // The detail here is this crate's own sentence about a shape, so it survives.
             Self::InvalidUrl { detail, .. } => Self::InvalidUrl { url, detail },
@@ -297,11 +310,7 @@ impl Streamed<'_> {
                 }
                 Ok(Some(Labelled::new(buffer, self.label)))
             }
-            Err(e) => Err(EgressError::Transport {
-                url: self.requested.clone(),
-                detail: e.to_string(),
-                transient: is_transient_io(&e),
-            }),
+            Err(e) => Err(body_failure(&self.requested, e)),
         }
     }
 
@@ -502,11 +511,7 @@ impl Egress {
         let (status, content_type, reader) = self.fetch_checked(policy, &request, cancel)?;
         // The URL the caller asked for, not the one the body is arriving from: a redirect chain
         // ends somewhere a server chose, and this failure is reported to whoever asked.
-        let (body, truncated) = read_capped(reader).map_err(|e| EgressError::Transport {
-            url: request.url.clone(),
-            detail: e.to_string(),
-            transient: is_transient_io(&e),
-        })?;
+        let (body, truncated) = read_capped(reader).map_err(|e| body_failure(&request.url, e))?;
 
         Ok(Response {
             status,
@@ -708,6 +713,16 @@ fn send(
         Ok(r) => r,
         // A redirect with max_redirects(0) is returned as a response, not an
         // error, so anything here is a genuine transport failure.
+        // A reply asked for whole is written before any of it is sent, so its deadline can pass
+        // while its headers are still awaited, and it was being written then as surely as one cut
+        // part way. Any other reply that never began is the connection's.
+        Err(ureq::Error::Timeout(ureq::Timeout::RecvResponse))
+            if matches!(request.reply, Some(ReplyBound::Whole(_))) =>
+        {
+            return Err(EgressError::OutOfTime {
+                url: url.to_string(),
+            });
+        }
         Err(e) => {
             return Err(EgressError::Transport {
                 url: url.to_string(),
@@ -740,8 +755,11 @@ fn send(
 ///
 /// A whole reply sets the same three phases [`Egress::with_transport`] sets from
 /// [`Timeouts::reply`], for the reason given there: each bounds the phases after it, so leaving one
-/// at the agent's figure would cut the reply off there. A begun one sets only the last, which ureq
-/// counts from the headers arriving, and the two before it keep the wait for them at the agent's.
+/// at the agent's figure would cut the reply off there. The body's is `send` longer than the
+/// reply's, so the wait for the reply ends on the reply's own bound and is named for it, which is
+/// what [`send`] tells a reply out of time from a request that did not get through by. A begun one
+/// sets only the last, which ureq counts from the headers arriving, and the two before it keep the
+/// wait for them at the agent's.
 fn within<B>(
     builder: ureq::RequestBuilder<B>,
     timeouts: Timeouts,
@@ -752,7 +770,7 @@ fn within<B>(
         Some(ReplyBound::Whole(bound)) => builder
             .config()
             .timeout_send_request(Some(timeouts.send + bound))
-            .timeout_send_body(Some(bound))
+            .timeout_send_body(Some(timeouts.send + bound))
             .timeout_recv_response(Some(bound))
             .build(),
         Some(ReplyBound::Begun(bound)) => {
@@ -774,6 +792,30 @@ fn is_transient_call(error: &ureq::Error) -> bool {
         ureq::Error::Timeout(_) | ureq::Error::ConnectionFailed | ureq::Error::HostNotFound => true,
         ureq::Error::Io(e) => is_transient_io(e),
         _ => false,
+    }
+}
+
+/// What a read of a reply's body that failed is reported as.
+///
+/// ureq names the reply's own deadline, [`Timeouts::reply`] or the bound its request stated, as
+/// the wait for the response, which it keeps counting from the headers while the body arrives. Any
+/// other failure, the gap bound among them, is the connection's.
+fn body_failure(url: &str, error: std::io::Error) -> EgressError {
+    let cause = error
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<ureq::Error>());
+    if matches!(
+        cause,
+        Some(ureq::Error::Timeout(ureq::Timeout::RecvResponse))
+    ) {
+        return EgressError::OutOfTime {
+            url: url.to_string(),
+        };
+    }
+    EgressError::Transport {
+        url: url.to_string(),
+        detail: error.to_string(),
+        transient: is_transient_io(&error),
     }
 }
 

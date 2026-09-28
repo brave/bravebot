@@ -760,6 +760,7 @@ impl<'a> BedrockClient<'a> {
                 Ok(Err(EgressError::Transport { .. })) if began => {
                     return Err(self.stopped_part_way(request));
                 }
+                // A reply cut at its deadline among them: asked for again, it runs as long.
                 Ok(Err(e)) => return Err(e.into()),
                 // Nothing has arrived yet, which is the only chance to look at anything while a
                 // reply is still being waited for.

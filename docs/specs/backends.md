@@ -1355,6 +1355,10 @@ written ([BACKEND-44](#BACKEND-44)) or offered no tool, and not where it offered
 there the silence may be the service holding an argument back until the model has finished it, and a
 second request waits out the same silence and is billed for it.
 
+A reply cut at the time its request stated for it ([NET-5](network-egress.md#NET-5)) is incomplete
+too, streamed or asked for whole, and never a request that did not get through: the service had the
+request and was still writing. It is not asked for again, since the same reply takes as long again.
+
 A reply stopped at its output ceiling reports that ceiling alongside the category. It is this
 program's own configured figure rather than anything a service said, so it is not a detail taken
 from a reply, and without it the report names a limit and no way to change it.
@@ -1380,6 +1384,8 @@ from a reply, and without it the report names a limit and no way to change it.
 `verified-by: bravebot_bedrock::lib::a_reply_that_went_quiet_while_an_argument_was_held_back_is_not_asked_for_again`
 `verified-by: bravebot_bedrock::lib::only_a_request_whose_arguments_are_held_back_stalls_rather_than_stopping`
 `verified-by: bravebot_agent::backend::a_reply_that_stopped_arriving_is_reported_as_unfinished_and_not_as_unreachable`
+`verified-by: bravebot_net::egress::a_reply_outlasting_the_time_its_request_stated_is_given_up_on`
+`verified-by: bravebot_net::egress::a_reply_written_before_any_of_it_is_sent_is_out_of_time_when_it_outlasts_its_stated_bound`
 `verified-by: bravebot_agent::failure_categories::service_exception_keeps_its_actionable_category`
 `verified-by: bravebot_agent::turn::compaction_failure_narration_keeps_credentials_out`
 `verified-by: bravebot_agent::turn::what_the_planner_is_told_about_a_failed_delegate_carries_nothing_of_the_endpoint`

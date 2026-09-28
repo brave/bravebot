@@ -109,6 +109,12 @@ is given it for the wait and again for the whole. A stream, which begins at once
 the moment it begins, and waits to begin no longer than any other reply. The gap allowed between
 two pieces of a reply is the same whatever the request says.
 
+A reply cut at the end of its time is reported as out of time, apart from one that stopped arriving,
+and is not worth another attempt. It was still being written when it was cut, and asked for again it
+is written as long again and billed again. A reply asked for whole within a time its request stated
+is out of time too when that time runs out before any of it arrives, since it is written before any
+of it is sent. Any other reply that never began is a connection that gave out.
+
 **Why.** One timeout over the whole call cannot tell a slow answer from a dead connection, and
 choosing a single number makes one of those two cases wrong. The same holds between replies: a
 model writing 128,000 tokens takes about half an hour, and a bound that long on every reply would
@@ -123,6 +129,7 @@ however long its reply was going to be.
 `verified-by: bravebot_net::egress::a_request_stating_how_long_its_reply_may_take_is_given_that_long`
 `verified-by: bravebot_net::egress::a_reply_outlasting_the_time_its_request_stated_is_given_up_on`
 `verified-by: bravebot_net::egress::a_reply_written_before_any_of_it_is_sent_is_waited_on_as_long_as_its_request_stated`
+`verified-by: bravebot_net::egress::a_reply_written_before_any_of_it_is_sent_is_out_of_time_when_it_outlasts_its_stated_bound`
 `verified-by: bravebot_net::egress::a_stream_is_waited_on_to_begin_no_longer_whatever_its_request_said`
 `verified-by: bravebot_net::egress::a_reply_that_stops_arriving_is_given_up_on_however_long_its_request_said_it_may_take`
 

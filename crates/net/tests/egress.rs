@@ -476,39 +476,63 @@ fn a_request_stating_how_long_its_reply_may_take_is_given_that_long() {
 }
 
 /// The bound a request states is a bound, not a floor under the default: a caller stating a
-/// shorter one than the default is held to it.
+/// shorter one than the default is held to it. A reply cut there was still being written, so it
+/// is reported as out of time rather than as a connection that gave out, and not as worth another
+/// attempt, which would write it as long again and be billed for it again.
 #[test]
 fn a_reply_outlasting_the_time_its_request_stated_is_given_up_on() {
-    // More than a second between pieces, since ureq gives a read begun after its deadline one
-    // more second: a reply whose pieces came closer than that could run on past it.
-    let base = serve_trickled(vec!["one ", "two"], Duration::from_millis(1_200));
-    let mut sink = RecordingSink::new();
-    let mut policy = Policy::begin(
-        routing(),
-        ReleasePlan::new(),
-        CapabilitySet::from_iter([Capability::WebFetch]),
-        &mut sink,
-    )
-    .expect("policy begins");
-
-    let egress = Egress::with_timeouts(Timeouts {
-        idle: Duration::from_secs(5),
-        reply: Duration::from_secs(30),
-        ..Timeouts::default()
-    });
-
-    let error = egress
-        .fetch(
-            &mut policy,
-            Request::get(&base).reply_within(Duration::from_millis(600)),
-            Label::untrusted_public(),
+    for streamed in [false, true] {
+        // More than a second between pieces, since ureq gives a read begun after its deadline one
+        // more second: a reply whose pieces came closer than that could run on past it.
+        let base = serve_trickled(vec!["one ", "two"], Duration::from_millis(1_200));
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
         )
-        .expect_err("a reply outlasting the bound its request stated is not waited on");
+        .expect("policy begins");
 
-    assert!(
-        matches!(error, EgressError::Transport { .. }),
-        "expected a transport failure, got {error:?}"
-    );
+        let egress = Egress::with_timeouts(Timeouts {
+            idle: Duration::from_secs(5),
+            reply: Duration::from_secs(30),
+            ..Timeouts::default()
+        });
+
+        let bound = Duration::from_millis(600);
+        let error = if streamed {
+            let mut stream = egress
+                .fetch_streaming(
+                    &mut policy,
+                    Request::get(&base).stream_within(bound),
+                    Label::untrusted_public(),
+                    None,
+                )
+                .expect("the reply starts arriving");
+            loop {
+                match stream.next_chunk() {
+                    Ok(Some(_)) => continue,
+                    Ok(None) => panic!("a reply outlasting its bound ended cleanly"),
+                    Err(error) => break error,
+                }
+            }
+        } else {
+            egress
+                .fetch(
+                    &mut policy,
+                    Request::get(&base).reply_within(bound),
+                    Label::untrusted_public(),
+                )
+                .expect_err("a reply outlasting the bound its request stated is not waited on")
+        };
+
+        assert!(
+            matches!(&error, EgressError::OutOfTime { url } if *url == base),
+            "streamed: {streamed}, got {error:?}"
+        );
+        assert!(!error.is_transient(), "streamed: {streamed}");
+    }
 }
 
 /// A server that takes the request, says nothing at all for a while, and only then answers.
@@ -633,6 +657,40 @@ fn a_reply_written_before_any_of_it_is_sent_is_waited_on_as_long_as_its_request_
 
     assert_eq!(response.status, 200);
     assert!(!response.truncated);
+}
+
+/// The same reply outlasting that bound is cut before any of it arrives, while it is being written,
+/// so it is out of time as surely as one cut part way, and never a request that did not get through.
+#[test]
+fn a_reply_written_before_any_of_it_is_sent_is_out_of_time_when_it_outlasts_its_stated_bound() {
+    let base = serve_after_thinking(Duration::from_millis(2_000));
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy begins");
+
+    let egress = Egress::with_timeouts(Timeouts {
+        reply: Duration::from_secs(30),
+        ..Timeouts::default()
+    });
+
+    let error = egress
+        .fetch(
+            &mut policy,
+            Request::post(&base, b"{}".to_vec()).reply_within(Duration::from_millis(600)),
+            Label::untrusted_public(),
+        )
+        .expect_err("a reply outlasting the bound its request stated is not waited on");
+
+    assert!(
+        matches!(&error, EgressError::OutOfTime { url } if *url == base),
+        "got {error:?}"
+    );
+    assert!(!error.is_transient());
 }
 
 /// A stream sends its first bytes at once, so how long a request says its stream may run says
