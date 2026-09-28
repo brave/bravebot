@@ -675,14 +675,17 @@ for the life of the process.
 streamed one offering a tool asks for its arguments as they are written
 ([BACKEND-44](#BACKEND-44)). There the breakpoints are refused with a status of their own, the one an
 expired credential also gets, so they are given up on that status and never for a refusal of either
-field. The level and the ask share one status, so they are given up in order: the level first, and
-the ask only where the request is refused again without it. Either is given up only by a request
-that carried it, so a request that carried no level never records the model as refusing one. The
-order keeps what a model does read: Claude Haiku 4.5 takes the ask and refuses the level, measured,
-and giving up the ask first would cost it the field that keeps a long argument from being cut off
-and still be refused. Where the request that answered had given up both, both are remembered, as on
-a gateway. A request refused with nothing left to give up settles nothing, and what an earlier
-request settled for that model stands.
+field. The level, the assumed ceiling of [BACKEND-41](#BACKEND-41) and the ask share one status, so
+they are given up in that order, each only where the request is refused again without the one
+before. Each is given up only by a request that carried it, so a request that carried no level never
+records the model as refusing one, and a stated ceiling is never given up. The order keeps what a
+model does read: Claude Haiku 4.5 takes the ask and refuses the level, measured, and giving up the
+ask first would cost it the field that keeps a long argument from being cut off and still be
+refused. The ceiling goes before the ask because, given up wrongly, it costs a model its replies
+longer than the fallback, where the ask costs it every long argument, written into a silence the
+idle bound cuts. Where the request that answered had given up more than one, all of them are
+remembered, as on a gateway. A request refused with nothing left to give up settles nothing, and
+what an earlier request settled for that model stands.
 
 **Why.** The judgment is the only description these services offer, and throwing it away leaves the
 interface reporting a charge somebody chose and stopped getting, which is the thing this clause
@@ -1603,33 +1606,47 @@ would understate the cost; charging an unfinished reply would claim a cost not y
 ### BACKEND-41: how long a reply may run belongs to the model, and an exported figure outranks it
 
 A Bedrock request states a ceiling on the reply. A configured model may state its own, out of the
-same `limit` block its context window comes from and under the same rule, and where it states none
-the figure assumed is one deliberately below what the model is likely to allow. One exported
-variable states a ceiling for every model this build reaches and outranks whatever any of them
-stated. Nothing is asked over the network to find out, and nobody is required to supply it.
+same `limit` block its context window comes from and under the same rule. One exported variable
+states a ceiling for every model this build reaches and outranks whatever any of them stated. Where
+nothing states one, the request carries an assumed 32,000 tokens. A model that refuses a request
+carrying the assumed figure is asked again with 8,192, and no later request carries the assumed
+figure to that model, on the terms [BACKEND-22](#BACKEND-22) gives the level. A stated figure is
+never lowered. Nothing is asked over the network to find out, and nobody is required to supply it.
 
 The aichat backend states no ceiling at all, so nothing here applies to it: its requests carry no
 such field and whatever bounds a reply there belongs to the service.
 
-**Why.** This is BACKEND-14's question with its asymmetry reversed, so the defaulting is the same
-and the reason is not. A ceiling below what the model allows costs the tail of a long answer; one
-above what it allows is a request the service refuses outright and refuses every time, so a guess
-upward does not cost a reply its ending, it costs the model the ability to answer at all. Bedrock
-fronts models from several providers whose ceilings differ by an order of magnitude, an
-inference-profile ARN does not say which model is behind it, and no endpoint there reports the
-figure, so there is nothing to resolve a guess against and the assumed number has to hold for the
-unrecognised case.
+**Why.** A ceiling below what the model allows costs the tail of a long answer, and a tool call the
+ceiling cuts off costs the call, [BACKEND-42](#BACKEND-42) keeping the text and never the calls. One
+above what it allows is a request the service refuses. Bedrock fronts models from several providers
+whose ceilings differ by an order of magnitude, an inference-profile ARN does not say which model is
+behind it, and no endpoint there reports the figure, so there is nothing to resolve a guess against.
+The refusal is the answer, and it costs one request per model per process, so the assumed figure is
+one that holds for the models a tier usually names rather than for the least of them: 32,000 is
+within what every model on Anthropic's current lineup allows, the smallest allowing 64,000. The
+fallback has to hold for a model nothing here can identify, so it is low.
 
-Which makes the assumed number low enough to be felt, and stating a better one is the answer to
-that rather than guessing a better one. The variable exists because the three tier names have no
-block to state anything in, and they are how most people reach this backend: without it the only
-models whose ceiling could be raised would be the ones a `provider` block already named.
+The assumed figure is not the largest those models allow, because it is also a reservation. Bedrock
+deducts a request's input and its ceiling from the account's tokens-per-minute quota when the request
+starts, and refunds the difference when it ends, so on an inference profile a team shares a larger
+ceiling is fewer requests at once before any of them is throttled. At the rate measured on Claude
+Opus 5.5, about 69 tokens a second, a reply of 32,000 tokens also finishes inside the bound the egress
+layer puts on a whole reply.
+
+A stated figure is somebody's statement about the model. Sending less in its place would cut short
+the replies they said could run, and a refusal of the figure they chose is theirs to see. The
+variable exists because the three tier names have no block to state anything in, and they are how
+most people reach this backend: without it the only models whose ceiling could be raised would be
+the ones a `provider` block already named.
 
 `verified-by: bravebot_config::provider::a_stated_reply_ceiling_is_read_per_model`
 `verified-by: bravebot_config::provider::a_limit_missing_either_half_states_no_window`
 `verified-by: bravebot_config::lib::an_exported_reply_ceiling_outranks_every_stated_one`
 `verified-by: bravebot_config::lib::a_reply_ceiling_that_is_not_a_figure_leaves_the_stated_one_standing`
 `verified-by: bravebot_bedrock::lib::a_request_carries_the_ceiling_its_own_model_states`
+`verified-by: bravebot_bedrock::lib::an_assumed_ceiling_a_model_refuses_is_stepped_down_and_remembered`
+`verified-by: bravebot_bedrock::lib::a_stated_ceiling_is_never_stepped_down`
+`verified-by: bravebot_bedrock::lib::the_level_is_given_up_before_the_ask_for_arguments_as_written`
 
 <a id="BACKEND-42"></a>
 ### BACKEND-42: a reply the ceiling stopped is kept for what it said and never for what it asked
@@ -1965,12 +1982,18 @@ written.
   tier: the one an unresolvable profile actually gets. It is deliberately low, because being wrong
   upward removes shortening rather than delaying it.
 
-- **The assumed reply ceiling is low, and a tier that does not raise it keeps hitting it.** For the
-  reason BACKEND-41 gives, the figure has to hold for a model nothing here can identify, so a
-  session on a model that would have written sixty thousand tokens still stops at the assumed one
-  until somebody exports a better figure. What that costs is now the tail of an answer rather than
-  the answer, since BACKEND-42 keeps what was written, but it is still an answer that stops short
-  for a reason belonging to this program rather than to the model.
+- **The assumed reply ceiling is a guess that a refusal corrects in one direction only.** A model
+  allowing more than 32,000 tokens still stops there until somebody states a better figure, and one
+  allowing less costs a refused request per process before it is sent the fallback, which then
+  holds for it however much it allows between the two. A request refused for any other reason, a
+  prompt too long for the model among them, costs one more request for the ceiling as well, and
+  where giving up something else afterwards is what got an answer, the ceiling is remembered as
+  refused beside it, the status naming no field: that model's replies stop at 8,192 for the rest of
+  the process. So do they after a prompt close enough to the model's window that the assumed ceiling
+  does not fit beside it, which the fallback does, since nothing tells that refusal from a model
+  allowing less; with the default context budget a prompt that long is compacted first. What a ceiling that is too low costs is the tail of an answer rather than the answer,
+  since BACKEND-42 keeps what was written, but it is still an answer that stops short for a reason
+  belonging to this program rather than to the model.
 
 - **A reply that stopped short reads like one that finished.** BACKEND-42 keeps the text, and text
   is all it is: the sentence ends wherever the ceiling fell. What says otherwise is a line beside

@@ -138,6 +138,8 @@ pub struct Refusals {
     pub effort: bool,
     /// The ask for tool arguments as they are written, which is a beta of one provider's.
     pub arguments_as_written: bool,
+    /// The assumed ceiling on the reply, which a model allowing less refuses along with the request.
+    pub ceiling: bool,
 }
 
 /// What each model has refused so far.
@@ -287,7 +289,13 @@ pub struct BedrockClient<'a> {
     /// True until a model refuses the ask. Without it the service holds an argument back until the
     /// model has finished writing it, and a long file is a silence the connection is cut on.
     arguments_as_written: bool,
-    /// The model the three above were loaded for, so what is learned is written back under it.
+    /// Whether requests to a model nobody stated a ceiling for still carry the assumed one.
+    ///
+    /// True until a model refuses it, after which they carry the fallback: nothing says what a model
+    /// behind an inference-profile ARN allows, and a refusal on the request's contents is the only
+    /// answer to be had.
+    ceiling: bool,
+    /// The model the four above were loaded for, so what is learned is written back under it.
     learned_for: String,
     /// What that model was known to refuse before this request, which a probe that settled nothing
     /// puts back.
@@ -330,6 +338,7 @@ impl<'a> BedrockClient<'a> {
             breakpoints: true,
             effort: true,
             arguments_as_written: true,
+            ceiling: true,
             learned_for: String::new(),
             recalled: Refusals::default(),
         }
@@ -363,6 +372,10 @@ impl<'a> BedrockClient<'a> {
                 }
                 Err(error) if self.worth_dropping_effort(&error, request) => {
                     self.effort = false;
+                    probed = true;
+                }
+                Err(error) if self.worth_lowering_ceiling(&error) => {
+                    self.ceiling = false;
                     probed = true;
                 }
                 Err(error) if worth_another_attempt(attempt, &error) => {
@@ -402,6 +415,30 @@ impl<'a> BedrockClient<'a> {
     /// level, and the order keeps the one that stops a long argument being cut off.
     fn worth_dropping_effort(&self, error: &BedrockError, request: &ChatRequest) -> bool {
         self.effort && request.effort.is_some() && error.is_refused_on_contents()
+    }
+
+    /// Whether this failure is worth sending the same request again with the fallback ceiling.
+    ///
+    /// Only where the ceiling sent was the assumed one: a figure somebody stated is their statement
+    /// about the model, and quietly sending less would cut replies short that they said could run.
+    /// Tried after the level and before the ask, all three refused with one status. Given up
+    /// wrongly, the ceiling costs a model its replies longer than the fallback, and the ask costs it
+    /// every long argument, written into a silence the idle bound cuts. So the ceiling goes first.
+    fn worth_lowering_ceiling(&self, error: &BedrockError) -> bool {
+        self.ceiling
+            && self.config.stated_output_limit(&self.learned_for).is_none()
+            && error.is_refused_on_contents()
+    }
+
+    /// The ceiling a request to `model` carries.
+    fn ceiling_for(&self, model: &str) -> u64 {
+        self.config
+            .stated_output_limit(model)
+            .unwrap_or(if self.ceiling {
+                bravebot_config::bedrock::OUTPUT_LIMIT
+            } else {
+                bravebot_config::bedrock::OUTPUT_LIMIT_FALLBACK
+            })
     }
 
     /// Whether this failure is worth sending the same streamed request again without the ask for
@@ -465,6 +502,7 @@ impl<'a> BedrockClient<'a> {
             self.breakpoints = !self.recalled.caching;
             self.effort = !self.recalled.effort;
             self.arguments_as_written = !self.recalled.arguments_as_written;
+            self.ceiling = !self.recalled.ceiling;
             return;
         }
         remember(
@@ -473,6 +511,7 @@ impl<'a> BedrockClient<'a> {
                 caching: !self.breakpoints,
                 effort: !self.effort,
                 arguments_as_written: !self.arguments_as_written,
+                ceiling: !self.ceiling,
             },
         );
     }
@@ -486,6 +525,7 @@ impl<'a> BedrockClient<'a> {
         self.breakpoints = !refusals.caching;
         self.effort = !refusals.effort;
         self.arguments_as_written = !refusals.arguments_as_written;
+        self.ceiling = !refusals.ceiling;
         self.learned_for = model.to_string();
         self.recalled = refusals;
     }
@@ -582,7 +622,7 @@ impl<'a> BedrockClient<'a> {
     ) -> Result<Completion, BedrockError> {
         if content.is_empty() {
             return Err(BedrockError::TooLong {
-                ceiling: self.config.output_limit(&model),
+                ceiling: self.ceiling_for(&model),
             });
         }
         Ok(Completion {
@@ -619,6 +659,10 @@ impl<'a> BedrockClient<'a> {
                 }
                 Err(error) if self.worth_dropping_effort(&error, request) => {
                     self.effort = false;
+                    probed = true;
+                }
+                Err(error) if self.worth_lowering_ceiling(&error) => {
+                    self.ceiling = false;
                     probed = true;
                 }
                 Err(error) if self.worth_dropping_arguments_as_written(&error, request) => {
@@ -821,7 +865,7 @@ impl<'a> BedrockClient<'a> {
         streaming: bool,
     ) -> protocol::ConverseRequest {
         let converse = protocol::request_from(&request.messages, request.tools.as_deref())
-            .with_ceiling(self.config.output_limit(model))
+            .with_ceiling(self.ceiling_for(model))
             .with_effort(request.effort.filter(|_| self.effort));
         let converse = if self.streams_arguments(request, streaming) {
             converse.with_arguments_as_written()
@@ -1120,6 +1164,7 @@ fn reported_usage(envelope: &serde_json::Value) -> Option<protocol::BedrockUsage
 mod tests {
     use super::*;
     use bravebot_aichat::protocol::{Effort, Message, Tool};
+    use bravebot_config::bedrock::{OUTPUT_LIMIT, OUTPUT_LIMIT_FALLBACK};
     use bravebot_config::env_var;
     use serde_json::json;
 
@@ -1165,6 +1210,7 @@ mod tests {
                 caching: true,
                 effort: true,
                 arguments_as_written: false,
+                ceiling: false,
             }
         );
 
@@ -1735,7 +1781,7 @@ mod tests {
     }
 
     /// Both entry points count every probe, none of which advances the retry ordinal. Only a
-    /// streamed request asks for arguments as they are written, so only it has a third to give up.
+    /// streamed request asks for arguments as they are written, so only it has a fourth to give up.
     #[test]
     fn request_counts_include_capability_probes() {
         use bravebot_core::{
@@ -1744,10 +1790,10 @@ mod tests {
             policy::{ReleasePlan, Routing},
         };
         for streaming in [false, true] {
-            let sent = if streaming { 4 } else { 3 };
+            let sent = if streaming { 5 } else { 4 };
             let config = config();
             let egress = Egress::new();
-            let (http, received) = refused_requests(vec![403, 400, 400, 400][..sent].to_vec());
+            let (http, received) = refused_requests(vec![403, 400, 400, 400, 400][..sent].to_vec());
             let mut client = BedrockClient::new(&config, &egress);
             client.test_request = Some(http);
             let mut sink = RecordingSink::new();
@@ -1883,6 +1929,13 @@ mod tests {
         ChatRequest::new(model, vec![Message::user("write fish.py")]).with_tools(vec![
             Tool::function("write_file", "Write a file", json!({})),
         ])
+    }
+
+    /// The ceiling a sent body carried.
+    fn ceiling_of(body: &serde_json::Value) -> u64 {
+        body["inferenceConfig"]["maxTokens"]
+            .as_u64()
+            .expect("a ceiling")
     }
 
     /// Whether a sent body carried the level, and whether it carried the ask for arguments as they
@@ -2081,26 +2134,33 @@ mod tests {
 
     /// A model that does not define the beta refuses the request on it, as a model from another
     /// provider refuses the level. It is given up, the request answers, and the next turn starts
-    /// without it. The level is left alone: this request carried none, so none was refused, and
-    /// recording one would tell the interface that a level it is later given is not in force.
+    /// without it. The assumed ceiling goes first, the status naming no field, so the request that
+    /// answered had given up both and both are remembered. The level is left alone: this request
+    /// carried none, so none was refused, and recording one would tell the interface that a level
+    /// it is later given is not in force.
     #[test]
     fn a_refused_ask_for_arguments_as_written_is_given_up_and_remembered() {
         let model = "a-model-that-refuses-the-beta";
         let config = config_for(model);
         let request = writing_a_file(model);
 
-        let (result, sent) = stream_against(&config, &request, vec![refused_with(400), answered()]);
+        let (result, sent) = stream_against(
+            &config,
+            &request,
+            vec![refused_with(400), refused_with(400), answered()],
+        );
 
         result.expect("the request without the ask answers");
         assert_eq!(
             sent.iter().map(carried).collect::<Vec<_>>(),
-            [(false, true), (false, false)],
+            [(false, true), (false, true), (false, false)],
             "(level, ask) of each attempt"
         );
         assert_eq!(
             refusals(model),
             Refusals {
                 arguments_as_written: true,
+                ceiling: true,
                 ..Refusals::default()
             },
             "the level was given up though no request carried one"
@@ -2150,13 +2210,28 @@ mod tests {
         let (result, sent) = stream_against(
             &config_for(model),
             &asked(model),
-            vec![refused_with(400), refused_with(400), answered()],
+            vec![
+                refused_with(400),
+                refused_with(400),
+                refused_with(400),
+                answered(),
+            ],
         );
-        result.expect("the request without either answers");
+        result.expect("the request without any of them answers");
         assert_eq!(
             sent.iter().map(carried).collect::<Vec<_>>(),
-            [(true, true), (false, true), (false, false)],
+            [(true, true), (false, true), (false, true), (false, false)],
             "(level, ask) of each attempt"
+        );
+        assert_eq!(
+            sent.iter().map(ceiling_of).collect::<Vec<_>>(),
+            [
+                OUTPUT_LIMIT,
+                OUTPUT_LIMIT,
+                OUTPUT_LIMIT_FALLBACK,
+                OUTPUT_LIMIT_FALLBACK
+            ],
+            "the ceiling of each attempt"
         );
         assert_eq!(
             refusals(model),
@@ -2164,8 +2239,119 @@ mod tests {
                 caching: false,
                 effort: true,
                 arguments_as_written: true,
+                ceiling: true,
             }
         );
+    }
+
+    /// Nothing says what a model behind an inference-profile ARN allows, so a model allowing less
+    /// than the assumed ceiling refuses every request carrying it, and without the step-down a tier
+    /// naming one could never be answered. Remembered, so each later turn is not a refused request
+    /// first.
+    #[test]
+    fn an_assumed_ceiling_a_model_refuses_is_stepped_down_and_remembered() {
+        let model = "a-model-that-allows-less-than-assumed";
+        let config = config_for(model);
+        let request = ChatRequest::new(model, vec![Message::user("hello")]);
+
+        let (result, sent) = stream_against(&config, &request, vec![refused_with(400), answered()]);
+
+        result.expect("the request with the fallback ceiling answers");
+        assert_eq!(
+            sent.iter().map(ceiling_of).collect::<Vec<_>>(),
+            [OUTPUT_LIMIT, OUTPUT_LIMIT_FALLBACK],
+            "the ceiling of each attempt"
+        );
+        assert_eq!(
+            refusals(model),
+            Refusals {
+                ceiling: true,
+                ..Refusals::default()
+            }
+        );
+
+        let egress = Egress::new();
+        let mut next = BedrockClient::new(&config, &egress);
+        next.recall(model);
+        assert_eq!(
+            next.converse_for(&request, model, true)
+                .inference_config
+                .max_tokens,
+            OUTPUT_LIMIT_FALLBACK,
+            "the next turn sent the refused ceiling again"
+        );
+
+        // A reply that reaches the ceiling names it, and the one to name is the one it was sent.
+        let (result, _) = stream_against(
+            &config,
+            &request,
+            vec![streamed(vec![
+                eventstream::tests::frame("messageStop", br#"{"stopReason":"max_tokens"}"#),
+                eventstream::tests::frame(
+                    "metadata",
+                    br#"{"usage":{"inputTokens":100,"outputTokens":7}}"#,
+                ),
+            ])],
+        );
+        assert!(
+            matches!(result, Err(BedrockError::TooLong { ceiling }) if ceiling == OUTPUT_LIMIT_FALLBACK),
+            "{result:?}"
+        );
+    }
+
+    /// A ceiling somebody stated, exported or in the model's block, is their statement of what the
+    /// model allows. Sending less in its place would cut short replies they said could run, and
+    /// the refusal of a figure they chose is theirs to see.
+    #[test]
+    fn a_stated_ceiling_is_never_stepped_down() {
+        use bravebot_config::bedrock::Entry;
+
+        let exported = "a-model-given-an-exported-ceiling";
+        let stated = "a-model-whose-block-states-a-ceiling";
+        let cases = [
+            (
+                config_for(exported).with_output_budget(Some(48_000)),
+                exported,
+                48_000,
+            ),
+            (
+                Bedrock::from_provider(
+                    "us-west-2".to_string(),
+                    None,
+                    vec![Entry {
+                        tier: None,
+                        id: stated.to_string(),
+                        name: None,
+                        context_window: None,
+                        output_limit: Some(16_000),
+                    }],
+                ),
+                stated,
+                16_000,
+            ),
+        ];
+        for (config, model, ceiling) in cases {
+            let request = ChatRequest::new(model, vec![Message::user("hello")]);
+            let (result, sent) =
+                stream_against(&config, &request, vec![refused_with(400), answered()]);
+
+            assert!(
+                matches!(
+                    result,
+                    Err(BedrockError::Egress(bravebot_net::EgressError::Status {
+                        status: 400,
+                        ..
+                    }))
+                ),
+                "{model}: {result:?}"
+            );
+            assert_eq!(
+                sent.iter().map(ceiling_of).collect::<Vec<_>>(),
+                [ceiling],
+                "{model}: the ceiling of each attempt"
+            );
+            assert_eq!(refusals(model), Refusals::default(), "{model}");
+        }
     }
 
     /// A request is refused on its contents for reasons that are no concession's, a prompt too long
@@ -2185,14 +2371,19 @@ mod tests {
         let (result, sent) = stream_against(
             &config_for(model),
             &writing_a_file(model).with_effort(Some(Effort::High)),
-            vec![refused_with(400), refused_with(400)],
+            vec![refused_with(400), refused_with(400), refused_with(400)],
         );
 
         assert!(result.is_err(), "{result:?}");
         assert_eq!(
             sent.iter().map(carried).collect::<Vec<_>>(),
-            [(false, true), (false, false)],
+            [(false, true), (false, true), (false, false)],
             "(level, ask) of each attempt"
+        );
+        assert_eq!(
+            sent.iter().map(ceiling_of).collect::<Vec<_>>(),
+            [OUTPUT_LIMIT, OUTPUT_LIMIT_FALLBACK, OUTPUT_LIMIT_FALLBACK],
+            "the ceiling of each attempt"
         );
         assert_eq!(
             refusals(model),
@@ -2576,7 +2767,7 @@ mod tests {
                 client.complete(&mut policy, &request)
             }
             .unwrap_err();
-            assert!(matches!(error, BedrockError::TooLong { ceiling } if ceiling == 8_192));
+            assert!(matches!(error, BedrockError::TooLong { ceiling } if ceiling == OUTPUT_LIMIT));
             assert_eq!(client.completed_usage().unwrap().total(), 107);
             assert_eq!(client.attempts(), 1);
             received.recv_timeout(Duration::from_secs(2)).unwrap();
