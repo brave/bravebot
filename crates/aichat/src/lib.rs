@@ -17,6 +17,7 @@
 #![forbid(unsafe_code)]
 
 pub mod models;
+pub mod ollama;
 pub mod protocol;
 
 use bravebot_config::{Config, Secret};

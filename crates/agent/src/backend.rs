@@ -273,6 +273,15 @@ pub fn bedrock_reads_effort(model: &str) -> bool {
     !bravebot_bedrock::refusals(model).effort
 }
 
+/// What the Ollama at `host` has pulled, for the import to offer: [`bravebot_aichat::ollama`]'s
+/// answer, reached from here because a front end does not talk to a backend crate itself.
+pub fn installed_on_ollama<S: Sink>(
+    host: &str,
+    sink: &mut S,
+) -> Option<Vec<bravebot_config::import::Installed>> {
+    bravebot_aichat::ollama::installed(host, sink)
+}
+
 /// Whether the service answering for `model` has refused a level for it.
 ///
 /// The question BACKEND-22 leaves to the service wherever no listing answers it, asked of what has

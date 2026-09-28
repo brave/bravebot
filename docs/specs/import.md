@@ -4,6 +4,7 @@ title: Importing a model service from another agent
 status: normative
 governs:
   - crates/config/src/import.rs
+  - crates/aichat/src/ollama.rs
   - crates/cli/src/import.rs
   - crates/cli/src/main.rs
   - crates/cli/src/plain.rs
@@ -12,9 +13,11 @@ documented-by: docs/website/docs/customize/configuration.md
 
 ## Scope
 
-What bravebot reads from Claude Code's and opencode's configuration when it starts with no service
-configured to answer, which of those settings may become bravebot's own configuration, how the
-person is asked, and what is written. The refusal a start gets with nothing configured, and the
+What bravebot reads from Claude Code's and opencode's configuration, and asks a local Ollama
+server, when it starts with no service configured to answer. It also covers which of those
+settings may become bravebot's own configuration, how the person is asked, and what is written.
+Two of the three sources are files. The third is a server running on this machine, which is asked
+what it serves. The refusal a start gets with nothing configured, and the
 three routes it names, are [backends.md](backends.md)'s.
 
 It covers model services only: the Bedrock account and the OpenAI-compatible gateways
@@ -22,7 +25,7 @@ It covers model services only: the Bedrock account and the OpenAI-compatible gat
 
 It never makes bravebot read another tool's files or setting names at run time. An import is a
 one-time copy a person approved, written in bravebot's own spelling. After it, the other tool's
-files are not read again.
+files are not read again, and Ollama is asked only for its roster, as any gateway is.
 
 Out of scope: permissions, hooks, MCP servers, instructions, skills, and the desktop app's first
 run.
@@ -30,7 +33,7 @@ run.
 ## Clauses
 
 <a id="IMPORT-1"></a>
-### IMPORT-1: a start with nothing configured offers what Claude Code and opencode configured, where bravebot can use it
+### IMPORT-1: a start with nothing configured offers what Claude Code and opencode configured, or a local Ollama serves, where bravebot can use it
 
 The start looks for the [IMPORT-2](#IMPORT-2) sources before the session opens when all of these
 hold:
@@ -59,6 +62,7 @@ The offer comes only where the answer is "configure a service", because a start 
 should not open with a question about another program.
 
 `verified-by: bravebot_cli::running::a_first_run_with_claude_code_configured_offers_to_import_it`
+`verified-by: bravebot_cli::running::a_first_run_with_ollama_running_offers_to_import_it`
 `verified-by: bravebot_cli::running::a_first_run_with_nothing_importable_refuses_as_before`
 `verified-by: bravebot_cli::running::a_configured_service_with_a_brave_model_is_not_offered_an_import`
 
@@ -86,14 +90,25 @@ read nowhere, because the person pointed the tool somewhere other than the defau
 `.claude/`, `opencode.json` and `.opencode/` are never opened. A machine whose platform names no
 profile directory reads nothing.
 
+**Ollama.** One server is asked, at the address `OLLAMA_HOST` names, read the way Ollama's own
+client reads it: `[scheme://]host[:port][/path]`. The defaults are `http` and port `11434`, or
+port 80 or 443 where `http` or `https` is written with no port. A `0.0.0.0` or `::` bind address
+means this machine. Unset or empty, it is `http://localhost:11434`. Only an address on this machine
+is asked: `localhost`, a loopback address, or a bind address. Any other value is left
+([IMPORT-4](#IMPORT-4)) under the name `OLLAMA_HOST`, and no request is made. What is asked, and
+when, is [IMPORT-10](#IMPORT-10)'s.
+
 **Why.** Home-level files are the person's own configuration, on the same footing as
 `~/.bravebot/settings.json`. A checkout's files hold whatever the repository's author wrote.
 Importing a host and a credential name from them would let a clone decide where the person's key is
-sent.
+sent. `OLLAMA_HOST` is honoured on the footing `CLAUDE_CONFIG_DIR` is: it is the variable the other
+program itself reads. Only this machine is asked, so that no request leaves it before a question.
 
 `verified-by: bravebot_config::import::a_checkouts_opencode_json_is_never_read`
 `verified-by: bravebot_config::import::claude_config_dir_moves_where_claude_code_is_read`
 `verified-by: bravebot_config::import::xdg_config_home_moves_where_opencode_is_read`
+`verified-by: bravebot_config::import::ollama_host_moves_where_ollama_is_asked`
+`verified-by: bravebot_config::import::an_ollama_host_off_this_machine_is_left_and_not_asked`
 
 <a id="IMPORT-3"></a>
 ### IMPORT-3: what is offered is what bravebot's own reading keeps, and of that only what speaks its protocol
@@ -107,6 +122,7 @@ sent.
 | opencode | a `provider` entry bravebot's own reading keeps, whose `npm` is absent, `@ai-sdk/openai-compatible`, `@openrouter/ai-sdk-provider` for `openrouter`, or `@ai-sdk/amazon-bedrock` for `amazon-bedrock` | that entry under `provider`, holding only the fields bravebot reads: `name`, `env`, `models`, `options.baseURL`, `options.region`, `options.profile`, and the credential as [IMPORT-6](#IMPORT-6) says |
 | opencode | an `auth.json` entry of `type: "api"` for an id whose endpoint is compiled in, with no config entry for that id | a `provider` entry for that id, with the credential as [IMPORT-6](#IMPORT-6) says |
 | opencode | a top-level `model` of the form `provider/model`, where the import writes that provider's entry | `model`, in the form that names the gateway; for `amazon-bedrock`, the model's own id, added to that entry's `models` |
+| Ollama | a server answering [IMPORT-10](#IMPORT-10)'s request with a model it can serve | `provider.ollama`: `{"name": "Ollama (local)", "options": {"baseURL": "<address>/v1"}}`, and `model: "ollama/<name>"` for the model [IMPORT-10](#IMPORT-10) chooses |
 
 **A host must name somewhere.** An entry whose host is not an `http` or `https` URL, or still holds
 one of opencode's `{env:...}` substitutions, is not offered, because this program makes no
@@ -126,6 +142,11 @@ writes for its provider. Where that entry is left as it is, because the settings
 or `managed.json` pins the `provider` block, the model is not written: it was chosen against
 opencode's entry, and a different one would answer it. The line naming the kept or pinned entry is
 the one said.
+
+**A running Ollama is written as the configuration guide's block.** It has no `env`, no `apiKey`
+and no `models`, so bravebot reads it as needing no credential and asks it for its roster
+([backends.md](backends.md)). A model pulled after the import is then offered with nothing written
+again.
 
 **Bedrock needs a region.** It is offered only where a region is named somewhere bravebot will read
 it, the settings file or the process environment. Without one, bravebot treats Bedrock as not
@@ -154,6 +175,7 @@ build reads it.
 `verified-by: bravebot_config::import::only_the_fields_bravebot_reads_are_written`
 `verified-by: bravebot_config::import::a_top_level_model_is_copied_where_its_provider_is`
 `verified-by: bravebot_config::import::a_limit_is_written_wherever_bravebot_reads_half_of_it`
+`verified-by: bravebot_config::import::a_running_ollama_is_offered_as_the_documented_block`
 `verified-by: bravebot_cli::import::an_opencode_model_is_written_only_beside_its_entry`
 
 <a id="IMPORT-4"></a>
@@ -177,7 +199,11 @@ reason:
 - opencode `oauth` and `wellknown` sign-ins;
 - an entry naming another SDK;
 - an id with no known endpoint and no usable `baseURL`;
-- a key built from an opencode substitution inside a longer value ([IMPORT-6](#IMPORT-6)).
+- a key built from an opencode substitution inside a longer value ([IMPORT-6](#IMPORT-6));
+- an `OLLAMA_HOST` naming a server on another machine, which is not asked
+  ([IMPORT-2](#IMPORT-2));
+- a running Ollama that reports which of its models can call tools and names none, or that has
+  pulled no model ([IMPORT-10](#IMPORT-10)).
 
 Only the name and the reason are said, never a value. Where a source is found and nothing in it can
 be imported, no question is asked, and these lines are said before the refusal's routes.
@@ -190,17 +216,19 @@ API key would otherwise see the three routes and no sign that their setup was lo
 `verified-by: bravebot_config::import::an_api_key_helper_is_never_imported`
 `verified-by: bravebot_config::import::permissions_hooks_and_mcp_servers_are_never_imported`
 `verified-by: bravebot_config::import::what_claude_code_uses_and_bravebot_cannot_is_named_and_not_shown`
+`verified-by: bravebot_config::import::an_ollama_with_no_model_that_can_call_tools_is_left_and_said`
 `verified-by: bravebot_cli::running::what_was_found_and_left_is_said_before_the_routes`
 
 <a id="IMPORT-5"></a>
 ### IMPORT-5: everything that would be written is shown before the question, and only the affirmative writes
 
-**One question per source.** Claude Code is asked about first, then opencode.
+**One question per source.** Claude Code is asked about first, then opencode, then Ollama.
 
 **What is shown before each question:**
 
 - the files it was read from, and the file that will be written. A setup found only in the process
-  environment says it was found there rather than naming no file;
+  environment says it was found there rather than naming no file, and a running Ollama names the
+  address that answered;
 - every name it would add, with its value verbatim: each host, region, profile, variable name and
   model id;
 - the credential lines, as [IMPORT-6](#IMPORT-6) says.
@@ -330,6 +358,7 @@ Where nothing is left to import it says so, along with what [IMPORT-4](#IMPORT-4
 answers yes on their behalf.
 
 `verified-by: bravebot_cli::running::a_one_shot_first_run_names_the_import_command_and_asks_nothing`
+`verified-by: bravebot_cli::running::a_one_shot_first_run_with_ollama_running_names_the_import_command`
 `verified-by: bravebot_cli::running::import_providers_is_refused_where_its_input_is_not_a_terminal`
 `verified-by: bravebot_cli::running::import_providers_is_refused_while_incognito`
 `verified-by: bravebot_cli::running::nothing_is_asked_where_stderr_is_not_a_terminal`
@@ -361,6 +390,58 @@ working, and ending over one would refuse a service that answers.
 `verified-by: bravebot_cli::running::an_unset_variable_after_an_import_is_named_before_the_session_opens`
 `verified-by: bravebot_cli::running::an_unset_variable_for_another_entry_is_said_and_the_session_opens`
 
+<a id="IMPORT-10"></a>
+### IMPORT-10: a running Ollama is asked once, on this machine, within a bound, and says nothing where it does not answer
+
+**When.** Ollama is asked wherever the other two sources are read: at the start
+[IMPORT-1](#IMPORT-1) describes, for [IMPORT-8](#IMPORT-8)'s refusal lines, and by
+`bravebot import-providers`. It is asked after the other two, and only once there is a settings
+file the import could write, so an incognito start opens no connection. A start with a service
+configured asks nothing.
+
+**What is asked.** One `GET <address>/api/tags` to the [IMPORT-2](#IMPORT-2) address, carrying no
+credential. It is bounded twice, because it is made before the start has said anything:
+
+- 1 second each to resolve, to connect and to send, and 2 seconds for the reply to begin and 2
+  more for its body, so a listener that accepts and never answers holds the start for seconds;
+- a listing over 1 MiB is not read.
+
+Only each model's `name`, `modified_at` and `capabilities` are read.
+
+**A failure says nothing.** A refused connection, a timeout, an error status, a listing
+over the bound, or one that does not decode means there is no Ollama source, and nothing is said
+about it, because nothing on the machine said an Ollama was meant to be there.
+
+**The model.** The one written is the listed model with the latest `modified_at`, compared as
+instants rather than taken from the listing's order, among those whose `capabilities` include
+`tools`. Where no model reports capabilities, it is the latest of them all. A model with no name
+is never chosen, and a time that does not read counts as the oldest. Where the server reports
+capabilities and none lists `tools`, or it has pulled nothing, the source is left
+([IMPORT-4](#IMPORT-4)).
+
+**Not offered twice.** The Ollama entry is left as it is, whatever the other entry's id, where the
+settings file has any `provider` entry whose `options.baseURL` is an `http` or `https` address on
+this machine at the same port. That includes an entry an earlier answer in the same run wrote.
+The line naming that entry is the one said ([IMPORT-7](#IMPORT-7)). A `provider.ollama` naming
+another address is kept as [IMPORT-7](#IMPORT-7) says, and the running server is then not offered.
+
+**Why.** A person who runs Ollama and nothing else would otherwise copy the configuration guide's
+block by hand. The request is `/api/tags` rather than the `/v1/models` roster the written block is
+later asked, because only it says which models can call tools. Every turn here calls tools, so a
+model that reports only completion would fail its first turn. Two entries for one server would
+list every model twice in the model picker.
+
+`verified-by: bravebot_config::import::the_default_model_is_the_newest_that_can_call_tools`
+`verified-by: bravebot_config::import::an_ollama_reporting_no_capabilities_defaults_to_its_newest_model`
+`verified-by: bravebot_config::import::an_ollama_that_does_not_answer_is_no_source`
+`verified-by: bravebot_aichat::ollama::a_listing_is_read_as_ollama_writes_it`
+`verified-by: bravebot_aichat::ollama::an_oversized_listing_is_not_read`
+`verified-by: bravebot_aichat::ollama::a_listener_that_never_answers_does_not_hold_the_start`
+`verified-by: bravebot_aichat::ollama::anything_but_a_listing_is_no_source`
+`verified-by: bravebot_cli::import::an_ollama_already_configured_under_another_id_is_not_offered_again`
+`verified-by: bravebot_cli::import::an_opencode_entry_for_the_same_server_leaves_the_ollama_source_with_nothing_to_add`
+`verified-by: bravebot_cli::running::a_first_run_with_nothing_listening_refuses_as_before`
+
 ## Where this stands against the rule
 
 No model runs during an import. Nothing it reads reaches the planner, a turn, a session record or a
@@ -368,6 +449,13 @@ trace, and no session exists yet when it runs. The files it reads are the person
 configuration, in their home directory, and every value it writes has been shown to them and
 approved ([IMPORT-5](#IMPORT-5)). A checkout's files, which carry a repository author's bytes, are
 never opened ([IMPORT-2](#IMPORT-2)).
+
+The import makes one request before any question, to a running Ollama ([IMPORT-10](#IMPORT-10)).
+Its body is labelled untrusted, as any roster's is. What it decides is whether to offer the source
+and which model to show. Both are decided before any session exists and reach no planner, which is
+the case [reviewing-for-the-rule.md](../development/reviewing-for-the-rule.md) calls the inverse
+mistake to flag. The only fetched value written to disk is a model name the person approved on
+sight.
 
 ## Known costs
 
@@ -384,3 +472,8 @@ never opened ([IMPORT-2](#IMPORT-2)).
 - **A program that can write the other tool's files can name a host**, which the import then shows
   for approval. Such a program could equally write `~/.bravebot/settings.json`, so the import gives
   it no new reach. What the import adds is that the host is shown before anything is sent to it.
+- **Any program listening at the Ollama address chooses the names offered.** It can answer the
+  listing, and so choose the model name the question shows. It cannot choose the host, which is
+  the address `OLLAMA_HOST` or the default names, and the name is shown before it is written.
+- **One loopback connection per refused start**, and per `doctor` or `--json` run, where no service
+  is configured and a settings file could be written.

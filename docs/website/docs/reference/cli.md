@@ -336,10 +336,10 @@ Without a channel, `stable` is what importing means. `--forget` removes what was
 bravebot import-providers
 ```
 
-Reads what Claude Code and opencode configured in your home directory, shows what it would add to
-`~/.bravebot/settings.json`, and asks once for each. It takes no arguments, needs a terminal to ask on,
-and refuses in an incognito session. See
-[Importing from Claude Code or opencode](../customize/configuration.md#importing-from-claude-code-or-opencode).
+Reads what Claude Code and opencode configured in your home directory, and asks a running Ollama on
+this machine what it serves, shows what it would add to `~/.bravebot/settings.json`, and asks once for
+each. It takes no arguments, needs a terminal to ask on, and refuses in an incognito session. See
+[Importing from Claude Code, opencode or Ollama](../customize/configuration.md#importing-from-claude-code-opencode-or-ollama).
 
 ## `mcp`
 

@@ -134,12 +134,18 @@ onboarding-no-model = no model service is configured yet
 # Said beside it where a subscription is stored and could not be read, because somebody in that
 # case is one import away rather than a whole configuration away.
 onboarding-subscription-unusable = the subscription that is stored could not be used: { $problem }
-# Said before the routes where Claude Code or opencode configures a service bravebot can use and
-# nobody was there to be asked about it: a one-shot run, --json, a pipe, or doctor.
+# Said before the routes where Claude Code or opencode configures a service bravebot can use, or a
+# running Ollama serves one, and nobody was there to be asked about it: a one-shot run, --json, a
+# pipe, or doctor.
 onboarding-import-one =
     { $source } configures a model service bravebot can use: run `bravebot import-providers` in a terminal to import it.
+# The same, where the one source is Ollama running on this machine.
+onboarding-import-running =
+    { $source } is running here with models bravebot can use: run `bravebot import-providers` in a terminal to import it.
 onboarding-import-both =
-    { $first } and { $second } configure model services bravebot can use: run `bravebot import-providers` in a terminal to import them.
+    { $first } and { $second } each have a model service bravebot can use: run `bravebot import-providers` in a terminal to import them.
+onboarding-import-three =
+    { $first }, { $second } and { $third } each have a model service bravebot can use: run `bravebot import-providers` in a terminal to import them.
 # Said instead, where a service is configured and only the model in force is Brave's own. A
 # settings block copied out of another tool names its models and names no default, so this is
 # where somebody following that route lands, and what they have to do is name one of their own.
@@ -442,7 +448,7 @@ hook-stopped =
     stopped
 
 
-## Importing a model service Claude Code or opencode configured
+## Importing a model service Claude Code or opencode configured, or a running Ollama serves
 
 # Said above everything an import would write, naming the files it was read from. Every name and
 # value follows before the question, because what is written is what the person approves.
@@ -450,6 +456,8 @@ import-found = { $source } configures a model service bravebot can use, in { $fi
 # Where no file was read: the setup is exported rather than written down.
 import-found-exported =
     { $source } configures a model service bravebot can use, in this process's environment.
+# Where the source is a server that answered rather than a file: Ollama, at the address asked.
+import-found-running = { $source } is running at { $url }, serving models bravebot can use.
 import-adds = Importing it adds these to { $file }:
 # One gateway, with the host its requests go to: that host is where a credential is sent, so it is
 # the part of the entry the question is really about.
@@ -474,6 +482,8 @@ import-left-another-sdk = an entry reached through an SDK other than an OpenAI-c
 import-left-no-endpoint = no reachable endpoint is stated or known for it
 import-left-substitution =
     its key is built from an opencode substitution inside a longer value, which bravebot does not make
+import-left-elsewhere = names a server on another machine, which is not asked
+import-left-no-tool-model = running there, with no model that can call tools
 import-question = Import this from { $source }?
 # Asked on its own, after the import is approved, and never showing the key.
 import-key-question =
@@ -482,6 +492,7 @@ import-key-export =
     provider.{ $id } reads its key from { $variables }: export it before starting bravebot.
 import-key-none = provider.{ $id } is written with no credential.
 import-imported = imported what { $source } configured into { $file }
+import-imported-running = imported what { $source } serves into { $file }
 import-unset-variable =
     provider.{ $id } in { $file } reads its key from { $variables }, which is not set here: export it, then run bravebot again
 # Said where the session opens anyway, because the model it runs on is served by another entry.
@@ -497,7 +508,8 @@ import-changed =
 import-needs-a-terminal = import-providers asks before it writes anything, so it needs a terminal to ask on
 import-not-while-incognito = an import writes settings to disk, which an incognito session will not do
 import-no-home = there is no home directory to write settings in
-import-nothing-found = neither Claude Code nor opencode configures a model service bravebot can use
+import-nothing-found =
+    neither Claude Code nor opencode configures a model service bravebot can use, and no Ollama serving one is running here
 import-nothing-new = nothing is left to import: every name found is already set, or pinned
 import-takes-nothing-else = import-providers takes no arguments
 

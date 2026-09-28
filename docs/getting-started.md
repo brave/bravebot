@@ -217,6 +217,10 @@ you say none is needed, and the request then carries no `authorization` header:
 No `models` key, so Ollama is asked what it has pulled, and `/model` lists what came back.
 `bravebot doctor` says a credential is not needed rather than missing.
 
+You need not write it by hand. With Ollama running and nothing else configured, a first run in a
+terminal shows this block, with the newest of your models that can call tools as `model`, and asks
+whether to write it. `bravebot import-providers` asks the same at any time.
+
 ### Brave Leo Premium, if you already subscribe
 
 ```sh
