@@ -272,6 +272,10 @@ doctor-settings-mcp-declared =
 doctor-managed = géré
 doctor-managed-pinned = { $names } depuis { $path }
 doctor-managed-nothing = { $path }, n'épinglant rien
+doctor-mcp-servers =
+    serveurs MCP déclarés dans { $path }, pour une session démarrée dans { $project }
+doctor-mcp-none =
+    aucun serveur MCP n'est déclaré dans { $path }, pour une session démarrée dans { $project }
 doctor-leo = leo
 doctor-subscription =
     abonnement { $environment } importé, { $unspent } identifiants sur { $total } non dépensés
@@ -504,6 +508,27 @@ mcp-list-unusable =
         [one] une déclaration dans { $path } est inutilisable
        *[other] { $count } déclarations dans { $path } sont inutilisables
     }
+mcp-list-here = pour une session démarrée dans { $path }
+mcp-not-requested-here =
+    non demandé ici : aucune session ici ne détient donc d'autorisation pour l'appeler
+mcp-requested-held =
+    demandé par { $file } : une session ici le démarre sans demander, et détient une autorisation
+    pour l'appeler
+mcp-requested-asked =
+    demandé par { $file } : une session dans un terminal ici demande avant de le démarrer, et ne
+    détient une autorisation pour l'appeler qu'après un oui
+mcp-requested-withheld =
+    demandé par { $file }, et aucune session ici ne le démarre ni ne détient d'autorisation pour
+    l'appeler : { $reason }
+mcp-requested-not-started =
+    demandé par { $file }, et aucune session ici ne le démarre ni ne détient d'autorisation pour
+    l'appeler
+mcp-requested-undeclared =
+    demandé par { $file }, et non déclaré : bravebot mcp add le déclare
+mcp-no-confinement-here = cette plateforme n'a pas encore de confinement pour un serveur MCP local
+mcp-standing-project = répondu ici : utiliser tous les serveurs MCP que ce projet demande
+mcp-standing-tools = répondu ici : appeler { $tools } sans demander
+mcp-standing-none = rien n'est répondu à son sujet ici
 
 
 ## Les serveurs MCP qu'une session démarre, et pourquoi un serveur demandé n'en fait pas partie

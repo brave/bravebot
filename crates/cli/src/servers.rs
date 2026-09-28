@@ -265,40 +265,40 @@ fn settle<R: BufRead, W: Write>(
                 continue;
             }
         };
-        let plan = match planned(&declaration, environment) {
-            Ok(plan) => plan,
-            Err(reason) => {
+        let (plan, covered) = match assess(
+            alias,
+            &declaration,
+            project,
+            &approvals,
+            &projects,
+            managed,
+            environment,
+            prelude,
+        ) {
+            Ok(assessed) => assessed,
+            Err(Unstarted::Unplanned(reason)) => {
                 notes.push(t!(servers_not_reached, alias = alias, reason = reason).to_string());
                 continue;
             }
+            Err(Unstarted::Refused(reason)) => {
+                notes.push(
+                    t!(
+                        servers_refused_by_managed,
+                        alias = shown(alias),
+                        reason = reason
+                    )
+                    .to_string(),
+                );
+                continue;
+            }
+            Err(Unstarted::Unconfined) => {
+                notes.push(t!(servers_no_confinement_here, alias = alias).to_string());
+                continue;
+            }
         };
-        // Once the program is the path it resolved to, and before anything is asked or recorded,
-        // so bypassing reaches a refused server no more than an answer would (SERVERS-12,
-        // SERVERS-13).
-        if let Some(reason) = refused(managed, &plan) {
-            notes.push(
-                t!(
-                    servers_refused_by_managed,
-                    alias = shown(alias),
-                    reason = reason
-                )
-                .to_string(),
-            );
-            continue;
-        }
-        if matches!(plan, Plan::Stdio { .. }) && prelude.is_none() {
-            notes.push(t!(servers_no_confinement_here, alias = alias).to_string());
-            continue;
-        }
 
-        let digest = declaration.digest();
-        let changed = approvals.changed(alias, &digest);
-        // A recorded project answers for a server nobody has seen here, and not for one somebody
-        // saw as something else: that is a server they have not seen either (SERVERS-5).
-        let answered = approvals.approves(&digest)
-            || (projects.contains(project) && !changed)
-            || asking == Asking::Bypass;
-        if !answered {
+        let changed = approvals.changed(alias, &declaration.digest());
+        if !(covered || asking == Asking::Bypass) {
             let nobody = match asking {
                 Asking::OneShot => Some(t!(servers_nobody_in_a_one_shot, alias = alias)),
                 _ if !person.present => Some(t!(servers_nobody_at_a_terminal, alias = alias)),
@@ -343,6 +343,86 @@ fn settle<R: BufRead, W: Write>(
     plans
 }
 
+/// Why a requested server is not started, found before anybody is asked about it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Unstarted {
+    /// The declaration does not resolve to anything to start here, and why.
+    Unplanned(String),
+    /// The machine's managed layer keeps it from starting, and why (SERVERS-12).
+    Refused(String),
+    /// A local server, on a platform with no confinement for one.
+    Unconfined,
+}
+
+/// A requested server as a session in `project` finds it before a question is put: how it would
+/// start, and whether an answer the person already gave covers it.
+///
+/// The one place both are decided, so a session and SERVERS-14's report cannot disagree about
+/// which servers start unasked. The managed layer is read once the program is the path it resolved
+/// to, so bypassing reaches a refused server no more than an answer would (SERVERS-12,
+/// SERVERS-13). A recorded project answers for a server nobody has seen here, and not for one
+/// somebody saw as something else: that is a server they have not seen either (SERVERS-5).
+#[allow(clippy::too_many_arguments)]
+fn assess(
+    alias: &str,
+    declaration: &Declaration,
+    project: &Path,
+    approvals: &Approvals,
+    projects: &Projects,
+    managed: &Managed,
+    environment: &dyn Fn(&str) -> Option<OsString>,
+    prelude: Option<Prelude>,
+) -> Result<(Plan, bool), Unstarted> {
+    let plan = planned(declaration, environment).map_err(Unstarted::Unplanned)?;
+    if let Some(reason) = refused(managed, &plan) {
+        return Err(Unstarted::Refused(reason));
+    }
+    if matches!(plan, Plan::Stdio { .. }) && prelude.is_none() {
+        return Err(Unstarted::Unconfined);
+    }
+    let digest = declaration.digest();
+    let covered = approvals.approves(&digest)
+        || (projects.contains(project) && !approvals.changed(alias, &digest));
+    Ok((plan, covered))
+}
+
+/// What a session started in `project` holds for a server its settings request, before anybody
+/// is asked anything (SERVERS-9, SERVERS-14).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Grant {
+    /// An answer the person gave covers it, so the session starts it and holds the grant naming it.
+    Held,
+    /// Nothing covers it, so a session at a terminal asks, and holds the grant only after a yes.
+    Asked,
+    /// No session here starts it, so none holds a grant for it.
+    Withheld(Unstarted),
+}
+
+/// SERVERS-14's capability for one requested server, read without starting it.
+pub(crate) fn grant(
+    alias: &str,
+    declaration: &Declaration,
+    project: &Path,
+    approvals: &Approvals,
+    projects: &Projects,
+    managed: &Managed,
+) -> Grant {
+    match assess(
+        alias,
+        declaration,
+        project,
+        approvals,
+        projects,
+        managed,
+        &|name| std::env::var_os(name),
+        Prelude::current(),
+    ) {
+        Ok((_, true)) => Grant::Held,
+        Ok((_, false)) => Grant::Asked,
+        Err(unstarted) => Grant::Withheld(unstarted),
+    }
+}
+
 /// The requested aliases, as one list.
 fn aliases(requested: &[(PathBuf, String)]) -> String {
     requested
@@ -355,7 +435,7 @@ fn aliases(requested: &[(PathBuf, String)]) -> String {
 /// A settings file as the person knows it: relative to the project where it is inside it.
 ///
 /// `project` has its links followed, so the file is compared with its own followed too.
-fn named(file: &Path, project: &Path) -> String {
+pub(crate) fn named(file: &Path, project: &Path) -> String {
     let file = file.canonicalize().unwrap_or_else(|_| file.to_path_buf());
     file.strip_prefix(project)
         .unwrap_or(&file)

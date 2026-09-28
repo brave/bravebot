@@ -319,6 +319,9 @@ doctor-managed-pinned = { $names } from { $path }
 # A file somebody wrote that holds nothing this layer may pin. Reported, because the alternative
 # leaves them unable to tell it from a file that was never found.
 doctor-managed-nothing = { $path }, pinning nothing
+# The heading over what `bravebot mcp list` reports, which `doctor` reports too.
+doctor-mcp-servers = MCP servers declared in { $path }, for a session started in { $project }
+doctor-mcp-none = no MCP server is declared in { $path }, for a session started in { $project }
 doctor-leo = leo
 doctor-subscription =
     { $environment } subscription imported, { $unspent } of { $total } credentials unspent
@@ -583,6 +586,28 @@ mcp-list-unusable =
         [one] one declaration in { $path } cannot be used
        *[other] { $count } declarations in { $path } cannot be used
     }
+# Under the heading of `bravebot mcp list`: the directory whose session the lines under each server
+# answer for.
+mcp-list-here = for a session started in { $path }
+# Under each server in `bravebot mcp list` and `doctor`: which checkout requested it, and whether a
+# session started here holds the grant to call it.
+mcp-not-requested-here = not requested here, so no session here holds a grant to call it
+mcp-requested-held =
+    requested by { $file }: a session here starts it unasked, and holds a grant to call it
+mcp-requested-asked =
+    requested by { $file }: a session at a terminal here asks before starting it, and holds a
+    grant to call it only after a yes
+mcp-requested-withheld =
+    requested by { $file }, and no session here starts it or holds a grant to call it: { $reason }
+# Where the server's own line already says why.
+mcp-requested-not-started =
+    requested by { $file }, and no session here starts it or holds a grant to call it
+mcp-requested-undeclared = requested by { $file }, and not declared: bravebot mcp add declares it
+mcp-no-confinement-here = this platform has no confinement for a local MCP server yet
+# The standing answers recorded for a server in this directory: answer 2 at either question.
+mcp-standing-project = answered here: use every MCP server this project requests
+mcp-standing-tools = answered here: call { $tools } without asking
+mcp-standing-none = nothing is answered for it here
 
 
 ## The MCP servers a session starts with, and why one it was asked for is not among them
