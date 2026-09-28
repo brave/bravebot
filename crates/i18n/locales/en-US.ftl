@@ -295,6 +295,15 @@ doctor-permissions-count =
        *[other] { $count } rules
     }
 doctor-permissions-unreadable = unreadable rule
+# A key a skill file declared that nothing here reads. The skill is its file's path and the keys are
+# that file's own words, joined with a comma, both from a source somebody vouched for. A line rather
+# than a silence, so the next key somebody writes is not another quiet no-op.
+doctor-skill-key-unread = unread key
+doctor-skill-keys-unread =
+    { $count ->
+        [one] { $skill } declares { $keys }, which nothing here reads
+       *[other] { $skill } declares { $keys }, none of which anything here reads
+    }
 # A file that configures a gateway names no variables, and reporting that as an absent file would
 # describe a file the person is looking at.
 doctor-settings-no-variables = settings.json, naming no variables
@@ -2092,6 +2101,20 @@ delegate-memory-not-a-slug = { $definition } keeps no memory: a definition keepi
 # person's own ~/.bravebot, as it does for a session in the home directory. The definition is its
 # file's path, and ~/.bravebot stays as it is.
 delegate-memory-in-home = { $definition } keeps no memory here: in this directory its memory would be inside ~/.bravebot, which no write can leave untrusted
+
+# What a skill file named beyond its name and description. The skill is its file's path and the
+# model and the effort are that file's own words, all three from a source somebody vouched for.
+# An effort word naming none of the five levels. The levels are this program's own names for them,
+# joined with a comma, and are not translated: they are what a file has to write to be understood.
+skill-effort-not-a-level = { $skill } asks for effort { $effort }, which is none of { $levels }, so its rounds keep this session's
+# A skill was loaded and asks the rest of the turn of a model of its own, over whatever the session
+# was running. Said because a switch nobody is told about is the person's money spent on a choice
+# they did not make.
+skill-asks-a-model = { $skill } asks the rest of this turn of { $model }
+skill-asks-an-effort = { $skill } asks the rest of this turn at { $effort } effort
+# The skill loads and the turn goes on as it was, rather than stopping: a skill is not the thing the
+# person asked for, so a model they cannot reach is a line of its file that does nothing.
+skill-model-needs-sign-in = { $skill } asks for { $model }, which needs a sign-in first, so its rounds keep this session's model
 
 # Advisory checks shown only in a Bravebot source checkout.
 doctor-development = development environment { $path }

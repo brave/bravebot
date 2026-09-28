@@ -31851,3 +31851,188 @@ fn a_redirection_into_a_memory_is_recorded_before_it_opens_it() {
         "a memory a line left untrusted was not recorded"
     );
 }
+
+/// Write a project skill whose frontmatter carries the lines given, so a test can say what the file
+/// declares beyond its name and description.
+fn write_project_skill_declaring(root: &std::path::Path, name: &str, lines: &str) {
+    let at = root.join(".bravebot/skills").join(name);
+    std::fs::create_dir_all(&at).expect("create skill directory");
+    std::fs::write(
+        at.join("SKILL.md"),
+        format!("---\nname: {name}\ndescription: when to use it\n{lines}---\n\nthe body\n"),
+    )
+    .expect("write skill");
+}
+
+/// A skill's model and effort reach the requests made after it is loaded, and they win over a
+/// session where the person chose both. The rounds before the call are asked at the session's, since
+/// the skill was not in force yet.
+///
+/// A skill asking for a cheaper model than the person picked is the case the keys are for, so a
+/// precedence that let the session's choice stand would leave both lines doing nothing on exactly
+/// the turn they were written for. The alias is resolved the way the settings key's value is:
+/// `haiku` names a tier, and a service that has never heard of the word answers with whatever it
+/// substitutes.
+#[test]
+fn a_loaded_skill_asks_the_rounds_after_it_of_its_own_model_and_effort() {
+    let scratch = Scratch::new("skill-runs-as");
+    write_project_skill_declaring(&scratch.path, "cheap", "model: haiku\neffort: low\n");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("load_skill", r#"{"name":"cheap"}"#),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let outcome = turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("do the work")
+            .with_model(Some("claude-3-sonnet".to_string()))
+            .with_effort(Some(bravebot_aichat::protocol::Effort::Xhigh)),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let first = received.recv().expect("first request");
+    assert!(
+        first.contains(r#""model":"claude-3-sonnet""#)
+            && first.contains(r#""reasoning_effort":"xhigh""#),
+        "the round before the skill was loaded was not the session's: {first}"
+    );
+
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains(r#""model":"claude-3-haiku""#),
+        "the skill's model did not reach the round after it was loaded: {second}"
+    );
+    assert!(
+        second.contains(r#""reasoning_effort":"low""#),
+        "the skill's effort did not reach the round after it was loaded: {second}"
+    );
+
+    // Said out loud, because a switch nobody is told about is the person's money spent on a choice
+    // they did not make, and the name in the line is the one their file wrote.
+    let said = outcome.notices.join(" | ");
+    assert!(
+        said.contains("cheap") && said.contains("haiku"),
+        "the switch was not reported: {said}"
+    );
+    assert!(
+        said.contains("low"),
+        "the effort switch was not reported: {said}"
+    );
+}
+
+/// A skill that named neither key leaves the session's own choice in force, so a turn that loads one
+/// sends what it was already sending. Absence has to stay absence: a skill read as naming the
+/// configured default would move every session off an explicit choice the moment it loaded anything.
+#[test]
+fn a_skill_naming_neither_key_leaves_the_session_its_own_choice() {
+    let scratch = Scratch::new("skill-runs-as-silent");
+    write_project_skill(&scratch.path, "plain", "plain", "a body");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("load_skill", r#"{"name":"plain"}"#),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let outcome = turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("do the work").with_model(Some("claude-3-sonnet".to_string())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains(r#""model":"claude-3-sonnet""#),
+        "loading a skill moved the turn off the model the person chose: {second}"
+    );
+    assert!(
+        !second.contains("reasoning_effort"),
+        "a level was sent by a turn that was asked for none: {second}"
+    );
+    assert!(
+        outcome.notices.is_empty(),
+        "a skill that asked for nothing was reported as a switch: {:?}",
+        outcome.notices
+    );
+}
+
+/// A skill naming a model this machine has not signed in to is said and the skill still loads, on
+/// whatever the session was already running.
+///
+/// The other half of the precedence: a skill's word wins where it can be honoured and changes
+/// nothing where it cannot. An addressed definition naming an unreachable model refuses the turn
+/// instead (ADDRESS-11), because that definition is what the person asked for; a skill is an
+/// adjustment to how a turn already under way is done, so the turn goes on.
+#[test]
+fn a_skill_whose_model_needs_a_sign_in_keeps_the_sessions_model_and_says_so() {
+    let scratch = Scratch::new("skill-model-sign-in");
+    write_project_skill_declaring(&scratch.path, "on-bedrock", "model: haiku\n");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("load_skill", r#"{"name":"on-bedrock"}"#),
+        reply_with("understood"),
+    ]);
+    let config = Config::from_lookup(|key| match key {
+        "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+        "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+        "BRAVE_AI_CHAT_ENDPOINT" => Some(endpoint.clone()),
+        bravebot_config::env_var::USE_BEDROCK => Some("1".into()),
+        bravebot_config::env_var::AWS_REGION => Some("us-west-2".into()),
+        bravebot_config::env_var::BEDROCK_HAIKU_MODEL => Some("haiku-arn".into()),
+        // A profile no machine has, so no session exists whoever runs this.
+        bravebot_config::env_var::AWS_PROFILE => Some("a-profile-no-machine-has".into()),
+        _ => None,
+    })
+    .expect("config");
+    assert_eq!(
+        config.model_named("haiku"),
+        "haiku-arn",
+        "the skill's model would not have needed a sign-in"
+    );
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let outcome = turn::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("do the work").with_model(Some("custom-parent-model".to_string())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains(r#""model":"custom-parent-model""#),
+        "the round after the skill loaded left the session's model: {second}"
+    );
+
+    let said = outcome.notices.join(" | ");
+    assert!(
+        said.contains("on-bedrock") && said.contains("haiku") && said.contains("sign-in"),
+        "nobody was told the skill's model could not be reached: {said}"
+    );
+}

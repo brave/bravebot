@@ -1903,6 +1903,58 @@ fn report_mcp_declared(settings: &bravebot_config::Settings, ending: &mut Ending
     }
 }
 
+/// One line per skill whose file declares a key nothing here reads.
+///
+/// Such a key stops nothing: the skill loads with it ignored, which is what lets one directory serve
+/// more than one agent. What it needs is to be said somewhere, because its author believes the line
+/// is in force and no session tells them otherwise (SKILL-16). Here rather than in a session notice,
+/// because almost every skill written for another agent carries one and a line repeated every turn
+/// about something that is working is how a notice stops being read.
+///
+/// The set is read the way a turn starting in this directory would read it, through the same gate
+/// and the same trust map, so no skill a turn would drop is named and one it would offer is. A
+/// project whose directory nobody has vouched for offers none, which is not silence about a
+/// mistake: it is the answer a session there would give too.
+///
+/// Nothing is said about a skill whose every key is read, which is the ordinary case, so a report on
+/// a machine with nothing to fix carries no skills section at all.
+fn skill_keys_unread(workspace: &Workspace, home: Option<&Path>, trust: TrustStore) -> Vec<String> {
+    bravebot_agent::skills::resolved(workspace, home, trust, &mut bravebot_core::event::NullSink)
+        .iter()
+        .filter(|skill| !skill.unread.is_empty())
+        .map(|skill| {
+            aligned(
+                t!(doctor_skill_key_unread),
+                t!(
+                    doctor_skill_keys_unread,
+                    skill = &skill.origin,
+                    count = skill.unread.len() as i64,
+                    keys = skill.unread.join(", ")
+                ),
+                FACT,
+            )
+        })
+        .collect()
+}
+
+/// The trust map a session starting in this directory would open with, without asking anybody.
+///
+/// A remembered yes answers here as it answers there (TRUST-23); anything else is a directory
+/// nothing has vouched for, which is what an unanswered question leaves. Nothing is written and
+/// nobody is asked: `doctor` changes nothing and puts no question.
+fn trust_already_answered(root: &Path) -> TrustStore {
+    let kept = bravebot_agent::trusted::record_for(
+        bravebot_agent::home::directory().as_deref(),
+        bravebot_agent::home::profile().as_deref(),
+        root,
+    )
+    .and_then(|(store, identity)| store.kept(&identity));
+    match kept {
+        Some(_) => bravebot_tui::trust_prompt::trusting_the_workspace(root),
+        None => TrustStore::new(bravebot_agent::workspace::key_of(root)),
+    }
+}
+
 /// Report whether configuration is usable, without revealing the signing key.
 fn doctor() -> ExitCode {
     // What the report ends on, rather than whether it passed: CLI-6 gives a configuration this
@@ -2186,6 +2238,22 @@ fn doctor() -> ExitCode {
     }
     if failed {
         ending = ends_on(ending, Ending::Failed);
+    }
+
+    // Outside the configuration block as well: which skills a session here loads is read off two
+    // directories and a trust map, and a key nothing reads is wrong whatever the configuration says.
+    if let Ok(workspace) = current_workspace(&settings) {
+        let lines = skill_keys_unread(
+            &workspace,
+            bravebot_agent::home::directory().as_deref(),
+            trust_already_answered(workspace.root()),
+        );
+        if !lines.is_empty() {
+            println!();
+        }
+        for line in lines {
+            println!("{line}");
+        }
     }
 
     println!();
