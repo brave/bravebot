@@ -225,6 +225,10 @@ from the rule a yes writes and from no other: a path an earlier session's writes
 directory it opened, a file it vouched for, and a no given inside the tree are all left behind with
 that session, as they are when the person presses `y` again.
 
+[MEMORY-5](definition-memory.md#MEMORY-5) specifies one path that is not left behind, and nothing
+yet builds it: a definition's memory a write left untrusted is recorded outside the session, and a
+fresh session in that directory starts with that path untrusted whatever the person answers.
+
 **What the record keeps is the name, not the key.** A rule inside the project is written down
 relative to it and a rule outside is written down in full, and a resume reads the relative ones
 under the directory it is resuming into. The map holds full paths (TRUST-2), and a record of those
@@ -1134,7 +1138,9 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   gone, so a file one session marked untrusted is read as trusted by the next session that vouches
   for the directory. The alternative is a per-directory map, which is a directory that trusts
   itself. If a file holds content you do not trust, the answer is to say no to the directory, or
-  to not leave it there.
+  to not leave it there. A definition's memory is the exception
+  [MEMORY-5](definition-memory.md#MEMORY-5) proposes and nothing yet builds, since it is read into
+  the next session's prompt without anybody asking for it.
 - **A file another process drops into a trusted directory is trusted.** TRUST-2 makes the rule
   about the path, so `npm install`, `git pull`, an editor, a background daemon, or a program the
   agent was allowed to run can all put a file inside a vouched-for tree and it will be read as

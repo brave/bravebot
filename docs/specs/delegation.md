@@ -44,7 +44,7 @@ lands.
 | | |
 |---|---|
 | Tools | its kind's, which are what its capabilities reach, and a way to delegate only above the bottom of the tree |
-| Memory | none of its parent's exchange: it begins with the task it was given |
+| Memory | none of its parent's exchange: it begins with the task it was given, and with the memory its definition keeps where [MEMORY-4](definition-memory.md#MEMORY-4) gives it one, which nothing yet builds |
 | Conversation | a loop of its own, bounded |
 | Reads | whatever its capabilities and the paths a person vouched for allow |
 | Writes | files, each shown to a person first, and slots in a quarantine of its own |
@@ -650,6 +650,10 @@ the last round what it refuses on the first. They are held to the ceiling of the
 replacement is loaded as, so a project writing a `worker`'s number under the name of a `reader` a
 person wrote gets a `reader`'s ceiling, and is told so ([DELEGATE-6](#DELEGATE-6)).
 
+The `memory:` key is taken over as the body is, because a memory decides what a run is told and
+never what it may do. [MEMORY-2](definition-memory.md#MEMORY-2) specifies that key, and nothing yet
+builds it.
+
 DELEGATE-19 says a checked-in file granting a capability would make the file the author of
 authority rather than the person who vouched for it, and a wider `kind:` for a name that person
 already defined is that grant written another way. The vouch that let the project's file be read at
@@ -703,8 +707,10 @@ definition and is not: by then the source it came from is one somebody vouched f
 named is its path rather than the name it asked for. A file from a directory nobody vouched for is
 never reached at all, and is counted with the rest.
 
-There is no length limit and no character class. A name is compared, never resolved against
-anything, so what it may hold is [SKILL-8](skills.md#SKILL-8)'s question and not this one.
+There is no length limit and no character class for a definition that keeps no memory. Its name is
+compared, never resolved against anything, so what it may hold is [SKILL-8](skills.md#SKILL-8)'s
+question and not this one. The name of a definition that keeps a memory also names a file, and
+[MEMORY-3](definition-memory.md#MEMORY-3), which nothing yet builds, holds it to a slug.
 
 `verified-by: bravebot_agent::agents::a_name_that_is_or_folds_to_a_colon_is_refused`
 

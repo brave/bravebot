@@ -207,6 +207,10 @@ more than what it leaves behind:
   process killed with the prompt open leaves it behind. [VET-4](tools/vet-content.md#VET-4) governs
   it.
 
+[MEMORY-5](definition-memory.md#MEMORY-5) adds a ninth, which nothing yet builds: the record that a
+definition's memory was left untrusted, naming its path and nothing else, kept under `~/.bravebot`
+so that the next session does not read what this one poisoned as trusted.
+
 **Why.** A stated limit is worth more than an unstated one. Someone who knows the third of these
 can decide not to open an editor; someone who assumed the mode covered it has been misled by their
 own tool.

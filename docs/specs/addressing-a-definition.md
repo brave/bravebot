@@ -45,7 +45,9 @@ again for that turn and the kernel decides the rest in `Policy::address`: the ca
 offered, and the refusal of a name that is not there. The driver offers only those tools and refuses
 a call to any other by name, and the interface draws the reply under the name the driver matched.
 
-`bravebot -p` and the desktop front end address nothing. Both are open questions below.
+`bravebot -p` and the desktop front end address nothing. The first is an open question below.
+[MEMORY-9](definition-memory.md#MEMORY-9) specifies that every turn in a desktop bot's conversation
+addresses the bot's definition, and nothing yet builds it.
 
 ## The comparison, and what it is worth
 
@@ -70,8 +72,9 @@ the three clauses standing in the way is about a run nobody is watching. That is
 ### ADDRESS-1: what a person addresses is a run of their own, and never a delegate
 
 A definition supplies four things to the run a person addresses: the prompt, the narrowing, the
-model, and the skills it names ([DELEGATE-23](delegation.md#DELEGATE-23)). It supplies nothing
-else, and in particular it does not make the run a delegate. The person is at the keyboard, so the
+model, and the skills it names ([DELEGATE-23](delegation.md#DELEGATE-23)).
+[MEMORY-4](definition-memory.md#MEMORY-4) adds a fifth, the memory it keeps, which nothing yet
+builds. It supplies nothing else, and in particular it does not make the run a delegate. The person is at the keyboard, so the
 run holds the screen, the confirmer, the task list and the way to ask a question, exactly as any
 turn of theirs does.
 
@@ -129,6 +132,11 @@ screen as six characters.
 **Why.** An addressed run works under a prompt the session's planner did not write and under a
 narrowing it did not choose, which is a decision a turn is not allowed to take on its own. The
 endorsement for it is the keystroke, so the keystroke is the only thing that may produce one.
+
+[MEMORY-9](definition-memory.md#MEMORY-9), which nothing yet builds, adds a second source: a turn
+the desktop front end sends in a bot's conversation addresses that bot's definition. The name comes
+from the conversation a person opened rather than from a line, and nothing a turn produced chooses
+it, so what stands in for the keystroke is making the bot and opening its conversation.
 
 `verified-by: bravebot_tui::app::a_line_addressing_a_definition_queued_while_a_turn_ran_addresses_it_when_the_turn_ends`
 `verified-by: by-construction (a name reaches a turn only through Session::address; its one caller settles the Action::Address that only the /agent branch of dispatch_command returns; dispatch_command is reached from the input box's key handler and from the queue that handler filled; and the turn takes the name off the session as it starts, so nothing a turn produced sets one)`
@@ -255,7 +263,10 @@ watch's fire starts is a turn of the session's planner ([ADDRESS-10](#ADDRESS-10
 everything the session holds. A reader addressed so that nothing is written could otherwise arm a
 turn that writes, with nobody typing anything. Carrying the name onto that later turn would keep
 the narrowing, and would make a turn nobody typed an addressed one, which is the question
-[ADDRESS-3](#ADDRESS-3) answers no to for now.
+[ADDRESS-3](#ADDRESS-3) answers no to for now. [MEMORY-9](definition-memory.md#MEMORY-9), which
+nothing yet builds, would address one kind of turn nobody typed, the desktop's own turn in a bot's
+conversation, and it is not this kind: the run chooses a later look, and chooses neither the
+desktop's turn nor what sends it.
 
 **The cost of this clause is that one file reads two ways.** A definition naming `ask_user` under
 `tools:` is a definition loaded without it when a planner spawns it, and with it when a person
@@ -347,14 +358,13 @@ the one that matched the name.
 
 - **Whether a definition may say that it is meant to be addressed.** Nothing above lets a file
   exclude itself from what a planner may select, or from what a person may address. A field saying
-  which is a fifth thing a definition means, and the argument for it is that a helper written for
+  which is one more thing a definition means, and the argument for it is that a helper written for
   one planner to call is noise in the list a person reads. The argument against is that the set is
   small and a person reading a name they do not recognise loses nothing by it.
 
-- **What the desktop front end does with this.** Its bots carry a name, a purpose, a model and a
-  memory file, which is most of a definition plus a store of what happened. Whether those become
-  definitions addressed this way depends on this surface existing first, and on a definition
-  gaining a memory and a checkout of its own, which is issue #727 and not settled here.
+- **What the desktop front end does with this.** [definition-memory.md](definition-memory.md)
+  proposes an answer: a definition keeps a memory, and each desktop bot becomes a definition its
+  conversation addresses. Nothing of it is built, so until it is the desktop addresses nothing.
 
 ## Known costs
 

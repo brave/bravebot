@@ -53,6 +53,10 @@ There is no search of parent directories and no nested instructions file. A file
 is an ordinary file, read only when something asks for it by name, or when the source names it,
 which is [INSTR-8](#INSTR-8).
 
+[MEMORY-4](definition-memory.md#MEMORY-4) specifies a seventh, which nothing yet builds: a
+definition's memory, `<workspace>/.bravebot/memory/<name>.md`, read for a run under the definition
+that keeps it and for no other.
+
 **Why no walking upwards.** A rule that walked upwards would pick up instructions from whatever
 happened to be above a project on this machine, which is a different set of instructions on the
 next machine.
