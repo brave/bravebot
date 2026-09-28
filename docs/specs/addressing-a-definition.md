@@ -46,8 +46,8 @@ offered, and the refusal of a name that is not there. The driver offers only tho
 a call to any other by name, and the interface draws the reply under the name the driver matched.
 
 `bravebot -p` and the desktop front end address nothing. The first is an open question below.
-[MEMORY-9](definition-memory.md#MEMORY-9) specifies that every turn in a desktop bot's conversation
-addresses the bot's definition, and nothing yet builds it.
+[MEMORY-10](definition-memory.md#MEMORY-10) specifies that every turn in a desktop bot's
+conversation addresses the bot's definition, and nothing yet builds it.
 
 ## The comparison, and what it is worth
 
@@ -73,10 +73,10 @@ the three clauses standing in the way is about a run nobody is watching. That is
 
 A definition supplies four things to the run a person addresses: the prompt, the narrowing, the
 model, and the skills it names ([DELEGATE-23](delegation.md#DELEGATE-23)).
-[MEMORY-4](definition-memory.md#MEMORY-4) adds a fifth, the memory it keeps, which nothing yet
-builds. It supplies nothing else, and in particular it does not make the run a delegate. The person is at the keyboard, so the
-run holds the screen, the confirmer, the task list and the way to ask a question, exactly as any
-turn of theirs does.
+[MEMORY-4](definition-memory.md#MEMORY-4) adds a fifth, which nothing yet builds: where the memory
+it keeps is, which the run reads itself. It supplies nothing else, and in particular it does not
+make the run a delegate. The person is at the keyboard, so the run holds the screen, the confirmer,
+the task list and the way to ask a question, exactly as any turn of theirs does.
 
 **Why.** The clauses in [delegation.md](delegation.md) that would forbid this are each about a run
 nobody is looking at. A delegate puts no question to a person because its task came from a planner
@@ -133,10 +133,10 @@ screen as six characters.
 narrowing it did not choose, which is a decision a turn is not allowed to take on its own. The
 endorsement for it is the keystroke, so the keystroke is the only thing that may produce one.
 
-[MEMORY-9](definition-memory.md#MEMORY-9), which nothing yet builds, adds a second source: a turn
-the desktop front end sends in a bot's conversation addresses that bot's definition. The name comes
-from the conversation a person opened rather than from a line, and nothing a turn produced chooses
-it, so what stands in for the keystroke is making the bot and opening its conversation.
+[MEMORY-10](definition-memory.md#MEMORY-10), which nothing yet builds, adds a second source: a
+turn in a desktop bot's conversation addresses that bot's definition. The name comes from the
+conversation a person opened rather than from a line, and nothing a turn produced chooses it, so
+what stands in for the keystroke is making the bot and opening its conversation.
 
 `verified-by: bravebot_tui::app::a_line_addressing_a_definition_queued_while_a_turn_ran_addresses_it_when_the_turn_ends`
 `verified-by: by-construction (a name reaches a turn only through Session::address; its one caller settles the Action::Address that only the /agent branch of dispatch_command returns; dispatch_command is reached from the input box's key handler and from the queue that handler filled; and the turn takes the name off the session as it starts, so nothing a turn produced sets one)`
@@ -263,10 +263,10 @@ watch's fire starts is a turn of the session's planner ([ADDRESS-10](#ADDRESS-10
 everything the session holds. A reader addressed so that nothing is written could otherwise arm a
 turn that writes, with nobody typing anything. Carrying the name onto that later turn would keep
 the narrowing, and would make a turn nobody typed an addressed one, which is the question
-[ADDRESS-3](#ADDRESS-3) answers no to for now. [MEMORY-9](definition-memory.md#MEMORY-9), which
-nothing yet builds, would address one kind of turn nobody typed, the desktop's own turn in a bot's
-conversation, and it is not this kind: the run chooses a later look, and chooses neither the
-desktop's turn nor what sends it.
+[ADDRESS-3](#ADDRESS-3) answers no to for now. [MEMORY-10](definition-memory.md#MEMORY-10), which
+nothing yet builds, would address two kinds of turn nobody typed in a bot's conversation, the
+desktop's own turn and the fire of a watch a person armed there, and neither is this kind: the run
+chooses a later look, and chooses neither of those.
 
 **The cost of this clause is that one file reads two ways.** A definition naming `ask_user` under
 `tools:` is a definition loaded without it when a planner spawns it, and with it when a person
@@ -340,6 +340,10 @@ time.
 
 A reply produced by an addressed run is drawn under the definition's name, and the name is the one
 the driver resolved rather than anything the reply says about itself.
+
+[MEMORY-10](definition-memory.md#MEMORY-10), which nothing yet builds, draws a desktop bot's reply
+under the name the bot is shown under instead. That name comes from the row the person opened, as
+the definition's name does, so no reply chooses it there either.
 
 **Why.** A reply is model output. An interface reading one to decide which definition produced it
 would be taking that decision from model output, which is the thing this repository refuses

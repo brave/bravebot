@@ -42,7 +42,9 @@ purpose reaches a turn as a briefing file the desktop composes under its own dat
 hands over as a dropped file, on the first turn of a session, after a compaction, and after a run
 of turns in which its memory did not change. Its memory is a file in its folder,
 `.bravebot-ui/bots/<slug>.md`, which the briefing names and the bot reads and writes with its
-ordinary tools. The desktop addresses no definition.
+ordinary tools. The desktop keeps up to thirty earlier versions of that file in its own data
+directory, and a person can edit the memory and restore an earlier version from a panel. The
+desktop addresses no definition.
 
 ## The comparison
 
@@ -54,14 +56,15 @@ edit tools. `isolation: worktree` runs a subagent in a temporary git worktree br
 default branch, removed afterwards if nothing in it changed. No key names a fixed checkout: a
 subagent starts in the conversation's working directory.
 
-Two of those cannot be taken as they are. A key that turns on a write tool is a checked-in file
+Three of those cannot be taken as they are. A key that turns on a write tool is a checked-in file
 choosing what a run may reach, which [DELEGATE-19](delegation.md#DELEGATE-19) refuses for `tools:`
-and [MEMORY-6](#MEMORY-6) refuses here. A memory under the home directory is a file no turn can
-write, since a turn's writes stay in its working directory and the directories a person opened
-([TRUST-10](trust-map.md#TRUST-10)), and one the map could not mark untrusted if a turn could,
-since the map does not govern that directory ([TRUST-11](trust-map.md#TRUST-11)). The rest is
-taken: the key's name, its `project` and `local` values, one memory per definition name, and a
-bounded head of it in the prompt.
+and [MEMORY-6](#MEMORY-6) refuses here. A memory in the system prompt would put words a run wrote
+where a delegate's prompt keeps its definition's, and no word a planner wrote goes there
+([DELEGATE-5](delegation.md#DELEGATE-5)), so [MEMORY-4](#MEMORY-4) names the file and the run reads
+it. A memory under the home directory is outside the map ([TRUST-11](trust-map.md#TRUST-11)): a
+turn writes there only once a person opens that directory ([TRUST-10](trust-map.md#TRUST-10)), and
+a write there could not leave the file untrusted. The rest is taken: the key's name, its `project`
+and `local` values, and one memory per definition name.
 
 ## Which half is a file
 
@@ -71,7 +74,7 @@ bounded head of it in the prompt.
 | Kept in | What | Why there |
 |---|---|---|
 | the definition file | its name, description, kind, tools, model, skills, rounds and `memory:`, and the purpose as its body | each says what the bot is for or narrows what it may reach, and each means the same on every machine |
-| the desktop's store | the name it is shown under, its folder, its avatar, its session and every conversation, the compaction and memory watermarks and the count of quiet turns, and when it was archived, made and last changed | each is a fact about one machine or a record of what happened |
+| the desktop's store | the name it is shown under, its folder, its avatar, its session and every conversation, how much compaction has taken from that session, and when it was archived, made and last changed | each is a fact about one machine or a record of what happened |
 
 The memory itself is in neither. It is a file in the checkout ([MEMORY-2](#MEMORY-2)).
 
@@ -92,13 +95,14 @@ calls the bot is free text they may change, like its avatar.
 ## The memory
 
 <a id="MEMORY-2"></a>
-### MEMORY-2: `memory: project` keeps one file in the working directory, and no other value keeps one anywhere
+### MEMORY-2: `memory: project` or `local` keeps one file in the working directory, and no other value keeps one anywhere
 
 A definition with `memory: project` or `memory: local` keeps its memory in one file,
 `.bravebot/memory/<name>.md` under the session's working directory, named after the definition. A
 definition with no `memory:` key keeps none, as today. Any other value, `user` included, is a
 definition that loads and keeps no memory, and the turn says so, naming the definition's file and
-the value.
+the value. Where that path falls inside the person's own directory, `~/.bravebot`, as it does for a
+session in the home directory, no memory is kept either, and the turn says so.
 
 `project` and `local` are one file. In Claude Code they differ over whether the file is meant to be
 committed, and whether a file is committed is decided by the person and their ignore rules rather
@@ -108,8 +112,12 @@ The working directory is read each turn, so a session moved with `/cd` reads the
 it moved to.
 
 **Why the working directory.** It is where a run can write, and where the trust map records what a
-write did. A memory there is kept with the tools a run already has, through the gate every write
-already passes.
+write did. A memory there is kept with the tools a run already has, and a write its file tools make
+passes the gate every such write passes.
+
+**Why not inside the person's own directory.** The map does not govern it
+([TRUST-11](trust-map.md#TRUST-11)). A file there is trusted for being the person's, so neither a
+write nor the record [MEMORY-5](#MEMORY-5) keeps could leave a memory there untrusted.
 
 **Why `user` loads.** It is Claude Code's default. A definition written for it would otherwise not
 load here, which would lose the definition over where its notes go;
@@ -117,7 +125,7 @@ load here, which would lose the definition over where its notes go;
 for the same reason. It is said, because an author not told would believe a memory was being kept.
 
 **A later definition of the same name takes the key over**, with the body and the model
-([DELEGATE-20](delegation.md#DELEGATE-20)), because a memory changes what a run is told and not what
+([DELEGATE-20](delegation.md#DELEGATE-20)), because a memory changes what a run knows and never what
 it may do ([MEMORY-6](#MEMORY-6)). Two definitions of one name that both keep a memory keep the same
 one, since the file is named after the name.
 
@@ -132,7 +140,7 @@ not one loads and keeps no memory, and the turn says so, naming its file.
 
 **Why this narrow.** A name that cannot traverse is the floor. Lowercase is for a filesystem that
 folds case, where `Reviewer` and `reviewer` would be two definitions sharing one file. It is the
-class the desktop already holds its bots' names to, so a bot's name becomes a definition's name
+class the desktop already holds its bots' slugs to, so a bot's slug becomes a definition's name
 without being rewritten.
 
 This amends the sentence in [DELEGATE-21](delegation.md#DELEGATE-21) saying a name is never
@@ -142,45 +150,57 @@ that clause.
 `verified-by: none`
 
 <a id="MEMORY-4"></a>
-### MEMORY-4: the memory reaches the run through the trust map, and only as far as the map trusts it
+### MEMORY-4: the run is told where its memory is and what the map says of it, and reads it itself
 
-The memory is read before the turn, with the definitions, through the gate a project's `AGENTS.md`
-passes ([INSTR-5](instructions.md#INSTR-5)). What the run is told depends on what that read found:
+Before the turn, with the definitions, the driver asks the map about the memory's path. Trust is
+decided first and by the path alone, so a path the map does not trust is withheld whatever is or is
+not there. The run is told, in the driver's words:
 
-| The file | What the run is told |
+| The path | What the run is told |
 |---|---|
-| trusted | its path, and what it holds, up to 32 KiB cut at a line |
-| trusted, and longer than that | the same, and that the file goes on past what it was given |
-| not trusted | its path, and that it was withheld; a read of it is quarantined like any other |
-| not there | its path, and that nothing is kept yet |
+| not trusted | its path, and that the memory is withheld; a read of it is quarantined like any other |
+| trusted, and a link or reached through one | its path, and that it is not read |
+| trusted, and nothing is there | its path, and that nothing is kept yet |
+| trusted, and a file is there | its path, and that its notes are there to read |
 
-What it holds goes into the prompt the definition's body is in, after the body and before what the
-run cannot do, so that it displaces neither the guidance before it nor the limits after it
-([DELEGATE-5](delegation.md#DELEGATE-5)). It is never put in the conversation. This holds alike for
-a run a person addressed and for a delegate a planner spawned, since each is a run under the
-definition.
+That sentence goes after the definition's body and before what the run cannot do
+([DELEGATE-5](delegation.md#DELEGATE-5)), alike for a run a person addressed and for a delegate a
+planner spawned, since each is a run under the definition. What the memory holds reaches the run
+only through a read the run makes, on the map's terms, as any file's does. Nothing puts its bytes in
+the prompt or the conversation, and nothing keeps a copy of them under another path. The desktop's
+history of earlier versions is retired, and restoring one with it. Its panel still shows the file
+to the person, and a change they save there is written as a program they run writes a file.
 
-Nothing else reads the memory's bytes, and nothing copies them to another path.
+**Why the path and not the bytes.** A delegate's prompt holds the driver's words and its
+definition's body, and no word a planner wrote ([DELEGATE-5](delegation.md#DELEGATE-5)). A memory
+is words runs wrote. A planner in a vouched checkout writes one without being asked, and in the
+prompt of the next run under that definition its words would stand where that clause keeps the
+definition's. Read as a file, a memory is what any file a run reads is.
 
-**Why through the map and not around it.** A model writes the memory, and a turn that has met
-untrusted content writes untrusted data: the write asks the person, and the path stops being trusted
-([TRUST-4](trust-map.md#TRUST-4)). A memory put in the prompt whatever the map said would bring those
-bytes back as trusted context on the next turn, which is the round trip that table exists to close.
-The desktop found this once already. It named its bots' memory among the files it handed a turn,
-naming a path vouches for it, and a memory a write had left untrusted came back trusted on the next
-briefing.
+**Why through the map.** A write whose body is quarantined content leaves its path untrusted
+([TRUST-4](trust-map.md#TRUST-4)): content the run passed on by reference, or a processor's reading
+of something nobody vouched for. A memory handed to a run whatever the map said would bring those
+bytes back as trusted on the next turn, which is the round trip that table exists to close. What the
+planner writes in its own words is trusted, since it was never shown what the map does not trust
+([LABEL-9](labels.md#LABEL-9)). The desktop found the round trip once already. It named its bots'
+memory in every briefing, and naming a path vouches for it, so a memory a write had left untrusted
+came back trusted.
 
-**Why no copy.** The map keys by path. A copy under a path it has never recorded, such as a cache or
-a briefing, is read on that path's terms, and in a vouched checkout those are trusted: a copy is how
-untrusted bytes are laundered.
+**Why trust is decided first.** Whether a file is at a path nobody vouched for is something that
+directory decides, and the driver's words carry nothing such a directory decides.
 
-**Why a bound.** The memory is sent with every request of every turn under the definition. 32 KiB is
-about eight thousand tokens, which is where notes turn into a transcript, and the rest is one read
-away.
+**Why a link is not read.** The map keys a path by the name it is spelled with. A link at the
+memory's path to another file in the checkout would be read on the link's terms, whatever a write
+had left the file it points at, and the record [MEMORY-5](#MEMORY-5) keeps would name the link.
 
 **Why the path is said even when nothing else is.** The path is made from the working directory and
 the definition's name, which the driver already holds, and nothing in it is read out of the file. A
 run told nothing would take a withheld memory for an empty one and write over it.
+
+**Why no copy.** The map keys by path. A copy under a path it has never recorded, such as a cache, a
+briefing or a list of earlier versions, is read on that path's terms, and in a vouched checkout those
+are trusted. Restoring one could put back bytes a write had left untrusted, after a later write had
+made the path trusted again: a copy is how untrusted bytes are laundered.
 
 `verified-by: none`
 
@@ -191,21 +211,35 @@ The map belongs to the session ([TRUST-6](trust-map.md#TRUST-6)), so a fresh one
 an earlier session's writes marked untrusted. [trust-map.md](trust-map.md) accepts that as a cost
 for files in general. For a memory it does not hold.
 
-A write that leaves a memory's path untrusted is recorded under `~/.bravebot`, through the crate
-that owns the record, before the write lands, naming the path in full. A session opening in that
-directory starts with the path untrusted in its map, as though its own write had marked it, so the
-memory is withheld ([MEMORY-4](#MEMORY-4)) and a read of it is quarantined. A later write that leaves
-the path trusted takes the record away. An incognito session keeps the record too.
+A write that leaves a memory's path untrusted is recorded before the write lands, naming the path in
+full, in a file under `~/.bravebot` kept beside the remembered answers to the startup question and
+keyed as they are. The record also holds the old notes [MEMORY-11](#MEMORY-11) puts in it. Before
+every turn, each path the record names is untrusted in the session's map, as though the session's
+own write had marked it, so the memory is withheld ([MEMORY-4](#MEMORY-4)) and a read of it is
+quarantined. That holds however the session came to the directory: started there, cleared, resumed,
+reopened, or moved there with `/cd`.
+
+A path leaves the record when a session trusts it again: by a later write that leaves it trusted, or
+by a person's yes when a read of it is quarantined ([TRUST-8](trust-map.md#TRUST-8)). The record is
+kept in every session, incognito included.
 
 **Why a memory and not every file.** Every other file reaches a run because something asked to
-read it. A memory reaches the next session's prompt because that is what it is for, with nobody
-reading it first, and a fresh session is exactly the one the map's forgetting reaches. The cost the
-map accepts is a file somebody might read; a memory is a file certain to be read.
+read it. A memory is read because the driver tells every run under the definition where it is, and
+a fresh session is exactly the one the map's forgetting reaches. The cost the map accepts is a file
+somebody might read; a memory is a file certain to be read.
 
 **Why this is not the per-directory map the trust map refuses.** That map would be a directory that
 trusts itself. This record can only distrust, one path at a time, and it is kept with the person's
 own configuration rather than in the directory it is about, so no file in the checkout can take a
-line out of it.
+line out of it. It is the record trust-map.md's cost about a kept answer says would close that
+cost's second half, kept for memories alone.
+
+**Why before every turn.** A session's map is made at a start, a clear and a resume, and moved by
+`/cd`. A record read only as a session opened would reach the first of those and miss the rest.
+
+**Why a person's yes takes a path out.** The yes comes after they were shown the file, with what a
+check found in all of it, which is what vouching for any file is. A record that outlived the yes
+would take it back on the next turn.
 
 **Why before the write lands.** A session killed between the two would leave the bytes and no
 record, which is the case this clause is for.
@@ -220,15 +254,16 @@ in that directory, which [INCOG-3](incognito.md#INCOG-3) otherwise refuses, so
 <a id="MEMORY-6"></a>
 ### MEMORY-6: a memory is kept with the tools the run holds, and keeping one adds none
 
-A run updates its memory by writing the file with its ordinary tools, and the write passes the gate
-every write passes ([TRUST-4](trust-map.md#TRUST-4)). Keeping a memory adds no tool and no
-capability.
+A run updates its memory by writing the file with its ordinary tools, and a write its file tools
+make passes the gate every such write passes ([TRUST-4](trust-map.md#TRUST-4)). A program a run
+starts writes the memory as it writes any file, which the map does not see. Keeping a memory adds
+no tool and no capability.
 
-A `reader` or a `checker` holds no write ([DELEGATE-4](delegation.md#DELEGATE-4)), so a definition
-of either kind reads its memory and cannot change it, and it is told so with what else it cannot do.
-A delegate's write is shown to a person first, as every delegate's write is
-([DELEGATE-1](delegation.md#DELEGATE-1)). Two runs under one definition writing its memory at once
-meet as any two writers of one path do: the second is refused while the first is in progress.
+A `reader` writes nothing and runs nothing, so it cannot change its memory. A `checker` has no tool
+that writes a file ([DELEGATE-4](delegation.md#DELEGATE-4)). A delegate's write is shown to a person
+first, as every delegate's write is ([DELEGATE-1](delegation.md#DELEGATE-1)). Two runs under one
+definition writing its memory at once meet as any two writers of one path do: the second is refused
+while the first is in progress.
 
 **Why nothing is added.** A key that turned on a write tool would be a checked-in file choosing what
 a run may reach, which [ADDRESS-7](addressing-a-definition.md#ADDRESS-7) says a file may never do. A
@@ -268,45 +303,67 @@ own store ([MEMORY-1](#MEMORY-1)), and a bot's conversation is a session in that
 ## The desktop's bots
 
 <a id="MEMORY-8"></a>
-### MEMORY-8: a desktop bot is a definition in the person's own directory, plus a row the desktop keeps
+### MEMORY-8: making a desktop bot writes a definition in the person's own directory
 
-Making a bot writes a definition to `~/.bravebot/agents/<name>.md`, through the crate that owns that
-directory ([STATE-3](state-directory.md#STATE-3)). The name is the bot's slug. The description is
-the first line of its purpose, and the body is the whole purpose. The kind is `worker`, `memory:` is
-`project`, and the model is given where one was chosen. Nothing typed into the form becomes a key:
-the description is one line, and the body comes after the front matter closes.
+Making a bot writes a definition to `~/.bravebot/agents/<name>.md`. The crate that reads the
+person's definitions writes it, since a surface writes nothing into that directory itself
+([STATE-3](state-directory.md#STATE-3)), and nothing writes one there today. The name is the bot's
+slug. The description is the first line of its purpose that is not blank, and the body is the whole
+purpose. The kind is `worker`, `memory:` is `project`, and the model is given where one was chosen.
+The desktop's row names the definition and the folder.
 
-The file is created and never written over. A name some file in that directory already declares, or
-one of the kinds' own names ([DELEGATE-19](delegation.md#DELEGATE-19)), is taken, and the next free
-name with a number after it is used.
+Nothing typed into the form becomes a key. The description and the model are each written so that
+reading the file back gives exactly what was typed, and the body comes after the front matter
+closes. A model that is not one line, or a purpose with no line that is not blank, is refused, and
+no bot is made.
 
-Editing a bot's purpose or model rewrites those fields and leaves every other line of the file as it
-is, so a `tools:` line somebody added by hand survives an edit made in a form that does not show it.
-The desktop's row names the definition and the folder. A row whose definition no longer resolves,
-because the file was removed or no longer loads, runs nothing and says so, naming the definition.
+Making a bot never writes over a file. A name some file in that directory already declares, or one
+of the kinds' own names ([DELEGATE-19](delegation.md#DELEGATE-19)), is taken, and the next free name
+with a number after it is used.
 
 **Why the person's own directory.** A file there is trusted for being theirs
 ([SKILL-3](skills.md#SKILL-3)), whatever the bot's folder is. And it is outside every checkout, so
 a run cannot rewrite the definition it runs under, which is the reason the desktop keeps its
 briefing outside the folder today.
 
-**Why a worker that names no tools.** A bot's turn has that reach today, since the desktop
-addresses nothing: the session's own, with every server it reached
-([ADDRESS-7](addressing-a-definition.md#ADDRESS-7)). A person narrows it by editing the file.
+**Why a worker that names no tools.** A bot's turn has the session's reach today, since the desktop
+addresses nothing. A worker that names no tools keeps that reach, with every server the session
+reached ([ADDRESS-7](addressing-a-definition.md#ADDRESS-7)), less a later look and a watch, which an
+addressed run is never offered ([ADDRESS-8](addressing-a-definition.md#ADDRESS-8)). A person
+narrows it further by editing the file.
 
 `verified-by: none`
 
 <a id="MEMORY-9"></a>
-### MEMORY-9: every turn in a bot's conversation addresses the bot's definition
+### MEMORY-9: editing a bot rewrites only the fields the form shows
 
-Each turn the desktop sends in a bot's conversation names the bot's definition. The driver resolves
-and addresses that name as it does one typed after `/agent`
+Editing a bot's purpose or model rewrites the description, the body and the model, and leaves every
+other line of the file as it is, so a `tools:` line somebody added by hand survives an edit made in
+a form that does not show it. What is written is held to the terms [MEMORY-8](#MEMORY-8) holds a
+new bot to.
+
+**Why not the whole file.** The file is the person's as much as the desktop's. A form that wrote the
+whole file back would undo whatever it does not show, such as a narrowing somebody made by hand.
+
+`verified-by: none`
+
+<a id="MEMORY-10"></a>
+### MEMORY-10: every turn in a bot's conversation addresses the bot's definition
+
+Each turn in a bot's conversation names the bot's definition, and the driver resolves and addresses
+that name as it does one typed after `/agent`
 ([addressing-a-definition.md](addressing-a-definition.md)). That includes the turns the desktop
-composes itself, such as the one it sends after a compaction. The name comes from the row the person
-opened, never from the line they typed and never from a reply.
+composes itself, such as the one it sends after a compaction, and the turn a watch the person armed
+there fires. The name comes from the row the person opened, never from the line they typed and never
+from a reply. A row whose definition no longer resolves, because the file was removed or no longer
+loads, runs nothing and says so, naming the definition.
 
-The briefing file is retired. The purpose reaches the run as the definition's body and the memory
-as [MEMORY-4](#MEMORY-4) puts it, which leaves the briefing nothing to carry.
+A reply is drawn in the bot's window under the name the bot is shown under, which comes from that
+row, as the definition's name does.
+
+The briefing file is retired, and so are the memory's recorded modification time and the count of
+quiet turns that decided when it was sent. The purpose reaches the run as the definition's body, and
+the memory's path as [MEMORY-4](#MEMORY-4) puts it, which leaves the briefing nothing to carry.
 
 **Why every turn, where `/agent` lasts one.** [ADDRESS-10](addressing-a-definition.md#ADDRESS-10)
 refuses a mode because of four questions. What happens to the conversation so far? What does the
@@ -316,38 +373,50 @@ it is closing that window, and every line queued there is the bot's. None of the
 
 **What stands in for the keystroke.** [ADDRESS-3](addressing-a-definition.md#ADDRESS-3) rests an
 addressed run on a person's act. Here there are two: making the bot, which wrote the definition,
-and opening its conversation, which chose the row.
+and opening its conversation, which chose the row. Arming a watch there is a third, for the turns
+that watch fires.
 
-**Why the composed turns too.** Addressing only narrows. A turn the desktop composes in a bot's
-conversation and sends unaddressed would hold the session's whole reach, wider than the bot's own,
-on a turn nobody typed.
+**Why the composed turns too.** Addressing only narrows. A turn in a bot's conversation sent
+unaddressed would hold the session's whole reach, wider than the bot's own, on a turn nobody typed.
 
 **Why this stops short of a turn the run arranged.** A later look the run schedules and a file it
 watches are still never addressed, and are still withheld from an addressed run
-([ADDRESS-8](addressing-a-definition.md#ADDRESS-8)). What separates the two is who decided the turn
-happens. The desktop sends its own turn when the agent reports a compaction, and the run chose
-neither the compaction nor the turn. A scheduled turn is one the run chose.
+([ADDRESS-8](addressing-a-definition.md#ADDRESS-8)). What separates them is who decided the turn
+happens. The desktop sends its own turn when the agent reports a compaction, and a person arms a
+watch: the run chose neither. A scheduled turn is one the run chose.
+
+**Why the shown name.** [ADDRESS-12](addressing-a-definition.md#ADDRESS-12) draws a reply under the
+definition's name so that no reply chooses what it is drawn under. The row is the driver's fact in
+the same way, and it holds the name the person gave the bot.
 
 This amends [ADDRESS-3](addressing-a-definition.md#ADDRESS-3), which admits only a line typed into
-the box, and the sentence in [addressing-a-definition.md](addressing-a-definition.md) saying the
-desktop addresses nothing.
+the box, [ADDRESS-12](addressing-a-definition.md#ADDRESS-12), and the sentence in
+[addressing-a-definition.md](addressing-a-definition.md) saying the desktop addresses nothing.
 
 `verified-by: none`
 
-<a id="MEMORY-10"></a>
-### MEMORY-10: a bot made before this keeps its notes where they are, and they are read rather than copied
+<a id="MEMORY-11"></a>
+### MEMORY-11: a bot made before this keeps its notes where they are, untrusted until a person reads them
 
-The first time a bot with no definition is opened, it is given one as
-[MEMORY-8](#MEMORY-8) makes one, named after its old slug where that name is free. Its old memory
-file is left where it is, and nothing reads its bytes on the way. The first turn after that is one
-the desktop composes and addresses. It tells the run where the old notes are, in the words of the
-turn and never as a file handed to it, and asks it to carry what still holds into its memory.
+The first time a bot with no definition is opened, it is given one as [MEMORY-8](#MEMORY-8) makes
+one, named after its old slug where that name is free. Its old memory file is left where it is, and
+nothing reads its bytes on the way. Its path goes into the record [MEMORY-5](#MEMORY-5) keeps, so
+from then on it is untrusted in every session, as a memory a write left untrusted is.
 
-**Why the run and not the desktop.** Whether the old notes are trusted is the map's answer, and only
-a read through the map gets it. Notes the map trusts are read as they are. Notes it does not trust
-come back quarantined, so what the run writes from them is untrusted and the write asks. A copy made
-by the desktop would put those bytes under a path the map has never recorded, which in a vouched
-checkout is trusted by the directory above it.
+The first turn after that is one the desktop composes and addresses. It tells the run where the old
+notes are, in the words of the turn and never as a file handed to it, and asks it to carry what
+still holds into its memory. The run's read of them is quarantined, so a person is shown them, with
+what a check found in all of them, and asked before they reach the run
+([TRUST-8](trust-map.md#TRUST-8)).
+
+**Why untrusted whatever the map would say.** A write in an earlier session may have left them
+untrusted, and the map that recorded it is gone ([TRUST-6](trust-map.md#TRUST-6)). Until its fix,
+the desktop also named them in every briefing, which vouched for them whatever a write had left.
+Nothing now knows whether a given bot's notes were ever left untrusted, so a person decides.
+
+**Why the run and not the desktop.** A copy made by the desktop would put those bytes under a path
+the map has never recorded, which in a vouched checkout is trusted by the directory above it. What
+the run writes from notes a person let it read is what it writes from any file it read.
 
 **Why not handed as a file.** A file handed to a turn is one a person is recorded as vouching for,
 and nobody vouched for these notes.
@@ -363,30 +432,34 @@ and nobody vouched for these notes.
   removing it is either a question for a person or a deletion nobody approved. Each of those has an
   answer, and together they are a spec of their own.
 
-- **Whether a memory may live in the person's own directory.** `memory: user` needs a write a run
-  can make into `~/.bravebot`, which no tool has. It also needs a record of what that write did,
-  which the map does not keep there ([TRUST-11](trust-map.md#TRUST-11)). Both are new, and until
-  they exist `user` keeps nothing ([MEMORY-2](#MEMORY-2)).
+- **Whether a memory may live in the person's own directory.** `memory: user` needs a run to write
+  into `~/.bravebot` without a person opening it, which no tool does. It also needs a record of what
+  that write did, which the map does not keep there ([TRUST-11](trust-map.md#TRUST-11)). Both are
+  new, and until they exist `user` keeps nothing ([MEMORY-2](#MEMORY-2)).
 
 ## Known costs
 
 - **A checkout a person vouched for can hold a memory for any name.** A file at
-  `.bravebot/memory/<name>.md` there is read as the memory of any definition of that name,
-  including one in the person's own directory, as a checked-in `AGENTS.md` is read as that
-  project's instructions. It decides what the run is told and never what it may reach
+  `.bravebot/memory/<name>.md` there is the memory of any definition of that name, including one in
+  the person's own directory, as a checked-in `AGENTS.md` is that project's instructions. The run
+  reads it as it reads any file there, and it decides nothing about what the run may reach
   ([MEMORY-6](#MEMORY-6)), which is the bound a definition's body has too.
 
-- **A file another program writes over a memory is read as trusted wherever its path is.**
-  [trust-map.md](trust-map.md) records this for every file. A `git pull` replacing a memory in a
-  vouched checkout, or in one where a clean turn's write left the memory's path trusted, puts the
-  new bytes in the next prompt. What a memory adds is that nobody has to read the file for that to
-  happen. A checkout moved or cloned afresh starts without the record [MEMORY-5](#MEMORY-5) keeps.
+- **A program writes a memory where the map cannot see.** [trust-map.md](trust-map.md) records this
+  for every file: a `git pull`, an editor, or a program a run was let start, `curl -o` to the
+  memory's path among them, puts bytes there that are read as trusted wherever the path is. What a
+  memory adds is that every run under its definition is told to read it. A checked-in `AGENTS.md`
+  carries the same cost and is put in every turn's prompt. A checkout moved or cloned afresh starts
+  without the record [MEMORY-5](#MEMORY-5) keeps.
 
-- **A bot that reads untrusted content asks before it writes its memory, and a yes costs the
-  memory.** A fetched page and a command's output nobody vouched for both leave a turn holding
-  untrusted content, so its memory write asks, and after a yes the memory is withheld until a turn
-  that met nothing untrusted replaces it. That is the gate working, and it costs such a bot the
-  memory it can see. No answer puts a withheld memory back: deleting it or replacing it does.
+- **Keeping quarantined content in a memory costs the memory.** Passing a fetched page on by
+  reference, or a processor's reading of a file nobody vouched for, asks before it is written, and
+  after a yes the memory is withheld until a write that leaves it trusted replaces it, or a person
+  shown it says yes ([MEMORY-5](#MEMORY-5)). Deleting it empties it and does not put it back. What
+  the run writes in its own words after such a read is trusted and asks nothing.
+
+- **A memory is one read away.** Claude Code puts the head of one in the prompt. Here a run that
+  does not read it works without it, and each run that does spends a round on it.
 
 - **A memory is per checkout.** Two clones of one project keep two, and a definition in the
   person's own directory keeps one in each project it runs in. It is also a file `git status` shows
@@ -395,8 +468,12 @@ and nobody vouched for these notes.
 - **A rename is a new definition.** The memory is named after the definition's name, so a file
   whose `name:` changes starts with no memory, and the old one stays where it was.
 
-- **A `reader` or a `checker` cannot keep its memory.** It reads one that something else wrote, and
-  changing it takes a definition of a kind that writes ([MEMORY-6](#MEMORY-6)).
+- **A `reader` or a `checker` has no tool that keeps its memory.** It reads one something else
+  wrote, and changing it takes a definition of a kind that writes ([MEMORY-6](#MEMORY-6)).
+
+- **A bot cannot arrange a later turn of its own.** Every turn in its conversation is addressed
+  ([MEMORY-10](#MEMORY-10)), and an addressed run is offered neither a later look nor a watch
+  ([ADDRESS-8](addressing-a-definition.md#ADDRESS-8)). A watch the person arms still fires.
 
 - **A bot is on offer to every planner in every project**, as any definition in the person's own
   directory is ([INSTR-1](instructions.md#INSTR-1)). A planner may spawn one as a delegate far from
