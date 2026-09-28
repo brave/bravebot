@@ -63,6 +63,13 @@ cli-plain-takes-nothing-else =
     --plain starts a session and takes no other arguments. --incognito,
     --dangerously-skip-permissions and --settings go with it; everything else is another way of
     starting.
+# Said where the startup question was not put because an earlier session here was told to remember
+# the answer (TRUST-23). A session in lines has no slash commands, so the ways to be asked again are
+# the ones it can name: the command in the interface that draws, or the lines in the file. The
+# lines rather than the file, since a directory whose path is spelled alike shares the file.
+cli-plain-trusting-kept =
+    trusting { $directory } (you said to remember it { $when }; to be asked again, run
+    /forget-trust in bravebot without --plain, or delete the lines naming it from { $path })
 
 ## How much a session asks before it acts, drawn under the input box
 #

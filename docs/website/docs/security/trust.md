@@ -353,7 +353,9 @@ It covers less than a yes does:
 Whenever it is in doubt it asks: a missing or unreadable record, one about an earlier directory at
 the path, or a line about this directory that this build cannot read all mean the question is put.
 
-`bravebot --plain` asks in every session for now and does not read the record.
+`bravebot --plain` honours a kept answer too, and says so as it opens, naming the file that holds
+it: delete the lines about the directory from that file to be asked again. It never
+offers to remember one: `r` typed at its question is a line that is not yes, and declines.
 
 [`/status`](#reading-the-map-back) says when a kept answer is in force and names its file.
 [`/forget-trust`](../reference/commands.md#forget-trust) removes it: the session you type it in

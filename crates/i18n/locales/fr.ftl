@@ -73,6 +73,13 @@ cli-plain-takes-nothing-else =
     --plain démarre une session et ne prend aucun autre argument. --incognito,
     --dangerously-skip-permissions et --settings vont avec lui ; tout le reste est une autre
     manière de démarrer.
+# Dit lorsque la question de démarrage n'est pas posée parce qu'une session antérieure ici a reçu
+# l'ordre de retenir la réponse (TRUST-23). Une session en lignes n'a pas de commandes à barre
+# oblique, donc les moyens de se faire reposer la question sont ceux qu'elle peut nommer.
+cli-plain-trusting-kept =
+    { $directory } approuvé (vous avez demandé de le retenir { $when } ; pour que la question
+    soit reposée, lancez /forget-trust dans bravebot sans --plain, ou supprimez de { $path } les
+    lignes qui le nomment)
 
 mode-accept-edits = ⏵ modifications acceptées
 mode-plan = ⏸ mode plan
