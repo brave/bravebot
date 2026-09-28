@@ -125,6 +125,9 @@ pub enum ToMain {
     Notice(String),
     /// What the model has written since the last frame. No reply.
     Streaming(String),
+    /// The call the model is writing, by the word its row will start with, or none once the
+    /// attempt writing it was thrown away. No reply.
+    Composing(Option<&'static str>),
     /// A tool call has begun. No reply.
     Started(Activity),
     /// The tool call last announced has finished. No reply.
@@ -361,6 +364,10 @@ impl Reporter for RemoteReporter {
 
     fn streaming(&mut self, text: String) {
         let _ = self.outbound.send(ToMain::Streaming(text));
+    }
+
+    fn composing(&mut self, call: Option<&'static str>) {
+        let _ = self.outbound.send(ToMain::Composing(call));
     }
 
     fn tool_started(&mut self, activity: Activity) {
@@ -911,6 +918,7 @@ mod tests {
         reporter.narration("nobody is listening".into());
         reporter.notice("nobody is listening to this either".into());
         reporter.streaming("nor this".into());
+        reporter.composing(Some("Read"));
         reporter.tool_started(Activity::running("Read", "a.rs"));
         reporter.tool_finished(Activity::running("Read", "a.rs").done("1 line"));
         reporter.check_started(bravebot_core::vetting::Checking::Lines(40));
@@ -949,6 +957,7 @@ mod tests {
                     ToMain::Narration(_) => seen.push("narration"),
                     ToMain::Notice(_) => seen.push("notice"),
                     ToMain::Streaming(_) => seen.push("streaming"),
+                    ToMain::Composing(_) => seen.push("composing"),
                     ToMain::Started(_) => seen.push("started"),
                     ToMain::Finished(_) => seen.push("finished"),
                     ToMain::CheckStarted(_) => seen.push("check started"),
@@ -979,6 +988,7 @@ mod tests {
         reporter.narration("about to write".into());
         reporter.notice("AGENTS.md was not loaded".into());
         reporter.streaming("about".into());
+        reporter.composing(Some("Write"));
         reporter.tool_started(Activity::running("Write", "notes.md"));
         reporter.tool_finished(Activity::running("Write", "notes.md").done("1 line"));
         assert_eq!(confirmer.confirm_write(&request()), Decision::Approve);
@@ -991,6 +1001,7 @@ mod tests {
                 "narration",
                 "notice",
                 "streaming",
+                "composing",
                 "started",
                 "finished",
                 "write"

@@ -610,6 +610,7 @@ impl<'a> AichatClient<'a> {
                     progress(Progress {
                         written: Labelled::new("", Label::untrusted_public()),
                         output_tokens: 0,
+                        calling: None,
                         counted_by_server: false,
                         attempt,
                     });
@@ -803,6 +804,7 @@ impl<'a> AichatClient<'a> {
                     || accumulated.output_tokens(),
                     |usage| usage.completion_tokens,
                 ),
+                calling: accumulated.calling().map(|name| Labelled::new(name, label)),
                 counted_by_server: reported.is_some(),
                 attempt,
             });
@@ -864,8 +866,16 @@ pub struct Progress<'a> {
     /// costs rather than the square of it.
     pub written: Labelled<&'a str>,
     /// Output tokens so far: the server's own figure once it has given one, and until then a count
-    /// of the chunks that carried text.
+    /// of the chunks that carried text or a piece of a tool argument.
     pub output_tokens: u64,
+    /// The tool call the model is writing, named as the model named it, once the reply has begun
+    /// one.
+    ///
+    /// The last call the reply began, under the label its words carry, from the moment its name
+    /// arrives until the reply ends. A service may hold an argument back until it is whole, and
+    /// then this is the only sign of what the model is doing through a silence that can last
+    /// minutes.
+    pub calling: Option<Labelled<&'a str>>,
     /// Whether that figure is the server's rather than an estimate.
     ///
     /// Worth knowing at the point of display: an estimate presented as a billed figure would be

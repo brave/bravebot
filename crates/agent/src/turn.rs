@@ -2919,6 +2919,8 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // output to a running total that also holds prompt tokens would make the figure jump by the
         // size of the re-sent history every round.
         let mut output_tokens = 0u64;
+        // What the indicator last said the turn had written, which the next round counts on from.
+        let mut shown_before = 0u64;
         // Summed over the turn like the total, and starting from zero with it: this says what this
         // turn's requests did, not what the session has done, and the session adds its turns up itself.
         let mut cached = Cached::default();
@@ -3111,7 +3113,12 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
 
                     // Streamed so the interface can show the reply growing. Each round's count restarts at
                     // zero, so earlier rounds are added back: the figure is for the turn, not the round.
-                    let written_before = output_tokens;
+                    // Added back as they were shown, where that is more than they were charged: the live
+                    // figure counts pieces of an argument that a reply without a figure of its own is
+                    // not charged for, and a count that falls between rounds reads as a bug.
+                    let written_before = shown_before.max(output_tokens);
+                    let mut round_shown = 0u64;
+                    let mut composing: Option<&'static str> = None;
                     // A request that failed in transit is sent again by the client, which the person waiting
                     // should be told: the count is about to fall back to where the round started, and a
                     // number going backwards with no explanation reads as a bug. Decided from the attempt
@@ -3144,14 +3151,27 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 showing = phase;
                                 reporter.phase(phase);
                             }
-                            reporter.output_tokens(written_before + progress.output_tokens);
+                            round_shown = progress.output_tokens;
+                            reporter.output_tokens(written_before + round_shown);
                             // Straight through to the screen. Sent whether or not there is anything in it:
                             // asking would be a question about untrusted text, and the interface is the side
                             // allowed to ask that one.
                             reporter
                                 .streaming(progress.written.declassify(&as_written).to_string());
+                            // Through the same gate, for the same screen, and as a word from a
+                            // fixed table rather than as the model spelt it. Whether there is a call
+                            // is a fact about which events arrived, not about what they said. Sent
+                            // when it changes, so an attempt thrown away takes its call with it.
+                            let calling = progress.calling.map(|calling| {
+                                crate::report::verb_for(calling.declassify(&as_written))
+                            });
+                            if calling != composing {
+                                composing = calling;
+                                reporter.composing(calling);
+                            }
                         })
                     };
+                    shown_before = written_before + round_shown;
                     // Retries included, because a round that had to reconnect really did keep the turn waiting
                     // that long. The count is what the turn spent, not what the endpoint would have taken had
                     // the connection held.

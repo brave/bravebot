@@ -3489,6 +3489,99 @@ fn the_reply_reaches_the_interface_while_it_is_being_written() {
     );
 }
 
+/// A call the model is writing has no line of its own until it runs, and a service holding its
+/// argument back sends nothing else, so its name is the only thing there is to show for a wait
+/// that can last minutes. It reaches the interface through the gate the reply's words pass, as the
+/// model wrote it, and the count moves with the argument.
+#[test]
+fn the_call_being_written_reaches_the_interface_before_it_runs() {
+    let scratch = Scratch::new("composing");
+    std::fs::write(scratch.path.join("target.txt"), "the file body").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"target.txt"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("what does target.txt say?"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    // Once, by the word its row starts with, however many pieces the argument came in.
+    assert_eq!(
+        reporter.composing,
+        vec![Some("Read")],
+        "the call being written was not named once, by its word"
+    );
+    // The argument is three pieces of eight bytes or fewer, and the reply that answers carries
+    // one word: a count of text alone would never pass two before the second round.
+    assert!(
+        reporter.written.iter().any(|&written| written >= 3),
+        "the count stood still while the argument arrived: {:?}",
+        reporter.written
+    );
+    // The stub reports no usage, so the first round is charged its words alone, which are none.
+    // The second round counts on from what the screen said, not from that.
+    assert!(
+        reporter.written.windows(2).all(|pair| pair[0] <= pair[1]),
+        "the count fell between rounds: {:?}",
+        reporter.written
+    );
+}
+
+/// A call named by an attempt the client threw away is not being written any more. With the
+/// phase already saying the request is going again, nothing else would take the name down, and
+/// it would stand beside the spinner through the wait for a call that no longer exists. The name
+/// here answers to no tool, so what reaches the interface is the table's word for an unknown one.
+#[test]
+fn a_call_named_by_an_attempt_thrown_away_is_taken_back() {
+    let scratch = Scratch::new("composing-retry");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_script(vec![
+        Served::Status(503),
+        Served::BrokenReply(tool_request("<b>no such tool</b>", "")),
+        Served::Reply(reply_with("done")),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("what does target.txt say?"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        reporter.composing,
+        vec![Some("Tool"), None],
+        "the call a lost attempt named was left standing, or drawn as the model spelt it"
+    );
+}
+
 /// Releasing text for a screen is a decision, and every decision this system makes is on the
 /// record. One line for the round, not one per frame: a trail with an entry per chunk would
 /// bury every other entry in it.

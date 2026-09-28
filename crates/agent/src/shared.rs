@@ -213,6 +213,7 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
         fn phase(&mut self, phase: Phase);
         fn narration(&mut self, text: String);
         fn streaming(&mut self, text: String);
+        fn composing(&mut self, call: Option<&'static str>);
         fn notice(&mut self, text: String);
         fn quarantined(&mut self, shown: Shown);
         fn printed(&mut self, output: Printed);

@@ -1259,6 +1259,9 @@ elapsed-minutes = { $minutes }m { $seconds }s
 # Beside a figure already labelled in tokens, so the unit is not repeated.
 indicator-tokens-read = ↓ { $tokens } tokens
 indicator-tokens-written = ↑ { $tokens }
+# Said while the model writes a tool call, before the call runs or has a line of its own. The
+# word is the one that line will start with ("Write", "Run"), so the two read as the same call.
+indicator-composing = Preparing a call: { $call }
 # Said while a confined check reads quarantined content, before any of it may be read. The count
 # is what the check was given, which is the one thing that predicts how long it will take. Not a
 # word about what it decided: that reaches a person on the prompt and nothing else.
