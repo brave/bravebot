@@ -887,9 +887,6 @@ impl<'a> BedrockClient<'a> {
     }
 
     /// The signed request for one attempt, and the model it names.
-    ///
-    /// Credentials are resolved here rather than held, because a session expires during a run and a
-    /// key read once at startup stops working part way through.
     fn build(
         &self,
         request: &ChatRequest,
@@ -898,19 +895,36 @@ impl<'a> BedrockClient<'a> {
         let model = self.model_for(request)?;
 
         let converse = self.converse_for(request, &model, streaming);
+        let bound = reply_bound(converse.inference_config.max_tokens);
         let body =
             serde_json::to_vec(&converse).map_err(|e| BedrockError::Encode(e.to_string()))?;
+        let http = self.signed(&model, streaming, body)?;
 
+        // A stream's headers come at once and the model writes after them; a reply asked for whole
+        // is written before any of it is sent.
+        let http = if streaming {
+            http.stream_within(bound)
+        } else {
+            http.reply_within(bound)
+        };
+        Ok((http, model))
+    }
+
+    /// `body` as a request to `model`, signed.
+    ///
+    /// Credentials are resolved here rather than held, because a session expires during a run and a
+    /// key read once at startup stops working part way through.
+    fn signed(&self, model: &str, streaming: bool, body: Vec<u8>) -> Result<Request, BedrockError> {
         #[cfg(test)]
         if let Some(http) = &self.test_request {
             let mut http = http.clone();
             http.body = Some(body);
-            return Ok((http, model));
+            return Ok(http);
         }
 
         let resolved = credentials::resolve(self.config.profile.as_deref())?;
 
-        let url = self.config.converse_url(&model, streaming);
+        let url = self.config.converse_url(model, streaming);
         let host = self.config.host();
         let path = path_of(&url);
 
@@ -939,7 +953,7 @@ impl<'a> BedrockClient<'a> {
             http = http.header("x-amz-security-token", token);
         }
 
-        Ok((http, model))
+        Ok(http)
     }
 
     /// Which model this request names.
@@ -1151,6 +1165,24 @@ const WAKE: Duration = Duration::from_millis(50);
 
 /// How many chunks may sit between the thread reading them and the one taking them apart.
 const CHUNKS_AHEAD: usize = 16;
+
+/// The slowest a reply is taken to be written, in tokens a second.
+///
+/// Well under half the slowest rate measured on Bedrock, 69 tokens a second on Claude Opus 5.5, so
+/// a reply running to its ceiling on a slow day still finishes inside the bound.
+const SLOWEST_WRITING: u64 = 25;
+
+/// How long a reply may take to begin, reading the prompt, before the first token of it.
+const BEFORE_WRITING: Duration = Duration::from_secs(120);
+
+/// How long a reply that may run to `ceiling` tokens is given.
+///
+/// Never less than the bound the egress layer puts on a reply of unstated length, which stays the
+/// figure for a short reply.
+fn reply_bound(ceiling: u64) -> Duration {
+    (BEFORE_WRITING + Duration::from_secs(ceiling.div_ceil(SLOWEST_WRITING)))
+        .max(bravebot_net::Timeouts::default().reply)
+}
 
 /// Whether a failed attempt should be repeated.
 ///
@@ -1823,27 +1855,14 @@ mod tests {
     fn scripted_with_silences(
         responses: Vec<(Vec<u8>, bool)>,
     ) -> (Request, std::sync::mpsc::Receiver<Vec<u8>>) {
-        use std::io::{BufRead, Read, Write};
+        use std::io::{Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let (sent, received) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             for (response, silent) in responses {
                 let (mut stream, _) = listener.accept().unwrap();
-                let mut reader = std::io::BufReader::new(&mut stream);
-                let mut length = 0;
-                loop {
-                    let mut line = String::new();
-                    reader.read_line(&mut line).unwrap();
-                    if line == "\r\n" {
-                        break;
-                    }
-                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-                        length = value.trim().parse().unwrap();
-                    }
-                }
-                let mut body = vec![0; length];
-                reader.read_exact(&mut body).unwrap();
+                let body = read_request(&mut stream);
                 stream.write_all(&response).unwrap();
                 sent.send(body).unwrap();
                 if silent {
@@ -1855,6 +1874,26 @@ mod tests {
             Request::post(format!("http://{address}/converse"), b"{}".to_vec()),
             received,
         )
+    }
+
+    /// Read one request off `stream`, head and body, and return the body.
+    fn read_request(stream: &mut std::net::TcpStream) -> Vec<u8> {
+        use std::io::{BufRead, Read};
+        let mut reader = std::io::BufReader::new(stream);
+        let mut length = 0;
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            if line == "\r\n" {
+                break;
+            }
+            if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                length = value.trim().parse().unwrap();
+            }
+        }
+        let mut body = vec![0; length];
+        reader.read_exact(&mut body).unwrap();
+        body
     }
 
     /// Both entry points count every probe, none of which advances the retry ordinal. Only a
@@ -2768,6 +2807,172 @@ mod tests {
                 "{model} did not take the exported ceiling"
             );
         }
+    }
+
+    /// A streamed reply of `frames` on each of `attempts` connections, its status sent at once and
+    /// each frame `gap` after the one before it.
+    fn trickled(frames: Vec<Vec<u8>>, gap: Duration, attempts: u32) -> Request {
+        use std::io::Write;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for _ in 0..attempts {
+                let (mut stream, _) = listener.accept().unwrap();
+                read_request(&mut stream);
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    frames.iter().map(Vec::len).sum::<usize>()
+                );
+                let _ = stream.write_all(head.as_bytes());
+                for frame in &frames {
+                    std::thread::sleep(gap);
+                    let _ = stream.write_all(frame);
+                    let _ = stream.flush();
+                }
+            }
+        });
+        Request::post(format!("http://{address}/converse"), b"{}".to_vec())
+    }
+
+    /// A reply is given as long as the ceiling its own request carries takes to write, rather than
+    /// the bound on a reply nothing states the length of. At the rate measured on Claude Opus 5.5,
+    /// that bound ends any reply longer than about 41,000 tokens while the model is still writing
+    /// it, and a request that asked for arguments as they are written is then sent again, and
+    /// billed again, to be cut off at the same point.
+    #[test]
+    fn a_reply_still_being_written_is_not_cut_off_by_a_bound_its_ceiling_did_not_set() {
+        use bravebot_core::{
+            capability::{Capability, CapabilitySet},
+            event::RecordingSink,
+            policy::{ReleasePlan, Routing},
+        };
+        let model = "a-model-writing-a-long-reply";
+        let config = config_for(model);
+        // Every frame arrives well inside the gap allowed, and all of them together take longer
+        // than the bound on a reply of unstated length, which falls halfway between two frames.
+        let egress = Egress::with_timeouts(bravebot_net::Timeouts {
+            reply: Duration::from_millis(375),
+            idle: Duration::from_secs(5),
+            ..Default::default()
+        });
+        let frames = vec![
+            eventstream::tests::frame(
+                "contentBlockDelta",
+                br#"{"contentBlockIndex":0,"delta":{"text":"still "}}"#,
+            ),
+            eventstream::tests::frame(
+                "contentBlockDelta",
+                br#"{"contentBlockIndex":0,"delta":{"text":"writing"}}"#,
+            ),
+            eventstream::tests::frame("messageStop", br#"{"stopReason":"end_turn"}"#),
+            eventstream::tests::frame(
+                "metadata",
+                br#"{"usage":{"inputTokens":100,"outputTokens":2}}"#,
+            ),
+        ];
+        let mut client = BedrockClient::new(&config, &egress);
+        client.test_request = Some(trickled(frames, Duration::from_millis(150), ATTEMPTS));
+        let mut sink = RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "test");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .unwrap();
+
+        let result = client.complete_streaming(
+            &mut policy,
+            &ChatRequest::new(model, vec![Message::user("write it all")]),
+            |_| {},
+        );
+
+        assert!(
+            result.is_ok(),
+            "a reply still arriving was reported as {result:?}"
+        );
+        assert_eq!(
+            client.attempts(),
+            1,
+            "a reply still arriving was sent again"
+        );
+    }
+
+    /// A reply is given at least twice as long as its ceiling takes to write at the rate measured
+    /// on Claude Opus 5.5, whichever ceiling that is, and a reply short enough for the egress
+    /// layer's own bound is given that bound and no less.
+    #[test]
+    fn the_time_a_reply_is_given_follows_the_ceiling_its_request_carries() {
+        use bravebot_config::bedrock::Entry;
+        use bravebot_net::ReplyBound;
+
+        let config = Bedrock::from_provider(
+            "us-west-2".to_string(),
+            None,
+            vec![
+                Entry {
+                    tier: None,
+                    id: "stated".to_string(),
+                    name: None,
+                    context_window: None,
+                    output_limit: Some(128_000),
+                },
+                Entry {
+                    tier: None,
+                    id: "unstated".to_string(),
+                    name: None,
+                    context_window: None,
+                    output_limit: None,
+                },
+            ],
+        );
+        let egress = Egress::new();
+        let mut client = BedrockClient::new(&config, &egress);
+        client.test_request = Some(Request::post("http://127.0.0.1:9/converse", Vec::new()));
+        // A stream is given the bound from the moment it begins, and a reply asked for whole the
+        // same bound on the wait for it as well, since it is written before any of it is sent.
+        let given = |client: &BedrockClient, model: &str| {
+            let stated = |streaming| {
+                client
+                    .build(&ChatRequest::new(model, vec![]), streaming)
+                    .unwrap()
+                    .0
+                    .reply
+            };
+            match (stated(true), stated(false)) {
+                (Some(ReplyBound::Begun(stream)), Some(ReplyBound::Whole(whole)))
+                    if stream == whole =>
+                {
+                    stream
+                }
+                other => panic!("requests to Bedrock stated {other:?} on their replies"),
+            }
+        };
+        let writing = |tokens: u64| Duration::from_secs(tokens.div_ceil(69));
+
+        let stated = given(&client, "stated");
+        let assumed = given(&client, "unstated");
+        assert!(
+            stated >= 2 * writing(128_000),
+            "a reply of 128,000 tokens was given {stated:?}"
+        );
+        assert!(
+            assumed >= 2 * writing(OUTPUT_LIMIT),
+            "a reply of the assumed ceiling was given {assumed:?}"
+        );
+        assert!(
+            stated > assumed,
+            "a higher ceiling was given no longer than a lower one"
+        );
+
+        client.ceiling = false;
+        assert_eq!(
+            given(&client, "unstated"),
+            bravebot_net::Timeouts::default().reply,
+            "a reply at the fallback ceiling was not given the egress layer's own bound"
+        );
     }
 
     /// The reply the ceiling stopped is the turn's work, and throwing it away to report that it
