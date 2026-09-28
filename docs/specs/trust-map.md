@@ -543,8 +543,9 @@ reviewer each have to deal with it, and somebody has to remember to delete it.
 
 A session has a directory of its own in the system temporary directory, created as the session
 opens. Its name carries this program's prefix and enough besides to tell two sessions apart. It is
-created rather than opened, so a name something else holds is refused rather than adopted, and on
-Unix it is created with mode `0700`. `/status` reports it as the session's own. A one-shot run has
+created rather than adopted, so a name something else holds is refused, and on Unix nobody but its
+owner can enter it: it is made at a mode that lets nobody else in, and is at `0700` once the session
+holds it ([TRUST-25](#TRUST-25)). `/status` reports it as the session's own. A one-shot run has
 one for as long as it runs. A session that cannot be given one runs without one and says so.
 
 **Why.** Both of the other places to put an intermediate file cost more than this one. In the
@@ -560,7 +561,7 @@ answers: `TMPDIR` on Unix, falling back to `/tmp`, and on Windows the operating 
 which resolves `TMP`, then `TEMP`, then the profile directory. An undefined `TMPDIR` therefore needs
 nothing written here.
 
-Created rather than opened, and `0700`, because that directory is shared. On macOS it is the
+Created rather than adopted, and its owner's alone, because that directory is shared. On macOS it is the
 account's own, but on Linux it is ordinarily the world-writable `/tmp`, where a name this program
 composes is one another account can create first, or leave pointing at a file of theirs. Refusing a
 name already taken is what keeps a write from going through one of those, and the mode is what keeps
@@ -1072,6 +1073,11 @@ its lock is held, so one still being made is left, and a program a session start
 the lock. A link under such a name is judged as a link rather than as what it points at. A local MCP
 server's home is removed on the same terms. On Windows nothing is removed.
 
+A session waits a second at most for its own directory's lock. One that cannot have it by then, or
+on a file system that refuses a lock on a directory, keeps its directory at `1700`, which is as
+private as `0700` and a mode the sweep leaves. The removal runs beside the opening session rather
+than ahead of it.
+
 **Why.** Removal as a session closes ([TRUST-15](#TRUST-15)) covers a session that closes. One
 killed outright leaves its directory and everything written in it, and nothing else knows the
 directory is there. The names are unrelated to each other precisely so that concurrent sessions
@@ -1090,6 +1096,15 @@ so to this build one still running would look exactly like a leftover. Naming th
 and `server` is what keeps a session opened just after an upgrade from removing the directory of
 one opened just before it.
 
+The lock is tried for a second rather than waited on. What holds a new directory's lock for a moment
+is another session's sweep checking it, and that is waited out; what holds it longer is not a sweep,
+and a session that waited on it would open when the holder pleased. Going without a directory
+instead is what every session on NFS would then pay, since Linux's NFS client takes this lock as one
+that needs the directory open for writing, which a directory never is. At `1700` the directory
+stays its owner's alone and outside what the sweep takes, so an unclaimed one costs only the disk it
+keeps if its session is killed. The removal has a thread of its own because a leftover can be as
+large as whatever a turn unpacked there, and nothing in the opening session needs it gone first.
+
 `verified-by: bravebot_agent::scratch::a_session_opening_removes_what_a_killed_one_left`
 `verified-by: bravebot_agent::scratch::a_directory_nothing_holds_is_taken_for_a_leftover`
 `verified-by: bravebot_agent::scratch::a_live_sessions_directory_is_left_alone`
@@ -1098,6 +1113,8 @@ one opened just before it.
 `verified-by: bravebot_agent::scratch::a_link_under_the_name_is_left_alone`
 `verified-by: bravebot_agent::scratch::a_name_this_build_does_not_give_is_left_alone`
 `verified-by: bravebot_agent::scratch::a_program_a_session_starts_does_not_hold_its_directory`
+`verified-by: bravebot_agent::scratch::a_claim_held_for_a_moment_is_waited_out`
+`verified-by: bravebot_agent::scratch::a_claim_held_by_something_else_does_not_stall_the_session`
 
 ## Known costs
 
@@ -1160,9 +1177,15 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   temporary directory leans on the platform's own cleaner. A directory a build from before the lock
   left is never taken on any platform, since its name is one the sweep does not give
   ([TRUST-25](#TRUST-25)).
-- **A session killed between making its directory and locking it leaves one nothing takes.** It is
-  at the mode a directory still being made has, which is the mode the sweep leaves. It is also
-  empty, since nothing can be written in it until the lock is held.
+- **Some of what a killed session left is never taken.** The sweep takes a directory at `0700`
+  alone. One whose session was killed between making it and locking it is at the mode a directory
+  still being made has, and empty, since nothing had been given its name yet. One whose lock could
+  not be had is at `1700` ([TRUST-25](#TRUST-25)), and one whose mode a turn changed is at whatever
+  the turn set. Each stays until somebody removes it.
+- **A lock is seen only by the machine that took it.** Where the temporary directory is shared
+  with another machine, a virtual one included, through a mount that keeps its locks to itself, a
+  session there can take a live session's directory here for a leftover and remove what is in it.
+  A temporary directory is ordinarily the machine's own.
 - **Intermediate files stay until the session ends.** Scratch writes record incomplete undo
   coverage (TRUST-19); later turns can read those files under the current file decisions. Keeping their
   bytes for undo would spend the budget intended for project files.

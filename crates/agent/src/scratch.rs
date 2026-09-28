@@ -56,26 +56,30 @@ impl SessionScratch {
     /// One of `kind`, and then whatever killed sessions left beside it taken away.
     ///
     /// The sweep runs once this one exists, since its owner is the account the others are
-    /// compared against.
+    /// compared against, and on a thread of its own, since a leftover can be a large tree and
+    /// nothing about this session waits on it being gone.
     fn made(kind: &str) -> std::io::Result<Self> {
         // The standard library answers which directory that is, so a machine that puts temporary
         // files somewhere unusual is honoured rather than guessed at. `created_at` below refuses
-        // a name already taken and leaves the one it makes at mode 0700, which is the secure
-        // creation this rule asks for.
+        // a name already taken and leaves the one it makes open to its owner alone, which is the
+        // secure creation this rule asks for.
         // nosemgrep: rust.lang.security.temp-dir.temp-dir
         let root = std::env::temp_dir();
         let scratch = Self::created_at(reserved_name(&root, kind))?;
         #[cfg(unix)]
         if let Ok(own) = scratch.claim.metadata() {
             use std::os::unix::fs::MetadataExt;
-            sweep(&root, own.uid());
+            let owner = own.uid();
+            let _ = std::thread::Builder::new()
+                .name("scratch sweep".into())
+                .spawn(move || sweep(&root, owner));
         }
         Ok(scratch)
     }
 
     /// [`SessionScratch::create`], at a named path, so a test can hand it one twice.
     ///
-    /// **Created, never opened.** On a shared temporary directory a name already taken may be a
+    /// **Created, never adopted.** On a shared temporary directory a name already taken may be a
     /// directory somebody else owns, or a symlink pointing at one of theirs, and adopting it would
     /// put this session's files somewhere they can be read and swapped. `DirBuilder::create` fails
     /// on a name that exists, which is why a collision comes back as an error rather than as a
@@ -129,6 +133,16 @@ const CLAIMED: u32 = 0o700;
 #[cfg(unix)]
 const UNCLAIMED: u32 = 0o500;
 
+/// The mode a session keeps its directory at when it could not lock it: its owner's alone, as
+/// [`CLAIMED`] is, and not [`CLAIMED`], so no sweep takes it while the session is still using it.
+#[cfg(unix)]
+const UNCLAIMABLE: u32 = 0o1700;
+
+/// How long a session waits for its new directory's lock. A sweep checking a directory still
+/// being made holds it for a moment; whatever holds it longer is not a sweep.
+#[cfg(unix)]
+const CLAIM_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// Make the directory, at a mode no sweep takes and nobody else can enter.
 fn made_unclaimed(path: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
@@ -145,17 +159,56 @@ fn made_unclaimed(path: &Path) -> std::io::Result<()> {
 
 /// Lock the directory just made, and only then open it to its owner.
 ///
+/// Where the lock cannot be had, because the file system refuses one on a directory or something
+/// holds it past [`CLAIM_WAIT`], the session keeps the directory at [`UNCLAIMABLE`] rather than
+/// going without one or waiting on whoever holds it.
+#[cfg(unix)]
+fn claimed(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = opened(path)?;
+    let mode = if locked(&directory) {
+        CLAIMED
+    } else {
+        UNCLAIMABLE
+    };
+    directory.set_permissions(std::fs::Permissions::from_mode(mode))?;
+    Ok(directory)
+}
+
+/// Whether the lock on `directory` was taken within [`CLAIM_WAIT`].
+#[cfg(unix)]
+fn locked(directory: &std::fs::File) -> bool {
+    use rustix::fs::{FlockOperation, flock};
+    use rustix::io::Errno;
+    let deadline = std::time::Instant::now() + CLAIM_WAIT;
+    loop {
+        match flock(directory, FlockOperation::NonBlockingLockExclusive) {
+            Ok(()) => return true,
+            Err(Errno::INTR) => {}
+            Err(Errno::WOULDBLOCK) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Err(_) => return false,
+        }
+    }
+}
+
+/// The directory at `path`, opened without following a link, so what is locked and checked is
+/// what stands at the name rather than wherever somebody pointed it, and without waiting, so a
+/// fifo left under the name cannot hold a session's start.
+///
 /// Closed on exec, since a program a session starts can outlive it, and one holding the lock
 /// would keep what the session left from ever being taken.
 #[cfg(unix)]
-fn claimed(path: &Path) -> std::io::Result<std::fs::File> {
-    use rustix::fs::{FlockOperation, Mode, OFlags};
-    use std::os::unix::fs::PermissionsExt;
-    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
-    let directory = std::fs::File::from(rustix::fs::open(path, flags, Mode::empty())?);
-    rustix::fs::flock(&directory, FlockOperation::LockExclusive)?;
-    directory.set_permissions(std::fs::Permissions::from_mode(CLAIMED))?;
-    Ok(directory)
+fn opened(path: &Path) -> std::io::Result<std::fs::File> {
+    use rustix::fs::{Mode, OFlags};
+    let flags =
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK;
+    Ok(std::fs::File::from(rustix::fs::open(
+        path,
+        flags,
+        Mode::empty(),
+    )?))
 }
 
 /// Remove every directory under `root` that a killed session of `owner`'s left.
@@ -181,17 +234,13 @@ fn sweep(root: &Path, owner: u32) {
 
 /// The directory at `path`, locked, if a session of `owner`'s made it and nothing holds it now.
 ///
-/// Opened without following a link, so what is checked is what stands at the name rather than
-/// wherever somebody pointed it, and without waiting, so a fifo left under the name cannot hold a
-/// session's start. The owner and the mode are read from what was opened and only once the lock
-/// is taken, since a directory still being made is at [`UNCLAIMED`] until its lock is held.
+/// The owner and the mode are read from what was opened and only once the lock is taken, since a
+/// directory still being made is at [`UNCLAIMED`] until its lock is held.
 #[cfg(unix)]
 fn abandoned(path: &Path, owner: u32) -> Option<std::fs::File> {
-    use rustix::fs::{FlockOperation, Mode, OFlags};
+    use rustix::fs::FlockOperation;
     use std::os::unix::fs::MetadataExt;
-    let flags =
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK;
-    let directory = std::fs::File::from(rustix::fs::open(path, flags, Mode::empty()).ok()?);
+    let directory = opened(path).ok()?;
     rustix::fs::flock(&directory, FlockOperation::NonBlockingLockExclusive).ok()?;
     let found = directory.metadata().ok()?;
     (found.uid() == owner && found.mode() & 0o7777 == CLAIMED).then_some(directory)
@@ -360,6 +409,28 @@ mod tests {
         drop(claim);
     }
 
+    /// How long a test gives a leftover to go. Another test's thread starting a program holds a
+    /// copy of every open claim until that program starts, so a claim just dropped can still be
+    /// held for a moment, and a sweep in that moment rightly leaves it.
+    #[cfg(unix)]
+    const SETTLE: std::time::Duration = std::time::Duration::from_secs(10);
+
+    /// Whether `path` is gone within [`SETTLE`], sweeping `root` for `owner` until it is.
+    #[cfg(unix)]
+    fn swept_away(root: &Path, owner: u32, path: &Path) -> bool {
+        let deadline = std::time::Instant::now() + SETTLE;
+        loop {
+            sweep(root, owner);
+            if !path.exists() {
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
     /// Opening a session takes away what killed ones left in the temporary directory, which is
     /// the only thing that ever will: nothing else knows the directory is there.
     #[test]
@@ -370,7 +441,11 @@ mod tests {
         let left = reserved_name(&std::env::temp_dir(), SESSION);
         left_by_a_killed_session(&left);
 
-        let _opened = SessionScratch::create().expect("a scratch directory");
+        let deadline = std::time::Instant::now() + SETTLE;
+        while left.exists() && std::time::Instant::now() < deadline {
+            let _opened = SessionScratch::create().expect("a scratch directory");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
 
         assert!(!left.exists(), "{} outlived its session", left.display());
     }
@@ -385,11 +460,18 @@ mod tests {
         let server = reserved_name(root.path(), SERVER);
         left_by_a_killed_session(&session);
         left_by_a_killed_session(&server);
+        let owner = owner_of(root.path());
 
-        sweep(root.path(), owner_of(root.path()));
-
-        assert!(!session.exists(), "{} was left", session.display());
-        assert!(!server.exists(), "{} was left", server.display());
+        assert!(
+            swept_away(root.path(), owner, &session),
+            "{} was left",
+            session.display()
+        );
+        assert!(
+            swept_away(root.path(), owner, &server),
+            "{} was left",
+            server.display()
+        );
     }
 
     /// A session running beside the one opening keeps its directory and everything in it. Its
@@ -515,14 +597,86 @@ mod tests {
             .expect("a program");
         drop(claim);
 
-        sweep(root.path(), owner_of(root.path()));
+        let taken = swept_away(root.path(), owner_of(root.path()), &path);
         let _ = program.kill();
         let _ = program.wait();
 
         assert!(
-            !path.exists(),
+            taken,
             "{} was kept by what the session started",
             path.display()
         );
+    }
+
+    /// `path` made as a session makes it, with its lock held by something other than the
+    /// session about to claim it.
+    #[cfg(unix)]
+    fn held_by_something_else(path: &Path) -> std::fs::File {
+        made_unclaimed(path).expect("made");
+        let holder = opened(path).expect("opened");
+        rustix::fs::flock(&holder, rustix::fs::FlockOperation::LockExclusive).expect("held");
+        holder
+    }
+
+    /// The mode `path` is at, with the kind of file it is left out.
+    #[cfg(unix)]
+    fn mode_of(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path)
+            .expect("its metadata")
+            .permissions()
+            .mode()
+            & 0o7777
+    }
+
+    /// A lock held for a moment, which is as long as a sweep checking a directory still being
+    /// made holds one, is waited out, and the session's directory is claimed as usual.
+    #[test]
+    #[cfg(unix)]
+    fn a_claim_held_for_a_moment_is_waited_out() {
+        let root = SessionScratch::create().expect("a directory to sweep");
+        let path = reserved_name(root.path(), SESSION);
+        let holder = held_by_something_else(&path);
+        let letting_go = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            drop(holder);
+        });
+
+        let _claim = claimed(&path).expect("claimed");
+        letting_go.join().expect("let go");
+
+        assert_eq!(mode_of(&path), CLAIMED, "mode was {:o}", mode_of(&path));
+    }
+
+    /// A lock something else keeps does not keep a session from opening. It goes on with its
+    /// directory private to it, at a mode the sweep leaves, rather than waiting as long as the
+    /// holder pleases or being taken for a leftover once nothing holds it.
+    #[test]
+    #[cfg(unix)]
+    fn a_claim_held_by_something_else_does_not_stall_the_session() {
+        let root = SessionScratch::create().expect("a directory to sweep");
+        let path = reserved_name(root.path(), SESSION);
+        let holder = held_by_something_else(&path);
+        let (sent, answer) = std::sync::mpsc::channel();
+        let claiming = path.clone();
+        std::thread::spawn(move || {
+            let _ = sent.send(claimed(&claiming));
+        });
+
+        let claim = answer
+            .recv_timeout(SETTLE)
+            .expect("the session waited on the holder")
+            .expect("its directory");
+        assert_eq!(
+            mode_of(&path) & 0o777,
+            0o700,
+            "mode was {:o}",
+            mode_of(&path)
+        );
+        drop(holder);
+        drop(claim);
+        sweep(root.path(), owner_of(root.path()));
+
+        assert!(path.is_dir(), "{} was taken for a leftover", path.display());
     }
 }
