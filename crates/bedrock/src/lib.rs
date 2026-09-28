@@ -52,6 +52,13 @@ pub enum BedrockError {
     NoContent,
     /// The stream stopped without the service saying the reply was over.
     Incomplete,
+    /// The reply began and then stopped arriving, on a request that let the service hold a tool's
+    /// arguments back until the model had finished writing them.
+    ///
+    /// The reply stopping, as [`BedrockError::Incomplete`] is, and unlike it never asked for again:
+    /// the silence may be the model still writing, and a second request writes the same argument
+    /// into the same silence and is billed for it.
+    Stalled,
     /// The service said, part way through the reply, that it was not going to finish it.
     ///
     /// Named by the failure the service reported rather than by a status: the status was sent and
@@ -95,6 +102,10 @@ impl fmt::Display for BedrockError {
             Self::Incomplete => {
                 f.write_str("the reply stopped before the service said it was finished")
             }
+            Self::Stalled => f.write_str(
+                "the reply stopped arriving while the service may still have been holding a tool \
+                 call back",
+            ),
             Self::Reported { kind } => {
                 write!(f, "AWS stopped the reply part way through and reported {kind}")
             }
@@ -419,6 +430,24 @@ impl<'a> BedrockClient<'a> {
                 .is_some_and(|tools| !tools.is_empty())
     }
 
+    /// What a streamed reply that began and then failed to arrive is reported as.
+    ///
+    /// Never as the request failing to get through, since some of the reply is here. Whether it is
+    /// worth asking for again turns on what the silence could have been: where arguments stream as
+    /// they are written, or there is no tool to write one for, nothing the model does is silent that
+    /// long and the connection is what died.
+    fn stopped_part_way(&self, request: &ChatRequest) -> BedrockError {
+        let offers_tools = request
+            .tools
+            .as_deref()
+            .is_some_and(|tools| !tools.is_empty());
+        if offers_tools && !self.streams_arguments(request, true) {
+            BedrockError::Stalled
+        } else {
+            BedrockError::Incomplete
+        }
+    }
+
     /// Settle what a probe found, once the request it was part of has finished one way or the other.
     ///
     /// A probe that answered leaves what it gave up dropped, which is the model saying it does not
@@ -675,11 +704,17 @@ impl<'a> BedrockClient<'a> {
         let mut reply = Reply::default();
         // One envelope, arriving in frames, so it is authorised once rather than once a frame.
         let decoding = policy.decode_transport("converse stream", Label::untrusted_public());
+        let mut began = false;
 
         loop {
             let piece = match arriving.recv_timeout(WAKE) {
                 Ok(Ok(Some(piece))) => piece,
                 Ok(Ok(None)) => break,
+                // A read that fails once the reply has begun is the reply stopping, whatever the
+                // socket reported: the request plainly got through.
+                Ok(Err(EgressError::Transport { .. })) if began => {
+                    return Err(self.stopped_part_way(request));
+                }
                 Ok(Err(e)) => return Err(e.into()),
                 // Nothing has arrived yet, which is the only chance to look at anything while a
                 // reply is still being waited for.
@@ -693,6 +728,7 @@ impl<'a> BedrockClient<'a> {
                 // connection leaves, and is answered as one below.
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             };
+            began = true;
 
             if self.cancelled() {
                 return Err(BedrockError::Cancelled);
@@ -1656,12 +1692,20 @@ mod tests {
     fn scripted_responses(
         responses: Vec<Vec<u8>>,
     ) -> (Request, std::sync::mpsc::Receiver<Vec<u8>>) {
+        scripted_with_silences(responses.into_iter().map(|r| (r, false)).collect())
+    }
+
+    /// As [`scripted_responses`], where a response paired with `true` is written and then followed
+    /// by nothing, the connection held open until the client gives up on it.
+    fn scripted_with_silences(
+        responses: Vec<(Vec<u8>, bool)>,
+    ) -> (Request, std::sync::mpsc::Receiver<Vec<u8>>) {
         use std::io::{BufRead, Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let (sent, received) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            for response in responses {
+            for (response, silent) in responses {
                 let (mut stream, _) = listener.accept().unwrap();
                 let mut reader = std::io::BufReader::new(&mut stream);
                 let mut length = 0;
@@ -1679,6 +1723,9 @@ mod tests {
                 reader.read_exact(&mut body).unwrap();
                 stream.write_all(&response).unwrap();
                 sent.send(body).unwrap();
+                if silent {
+                    let _ = stream.read(&mut [0; 1]);
+                }
             }
         });
         (
@@ -1787,13 +1834,27 @@ mod tests {
         request: &ChatRequest,
         responses: Vec<Vec<u8>>,
     ) -> (Result<Completion, BedrockError>, Vec<serde_json::Value>) {
+        stream_against_with(
+            Egress::new(),
+            config,
+            request,
+            responses.into_iter().map(|r| (r, false)).collect(),
+        )
+    }
+
+    /// As [`stream_against`], through `egress`, against [`scripted_with_silences`].
+    fn stream_against_with(
+        egress: Egress,
+        config: &Bedrock,
+        request: &ChatRequest,
+        responses: Vec<(Vec<u8>, bool)>,
+    ) -> (Result<Completion, BedrockError>, Vec<serde_json::Value>) {
         use bravebot_core::{
             capability::{Capability, CapabilitySet},
             event::RecordingSink,
             policy::{ReleasePlan, Routing},
         };
-        let (http, received) = scripted_responses(responses);
-        let egress = Egress::new();
+        let (http, received) = scripted_with_silences(responses);
         let mut client = BedrockClient::new(config, &egress);
         client.test_request = Some(http);
         let mut sink = RecordingSink::new();
@@ -1872,6 +1933,149 @@ mod tests {
             asks(&client, &offering, true),
             None,
             "an ask the model refused was sent again"
+        );
+    }
+
+    /// An egress layer that gives up on a reply after a short silence, standing in for the idle
+    /// bound a real one has.
+    fn impatient() -> Egress {
+        Egress::with_timeouts(bravebot_net::Timeouts {
+            idle: Duration::from_millis(300),
+            ..Default::default()
+        })
+    }
+
+    /// A reply that opens a call to `write_file` and then says nothing, the connection left open.
+    fn begun_then_silent() -> (Vec<u8>, bool) {
+        let frame = eventstream::tests::frame(
+            "contentBlockStart",
+            br#"{"contentBlockIndex":0,"start":{"toolUse":{"toolUseId":"t1","name":"write_file"}}}"#,
+        );
+        let mut response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+            frame.len() * 100
+        )
+        .into_bytes();
+        response.extend(frame);
+        (response, true)
+    }
+
+    /// A reply whose status arrived and whose body never began.
+    fn silent_from_the_start() -> (Vec<u8>, bool) {
+        (
+            b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\n".to_vec(),
+            true,
+        )
+    }
+
+    /// Once any of the reply has arrived, the request got through: a reply that then goes quiet
+    /// has stopped, and saying it did not get through sends a person to check their network. With
+    /// arguments streamed as they are written, a silence that long is a dead connection, so it is
+    /// asked for again like any reply that stopped early.
+    #[test]
+    fn a_reply_that_went_quiet_after_it_began_is_reported_as_stopping_and_asked_for_again() {
+        let model = "a-model-whose-reply-went-quiet";
+        let (result, sent) = stream_against_with(
+            impatient(),
+            &config_for(model),
+            &writing_a_file(model),
+            vec![
+                begun_then_silent(),
+                begun_then_silent(),
+                begun_then_silent(),
+            ],
+        );
+
+        assert!(
+            matches!(result, Err(BedrockError::Incomplete)),
+            "a reply that began was reported as {result:?}"
+        );
+        assert_eq!(sent.len() as u32, ATTEMPTS, "each attempt the server read");
+        assert!(
+            sent.iter().all(|body| carried(body).1),
+            "sent without the ask"
+        );
+    }
+
+    /// A reply that never began is the one failure that may still be the request not getting
+    /// through, and it is not asked for again: sending it again waits out the same silence.
+    #[test]
+    fn a_reply_that_never_began_is_still_a_request_that_did_not_get_through() {
+        let model = "a-model-that-never-began-a-reply";
+        let (result, sent) = stream_against_with(
+            impatient(),
+            &config_for(model),
+            &writing_a_file(model),
+            vec![silent_from_the_start(), (answered(), false)],
+        );
+
+        assert!(
+            matches!(
+                result,
+                Err(BedrockError::Egress(
+                    bravebot_net::EgressError::Transport { .. }
+                ))
+            ),
+            "a reply that never began was reported as {result:?}"
+        );
+        assert_eq!(sent.len(), 1, "a silence before the reply was sent again");
+    }
+
+    /// Without the ask, the service holds a tool argument back until it is finished, so a reply
+    /// that went quiet after opening a call may be the model still writing. Asking again writes
+    /// the same argument into the same silence and bills it again, so it is reported as the reply
+    /// stopping and left there.
+    #[test]
+    fn a_reply_that_went_quiet_while_an_argument_was_held_back_is_not_asked_for_again() {
+        let model = "a-model-that-holds-arguments-back";
+        remember(
+            model,
+            Refusals {
+                arguments_as_written: true,
+                ..Refusals::default()
+            },
+        );
+        let (result, sent) = stream_against_with(
+            impatient(),
+            &config_for(model),
+            &writing_a_file(model),
+            vec![begun_then_silent(), (answered(), false)],
+        );
+
+        assert!(
+            matches!(result, Err(BedrockError::Stalled)),
+            "a reply that went quiet without the ask was reported as {result:?}"
+        );
+        assert_eq!(sent.len(), 1, "the held-back argument was asked for again");
+        assert!(!carried(&sent[0]).1, "the ask the model refused was sent");
+    }
+
+    /// Only a request offering a tool has an argument for the service to hold back, so only there
+    /// is a silence without the ask possibly the model still writing.
+    #[test]
+    fn only_a_request_whose_arguments_are_held_back_stalls_rather_than_stopping() {
+        let config = config();
+        let egress = Egress::new();
+        let mut client = BedrockClient::new(&config, &egress);
+        let offering = writing_a_file("opus-arn");
+        let bare = ChatRequest::new("opus-arn", vec![Message::user("hello")]);
+
+        assert!(matches!(
+            client.stopped_part_way(&offering),
+            BedrockError::Incomplete
+        ));
+        assert!(
+            matches!(client.stopped_part_way(&bare), BedrockError::Incomplete),
+            "a reply with no tool to hold back was not asked for again"
+        );
+        client.arguments_as_written = false;
+        assert!(matches!(
+            client.stopped_part_way(&offering),
+            BedrockError::Stalled
+        ));
+        assert!(
+            matches!(client.stopped_part_way(&bare), BedrockError::Incomplete),
+            "a reply with no tool to hold back was not asked for again"
         );
     }
 

@@ -1344,6 +1344,14 @@ Known Bedrock stream exceptions map to fixed categories: validation to refused, 
 rate-limited, and service-unavailable or internal-server errors to unavailable. Other exception
 names map to incomplete. Retry eligibility is unchanged.
 
+A streamed Bedrock reply that stops arriving once any of its body has arrived is incomplete, and
+never a request that did not get through, whatever the transport said about the read that failed.
+A read that fails before any of the body has arrived stays a transport failure and is not sent
+again. A reply that stopped is sent again where its request asked for tool arguments as they are
+written ([BACKEND-44](#BACKEND-44)) or offered no tool, and not where it offered one without the ask:
+there the silence may be the service holding an argument back until the model has finished it, and a
+second request waits out the same silence and is billed for it.
+
 A reply stopped at its output ceiling reports that ceiling alongside the category. It is this
 program's own configured figure rather than anything a service said, so it is not a detail taken
 from a reply, and without it the report names a limit and no way to change it.
@@ -1364,6 +1372,11 @@ from a reply, and without it the report names a limit and no way to change it.
 `verified-by: bravebot_aichat::client::a_stop_between_attempts_at_a_whole_reply_does_not_wait_out_the_pause`
 `verified-by: bravebot_bedrock::lib::a_stop_between_attempts_at_a_whole_reply_does_not_wait_out_the_pause`
 `verified-by: bravebot_bedrock::lib::framed_service_exceptions_keep_their_kind_and_request_count`
+`verified-by: bravebot_bedrock::lib::a_reply_that_went_quiet_after_it_began_is_reported_as_stopping_and_asked_for_again`
+`verified-by: bravebot_bedrock::lib::a_reply_that_never_began_is_still_a_request_that_did_not_get_through`
+`verified-by: bravebot_bedrock::lib::a_reply_that_went_quiet_while_an_argument_was_held_back_is_not_asked_for_again`
+`verified-by: bravebot_bedrock::lib::only_a_request_whose_arguments_are_held_back_stalls_rather_than_stopping`
+`verified-by: bravebot_agent::backend::a_reply_that_stopped_arriving_is_reported_as_unfinished_and_not_as_unreachable`
 `verified-by: bravebot_agent::failure_categories::service_exception_keeps_its_actionable_category`
 `verified-by: bravebot_agent::turn::compaction_failure_narration_keeps_credentials_out`
 `verified-by: bravebot_agent::turn::what_the_planner_is_told_about_a_failed_delegate_carries_nothing_of_the_endpoint`

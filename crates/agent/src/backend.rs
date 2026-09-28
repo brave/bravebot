@@ -145,7 +145,7 @@ impl BackendError {
                 BedrockError::Decode { .. } | BedrockError::Frame(_) | BedrockError::NoContent => {
                     Category::Undecodable
                 }
-                BedrockError::Incomplete => Category::Incomplete,
+                BedrockError::Incomplete | BedrockError::Stalled => Category::Incomplete,
                 BedrockError::Reported { kind } => match kind.as_str() {
                     "validationException" => Category::Refused,
                     "throttlingException" => Category::RateLimited,
@@ -1246,6 +1246,18 @@ mod tests {
             }
             .is_unreachable()
         );
+    }
+
+    /// A Bedrock reply that began and then stopped arriving got through, whether or not it was
+    /// worth asking for again. Reported as a request that did not, it sends a person to check a
+    /// network that was working, and a caller to reach again a service that was reached.
+    #[test]
+    fn a_reply_that_stopped_arriving_is_reported_as_unfinished_and_not_as_unreachable() {
+        for stopped in [BedrockError::Incomplete, BedrockError::Stalled] {
+            let failure = BackendError::from(stopped).counted(1, None, None);
+            assert_eq!(failure.diagnosis().category, Category::Incomplete);
+            assert!(!failure.is_unreachable());
+        }
     }
 
     /// A turn asks again after an empty reply, so a reply that was cut or garbled must not pass
