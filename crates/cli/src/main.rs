@@ -55,7 +55,7 @@ fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
 
     // A bare `--` ends bravebot's own flags: what follows is another program's argv, as after
-    // `mcp add --stdio --`, where a server's own `--settings` must stay the server's.
+    // `mcp add <alias> --`, where a server's own `--settings` must stay the server's.
     let foreign = match args.iter().position(|arg| arg == "--") {
         Some(at) => args.split_off(at),
         None => Vec::new(),

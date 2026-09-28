@@ -373,7 +373,7 @@ bare invocation alike. It cannot be turned off once the session has started.
 
 ### What it does not cover
 
-Five things still reach the filesystem:
+Six things still reach the filesystem:
 
 - **Your project.** `write_file` and `edit_file` go on editing it. Those edits are the work rather
   than a trace of it.
@@ -388,6 +388,10 @@ Five things still reach the filesystem:
   directory on the same terms as the editor's file and goes with the session. Its name says which
   program made it and nothing about which project or which session, so an empty one records only that
   this program ran at this time.
+- **A local MCP server's home.** A [server](../customize/mcp-servers.md) is given a directory of its
+  own to keep its files in, such as a runner's cache. Here it sits in the system temporary directory
+  on the same terms and goes once the server stops, so a runner fetches its package again each
+  session.
 - **A credential you spent.** With a [Leo Premium](../customize/premium.md) subscription imported,
   the session spends credentials from it as any session does, and records which ones it spent in the
   file the import created under `~/.bravebot`. A credential is single use and presenting it to the

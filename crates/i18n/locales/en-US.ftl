@@ -502,14 +502,14 @@ mcp-needs-an-alias = { $command } needs the alias of a server
 mcp-unexpected-argument = { $command } does not take { $argument }
 mcp-add-stray-argument =
     word { $position } after add is not a flag, and is not repeated since it may be a value:
-    --env, --dir and --http take one word each, and --stdio -- takes the rest
+    --env, --dir and --http take one word each, and -- takes the rest
 mcp-not-an-alias =
     { $alias } cannot name a server: an alias is letters, digits, - and _, starts with a letter or
     a digit, and is at most 64 characters
-mcp-needs-a-transport = add needs --stdio -- <program> [args...] or --http <url>
-mcp-two-transports = add takes --stdio or --http, not both
+mcp-needs-a-transport = add needs -- <program> [args...] or --http <url>
+mcp-two-transports = add takes a program after -- or --http, not both
 mcp-stdio-needs-a-program =
-    --stdio takes the program and its arguments after a bare --, as in --stdio -- npx -y weather-mcp
+    a program and its arguments come after a bare --, as in -- npx -y weather-mcp
 mcp-http-needs-a-url = --http needs a url
 mcp-env-needs-a-name = --env needs the name of a variable
 mcp-dir-needs-a-path = --dir needs a directory
@@ -634,6 +634,8 @@ servers-project-not-kept = { $path } was not recorded as a project whose servers
 servers-not-confined = { $alias } was not started, since nothing here can confine it: { $reason }
 servers-no-confinement-here =
     { $alias } was not started: this platform has no confinement for a local MCP server yet
+servers-no-home =
+    { $alias } was not started: a directory of its own could not be made in { $path }: { $reason }
 servers-no-handshake = { $alias } was started and did not complete its handshake: { $reason }
 servers-too-slow = { $alias } did not complete its handshake within { $seconds } seconds
 

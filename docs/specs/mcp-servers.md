@@ -152,7 +152,7 @@ machine asks again, and a deliberate `rm -rf` of the workspace no longer forgets
 ## The command line
 
 ```
-bravebot mcp add <alias> [--env <name>]... [--dir <path>] --stdio -- <program> [args...]
+bravebot mcp add <alias> [--env <name>]... [--dir <path>] [--stdio] -- <program> [args...]
 bravebot mcp add <alias> --http <url>
 bravebot mcp get <alias>
 bravebot mcp list
@@ -169,11 +169,14 @@ anything requested it. `remove` deletes the declaration and its approval togethe
 approval outliving its declaration is a digest nothing resolves. `forget` drops the standing answers
 recorded for a project, defaulting to this one.
 
-`--stdio -- ...` takes the program and its arguments after a bare `--`, as argv and never as a line.
-Nothing here compiles shell syntax: that is [tools/command-line.md](tools/command-line.md)'s road,
-for a line a planner wrote, and a server is a program a person named. `--env <name>` names one
-variable the server receives ([SERVERS-10](#SERVERS-10)) and may be given more than once; `--dir
-<path>` is the directory it runs in, written into the file as the absolute path it resolves to.
+A bare `--` takes the program and its arguments after it, as argv and never as a line, and every
+word after it is the server's, a flag of bravebot's included. `--stdio --` is the same and may be
+written instead. Nothing here compiles shell syntax: that is
+[tools/command-line.md](tools/command-line.md)'s road, for a line a planner wrote, and a server is a
+program a person named. `--env <name>` names one variable the server receives
+([SERVERS-10](#SERVERS-10)) and may be given more than once, and a program given by a bare name
+has `PATH` named for it; `--dir <path>` is the directory it runs in, written into the file as the
+absolute path it resolves to.
 
 `forget` takes one path at most, and the current directory without one. The path is read with its
 links followed, as answer 2 recorded it, and one that no longer resolves, a deleted checkout's, is
@@ -187,8 +190,8 @@ was recorded, and leaves every other project's as it was. An incognito session w
 
 | Claude Code | Here | Note |
 |---|---|---|
-| `claude mcp add weather -- npx -y @dangahagan/weather-mcp@latest` | `bravebot mcp add weather --stdio -- npx -y @dangahagan/weather-mcp@latest` | The transport is named rather than inferred from whether a url was given. |
-| `claude mcp add weather -s user -- ...` | `bravebot mcp add weather --stdio -- ...` | Already the only scope that may declare, so the flag would have one value. |
+| `claude mcp add weather -- npx -y @dangahagan/weather-mcp@latest` | `bravebot mcp add weather -- npx -y @dangahagan/weather-mcp@latest` | The same line. It declares `PATH` for `npx`, and the question shows it. |
+| `claude mcp add weather -s user -- ...` | `bravebot mcp add weather -- ...` | Already the only scope that may declare, so the flag would have one value. |
 | `claude mcp add weather -s project -- ...` | no equivalent | [SERVERS-1](#SERVERS-1). The checkout may request the alias; it may not carry the argv. |
 | `claude mcp get weather` | `bravebot mcp get weather` | Also prints the digest, which is what an approval is against. |
 | `claude mcp remove weather -s project` | edit `"mcp": { "request": [...] }` in `.bravebot/settings.json` | A request is a line in a file somebody commits, so it is removed the way it was added. |
@@ -203,6 +206,7 @@ was recorded, and leaves every other project's as it was. An incognito session w
 | The list of tools a person vouched for, a `tools` line holding the declaration's digest and the list's | `~/.bravebot/mcp-approved` | the person's own directory | until another list is vouched for under that declaration, or no declaration resolves to it |
 | "use all future servers in this project", one project path per line | `~/.bravebot/mcp-projects` | the person's own directory | until `mcp forget` |
 | "stop asking for this tool here", one alias, tool and project path per line | `~/.bravebot/mcp-tools` | the person's own directory | until `mcp forget` |
+| What a local server writes in its own home, such as a runner's cache ([SERVERS-10](#SERVERS-10)) | `~/.bravebot/mcp-home/<digest>` | one declaration | until somebody removes it |
 | A request for an alias, `"mcp": { "request": ["weather"] }` | `.bravebot/settings.json` beside the work | that checkout | that checkout |
 | What may start, `"mcp": { "allow": [{ "host": "*.corp.example" }], "deny": [{ "command": ["/opt/weather-mcp"] }] }` | the managed layer | the machine | as long as it is pinned |
 | A declaration, an argv, a url, or a variable's value | `.bravebot/settings.json` or `.bravebot/settings.local.json` | **nothing.** [SERVERS-1](#SERVERS-1) | n/a |
@@ -299,7 +303,9 @@ and `remove` is refused there and leaves the files as they were.
 `verified-by: bravebot_cli::mcp::a_yes_at_the_question_records_the_digest_and_nothing_else_does`
 `verified-by: bravebot_cli::mcp::approve_records_only_on_a_yes_and_a_no_ends_refused`
 `verified-by: bravebot_cli::mcp::the_question_shows_every_argument_as_the_word_it_is`
+`verified-by: bravebot_cli::mcp::a_bare_double_dash_declares_the_program_after_it`
 `verified-by: bravebot_cli::running::an_added_server_nobody_was_asked_about_is_declared_and_listed_unapproved`
+`verified-by: bravebot_cli::running::a_flag_of_bravebots_after_the_bare_dashes_is_the_servers_argument`
 `verified-by: bravebot_cli::running::approving_with_nobody_to_ask_is_refused_and_records_nothing`
 `verified-by: bravebot_cli::running::a_server_is_not_declared_in_an_incognito_session`
 
@@ -721,7 +727,8 @@ no other.
 [MCP-9](mcp.md#MCP-9) empties the environment before a stdio server starts, on every platform, and
 its known cost is that a server needing a variable to work at all does not work. This is that cost
 paid: the declaration lists variable **names**, those names are read from this process's environment
-at launch, and the resulting environment of the server is those values and nothing else.
+at launch, and the resulting environment of the server is those values and nothing else, beside
+the `HOME` described below.
 
 No value is stored. A settings layer supplies none of them, and neither does the declaration: a
 declaration that wrote a value in place of a name is a parse error. `PATH` is a name like any other,
@@ -737,7 +744,11 @@ named ones keeps [MCP-9](mcp.md#MCP-9)'s property where it matters: this process
 are in variables, and a server is code we did not write.
 
 `--env <name>` adds a name, a name given a value (`--env TOKEN=...`, or an `env` block in the
-file) is refused, and the refusal names the variable and never repeats what it was set to.
+file) is refused, and the refusal names the variable and never repeats what it was set to. A
+program `add` is given by a bare name, such as `npx`, has `PATH` added to the names once, whether or
+not it was typed, since the `PATH` a declaration names is the only one such a program is looked for
+in, as the next paragraph says. It is shown at the question as a typed name is, and is part of what
+the digest covers. A program given as a path is declared with only the names typed.
 
 At launch each named variable this process holds is handed over, and one it does not hold is left
 out rather than set empty. A program named rather than given as a path is looked for in the `PATH`
@@ -756,6 +767,13 @@ The process is confined under [MCP-3](mcp.md#MCP-3), and what it may reach is bu
   is left out, and so is a `bin` directory's parent inside it, since `~/.cargo` keeps a registry
   token beside `~/.cargo/bin`. A `PATH` entry inside it, such as `~/.local/bin`, is read, as the
   place the person put programs.
+- The installation the program came from, which is the directory above the `bin` directory the
+  program resolved into, with its links followed, where that sits deeper in the home directory than
+  a directory directly inside it. `nvm` installs `npx` as a link into
+  `~/.nvm/versions/node/<version>/lib/node_modules/npm/bin`, and the script there loads the rest of
+  npm from beside it. A `bin` directory directly inside a directory at the top of the home, such as
+  `~/.cargo/bin`, brings nothing, for the reason above.
+- The server's own directory, below, which it may read and write.
 - The declared directory, which the server may read and write and starts in. Without one it starts
   in the system temporary directory, and reads nothing of the workspace.
 - A look at any path, and no read or listing beyond the rows above, which is
@@ -766,6 +784,29 @@ The home these rows keep out is the person's profile directory, and not the stat
 it that bravebot keeps its own files in. It is compared with its links followed, as the rows are,
 so a home reached through a link is kept out as well.
 
+**A server has a home directory of its own**, and `HOME` names it unless the declaration names
+`HOME`, in which case the person's value is handed over as any other named variable is. A runner
+keeps its cache and a server its settings under `HOME`, and with the person's own home out of reach
+and no `HOME` at all, `npx` cannot start. The directory is
+`~/.bravebot/mcp-home/<digest>`, keyed by the declaration's digest rather than its alias, so what a
+runner fetched is there on the next launch and a declaration edited to run another program starts
+with nothing the one before it wrote. It is created by this process before the server starts, at
+the modes [state-directory.md](state-directory.md#STATE-1) gives them, and a server whose directory
+cannot be created is not started, and the line says where it was to be made and why.
+
+It is not trusted, and `~/.bravebot` is exactly why somebody will think it is, as with
+[LSP-10](tools/lsp.md#LSP-10)'s cache. [TRUST-11](trust-map.md#TRUST-11) makes that directory
+trusted because the person wrote what is in it, and this directory is written by a server, which is
+code we did not write. The driver never opens it: what it reads under `~/.bravebot` is what
+[instructions.md](instructions.md) and [skills.md](skills.md) name, and this is none of it. A read
+the planner asks for reaches it only where [TRUST-10](trust-map.md#TRUST-10) lets one, which is a
+workspace holding it, and is read through the map like any other file there.
+
+**A session that keeps nothing** hands the server a directory of its own in the system temporary
+directory instead, on the terms [incognito.md](incognito.md#INCOG-8) states for it: created rather
+than adopted, readable by nobody else, and removed once the server has stopped. A runner there
+fetches its package again each session, which is the trade incognito already makes.
+
 A platform with no confinement for this, which is Windows today, starts no stdio server and says
 so, and asks nobody about one it could not start. Where the sandbox cannot be built, the server is
 not started either, and the line says why.
@@ -774,12 +815,21 @@ not started either, and the line says why.
 `verified-by: bravebot_config::mcp::an_env_block_or_an_object_of_variables_is_values_and_is_refused`
 `verified-by: bravebot_config::mcp::a_name_that_is_not_one_is_refused`
 `verified-by: bravebot_cli::running::a_value_given_to_a_variable_is_refused_and_never_repeated`
+`verified-by: bravebot_cli::mcp::a_program_named_by_a_bare_name_is_declared_with_path`
+`verified-by: bravebot_cli::mcp::the_question_shows_the_path_a_bare_name_was_given`
 `verified-by: bravebot_cli::servers::a_program_is_found_in_the_path_it_names_and_nowhere_else`
 `verified-by: bravebot_cli::servers::a_path_the_declaration_does_not_name_resolves_nothing`
 `verified-by: bravebot_cli::servers::a_local_server_is_not_asked_about_where_nothing_can_confine_it`
 `verified-by: bravebot_cli::servers::a_servers_confinement_reaches_its_installation_and_nothing_of_the_home_directory`
 `verified-by: bravebot_cli::servers::the_home_kept_out_of_a_launched_server_is_the_persons_and_not_the_state_directory`
 `verified-by: bravebot_cli::servers::a_home_reached_through_a_link_is_kept_out_of_a_servers_confinement`
+`verified-by: bravebot_cli::servers::a_programs_own_installation_deep_in_the_home_directory_is_read`
+`verified-by: bravebot_cli::servers::a_server_is_handed_its_own_home_unless_the_declaration_names_one`
+`verified-by: bravebot_cli::servers::a_server_keeps_a_home_of_its_own_under_the_state_directory`
+`verified-by: bravebot_cli::servers::a_started_server_writes_its_own_files_in_the_home_kept_for_it`
+`verified-by: bravebot_cli::servers::a_server_in_a_session_that_keeps_nothing_is_given_a_home_that_goes_with_it`
+`verified-by: bravebot_cli::servers::a_started_server_in_a_session_that_keeps_nothing_has_a_home_that_goes_with_it`
+`verified-by: bravebot_agent::mcp::a_servers_throwaway_home_lasts_as_long_as_the_session_holding_it`
 `verified-by: bravebot_mcp::stdio::a_server_receives_the_variables_it_was_handed_and_no_others`
 
 <a id="SERVERS-11"></a>
@@ -1049,11 +1099,11 @@ is one of the clauses above; every refusal is a clause refusing.
 **1. Declare it.** A person types:
 
 ```
-bravebot mcp add weather --stdio -- npx -y @dangahagan/weather-mcp@latest
+bravebot mcp add weather -- npx -y @dangahagan/weather-mcp@latest
 ```
 
-The declaration lands in `~/.bravebot/mcp.json`. Nothing is reachable yet
-([SERVERS-3](#SERVERS-3)).
+The declaration lands in `~/.bravebot/mcp.json`, naming `PATH` for `npx`
+([SERVERS-10](#SERVERS-10)). Nothing is reachable yet ([SERVERS-3](#SERVERS-3)).
 
 **2. Answer the server question.** `add` asks [SERVERS-3](#SERVERS-3)'s question, naming `npx` as a
 runner that fetches its own code and `@latest` as unpinned ([SERVERS-6](#SERVERS-6)). `y` records
@@ -1209,11 +1259,13 @@ This spec cannot land without these. Each is named by what the clause says rathe
   on the plain terminal before that interface takes the screen, and the question about trusting the
   directory is asked inside it. A server can therefore start for a session whose directory is then
   declined, and it runs until the process exits.
-- **A runner's cache is not writable.** The home directory is not in a server's policy, so `npx` or
-  `uvx` cannot fill the cache they keep under it. Naming a cache variable with `--env`, pointed into
-  `--dir` or the temporary directory, is the road around it. A toolchain installed under the home
-  directory, as `nvm` installs one, has its `bin` directories readable and not the directory beside
-  them its programs load from, so a runner from one does not start confined.
+- **Nothing removes a server's old home.** A declaration that changes leaves the directory the one
+  before it wrote under `~/.bravebot/mcp-home`, a runner's whole cache among it, until somebody
+  removes it.
+- **A toolchain is found through its own installation and nowhere else in the home directory.** A
+  runner whose program loads from somewhere other than the installation it came from, such as a
+  version manager's shim that hands over to a program elsewhere in the home, is not given that
+  somewhere, and does not start confined.
 - **The full-screen interface discards a server's stderr.** It owns the screen, and a server's
   diagnostics drawn over it would be a server's bytes where the interface draws. A one-shot run and
   the plain interface pass it through to their own stderr.

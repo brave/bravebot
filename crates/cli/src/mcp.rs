@@ -97,7 +97,7 @@ fn refused_with_the_forms(message: String) -> Stopped {
     said.push('\n');
     said.push_str(t!(mcp_forms_heading));
     for form in [
-        "bravebot mcp add <alias> [--env <name>]... [--dir <path>] --stdio -- <program> [args...]",
+        "bravebot mcp add <alias> [--env <name>]... [--dir <path>] [--stdio] -- <program> [args...]",
         "bravebot mcp add <alias> --http <url>",
         "bravebot mcp get <alias>",
         "bravebot mcp list",
@@ -221,8 +221,8 @@ impl From<Stopped> for Refusal {
 
 /// The declaration `add`'s flags spell, checked exactly as an entry in the file is.
 ///
-/// Everything after `--stdio --` is the program and its arguments, as words and never as a line,
-/// so a flag of this command written after it is an argument of the server's.
+/// Everything after a bare `--`, or after `--stdio --`, is the program and its arguments, as words
+/// and never as a line, so a flag of this command written after it is an argument of the server's.
 fn declared(flags: &[String]) -> Result<Declaration, Refusal> {
     let mut variables = Vec::new();
     let mut directory = None;
@@ -247,14 +247,16 @@ fn declared(flags: &[String]) -> Result<Declaration, Refusal> {
                 }
                 transport = Some(Transport::Http(url.clone()));
             }
-            "--stdio" => {
+            "--stdio" | "--" => {
                 if transport.is_some() {
                     return Err(argument(t!(mcp_two_transports)).into());
                 }
-                if value.map(String::as_str) != Some("--") {
-                    return Err(argument(t!(mcp_stdio_needs_a_program)).into());
-                }
-                let argv = flags[index + 2..].to_vec();
+                let program = match flag {
+                    "--" => index + 1,
+                    _ if value.map(String::as_str) == Some("--") => index + 2,
+                    _ => return Err(argument(t!(mcp_stdio_needs_a_program)).into()),
+                };
+                let argv = flags[program..].to_vec();
                 if argv.is_empty() {
                     return Err(argument(t!(mcp_stdio_needs_a_program)).into());
                 }
@@ -279,6 +281,11 @@ fn declared(flags: &[String]) -> Result<Declaration, Refusal> {
     match transport {
         None => Err(argument(t!(mcp_needs_a_transport)).into()),
         Some(Transport::Stdio(argv)) => {
+            // A bare name is looked for only in the PATH a declaration names (SERVERS-10), so
+            // one typed without it would be a server that can never start.
+            if is_a_bare_name(&argv[0]) {
+                variables.push("PATH".to_string());
+            }
             Declaration::stdio(argv, variables, directory).map_err(Refusal::Problem)
         }
         Some(Transport::Http(_)) if !variables.is_empty() => {
@@ -289,6 +296,14 @@ fn declared(flags: &[String]) -> Result<Declaration, Refusal> {
         }
         Some(Transport::Http(url)) => Declaration::http(url).map_err(Refusal::Problem),
     }
+}
+
+fn is_a_bare_name(program: &str) -> bool {
+    let mut parts = Path::new(program).components();
+    matches!(
+        (parts.next(), parts.next()),
+        (Some(std::path::Component::Normal(_)), None)
+    )
 }
 
 /// Which transport the flags named, before the rest of the declaration is checked.
@@ -868,7 +883,7 @@ mod tests {
     }
 
     fn weather() -> Declaration {
-        Declaration::stdio(words(&["npx", "-y", "weather-mcp"]), Vec::new(), None).unwrap()
+        Declaration::stdio(words(&["npx", "-y", "weather-mcp"]), words(&["PATH"]), None).unwrap()
     }
 
     const ADD: &[&str] = &[
@@ -1000,6 +1015,80 @@ mod tests {
         assert!(approved(&directory, &weather()));
     }
 
+    /// SERVERS-3: a bare `--` starts the program as `--stdio --` does, which is how `claude mcp add`
+    /// spells it, with the flags before it read the same and every word after it the server's.
+    #[test]
+    fn a_bare_double_dash_declares_the_program_after_it() {
+        let directory = scratch("cli-mcp-bare-dashes");
+        let place = std::fs::canonicalize(&directory).unwrap();
+        let place = place.to_str().unwrap();
+        let declared_by = |flags: &[&str]| declared(&words(flags)).ok();
+
+        assert_eq!(
+            declared_by(&["--", "npx", "-y", "weather-mcp"]),
+            Some(weather())
+        );
+        let flagged = Declaration::stdio(
+            words(&["/opt/srv", "--http", "x"]),
+            words(&["TOKEN"]),
+            Some(place.to_string()),
+        )
+        .unwrap();
+        assert_eq!(
+            declared_by(&[
+                "--env", "TOKEN", "--dir", place, "--", "/opt/srv", "--http", "x"
+            ]),
+            Some(flagged)
+        );
+
+        let refused = |flags: &[&str]| match declared(&words(flags)) {
+            Err(Refusal::Said((Ending::Argument, said))) => said,
+            _ => panic!("{flags:?} was not refused as an argument"),
+        };
+        assert_eq!(refused(&["--"]), t!(mcp_stdio_needs_a_program).to_string());
+        assert_eq!(
+            refused(&["--http", "https://mcp.example.com/mcp", "--", "npx"]),
+            t!(mcp_two_transports).to_string()
+        );
+    }
+
+    /// SERVERS-10: a program named by a bare name is looked for only in the `PATH` its declaration
+    /// names, so `add` names `PATH` for one, once, whichever way it was typed. A program given as a
+    /// path is declared with only the variables named.
+    #[test]
+    fn a_program_named_by_a_bare_name_is_declared_with_path() {
+        for (flags, expected) in [
+            (&["--", "npx", "weather-mcp"][..], &["PATH"][..]),
+            (&["--stdio", "--", "npx", "weather-mcp"], &["PATH"]),
+            (&["--env", "PATH", "--", "npx", "weather-mcp"], &["PATH"]),
+            (
+                &["--env", "TOKEN", "--", "npx", "weather-mcp"],
+                &["TOKEN", "PATH"],
+            ),
+            (&["--", "/opt/weather-mcp"], &[]),
+            (&["--", "bin/weather-mcp"], &[]),
+            (&["--env", "TOKEN", "--", "/opt/weather-mcp"], &["TOKEN"]),
+        ] {
+            let Ok(Declaration::Stdio { variables, .. }) = declared(&words(flags)) else {
+                panic!("{flags:?} declared no local server");
+            };
+            assert_eq!(variables, words(expected), "{flags:?}");
+        }
+    }
+
+    /// The `PATH` `add` names is shown at the question like one typed, since the approval is of
+    /// the declaration and the declaration hands the server its value.
+    #[test]
+    fn the_question_shows_the_path_a_bare_name_was_given() {
+        let directory = scratch("cli-mcp-bare-path");
+        let short = ["add", "weather", "--", "npx", "-y", "weather-mcp"];
+        let (outcome, screen) = typing(&directory, &short, "y\n");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let shown = t!(mcp_variables, names = "PATH").to_string();
+        assert!(screen.lines().any(|line| line.trim() == shown), "{screen}");
+        assert!(approved(&directory, &weather()));
+    }
+
     #[test]
     fn the_question_shows_every_argument_as_the_word_it_is() {
         let directory = scratch("cli-mcp-shown");
@@ -1081,9 +1170,12 @@ mod tests {
         ];
         let (outcome, _) = typing(&directory, &pinned, "n\n");
         assert!(outcome.is_ok());
-        let replaced =
-            Declaration::stdio(words(&["npx", "-y", "weather-mcp@1.2.0"]), Vec::new(), None)
-                .unwrap();
+        let replaced = Declaration::stdio(
+            words(&["npx", "-y", "weather-mcp@1.2.0"]),
+            words(&["PATH"]),
+            None,
+        )
+        .unwrap();
         assert!(Approvals::read(&directory).changed("weather", &replaced.digest()));
     }
 

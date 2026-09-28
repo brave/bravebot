@@ -34,7 +34,13 @@ impl SessionScratch {
     /// names a session in a directory anybody on the machine can list, and not a fixed name, which
     /// two sessions would share.
     pub fn create() -> std::io::Result<Self> {
-        Self::created_at(reserved_name())
+        Self::created_at(reserved_name("scratch"))
+    }
+
+    /// One on the same terms, to hand a local MCP server as its home in a session that keeps
+    /// nothing, named for that so a person looking at a temporary directory can tell the two apart.
+    pub fn for_a_server() -> std::io::Result<Self> {
+        Self::created_at(reserved_name("mcp"))
     }
 
     /// Where it is.
@@ -90,7 +96,7 @@ impl Drop for SessionScratch {
 /// The pid separates processes, the stamp separates sessions within one, and the count separates
 /// two taken in the same moment: the clock behind the stamp holds a value for thousands of reads,
 /// so two names taken together are routinely the same name.
-fn reserved_name() -> PathBuf {
+fn reserved_name(kind: &str) -> PathBuf {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|since| since.as_nanos())
@@ -102,7 +108,7 @@ fn reserved_name() -> PathBuf {
     // asks for.
     // nosemgrep: rust.lang.security.temp-dir.temp-dir
     std::env::temp_dir().join(format!(
-        "bravebot-scratch-{}-{stamp}-{nth}",
+        "bravebot-{kind}-{}-{stamp}-{nth}",
         std::process::id()
     ))
 }

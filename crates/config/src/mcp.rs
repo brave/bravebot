@@ -49,6 +49,9 @@ const PROJECTS_FILE: &str = "mcp-projects";
 /// The tools answer 2 at a call was given about, one alias, tool and project per line.
 const TOOLS_FILE: &str = "mcp-tools";
 
+/// The directory holding one home per declaration a server was started from.
+const HOMES_DIRECTORY: &str = "mcp-home";
+
 /// The most of either file worth reading.
 ///
 /// A handful of short argument vectors, or a handful of digests. Bounded so a file that grew by
@@ -85,6 +88,14 @@ pub fn projects_file(directory: &Path) -> PathBuf {
 /// Where the tools answer 2 at a call was given about are recorded.
 pub fn tools_file(directory: &Path) -> PathBuf {
     directory.join(TOOLS_FILE)
+}
+
+/// Where a local server started from the declaration digested as `declared` keeps its own files.
+///
+/// Keyed by the digest rather than the alias, so a declaration edited to run another program does
+/// not inherit what the one before it wrote.
+pub fn server_home(directory: &Path, declared: &Digest) -> PathBuf {
+    directory.join(HOMES_DIRECTORY).join(declared.to_string())
 }
 
 /// Whether `word` may be offered as a tool's name beneath an alias.

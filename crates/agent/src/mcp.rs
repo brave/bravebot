@@ -16,6 +16,7 @@ use crate::confirm::{
 };
 use crate::processor::Chat;
 use crate::report::Reporter;
+use crate::scratch::SessionScratch;
 use bravebot_aichat::protocol::{Tool, Usage};
 use bravebot_config::mcp::{self as records, Approvals, Digest, Standing};
 use bravebot_core::capability::ServerAlias;
@@ -44,6 +45,7 @@ pub struct Reached {
     connection: Connection,
     listing: Listing,
     declaration: Digest,
+    home: Option<SessionScratch>,
 }
 
 impl Reached {
@@ -54,7 +56,15 @@ impl Reached {
             connection,
             listing,
             declaration,
+            home: None,
         }
+    }
+
+    /// The same server, holding the directory it was handed as its home in a session that keeps
+    /// nothing, so the directory goes once the server has stopped and not before.
+    pub fn holding(mut self, home: SessionScratch) -> Self {
+        self.home = Some(home);
+        self
     }
 
     /// The alias the person gave the server.
@@ -158,6 +168,8 @@ struct Server {
     state: Mutex<State>,
     /// Locked for one call at a time.
     connection: Mutex<Connection>,
+    /// After `connection`, since fields drop in order: the process is stopped before its home goes.
+    _home: Option<SessionScratch>,
 }
 
 struct Shared {
@@ -252,6 +264,7 @@ impl Session {
                 local: matches!(reached.connection, Connection::Stdio(_)),
                 state: Mutex::new(State::Unasked(reached.listing)),
                 connection: Mutex::new(reached.connection),
+                _home: reached.home,
             })
             .collect();
         Self(Arc::new(Shared {
