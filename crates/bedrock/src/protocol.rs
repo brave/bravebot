@@ -89,8 +89,8 @@ pub struct ConverseRequest {
     pub tool_config: Option<ToolConfig>,
     /// What the service hands to the model without reading it.
     ///
-    /// Absent unless somebody asked for a level or the request streams tool arguments, so a
-    /// whole-reply request nobody asked a level of sends the body it always sent.
+    /// Absent unless somebody asked for a level or the request streams, so a whole-reply request
+    /// nobody asked a level of sends the body it always sent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub additional_model_request_fields: Option<serde_json::Map<String, Value>>,
 }
@@ -456,6 +456,17 @@ impl ConverseRequest {
         self
     }
 
+    /// Ask for the model's thinking to be sent as it thinks, rather than kept back.
+    ///
+    /// Says how thinking is shown and never whether the model thinks, which stays the model's own
+    /// default: Claude Opus 5.5 asked nothing sent an empty thinking block after 11 seconds of
+    /// silence, and asked this sent the thinking as it went, the longest gap 7.6 seconds.
+    pub fn with_thinking_shown(mut self) -> Self {
+        self.passthrough()
+            .insert("thinking".to_string(), json!({ "display": "summarized" }));
+        self
+    }
+
     fn passthrough(&mut self) -> &mut serde_json::Map<String, Value> {
         self.additional_model_request_fields
             .get_or_insert_with(serde_json::Map::new)
@@ -797,27 +808,37 @@ mod tests {
         );
     }
 
-    /// The level and the ask for arguments as they are written share one passthrough object, so
-    /// setting either leaves the other in place. Replaced wholesale, a turn given a level loses the
-    /// ask and its long file is silent again.
+    /// The level, the ask for arguments as they are written and the ask to show thinking share one
+    /// passthrough object, so setting any leaves the others in place. Replaced wholesale, a turn
+    /// given a level loses the ask and its long file is silent again.
     #[test]
     fn the_level_and_the_ask_for_arguments_as_written_travel_together() {
         let tools = vec![Tool::function("write_file", "Write a file", json!({}))];
         let asked = || request_from(&[Message::user("hello")], Some(&tools));
-        for request in [
-            asked()
-                .with_arguments_as_written()
-                .with_effort(Some(Effort::Max)),
-            asked()
-                .with_effort(Some(Effort::Max))
-                .with_arguments_as_written(),
+        type Setter = fn(ConverseRequest) -> ConverseRequest;
+        let setters: [Setter; 3] = [
+            |r| r.with_effort(Some(Effort::Max)),
+            ConverseRequest::with_arguments_as_written,
+            ConverseRequest::with_thinking_shown,
+        ];
+        for order in [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
         ] {
-            let fields = &body_of(&request)["additionalModelRequestFields"];
-            assert_eq!(fields["output_config"]["effort"], "max", "{fields}");
+            let request = order.iter().fold(asked(), |r, &i| setters[i](r));
             assert_eq!(
-                fields["anthropic_beta"],
-                json!([ARGUMENTS_AS_WRITTEN]),
-                "{fields}"
+                body_of(&request)["additionalModelRequestFields"],
+                json!({
+                    "output_config": { "effort": "max" },
+                    "anthropic_beta": [ARGUMENTS_AS_WRITTEN],
+                    // How thinking is shown, and no type: whether the model thinks is its own.
+                    "thinking": { "display": "summarized" },
+                }),
+                "set in the order {order:?}"
             );
         }
 
