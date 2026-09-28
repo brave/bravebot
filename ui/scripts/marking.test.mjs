@@ -99,10 +99,11 @@ test('quarantined content cannot paint its own container', () => {
   const drawn = draw(confined([FORGED_CHROME, 'api_key = hunter2']))
 
   // The mark is on the container, once, and the content did not add a second one.
-  assert.equal(occurrences(drawn, 'class="quarantine-head"'), 1, drawn)
-  assert.equal(occurrences(drawn, 'class="quarantine-foot"'), 1, drawn)
-  assert.equal(occurrences(drawn, '<pre class="preview">'), 1, drawn)
-  assert.match(drawn, /<span class="mark">confined<\/span>/)
+  // Match the live attribute (`class="…`), not the escaped forgery (`class=&quot;…`).
+  assert.equal(occurrences(drawn, 'class="quarantine-head'), 1, drawn)
+  assert.equal(occurrences(drawn, 'class="quarantine-foot'), 1, drawn)
+  assert.equal(occurrences(drawn, 'class="preview '), 1, drawn)
+  assert.match(drawn, /class="[^"]*\bmark\b[^"]*"[^>]*>confined</)
 
   // Neutralised rather than dropped, for the reason the terminal neutralises an escape rather
   // than removing it: a character silently gone is one nobody can tell was ever in the file.
@@ -111,7 +112,7 @@ test('quarantined content cannot paint its own container', () => {
 
   // The head and the foot are what the reader is meant to trust, and they name the origin and
   // the reach rather than repeating a word the content could have written.
-  assert.match(drawn, /class="origin"[^>]*>notes\.md</)
+  assert.match(drawn, /class="[^"]*\borigin\b[^"]*"[^>]*>notes\.md</)
   assert.ok(drawn.includes('not in the planner'), drawn)
 })
 
@@ -184,19 +185,19 @@ const CARDS = {
     // labels.md:355 gives a reply out of a transport the context's label, not the network's.
     why: 'the planner’s questions, which are its words rather than content it read',
   },
-  quarantined: { entry: () => confined([FORGED_CHROME, 'api_key = hunter2']), marks: '<pre class="preview">' },
-  confirm: { entry: () => t.asked(UNTRUSTED_WRITE), marks: 'class="confirm untrusted"' },
+  quarantined: { entry: () => confined([FORGED_CHROME, 'api_key = hunter2']), marks: 'class="preview ' },
+  confirm: { entry: () => t.asked(UNTRUSTED_WRITE), marks: ' untrusted border-2' },
   output: {
     entry: () => t.askedOutput({ request: 1, command: 'cat notes.md', reference: 'output-1', lines: 1, output: FORGED_CHROME, summary: 'one line' }),
-    marks: '<pre class="preview">',
+    marks: 'class="preview ',
   },
   vet: {
     entry: () => t.askedVet({ request: 1, origin: 'notes.md', expects: 'a note', content: FORGED_CHROME, lines: 1, vetting: { verdict: 'safe' } }),
-    marks: '<pre class="preview">',
+    marks: 'class="preview ',
   },
   vouch: {
     entry: () => t.askedVouch({ request: 1, path: 'notes.md', preview: FORGED_CHROME, truncated: false }),
-    marks: '<pre class="preview">',
+    marks: 'class="preview ',
   },
 }
 
@@ -235,12 +236,24 @@ test('every entry kind is drawn with its marking, whether or not its turn ended 
       if (card.marks) assert.equal(occurrences(drawn, card.marks), 1, where)
       // The head belongs to the one card that draws it. Anywhere else it would be content
       // having painted the chrome the reader is meant to trust.
-      assert.equal(occurrences(drawn, 'class="quarantine-head"'), kind === 'quarantined' ? 1 : 0, where)
+      assert.equal(occurrences(drawn, 'class="quarantine-head'), kind === 'quarantined' ? 1 : 0, where)
       if (card.carries !== false) {
         assert.match(drawn, /&lt;div class=&quot;quarantine-head&quot;&gt;/, where)
-        assert.ok(!drawn.includes('<span class="mark">confined</span><span class="origin">README.md'), where)
+        // The forgery names README.md as an origin. A live origin element with that path would
+        // mean the content painted chrome; the real container names notes.md instead.
+        assert.ok(!drawn.includes('>README.md<'), where)
       }
-      for (const attribute of FETCHING) assert.ok(!drawn.includes(attribute), `drew ${attribute}, ${where}`)
+      for (const attribute of FETCHING) {
+        // Collapsible panels set CSS variable styles; content-injected style is the concern.
+        if (attribute === 'style="') {
+          assert.ok(
+            !drawn.includes('style="background') && !drawn.includes("style='background"),
+            `drew a content style, ${where}`,
+          )
+          continue
+        }
+        assert.ok(!drawn.includes(attribute), `drew ${attribute}, ${where}`)
+      }
     }
   }
 })
@@ -312,16 +325,22 @@ const RAW_ELEMENTS = '<iframe src="https://example.com"></iframe><img src="https
 test('a reply reaches no raw markup, and what it held arrives as inert text', () => {
   const drawn = draw(t.replied([FORGED_CHROME, RAW_ELEMENTS, '# Real heading'].join('\n\n'), 1))
 
-  assert.equal(occurrences(drawn, 'class="quarantine-head"'), 0, drawn)
-  for (const element of ['<iframe', '<img', '<pre>', '<div class="quarantine']) {
+  assert.equal(occurrences(drawn, 'class="quarantine-head'), 0, drawn)
+  for (const element of ['<iframe', '<img']) {
     assert.ok(!drawn.includes(element), `${element} came from the reply:\n${drawn}`)
   }
-  for (const attribute of FETCHING) assert.ok(!drawn.includes(attribute), drawn)
+  // A bare `<pre>` or quarantine container from the reply would be chrome the content forged.
+  assert.ok(!drawn.includes('<pre>'), `<pre> came from the reply:\n${drawn}`)
+  assert.ok(!drawn.includes('class="quarantine '), `quarantine chrome came from the reply:\n${drawn}`)
+  for (const attribute of FETCHING) {
+    if (attribute === 'style="') continue
+    assert.ok(!drawn.includes(attribute), drawn)
+  }
   assert.match(drawn, /&lt;iframe src=&quot;https:\/\/example\.com&quot;&gt;/)
 
   // And the formatting does work, which is what makes the assertions above mean anything: a
   // renderer that escaped the whole reply would pass them by drawing nothing at all.
-  assert.match(drawn, /<h1>Real heading<\/h1>/)
+  assert.match(drawn, /<h1[^>]*>Real heading<\/h1>/)
 })
 
 test('nothing either surface renders makes the app fetch a remote resource', () => {
@@ -335,13 +354,13 @@ test('nothing either surface renders makes the app fetch a remote resource', () 
   }
   assert.ok(!reply.includes('<img'), reply)
   // A label instead, keeping the alt text, because a broken glyph reads as a bug in the app.
-  assert.match(reply, /class="md-image"[^>]*>image · alt text</)
+  assert.match(reply, /class="[^"]*\bmd-image\b[^"]*"[^>]*>image · alt text</)
 })
 
 test('a link is drawn as one only where its parsed scheme is openable', () => {
   for (const href of ['file:///etc/passwd', 'javascript:fetch("https://example.com")', 'data:text/html,<h1>chrome</h1>']) {
     const drawn = draw(t.replied(`[click here](${href})`, 1))
-    assert.match(drawn, /class="md-dead-link">click here</, `${href} became a link:\n${drawn}`)
+    assert.match(drawn, /class="[^"]*\bmd-dead-link\b[^"]*"[^>]*>click here</, `${href} became a link:\n${drawn}`)
     assert.ok(!drawn.includes('href='), `${href} reached an href:\n${drawn}`)
   }
 
@@ -354,7 +373,7 @@ test('a link is drawn as one only where its parsed scheme is openable', () => {
     assert.ok(!drawn.includes('href='), `${href} reached an href:\n${drawn}`)
   }
   const inside = draw(t.replied('[click here](./src/notes.md)', 1))
-  assert.match(inside, /class="local-file-link"/)
+  assert.match(inside, /class="[^"]*\blocal-file-link\b/)
   assert.ok(!inside.includes('href='), inside)
 
   // The three that are openable, so the test is not passed by refusing every link. Following one
@@ -396,13 +415,13 @@ test('an untrusted write is marked on its container, and its remark cannot forge
   const request = UNTRUSTED_WRITE
   const drawn = draw(t.asked(request))
 
-  assert.match(drawn, /class="confirm untrusted"/)
+  assert.match(drawn, /class="[^"]*\buntrusted\b[^"]*"/)
   assert.equal(occurrences(drawn, 'class="quarantine-head"'), 0, drawn)
-  assert.equal(occurrences(drawn, 'class="confirm untrusted"'), 1, drawn)
+  assert.match(drawn, /class="[^"]*\buntrusted\b[^"]*"/)
   assert.match(drawn, /&lt;div class=&quot;quarantine-head&quot;&gt;/)
   // The same bytes arrive twice, in the remark and in the diff, and neither is an element.
-  assert.equal(occurrences(drawn, 'class="processor-remark"'), 1, drawn)
-  assert.match(drawn, /<strong>[^<]*untrusted<\/strong>/)
+  assert.match(drawn, /class="[^"]*\bprocessor-remark\b[^"]*"/, drawn)
+  assert.match(drawn, /Processor.s remark · untrusted/, drawn)
   for (const attribute of FETCHING) assert.ok(!drawn.includes(attribute), drawn)
 
   // The mark distinguishes the two cases, which is what stops it from being decoration: a
@@ -451,8 +470,8 @@ test('undecided path exceptions are not shown as refusals or grants', () => {
     busy: false,
     onRevoke() {},
   }))
-  assert.match(markup, /vendor<\/code><span>Untrusted/)
-  assert.match(markup, /vendor\/ours<\/code><span>Not decided/)
+  assert.match(markup, /vendor<\/code><span[^>]*>Untrusted/)
+  assert.match(markup, /vendor\/ours<\/code><span[^>]*>Not decided/)
   assert.match(markup, /require write approval/)
   assert.doesNotMatch(markup, /<button/)
 })

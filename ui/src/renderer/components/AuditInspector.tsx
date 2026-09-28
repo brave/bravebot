@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState } from 'react'
-import { ChevronRightIcon, XIcon } from 'lucide-react'
+import { ChevronRightIcon, CircleAlertIcon, TriangleAlertIcon, XIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -101,12 +101,14 @@ export function AuditInspector({ details, onClose }: { details?: TurnDetails; on
         <div className="flex flex-col gap-3">
           {incomplete && (
             <Alert>
+              <TriangleAlertIcon />
               <AlertDescription>The event stream may be incomplete. Captured evidence is shown below.</AlertDescription>
             </Alert>
           )}
           {details.omitted > 0 && (
             <Alert className="audit-retention">
-              <AlertDescription className="text-warning">
+              <TriangleAlertIcon />
+              <AlertDescription>
                 {details.omitted.toLocaleString()} events omitted by the display retention limit.
               </AlertDescription>
             </Alert>
@@ -115,6 +117,7 @@ export function AuditInspector({ details, onClose }: { details?: TurnDetails; on
           {!refusals.length && (
             details.clean === false ? (
               <Alert variant="destructive">
+                <CircleAlertIcon />
                 <AlertTitle>Policy refusal</AlertTitle>
                 <AlertDescription>A policy refusal was reported, but its detailed evidence is unavailable.</AlertDescription>
               </Alert>

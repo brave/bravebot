@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
 import { cn, SCRIM } from '@/lib/utils'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
-import type { FilePreview as Preview } from '../../shared/files'
 import {
   Dialog,
   DialogContent,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { Spinner } from '@/components/ui/spinner'
+import type { FilePreview as Preview } from '../../shared/files'
 
 export function FilePreview({ session, path, onClose }: { session: string; path: string; onClose: () => void }): React.JSX.Element {
   const [preview, setPreview] = useState<Preview | null>(null)
@@ -30,11 +32,24 @@ export function FilePreview({ session, path, onClose }: { session: string; path:
         <div className="code-toolbar flex items-center gap-2 border-b border-border bg-bubble-agent px-2.5 py-[7px] text-xs"><strong className="min-w-0 flex-1 wrap-anywhere">{path}</strong><Button variant="outline" size="sm" className="text-xs" onClick={onClose}>Done</Button></div>
         {/* Drawn as confined content is drawn, because that is what it is: bytes this window
             will show and not release. */}
-        <p className="preview-boundary border-l-[3px] border-confine bg-confine/10 px-3 py-2.5 text-xs">For your review only. Previewing a file does not put its contents in the agent’s context.</p>
+        <Alert className="preview-boundary rounded-none border-x-0 border-t-0">
+          <AlertDescription>
+            For your review only. Previewing a file does not put its contents in the agent’s context.
+          </AlertDescription>
+        </Alert>
         <div className="preview-actions flex gap-2"><Button variant="outline" size="sm" className="text-xs" aria-pressed={wrap} onClick={() => setWrap(!wrap)}>Wrap lines</Button>
           <Button variant="outline" size="sm" className="text-xs" onClick={() => { void window.bravebot.openFile(session, path).then((outcome) => { if (outcome.status === 'failed') setProblem(outcome.message) }).catch(() => setProblem('The file could not be opened.')) }}>Open in default app</Button></div>
-        {problem && <p role="alert">{problem}</p>}
-        {loading ? <p role="status">Loading preview…</p> : preview ? <>
+        {problem && (
+          <Alert variant="destructive">
+            <AlertDescription>{problem}</AlertDescription>
+          </Alert>
+        )}
+        {loading ? (
+          <p role="status" className="flex items-center gap-2">
+            <Spinner />
+            Loading preview…
+          </p>
+        ) : preview ? <>
           {preview.truncated && <p role="status">Showing the first 128 KB. Open the file to review the rest.</p>}
           {/* Wrapping is the reader's choice. Unwrapped is what is actually in the file, which is
               the reading this window defaults to. */}

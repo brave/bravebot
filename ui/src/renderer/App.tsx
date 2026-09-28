@@ -34,6 +34,7 @@ import { AuditInspector } from './components/AuditInspector'
 import { conversationKey } from '../shared/experience'
 import { useExperience, conversationPreferences, setConversation, experienceError } from './experience'
 import { ThemePicker } from './components/ThemePicker'
+import { Button } from '@/components/ui/button'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { applyTheme, watchAppearance } from './theme'
 import { BRAVE, BRAVE_THEME, BUILTINS, findTheme, type Theme } from '../shared/theme'
@@ -1316,13 +1317,15 @@ export function App(): React.JSX.Element {
       {[...openedLives.current.values()].some((item) => item.handle !== live?.handle && item.running) && (
         <div className="background-tasks fixed bottom-3 left-3 z-25 grid w-55 gap-1.5" aria-label="Background tasks">
           {[...openedLives.current.values()].filter((item) => item.handle !== live?.handle && item.running).map((item) => (
-            <button
+            <Button
               key={item.handle}
-              className="rounded-full border border-primary bg-background px-2.5 py-2 text-left text-xs shadow-sm"
+              variant="outline"
+              size="sm"
+              className="h-auto border-primary px-2.5 py-2 text-left text-xs shadow-sm whitespace-normal"
               onClick={() => setLive(item)}
             >
               {t.outstanding(item.entries) ? t.outstanding(item.entries)?.kind === 'ask' ? 'Answer needed' : 'Approval needed' : 'Working'} · {item.summary.title}
-            </button>
+            </Button>
           ))}
         </div>
       )}

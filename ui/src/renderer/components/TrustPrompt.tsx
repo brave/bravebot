@@ -1,7 +1,10 @@
-import { cn, SCRIM } from '@/lib/utils'
+import { SCRIM } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
+  DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
 
@@ -9,10 +12,6 @@ interface Props {
   directory: string
   onAnswer: (trusted: boolean) => void
 }
-
-/** The box both answers are drawn in, so the pair differ only where they are meant to. */
-const ANSWER =
-  'min-h-8 rounded-full border px-3.5 py-1.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary'
 
 /**
  * The one question the agent asks before it will work in a directory.
@@ -31,8 +30,11 @@ export function TrustPrompt({ directory, onAnswer }: Props): React.JSX.Element {
         showCloseButton={false}
         overlayClassName={SCRIM}
       >
-        <DialogTitle className="sr-only">Project trust</DialogTitle>
-        <h2 id="trust-title" className="m-0 mb-2.5 text-[15px] font-semibold">Do you trust this directory?</h2>
+        <DialogHeader className="gap-0 text-left">
+          <DialogTitle id="trust-title" className="mb-2.5 text-[15px] font-semibold">
+            Do you trust this directory?
+          </DialogTitle>
+        </DialogHeader>
         <code className="path mb-3 block rounded-sm bg-bubble-agent px-2.5 py-[7px] font-mono text-[11px] break-all">{directory}</code>
         <p className="m-0 mb-[9px] text-xs text-muted-foreground">
           <strong>Trust it</strong> and files here are read normally, so ordinary work
@@ -46,16 +48,23 @@ export function TrustPrompt({ directory, onAnswer }: Props): React.JSX.Element {
         <p className="aside m-0 mb-[9px] text-[11px] text-muted-foreground/70">
           Trusted writes may apply directly. Changes involving untrusted content require review. Your trust choice is saved with this conversation.
         </p>
-        <div className="trust-actions mt-4 flex justify-end gap-2">
-          <button className={cn(ANSWER, 'decline border-border bg-transparent hover:bg-destructive/10 hover:text-destructive')} onClick={() => onAnswer(false)}>
+        <DialogFooter className="trust-actions -mx-0 -mb-0 mt-4 justify-end gap-2 rounded-none border-0 bg-transparent p-0 sm:justify-end">
+          <Button
+            variant="outline"
+            className="decline"
+            onClick={() => onAnswer(false)}
+          >
             Don't trust
-          </button>
+          </Button>
           {/* The two answers are not drawn alike. Trusting is the one that grants something, so
               it is the filled one; declining leaves the directory as the agent already found it. */}
-          <button className={cn(ANSWER, 'approve border-transparent bg-primary font-medium text-primary-foreground')} onClick={() => onAnswer(true)}>
+          <Button
+            className="approve"
+            onClick={() => onAnswer(true)}
+          >
             Trust this directory
-          </button>
-        </div>
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   )

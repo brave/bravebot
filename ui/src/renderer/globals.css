@@ -237,12 +237,9 @@
     color: inherit;
     cursor: pointer;
   }
-  /* Keyboard focus, for the bare elements in the window that are not one of the shadcn controls
-     — the buttons in the conversation toolbar, the find row, the welcome screen. It sits in the
-     base layer so those get it by default while the shadcn components' own focus rings, which are
-     utilities, keep winning where they are used. Not expressible as a utility: the whole point is
-     that it applies without being asked for. */
-  :is(a, button, input, textarea, summary):focus-visible {
+  /* Keyboard focus for bare links. Shadcn controls carry their own rings as utilities;
+     the few remaining custom buttons (tree rows, About mascot) set theirs inline. */
+  a:focus-visible {
     outline: 2px solid var(--primary);
     outline-offset: 3px;
   }

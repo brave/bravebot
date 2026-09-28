@@ -257,7 +257,7 @@ await click('app.about')
 await page.waitForTimeout(600)
 const about = page.getByRole('dialog', { name: 'About Brave Bot' })
 check(await about.isVisible(), 'About opens a panel')
-await about.locator('summary').click()
+await about.locator('[data-slot=collapsible-trigger]').click()
 check(
   /Agent/.test(await about.locator('dl').textContent()),
   'and it carries the agent build, which is the first thing worth knowing',

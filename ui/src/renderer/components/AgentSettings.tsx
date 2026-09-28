@@ -39,6 +39,7 @@ import {
   NativeSelect,
   NativeSelectOption,
 } from '@/components/ui/native-select'
+import { Spinner } from '@/components/ui/spinner'
 import {
   Tabs,
   TabsContent,
@@ -78,11 +79,8 @@ const PATH = 'settings-path font-mono text-xs wrap-anywhere'
 const ACTIONS = 'settings-actions mt-3.5 mb-1 flex flex-wrap gap-2'
 
 /** The chosen tab is named in the accent rather than filled, so the strip stays a strip. */
-const TAB_TRIGGER = [
-  'flex-none data-active:border-primary data-active:bg-transparent data-active:text-primary',
-  'group-data-[variant=default]/tabs-list:data-active:shadow-none',
-  'dark:data-active:border-primary dark:data-active:bg-transparent',
-].join(' ')
+const TAB_TRIGGER =
+  'flex-none data-active:border-primary data-active:bg-transparent! data-active:text-primary group-data-[variant=line]/tabs-list:data-active:after:bg-primary'
 
 export function AgentSettings({ session, onClose, onChanged }: { session?: string; onClose: () => void; onChanged: () => void }): React.JSX.Element {
   const [tab, setTab] = useState<Tab>('Connection')
@@ -181,6 +179,7 @@ export function AgentSettings({ session, onClose, onChanged }: { session?: strin
           className="gap-0"
         >
           <TabsList
+            variant="line"
             className="settings-tabs my-3 w-full justify-start gap-1.5 rounded-none border-b border-border bg-transparent p-0 pb-2.5 group-data-horizontal/tabs:h-auto max-[640px]:flex-wrap"
             aria-label="Agent settings sections"
           >
@@ -201,7 +200,12 @@ export function AgentSettings({ session, onClose, onChanged }: { session?: strin
             </Alert>
           )}
           {status && <p role="status">{status}</p>}
-          {busy && <p role="status">Working…</p>}
+          {busy && (
+            <p role="status" className="flex items-center gap-2 text-muted-foreground">
+              <Spinner />
+              Working…
+            </p>
+          )}
           <TabsContent value="Connection" className={BODY}>
             {report && <>
               <section>

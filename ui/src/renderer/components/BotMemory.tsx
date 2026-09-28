@@ -4,6 +4,11 @@ import { useEffect, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
 import { Spinner } from '@/components/ui/spinner'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
@@ -17,7 +22,7 @@ const MEMORY = 'bot-memory m-0 overflow-auto bg-code font-mono text-muted-foregr
 
 /** The chosen mode is filled in rather than underlined, the way the rest of this column's is. */
 const MEMORY_TAB =
-  'data-active:bg-bubble-agent data-active:font-semibold dark:data-active:bg-bubble-agent'
+  'data-active:bg-bubble-agent! data-active:font-semibold'
 
 export function BotMemory({ slug }: { slug: string }): React.JSX.Element {
   const [text, setText] = useState<string | null>(null)
@@ -86,11 +91,15 @@ export function BotMemory({ slug }: { slug: string }): React.JSX.Element {
           <>
             <TabsContent value="history" className="memory-history flex flex-col gap-2">
               {history.length ? [...history].reverse().map((revision, index) => (
-                <details key={`${revision.at}-${index}`} className="flex flex-col gap-2 border-b border-border py-2.5">
-                  <summary className="cursor-pointer">{new Date(revision.at).toLocaleString()} · {revision.source === 'user' ? 'Your edit' : 'Bot update'}</summary>
-                  <pre className="max-h-60 overflow-auto text-xs whitespace-pre-wrap">{revision.text || '(Empty memory)'}</pre>
-                  <Button type="button" size="sm" variant="outline" onClick={() => { setDraft(revision.text); setEditing(true) }}>Review for restore</Button>
-                </details>
+                <Collapsible key={`${revision.at}-${index}`} className="memory-revision flex flex-col gap-2 border-b border-border py-2.5">
+                  <CollapsibleTrigger className="cursor-pointer text-left">
+                    {new Date(revision.at).toLocaleString()} · {revision.source === 'user' ? 'Your edit' : 'Bot update'}
+                  </CollapsibleTrigger>
+                  <CollapsibleContent className="flex flex-col gap-2">
+                    <pre className="max-h-60 overflow-auto text-xs whitespace-pre-wrap">{revision.text || '(Empty memory)'}</pre>
+                    <Button type="button" size="sm" variant="outline" onClick={() => { setDraft(revision.text); setEditing(true) }}>Review for restore</Button>
+                  </CollapsibleContent>
+                </Collapsible>
               )) : <p>History begins with memory updates captured by this version.</p>}
             </TabsContent>
             <TabsContent value="raw">

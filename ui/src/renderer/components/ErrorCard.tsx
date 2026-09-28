@@ -1,12 +1,9 @@
-import { ChevronRightIcon } from 'lucide-react'
+import { useState } from 'react'
+import { CircleAlertIcon, ChevronRightIcon } from 'lucide-react'
 import { failureSummary } from '../failure'
+import { cn } from '@/lib/utils'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from '@/components/ui/collapsible'
 
 /**
  * A failure, titled from the category the agent sent and never from the words in the detail.
@@ -21,38 +18,53 @@ export function ErrorCard({ detail, onRetry, onModel, category, attempts, status
   detail: string; onRetry?: () => void; onModel?: () => void
 }): React.JSX.Element {
   const classified = failureSummary(category ?? '')
+  const [detailsOpen, setDetailsOpen] = useState(false)
+  const technical = [
+    detail.trim(),
+    attempts != null ? `Requests attempted: ${attempts}` : '',
+    status != null ? `HTTP status: ${status}` : '',
+  ].filter(Boolean).join('\n')
   return (
-    // The left edge carries the failure on its own, so the card reads as one at a glance and
-    // without relying on the tint alone — which on a light theme is nearly the page.
-    <Alert
-      variant="destructive"
-      className="error-card rounded-[10px] border-[color-mix(in_srgb,var(--destructive)_25%,var(--border))] border-l-[3px] border-l-destructive bg-destructive/10 px-4 py-3.5 text-[13px]"
-      role="alert"
-    >
-      <AlertTitle>
-        <strong>{classified.title}</strong>
-      </AlertTitle>
-      <AlertDescription className="[&_p:not(:last-child)]:mt-1.5 [&_p:not(:last-child)]:mb-2.5">
-        <p className="leading-normal">{classified.description}</p>
-        <div className="error-actions flex flex-wrap gap-2">
-          {onRetry && <Button variant="outline" size="sm" onClick={onRetry}>Draft continuation</Button>}
-          {onModel && <Button variant="outline" size="sm" onClick={onModel}>Choose another model</Button>}
-        </div>
-        <Collapsible className="mt-2.5 text-xs group/details">
-          <CollapsibleTrigger className="flex items-center gap-1 text-left">
-            <ChevronRightIcon className="size-3! transition-transform motion-reduce:transition-none group-data-open/details:rotate-90" />
-            Technical details
-          </CollapsibleTrigger>
-          <CollapsibleContent>
-            {/* Capped and scrollable. A backend's diagnostic can be a page long, and a card
-                that grew to fit one would bury the conversation it interrupted. */}
-            <pre className="max-h-50 overflow-auto text-xs whitespace-pre-wrap wrap-anywhere">
-              {detail}
-              {attempts != null ? `\nRequests attempted: ${attempts}` : ''}
-              {status != null ? `\nHTTP status: ${status}` : ''}
+    <Alert variant="destructive" className="error-card" role="alert">
+      <CircleAlertIcon />
+      <AlertTitle><strong>{classified.title}</strong></AlertTitle>
+      <AlertDescription>
+        <p>{classified.description}</p>
+        {(onRetry || onModel) && (
+          <div className="error-actions mt-2.5 flex flex-wrap gap-2">
+            {onRetry && <Button variant="outline" size="sm" onClick={onRetry}>Draft continuation</Button>}
+            {onModel && <Button variant="outline" size="sm" onClick={onModel}>Choose another model</Button>}
+          </div>
+        )}
+        {!!technical && (
+          <div className="mt-2.5 text-xs">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-auto gap-1 px-0 py-0 text-xs font-normal text-inherit hover:bg-transparent hover:text-inherit"
+              aria-expanded={detailsOpen}
+              onClick={() => setDetailsOpen((open) => !open)}
+            >
+              <ChevronRightIcon
+                className={cn(
+                  'size-3! transition-transform motion-reduce:transition-none',
+                  detailsOpen && 'rotate-90',
+                )}
+              />
+              Technical details
+            </Button>
+            {/* Kept mounted while shut so the diagnostic stays in the document for copy and for
+                the marking tests; capped and scrollable so a long backend log cannot bury the
+                conversation it interrupted. */}
+            <pre
+              hidden={!detailsOpen}
+              className="mt-1.5 max-h-50 overflow-auto text-xs whitespace-pre-wrap wrap-anywhere"
+            >
+              {technical}
             </pre>
-          </CollapsibleContent>
-        </Collapsible>
+          </div>
+        )}
       </AlertDescription>
     </Alert>
   )

@@ -5,7 +5,9 @@ import remarkGfm from 'remark-gfm'
 import { CopyIcon, WrapTextIcon } from 'lucide-react'
 import { isSubpath } from '../../shared/files'
 import { cn } from '@/lib/utils'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { Separator } from '@/components/ui/separator'
 
 /**
  * The model's own words, formatted.
@@ -116,7 +118,7 @@ const COMPONENTS: Components = {
     )
   },
   hr() {
-    return <hr className="my-[0.9em] border-0 border-t border-border" />
+    return <Separator className="my-[0.9em]" />
   },
   code({ className, children }) {
     const fenced = typeof className === 'string' && className.includes('language-')
@@ -247,7 +249,11 @@ function CodeBlock({ children }: { children: ReactNode }): React.JSX.Element {
           {copied ? 'Copied' : 'Copy code'}
         </Button>
       </div>
-      {error && <p role="alert" className="px-2.5 text-xs text-destructive">Could not copy. Select the code and copy it manually.</p>}
+      {error && (
+        <Alert variant="destructive" className="rounded-none border-x-0 border-b-0 px-2.5 py-1.5 text-xs">
+          <AlertDescription>Could not copy. Select the code and copy it manually.</AlertDescription>
+        </Alert>
+      )}
       {/* Square, because the frame above already has the corners. Code scrolls rather than wraps
           unless somebody asks: a wrapped line misrepresents what is actually in the file, which is
           the one thing this app does not do to a reader. The `code` inside has to be told as well,

@@ -121,7 +121,7 @@ export function BotAvatar({ seed, size = 38, doing = 'idle', expression = 'neutr
             'rounded-full border-[1.5px] border-background bg-muted-foreground text-background',
             'font-sans text-[10px] leading-none font-bold',
             doing === 'failed'
-              ? 'bot-avatar-status-failed bg-[#b83e43] text-white'
+              ? 'bot-avatar-status-failed bg-destructive text-white'
               : 'bot-avatar-status-working',
           )}
           style={{ width: statusSize, height: statusSize }}

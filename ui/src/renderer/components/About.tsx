@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
+import { XIcon } from 'lucide-react'
 import { BotAvatar } from './BotAvatar'
 import { cn, SCRIM } from '@/lib/utils'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
 import {
   Dialog,
   DialogContent,
@@ -27,6 +35,7 @@ export function About({ info, onClose }: { info: AboutInfo; onClose: () => void 
   const [hovered, setHovered] = useState(false)
   const [focused, setFocused] = useState(false)
   const [copyStatus, setCopyStatus] = useState('')
+  const [detailsOpen, setDetailsOpen] = useState(false)
 
   useEffect(() => () => {
     if (winkTimer.current !== null) clearTimeout(winkTimer.current)
@@ -65,13 +74,15 @@ export function About({ info, onClose }: { info: AboutInfo; onClose: () => void 
         overlayClassName={SCRIM}
       >
         <DialogTitle className="sr-only">About Brave Bot</DialogTitle>
-        <button
-          className="about-close absolute top-3 right-3 z-[1] grid size-8 place-items-center rounded-full border border-transparent bg-transparent p-0 text-muted-foreground hover:bg-code hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="about-close absolute top-3 right-3 text-muted-foreground hover:bg-code hover:text-foreground"
           aria-label="Close About Brave Bot"
           onClick={onClose}
         >
-          <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
-        </button>
+          <XIcon />
+        </Button>
         <div className="about-hero text-center">
           {/* The glow is the stage, not the figure: a pool of the accent behind the mascot so it
               stands on something instead of floating at the top of an empty card. */}
@@ -88,31 +99,38 @@ export function About({ info, onClose }: { info: AboutInfo; onClose: () => void 
             </button>
           </div>
           <h2 className="mt-3.5 mb-2 text-[32px] leading-[1.15] font-[650] tracking-[-1.1px]">Brave Bot</h2>
-          <span className="about-version mt-[18px] inline-block max-w-full rounded-[20px] border border-border bg-code px-[11px] py-[5px] text-xs text-muted-foreground wrap-anywhere">Version {agentVersion}</span>
+          <Badge variant="outline" className="about-version mt-[18px] h-auto max-w-full rounded-[20px] border-border bg-code px-[11px] py-[5px] text-xs font-normal text-muted-foreground wrap-anywhere whitespace-normal">
+            Version {agentVersion}
+          </Badge>
         </div>
         <nav className="about-links mt-6 mb-7 flex flex-wrap justify-center gap-6 text-[13px]" aria-label="Project resources">
           <a className={LINK} href={project} target="_blank" rel="noreferrer">GitHub <span className="ml-0.5 opacity-65" aria-hidden="true">↗</span></a>
           <a className={LINK} href={`${project}/releases`} target="_blank" rel="noreferrer">Release notes <span className="ml-0.5 opacity-65" aria-hidden="true">↗</span></a>
         </nav>
-        <details className="about-details border-y border-border text-xs">
-          <summary className="cursor-pointer py-[15px] text-muted-foreground hover:text-foreground focus-visible:rounded-[3px] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary" tabIndex={0}>Build &amp; storage details</summary>
-          {/* Selectable, because the whole point of these three lines is pasting them into a
-              bug report. */}
-          <dl className="m-0 mb-4 [&>div]:my-2.5 [&>div]:grid [&>div]:grid-cols-[65px_minmax(0,1fr)] [&>div]:gap-3 [&_dd]:m-0 [&_dd]:font-mono [&_dd]:text-[11px] [&_dd]:leading-[1.6] [&_dd]:wrap-anywhere [&_dd]:select-text [&_dt]:text-muted-foreground">
-            <div><dt>Interface</dt><dd>{info.version}</dd></div>
-            <div><dt>Agent</dt><dd>{info.build}</dd></div>
-            <div><dt>Sessions</dt><dd>{info.home ?? 'Session folder unavailable'}</dd></div>
-          </dl>
-          <div className="about-copy flex flex-wrap items-center gap-2.5 pb-4">
-            <button
-              className="min-h-8 rounded-full border border-border bg-background px-3 py-1.5 text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-              onClick={() => void copyBuildInfo()}
-            >
-              Copy build info
-            </button>
-            <span className="text-[11px] text-muted-foreground" role="status">{copyStatus}</span>
-          </div>
-        </details>
+        <Collapsible open={detailsOpen} onOpenChange={setDetailsOpen} className="about-details border-y border-border text-xs">
+          <CollapsibleTrigger className="w-full cursor-pointer py-[15px] text-left text-muted-foreground hover:text-foreground focus-visible:rounded-[3px] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary">
+            Build &amp; storage details
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            {/* Selectable, because the whole point of these three lines is pasting them into a
+                bug report. */}
+            <dl className="m-0 mb-4 [&>div]:my-2.5 [&>div]:grid [&>div]:grid-cols-[65px_minmax(0,1fr)] [&>div]:gap-3 [&_dd]:m-0 [&_dd]:font-mono [&_dd]:text-[11px] [&_dd]:leading-[1.6] [&_dd]:wrap-anywhere [&_dd]:select-text [&_dt]:text-muted-foreground">
+              <div><dt>Interface</dt><dd>{info.version}</dd></div>
+              <div><dt>Agent</dt><dd>{info.build}</dd></div>
+              <div><dt>Sessions</dt><dd>{info.home ?? 'Session folder unavailable'}</dd></div>
+            </dl>
+            <div className="about-copy flex flex-wrap items-center gap-2.5 pb-4">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void copyBuildInfo()}
+              >
+                Copy build info
+              </Button>
+              <span className="text-[11px] text-muted-foreground" role="status">{copyStatus}</span>
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
         <footer className="about-footer mt-5 flex flex-wrap justify-center gap-2 text-[11px] text-muted-foreground">
           <span>Built with <a className={cn(LINK, 'text-inherit')} href={project} target="_blank" rel="noreferrer">bravebot</a></span>
           <span aria-hidden="true">·</span>

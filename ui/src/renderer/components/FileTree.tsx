@@ -7,6 +7,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription } from '@/components/ui/empty'
 import { Input } from '@/components/ui/input'
+import { Spinner } from '@/components/ui/spinner'
 import { Fold } from './Fold'
 import { FileGlyph, glyphBox } from './FileGlyph'
 import { type FileRow, type Listing, isSubpath, under } from '../../shared/files'
@@ -251,7 +252,12 @@ export function FileTree({
       <div className="tree-body min-h-0 flex-1 overflow-auto overscroll-contain rounded-[10px] border border-border bg-tree px-0.5 py-1">
         {terms.length > 0 ? (
           <div className="file-search-results flex flex-col gap-1 p-1.5">
-            {searching && <p role="status">Searching project…</p>}
+            {searching && (
+              <p role="status" className="flex items-center gap-2">
+                <Spinner />
+                Searching project…
+              </p>
+            )}
             {!searching && results?.paths.length === 0 && (
               <Empty className={NONE}>
                 <EmptyDescription className={NONE_TEXT}>No matching files.</EmptyDescription>

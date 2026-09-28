@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ModelCatalogue, ModelOption } from '../../shared/protocol'
 import { setExperience, useExperience } from '../experience'
 import { cn } from '@/lib/utils'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -20,6 +21,7 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover'
 import { Layers } from 'lucide-react'
+import { Spinner } from '@/components/ui/spinner'
 
 const CAPABILITIES: Record<string, [string, string]> = {
   text: ['Text', 'Generates text'],
@@ -117,9 +119,11 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
         <PopoverTrigger
           disabled={disabled}
           render={
-            <button
+            <Button
               ref={triggerRef}
-              className="model-trigger flex h-[38px] w-full cursor-pointer items-center gap-1.5 rounded-lg border border-border bg-background px-2 text-muted-foreground hover:border-primary hover:text-primary aria-expanded:border-primary aria-expanded:text-primary disabled:cursor-default focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+              variant="outline"
+              size="lg"
+              className="model-trigger w-full justify-start px-3 text-muted-foreground hover:border-primary hover:text-primary aria-expanded:border-primary aria-expanded:text-primary"
               type="button"
               disabled={disabled}
               title={`Choose model · ${model ?? label}`}
@@ -177,9 +181,22 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
                 }
               }}
             />
-            {loading && <p className={STATUS} role="status">Loading available models…</p>}
-            {problem && <p className={STATUS} role="alert">{problem}</p>}
-            {catalogue?.warnings.map((warning) => <p className={STATUS} key={warning}>{warning}</p>)}
+            {loading && (
+              <p className={cn(STATUS, 'flex items-center gap-2')} role="status">
+                <Spinner />
+                Loading available models…
+              </p>
+            )}
+            {problem && (
+              <Alert variant="destructive" className={STATUS}>
+                <AlertDescription>{problem}</AlertDescription>
+              </Alert>
+            )}
+            {catalogue?.warnings.map((warning) => (
+              <Alert key={warning} className={STATUS}>
+                <AlertDescription>{warning}</AlertDescription>
+              </Alert>
+            ))}
             <CommandList className="model-options max-h-none min-h-0">
               <CommandGroup>
                 {options.map((row) => (

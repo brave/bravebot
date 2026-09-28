@@ -2,7 +2,7 @@ import { Watches } from './Watches'
 import type { FileAttachment } from '../../shared/files'
 import { Permissions } from './Permissions'
 import { useLayoutEffect, useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDownIcon, ChevronRightIcon } from 'lucide-react'
+import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, CircleAlertIcon, TriangleAlertIcon, XIcon } from 'lucide-react'
 import { isConfined, type AskAnswer, type AskPrompt, type Phase, type Shown, type TodoRow } from '../../shared/protocol'
 import * as t from '../transcript'
 import type { Side } from '../columns'
@@ -42,9 +42,18 @@ import { Input } from '@/components/ui/input'
 import {
   InputGroup,
   InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
   InputGroupText,
   InputGroupTextarea,
 } from '@/components/ui/input-group'
+import {
+  Item,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemTitle,
+} from '@/components/ui/item'
 import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker'
 import { Message, MessageContent } from '@/components/ui/message'
 import { Spinner } from '@/components/ui/spinner'
@@ -161,12 +170,12 @@ function ColumnToggle({
   return (
     // Sits on top of the drag strip and must stay clickable rather than moving the window, the
     // same exemption the New button gets in the session list.
-    <button
+    <Button
+      variant="ghost"
+      size="icon-xs"
       className={cn(
-        'fold-toggle relative z-40 grid size-5.5 flex-none place-items-center rounded-full border-0 bg-transparent p-0',
-        'text-[15px] leading-none text-muted-foreground/70 [-webkit-app-region:no-drag]',
+        'fold-toggle relative z-40 size-5.5 flex-none text-[15px] leading-none text-muted-foreground/70 [-webkit-app-region:no-drag]',
         'hover:bg-foreground/12 hover:text-foreground',
-        'focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary',
         side,
       )}
       aria-expanded={!collapsed}
@@ -190,7 +199,7 @@ function ColumnToggle({
       >
         {side === 'left' ? '›' : '‹'}
       </span>
-    </button>
+    </Button>
   )
 }
 
@@ -414,15 +423,11 @@ export function Transcript({
       </div>
       {/* Every control here is bordered rather than filled: a strip with an accent-coloured
           button in it would have a primary action, and none of these is one. */}
-      {live && <div className={cn(
-        'conversation-toolbar flex flex-wrap items-center gap-1.5 px-5 pt-1.5 pb-2.5',
-        '[&>button]:min-h-7.5 [&>button]:rounded-full [&>button]:border [&>button]:border-border',
-        '[&>button]:bg-transparent [&>button]:px-2.5 [&>button]:py-1 [&>button]:text-xs',
-      )}>
-        <button onClick={() => setSearching((value) => !value)} aria-expanded={searching}>Find</button>
-        <button onClick={() => setPermissions(true)}>Permissions</button>
-        <button onClick={() => setWatches(true)}>Watches</button>
-        <button onClick={() => {
+      {live && <div className="conversation-toolbar flex flex-wrap items-center gap-1.5 px-5 pt-1.5 pb-2.5">
+        <Button variant="outline" size="sm" onClick={() => setSearching((value) => !value)} aria-expanded={searching}>Find</Button>
+        <Button variant="outline" size="sm" onClick={() => setPermissions(true)}>Permissions</Button>
+        <Button variant="outline" size="sm" onClick={() => setWatches(true)}>Watches</Button>
+        <Button variant="outline" size="sm" onClick={() => {
           if (focusedLayout) {
             for (const side of ['left', 'right'] as const) if (collapsed[side] !== focusedLayout[side]) onToggle(side)
             setFocusedLayout(null)
@@ -430,33 +435,58 @@ export function Transcript({
             setFocusedLayout({ ...collapsed })
             for (const side of ['left', 'right'] as const) if (!collapsed[side]) onToggle(side)
           }
-        }}>{focusedLayout ? 'Exit focus' : 'Focus'}</button>
-        <button onClick={() => setExperience('density', preferences.density === 'compact' ? 'comfortable' : 'compact')}>
+        }}>{focusedLayout ? 'Exit focus' : 'Focus'}</Button>
+        <Button variant="outline" size="sm" onClick={() => setExperience('density', preferences.density === 'compact' ? 'comfortable' : 'compact')}>
           {preferences.density === 'compact' ? 'Comfortable view' : 'Compact view'}
-        </button>
+        </Button>
         <ExportMenu canExport={canExport} includeTools={includeTools} onToggleTools={onToggleTools} onExport={onExport} />
       </div>}
-      {backendReady === false && <div className={cn(
-        'backend-status flex flex-col gap-1.25 bg-warning/10 px-5 py-3 text-xs',
-        '[&_button]:rounded-[5px] [&_button]:border [&_button]:border-border [&_button]:bg-background [&_button]:px-2 [&_button]:py-1.25',
-      )} role="status"><strong>Backend setup needed</strong><span>You can browse conversations and prepare drafts.</span><div className="flex gap-1.5"><button onClick={onSetup}>Setup help</button><button onClick={onCheckBackend}>Check again</button><button onClick={onDiagnostics}>Diagnostics</button></div></div>}
+      {backendReady === false && (
+        <Alert className="backend-status rounded-none border-x-0 border-t border-b-0 text-xs" role="status">
+          <TriangleAlertIcon />
+          <AlertTitle>Backend setup needed</AlertTitle>
+          <AlertDescription>
+            You can browse conversations and prepare drafts.
+            <div className="mt-1.5 flex gap-1.5">
+              <Button variant="outline" size="sm" onClick={onSetup}>Setup help</Button>
+              <Button variant="outline" size="sm" onClick={onCheckBackend}>Check again</Button>
+              <Button variant="outline" size="sm" onClick={onDiagnostics}>Diagnostics</Button>
+            </div>
+          </AlertDescription>
+        </Alert>
+      )}
       {live && <div className="context-status shrink-0 px-5 py-1.5 text-[11px] text-muted-foreground" title="The model’s last request size, not accumulated token usage. New messages may change the next request.">
         {live.phase === 'compacting' ? 'Summarising context…' : live.contextTokens === undefined ? 'Context measurement unavailable' : live.contextTokens === 0 ? 'Context not yet measured' : `${live.contextTokens.toLocaleString()} context tokens at last request`}
         {!!live.archived && <span> · Earlier context summarised</span>}
       </div>}
       {problem && <ErrorCard detail={problem} />}
-      {searching && <div className={cn(
-        'conversation-search flex items-center gap-1.5 border-t border-border px-5 py-2',
-        '[&_button]:min-h-7.5 [&_button]:min-w-7 [&_button]:rounded-full [&_button]:border [&_button]:border-border [&_button]:bg-background',
-      )}>
-        <input className="min-w-0 flex-1 rounded-md border border-border bg-background p-2 text-foreground [appearance:none] focus:border-primary focus:outline-none [&::-webkit-search-cancel-button]:[appearance:none]"
-          autoFocus type="search" aria-label="Find in conversation" placeholder="Find in conversation…" value={query}
-          onChange={(event) => { setQuery(event.target.value); setMatch(0) }}
-          onKeyDown={(event) => { if (event.key === 'Escape') setSearching(false); if (event.key === 'Enter') setMatch((n) => n + (event.shiftKey ? -1 + matches.length : 1)) }} />
-        <span className="text-xs whitespace-nowrap text-muted-foreground" role="status">{matches.length ? `${match % matches.length + 1} of ${matches.length}` : query ? 'No matches' : ''}</span>
-        <button disabled={!matches.length} onClick={() => setMatch((n) => n + matches.length - 1)} aria-label="Previous match">↑</button>
-        <button disabled={!matches.length} onClick={() => setMatch((n) => n + 1)} aria-label="Next match">↓</button>
-        <button onClick={() => setSearching(false)} aria-label="Close search">×</button>
+      {searching && <div className="conversation-search flex items-center gap-1.5 border-t border-border px-5 py-2">
+        <InputGroup className="min-w-0 flex-1">
+          <InputGroupInput
+            autoFocus
+            type="search"
+            aria-label="Find in conversation"
+            placeholder="Find in conversation…"
+            value={query}
+            onChange={(event) => { setQuery(event.target.value); setMatch(0) }}
+            onKeyDown={(event) => { if (event.key === 'Escape') setSearching(false); if (event.key === 'Enter') setMatch((n) => n + (event.shiftKey ? -1 + matches.length : 1)) }}
+            className="[appearance:none] [&::-webkit-search-cancel-button]:[appearance:none]"
+          />
+          <InputGroupAddon align="inline-end">
+            <InputGroupText className="text-xs whitespace-nowrap" role="status">
+              {matches.length ? `${match % matches.length + 1} of ${matches.length}` : query ? 'No matches' : ''}
+            </InputGroupText>
+            <InputGroupButton size="icon-xs" disabled={!matches.length} onClick={() => setMatch((n) => n + matches.length - 1)} aria-label="Previous match">
+              <ChevronUpIcon />
+            </InputGroupButton>
+            <InputGroupButton size="icon-xs" disabled={!matches.length} onClick={() => setMatch((n) => n + 1)} aria-label="Next match">
+              <ChevronDownIcon />
+            </InputGroupButton>
+            <InputGroupButton size="icon-xs" onClick={() => setSearching(false)} aria-label="Close search">
+              <XIcon />
+            </InputGroupButton>
+          </InputGroupAddon>
+        </InputGroup>
       </div>}
       {live?.autoVetting && <VettingBanner />}
       {live?.forkedFrom && <ForkBanner from={live.forkedFrom} onOpen={onOpenParent} />}
@@ -474,13 +504,26 @@ export function Transcript({
             <div className="welcome-mark mb-5.5 grid size-12.5 place-items-center rounded-[15px] bg-primary text-2xl font-bold text-primary-foreground">B</div>
             <h1 className="mt-0 mb-3.5 text-[28px] leading-[1.2] tracking-[-0.5px] text-foreground">What would you like to build?</h1>
             <p className="leading-[1.6]">Work with an agent in your project. Track changes and review approval requests as you work.</p>
-            <button className="primary rounded-full border-0 bg-primary px-4.5 py-2.5 font-semibold text-primary-foreground" onClick={() => onNew()}>Open project</button>
-            {!!recents.length && <div className={cn(
-              'welcome-recents mt-8 grid gap-1.5',
-              '[&>button]:flex [&>button]:flex-col [&>button]:gap-0.75 [&>button]:rounded-lg [&>button]:border [&>button]:border-border',
-              '[&>button]:bg-transparent [&>button]:px-3 [&>button]:py-2.5 [&>button]:text-left',
-            )}><h2 className="text-[13px] text-muted-foreground">Recent projects</h2>{recents.slice(0, 5).map((directory) =>
-              <button key={directory} onClick={() => onNew(directory)}><strong>{projectLabel(directory)}</strong><span className="text-xs text-muted-foreground [overflow-wrap:anywhere]">{directory}</span></button>)}</div>}
+            <Button className="primary px-4.5 py-2.5 font-semibold" onClick={() => onNew()}>Open project</Button>
+            {!!recents.length && (
+              <ItemGroup className="welcome-recents mt-8 gap-1.5">
+                <h2 className="text-[13px] text-muted-foreground">Recent projects</h2>
+                {recents.slice(0, 5).map((directory) => (
+                  <Item
+                    key={directory}
+                    variant="outline"
+                    size="sm"
+                    render={<button type="button" onClick={() => onNew(directory)} />}
+                    className="text-left"
+                  >
+                    <ItemContent>
+                      <ItemTitle>{projectLabel(directory)}</ItemTitle>
+                      <ItemDescription className="[overflow-wrap:anywhere]">{directory}</ItemDescription>
+                    </ItemContent>
+                  </Item>
+                ))}
+              </ItemGroup>
+            )}
             <p className="welcome-hint mt-6 text-xs text-muted-foreground">Choose a conversation to resume work, or create a bot with a purpose and persistent memory.</p>
           </div>
         </div>
@@ -622,13 +665,14 @@ export function Transcript({
           />
           <InputGroupAddon align="block-end" className="composer-toolbar flex flex-wrap items-center gap-2 [&_.model-picker]:max-w-55 [&_.model-picker]:self-center">
             <ModelPicker session={live.handle} scope={bot ? 'bot' : 'conversation'} key={live.handle} model={live.model} disabled={live.running} onChoose={onModel} />
-            <Button variant="outline" size="sm" className="attach-files h-auto border-border bg-background px-2.25 py-1.75 text-xs font-normal whitespace-nowrap" onClick={onAttach} disabled={attachments.length >= 5} title="Choose project files to share as trusted context">Attach files</Button>
+            <Button variant="outline" size="lg" className="attach-files px-3 text-xs font-normal" onClick={onAttach} disabled={attachments.length >= 5} title="Choose project files to share as trusted context">Attach files</Button>
             {/* The first thing a narrow window gives up: it is a reminder, and the two controls
                 beside it are not. */}
             <InputGroupText className="composer-hint min-w-[130px] flex-1 text-[11px] text-muted-foreground max-[1120px]:hidden">Enter to send · Shift+Enter for newline</InputGroupText>
-            {live.running && <Button variant="outline" size="sm" className="stop min-h-9 border-destructive bg-background px-3 py-1.5 text-destructive" onClick={onCancel}>Stop</Button>}
+            {live.running && <Button variant="outline" size="lg" className="stop border-destructive px-3 text-destructive" onClick={onCancel}>Stop</Button>}
             <Button
-              className="send ml-auto h-auto min-h-9 rounded-[10px] px-4.5 font-medium whitespace-nowrap"
+              size="lg"
+              className="send ml-auto px-4"
               onClick={() => { latest(); live.running ? onQueue() : onSubmit() }}
               disabled={!draft.trim() || !!live.askingTrust || backendReady === false}
             >
@@ -878,7 +922,8 @@ const PATH = 'path flex-1 font-mono text-xs'
 const COUNTS = 'counts font-mono text-[11px] text-muted-foreground/70'
 
 /** Something the reader is being told to look twice at, above the thing itself. */
-const WARN = 'warn m-0 border-b border-border bg-warning/10 px-3 py-1.75 text-[11px] text-warning'
+const WARN_STRIP =
+  'warn rounded-none border-x-0 border-t-0 text-[11px] [&>svg]:size-3.5! *:[svg]:translate-y-0'
 
 /** What the answer would actually cover, which is not always what the head says. */
 const SCOPE = 'permission-scope m-0 border-t border-border px-3 py-2.5 text-xs text-muted-foreground [overflow-wrap:anywhere]'
@@ -894,8 +939,8 @@ const DECIDED = 'decided border-t border-border px-3 py-2 text-[11px]'
 
 /** The shape of the asides a card can carry about its own contents: what a checker made of them,
  *  what an isolated processor said about them, what this window thinks it recognised in them. Each
- *  site adds its own class hook; this is only the box they share. */
-const NOTICE = 'm-3 rounded-lg border border-border px-4 py-3'
+ *  site adds its own class hook; this is only the margin they share. */
+const NOTICE = 'm-3'
 
 const decidedTone = (decision: string): string =>
   decision === 'approve' ? 'text-success' : decision === 'reject' ? 'text-destructive' : 'text-muted-foreground'
@@ -1107,7 +1152,7 @@ function ForkBanner({
  */
 function VettingBanner(): React.JSX.Element {
   return (
-    <Alert className="fork-banner vetting-banner mt-1.5 rounded-md border border-border border-l-[3px] border-l-primary px-2.25 py-1.25 text-[11px] text-muted-foreground [&_[data-slot=alert-title]]:text-foreground" role="note">
+    <Alert className="fork-banner vetting-banner mt-1.5 text-[11px]" role="note">
       <AlertTitle>Auto-vetting is on.</AlertTitle>
       <AlertDescription>
         A check that finds nothing reads content to the model without asking you. Kept in{' '}
@@ -1192,7 +1237,7 @@ export function Row({
           <ChevronRightIcon className="size-3! transition-transform group-data-open:rotate-90" />
           Request details
         </CollapsibleTrigger>
-        <CollapsibleContent>
+        <CollapsibleContent keepMounted>
           {card}
         </CollapsibleContent>
       </Collapsible>
@@ -1399,29 +1444,46 @@ function EntryCard({
           </div>
 
           {request.untrusted && (
-            <p className={WARN}>
-              This came from somewhere nobody vouched for. The agent never read it — an
-              isolated processor wrote it. Read it as you would a stranger’s patch.
-            </p>
+            <Alert variant="destructive" className={WARN_STRIP}>
+              <TriangleAlertIcon />
+              <AlertDescription>
+                This came from somewhere nobody vouched for. The agent never read it — an
+                isolated processor wrote it. Read it as you would a stranger’s patch.
+              </AlertDescription>
+            </Alert>
           )}
           {!request.exact && (
-            <p className={WARN}>
-              The files were too dissimilar to diff exactly. This is an approximation of
-              the change.
-            </p>
+            <Alert className={WARN_STRIP}>
+              <TriangleAlertIcon />
+              <AlertDescription>
+                The files were too dissimilar to diff exactly. This is an approximation of
+                the change.
+              </AlertDescription>
+            </Alert>
           )}
 
           <p className={SCOPE}>{request.existing ? 'Update an existing project file.' : 'Create a new project file.'} This decision applies to the change shown below.</p>
-          {request.remark && <div className={cn('processor-remark', NOTICE)}><strong>Processor’s remark · untrusted</strong>
-            <pre className="my-2 whitespace-pre-wrap [overflow-wrap:anywhere]">{request.remark.preview.join('\n')}</pre>
-            <small className="leading-[1.5] text-muted-foreground">{request.remark.label}{request.remark.lines > request.remark.preview.length ? ` · ${request.remark.lines - request.remark.preview.length} more lines not shown` : ''}. Review the diff before approving.</small>
-          </div>}
+          {request.remark && (
+            <Alert className={cn('processor-remark', NOTICE)}>
+              <AlertTitle>Processor’s remark · untrusted</AlertTitle>
+              <AlertDescription>
+                <pre className="my-2 whitespace-pre-wrap [overflow-wrap:anywhere]">{request.remark.preview.join('\n')}</pre>
+                <small className="leading-[1.5] text-muted-foreground">{request.remark.label}{request.remark.lines > request.remark.preview.length ? ` · ${request.remark.lines - request.remark.preview.length} more lines not shown` : ''}. Review the diff before approving.</small>
+              </AlertDescription>
+            </Alert>
+          )}
           {/* The one notice that is a question about the lines below it, so it is the one that
-              carries the warn colours rather than the plain border the others get. */}
-          {request.credentials && request.credentials.length > 0 && <div className={cn('credential-finding', NOTICE, 'border-warning bg-warning/10')}><strong className="text-warning">This looks like it would put a secret in the tree</strong>
-            <ul className="my-2 list-none p-0">{request.credentials.map((found) => <li className="my-1 font-mono text-[11px] [overflow-wrap:anywhere]" key={found}>{found}</li>)}</ul>
-            <small className="leading-[1.5] text-muted-foreground">Going by the name beside the value and how the value reads. Nothing recognised it as a particular provider’s key, so it is a guess and yours to settle.</small>
-          </div>}
+              carries the destructive variant rather than the default the others get. */}
+          {request.credentials && request.credentials.length > 0 && (
+            <Alert variant="destructive" className={cn('credential-finding', NOTICE)}>
+              <CircleAlertIcon />
+              <AlertTitle>This looks like it would put a secret in the tree</AlertTitle>
+              <AlertDescription>
+                <ul className="my-2 list-none p-0">{request.credentials.map((found) => <li className="my-1 font-mono text-[11px] [overflow-wrap:anywhere]" key={found}>{found}</li>)}</ul>
+                <small className="leading-[1.5]">Going by the name beside the value and how the value reads. Nothing recognised it as a particular provider’s key, so it is a guess and yours to settle.</small>
+              </AlertDescription>
+            </Alert>
+          )}
           <Diff changes={request.changes} />
 
           {!answerable ? (
@@ -1489,23 +1551,29 @@ function EntryCard({
           <p className={SCOPE}>Run this command in the project folder shown above. “Run once” approves only this execution.</p>
           {answerable && decision === null && <p className={SCOPE}><strong>Remembered approval:</strong> {request.vouches.map((v) => v.display).join('; ')}. Covers these exact commands and trusts their output for this conversation, including after reopening it. Revoke through Permissions.</p>}
           {!!request.ambient?.length && (
-            <div className={WARN}>
-              This spends access that is yours elsewhere. Nobody is asked for it at the moment it
-              is used, and nothing here takes it back afterwards.
-              <ul>
-                {request.ambient.map((spent) => (
-                  <li key={`${spent.authority}:${spent.named}`}>
-                    <code>{spent.named}</code>: {t.ambientSentence(spent.authority)}
-                  </li>
-                ))}
-              </ul>
-            </div>
+            <Alert variant="destructive" className={WARN_STRIP}>
+              <TriangleAlertIcon />
+              <AlertDescription>
+                This spends access that is yours elsewhere. Nobody is asked for it at the moment it
+                is used, and nothing here takes it back afterwards.
+                <ul>
+                  {request.ambient.map((spent) => (
+                    <li key={`${spent.authority}:${spent.named}`}>
+                      <code>{spent.named}</code>: {t.ambientSentence(spent.authority)}
+                    </li>
+                  ))}
+                </ul>
+              </AlertDescription>
+            </Alert>
           )}
           {request.releasesPrivate && (
-            <p className={WARN}>
-              This hands your own data to the program. Whatever it does with those bytes
-              happens somewhere the agent stops governing them.
-            </p>
+            <Alert variant="destructive" className={WARN_STRIP}>
+              <TriangleAlertIcon />
+              <AlertDescription>
+                This hands your own data to the program. Whatever it does with those bytes
+                happens somewhere the agent stops governing them.
+              </AlertDescription>
+            </Alert>
           )}
 
           {!answerable ? (
@@ -1557,11 +1625,14 @@ function EntryCard({
             </span>
           </div>
 
-          <p className={WARN}>
-            The planner has not seen this. Read it yourself before deciding: approving is
-            what puts it into the model’s context, and anything in here that reads like an
-            instruction will be read there as one.
-          </p>
+          <Alert className={WARN_STRIP}>
+            <TriangleAlertIcon />
+            <AlertDescription>
+              The planner has not seen this. Read it yourself before deciding: approving is
+              what puts it into the model’s context, and anything in here that reads like an
+              instruction will be read there as one.
+            </AlertDescription>
+          </Alert>
 
           <VettingNotice vetting={request.vetting} />
           <pre className={PREVIEW}>{request.output}</pre>
@@ -1601,7 +1672,12 @@ function EntryCard({
         <div className={HEAD}><span className={INTENT}>read once</span><code className={PATH}>{request.origin}</code><span className={COUNTS}>{request.lines} lines</span></div>
         <p className={SCOPE}>Expected contents: {request.expects}</p>
         <VettingNotice vetting={request.vetting} />
-        <p className={WARN}>Approval lets the planner read only this content. It does not trust this file for future reads.</p>
+        <Alert className={WARN_STRIP}>
+          <TriangleAlertIcon />
+          <AlertDescription>
+            Approval lets the planner read only this content. It does not trust this file for future reads.
+          </AlertDescription>
+        </Alert>
         <pre className={PREVIEW}>{request.content}</pre>
         {!answerable ? <Unanswered /> : decision === null ? <div className={ACTIONS}>
           <Button variant="outline" className="reject hover:bg-destructive/10 hover:text-destructive" onClick={() => onDecide('vet', request.request, false)}>Keep it out</Button>
@@ -1621,10 +1697,13 @@ function EntryCard({
             <code className={PATH}>{request.path}</code>
           </div>
 
-          <p className={WARN}>
-            Vouching records a standing rule for this path, so it applies to later reads as
-            well as this one. Only do it for content you know the origin of.
-          </p>
+          <Alert className={WARN_STRIP}>
+            <TriangleAlertIcon />
+            <AlertDescription>
+              Vouching records a standing rule for this path, so it applies to later reads as
+              well as this one. Only do it for content you know the origin of.
+            </AlertDescription>
+          </Alert>
 
           <VettingNotice vetting={request.vetting} />
           <pre className={PREVIEW}>{request.preview}</pre>
@@ -1699,12 +1778,17 @@ function VettingNotice({ vetting }: { vetting?: import('../../shared/protocol').
   const verdict = vetting?.verdict
   const label = verdict === 'safe' ? 'No instructions detected' : verdict === 'unsafe' ? 'Possible instructions detected' : 'Check inconclusive'
   return (
-    <Alert className={cn(
-      'vetting-notice',
-      NOTICE,
-      '[&_p]:my-2 [&_p]:whitespace-pre-wrap [&_p]:[overflow-wrap:anywhere]',
-      verdict === 'safe' ? 'safe' : 'caution border-l-[3px] border-l-primary',
-    )} variant={verdict === 'unsafe' ? 'destructive' : 'default'}>
+    <Alert
+      className={cn(
+        'vetting-notice',
+        NOTICE,
+        '[&_p]:my-2 [&_p]:whitespace-pre-wrap [&_p]:[overflow-wrap:anywhere]',
+        verdict === 'safe' && 'safe',
+        verdict !== 'safe' && 'caution',
+      )}
+      variant={verdict === 'unsafe' ? 'destructive' : 'default'}
+    >
+      {verdict === 'unsafe' ? <CircleAlertIcon /> : <TriangleAlertIcon />}
       <AlertTitle>{label}</AlertTitle>
       <AlertDescription className="flex flex-col gap-1">
         {vetting?.reason && <p>{vetting.reason}</p>}

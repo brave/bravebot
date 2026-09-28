@@ -13,6 +13,7 @@ import {
 import { Empty, EmptyDescription } from '@/components/ui/empty'
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
+import { Spinner } from '@/components/ui/spinner'
 
 interface Watch { number: number; path: string; remainingSeconds: number; armedBy: number; state: string }
 interface Listing { watches: Watch[]; busy: boolean }
@@ -56,7 +57,12 @@ export function Watches({ session, onClose }: { session: string; onClose: () => 
             </Alert>
           )}
           {status && <p role="status">{status}</p>}
-          {!listing && !problem && <p role="status">Loading watches…</p>}
+          {!listing && !problem && (
+            <p role="status" className="flex items-center gap-2">
+              <Spinner />
+              Loading watches…
+            </p>
+          )}
           {listing?.watches.length === 0 && (
             <Empty className="min-h-0 flex-none items-start gap-0 border-0 p-0 text-left">
               <EmptyDescription className="text-left text-inherit">
