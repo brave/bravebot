@@ -134,7 +134,6 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
   useEffect(() => {
     const button = trigger.current
     if (!button) return
-    button.setAttribute('role', 'button')
     button.setAttribute('aria-label', `Choose model: ${label}`)
     button.setAttribute('aria-haspopup', 'dialog')
     button.setAttribute('aria-expanded', String(open))

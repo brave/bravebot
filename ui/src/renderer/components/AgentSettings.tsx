@@ -1,11 +1,18 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Modal } from './Modal'
 import type { AgentSettings as Report, Hook, HooksDocument } from '../../shared/agent-settings'
 import { composeHooks } from '../../shared/agent-settings'
 import { Alert, Button, Collapse, Dropdown, Input, TabItem, Tabs } from '../nala'
+const fieldText = (event: { value?: unknown; target?: EventTarget | null }): string | null => {
+  if (typeof event.value === 'string') return event.value
+  const target = event.target
+  if (target && typeof target === 'object' && 'value' in target && typeof target.value === 'string') return target.value
+  return null
+}
+
+const sections = ['Connection', 'Hooks', 'Run settings']
 
 export function AgentSettings({ session, onClose, onChanged }: { session?: string; onClose: () => void; onChanged: () => void }): React.JSX.Element {
-  const tabs = ['Connection', 'Hooks', 'Run settings']
   const [tab, setTab] = useState('Connection')
   const [report, setReport] = useState<Report | null>(null)
   const [document, setDocument] = useState<HooksDocument | null>(null)
@@ -71,15 +78,84 @@ export function AgentSettings({ session, onClose, onChanged }: { session?: strin
   // A file the agent passed over in part is the person's to edit: composing it back from the
   // entries it did read would drop the rest.
   const editable = !!document && document.entire
+  const tabsRoot = useRef<HTMLElement>(null)
+  const tabNow = useRef(tab)
+  tabNow.current = tab
+  // Leo's tabs select on click only. Arrow, Home and End stay on this list, the
+  // same way the previous tab buttons did. Changing the selected value leaves
+  // focus on the tablist host, so the selected tab is focused again after that
+  // render when focus was already in the list.
+  useEffect(() => {
+    const root = tabsRoot.current
+    if (!root) return
+    let fromTabsKey = false
+    const place = () => {
+      const index = sections.indexOf(tabNow.current)
+      if (index < 0) return
+      root.querySelectorAll<HTMLElement>('[role="tab"]')[index]?.focus()
+    }
+    // Capture on the window: after a tab change the dialog host can hold focus,
+    // and a key aimed at that host never bubbles through the tablist.
+    const onKey = (event: KeyboardEvent) => {
+      const next = event.key === 'ArrowRight' ? (sections.indexOf(tabNow.current) + 1) % sections.length
+        : event.key === 'ArrowLeft' ? (sections.indexOf(tabNow.current) + sections.length - 1) % sections.length
+        : event.key === 'Home' ? 0
+        : event.key === 'End' ? sections.length - 1
+        : -1
+      if (next < 0) return
+      const active = window.document.activeElement
+      if (!active || active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'LEO-INPUT') return
+      const dialog = root.closest('[role="dialog"]')
+      const host = active.getRootNode() instanceof ShadowRoot ? (active.getRootNode() as ShadowRoot).host : active
+      const inTabs = active === root || root.contains(active) || root.contains(host)
+      if (!inTabs && active !== dialog && host !== dialog) return
+      event.preventDefault()
+      fromTabsKey = true
+      tabNow.current = sections[next]!
+      setTab(tabNow.current)
+      setProblem('')
+      setStatus('')
+      place()
+      queueMicrotask(() => {
+        place()
+        requestAnimationFrame(() => { place(); fromTabsKey = false })
+      })
+    }
+    // The tablist rebuild and the dialog's own tab stop both take focus off the
+    // selected tab. Put it back while an arrow, Home, or End key is in flight.
+    const onFocus = () => {
+      if (!fromTabsKey) return
+      const active = window.document.activeElement
+      if (active === root || active?.getAttribute('role') === 'dialog') place()
+    }
+    window.addEventListener('keydown', onKey, true)
+    window.document.addEventListener('focusin', onFocus)
+    return () => {
+      window.removeEventListener('keydown', onKey, true)
+      window.document.removeEventListener('focusin', onFocus)
+    }
+  }, [])
+  useLayoutEffect(() => {
+    const root = tabsRoot.current
+    const active = window.document.activeElement
+    if (!root || !active || (active !== root && !root.contains(active))) return
+    const index = sections.indexOf(tab)
+    if (index < 0) return
+    const place = () => {
+      if (!root.isConnected) return
+      root.querySelectorAll<HTMLElement>('[role="tab"]')[index]?.focus()
+    }
+    queueMicrotask(place)
+  }, [tab])
   return <Modal title="Agent settings" onClose={busy ? undefined : close} className="agent-settings">
     <div className="settings-heading"><div><p>Configuration and automation for this app.</p></div>
       <Button size="small" kind="plain-faint" fab onClick={close} isDisabled={busy} aria-label="Close agent settings" data-test="settings-close">×</Button>
     </div>
-    <Tabs className="settings-tabs" value={tab} data-test="settings-tabs"
+    <Tabs ref={tabsRoot} className="settings-tabs" value={tab} data-test="settings-tabs"
       onChange={({ value }) => { if (value) { setTab(value); setProblem(''); setStatus('') } }}>
-      {tabs.map((name) => <TabItem key={name} value={name}>{name}{name === 'Hooks' && dirty ? ' •' : ''}</TabItem>)}
+      {sections.map((name) => <TabItem key={name} value={name}>{name}{name === 'Hooks' && dirty ? ' •' : ''}</TabItem>)}
     </Tabs>
-    {problem && <div className="settings-error"><Alert type="error" data-test="settings-error">{problem}</Alert>{tab !== 'Hooks' && <Button size="small" kind="outline" isDisabled={busy} onClick={() => void load()}>Retry diagnostics</Button>}</div>}
+    {problem && <div className="settings-error"><Alert type="error" role="alert" data-test="settings-error">{problem}</Alert>{tab !== 'Hooks' && <Button size="small" kind="outline" isDisabled={busy} onClick={() => void load()}>Retry diagnostics</Button>}</div>}
     {status && <p role="status">{status}</p>}
     {busy && <p role="status">Working…</p>}
     <div className="settings-body" data-test="settings-body">
@@ -96,7 +172,7 @@ export function AgentSettings({ session, onClose, onChanged }: { session?: strin
           <section><h4>Brave service</h4><p>Use a configured Brave build, or launch from a shell with <code>SERVICES_KEY_AICHAT</code>, <code>BRAVE_SERVICES_KEY_ID</code> and <code>BRAVE_AI_CHAT_ENDPOINT</code> set to your supplied credentials and endpoint. Credentials are not stored in this window.</p></section></div>
         </Collapse>
         <section><h3>Network</h3><dl><dt>Certificate roots</dt><dd>{report.network.roots.length ? report.network.roots.join(', ') : 'Bundled roots'}</dd><dt>Proxy</dt><dd>{report.network.proxy ?? 'No proxy configured'}{report.network.authenticated ? ' · authenticated' : ''}</dd><dt>Proxy bypass</dt><dd>{report.network.noProxy ?? 'None'}</dd></dl>
-          {(report.network.problem || report.network.trustsNothing || report.network.unusableProxy) && <Alert type="warning">{report.network.problem || (report.network.trustsNothing ? 'No usable trust roots.' : `Unsupported proxy: ${report.network.unusableProxy}`)}</Alert>}
+          {(report.network.problem || report.network.trustsNothing || report.network.unusableProxy) && <Alert type="warning" role="alert">{report.network.problem || (report.network.trustsNothing ? 'No usable trust roots.' : `Unsupported proxy: ${report.network.unusableProxy}`)}</Alert>}
           <p>For a custom certificate authority, set <code>SSL_CERT_FILE</code> or <code>SSL_CERT_DIR</code> before opening the app. These replace bundled roots. Proxy and certificate changes require restarting the app.</p>
         </section>
         <section><h3>Managed configuration</h3>{report.managed.path ? <><p>{report.managed.path}</p><p>{report.managed.keys.length ? `Locked by your administrator: ${report.managed.keys.join(', ')}` : 'File found; no recognized values are pinned.'}</p></> : <p>No administrator-managed configuration found.</p>}<p>Administrator-pinned destinations take precedence over your settings and environment.</p></section>
@@ -105,7 +181,7 @@ export function AgentSettings({ session, onClose, onChanged }: { session?: strin
       {tab === 'Hooks' && <>
         <p>Hooks are shared with the terminal client. Run your own programs at specific moments. These commands run with your account’s permissions in the project directory. They cannot approve or block the agent.</p>
         {document && <p className="settings-path">{document.path}</p>}
-        {document && !document.entire && <Alert type="warning">{document.text === null
+        {document && !document.entire && <Alert type="warning" role="alert">{document.text === null
           ? 'The agent could not read this file, so it declares no hooks. Open it yourself to see why.'
           : 'The agent did not read all of this file, so saving it from here could drop what it passed over. Edit it directly.'}</Alert>}
         {document && document.entire && hooks.length === 0 && <p>No hooks configured.</p>}
@@ -120,15 +196,15 @@ export function AgentSettings({ session, onClose, onChanged }: { session?: strin
           </label>
           {(hook.on === 'tool-finished' || hook.tool !== null) && <label>Tool filter (optional)
             <Input value={hook.tool ?? ''} placeholder="All tools"
-              onChange={({ value }) => change(index, { ...hook, tool: value.trim() || null })} />
+              onInput={(event) => { const value = fieldText(event); if (value !== null) change(index, { ...hook, tool: value.trim() || null }) }} />
           </label>}
-          {!dirty && document?.hooks[index]?.firesForNothing && <Alert type="warning">This hook fires for nothing: only a finished tool call carries a tool name. Clear the filter, or choose Tool finishes.</Alert>}
+          {!dirty && document?.hooks[index]?.firesForNothing && <Alert type="warning" role="alert">This hook fires for nothing: only a finished tool call carries a tool name. Clear the filter, or choose Tool finishes.</Alert>}
           <label>Program
             <Input value={hook.run[0]} placeholder="/path/to/program" data-test={`hook-program-${index}`}
-              onChange={({ value }) => change(index, { ...hook, run: [value, ...hook.run.slice(1)] })} />
+              onInput={(event) => { const value = fieldText(event); if (value !== null) change(index, { ...hook, run: [value, ...hook.run.slice(1)] }) }} />
           </label>
           {hook.run.slice(1).map((argument, i) => <div key={i} className="hook-argument"><label>Argument {i + 1}
-            <Input value={argument} onChange={({ value }) => change(index, { ...hook, run: hook.run.map((word, j) => j === i + 1 ? value : word) })} />
+            <Input value={argument} onInput={(event) => { const value = fieldText(event); if (value !== null) change(index, { ...hook, run: hook.run.map((word, j) => j === i + 1 ? value : word) }) }} />
           </label><Button size="small" kind="plain-faint" onClick={() => change(index, { ...hook, run: hook.run.filter((_, j) => j !== i + 1) })} aria-label={`Remove argument ${i + 1} from hook ${index + 1}`}>Remove</Button></div>)}
           <div className="settings-actions">
             <Button size="small" kind="plain" onClick={() => change(index, { ...hook, run: [...hook.run, ''] })}>Add argument</Button>
