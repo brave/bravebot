@@ -244,7 +244,8 @@ whether or not there is anything at the other end of it.
 
 Every session is given a directory of its own in the system temporary directory, created as the
 session opens, and it is somewhere to put an intermediate file. A one-shot run has one for as long as
-it runs. A session that cannot be given one runs without one and says so.
+it runs. A session that cannot be given one runs without one and says so. On macOS and Linux, one
+left behind by a session that was killed rather than closed is removed as the next session opens.
 
 `/status` reports it as the session's own, on a line of its own rather than among the rules, because
 it is reachable without any rule covering it.

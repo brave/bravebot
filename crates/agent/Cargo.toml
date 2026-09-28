@@ -38,6 +38,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
-# uname(2), for the platform and OS version the preamble states, and the no-follow open status
-# reads a file with. rustix rather than libc so the calls do not need unsafe at this crate.
+# uname(2), for the platform and OS version the preamble states, the no-follow open status reads
+# a file with, and flock(2), for the claim a session holds on its scratch directory. rustix rather
+# than libc so the calls do not need unsafe at this crate.
 rustix = { workspace = true, features = ["fs", "system"] }
