@@ -336,7 +336,15 @@ impl Bridge {
                 crate::FRONT,
             ),
             "autoVetting": auto_vetting,
+            "serversNote": self.servers_note(directory),
         })
+    }
+
+    /// The MCP servers the settings a session in `directory` opens under request, none of which
+    /// this front end starts (SERVERS-2).
+    fn servers_note(&self, directory: &Path) -> Option<String> {
+        let settings = crate::settings::layers(Some(directory), self.settings.as_deref());
+        bravebot_session::sessions::servers_note(settings.mcp_requested().map(|(_, alias)| alias))
     }
 
     fn new_session(&mut self, request: &Request) -> Result<Value, Failure> {
@@ -383,6 +391,7 @@ impl Bridge {
             "directory": directory.display().to_string(),
             "branch": branch,
             "autoVetting": auto_vetting,
+            "serversNote": self.servers_note(&directory),
         });
         merge(&mut made, reported);
         Ok(made)
@@ -536,6 +545,7 @@ impl Bridge {
             "todos": todos_json(&todos),
             "trust": { "known": known, "rules": if known { Value::from(rules) } else { Value::Null } },
             "autoVetting": auto_vetting,
+            "serversNote": self.servers_note(&project),
             "parent": {
                 "id": parent_id,
                 "directory": project.display().to_string(),

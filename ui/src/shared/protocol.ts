@@ -151,6 +151,8 @@ export interface OpenedSession {
   buildNote: string | null
   /** Said when the other front end wrote the transcript above: it drew it, and this one will not draw it the same way. */
   frontNote: string | null
+  /** Names the MCP servers the settings here request, which this app starts none of (SERVERS-2). */
+  serversNote: string | null
   /**
    * How many messages compaction has taken out of this conversation, in total.
    *
@@ -209,6 +211,8 @@ export interface ForkedSession {
   keeping?: string | null
   /** The parent's, as it opened: the child carries on its conversation. */
   autoVetting: boolean
+  /** As on `OpenedSession`, read again for the child. */
+  serversNote: string | null
   parent: {
     id: string
     directory: string

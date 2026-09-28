@@ -1169,6 +1169,10 @@ session-build-differs = cette session tournait sous bravebot { $was } ; celle-ci
 session-front-differs = cette session a été écrite dans { $was } ; celle-ci l'est dans { $now }
 session-front-terminal = le terminal
 session-front-desktop = l'application de bureau
+session-servers-not-started =
+    les réglages ici demandent les serveurs MCP { $servers }, que l'application de bureau ne
+    démarre pas : bravebot mcp list, lancé ici dans un terminal, dit lesquels une session y
+    démarrerait
 
 
 ## Thèmes

@@ -540,7 +540,7 @@ export function App(): React.JSX.Element {
         archived: opened.archived,
         autoVetting: opened.autoVetting,
       })
-      const notes = [opened.branchNote, opened.buildNote, opened.frontNote].filter(Boolean) as string[]
+      const notes = [opened.branchNote, opened.buildNote, opened.frontNote, opened.serversNote].filter(Boolean) as string[]
       setProblem(notes.length ? notes.join(' · ') : null)
     } catch (error) {
       setProblem(String(error))
@@ -563,6 +563,7 @@ export function App(): React.JSX.Element {
         branch: string | null
         model: string | null
         autoVetting: boolean
+        serversNote: string | null
         remembered?: KeptTrust | null
         keeping?: string | null
       }>('session.new', {
@@ -598,7 +599,7 @@ export function App(): React.JSX.Element {
         archived: 0,
         autoVetting: made.autoVetting,
       })
-      setProblem(null)
+      setProblem(made.serversNote)
     } catch (error) {
       setProblem(String(error))
     }
@@ -1145,7 +1146,7 @@ export function App(): React.JSX.Element {
         // From the agent rather than from `entry.text`: what the composer opens with should be
         // the prompt that was actually cut out, not the one this window thought it clicked.
         setDraft(forked.prefill)
-        setProblem(null)
+        setProblem(forked.serversNote)
         void refresh()
         void readForks()
       } catch (error) {
