@@ -319,7 +319,11 @@ impl Session {
             .collect()
     }
 
-    /// Settle every list nobody has been asked about yet (SERVERS-8, SERVERS-13).
+    /// Settle every list nobody has been asked about yet of a server `holding` grants a call to
+    /// (SERVERS-8, SERVERS-13).
+    ///
+    /// A server the turn holds no grant for is one it is offered nothing of, so its list waits
+    /// for a turn that does rather than being put to a person who could not use the answer here.
     ///
     /// A list that is the one somebody vouched for under this declaration before is offered with
     /// nobody asked. Every other list is checked, unless every check is being bypassed, and put to
@@ -334,11 +338,17 @@ impl Session {
         confirmer: &mut C,
         reporter: &mut R,
         mode: crate::PermissionMode,
+        holding: &CapabilitySet,
     ) -> Settled {
         let mut settled = Settled::default();
         for server in &self.0.servers {
             if stopped(chat) {
                 break;
+            }
+            if !holding.contains(&Capability::McpCall(ServerAlias::new(
+                server.alias.as_str(),
+            ))) {
+                continue;
             }
             // Taken out rather than held, so nothing is locked while the person reads the list.
             let listing = {

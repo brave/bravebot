@@ -1957,6 +1957,19 @@ delegate-skills-not-found =
         [one] { $definition } names a skill this session did not find, so its delegate is offered without it: { $skills }
        *[other] { $definition } names skills this session did not find, so its delegate is offered without them: { $skills }
     }
+# A definition's mcpServers line named servers this session did not reach. The definition is its
+# file's path and the servers are that file's own words, joined with a comma, both from a
+# vouched-for file. "MCP" is a protocol's name and stays as it is.
+delegate-servers-not-found =
+    { $count ->
+        [one] { $definition } names an MCP server this session did not reach, so its delegate runs without it: { $servers }
+       *[other] { $definition } names MCP servers this session did not reach, so its delegate runs without them: { $servers }
+    }
+# A definition's mcpServers line declared a server inline rather than naming one, so its delegate
+# calls no MCP server. The definition is its file's path. Nothing from the line is shown, since an
+# inline entry can hold a command line and the value of a secret. "MCP", "mcpServers" and the path
+# stay as they are.
+delegate-servers-declared = { $definition } declares an MCP server in its mcpServers line, which only ~/.bravebot/mcp.json may do, so its delegate calls no MCP server
 # A definition's rounds line is not a whole number above zero, so the file did not load. The
 # definition is its file's path.
 delegate-rounds-not-a-count = { $definition } was skipped: its rounds must be a whole number above zero

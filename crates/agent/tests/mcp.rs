@@ -1310,6 +1310,121 @@ fn an_addressed_worker_is_put_the_list_and_calls_the_servers_tool() {
     assert_eq!(methods(&server), ["tools/call"]);
 }
 
+/// A turn addressed to a worker whose definition names one server keeps that server alone
+/// (ADDRESS-7), so it is put that server's list and not the other's, and offered that tool and not
+/// the other's. The same session with nobody addressed is then put the list the addressed turn
+/// left unasked, which is what shows it was left rather than declined.
+#[test]
+fn an_addressed_worker_naming_one_server_is_put_its_list_alone() {
+    let scratch = Scratch::new("addressed-names-a-server");
+    let home = Scratch::new("addressed-names-a-server-home");
+    a_fixer_naming_the_weather(&home);
+    let (session, _bodies) = two_servers(&scratch);
+    let (endpoint, chat) = serve_chat(vec![reply_with("looked"), reply_with("looked too")]);
+
+    let mut asked = Answering::new(Decision::Approve, CallDecision::approve());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is the forecast")
+            .with_home(Some(home.path.clone()))
+            .addressing(Some("fixer".to_string()))
+            .with_mcp(Some(session.clone())),
+        &mut asked,
+    );
+    let addressed = rounds(&chat);
+    let [addressed] = addressed.as_slice() else {
+        panic!("the addressed turn made {} rounds", addressed.len());
+    };
+    assert!(
+        addressed.contains("FIX-BY-DEFINITION"),
+        "the turn did not run under the definition, so this says nothing: {addressed}"
+    );
+    let put: Vec<&str> = asked.lists.iter().map(|list| list.alias.as_str()).collect();
+    assert_eq!(put, ["weather"], "the lists put for the addressed turn");
+    assert!(
+        addressed.contains(FORECAST),
+        "the turn was not offered the tool of the server its definition named: {addressed}"
+    );
+    assert!(
+        !addressed.contains(DOCS_TOOL),
+        "the turn was offered the tool of a server its definition left off: {addressed}"
+    );
+
+    let mut control = Answering::new(Decision::Approve, CallDecision::approve());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is the forecast")
+            .with_home(Some(home.path.clone()))
+            .with_mcp(Some(session)),
+        &mut control,
+    );
+    let put: Vec<&str> = control
+        .lists
+        .iter()
+        .map(|list| list.alias.as_str())
+        .collect();
+    assert_eq!(
+        put,
+        ["docs"],
+        "the list the addressed turn left was not put next"
+    );
+    let open = rounds(&chat);
+    let [open] = open.as_slice() else {
+        panic!("the control turn made {} rounds", open.len());
+    };
+    assert!(
+        open.contains(DOCS_TOOL),
+        "the control was not offered the other tool, so this says nothing: {open}"
+    );
+}
+
+/// A server a definition names and the session did not reach selects nothing, and the turn says so
+/// on its outcome beside the rest of what it found (DELEGATE-24), naming the definition and that
+/// name alone: the server it did reach is not said.
+#[test]
+fn a_server_a_definition_names_and_the_session_did_not_reach_is_said() {
+    let scratch = Scratch::new("definition-names-no-such-server");
+    let home = Scratch::new("definition-names-no-such-server-home");
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("forecaster.md"),
+        "---\nname: forecaster\ndescription: Forecasts.\nkind: worker\nmcpServers: weather, \
+         wether\n---\n\nbody\n",
+    )
+    .expect("write the definition");
+    let (url, _server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let (endpoint, _chat) = serve_chat(vec![reply_with("looked")]);
+
+    let outcome = run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is the forecast")
+            .with_home(Some(home.path.clone()))
+            .with_mcp(Some(session)),
+        &mut Answering::new(Decision::Approve, CallDecision::approve()),
+    );
+
+    let said: Vec<&String> = outcome
+        .notices
+        .iter()
+        .filter(|notice| notice.contains("did not reach"))
+        .collect();
+    assert_eq!(
+        said.len(),
+        1,
+        "not said exactly once: {:?}",
+        outcome.notices
+    );
+    assert!(
+        said[0].contains("forecaster.md") && said[0].ends_with(": wether"),
+        "the notice did not name the definition and the one server nothing reached: {}",
+        said[0]
+    );
+}
+
 /// The task a turn is given and the one its planner hands a delegate, each the marker its run's
 /// requests carry.
 const PARENT: &str = "ASK-A-DELEGATE-FOR-THE-FORECAST";
@@ -1410,22 +1525,35 @@ fn a_workers_call_to_a_servers_tool_is_put_to_the_person() {
     );
 }
 
-/// A worker holds the servers its parent holds and no other the session reached. The turn is
-/// handed two servers and a grant for one, so neither it nor the worker it spawns is offered the
-/// other's tool, though the session settled both lists.
-#[test]
-fn a_worker_is_offered_only_the_servers_its_parent_holds() {
-    let scratch = Scratch::new("delegate-worker-narrowed");
-    let (weather, _weather) = serve_weather();
-    let (docs, _docs) = serve_tool("lookup");
+/// What the turn settling both lists is sent, so the rules below can tell its requests apart.
+const SETTLE_BOTH: &str = "SETTLE-BOTH-LISTS-FIRST";
+
+/// The weather server and one serving [`DOCS_TOOL`], both reached by one session.
+fn two_servers(scratch: &Scratch) -> (Session, [mpsc::Receiver<String>; 2]) {
+    let (weather, weather_bodies) = serve_weather();
+    let (docs, docs_bodies) = serve_tool("lookup");
     let session = Session::new(
         vec![reach_as("weather", &weather), reach_as("docs", &docs)],
         scratch.project(),
         Some(scratch.state()),
         true,
     );
+    (session, [weather_bodies, docs_bodies])
+}
+
+/// The one tool of the second server [`two_servers`] reaches.
+const DOCS_TOOL: &str = "mcp__docs__lookup";
+
+/// A worker holds the servers its parent holds and no other the session reached. A first turn
+/// holding both settles both lists, and the next is handed a grant for one, so neither it nor the
+/// worker it spawns is offered the other's tool, though that list was vouched for.
+#[test]
+fn a_worker_is_offered_only_the_servers_its_parent_holds() {
+    let scratch = Scratch::new("delegate-worker-narrowed");
+    let (session, _bodies) = two_servers(&scratch);
     let spawn = format!(r#"{{"kind":"worker","task":"{DELEGATED}"}}"#);
     let (endpoint, chat) = serve_chat_by_marker(vec![
+        (SETTLE_BOTH, vec![reply_with("settled")]),
         (
             PARENT,
             vec![
@@ -1437,6 +1565,17 @@ fn a_worker_is_offered_only_the_servers_its_parent_holds() {
         (DELEGATED, vec![reply_with("nothing to look up")]),
     ]);
     let mut asked = Answering::new(Decision::Approve, CallDecision::approve());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new(SETTLE_BOTH).with_mcp(Some(session.clone())),
+        &mut asked,
+    );
+    assert_eq!(
+        asked.lists.len(),
+        2,
+        "the first turn did not settle both lists, so this says nothing"
+    );
     run_turn(
         &endpoint,
         &scratch.project(),
@@ -1460,10 +1599,78 @@ fn a_worker_is_offered_only_the_servers_its_parent_holds() {
             "{run} was not offered the tool of the server it holds, so this says nothing: {body}"
         );
         assert!(
-            !body.contains("mcp__docs__lookup"),
+            !body.contains(DOCS_TOOL),
             "{run} was offered the tool of a server it holds no grant for: {body}"
         );
     }
+}
+
+/// A definition that names `fixer` a worker calling only the weather server.
+fn a_fixer_naming_the_weather(home: &Scratch) {
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("fixer.md"),
+        "---\nname: fixer\ndescription: Fixes what the weather broke.\nkind: worker\nmcpServers: \
+         weather\n---\n\nFIX-BY-DEFINITION\n",
+    )
+    .expect("write the definition");
+}
+
+/// A delegate's definition narrows the servers its parent holds (`delegation.md` DELEGATE-24). The
+/// turn holds both servers and is offered both tools, and the worker it spawns under a definition
+/// naming the weather server is offered that one's tool and not the other's.
+#[test]
+fn a_worker_whose_definition_names_one_server_is_offered_only_its_tool() {
+    let scratch = Scratch::new("delegate-names-a-server");
+    let home = Scratch::new("delegate-names-a-server-home");
+    a_fixer_naming_the_weather(&home);
+    let (session, _bodies) = two_servers(&scratch);
+    let spawn = format!(r#"{{"kind":"fixer","task":"{DELEGATED}"}}"#);
+    let (endpoint, chat) = serve_chat_by_marker(vec![
+        (
+            PARENT,
+            vec![
+                tool_request("spawn_agent", &spawn),
+                reply_with("waiting"),
+                reply_with("the delegate reported"),
+            ],
+        ),
+        (DELEGATED, vec![reply_with("nothing to look up")]),
+    ]);
+    let mut asked = Answering::new(Decision::Approve, CallDecision::approve());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new(PARENT)
+            .with_home(Some(home.path.clone()))
+            .with_mcp(Some(session)),
+        &mut asked,
+    );
+    let sent = rounds(&chat);
+    let parent = sent
+        .iter()
+        .find(|body| body.contains(PARENT))
+        .expect("the turn asked");
+    let delegate = sent
+        .iter()
+        .find(|body| body.contains(DELEGATED) && !body.contains(PARENT))
+        .expect("the worker asked");
+    assert!(
+        delegate.contains("FIX-BY-DEFINITION"),
+        "the worker did not run under the definition, so this says nothing: {delegate}"
+    );
+    assert!(
+        parent.contains(FORECAST) && parent.contains(DOCS_TOOL),
+        "the turn was not offered both tools, so this says nothing: {parent}"
+    );
+    assert!(
+        delegate.contains(FORECAST),
+        "the worker was not offered the tool of the server its definition named: {delegate}"
+    );
+    assert!(
+        !delegate.contains(DOCS_TOOL),
+        "the worker was offered the tool of a server its definition left off: {delegate}"
+    );
 }
 
 /// A reader and a checker hold no server, so neither is offered a server's tool, and a call to one

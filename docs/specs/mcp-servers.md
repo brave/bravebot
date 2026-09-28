@@ -729,8 +729,8 @@ built-in's name starts with `mcp__`, so none can be shadowed. Two servers whose 
 compose one name are both left without a tool of that name, since which of them a call reached would
 be the order they were listed in. A delegate, and a turn addressed to a definition, is offered the
 tools of only the servers it holds a grant for ([SERVERS-9](#SERVERS-9)). A delegate is put no list
-and is offered what the turn that spawned it settled, and an addressed turn holding no grant is put
-no list.
+and is offered what the turn that spawned it settled. An addressed turn is put the lists of only the
+servers it holds a grant for, and another server's list waits for a turn that holds that grant.
 
 `verified-by: bravebot_mcp::protocol::a_tool_list_is_content`
 `verified-by: bravebot_mcp::protocol::the_name_on_the_wire_is_the_alias_and_the_word`
@@ -784,10 +784,12 @@ server should mean.
 
 The capability names the alias, both transports gate on the one naming the server in front of
 them, and a grant can be withdrawn while the run is going. A session holds one grant for each
-server it started and no other. A delegate it hands work to holds every one of those grants where
-the delegate is a worker whose definition names no tools, and none otherwise
-([DELEGATE-4](delegation.md#DELEGATE-4)): each is a grant for a server a person already said the
-session may use, and a server's tool may do what only a worker may. No delegate holds a grant its
+server it started and no other. A delegate it hands work to holds those of the grants its
+definition selects where the delegate is a worker, which is every one where the definition names
+neither its tools nor its servers, and none where it is a reader or a checker
+([DELEGATE-4](delegation.md#DELEGATE-4), [DELEGATE-24](delegation.md#DELEGATE-24)): each is a
+grant for a server a person already said the session may use, and a server's tool may do what only
+a worker may. No delegate holds a grant its
 parent does not. A turn addressed to a definition holds the session's grants on the same terms
 ([ADDRESS-7](addressing-a-definition.md#ADDRESS-7)). A call to a server's tool is refused where the
 run holds no grant naming that server, and a remote server's handshake runs under a policy holding
@@ -804,6 +806,9 @@ the grant naming that server and no other.
 `verified-by: bravebot_core::policy::a_worker_delegate_holds_the_servers_its_parent_holds_and_no_other`
 `verified-by: bravebot_agent::mcp::a_reader_or_a_checker_delegate_holds_no_server_and_reaches_none`
 `verified-by: bravebot_agent::mcp::a_worker_is_offered_only_the_servers_its_parent_holds`
+`verified-by: bravebot_core::delegate::a_worker_naming_servers_holds_only_those_of_them_its_parent_holds`
+`verified-by: bravebot_core::policy::a_definition_naming_servers_is_delegated_with_only_those_its_parent_holds`
+`verified-by: bravebot_agent::mcp::a_worker_whose_definition_names_one_server_is_offered_only_its_tool`
 
 <a id="SERVERS-10"></a>
 ### SERVERS-10: a variable a server needs is named in the declaration, and reaches that server alone

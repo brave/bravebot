@@ -1142,7 +1142,7 @@ impl Task {
 /// narrowed by whatever the run that spawned it held. Taken from the spec rather than recomputed
 /// here, because a second computation of the same thing is a second answer waiting to disagree
 /// with the one the trail recorded. The servers it holds are there too, where its kind holds
-/// servers, and are every one its parent held.
+/// servers, and are those its parent held that its definition selects.
 fn held(task: &Task) -> CapabilitySet {
     match &task.delegate {
         Some(spec) => spec.capabilities().clone(),
@@ -2523,6 +2523,12 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             crate::agents::discover(&mut policy, workspace, task.home.as_deref());
         notices.extend(delegate_notices);
         notices.extend(crate::agents::skills_not_found(&delegates, &catalogue));
+        let reached = task
+            .mcp
+            .as_ref()
+            .map(|mcp| mcp.aliases())
+            .unwrap_or_default();
+        notices.extend(crate::agents::servers_not_found(&delegates, &reached));
         policy.install_delegates(delegates.clone());
 
         // A delegate whose definition named skills is offered those of them this turn found, and is
@@ -2864,8 +2870,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // for, a tick of their loop included, which is where there is a person to put a list to
         // (SERVERS-8). A delegate settles none, since it puts no question to a person (DELEGATE-12),
         // and is offered what its parent's turn already settled. Every run is offered the tools of the
-        // servers it holds a grant for and no other, so a run of a definition that holds no servers is
-        // offered none and, being put no list, is asked about none either (ADDRESS-7).
+        // servers it holds a grant for and no other, and is put the lists of those alone, so a run
+        // of a definition that holds no servers is offered none and asked about none either
+        // (ADDRESS-7).
         let holding = match (&task.delegate, &addressed) {
             (Some(spec), _) => spec.capabilities().clone(),
             (None, Some(addressed)) => addressed.capabilities().clone(),
@@ -2895,6 +2902,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     &mut confirmer,
                     &mut reporter,
                     task.permission_mode,
+                    &holding,
                 );
                 notices.extend(
                     settled
