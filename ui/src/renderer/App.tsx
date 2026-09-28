@@ -14,7 +14,7 @@ import type {
   TodoRow,
 } from '../shared/protocol'
 import { Sidebar } from './components/Sidebar'
-import { SessionInfo } from './components/Sessions'
+import { SessionInfo, type SessionInfoValue } from './components/Sessions'
 import { Transcript } from './components/Transcript'
 import { Context } from './components/Context'
 import { Gutter, useColumns } from './components/Gutter'
@@ -733,14 +733,21 @@ export function App(): React.JSX.Element {
       ownSessions.unshift({ id, directory, title: `Draft · ${preference.draft.slice(0, 60)}`, project: projectLabel(directory), branch: null, updated: Date.now() / 1000, bytes: 0 })
     } catch { /* Ignore malformed preference keys. */ }
   }
-  const sessionInfo: Record<string, { bot?: string; state?: string }> = {}
+  const sessionInfo: Record<string, SessionInfoValue> = {}
   for (const summary of ownSessions) {
     const current = [...openedLives.current.values()].find((item) => (item.summary.id ?? item.draftId) === summary.id && item.summary.directory === summary.directory)
     const owner = preferences.conversations[conversationKey(summary.directory, summary.id)]?.botSlug
     const bot = bots.find((item) => (item.conversations.includes(summary.id) || item.slug === owner) && item.directory === summary.directory)
+    const outstanding = current ? t.outstanding(current.entries) : undefined
+    const state = !current ? undefined
+      : outstanding ? { label: outstanding.kind === 'ask' ? 'Needs answer' : 'Needs approval', color: 'yellow' as const }
+        : current.running ? { label: 'Working', color: 'yellow' as const }
+          : current.entries.at(-1)?.kind === 'error' ? { label: 'Failed', color: 'red' as const }
+            : current.outcome === 'complete' ? { label: 'Completed', color: 'green' as const }
+              : { label: 'Ready', color: 'neutral' as const }
     sessionInfo[conversationKey(summary.directory, summary.id)] = {
       bot: bot?.name ?? bots.find((item) => item.slug === current?.bot?.slug)?.name,
-      state: current ? t.outstanding(current.entries) ? t.outstanding(current.entries)?.kind === 'ask' ? 'Needs answer' : 'Needs approval' : current.running ? 'Working' : current.entries.at(-1)?.kind === 'error' ? 'Failed' : current.outcome === 'complete' ? 'Completed' : 'Ready' : undefined,
+      state,
     }
   }
 

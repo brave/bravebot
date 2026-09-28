@@ -45,23 +45,37 @@ export function AppearancePicker(props: Props): React.JSX.Element {
     onKeep(selected)
   }
 
+  const keys = (event: React.KeyboardEvent): void => {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      const index = APPEARANCES.indexOf(selected)
+      const offset = event.key === 'ArrowDown' ? 1 : -1
+      preview(APPEARANCES[(index + offset + APPEARANCES.length) % APPEARANCES.length]!)
+    } else if (event.key === 'Enter' && !(event.target instanceof HTMLElement && event.target.closest('leo-button'))) {
+      event.preventDefault()
+      keep()
+    }
+  }
+
   return (
     <Modal title="Appearance" className="appearance-picker" onClose={cancel}>
-      <SegmentedControl
-        value={selected}
-        size="small"
-        data-test="appearance-control"
-        onChange={(detail) => {
-          const next = detail.value
-          if (next === 'system' || next === 'light' || next === 'dark') preview(next)
-        }}
-      >
-        {APPEARANCES.map((appearance) => (
-          <ControlItem key={appearance} value={appearance}>
-            {LABELS[appearance]}
-          </ControlItem>
-        ))}
-      </SegmentedControl>
+      <div onKeyDownCapture={keys}>
+        <SegmentedControl
+          value={selected}
+          size="small"
+          data-test="appearance-control"
+          onChange={(detail) => {
+            const next = detail.value
+            if (next === 'system' || next === 'light' || next === 'dark') preview(next)
+          }}
+        >
+          {APPEARANCES.map((appearance) => (
+            <ControlItem key={appearance} value={appearance}>
+              {LABELS[appearance]}
+            </ControlItem>
+          ))}
+        </SegmentedControl>
+      </div>
       <p className="theme-aside">
         System follows the OS. Light and Dark stay put regardless of it.
       </p>

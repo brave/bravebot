@@ -1,7 +1,7 @@
 import { defineConfig } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import { cpSync, createReadStream, existsSync, mkdirSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { resolve, sep } from 'node:path'
 import type { Plugin } from 'vite'
 
 /**
@@ -22,7 +22,7 @@ function leoIcons(): Plugin {
           return
         }
         const file = resolve(source, name)
-        if (!file.startsWith(source) || !existsSync(file)) {
+        if (!file.startsWith(source + sep) || !existsSync(file)) {
           next()
           return
         }

@@ -140,19 +140,7 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
     button.setAttribute('aria-expanded', String(open))
     if (open) button.setAttribute('aria-controls', id)
     else button.removeAttribute('aria-controls')
-    // `isDisabled` reflects as `isdisabled`, which is not the disabled state
-    // the accessibility tree reads. The host needs a button role for
-    // `aria-disabled` to count, and the `disabled` property for the same check
-    // the composer already makes on this element.
-    if (disabled) {
-      button.setAttribute('aria-disabled', 'true')
-      button.setAttribute('disabled', '')
-    } else {
-      button.removeAttribute('aria-disabled')
-      button.removeAttribute('disabled')
-    }
-    Object.assign(button, { disabled })
-  }, [label, open, id, disabled])
+  }, [label, open, id])
 
   const choose = (row: ModelOption) => {
     setExperience('recentModels', [row.id, ...preferences.recentModels.filter((id) => id !== row.id)].slice(0, 8))

@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { Dialog } from '../nala'
 
@@ -19,6 +20,15 @@ export function Modal({
   children: React.ReactNode
   className?: string
 }): React.JSX.Element {
+  const previousFocus = useRef<HTMLElement | null>(
+    document.activeElement instanceof HTMLElement ? document.activeElement : null,
+  )
+
+  useEffect(() => () => {
+    const previous = previousFocus.current
+    if (previous?.isConnected) previous.focus({ preventScroll: true })
+  }, [])
+
   return createPortal(
     <Dialog
       isOpen

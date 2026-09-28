@@ -18,6 +18,7 @@
 
 html,
 body {
+  color-scheme: light;
   /* The app shell hides overflow to keep the columns still. A document has to be allowed
      to be taller than the window that measured it. */
   overflow: visible;

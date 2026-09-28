@@ -17,6 +17,7 @@ const ALLOW = [
 const hex = /#[0-9a-fA-F]{3,8}\b/g
 const rgb = /rgba?\([^)]*\)/g
 const fontPx = /font-size:\s*[0-9.]+px/g
+const fontShorthandPx = /\bfont\s*:[^;]*\b[0-9.]+px\b/g
 
 let failed = false
 for (const rel of files) {
@@ -25,7 +26,7 @@ for (const rel of files) {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
     if (ALLOW.some((re) => re.test(line))) continue
-    for (const re of [hex, rgb, fontPx]) {
+    for (const re of [hex, rgb, fontPx, fontShorthandPx]) {
       re.lastIndex = 0
       if (re.test(line)) {
         console.error(`${rel}:${i + 1}: ${line.trim()}`)

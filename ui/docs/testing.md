@@ -96,7 +96,7 @@ at, that a control keeps keyboard focus through an animation.
 | `npm run drive:export` | Exporting a conversation to text, Markdown and PDF — with and without the tool calls, and what the file leaves out either way |
 | `npm run drive:fork` | Cutting a session in two: that the fork holds the right half and the session it came from is untouched |
 | `npm run drive:tree` | The file tree: listing, expanding, the dotfile toggle, the name filter, and that a session with no root and a symlink out of the project both list nothing |
-| `npm run drive:theme` | Themes: that previewing repaints before anything is written down, that Escape restores exactly, that every derived token survives a palette, that editing a palette repaints without a relaunch, and that a PDF stays white regardless |
+| `npm run drive:theme` | Appearance: System / Light / Dark painting and persistence, legacy palette fallback, and the export renderer's light-only guarantee |
 | `npm run drive:bots` | Bots: that the column has two lists and remembers which, that a bot survives a relaunch with what was typed into it, and that two bots have different faces while one bot keeps its own across a rename — asserted on the *form* the seed built, since the face is turning while it is looked at. Also the archive: that a bot put away survives field-for-field and comes back as itself, and that deleting one asks before it does anything |
 | `npm run drive:packaged` | A built `.app`: that a release hides the developer items and finds its agent |
 | `npm run drive:bot-turn` | A live turn as a bot: that a purpose nobody typed reaches the model, that the memory file is real and in the checkout, and that reopening the bot resumes the same session |
@@ -128,9 +128,8 @@ on before it tests it. Anything new in this
 area should do the same, and a driver that seeds a fixture should replace its own key rather than
 the file: the other keys are somebody's arrangement of this window.
 
-`drive-theme.mjs` does the same for the `theme` key, and has one duty beyond the file: it writes
-palettes into `themes/` beside it, so it removes the ones it wrote on the way out however it exits,
-and removes the directory too if it was the one that made it.
+`drive-theme.mjs` does the same for the `theme` key. It also verifies that the export document is
+pinned to light and that its renderer bundle cannot switch appearance at runtime.
 
 ## Automated 0.9 manual walkthrough
 

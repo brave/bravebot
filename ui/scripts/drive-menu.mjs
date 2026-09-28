@@ -31,13 +31,13 @@ const check = (ok, what) => {
 // it was left that way.
 async function showSessions(page) {
   await page
-    .locator('.sidebar-tab')
-    .first()
+    .locator('[data-test="sidebar-tabs"]')
+    .getByText('Sessions', { exact: true })
     .waitFor({ state: 'visible', timeout: 15000 })
     .catch(() => undefined)
   await page
-    .locator('.sidebar-tab')
-    .first()
+    .locator('[data-test="sidebar-tabs"]')
+    .getByText('Sessions', { exact: true })
     .click({ timeout: 3000 })
     .catch(() => undefined)
   await page.waitForTimeout(250)
@@ -326,11 +326,11 @@ if (rows > 1) {
     (await page.evaluate(() => document.activeElement?.textContent))?.includes('beta-project'),
     'and another ArrowDown moves to the next row',
   )
-  await page.keyboard.press('ArrowUp')
+  await page.keyboard.press('Home')
   await page.waitForTimeout(150)
   check(
     (await page.evaluate(() => document.activeElement?.textContent))?.includes('alpha-project'),
-    'and ArrowUp comes back to the first',
+    'and Home comes back to the first',
   )
 }
 await page.screenshot({ path: '/tmp/bravebot-ui/12-popmenu.png' })
@@ -341,6 +341,17 @@ check(
   await page.evaluate(() => document.activeElement?.classList.contains('new-recent')),
   'and focus went back to the button that opened it',
 )
+
+await chevron.click()
+await page.waitForTimeout(300)
+await page.keyboard.press('b')
+await page.waitForTimeout(150)
+check(
+  (await page.evaluate(() => document.activeElement?.textContent))?.includes('beta-project'),
+  'typing a letter jumps to the matching recent project',
+)
+await page.keyboard.press('Escape')
+await page.waitForTimeout(250)
 
 // --- context menus ----------------------------------------------------------------------
 // A real popup is modal and would block the run, so `popup` is replaced with something that

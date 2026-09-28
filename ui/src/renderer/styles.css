@@ -994,18 +994,11 @@ leo-collapse {
   color: var(--ink-dim);
   font-size: var(--leo-typography-small-regular-font-size);
 }
-.spinner, .working-ring {
+.working-ring {
   width: 16px; height: 16px;
   --leo-progressring-size: 16px;
   --leo-progressring-color: var(--accent);
 }
-.spinner {
-  border: 2px solid var(--accent);
-  border-right-color: transparent;
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
 /* A bot's face in place of the spinner. No change to the padding: the row's height is the Cancel
    button's, not the spinner's, so a 22px figure fits in the same line. The gap is a shade tighter
    than the spinner's, because the figure has air of its own inside its disc. */
@@ -1669,51 +1662,7 @@ leo-collapse {
 .export-tools-row leo-icon { --leo-icon-size: 18px; }
 .export-format { white-space: nowrap; }
 
-/* ---------------------------------------------------------------- theme picker
-
-   No scrim of its own, unlike the trust dialog. Darkening the window would defeat the point of
-   the thing: moving the cursor repaints what is *behind* this panel, and a preview seen through
-   forty percent black is a preview of the wrong colours. The click-catcher is transparent and
-   exists only so that clicking away cancels. */
-
-.theme-scrim { position: fixed; inset: 0; display: grid; place-items: center; }
-.theme-picker {
-  width: 320px;
-  padding: 16px 18px 14px;
-  border: 1px solid var(--line);
-  border-radius: var(--leo-radius-l);
-  background: var(--bg);
-  box-shadow: 0 18px 60px var(--scrim);
-}
-.theme-picker h2 { margin: 0 0 10px; font-size: var(--leo-typography-components-tableheader-font-size); color: var(--ink-dim); font-weight: 600; }
-.theme-list {
-  max-height: 300px;
-  overflow-y: auto;
-  outline: none;
-  border-radius: var(--leo-radius-m);
-}
-.theme-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 8px;
-  border-radius: var(--leo-radius-s);
-  cursor: pointer;
-}
-.theme-row:hover { background: var(--hover-wash); }
-.theme-row.active { background: var(--accent); color: var(--accent-ink); }
-.theme-name { flex: 1; font-variant-numeric: tabular-nums; }
-.theme-current { font-size: var(--leo-typography-x-small-regular-font-size); opacity: 0.75; text-transform: uppercase; letter-spacing: 0.04em; }
-/* The palette's own inks, so a name is not the only thing to go on for twenty-two of them. */
-.theme-swatches { display: flex; gap: 3px; }
-.theme-swatches i { width: 8px; height: 8px; border-radius: 2px; }
-.theme-hint { margin: 10px 0 0; font-size: var(--leo-typography-x-small-regular-font-size); color: var(--ink-faint); }
-.theme-hint kbd {
-  font: inherit;
-  padding: 0 3px;
-  border: 1px solid var(--line);
-  border-radius: var(--leo-radius-2xs);
-}
+/* ------------------------------------------------------------- appearance picker */
 .theme-aside { margin: 6px 0 0; font-size: var(--leo-typography-x-small-regular-font-size); color: var(--ink-faint); }
 .theme-aside code { font-family: var(--mono); font-size: var(--leo-typography-x-small-regular-font-size); }
 
@@ -2083,7 +2032,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .empty-body h1 { font-size: var(--leo-typography-heading-h1-font-size); line-height: 1.2; letter-spacing: -.5px; }
 .empty-body p { line-height: 1.6; }
 .empty-body .welcome-open { flex-grow: 0; margin-top: 8px; }
-.primary { border: 0; border-radius: var(--leo-radius-m); background: var(--accent); color: var(--accent-ink); padding: 10px 18px; font-weight: 600; }
 .welcome-recents { display: grid; gap: 6px; margin-top: 32px; }
 .welcome-recents h2 { font-size: var(--leo-typography-components-tableheader-font-size); color: var(--ink-dim); }
 .welcome-recents button { display: flex; flex-direction: column; gap: 3px; text-align: left; padding: 10px 12px; background: transparent; border: 1px solid var(--line); border-radius: var(--leo-radius-m); }
@@ -2119,7 +2067,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .app .panel-inner .none { padding: 0; margin: 4px 0 10px; }
 .app .panel-inner { padding: 8px 14px 14px; }
 .app .panel { flex: none; }
-.context-link { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; border: 0; background: transparent; font: 12px var(--mono); padding: 4px 0; color: var(--ink); min-width: 0; }
+.context-link { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; border: 0; background: transparent; font-family: var(--mono); font-size: var(--leo-typography-x-small-regular-font-size); padding: 4px 0; color: var(--ink); min-width: 0; }
 .context-link:hover { text-decoration: underline; }
 .files .approved .tag, .files .applying .tag { color: var(--warn); }
 .files .failed .tag { color: var(--removed); }
@@ -2163,13 +2111,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .file-search-scope button, .preview-actions button { padding: 6px 8px; border: 1px solid var(--line); background: var(--bg); border-radius: var(--leo-radius-s); font-size: var(--leo-typography-small-regular-font-size); }
 .file-search-scope button[aria-pressed="true"] { background: var(--bubble-agent); font-weight: 600; }
 .file-search-results { padding: 6px; }
-.file-search-results > button { display: block; width: 100%; border: 0; background: transparent; text-align: left; padding: 8px; overflow-wrap: anywhere; font: 12px var(--mono); }
+.file-search-results > button { display: block; width: 100%; border: 0; background: transparent; text-align: left; padding: 8px; overflow-wrap: anywhere; font-family: var(--mono); font-size: var(--leo-typography-x-small-regular-font-size); }
 .file-search-results > button:hover { background: var(--bubble-agent); }
 .file-preview { width: min(1000px, calc(100vw - 48px)); }
 .file-preview .code-toolbar strong { flex: 1; overflow-wrap: anywhere; }
 .preview-boundary { padding: 10px 12px; background: var(--confine-bg); border-left: 3px solid var(--confine); font-size: var(--leo-typography-small-regular-font-size); }
 .preview-actions { display: flex; gap: 8px; }
-.file-preview pre { max-height: 60vh; overflow: auto; padding: 14px; font: 12px/1.6 var(--mono); background: var(--code-bg); }
+.file-preview pre { max-height: 60vh; overflow: auto; padding: 14px; font-family: var(--mono); font-size: var(--leo-typography-x-small-regular-font-size); line-height: 1.6; background: var(--code-bg); }
 .file-preview pre.wrapped { white-space: pre-wrap; overflow-wrap: anywhere; }
 .local-file-link { background: transparent; border: 0; padding: 0; color: var(--accent-quiet); text-decoration: underline; display: inline; }
 
@@ -2197,7 +2145,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .memory-readable { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--leo-typography-default-regular-font-size); line-height: 1.65; padding: 14px; background: var(--bubble-agent); max-height: 300px; overflow: auto; border-radius: var(--leo-radius-m); }
 .memory-history details { padding: 10px 0; border-bottom: 1px solid var(--line); }
 .memory-history pre { max-height: 240px; overflow: auto; white-space: pre-wrap; font-size: var(--leo-typography-small-regular-font-size); }
-.bot-memory-panel > textarea { width: 100%; font: 13px/1.5 var(--mono); padding: 12px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: var(--leo-radius-m); }
+.bot-memory-panel > textarea { width: 100%; font-family: var(--mono); font-size: var(--leo-typography-small-regular-font-size); line-height: 1.5; padding: 12px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: var(--leo-radius-m); }
 .memory-reset { padding: 12px; border: 1px solid var(--warn); border-radius: var(--leo-radius-m); }
 .theme-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 12px; }
 .theme-actions button { border: 1px solid var(--line); background: var(--bg); border-radius: var(--leo-radius-s); padding: 7px 12px; }
@@ -2236,7 +2184,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 }
 
 /* Shared dialog controls retain visible keyboard focus and the app's visual language. */
-.modal button:not(:where(.model-trigger, .model-option, .theme-swatch)) {
+.modal button:not(:where(.model-trigger, .model-option)) {
   min-height: 32px; padding: 6px 12px; border: 1px solid var(--line);
   border-radius: var(--leo-radius-s); background: var(--bg); color: var(--ink); font: inherit;
 }
@@ -2272,7 +2220,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .audit-labels { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 8px; margin: 10px 0; }
 .audit-labels dt { color: var(--ink-dim); }
 .audit-labels dd { margin: 0; }
-.audit-event pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.6 var(--mono); padding: 8px; background: var(--code-bg); border-radius: var(--leo-radius-xs); }
+.audit-event pre { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: var(--leo-typography-x-small-regular-font-size); line-height: 1.6; padding: 8px; background: var(--code-bg); border-radius: var(--leo-radius-xs); }
 .audit-all { margin: 16px 0; border-top: 1px solid var(--line); padding-top: 8px; }
 @media (pointer: coarse) {
   .turn-notices summary, .turn-statistics summary, .audit-inspector summary, .turn-audit-link, .audit-close { min-height: 44px; }

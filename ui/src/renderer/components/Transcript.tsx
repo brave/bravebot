@@ -638,7 +638,7 @@ function ExportMenu({
           the File menu carries the same row: see `session.export-tools` in
           `shared/commands.ts`. The tick is the state; a second line would say it twice.
           Choosing it closes the menu, the way a checkable menu item does. */}
-      <leo-menu-item className="export-tools" aria-checked={includeTools ? 'true' : 'false'} onClick={() => onToggleTools()}>
+      <leo-menu-item className="export-tools" role="menuitemcheckbox" aria-checked={includeTools ? 'true' : 'false'} onClick={() => onToggleTools()}>
         <span className="export-tools-row">
           <Icon name={includeTools ? 'checkbox-checked' : 'checkbox-unchecked'} />
           Include Tool Calls

@@ -10,7 +10,11 @@ import { PopMenu } from './PopMenu'
 import { conversationKey } from '../../shared/experience'
 import { useExperience, setConversation } from '../experience'
 import { Button, ButtonMenu, Icon, Label, TabItem, Tabs } from '../nala'
-export const SessionInfo = createContext<Record<string, { bot?: string; state?: string }>>({})
+export interface SessionInfoValue {
+  bot?: string
+  state?: { label: string; color: 'red' | 'yellow' | 'green' | 'neutral' }
+}
+export const SessionInfo = createContext<Record<string, SessionInfoValue>>({})
 
 interface Props {
   sessions: SessionSummary[]
@@ -292,10 +296,7 @@ function Session({
       <span className="session-where">{session.project}{session.branch && <span className="branch"> · {session.branch}</span>} · {ago(session.updated)}</span>
       {(info?.bot || info?.state) && <span className="session-badges">
         {info.bot && <Label color="secondary">{info.bot}</Label>}
-        {info.state && <Label
-          className={`session-state ${info.state.toLowerCase().replaceAll(' ', '-')}`}
-          color={info.state.toLowerCase().includes('fail') ? 'red' : info.state.toLowerCase().includes('need') || info.state.toLowerCase().includes('work') ? 'yellow' : info.state.toLowerCase().includes('complete') ? 'green' : 'neutral'}
-        >{info.state}</Label>}
+        {info.state && <Label className="session-state" color={info.state.color}>{info.state.label}</Label>}
       </span>}
     </button>
     <button ref={anchor} className="session-more" aria-label={`Actions for ${session.title}`} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>⋯</button>
@@ -317,6 +318,7 @@ function NewSession({ onNew }: { onNew: (directory?: string) => void }): React.J
   const [open, setOpen] = useState(false)
   const [directories, setDirectories] = useState<string[]>([])
   const menu = useRef<HTMLElement>(null)
+  const trigger = useRef<HTMLElement>(null)
   // A load that returns after the menu was shut must not open it again.
   const opening = useRef(0)
 
@@ -355,9 +357,30 @@ function NewSession({ onNew }: { onNew: (directory?: string) => void }): React.J
     return () => host.removeEventListener('click', choose)
   }, [choose])
 
+  useEffect(() => {
+    const host = menu.current
+    if (!host || !open) return
+    const keys = (event: KeyboardEvent): void => {
+      const items = [...host.querySelectorAll<HTMLElement>('leo-menu-item:not([aria-disabled="true"])')]
+      let target: HTMLElement | undefined
+      if (event.key === 'Home') target = items[0]
+      else if (event.key === 'End') target = items.at(-1)
+      else if (event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        const letter = event.key.toLocaleLowerCase()
+        target = items.find((item) => item.textContent?.trim().toLocaleLowerCase().startsWith(letter))
+      }
+      if (!target) return
+      event.preventDefault()
+      event.stopPropagation()
+      target.focus()
+    }
+    host.addEventListener('keydown', keys)
+    return () => host.removeEventListener('keydown', keys)
+  }, [open, directories])
+
   const shut = (detail: { reason: string }): void => {
     if (detail.reason === 'cancel' || detail.reason === 'select') {
-      menu.current?.shadowRoot?.querySelector<HTMLElement>('[role="button"]')?.focus()
+      trigger.current?.focus()
     }
   }
 
@@ -384,6 +407,7 @@ function NewSession({ onNew }: { onNew: (directory?: string) => void }): React.J
         onClose={shut}
       >
         <Button
+          ref={trigger}
           slot="anchor-content"
           kind="plain"
           size="small"

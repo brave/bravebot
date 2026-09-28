@@ -77,7 +77,7 @@ export function Bots({
     apply()
     const timer = window.setTimeout(apply, 0)
     return () => window.clearTimeout(timer)
-  })
+  }, [overviewSlug, history.length])
   const [editing, setEditing] = useState<string | null>(null)
   // Whether the archive is open. Local for the same reason, and closed to begin with: the archive
   // is where things go to stop being in the way, and one that opened itself every launch would be
@@ -412,7 +412,7 @@ function BotForm({
       cancelAnimationFrame(frame)
       window.clearTimeout(timer)
     }
-  })
+  }, [saving])
   const onEscape = ({ innerEvent }: { innerEvent: Event }) => {
     if ((innerEvent as KeyboardEvent).key === 'Escape') onCancel()
   }

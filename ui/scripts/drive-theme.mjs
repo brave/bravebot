@@ -1,7 +1,7 @@
 // That System / Light / Dark can be chosen and remembered.
 import { _electron as electron } from 'playwright-core'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 
 const shots = '/tmp/bravebot-ui'
 mkdirSync(shots, { recursive: true })
@@ -11,6 +11,17 @@ const check = (ok, what) => {
   console.log(`${ok ? '  ok  ' : ' FAIL '} ${what}`)
   if (!ok) problems.push(what)
 }
+
+const exportHtmlPath = join(process.cwd(), 'out/renderer/export.html')
+const exportHtml = readFileSync(exportHtmlPath, 'utf8')
+const exportScript = exportHtml.match(/<script[^>]+src="([^"]+)"/)?.[1]
+check(exportHtml.includes('data-theme="light"'), 'export document is pinned to the light appearance')
+check(Boolean(exportScript), 'export document has a renderer bundle')
+if (exportScript) {
+  const bundle = readFileSync(resolve(dirname(exportHtmlPath), exportScript), 'utf8')
+  check(!bundle.includes('data-theme'), 'export renderer bundle carries no runtime appearance switching')
+}
+check(/\bcolor-scheme:\s*light\b/.test(readFileSync(join(process.cwd(), 'src/renderer/export.css'), 'utf8')), 'export pins native controls to light')
 
 const naming = await electron.launch({ args: ['.'], cwd: process.cwd(), timeout: 40000 })
 const userData = await naming.evaluate(({ app }) => app.getPath('userData'))
@@ -87,8 +98,32 @@ const appearanceAttr = async (page) =>
   check((await appearanceAttr(page)) === null, 'system clears data-theme again')
   check(readState().theme === 'system', 'system is remembered')
 
-  putTheme('nord')
+  const openPicker = () => app.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0].webContents.send('bravebot:command', 'view.theme', null)
+  })
+  await openPicker()
+  const control = page.locator('[data-test="appearance-control"]')
+  await control.waitFor()
+  await control.getByText('System', { exact: true }).click()
+  await page.keyboard.press('ArrowDown')
+  await page.waitForFunction(() => document.documentElement.getAttribute('data-theme') === 'light')
+  check(readState().theme === 'system', 'keyboard preview does not persist before Use')
+  await page.keyboard.press('Escape')
+  await page.locator('[data-test="modal"]').waitFor({ state: 'detached' })
+  check((await appearanceAttr(page)) === null, 'Escape restores the appearance that opened the picker')
+
+  await openPicker()
+  await control.waitFor()
+  await control.getByText('System', { exact: true }).click()
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('Enter')
+  await page.locator('[data-test="modal"]').waitFor({ state: 'detached' })
+  check(readState().theme === 'dark', 'Enter keeps the keyboard-selected appearance')
+  await page.evaluate(() => window.bravebot.writeTheme('system'))
+
   await app.close()
+  putTheme('nord')
 }
 
 {
