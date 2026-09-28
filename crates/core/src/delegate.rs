@@ -46,7 +46,7 @@ pub enum Kind {
     /// The shape whose value is mostly independence: a question about a tree, answered without
     /// the tree arriving in the asker's context.
     Reader,
-    /// A reader that may also run programs, so it can build and test.
+    /// A reader that may also run programs and ask a language server, so it can build and test.
     ///
     /// Writes nothing, which is what makes it worth having separately: reporting that the tests
     /// fail does not need permission to change them, and a build log is the single most
@@ -91,6 +91,9 @@ impl Kind {
     /// the request out is egress like any other. It is not a tool a delegate can point anywhere:
     /// nothing in any kind's tool set reaches it, so what it buys is the driver's ability to ask
     /// the endpoint on this delegate's behalf. A kind without it is a kind that cannot think.
+    ///
+    /// A language server goes with running programs, and never without: starting one runs the
+    /// project's build tooling (LSP-5), so a kind that may not run a program may not start one.
     pub fn capabilities(self) -> CapabilitySet {
         match self {
             Self::Reader => CapabilitySet::from_iter([Capability::WebFetch, Capability::FileRead]),
@@ -98,12 +101,14 @@ impl Kind {
                 Capability::WebFetch,
                 Capability::FileRead,
                 Capability::ShellExec,
+                Capability::LanguageServer,
             ]),
             Self::Worker => CapabilitySet::from_iter([
                 Capability::WebFetch,
                 Capability::FileRead,
                 Capability::FileWrite,
                 Capability::ShellExec,
+                Capability::LanguageServer,
             ]),
         }
     }
@@ -144,8 +149,8 @@ impl Kind {
                 "reads, lists, searches and runs processors; writes nothing and runs nothing"
             }
             Self::Checker => {
-                "a reader that may also run programs, so it can build, test and lint; writes \
-                 nothing"
+                "a reader that may also run programs and ask a language server, so it can build, \
+                 test and lint; writes nothing"
             }
             Self::Worker => "a checker that may also write files, so it can finish a sub-task",
         }
@@ -1041,6 +1046,35 @@ mod tests {
                 "the order the kinds compare in stopped being the order of what they hold"
             );
         }
+    }
+
+    /// LSP-9: starting a language server runs the project's build tooling (LSP-5), so the kinds
+    /// that hold one are exactly the kinds that may already run a program.
+    #[test]
+    fn a_kind_holds_a_language_server_exactly_where_it_may_run_programs() {
+        for name in Kind::NAMES {
+            let held = Kind::from_name(name).expect("advertised").capabilities();
+            assert_eq!(
+                held.contains(&Capability::LanguageServer),
+                held.contains(&Capability::ShellExec),
+                "{name}"
+            );
+        }
+        assert!(
+            !Kind::Reader
+                .capabilities()
+                .contains(&Capability::LanguageServer)
+        );
+        assert!(
+            Kind::Checker
+                .capabilities()
+                .contains(&Capability::LanguageServer)
+        );
+        assert!(
+            Kind::Worker
+                .capabilities()
+                .contains(&Capability::LanguageServer)
+        );
     }
 
     /// A planner is a model call, so every kind can reach the endpoint and no kind can reach

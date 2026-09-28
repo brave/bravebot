@@ -13455,9 +13455,36 @@ five
             );
             let trail = trail(&sink);
             assert!(
-                trail.contains("asks for file_write, shell_exec which this turn does not hold"),
+                trail.contains(
+                    "asks for file_write, shell_exec, language_server which this turn does not hold"
+                ),
                 "the trail does not say what the kind asked for and did not get: {trail}"
             );
+        }
+
+        /// ADDRESS-7 with LSP-9. A turn addressed to a kind that may run programs keeps the
+        /// language server the session holds, and one addressed to a reader loses it.
+        #[test]
+        fn a_turn_addressed_to_a_checker_or_a_worker_keeps_the_language_server() {
+            for (name, keeps) in [("reader", false), ("checker", true), ("worker", true)] {
+                let mut sink = RecordingSink::new();
+                let mut policy = addressing(name, all_capabilities(), &mut sink);
+                let addressed = policy
+                    .address(&OFFERED)
+                    .expect("a resolved name is addressed")
+                    .expect("the line named a definition");
+
+                assert_eq!(
+                    policy.before_capability(Capability::LanguageServer).is_ok(),
+                    keeps,
+                    "a turn addressed to a {name}"
+                );
+                assert_eq!(
+                    addressed.tools().iter().any(|tool| tool == "lsp"),
+                    keeps,
+                    "a turn addressed to a {name}"
+                );
+            }
         }
 
         /// ADDRESS-7 one level down. A delegate is cut from what the turn holds, so a worker an

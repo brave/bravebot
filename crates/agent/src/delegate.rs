@@ -362,13 +362,14 @@ pub fn seed<S: Sink>(
 /// Run one delegate to completion.
 ///
 /// Takes nothing belonging to the run that spawned it. The trail, the reporter, the confirmer and
-/// the wallet are lent rather than owned, because there is one of each however many runs are
-/// going: one trail records them all, one screen shows them all, one person answers for them all,
-/// and one subscription pays for them all.
+/// the wallet are lent rather than owned, and the language servers come as a handle onto the
+/// session's set, because there is one of each however many runs are going: one trail records
+/// them all, one screen shows them all, one person answers for them all, one subscription pays for
+/// them all, and one index serves them all.
 ///
-/// Takes all four by trait object rather than by type parameter. A delegate is a turn, and a
-/// turn lends these four to the delegates it starts, so a type parameter here would describe a
-/// tower of lenders one level deeper for every level of nesting: a type the compiler builds for
+/// Takes the four it is lent by trait object rather than by type parameter. A delegate is a turn,
+/// and a turn lends these four to the delegates it starts, so a type parameter here would describe
+/// a tower of lenders one level deeper for every level of nesting: a type the compiler builds for
 /// ever and a program that cannot be compiled. A delegate may delegate in turn, and the trait
 /// objects are what keep the tower of types one level tall however deep the tree of runs grows.
 #[allow(clippy::too_many_arguments)]
@@ -407,6 +408,10 @@ pub fn run(
     // own would read the file as the turn found it and present the credential the turn is
     // presenting right now (PREM-5).
     wallet: Option<&dyn crate::shared::Spends>,
+    // The spawning turn's language servers. A set of its own would put the same language to the
+    // person a second time and index the same tree twice, beside the server already doing it
+    // (LSP-8).
+    mut servers: Option<crate::lsp::LanguageServers>,
 ) -> Ended {
     let definition_model = seeded
         .spec
@@ -485,6 +490,7 @@ pub fn run(
         &mut vouched,
         &mut notices,
         wallet,
+        servers.as_mut(),
     ) {
         Ok(outcome) => outcome,
         // Nothing to report and nothing it cost that the parent can use, but the answers a

@@ -117,8 +117,11 @@ The three kinds are ordered, so choosing a wider one never costs a narrower one'
 | Kind | Holds | For |
 |---|---|---|
 | `reader` | reading | finding something out |
-| `checker` | reading, running programs | finding out whether something works |
-| `worker` | reading, running programs, writing files | finishing a sub-task |
+| `checker` | reading, running programs, asking a language server | finding out whether something works |
+| `worker` | reading, running programs, asking a language server, writing files | finishing a sub-task |
+
+A language server goes with running programs and never without it, because starting one runs the
+project's build tooling ([LSP-9](tools/lsp.md#LSP-9)).
 
 Every kind additionally reaches the network, because a planner is a model call and the request out
 is egress like any other. No tool a delegate is offered reaches it, so what it buys is the ability
@@ -130,6 +133,8 @@ tool list is written out a second time as a refusal.
 
 `verified-by: bravebot_core::policy::a_delegate_holds_no_more_than_the_run_that_spawned_it`
 `verified-by: bravebot_core::delegate::the_kinds_are_ordered_by_what_they_hold`
+`verified-by: bravebot_core::delegate::a_kind_holds_a_language_server_exactly_where_it_may_run_programs`
+`verified-by: bravebot_agent::lsp::a_checker_and_a_worker_are_offered_lsp_and_a_reader_is_not`
 `verified-by: bravebot_core::delegate::every_kind_can_reach_the_endpoint_and_nothing_else_remote`
 `verified-by: bravebot_agent::tools::no_kind_is_offered_a_tool_that_reaches_the_network`
 `verified-by: bravebot_agent::turn::a_delegate_naming_fetch_url_reaches_no_host`

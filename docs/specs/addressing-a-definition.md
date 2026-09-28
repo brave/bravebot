@@ -211,7 +211,9 @@ them, less the sentence about an agent that asked it, because the planner's own 
 them is written for a turn that can edit and run.
 
 No kind holds an MCP server, so no addressed run does: it is offered none of the tools of the
-servers this session reached, and no server's list is put to the person for it.
+servers this session reached, and no server's list is put to the person for it. A `checker` and a
+`worker` hold a language server and a `reader` does not ([LSP-9](tools/lsp.md#LSP-9)), so a run
+addressed to either of the first two keeps the `lsp` tool the session holds.
 
 **Why.** Addressing a definition is a person choosing which of their own capabilities to work
 under, so it can only take away. This is the same direction a delegate's capabilities are computed
@@ -221,6 +223,7 @@ authority, which is the one thing a definition is not.
 
 `verified-by: bravebot_core::policy::an_addressed_turn_holds_only_what_the_session_and_the_kind_both_hold`
 `verified-by: bravebot_core::policy::a_definition_wider_than_the_session_gets_the_sessions_reach`
+`verified-by: bravebot_core::policy::a_turn_addressed_to_a_checker_or_a_worker_keeps_the_language_server`
 `verified-by: bravebot_core::policy::a_delegate_an_addressed_turn_spawns_holds_no_more_than_the_turn`
 `verified-by: bravebot_core::policy::an_addressed_turn_is_offered_only_the_tools_its_definition_named`
 `verified-by: bravebot_agent::turn::a_tool_an_addressed_definition_left_out_is_refused_when_the_model_calls_it`

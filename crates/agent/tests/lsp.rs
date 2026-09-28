@@ -418,6 +418,213 @@ fn a_turn_that_is_handed_no_set_starts_a_server_of_its_own() {
     assert_eq!(starts(&recorded), 2, "the second turn reused a process");
 }
 
+/// LSP-8 across a delegate: a `checker` the turn starts asks the server its session already has,
+/// rather than putting the same language to the person again and indexing the same tree beside it.
+#[test]
+fn a_delegate_asks_the_server_its_session_started() {
+    let _path = PATH_LOCK.lock().unwrap_or_else(|held| held.into_inner());
+    let scratch = Scratch::new("agent-lsp-a-delegate-shares");
+    let (workspace, recorded) = a_workspace_with_a_server(&scratch);
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "ASK-THEN-DELEGATE",
+            vec![
+                a_question_about_a_symbol(),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"checker","task":"CHECK-THE-SYMBOL"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "CHECK-THE-SYMBOL",
+            vec![a_question_about_a_symbol(), reply_with("it is in src/a.rs")],
+        ),
+    ]);
+    let mut asking = AskedAboutServers {
+        asked: 0,
+        reject: false,
+    };
+    let mut servers = LanguageServers::new(workspace.root().to_path_buf(), None);
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("ASK-THEN-DELEGATE"),
+        &mut Conversation::new(),
+        &mut asking,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(&workspace),
+        TrustedPrograms::new(),
+        Some(&mut servers),
+        &Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    assert_eq!(
+        asking.asked, 1,
+        "the delegate put the same language to the person a second time"
+    );
+    assert_eq!(
+        starts(&recorded),
+        1,
+        "the delegate started a second server beside the session's"
+    );
+    // Answered, not refused: the delegate's own conversation carries the location.
+    assert!(
+        received
+            .try_iter()
+            .filter(|body| !body.contains("ASK-THEN-DELEGATE"))
+            .any(|body| body.contains("src/a.rs:1:11")),
+        "the delegate was not answered from the running server"
+    );
+}
+
+/// LSP-9 across the same handle: a `reader` shares its session's servers and is still not
+/// answered by one, because what a run may ask is its own set's to decide, not the set of whoever
+/// started the server.
+#[test]
+fn a_reader_delegate_is_not_answered_by_the_sessions_server() {
+    let _path = PATH_LOCK.lock().unwrap_or_else(|held| held.into_inner());
+    let scratch = Scratch::new("agent-lsp-a-reader-is-refused");
+    let (workspace, recorded) = a_workspace_with_a_server(&scratch);
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "ASK-THEN-DELEGATE",
+            vec![
+                a_question_about_a_symbol(),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"READ-THE-SYMBOL"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "READ-THE-SYMBOL",
+            vec![a_question_about_a_symbol(), reply_with("not found")],
+        ),
+    ]);
+    let mut asking = AskedAboutServers {
+        asked: 0,
+        reject: false,
+    };
+    let mut servers = LanguageServers::new(workspace.root().to_path_buf(), None);
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("ASK-THEN-DELEGATE"),
+        &mut Conversation::new(),
+        &mut asking,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(&workspace),
+        TrustedPrograms::new(),
+        Some(&mut servers),
+        &Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let delegate: Vec<String> = received
+        .try_iter()
+        .filter(|body| body.contains("READ-THE-SYMBOL") && !body.contains("ASK-THEN-DELEGATE"))
+        .collect();
+    assert!(
+        delegate.len() >= 2,
+        "the reader never sent the request after its lsp call: {} bodies",
+        delegate.len()
+    );
+    assert!(
+        !delegate.iter().any(|body| body.contains("src/a.rs:1:11")),
+        "a reader was answered from the session's server"
+    );
+    assert_eq!(asking.asked, 1, "a reader's call was put to the person");
+    assert_eq!(starts(&recorded), 1);
+}
+
+/// The other way round: a server a delegate starts is put to the person through the confirmer the
+/// delegate was lent, and it is the session's, so the turn after it asks nobody.
+#[test]
+fn a_server_a_delegate_started_answers_the_sessions_next_turn() {
+    let _path = PATH_LOCK.lock().unwrap_or_else(|held| held.into_inner());
+    let scratch = Scratch::new("agent-lsp-a-delegate-starts");
+    let (workspace, recorded) = a_workspace_with_a_server(&scratch);
+
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "THE-NEXT-TURN",
+            vec![a_question_about_a_symbol(), reply_with("the same place")],
+        ),
+        (
+            "DELEGATE-FIRST",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"CHECK-THE-SYMBOL"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "CHECK-THE-SYMBOL",
+            vec![a_question_about_a_symbol(), reply_with("it is in src/a.rs")],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut asking = AskedAboutServers {
+        asked: 0,
+        reject: false,
+    };
+    let mut servers = LanguageServers::new(workspace.root().to_path_buf(), None);
+    let mut ask = |prompt: &str, asking: &mut AskedAboutServers| {
+        turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new(prompt),
+            &mut Conversation::new(),
+            asking,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut RecordingSink::new(),
+            trusting_the_workspace(&workspace),
+            TrustedPrograms::new(),
+            Some(&mut servers),
+            &Cancel::new(),
+        )
+        .outcome
+        .expect("the turn runs");
+    };
+
+    ask("DELEGATE-FIRST", &mut asking);
+    assert_eq!(
+        asking.asked, 1,
+        "the server the delegate started was not put to the person"
+    );
+    assert_eq!(starts(&recorded), 1);
+
+    ask("THE-NEXT-TURN", &mut asking);
+    assert_eq!(
+        asking.asked, 1,
+        "the server the delegate started ended with it, so the next turn asked again"
+    );
+    assert_eq!(
+        starts(&recorded),
+        1,
+        "the next turn indexed the tree a second time"
+    );
+}
+
 fn trusting_the_workspace(workspace: &Workspace) -> TrustStore {
     let mut trust = TrustStore::new(workspace.root());
     trust.trust(".");
@@ -493,12 +700,38 @@ fn as_sse(reply: &str) -> String {
 /// nothing behind it answers with `Connection refused`, which the egress layer calls permanent, so
 /// a turn that asked one question too many would fail naming neither.
 fn serve_sequence(replies: Vec<String>) -> (String, mpsc::Receiver<String>) {
+    let mut replies = replies.into_iter();
+    serve(move |_| replies.next())
+}
+
+/// Serve each run by a marker in what it sent, rather than by the order the runs asked in.
+///
+/// A delegate runs beside the turn that started it, so which of the two reaches the socket first
+/// is a race. The first rule whose marker is in the body and still has a reply answers, so a
+/// turn's own marker goes before the tasks it hands out: a turn replays the arguments it called
+/// with, and so holds the delegate's task as well as its own prompt.
+fn serve_by_marker(rules: Vec<(&'static str, Vec<String>)>) -> (String, mpsc::Receiver<String>) {
+    let mut rules: Vec<(&str, std::collections::VecDeque<String>)> = rules
+        .into_iter()
+        .map(|(marker, replies)| (marker, replies.into()))
+        .collect();
+    serve(move |body| {
+        rules
+            .iter_mut()
+            .find(|(marker, replies)| body.contains(marker) && !replies.is_empty())
+            .and_then(|(_, replies)| replies.pop_front())
+    })
+}
+
+/// Answer every request with what `reply` picks for its body, reporting every body.
+fn serve(
+    mut reply: impl FnMut(&str) -> Option<String> + Send + 'static,
+) -> (String, mpsc::Receiver<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().expect("addr").port();
     let (sender, receiver) = mpsc::channel();
 
     thread::spawn(move || {
-        let mut replies = replies.into_iter();
         while let Ok((mut stream, _)) = listener.accept() {
             let mut reader = BufReader::new(stream.try_clone().expect("clone"));
 
@@ -522,9 +755,10 @@ fn serve_sequence(replies: Vec<String>) -> (String, mpsc::Receiver<String>) {
             }
             let mut body = vec![0u8; content_length];
             let _ = reader.read_exact(&mut body);
-            let _ = sender.send(String::from_utf8_lossy(&body).to_string());
+            let body = String::from_utf8_lossy(&body).to_string();
+            let _ = sender.send(body.clone());
 
-            let response = match replies.next() {
+            let response = match reply(&body) {
                 Some(reply) => {
                     let frames = as_sse(&reply);
                     format!(
