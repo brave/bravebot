@@ -167,6 +167,10 @@ check-toolchain:
 # what a clause says needs a reading of the governed source: run the check-spec skill for
 # that half.
 #
+# Numbering is read against the last commit as well as within the file, because a file renumbered
+# to close a gap still reads 1..N and leaves every citation of a moved id pointing at another
+# clause. A renumber meant on purpose is declared in agents/renumbered-clauses.txt, by hand.
+#
 # The screenshot renderer rides along because it is the other half's tool: the skill pastes what
 # it prints into issue bodies, it is standard library Python like everything else here, and a
 # renderer that is quietly wrong sends a plausible and untrue screen to whoever has to fix the bug.

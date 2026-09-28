@@ -170,6 +170,21 @@ def _parse_front_matter(lines):
     return front, end + 1
 
 
+def clause_headings(lines):
+    """Clause id to heading, for text that is not a loaded spec.
+
+    A loaded `Spec` already carries its clauses, so this is for the other form the same file
+    comes in: what `git show` prints for a committed revision, read against the working tree to
+    say whether an id still names the clause it named. One parser for both, because a comparison
+    between two readings of the same grammar is only a fact if one reading did them both."""
+    found = {}
+    for raw in lines:
+        heading = CLAUSE_HEADING.match(raw)
+        if heading:
+            found[f"{heading.group(1)}-{heading.group(2)}"] = heading.group(3).strip()
+    return found
+
+
 def load_spec(path):
     spec = Spec(path)
     text = path.read_text(encoding="utf-8")
