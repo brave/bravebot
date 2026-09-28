@@ -2459,60 +2459,158 @@ fn declared_and_listed_unapproved(name: &str, flags: &[&str], enable: &str) {
     assert!(line.contains(&declaration.digest().short()), "{line}");
 }
 
-/// SERVERS-10: a declaration names a variable and never holds its value, so `--env NAME=value` is
-/// refused, the refusal names the variable, and the value is printed nowhere and written nowhere.
+/// SERVERS-10: a value given at `add`, typed as `claude mcp add` takes it, is stored in the
+/// person's own `mcp.json`, which only they can read, and is printed by nothing that reads the
+/// declaration back: not `add`, `get`, `list` or `doctor`.
 #[test]
-fn a_value_given_to_a_variable_is_refused_and_never_repeated() {
+fn a_value_given_at_add_is_stored_where_only_the_person_reads_it_and_printed_by_nothing() {
     let scratch = Scratch::new("cli-running-mcp-value");
-    let output = bravebot(
+    let added = bravebot(
         &scratch.path,
         &[],
         &[
             "mcp",
             "add",
             "weather",
-            "--env",
+            "-e",
             "WEATHER_TOKEN=hunter2-token",
-            "--stdio",
             "--",
             "npx",
             "weather-mcp",
         ],
     );
-    let (stdout, stderr) = said(&output);
-    assert_eq!(output.status.code(), Some(2), "{stderr}");
-    assert!(stderr.contains("WEATHER_TOKEN"), "{stderr}");
+    let (stdout, stderr) = said(&added);
+    assert!(added.status.success(), "{stderr}");
+
+    let file = scratch.path.join(".bravebot").join("mcp.json");
+    let written = std::fs::read_to_string(&file).expect("the declaration was written");
+    let read = bravebot_config::mcp::Declarations::parse(&written).expect("it reads back");
+    let declared = bravebot_config::mcp::Declaration::stdio(
+        vec!["npx".into(), "weather-mcp".into()],
+        vec!["PATH".into()],
+        None,
+    )
+    .and_then(|declaration| {
+        declaration.storing([("WEATHER_TOKEN".into(), "hunter2-token".into())].into())
+    })
+    .expect("a declaration");
+    assert_eq!(
+        read.get("weather").map(|entry| entry.declaration),
+        Some(Ok(declared))
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&file)
+            .expect("its metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "mode was {:o}", mode & 0o777);
+    }
+
+    let mut printed = format!("{stdout}{stderr}");
+    for command in [
+        &["mcp", "get", "weather"][..],
+        &["mcp", "list"],
+        &["doctor"],
+    ] {
+        let (stdout, stderr) = said(&bravebot(&scratch.path, &[], command));
+        printed.push_str(&stdout);
+        printed.push_str(&stderr);
+    }
     assert!(
-        !stdout.contains("hunter2") && !stderr.contains("hunter2"),
-        "the value was repeated: {stdout}{stderr}"
+        printed.contains("WEATHER_TOKEN (stored)"),
+        "the stored name was not shown: {printed}"
     );
     assert!(
-        !scratch.path.join(".bravebot").join("mcp.json").exists(),
-        "a refused declaration was written"
+        !printed.contains("hunter2"),
+        "the value was printed: {printed}"
     );
 }
 
-/// SERVERS-10: a value written where `add` expects none, as a stray word or joined to a flag, is
-/// refused without being repeated either.
+/// SERVERS-10: the line brave-search's own README gives, which names a key file, declares the
+/// server with that file as one it may read, and shows the file as that read.
+#[cfg(unix)]
 #[test]
-fn a_value_in_a_stray_word_or_a_joined_flag_is_never_repeated() {
+fn a_servers_own_install_line_naming_a_key_file_declares_a_read_of_that_file() {
+    let scratch = Scratch::new("cli-running-mcp-key-file").with_file("keys/brave-api-key", "k");
+    let key = scratch.path.join("keys/brave-api-key");
+    let assignment = format!("BRAVE_API_KEY_FILE={}", key.display());
+    let added = bravebot(
+        &scratch.path,
+        &[],
+        &[
+            "mcp",
+            "add",
+            "brave-search",
+            "-e",
+            &assignment,
+            "--",
+            "npx",
+            "-y",
+            "@brave/brave-search-mcp-server",
+        ],
+    );
+    let (_, stderr) = said(&added);
+    assert!(added.status.success(), "{stderr}");
+
+    let (stdout, stderr) = said(&bravebot(
+        &scratch.path,
+        &[],
+        &["mcp", "get", "brave-search"],
+    ));
+    let reads: Vec<&str> = stdout
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("may read: "))
+        .collect();
+    assert_eq!(reads, [key.display().to_string()], "{stdout}{stderr}");
+}
+
+/// SERVERS-10: a value `add` cannot take is refused without being repeated: a word after a name in
+/// an `-e` run, a word `-e` cannot read as `NAME=value`, a variable given twice, an `-e` before the
+/// alias, or a value joined to a flag `add` does not have.
+#[test]
+fn a_value_add_cannot_take_is_refused_and_never_repeated() {
     let scratch = Scratch::new("cli-running-mcp-stray");
     let program = ["--stdio", "--", "npx", "weather-mcp"];
-    for flags in [
-        vec!["--env=WEATHER_TOKEN=hunter2-token"],
+    let mut typed: Vec<Vec<&str>> = [
         vec!["--env", "PATH", "WEATHER_TOKEN=hunter2-token"],
         vec!["--env", "WEATHER_TOKEN", "hunter2-token"],
+        vec!["-e", "WEATHER_TOKEN", "hunter2-token"],
+        vec!["--env=hunter2-token"],
+        vec!["-e", "1WEATHER=hunter2-token"],
+        vec![
+            "-e",
+            "WEATHER_TOKEN=hunter2-token",
+            "-e",
+            "WEATHER_TOKEN=hunter2-token",
+        ],
         vec!["--http=https://user:hunter2-token@mcp.example.com/mcp"],
-    ] {
+    ]
+    .into_iter()
+    .map(|flags| {
         let mut args = vec!["mcp", "add", "weather"];
-        args.extend(&flags);
+        args.extend(flags);
         args.extend(program);
+        args
+    })
+    .collect();
+    for before in ["-e", "-eWEATHER_TOKEN=hunter2-token"] {
+        let mut args = vec!["mcp", "add", before];
+        if before == "-e" {
+            args.push("WEATHER_TOKEN=hunter2-token");
+        }
+        args.push("weather");
+        args.extend(program);
+        typed.push(args);
+    }
+    for args in typed {
         let output = bravebot(&scratch.path, &[], &args);
         let (stdout, stderr) = said(&output);
-        assert_eq!(output.status.code(), Some(2), "{flags:?}: {stderr}");
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {stderr}");
         assert!(
             !stdout.contains("hunter2") && !stderr.contains("hunter2"),
-            "{flags:?} repeated the value: {stdout}{stderr}"
+            "{args:?} repeated the value: {stdout}{stderr}"
         );
     }
     assert!(
@@ -2720,7 +2818,7 @@ fn a_declaration_that_cannot_be_used_is_listed_with_its_problem() {
     let scratch = Scratch::new("cli-running-mcp-broken").with_state(
         "mcp.json",
         &format!(
-            r#"{{"servers": {{"weather": {entry}, "leaky": {{"transport": "stdio", "argv": ["x"], "env": {{"TOKEN": "hunter2"}}}}}}}}"#
+            r#"{{"servers": {{"weather": {entry}, "leaky": {{"transport": "stdio", "argv": ["x"], "variables": ["TOKEN=hunter2"]}}}}}}"#
         ),
     );
 
@@ -2731,7 +2829,7 @@ fn a_declaration_that_cannot_be_used_is_listed_with_its_problem() {
         .lines()
         .find(|line| line.contains("leaky"))
         .unwrap_or_else(|| panic!("the broken entry was left out: {stdout}"));
-    assert!(line.contains("values"), "{line}");
+    assert!(line.contains("is not a name"), "{line}");
     assert!(
         stdout.lines().any(|line| line.contains("weather")),
         "the usable entry was dropped with it: {stdout}"

@@ -2,10 +2,10 @@
 //! which of them the person approved, `mcp-approved` beside it.
 //!
 //! A declaration says that a server exists: its alias, its transport, the program and arguments
-//! that start it or the url that reaches it, the names of the variables it needs, and the directory
-//! it runs in. This module reads and writes that format and computes what an approval binds to. It
-//! starts nothing and reaches nothing: launching a server is the client's, and deciding whether one
-//! is offered to a session is the agent's.
+//! that start it or the url that reaches it, the variables it receives, the files it may read, and
+//! the directory it runs in. This module reads and writes that format and computes what an approval
+//! binds to. It starts nothing and reaches nothing: launching a server is the client's, and deciding
+//! whether one is offered to a session is the agent's.
 //!
 //! # Why not a settings layer
 //!
@@ -15,11 +15,14 @@
 //! execution nobody approved. A file in the state directory is outside every directory a session can
 //! write. [`crate::Settings::mcp_declared`] is where a layer that tried anyway is reported.
 //!
-//! # Names, never values
+//! # Names, and the values a person gave
 //!
-//! `variables` lists the names of variables a server needs. Their values are the person's own
-//! environment at launch and are written nowhere, so an entry spelled `NAME=value` is refused, and
-//! what is said about it names the variable and never repeats the value.
+//! `variables` lists the names of variables a server receives from the person's own environment
+//! at launch. `env` holds the ones the person gave a value when they declared it, in the shape
+//! Claude Code's `.mcp.json` uses, and a stored value is handed over as written. The file is the
+//! person's own, private to them inside the state directory, which is why a value may be kept in
+//! it and in no settings layer. Nothing said about an entry repeats a value: a problem names the
+//! variable at most. `reads` lists the files a value or an argument named, one grant each.
 //!
 //! # Every failure is per entry, except the file's own shape
 //!
@@ -29,7 +32,8 @@
 //!
 //! ```json
 //! { "servers": {
-//!     "weather": { "transport": "stdio", "argv": ["npx", "-y", "weather-mcp"], "variables": ["PATH"] },
+//!     "weather": { "transport": "stdio", "argv": ["npx", "-y", "weather-mcp"], "variables": ["PATH"],
+//!         "env": { "WEATHER_KEY_FILE": "/home/me/keys/weather" }, "reads": ["/home/me/keys/weather"] },
 //!     "docs": { "transport": "http", "url": "https://docs.example.com/mcp" } } }
 //! ```
 
@@ -137,8 +141,8 @@ pub fn is_variable_name(name: &str) -> bool {
 
 /// What is wrong with one entry, or with one flag that would have made it.
 ///
-/// Nothing here carries a value. The one variant that names something from a variable list names
-/// the part before the `=`, and only where that part is itself a name.
+/// Nothing here carries a value. The variants that name a variable name one [`is_variable_name`]
+/// accepts, and never what it was given.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Problem {
     /// The alias is not one [`is_alias`] accepts.
@@ -149,14 +153,18 @@ pub enum Problem {
     Transport,
     /// A key this format does not have, as the file spelled it.
     Key(String),
-    /// Values where the names belong: an `env` block, or an object in place of the list.
-    Values,
     /// `argv` is missing or empty, names a blank program, or holds something that is not a string.
     Program,
-    /// An entry in `variables` is not a string, or is not a name.
+    /// `variables` is not a list of names, or a key of `env` is not a name.
     Name,
-    /// An entry in `variables` is `NAME=value`, and this is the name.
-    Assignment(String),
+    /// `env` is not an object.
+    Env,
+    /// The value `env` gives this variable is not a string, or holds a NUL no environment can.
+    Value(String),
+    /// This variable is given two answers: it is in `variables` and in `env`, or given two values.
+    Twice(String),
+    /// `reads` is not a list of absolute paths.
+    Reads,
     /// `directory` is not an absolute path.
     Directory,
     /// `url` is missing, is not a string, is not `http` or `https`, or names no host.
@@ -168,14 +176,23 @@ pub enum Problem {
 }
 
 /// One server, as a person declared it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Its `Debug` shows a stored value by its name alone, so no value reaches a log or a panic.
+#[derive(Clone, PartialEq, Eq)]
 pub enum Declaration {
     /// A program this machine starts, spoken to over its standard streams.
     Stdio {
         /// The program and its arguments, never a line. Never empty.
         argv: Vec<String>,
-        /// The names of the variables it receives, each once, in the order they were written.
+        /// The names of the variables it receives from the environment at launch, each once, in the
+        /// order they were written.
         variables: Vec<String>,
+        /// The variables it receives with the value the person gave them, by name. None of them is
+        /// in `variables`, so the environment at launch is never read for one.
+        env: BTreeMap<String, String>,
+        /// The files it may read, each once, where the confinement would otherwise refuse them.
+        /// Absolute.
+        reads: Vec<String>,
         /// Where it runs, where somebody said. Absolute.
         directory: Option<String>,
     },
@@ -186,23 +203,51 @@ pub enum Declaration {
     },
 }
 
+impl std::fmt::Debug for Declaration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Stdio {
+                argv,
+                variables,
+                env,
+                reads,
+                directory,
+            } => f
+                .debug_struct("Stdio")
+                .field("argv", argv)
+                .field("variables", variables)
+                .field("env", &env.keys().collect::<Vec<_>>())
+                .field("reads", reads)
+                .field("directory", directory)
+                .finish(),
+            Self::Http { url } => f.debug_struct("Http").field("url", url).finish(),
+        }
+    }
+}
+
 /// A field of a declaration, for saying which of them changed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Field {
     Transport,
     Argv,
     Variables,
+    /// The stored values, with the name of each variable whose value was added, changed or
+    /// removed. Names only: saying which value changed is saying the values.
+    Env(Vec<String>),
+    Reads,
     Directory,
     Url,
 }
 
 impl Field {
     /// The key the file spells it with.
-    pub fn key(self) -> &'static str {
+    pub fn key(&self) -> &'static str {
         match self {
             Self::Transport => "transport",
             Self::Argv => "argv",
             Self::Variables => "variables",
+            Self::Env(_) => "env",
+            Self::Reads => "reads",
             Self::Directory => "directory",
             Self::Url => "url",
         }
@@ -226,6 +271,79 @@ impl Declaration {
         Ok(Self::Stdio {
             argv,
             variables,
+            env: BTreeMap::new(),
+            reads: Vec::new(),
+            directory,
+        })
+    }
+
+    /// This declaration with `env` as the values the person gave, checked as a file's entry is.
+    ///
+    /// A stored name also in `variables` would be two answers to where its value comes from, so it
+    /// is refused rather than one of them winning.
+    pub fn storing(self, env: BTreeMap<String, String>) -> Result<Self, Problem> {
+        let Self::Stdio {
+            argv,
+            variables,
+            reads,
+            directory,
+            ..
+        } = self
+        else {
+            return match env.is_empty() {
+                true => Ok(self),
+                false => Err(Problem::Remote("env")),
+            };
+        };
+        for (name, value) in &env {
+            if !is_variable_name(name) {
+                return Err(Problem::Name);
+            }
+            if value.contains('\0') {
+                return Err(Problem::Value(name.clone()));
+            }
+            if variables.contains(name) {
+                return Err(Problem::Twice(name.clone()));
+            }
+        }
+        Ok(Self::Stdio {
+            argv,
+            variables,
+            env,
+            reads,
+            directory,
+        })
+    }
+
+    /// This declaration with `reads` as the files it may read, each absolute and each kept once.
+    pub fn reading(self, reads: Vec<String>) -> Result<Self, Problem> {
+        let Self::Stdio {
+            argv,
+            variables,
+            env,
+            directory,
+            ..
+        } = self
+        else {
+            return match reads.is_empty() {
+                true => Ok(self),
+                false => Err(Problem::Remote("reads")),
+            };
+        };
+        let mut kept: Vec<String> = Vec::with_capacity(reads.len());
+        for file in reads {
+            if file.contains('\0') || !Path::new(&file).is_absolute() {
+                return Err(Problem::Reads);
+            }
+            if !kept.contains(&file) {
+                kept.push(file);
+            }
+        }
+        Ok(Self::Stdio {
+            argv,
+            variables,
+            env,
+            reads: kept,
             directory,
         })
     }
@@ -244,7 +362,8 @@ impl Declaration {
         }
     }
 
-    /// The names of the variables this server receives. None for a remote one.
+    /// The names of the variables this server receives from the environment at launch. None for a
+    /// remote one.
     pub fn variables(&self) -> &[String] {
         match self {
             Self::Stdio { variables, .. } => variables,
@@ -252,21 +371,55 @@ impl Declaration {
         }
     }
 
+    /// The names of the variables this server receives with a stored value, never the values.
+    pub fn stored(&self) -> impl Iterator<Item = &str> {
+        let env = match self {
+            Self::Stdio { env, .. } => Some(env),
+            Self::Http { .. } => None,
+        };
+        env.into_iter()
+            .flat_map(|env| env.keys().map(String::as_str))
+    }
+
+    /// The files this server may read beyond what its confinement grants. None for a remote one.
+    pub fn reads(&self) -> &[String] {
+        match self {
+            Self::Stdio { reads, .. } => reads,
+            Self::Http { .. } => &[],
+        }
+    }
+
     /// What an approval of this declaration binds to.
     ///
-    /// The transport, the program and every argument or the url, the set of variable names, and
-    /// the directory. Not the alias: an alias is a label a person chose, and an approval keyed on
-    /// it would let an edit to the argv inherit an answer given about a different program. Not the
-    /// order the names were written in either, since the set is what the server receives.
+    /// The transport, the program and every argument or the url, the set of variable names, the
+    /// directory, and every stored value and the set of files it may read. Not the alias: an alias
+    /// is a label a person chose, and an approval keyed on it would let an edit to the argv inherit
+    /// an answer given about a different program. Not the order the names were written in either,
+    /// since the set is what the server receives.
     pub fn digest(&self) -> Digest {
         let form = match self {
             Self::Stdio {
                 argv,
                 variables,
+                env,
+                reads,
                 directory,
             } => {
                 let variables: BTreeSet<&String> = variables.iter().collect();
-                serde_json::json!([DIGEST_FORM, "stdio", argv, variables, directory])
+                let mut form = vec![
+                    DIGEST_FORM.into(),
+                    "stdio".into(),
+                    serde_json::json!(argv),
+                    serde_json::json!(variables),
+                    serde_json::json!(directory),
+                ];
+                // Only where there is one, so a declaration that stores nothing digests as it did
+                // before anything could be stored, and the approval given it still stands.
+                if !env.is_empty() || !reads.is_empty() {
+                    let reads: BTreeSet<&String> = reads.iter().collect();
+                    form.push(serde_json::json!({ "env": env, "reads": reads }));
+                }
+                serde_json::Value::Array(form)
             }
             Self::Http { url } => serde_json::json!([DIGEST_FORM, "http", url]),
         };
@@ -283,18 +436,32 @@ impl Declaration {
                 Self::Stdio {
                     argv,
                     variables,
+                    env,
+                    reads,
                     directory,
                 },
                 Self::Stdio {
                     argv: other_argv,
                     variables: other_variables,
+                    env: other_env,
+                    reads: other_reads,
                     directory: other_directory,
                 },
             ) => {
                 let set = |names: &[String]| names.iter().cloned().collect::<BTreeSet<_>>();
+                let restored: Vec<String> = env
+                    .keys()
+                    .chain(other_env.keys())
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .filter(|name| env.get(*name) != other_env.get(*name))
+                    .cloned()
+                    .collect();
                 [
                     (argv != other_argv, Field::Argv),
                     (set(variables) != set(other_variables), Field::Variables),
+                    (!restored.is_empty(), Field::Env(restored)),
+                    (set(reads) != set(other_reads), Field::Reads),
                     (directory != other_directory, Field::Directory),
                 ]
                 .into_iter()
@@ -317,11 +484,23 @@ impl Declaration {
             Self::Stdio {
                 argv,
                 variables,
+                env,
+                reads,
                 directory,
             } => {
                 entry.insert("argv".into(), argv.clone().into());
                 if !variables.is_empty() {
                     entry.insert("variables".into(), variables.clone().into());
+                }
+                if !env.is_empty() {
+                    let env = env
+                        .iter()
+                        .map(|(name, value)| (name.clone(), value.clone().into()))
+                        .collect();
+                    entry.insert("env".into(), serde_json::Value::Object(env));
+                }
+                if !reads.is_empty() {
+                    entry.insert("reads".into(), reads.clone().into());
                 }
                 if let Some(directory) = directory {
                     entry.insert("directory".into(), directory.clone().into());
@@ -337,8 +516,16 @@ impl Declaration {
     /// The declaration an entry states, or what is wrong with it.
     fn from_value(value: &serde_json::Value) -> Result<Self, Problem> {
         let entry = value.as_object().ok_or(Problem::NotAnObject)?;
+        const LOCAL: [&str; 4] = ["variables", "env", "reads", "directory"];
         let allowed: &[&str] = match entry.get("transport").and_then(|word| word.as_str()) {
-            Some("stdio") => &["transport", "argv", "variables", "directory"],
+            Some("stdio") => &[
+                "transport",
+                "argv",
+                "variables",
+                "env",
+                "reads",
+                "directory",
+            ],
             Some("http") => &["transport", "url"],
             _ => return Err(Problem::Transport),
         };
@@ -346,13 +533,9 @@ impl Declaration {
             if allowed.contains(&key.as_str()) {
                 continue;
             }
-            return Err(match key.as_str() {
-                // Claude Code's spelling, which holds values. Named for what it is rather than as
-                // an unknown key, because somebody who wrote it meant to pass those values on.
-                "env" => Problem::Values,
-                "variables" => Problem::Remote("variables"),
-                "directory" => Problem::Remote("directory"),
-                other => Problem::Key(other.to_string()),
+            return Err(match LOCAL.into_iter().find(|local| local == key) {
+                Some(local) => Problem::Remote(local),
+                None => Problem::Key(key.clone()),
             });
         }
         if allowed.contains(&"url") {
@@ -374,15 +557,39 @@ impl Declaration {
                 .map(|name| name.as_str().map(str::to_string))
                 .collect::<Option<Vec<_>>>()
                 .ok_or(Problem::Name)?,
-            Some(serde_json::Value::Object(_)) => return Err(Problem::Values),
             Some(_) => return Err(Problem::Name),
+        };
+        let env = match entry.get("env") {
+            None => BTreeMap::new(),
+            Some(serde_json::Value::Object(values)) => values
+                .iter()
+                .map(
+                    |(name, value)| match (is_variable_name(name), value.as_str()) {
+                        (false, _) => Err(Problem::Name),
+                        (true, None) => Err(Problem::Value(name.clone())),
+                        (true, Some(value)) => Ok((name.clone(), value.to_string())),
+                    },
+                )
+                .collect::<Result<_, _>>()?,
+            Some(_) => return Err(Problem::Env),
+        };
+        let reads = match entry.get("reads") {
+            None => Vec::new(),
+            Some(serde_json::Value::Array(files)) => files
+                .iter()
+                .map(|file| file.as_str().map(str::to_string))
+                .collect::<Option<Vec<_>>>()
+                .ok_or(Problem::Reads)?,
+            Some(_) => return Err(Problem::Reads),
         };
         let directory = match entry.get("directory") {
             None => None,
             Some(serde_json::Value::String(directory)) => Some(directory.clone()),
             Some(_) => return Err(Problem::Directory),
         };
-        Self::stdio(argv, variables, directory)
+        Self::stdio(argv, variables, directory)?
+            .storing(env)?
+            .reading(reads)
     }
 }
 
@@ -395,16 +602,11 @@ fn program(argv: &[String]) -> Result<(), Problem> {
 }
 
 /// The names, each checked and each kept once.
+///
+/// `NAME=value` is not a name, and is refused as one that is not, so nothing repeats its value.
 fn names(variables: Vec<String>) -> Result<Vec<String>, Problem> {
     let mut kept: Vec<String> = Vec::with_capacity(variables.len());
     for name in variables {
-        if let Some((before, _)) = name.split_once('=') {
-            // The part after the `=` is dropped here, before anything could print it.
-            return Err(match is_variable_name(before) {
-                true => Problem::Assignment(before.to_string()),
-                false => Problem::Name,
-            });
-        }
         if !is_variable_name(&name) {
             return Err(Problem::Name);
         }
@@ -428,8 +630,9 @@ fn absolute(directory: &str) -> Result<(), Problem> {
 
 /// A url to reach a server at: `http` or `https`, a host, and no user or password.
 ///
-/// No credential in the url, for the reason no value is in a variable list: this file holds what a
-/// server is, and a token written into it is a token kept in plain text beside every server.
+/// No credential in the url: the url is drawn wherever the declaration is, at the question and in
+/// `get`, so a token written into it is a token on the screen. A stored value is drawn only where it
+/// names a file the server may read, since that read is a grant.
 fn remote(url: &str) -> Result<(), Problem> {
     if url.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return Err(Problem::Url);
@@ -526,10 +729,17 @@ pub struct Entry {
 /// The declarations file, as it is written.
 ///
 /// Held as the entries the file had rather than as the declarations read out of them, so an entry
-/// this cannot use is written back as it was when another one changes.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// this cannot use is written back as it was when another one changes. Its `Debug` names the
+/// aliases alone, since an entry holds the values stored for it.
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct Declarations {
     servers: serde_json::Map<String, serde_json::Value>,
+}
+
+impl std::fmt::Debug for Declarations {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.servers.keys()).finish()
+    }
 }
 
 impl Declarations {
@@ -1055,6 +1265,14 @@ mod tests {
     }
 
     #[test]
+    fn a_declaration_storing_no_value_digests_as_it_did_before_values_could_be_stored() {
+        assert_eq!(
+            weather().digest().to_string(),
+            "25edc5e806956f3254b5ff2b116f1c07ae5ad8d4a5df00f6d15c0f8aadfec43f"
+        );
+    }
+
+    #[test]
     fn two_arguments_digest_apart_from_one_holding_the_same_characters() {
         let two = Declaration::stdio(words(&["run", "a", "b"]), Vec::new(), None).unwrap();
         let one = Declaration::stdio(words(&["run", "a b"]), Vec::new(), None).unwrap();
@@ -1076,26 +1294,139 @@ mod tests {
         assert_eq!(first.digests(), second.digests());
     }
 
+    fn stored(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect()
+    }
+
     #[test]
-    fn a_value_written_in_place_of_a_name_is_refused_without_repeating_it() {
+    fn a_value_is_stored_under_its_name_and_one_written_as_a_name_is_refused_unrepeated() {
+        let declaration = Declaration::stdio(words(&["server"]), words(&["PATH"]), None)
+            .unwrap()
+            .storing(stored(&[("WEATHER_TOKEN", "sk-live-0123456789")]))
+            .unwrap();
+        assert_eq!(
+            declaration.stored().collect::<Vec<_>>(),
+            vec!["WEATHER_TOKEN"]
+        );
+        assert_eq!(declaration.variables(), ["PATH"]);
+
         let refused = Declaration::stdio(
             words(&["server"]),
             words(&["WEATHER_TOKEN=sk-live-0123456789"]),
             None,
         );
-        assert_eq!(refused, Err(Problem::Assignment("WEATHER_TOKEN".into())));
+        assert_eq!(refused, Err(Problem::Name));
         assert!(!format!("{refused:?}").contains("sk-live"));
     }
 
     #[test]
-    fn an_env_block_or_an_object_of_variables_is_values_and_is_refused() {
-        for text in [
-            r#"{"servers": {"weather": {"transport": "stdio", "argv": ["server"], "env": {"TOKEN": "sk-live"}}}}"#,
-            r#"{"servers": {"weather": {"transport": "stdio", "argv": ["server"], "variables": {"TOKEN": "sk-live"}}}}"#,
+    fn an_env_block_is_stored_values_and_an_object_of_variables_is_not_a_list_of_names() {
+        let text = r#"{"servers": {"weather": {"transport": "stdio", "argv": ["server"], "env": {"TOKEN": "sk-live"}}}}"#;
+        let entry = Declarations::parse(text).unwrap().get("weather").unwrap();
+        assert_eq!(
+            entry.declaration,
+            Declaration::stdio(words(&["server"]), Vec::new(), None)
+                .unwrap()
+                .storing(stored(&[("TOKEN", "sk-live")]))
+        );
+
+        let text = r#"{"servers": {"weather": {"transport": "stdio", "argv": ["server"], "variables": {"TOKEN": "sk-live"}}}}"#;
+        let entry = Declarations::parse(text).unwrap().get("weather").unwrap();
+        assert_eq!(entry.declaration, Err(Problem::Name));
+        assert!(!format!("{:?}", entry.declaration).contains("sk-live"));
+    }
+
+    #[test]
+    fn a_stored_value_no_environment_could_hold_or_a_second_answer_is_refused_by_its_name() {
+        let plain = || Declaration::stdio(words(&["server"]), words(&["PATH"]), None).unwrap();
+        assert_eq!(
+            plain().storing(stored(&[("TOKEN", "sk-live\0tail")])),
+            Err(Problem::Value("TOKEN".into()))
+        );
+        assert_eq!(
+            plain().storing(stored(&[("PATH", "/usr/bin")])),
+            Err(Problem::Twice("PATH".into()))
+        );
+        assert_eq!(
+            plain().storing(stored(&[("sk-live", "TOKEN")])),
+            Err(Problem::Name)
+        );
+        assert!(plain().storing(stored(&[("EMPTY", "")])).is_ok());
+
+        for (entry, problem) in [
+            (r#""env": {"TOKEN": 5}"#, Problem::Value("TOKEN".into())),
+            (r#""env": {"sk-live": "x"}"#, Problem::Name),
+            (r#""env": ["TOKEN=sk-live"]"#, Problem::Env),
+            (r#""reads": ["keys/weather"]"#, Problem::Reads),
+            (r#""reads": "/keys/weather""#, Problem::Reads),
+            (
+                r#""variables": ["TOKEN"], "env": {"TOKEN": "x"}"#,
+                Problem::Twice("TOKEN".into()),
+            ),
         ] {
-            let entry = Declarations::parse(text).unwrap().get("weather").unwrap();
-            assert_eq!(entry.declaration, Err(Problem::Values), "{text}");
+            let text = format!(
+                r#"{{"servers": {{"weather": {{"transport": "stdio", "argv": ["server"], {entry}}}}}}}"#
+            );
+            let parsed = Declarations::parse(&text).unwrap();
+            assert_eq!(
+                parsed.get("weather").unwrap().declaration,
+                Err(problem),
+                "{entry}"
+            );
         }
+    }
+
+    /// SERVERS-10: a stored value is debugged by its name and never as itself, as a declaration, as
+    /// the entry the file holds and as the file, so none reaches a log or a panic.
+    #[test]
+    fn a_stored_value_is_debugged_by_its_name_alone() {
+        let declaration = weather()
+            .storing(stored(&[("WEATHER_TOKEN", "hunter2-token")]))
+            .expect("a declaration");
+        let mut file = Declarations::default();
+        file.insert("weather", &declaration);
+        let entry = file.get("weather").expect("the entry");
+        for (debugged, named) in [
+            (format!("{declaration:?}"), "WEATHER_TOKEN"),
+            (format!("{declaration:#?}"), "WEATHER_TOKEN"),
+            (format!("{entry:?}"), "WEATHER_TOKEN"),
+            (format!("{file:?}"), "weather"),
+        ] {
+            assert!(debugged.contains(named), "{debugged}");
+            assert!(!debugged.contains("hunter2"), "{debugged}");
+        }
+    }
+
+    #[test]
+    fn a_digest_covers_every_stored_value_and_every_file_it_may_read() {
+        let storing = |pairs: &[(&str, &str)], reads: &[&str]| {
+            weather()
+                .storing(stored(pairs))
+                .and_then(|declaration| declaration.reading(words(reads)))
+                .expect("a declaration")
+        };
+        let key = somewhere();
+        let other = Path::new(&key).join("other").display().to_string();
+        let approved = storing(&[("KEY_FILE", &key)], &[&key]).digest();
+        for changed in [
+            weather(),
+            storing(&[("KEY_FILE", &other)], &[&key]),
+            storing(&[("KEY_PATH", &key)], &[&key]),
+            storing(&[("KEY_FILE", &key), ("REGION", "eu")], &[&key]),
+            storing(&[("KEY_FILE", &key)], &[]),
+            storing(&[("KEY_FILE", &key)], &[&key, &other]),
+        ] {
+            assert_ne!(changed.digest(), approved, "{changed:?}");
+        }
+        assert_eq!(
+            storing(&[], &[&key, &other]).digest(),
+            storing(&[], &[&other, &key]).digest(),
+            "the files are a set, whatever order they were found in"
+        );
+        assert_ne!(storing(&[], &[&key]).digest(), weather().digest());
     }
 
     #[test]
@@ -1154,18 +1485,32 @@ mod tests {
     }
 
     #[test]
-    fn a_remote_server_takes_no_variables_and_no_directory() {
+    fn a_remote_server_takes_no_variables_values_reads_or_directory() {
         let text = r#"{"servers": {
             "a": {"transport": "http", "url": "https://a.example.com", "variables": ["PATH"]},
-            "b": {"transport": "http", "url": "https://b.example.com", "directory": "/srv"}}}"#;
+            "b": {"transport": "http", "url": "https://b.example.com", "directory": "/srv"},
+            "c": {"transport": "http", "url": "https://c.example.com", "env": {"TOKEN": "x"}},
+            "d": {"transport": "http", "url": "https://d.example.com", "reads": ["/srv/key"]}}}"#;
         let declarations = Declarations::parse(text).unwrap();
+        for (alias, key) in [
+            ("a", "variables"),
+            ("b", "directory"),
+            ("c", "env"),
+            ("d", "reads"),
+        ] {
+            assert_eq!(
+                declarations.get(alias).unwrap().declaration,
+                Err(Problem::Remote(key))
+            );
+        }
+        let remote = || Declaration::http("https://a.example.com".into()).unwrap();
         assert_eq!(
-            declarations.get("a").unwrap().declaration,
-            Err(Problem::Remote("variables"))
+            remote().storing(stored(&[("TOKEN", "x")])),
+            Err(Problem::Remote("env"))
         );
         assert_eq!(
-            declarations.get("b").unwrap().declaration,
-            Err(Problem::Remote("directory"))
+            remote().reading(words(&["/srv/key"])),
+            Err(Problem::Remote("reads"))
         );
     }
 
@@ -1236,6 +1581,10 @@ mod tests {
             words(&["PATH", "HOME"]),
             Some(somewhere()),
         )
+        .unwrap()
+        .storing(stored(&[("KEY_FILE", &somewhere()), ("EMPTY", "")]))
+        .unwrap()
+        .reading(vec![somewhere()])
         .unwrap();
         let mut declarations = Declarations::default();
         declarations.insert("weather", &declaration);
@@ -1261,6 +1610,27 @@ mod tests {
         assert_eq!(
             naming(&["PATH"]).changes(&naming(&["PATH", "HOME"])),
             vec![Field::Variables]
+        );
+        let storing = |pairs: &[(&str, &str)]| naming(&[]).storing(stored(pairs)).unwrap();
+        assert_eq!(
+            storing(&[("KEY", "old"), ("REGION", "eu"), ("GONE", "x")]).changes(&storing(&[
+                ("KEY", "new"),
+                ("REGION", "eu"),
+                ("ADDED", "y")
+            ])),
+            vec![Field::Env(words(&["ADDED", "GONE", "KEY"]))]
+        );
+        let reading = |files: &[&str]| {
+            let files = files.iter().map(|file| format!("{}{file}", somewhere()));
+            naming(&[]).reading(files.collect()).unwrap()
+        };
+        assert_eq!(
+            reading(&["/a", "/b"]).changes(&reading(&["/b", "/a"])),
+            Vec::new()
+        );
+        assert_eq!(
+            reading(&["/a"]).changes(&reading(&["/b"])),
+            vec![Field::Reads]
         );
         let remote = Declaration::http("https://weather.example.com".into()).unwrap();
         assert_eq!(weather().changes(&remote), vec![Field::Transport]);

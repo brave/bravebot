@@ -511,39 +511,52 @@ mcp-unknown-command = bravebot mcp has no command { $command }
 mcp-needs-an-alias = { $command } needs the alias of a server
 mcp-unexpected-argument = { $command } does not take { $argument }
 mcp-add-stray-argument =
-    word { $position } after add is not a flag, and is not repeated since it may be a value:
-    --env, --dir, --http and -s take one word each, and -- takes the rest
+    word { $position } after add is not a flag, and is not repeated since it may be a value: -e
+    takes the words up to the next flag, --dir, --http and -s one each, and -- takes the rest
 mcp-scope-needs-a-value = -s needs a scope: local, project or user
 mcp-not-a-scope = { $scope } is not a scope: -s takes local, project or user
+mcp-not-a-scope-unshown =
+    the word after -s is not a scope, and is not repeated since it may be a value: -s takes local,
+    project or user
 mcp-two-scopes = -s is given twice, and a request is written to one file
 mcp-not-an-alias =
     { $alias } cannot name a server: an alias is letters, digits, - and _, starts with a letter or
     a digit, and is at most 64 characters
+mcp-not-an-alias-unshown =
+    word { $position } after add cannot name a server, and is not repeated since it may be a value:
+    an alias is letters, digits, - and _, starts with a letter or a digit, and is at most 64
+    characters
 mcp-needs-a-transport = add needs -- <program> [args...] or --http <url>
 mcp-two-transports = add takes a program after -- or --http, not both
 mcp-stdio-needs-a-program =
     a program and its arguments come after a bare --, as in -- npx -y weather-mcp
 mcp-http-needs-a-url = --http needs a url
-mcp-env-needs-a-name = --env needs the name of a variable
+mcp-env-needs-a-name = -e needs NAME=value, or the name of a variable read from your environment
+mcp-env-after-the-alias =
+    -e and --env come after the alias, as in add weather -e KEY=value -- weather-mcp
+mcp-env-word-refused =
+    word { $position } after add is not NAME=value, and is not repeated since it may be a value: a
+    name alone is read from your environment only as the one word its -e takes
 mcp-dir-needs-a-path = --dir needs a directory
 mcp-dir-not-a-directory = { $path } is not a directory
+mcp-dir-not-a-directory-unshown =
+    the word after --dir is not a directory, and is not repeated since it may be a value
 mcp-dir-not-text = { $path } cannot be written into mcp.json, which holds text
 mcp-not-added = { $alias } was not declared: { $problem }
 mcp-not-declared = no MCP server is declared as { $alias }
 # What is wrong with a declaration, from a flag or from mcp.json. None of these repeats a value: the
-# one that names something names the variable, never what it was set to.
+# ones that name something name the variable, never what it was set to.
 mcp-problem-alias = the alias is not one: letters, digits, - and _, starting with a letter or a digit
 mcp-problem-not-an-object = the entry is not an object
 mcp-problem-transport = transport is missing, or is neither stdio nor http
 mcp-problem-key = { $key } is not a key a declaration has
-mcp-problem-values =
-    it holds values: a declaration lists the names of variables, and their values are read from
-    your environment
 mcp-problem-program = argv is missing or empty, or holds something that is not a string
 mcp-problem-name = a variable is not a name: a letter or _, then letters, digits and _
-mcp-problem-assignment =
-    { $name } is given a value: a declaration names the variable, and its value is read from your
-    environment
+mcp-problem-env = env is not an object of names and their values
+mcp-problem-value = the value env gives { $name } is not text a variable can hold
+mcp-problem-twice =
+    { $name } is given twice: a variable has one value, stored or read from your environment
+mcp-problem-reads = reads is not a list of absolute paths
 mcp-problem-directory = the directory is not an absolute path
 mcp-problem-url = the url is not http or https with a host
 mcp-problem-credentials =
@@ -564,6 +577,10 @@ mcp-no-state-directory =
 mcp-not-written = { $path } could not be written ({ $error })
 mcp-declared = declared { $alias } in { $path }
 mcp-variables = variables: { $names }
+# A variable given its value at add, which is kept in mcp.json and is never shown.
+mcp-variable-stored = { $name } (stored)
+# A file a stored value or an argument names, which the server is let read.
+mcp-may-read = may read: { $path }
 mcp-directory = directory: { $path }
 mcp-digest = digest: { $digest }
 # Where a declaration replaced one that was approved, which of its fields differ.

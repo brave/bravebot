@@ -344,7 +344,7 @@ and refuses in an incognito session. See
 ## `mcp`
 
 ```sh
-bravebot mcp add <alias> [-s <scope>] [--env <name>]... [--dir <path>] [--stdio] -- <program> [args...]
+bravebot mcp add <alias> [-s <scope>] [-e|--env <name>[=<value>]...]... [--dir <path>] [--stdio] -- <program> [args...]
 bravebot mcp add <alias> [-s <scope>] --http <url>
 bravebot mcp get <alias>
 bravebot mcp list
