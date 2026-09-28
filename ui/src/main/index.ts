@@ -53,8 +53,8 @@ import {
   type ExportOutcome,
 } from '../shared/export'
 import { printToPdf } from './export'
-import { readThemes, themesDirectory, watchThemes } from './theme'
-import { parseChosenTheme } from '../shared/theme'
+import { applyNativeAppearance } from './theme'
+import { parseAppearance } from '../shared/theme'
 import { readExperience, writeExperience } from './experience'
 import { editMemory, memoryHistory, snapshotMemory, removeMemoryHistory } from './memory'
 
@@ -118,7 +118,6 @@ function listModels(directory?: string): Promise<unknown> {
   return modelListing
 }
 
-let stopWatchingThemes: (() => void) | null = null
 
 /**
  * Send a turn as a bot, which is the only path that may name a file.
@@ -260,7 +259,7 @@ function createWindow(): void {
           vibrancy: 'sidebar' as const,
           backgroundColor: '#00000000',
         }
-      : { backgroundColor: '#181818' }),
+      : { backgroundColor: '#141415' }),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -350,19 +349,6 @@ function createWindow(): void {
   }, 1000)
   window.on('closed', () => { if (watchClock) clearInterval(watchClock); watchClock = null })
 
-  // Watching the palettes directory, so that editing one is an editing loop rather than a relaunch
-  // each time. Torn down with the window rather than at quit: on macOS the last window can close
-  // and a new one be built from the dock, and a watcher left holding a `webContents` that is gone
-  // would be one more thing keeping it alive.
-  stopWatchingThemes?.()
-  stopWatchingThemes = watchThemes(() => {
-    window?.webContents.send('bravebot:theme:changed', {
-      themes: readThemes(),
-      chosen: readState().theme,
-      directory: themesDirectory(),
-    })
-  })
-
   if (process.env.ELECTRON_RENDERER_URL) {
     void window.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
@@ -370,8 +356,6 @@ function createWindow(): void {
   }
 
   window.on('closed', () => {
-    stopWatchingThemes?.()
-    stopWatchingThemes = null
     bridge?.dispose()
     bridge = null
     runningHandles.clear()
@@ -384,6 +368,7 @@ function createWindow(): void {
   // dock icon builds a new one — with the menu installed once, every item would still be
   // pointing at the window that was closed, and the whole menu would go quiet with nothing
   // on screen to say why.
+  applyNativeAppearance(parseAppearance(readState().theme))
   installMenu(window)
 }
 
@@ -740,25 +725,18 @@ app.whenReady().then(() => {
 
   ipcMain.handle('bravebot:panels:write', (_event, value: unknown) => putPanels(parsePanels(value)))
 
-  // The theme. The chosen name is a key in the same file as the three above; the list it is chosen
-  // from is built here, because reading a directory of palettes is not something the renderer does.
-  //
-  // What crosses is a *name*. Not a path — the renderer cannot see the filesystem and this does not
-  // become the first place it can reach one — and not a colour either, so nothing painted in this
-  // window is something the renderer composed. Validated on the way in like the rest, and checked
-  // against the list as well: a name nobody is offering is a bug on this side rather than a
-  // preference, and writing it down would outlive the session that caused it.
+  // Appearance: System / Light / Dark. The name is a key in the same file as the columns;
+  // Electron's nativeTheme is told so scrollbars and vibrancy follow the page.
 
   ipcMain.handle('bravebot:theme:read', () => ({
-    themes: readThemes(),
-    chosen: readState().theme,
-    directory: themesDirectory(),
+    chosen: parseAppearance(readState().theme),
   }))
 
   ipcMain.handle('bravebot:theme:write', (_event, value: unknown) => {
-    const name = parseChosenTheme(value)
-    if (!readThemes().some((theme) => theme.name === name)) return
-    putTheme(name)
+    const appearance = parseAppearance(value)
+    putTheme(appearance)
+    applyNativeAppearance(appearance)
+    window?.webContents.send('bravebot:theme:changed', { chosen: appearance })
   })
 
   // Choosing a project is a native affair: the renderer cannot see the filesystem and

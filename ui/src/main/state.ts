@@ -27,7 +27,7 @@ import { parseView, type StoredView } from '../shared/view'
 import { parseRecents } from '../shared/recents'
 import { parseForks, type Fork } from '../shared/forks'
 import { type Bot } from '../shared/bots'
-import { BRAVE } from '../shared/theme'
+import { SYSTEM } from '../shared/theme'
 
 const file = (): string => join(app.getPath('userData'), 'bravebot-ui.json')
 
@@ -68,9 +68,9 @@ function inherited(): StoredState {
     view: parseView(legacy('view.json')),
     // Panels are new with this file, so there is nothing to inherit — every panel is on.
     panels: { off: [] },
-    // As is the theme, and there was never a file for it: an app that has never been themed is
-    // one drawing itself in `brave`, which is every window before this feature existed.
-    theme: BRAVE,
+    // As is the appearance, and there was never a file for it: an app that has never chosen one
+    // follows the system, which is every window before this feature existed.
+    theme: SYSTEM,
     recents: parseRecents(legacy('recents.json')).directories,
     forks: parseForks(legacy('forks.json')).forks,
     // Bots are newer than this file, so there is nothing to inherit. Listed all the same rather
@@ -113,7 +113,7 @@ export function putPanels(panels: StoredPanels): void {
   update({ panels })
 }
 
-/** Remember which palette the window is painted in. */
+/** Remember which appearance the window follows. */
 export function putTheme(theme: string): void {
   update({ theme })
 }

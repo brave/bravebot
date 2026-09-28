@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Fold } from './Fold'
 import { FileGlyph } from './FileGlyph'
 import { type FileRow, type Listing, isSubpath, under } from '../../shared/files'
+import { Icon, Input } from '../nala'
 
 /**
  * The folder the session is working in.
@@ -156,8 +157,9 @@ export function FileTree({
         </code>
         <button ref={searchButton} className={`tree-tool ${searchOpen ? 'on' : ''}`}
           title="Search files" aria-label="Search files" aria-expanded={searchOpen}
+          data-test="tree-search-toggle"
           onClick={() => searchOpen ? closeSearch() : setSearchOpen(true)}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 5 5" /></svg>
+          <Icon name="search" style={{ '--leo-icon-size': '16px' } as React.CSSProperties} />
         </button>
         {/* Labelled with the thing it is about rather than with an eye or a dot: `.*` is what a
             dotfile looks like, and it is legible at 10px where a pictogram is not. */}
@@ -175,11 +177,19 @@ export function FileTree({
       </div>
 
       {searchOpen && <div className="tree-search">
-        <input autoFocus type="search" className="tree-find" value={query}
+        <Input autofocus type="search" className="tree-find" value={query}
           placeholder="Search project filenames…" aria-label="Search project files by name"
-          onChange={event => setQuery(event.target.value)}
-          onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); closeSearch() } }} />
-        <button className="tree-tool" aria-label="Close file search" onClick={closeSearch}>×</button>
+          data-test="tree-search"
+          onChange={({ value }) => setQuery(value)}
+          onKeyDown={({ innerEvent }) => {
+            if ((innerEvent as unknown as KeyboardEvent).key === 'Escape') {
+              innerEvent.stopPropagation()
+              closeSearch()
+            }
+          }} />
+        <button className="tree-tool" aria-label="Close file search" onClick={closeSearch}>
+          <Icon name="close" style={{ '--leo-icon-size': '14px' } as React.CSSProperties} />
+        </button>
       </div>}
 
       {problem && <p className="tree-problem">{problem}</p>}
@@ -364,7 +374,7 @@ function Rows({
                   names either side of a folder would not line up. */}
               {row.kind === 'directory' ? (
                 <span className="tree-glyph folder" aria-hidden="true">
-                  /
+                  <Icon name="folder-open" style={{ '--leo-icon-size': '14px' } as React.CSSProperties} />
                 </span>
               ) : (
                 <FileGlyph name={row.name} />

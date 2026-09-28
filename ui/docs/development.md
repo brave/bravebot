@@ -5,6 +5,10 @@ workspace of the package at the repository root, so nothing there reaches these 
 Run the `cargo` commands from the root, where the workspace the two front-end crates are
 members of lives.
 
+The UI depends on [Brave's Leo (Nala)](https://github.com/brave/leo) design system as a
+git dependency. Installing it runs Leo's `prepare` script, which needs `pnpm`. Enable it
+once with `corepack enable` (ships with Node 18+); `npm ci` and `npm install` then work.
+
 | Command | What it does |
 | --- | --- |
 | `npm ci` | Install locked npm dependencies and set up Electron |

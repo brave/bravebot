@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { BotAvatar } from './BotAvatar'
 import { Modal } from './Modal'
+import { Button, Collapse, Icon, Link } from '../nala'
 
 export interface AboutInfo {
   version: string
@@ -43,8 +44,8 @@ export function About({ info, onClose }: { info: AboutInfo; onClose: () => void 
   }
 
   return <Modal title="About Brave Bot" onClose={onClose} className="about">
-    <button className="about-close" aria-label="Close About Brave Bot" onClick={onClose}>
-      <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
+    <button className="about-close" aria-label="Close About Brave Bot" onClick={onClose} data-test="about-close">
+      <Icon name="close" style={{ '--leo-icon-size': '18px' } as React.CSSProperties} />
     </button>
     <div className="about-hero">
       <div className="about-stage">
@@ -61,25 +62,27 @@ export function About({ info, onClose }: { info: AboutInfo; onClose: () => void 
       <span className="about-version">Version {agentVersion}</span>
     </div>
     <nav className="about-links" aria-label="Project resources">
-      <a href={project} target="_blank" rel="noreferrer">GitHub <span aria-hidden="true">↗</span></a>
-      <a href={`${project}/releases`} target="_blank" rel="noreferrer">Release notes <span aria-hidden="true">↗</span></a>
+      <Link href={project} target="_blank" rel="noreferrer">GitHub <span aria-hidden="true">↗</span></Link>
+      <Link href={`${project}/releases`} target="_blank" rel="noreferrer">Release notes <span aria-hidden="true">↗</span></Link>
     </nav>
-    <details className="about-details">
-      <summary tabIndex={0}>Build &amp; storage details</summary>
+    <Collapse className="about-details" title="Build & storage details" isOpen={undefined} data-test="about-details">
       <dl>
         <div><dt>Interface</dt><dd>{info.version}</dd></div>
         <div><dt>Agent</dt><dd>{info.build}</dd></div>
         <div><dt>Sessions</dt><dd>{info.home ?? 'Session folder unavailable'}</dd></div>
       </dl>
       <div className="about-copy">
-        <button onClick={() => void copyBuildInfo()}>Copy build info</button>
+        <Button size="small" kind="outline" onClick={() => void copyBuildInfo()} data-test="about-copy">
+          <Icon name="copy" slot="icon-before" />
+          Copy build info
+        </Button>
         <span role="status">{copyStatus}</span>
       </div>
-    </details>
+    </Collapse>
     <footer className="about-footer">
-      <span>Built with <a href={project} target="_blank" rel="noreferrer">bravebot</a></span>
+      <span>Built with <Link href={project} target="_blank" rel="noreferrer">bravebot</Link></span>
       <span aria-hidden="true">·</span>
-      <a href={`${project}/blob/main/LICENSE`} target="_blank" rel="noreferrer">MPL-2.0</a>
+      <Link href={`${project}/blob/main/LICENSE`} target="_blank" rel="noreferrer">MPL-2.0</Link>
     </footer>
   </Modal>
 }

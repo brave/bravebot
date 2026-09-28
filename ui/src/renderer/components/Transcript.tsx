@@ -22,6 +22,7 @@ import { ErrorCard } from './ErrorCard'
 import { FilePreview } from './FilePreview'
 import { TurnFooter, TurnNotices, type OpenAudit } from './TurnDetails'
 import type { Turns, TurnDisclosure } from '../turn-details'
+import { Button, Collapse, ProgressRing } from '../nala'
 
 interface Live {
   model: string | null
@@ -475,15 +476,15 @@ export function Transcript({
             {bot ? (
               <BotAvatar seed={bot.avatar} size={22} doing="working" />
             ) : (
-              <span className="spinner" />
+              <ProgressRing mode="indeterminate" className="working-ring" data-test="working-ring" />
             )}
             {workingWord(live.phase, live.checking)}
             {live.tokens > 0 && <span className="count"> · {live.tokens} tokens written</span>}
             {Object.values(live.turns).filter((turn) => turn.status === 'running').slice(-1).map((turn) =>
               <button className="turn-audit-link" key={turn.turn} aria-controls="turn-audit-inspector" onClick={(event) => onAudit(turn.turn, event.currentTarget)}>Audit</button>)}
-            <button className="cancel" onClick={onCancel}>
+            <Button kind="plain-faint" size="tiny" className="cancel" onClick={onCancel} data-test="cancel-turn">
               Cancel
-            </button>
+            </Button>
           </div>
         )}
         <div ref={bottom} />
@@ -516,10 +517,12 @@ export function Transcript({
           <ModelPicker session={live.handle} scope={bot ? 'bot' : 'conversation'} key={live.handle} model={live.model} disabled={live.running} onChoose={onModel} />
           <button className="attach-files" onClick={onAttach} disabled={attachments.length >= 5} title="Choose project files to share as trusted context">Attach files</button>
           <span className="composer-hint">Enter to send · Shift+Enter for newline</span>
-          {live.running && <button className="stop" onClick={onCancel}>Stop</button>}
-          <button className="send" onClick={() => { latest(); live.running ? onQueue() : onSubmit() }} disabled={!draft.trim() || !!live.askingTrust || backendReady === false}>
+          {live.running && <Button kind="outline" size="small" className="stop" onClick={onCancel} data-test="stop-turn">Stop</Button>}
+          <Button kind="filled" size="small" className="send" onClick={() => { latest(); live.running ? onQueue() : onSubmit() }}
+            isDisabled={!draft.trim() || !!live.askingTrust || backendReady === false}
+            data-test="send-message">
             {live.running ? 'Queue message' : 'Send'}
-          </button>
+          </Button>
         </div>
       </footer>
       {watches && <Watches session={live.handle} onClose={() => setWatches(false)} />}
@@ -1078,10 +1081,9 @@ export function Row({
   return (
     <div className="interrupted-request">
       <strong>Request cancelled when the turn ended</strong>
-      <details>
-        <summary>Request details</summary>
+      <Collapse title="Request details" isOpen={undefined} data-test="interrupted-details">
         {card}
-      </details>
+      </Collapse>
     </div>
   )
 }

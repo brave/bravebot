@@ -165,7 +165,7 @@ export const COMMANDS: readonly Command[] = [
   // a session in it, and a person who has just launched the app is exactly who wants to change
   // how it looks. No accelerator — it is not a thing anybody does twice in a sitting, and the
   // shortcuts left are worth more to the folds.
-  { id: 'view.theme', label: 'Theme…', requires: 'always' },
+  { id: 'view.theme', label: 'Appearance…', requires: 'always' },
   { id: 'app.about', label: 'About Brave Bot', requires: 'always' },
   { id: 'help.doctor', label: 'Run Diagnostics…', requires: 'always' },
 ]

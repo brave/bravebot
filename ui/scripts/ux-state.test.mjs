@@ -253,19 +253,17 @@ test('request IDs reused in later turns never rewrite prior answers or approvals
 })
 
 
-test('built-in accent and message foregrounds meet normal-text contrast', () => {
-  const { BUILTINS, roleVariables } = load('src/shared/theme.ts')
-  const luminance = (hex) => {
-    const linear = hex.slice(1).match(/../g).map((channel) => parseInt(channel, 16) / 255).map((c) => c <= .04045 ? c / 12.92 : ((c + .055) / 1.055) ** 2.4)
-    return .2126 * linear[0] + .7152 * linear[1] + .0722 * linear[2]
-  }
-  for (const theme of BUILTINS) for (const dark of [false, true]) {
-    const vars = roleVariables(theme, dark)
-    for (const role of ['note', 'primary']) {
-      const a = luminance(vars[`--role-${role}`]), b = luminance(vars[`--role-${role}-ink`])
-      assert.ok((Math.max(a, b) + .05) / (Math.min(a, b) + .05) >= 4.5, `${theme.name} ${role}`)
-    }
-  }
+test('appearance parsing accepts system/light/dark and maps legacy names to system', () => {
+  const { parseAppearance, APPEARANCES, SYSTEM } = load('src/shared/theme.ts')
+  assert.equal(parseAppearance(undefined), SYSTEM)
+  assert.equal(parseAppearance(''), SYSTEM)
+  assert.equal(parseAppearance('light'), 'light')
+  assert.equal(parseAppearance('dark'), 'dark')
+  assert.equal(parseAppearance('system'), 'system')
+  assert.equal(parseAppearance('brave'), SYSTEM)
+  assert.equal(parseAppearance('nord'), SYSTEM)
+  assert.equal(parseAppearance('catppuccin-mocha'), SYSTEM)
+  assert.deepEqual([...APPEARANCES], ['system', 'light', 'dark'])
 })
 
 
@@ -450,7 +448,7 @@ test('a turn the output limit ended says the limit and what the reply was writin
   const raise = /raise the limit with BRAVEBOT_OUTPUT_BUDGET in the env block of ~\/\.bravebot\/settings\.json\./
 
   const call = failed('too-long', { ceiling: 32000, call: { tool: 'write_file' }, thought: true })
-  assert.match(call, /<strong>The reply reached its output limit<\/strong>/)
+  assert.match(call, /<span slot="title">The reply reached its output limit<\/span>/)
   assert.match(call, /reached its limit of 32,000 tokens part way through a call to write_file, so the call was not made\. Ask for the work in smaller parts, or /)
   assert.match(call, raise)
 

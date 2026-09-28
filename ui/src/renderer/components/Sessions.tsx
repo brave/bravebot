@@ -9,6 +9,7 @@ import { ForkIcon } from './ForkIcon'
 import { PopMenu, type PopItem } from './PopMenu'
 import { conversationKey } from '../../shared/experience'
 import { useExperience, setConversation } from '../experience'
+import { Icon, Label } from '../nala'
 export const SessionInfo = createContext<Record<string, { bot?: string; state?: string }>>({})
 
 interface Props {
@@ -273,13 +274,18 @@ function Session({
   return <div className={`session-row ${session.id === openId ? 'current' : ''}`}>
     <button className={`session ${session.id === openId ? 'current' : ''}`} onClick={() => onOpen(session)} onContextMenu={contextMenu('session', session.id)}>
       <span className="session-title" title={session.title}>
-        {preferences?.pinned && <svg className="session-pin" width="13" height="15" viewBox="0 0 16 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" role="img" aria-label="Pinned" focusable="false">
-          <path d="M5 2h6M6 2v6l-3 4h10l-3-4V2M8 12v4" />
-        </svg>}
+        {preferences?.pinned && <Icon className="session-pin" name="pin" style={{ '--leo-icon-size': '13px' } as React.CSSProperties} title="Pinned" />}
         {forked && <span className="fork-mark"><ForkIcon size={11} /></span>}{session.title}
       </span>
       <span className="session-where">{session.project}{session.branch && <span className="branch"> · {session.branch}</span>} · {ago(session.updated)}</span>
-      {(info?.bot || info?.state) && <span className="session-badges">{info.bot && <span>{info.bot}</span>}{info.state && <span className={`session-state ${info.state.toLowerCase().replaceAll(' ', '-')}`}>{info.state}</span>}</span>}
+      {(info?.bot || info?.state) && <span className="session-badges">
+        {info.bot && <Label color="secondary" mode="outline">{info.bot}</Label>}
+        {info.state && <Label
+          className={`session-state ${info.state.toLowerCase().replaceAll(' ', '-')}`}
+          color={info.state.toLowerCase().includes('fail') ? 'red' : info.state.toLowerCase().includes('need') || info.state.toLowerCase().includes('work') ? 'yellow' : info.state.toLowerCase().includes('complete') ? 'green' : 'neutral'}
+          mode="outline"
+        >{info.state}</Label>}
+      </span>}
     </button>
     <button ref={anchor} className="session-more" aria-label={`Actions for ${session.title}`} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>⋯</button>
     <PopMenu open={menu} anchor={anchor} label="Conversation actions" onClose={() => setMenu(false)}
@@ -322,8 +328,8 @@ function NewSession({ onNew }: { onNew: (directory?: string) => void }): React.J
 
   return (
     <div className="new-split">
-      <button className="new" onClick={() => onNew()} title="Open a project">
-        <span className="plus">+</span> New session
+      <button className="new" onClick={() => onNew()} title="Open a project" data-test="new-session">
+        <Icon name="plus-add" style={{ '--leo-icon-size': '14px' } as React.CSSProperties} /> New session
       </button>
       <button
         ref={chevron}

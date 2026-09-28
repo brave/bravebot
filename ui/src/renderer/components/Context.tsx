@@ -4,6 +4,7 @@ import { FileTree } from './FileTree'
 import { type PanelName } from '../../shared/state'
 import { isConfined, type Activity, type Phase, type Shown, type TodoRow } from '../../shared/protocol'
 import type { Entry } from '../transcript'
+import { Icon, TabItem, Tabs } from '../nala'
 
 interface Live {
   /** The session's handle. The file tree names it rather than naming a folder. */
@@ -84,11 +85,16 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
           column will come back at when it unfolds — which a full-width row of buttons plus its
           own margins overflows. The wrapper takes that width and the bar sits inside it. */}
       <div className="context-head">
-        <div className="inspector-title"><strong>Project context</strong><button className="drawer-close" onClick={onClose} aria-label="Close context panel">×</button></div>
-        <div className="inspector-tabs" role="tablist" aria-label="Project context">
-          {(['overview', 'files'] as const).map((name) => <button key={name} role="tab" aria-selected={tab === name} onClick={() => setTab(name)}>{name === 'overview' ? 'Overview' : 'Files'}</button>)}
+        <div className="inspector-title"><strong>Project context</strong>
+          <button className="drawer-close" onClick={onClose} aria-label="Close context panel" data-test="context-close">
+            <Icon name="close" style={{ '--leo-icon-size': '14px' } as React.CSSProperties} />
+          </button>
         </div>
-
+        <Tabs className="inspector-tabs" value={tab} data-test="inspector-tabs"
+          onChange={({ value }) => { if (value === 'overview' || value === 'files') setTab(value) }}>
+          <TabItem value="overview">Overview</TabItem>
+          <TabItem value="files">Files</TabItem>
+        </Tabs>
       </div>
 
       <Section id="plan" title="Plan" count={live.todos.length} off={off.has('plan')}>

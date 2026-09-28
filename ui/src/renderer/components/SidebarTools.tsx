@@ -1,4 +1,5 @@
 import { useId, useRef, useState, type ReactNode } from 'react'
+import { Icon, Input } from '../nala'
 
 /** Keep search optional, while never hiding an active filter. */
 export function SidebarTools({ action, children, query, onQuery, label }: {
@@ -16,16 +17,25 @@ export function SidebarTools({ action, children, query, onQuery, label }: {
     <div className="sidebar-actions">
       <div className="sidebar-create">{action}</div>
       <button ref={trigger} className="sidebar-search-toggle" aria-label={label} title={label}
-        aria-expanded={expanded} aria-controls={id} onClick={() => expanded ? close() : setExpanded(true)}>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 5 5" /></svg>
+        aria-expanded={expanded} aria-controls={id} data-test="sidebar-search-toggle"
+        onClick={() => expanded ? close() : setExpanded(true)}>
+        <Icon name="search" style={{ '--leo-icon-size': '16px' } as React.CSSProperties} />
       </button>
       {children}
     </div>
     {expanded && <div className="sidebar-search" id={id}>
-      <input autoFocus type="search" className="session-find" aria-label={label} placeholder={`${label}…`}
-        value={query} onChange={event => onQuery(event.target.value)}
-        onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); close() } }} />
-      <button aria-label="Close search" title="Clear and close search" onClick={close}>×</button>
+      <Input autofocus type="search" className="session-find" aria-label={label} placeholder={`${label}…`}
+        value={query} data-test="sidebar-search"
+        onChange={({ value }) => onQuery(value)}
+        onKeyDown={({ innerEvent }) => {
+          if ((innerEvent as unknown as KeyboardEvent).key === 'Escape') {
+            innerEvent.stopPropagation()
+            close()
+          }
+        }} />
+      <button aria-label="Close search" title="Clear and close search" onClick={close}>
+        <Icon name="close" style={{ '--leo-icon-size': '14px' } as React.CSSProperties} />
+      </button>
     </div>}
   </>
 }

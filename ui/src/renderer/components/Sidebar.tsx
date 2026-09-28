@@ -30,6 +30,7 @@ import type { Doing } from './BotAvatar'
 import type { Tab } from '../../shared/view'
 import { Sessions } from './Sessions'
 import { Bots } from './Bots'
+import { Button, ControlItem, SegmentedControl } from '../nala'
 
 interface Props {
   sessions: SessionSummary[]
@@ -105,18 +106,16 @@ export function Sidebar({
       {/* The label stays put and `aria-pressed` carries which is on, the disclosure discipline
           every toggle in this window follows. No tooltips: the labels are the whole of what
           these do, and a popup could only repeat them. */}
-      <div className="sidebar-tabs" role="group" aria-label="What the column shows">
-        <button
-          className="sidebar-tab"
-          aria-pressed={tab === 'sessions'}
-          onClick={() => show('sessions')}
-        >
-          Sessions
-        </button>
-        <button className="sidebar-tab" aria-pressed={tab === 'bots'} onClick={() => show('bots')}>
-          Bots
-        </button>
-      </div>
+      <SegmentedControl
+        className="sidebar-tabs"
+        value={tab}
+        size="small"
+        data-test="sidebar-tabs"
+        onChange={({ value }) => { if (value === 'sessions' || value === 'bots') show(value) }}
+      >
+        <ControlItem value="sessions">Sessions</ControlItem>
+        <ControlItem value="bots">Bots</ControlItem>
+      </SegmentedControl>
 
       <div className="sidebar-body" hidden={tab !== 'sessions'}>
         <Sessions
@@ -146,7 +145,9 @@ export function Sidebar({
         />
       </div>
 
-      <button className="agent-settings-open" onClick={onSettings}>Agent settings</button>
+      <Button kind="outline" size="small" className="agent-settings-open" onClick={onSettings} data-test="agent-settings">
+        Agent settings
+      </Button>
       {build && (
         <footer className="build" title="The agent build these sessions are stamped with">
           {build}

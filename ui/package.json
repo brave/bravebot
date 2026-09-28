@@ -6,15 +6,15 @@
   "private": true,
   "main": "./out/main/index.js",
   "scripts": {
-    "postinstall": "npm run setup:electron",
+    "postinstall": "npm run setup:electron && node scripts/patch-leo-types.mjs",
     "name-dev-app": "node scripts/name-dev-app.mjs",
-    "deps": "node scripts/check-deps.mjs",
+    "deps": "node scripts/check-deps.mjs && node scripts/patch-leo-types.mjs",
     "prebridge": "npm run deps",
     "bridge": "./scripts/build-bridge.sh",
     "dev": "npm run deps && npm run setup:electron && npm run bridge && electron-vite dev",
     "build": "npm run bridge && tsc --noEmit && electron-vite build",
     "pretypecheck": "npm run deps",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "node scripts/check-nala.mjs && tsc --noEmit",
     "start": "electron-vite preview",
     "drive:smoke": "node scripts/drive-smoke.mjs",
     "drive": "npm run bridge && electron-vite build && node scripts/drive.mjs",
@@ -64,6 +64,7 @@
     "vite": "^7.3.6"
   },
   "dependencies": {
+    "@brave/leo": "github:brave/leo#ff620e4e53b70dc9868c2215c5cb56e8145e92df",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-markdown": "^10.1.0",

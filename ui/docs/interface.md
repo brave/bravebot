@@ -12,7 +12,7 @@ are in [setup](setup.md) and [development](development.md); the protocol underne
 - [Keys](#keys) and [tooltips](#tooltips)
 - [Layout](#layout)
 - [What is remembered](#what-is-remembered)
-- [Themes](#themes)
+- [Appearance](#appearance)
 
 ## What it looks like
 
@@ -210,7 +210,7 @@ Restore button would be saying something untrue.
 
 Each bot has a seed-based three-dimensional avatar rendered with three.js. Its stored
 seed keeps the identity stable across renames. New avatars use versioned traits;
-older seeds retain their original appearance. Avatar colours do not change with themes.
+older seeds retain their original appearance. Avatar colours do not change with appearance.
 
 The avatars share a WebGL renderer rather than allocating a context per bot.
 A flat canvas fallback uses the same traits when WebGL is unavailable. Motion is
@@ -393,7 +393,7 @@ was no way to find out that ⌘↵ sent a prompt.
 | `⌘.` | Cancel the running turn |
 | `⌥⌘←` / `⌥⌘→` | Fold the session list / the context panel |
 | right-click | A session row, or anything in the transcript |
-| `↑` `↓` `⏎` `Esc` | In the theme picker: preview, keep, and put back what was there |
+| `Esc` | In the appearance picker: put back what was there |
 | `Esc` | Cancel, from the composer — or clear the session filter, from the filter box |
 
 `Esc` is the one that is not in a menu. As an accelerator it would fire with no session open
@@ -472,7 +472,7 @@ src/main/                   Electron main: one window, one child process, a narr
   recents.ts                the projects opened before, which only this side writes
   forks.ts                  which session came out of which
   export.ts                 text, Markdown and the second renderer that draws the PDF
-  theme.ts                  the palettes on offer: the built-ins, plus JSON in themes/
+  theme.ts                  applying System / Light / Dark to nativeTheme
 src/preload/                the only thing the renderer can reach
   index.ts                  a handful of functions and one subscription
   export.ts                 the same, for the PDF renderer
@@ -481,9 +481,9 @@ src/renderer/               the React app
   commands.ts               what a chosen menu item does — and what it deliberately cannot
   columns.ts                widths, folds and the clamps on both
   transcript.ts             gathering a turn's tool calls into runs
-  theme.ts                  putting a palette on the window, as DOM rather than as a render
+  theme.ts                  putting System / Light / Dark on <html> data-theme
   export.tsx                the PDF entry point, using the components the window uses
-  components/               ThemePicker, Sidebar, Transcript, FileTree,
+  components/               AppearancePicker, Sidebar, Transcript, FileTree,
                             Diff, TrustPrompt and BotAvatar are the load-bearing ones
   avatar/stage.ts           one WebGL context, however many avatars, and their clock
   avatar/figure.ts          what a friendly figure is made of, and what a seed varies
@@ -496,7 +496,7 @@ src/shared/                 types both sides agree on
   bots.ts                   what a bot is, and which half of one a window may write
   recents.ts forks.ts       the two keys the renderer may read and never write
   export.ts                 the formats, and what each one leaves out
-  theme.ts                  the palette format, ported from the agent's own theme.rs
+  theme.ts                  Appearance names and parseAppearance
 scripts/                    the bridge build, the packager, the drivers and the demo
 build/                      the app icon, and the drawing it is made from
 docs/                       the protocol design, this document, testing and the demo
@@ -514,7 +514,7 @@ docs/                       the protocol design, this document, testing and the 
 | `recents` | The projects opened before, newest first |
 | `forks` | Which session came out of which |
 | `bots` | The bots defined here: name, purpose, avatar seed, checkout, model, conversation IDs and memory bookkeeping |
-| `theme` | Which palette the window is painted in, by name |
+| `theme` | Appearance: `system`, `light`, or `dark` |
 
 Additional state lives outside this file:
 
@@ -548,42 +548,17 @@ This replaces `layout.json`, `view.json`, `recents.json` and `forks.json`. Those
 the first launch after the change, so nobody loses their columns to a rename; they are then left
 where they are and never read again.
 
-### Themes
+### Appearance
 
-`View ▸ Theme…` opens a picker over the transcript. Moving the cursor repaints the window behind
-it, Enter keeps the choice, Escape puts back what was there.
+`View ▸ Appearance…` opens a picker with System, Light, and Dark. Previewing applies
+immediately; Use keeps the choice in `bravebot-ui.json`; Escape puts back what was there.
 
-`brave` is the default and means what this window has always looked like: the macOS palette in
-`styles.css`, following the system between light and dark. It is not a theme that happens to match
-— under `brave` no theme is applied at all, which is why it costs nothing, why the native sidebar
-blur survives it, and why an exported PDF stays white however dark the window is.
+System follows the OS (`prefers-color-scheme`). Light and Dark set `data-theme` on
+`<html>` so Leo (Nala) tokens stay put. The PDF export window is pinned with
+`data-theme="light"` on `export.html`.
 
-Twenty-one named schemes are compiled in beside it. A palette somebody writes goes in `themes/`,
-beside `bravebot-ui.json` under `userData`; the picker prints the path, and the window follows the
-file as it is edited rather than needing a relaunch. A file taking the name of a built-in replaces
-it. A broken one is not a theme, and does not appear.
-
-A palette names nine things — a ground, an ink, a quieter ink, and one each for finished, failed,
-running, a confinement, the session's own voice and the person at the keyboard:
-
-```json
-{ "defs": { "ground": "#2e3440" },
-  "background": "ground", "text": "#d8dee9", "muted": "#616e88",
-  "ok": "#a3be8c", "fail": "#bf616a", "running": "#ebcb8b",
-  "accent": "#b48ead", "note": "#d08770", "primary": "#88c0d0" }
-```
-
-Nine and not nineteen: `styles.css` mixes the window's other tokens from these in a
-`:root[data-theme]` block, so writing a palette is choosing colours rather than computing a rule at
-fourteen percent of your own ink. Any key left out, or set to `"none"`, is inherited — a palette
-that only changes the accent is two lines long, and one that inherits its background keeps the
-window blur that an opaque ground would cover.
-
-The format is a port of `crates/tui/src/theme.rs` in the agent's repository, kept faithful so that
-a palette written for one is recognisable in the other and `nord` means the same thing in both. It
-is a port and not a link: nothing here reads anything the agent owns. The agent is a subprocess
-this window drives, not something it is installed alongside, and a window that could not paint
-itself until the terminal had been run once would be depending on something it was never promised.
+Legacy palette names (`brave`, `nord`, and the rest) stored from earlier builds all
+resolve to System.
 
 
 ## Agent 0.9 controls

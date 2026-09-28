@@ -4,6 +4,7 @@ import { Modal } from './Modal'
 import { botHistory } from '../../shared/bot-history'
 import { useExperience } from '../experience'
 import type { SessionSummary } from '../../shared/protocol'
+import { Icon } from '../nala'
 /**
  * The other list in the left column: the bots somebody has defined.
  *
@@ -408,10 +409,7 @@ function BotForm({
               title="Try a new avatar appearance"
               onClick={() => setAvatar(newAvatarSeed(crypto.randomUUID()))}
             >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M20 7v5h-5M4 17v-5h5" />
-                <path d="M6.1 7a7 7 0 0 1 11.6-1L20 12M4 12l2.3 6A7 7 0 0 0 17.9 17" />
-              </svg>
+              <Icon name="refresh" style={{ '--leo-icon-size': '12px' } as React.CSSProperties} />
             </button>
           </div>
         )}

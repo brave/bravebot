@@ -12,10 +12,8 @@
  * where the columns were and how the session list is arranged, and the main process checks that
  * that is all they are.
  *
- * The theme pair belongs with them: which palette the window is painted in is a fact about this
- * window, kept in the same file as the columns. What crosses is a name and never a colour, and the
- * one path that comes back is there to be printed in a sentence — nothing here takes a path, so
- * this side still cannot name a file.
+ * The appearance pair belongs with them: System / Light / Dark is a fact about this
+ * window, kept in the same file as the columns. What crosses is a name and never a colour.
  */
 
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
@@ -28,19 +26,12 @@ import type { ExportOutcome, ExportRequest } from '../shared/export'
 import type { Fork } from '../shared/forks'
 import type { Bot } from '../shared/bots'
 import type { Listing, OpenOutcome, FilePreview, FileSearch, FileAttachment } from '../shared/files'
-import type { Theme } from '../shared/theme'
+import type { Appearance } from '../shared/theme'
 import type { Experience } from '../shared/experience'
 
-/** Everything the picker needs: what is on offer, which of them is chosen, and where to put one. */
+/** The appearance in force: System, Light, or Dark. */
 export interface ThemeState {
-  themes: Theme[]
-  chosen: string
-  /**
-   * Where a palette somebody writes goes. Shown, and nothing more — the picker prints it in a
-   * sentence so that "add your own" is an instruction rather than a hint. It is composed in the
-   * main process and never travels back.
-   */
-  directory: string
+  chosen: Appearance
 }
 
 export interface Answer<T> {
@@ -106,37 +97,17 @@ const api = {
     void ipcRenderer.invoke('bravebot:panels:write', panels)
   },
 
-  /**
-   * The palettes on offer and the one in force.
-   *
-   * The list is built in the main process from the set compiled into the app plus whatever JSON
-   * somebody has written into its themes directory, because reading a directory is not something
-   * this side does. The chosen name comes out of `bravebot-ui.json`, beside the columns.
-   */
+  /** The appearance in force. */
   readTheme(): Promise<ThemeState> {
     return ipcRenderer.invoke('bravebot:theme:read') as Promise<ThemeState>
   },
 
-  /**
-   * Choose a theme, by name.
-   *
-   * A name and nothing else, checked against the list on the way in — the renderer cannot hand
-   * over a colour to paint with any more than it can name a file to read. Best-effort and
-   * unanswered, like `writeLayout`: the window is already painted, and the round trip would only
-   * confirm that the memory of it was written down.
-   */
-  writeTheme(name: string): void {
+  /** Choose System / Light / Dark. Best-effort and unanswered, like `writeLayout`. */
+  writeTheme(name: Appearance): void {
     void ipcRenderer.invoke('bravebot:theme:write', name)
   },
 
-  /**
-   * Listen for the palettes on disk changing. Returns an unsubscribe.
-   *
-   * The second subscription on this bridge, and the reason there is one: writing a palette is an
-   * editing loop — save the file, look at the window, adjust a colour — and without this every
-   * turn of it would mean quitting the app. Carries the same shape `readTheme` answers with, so
-   * the renderer has one way of taking it in rather than two.
-   */
+  /** Listen for appearance changes written through the main process. */
   onThemeChanged(listener: (state: ThemeState) => void): () => void {
     const handler = (_event: IpcRendererEvent, state: ThemeState) => listener(state)
     ipcRenderer.on('bravebot:theme:changed', handler)

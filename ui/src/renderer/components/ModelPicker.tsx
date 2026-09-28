@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ModelCatalogue, ModelOption } from '../../shared/protocol'
 import { setExperience, useExperience } from '../experience'
+import { Button, Icon, Input } from '../nala'
 
 const CAPABILITIES: Record<string, [string, string]> = {
   text: ['Text', 'Generates text'],
@@ -32,7 +33,7 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
   const [revision, setRevision] = useState(0)
   const root = useRef<HTMLDivElement>(null)
   const trigger = useRef<HTMLButtonElement>(null)
-  const search = useRef<HTMLInputElement>(null)
+  const search = useRef<HTMLElement>(null)
   const list = useRef<HTMLDivElement>(null)
   const id = useId()
   const close = () => { setOpen(false); trigger.current?.focus() }
@@ -100,28 +101,29 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
     <button ref={trigger} className="model-trigger" type="button" disabled={disabled}
       title={`Choose model · ${model ?? label}`} aria-label={`Choose model: ${label}`}
       aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? id : undefined}
+      data-test="model-trigger"
       onClick={() => { setQuery(''); setActive(0); setOpen((value) => !value) }}>
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
-        <path d="m12 3 9 5-9 5-9-5 9-5Z M3 12l9 5 9-5 M3 16l9 5 9-5" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
+      <Icon name="layers" style={{ '--leo-icon-size': '20px' } as React.CSSProperties} />
       <span className="model-current" aria-hidden="true">{compactLabel}</span>
     </button>
-    {open && <div id={id} className="model-popover" role="dialog" aria-label={heading}
+    {open && <div id={id} className="model-popover" role="dialog" aria-label={heading} data-test="model-popover"
       onKeyDown={(event) => {
         if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close() }
       }}>
       <div className="model-heading"><strong>{heading}</strong>
-        <button type="button" className="model-refresh" disabled={loading} onClick={() => setRevision((n) => n + 1)}>Refresh</button>
+        <Button size="small" kind="plain-faint" isDisabled={loading} onClick={() => setRevision((n) => n + 1)} data-test="model-refresh">Refresh</Button>
       </div>
-      <input ref={search} className="model-search" type="search" placeholder="Search models…" value={query}
+      <Input ref={search} className="model-search" type="search" placeholder="Search models…" value={query}
         role="combobox" aria-label="Search models" aria-autocomplete="list" aria-expanded="true"
         aria-controls={`${id}-list`} aria-activedescendant={options[active] ? `${id}-option-${active}` : undefined}
-        onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => {
-          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-            event.preventDefault()
-            setActive((index) => Math.max(0, Math.min(options.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1))))
-          } else if (event.key === 'Enter') {
-            event.preventDefault()
+        data-test="model-search"
+        onChange={({ value }) => setQuery(value)} onKeyDown={({ innerEvent }) => {
+          const key = (innerEvent as unknown as KeyboardEvent).key
+          if (key === 'ArrowDown' || key === 'ArrowUp') {
+            innerEvent.preventDefault()
+            setActive((index) => Math.max(0, Math.min(options.length - 1, index + (key === 'ArrowDown' ? 1 : -1))))
+          } else if (key === 'Enter') {
+            innerEvent.preventDefault()
             if (options[active]) choose(options[active])
           }
         }} />

@@ -1,3 +1,7 @@
+## Unreleased
+
+ - Changed the desktop app to Brave's Nala (Leo) design system for colours, type scale, and shared controls. Appearance is System / Light / Dark; the earlier named palette picker is gone. Fonts stay the system stack.
+
 ## [0.12.0](https://github.com/brave/bravebot/releases/tag/v0.12.0)
 
  - Added `bravebot mcp enable` and `mcp disable`, and `-s` on `mcp add`, which put a server's request in the settings file for you, the project or this directory, so a server you add starts without editing JSON by hand. ([#939](https://github.com/brave/bravebot/issues/939))

@@ -1,14 +1,11 @@
 /**
- * What kind of thing a filename is, in the width of two characters.
+ * What kind of thing a filename is, in the width of an icon.
  *
- * Letters rather than pictograms, and for a measured reason: this app has no icon set, the one
- * drawing in it is `ForkIcon`, and a tree row is eleven pixels tall. A hand-drawn camera at that
- * size is a grey smudge, where `PNG` is the thing itself — and the extension is what the person
- * already reads the name for. Colour carries the family so a folder of one kind of file reads as
- * a block at a glance; the letters carry the detail when they look closer.
- *
+ * Leo icons coloured by family so a folder of one kind of file reads as a block at a glance.
  * Every colour is a token this window already uses. Nothing new was invented for a badge.
  */
+
+import { Icon, type IconName } from '../nala'
 
 /** Which family each extension belongs to. Extensions, not names: a name is not a type. */
 const FAMILIES: Record<string, string> = {
@@ -35,6 +32,18 @@ const FAMILIES: Record<string, string> = {
   zst: 'archive', rar: 'archive', dmg: 'archive', pkg: 'archive', whl: 'archive', jar: 'archive',
 }
 
+const ICONS: Record<string, IconName> = {
+  code: 'file-code',
+  data: 'file-table',
+  markup: 'code',
+  doc: 'file-text',
+  image: 'file-image',
+  media: 'file-video',
+  archive: 'file-backup',
+  plain: 'file-text',
+  folder: 'folder-open',
+}
+
 /**
  * The extension, or `''` for a name that has none.
  *
@@ -48,13 +57,11 @@ function extensionOf(name: string): string {
   return name.slice(dot + 1).toLowerCase()
 }
 
-/** The badge for one filename: three letters at most, and the family that colours them. */
+/** The family that colours a filename's badge. */
 export function glyphOf(name: string): { label: string; family: string } {
   const extension = extensionOf(name)
   if (extension === '') return { label: '·', family: 'plain' }
   return {
-    // An extension this table has never heard of still shows its own letters. The colour says
-    // "not a family I know"; blanking the label would throw away the one true thing about it.
     label: extension.slice(0, 3).toUpperCase(),
     family: FAMILIES[extension] ?? 'plain',
   }
@@ -65,13 +72,13 @@ export function glyphOf(name: string): { label: string; family: string } {
  *
  * `aria-hidden`, like every other glyph in this window: it is a second rendering of the
  * extension, which is already in the name being read out, and a screen reader announcing
- * "TS index dot ts" would be the tree saying it twice.
+ * "code index dot ts" would be the tree saying it twice.
  */
 export function FileGlyph({ name }: { name: string }): React.JSX.Element {
-  const { label, family } = glyphOf(name)
+  const { family } = glyphOf(name)
   return (
     <span className={`tree-glyph ${family}`} aria-hidden="true">
-      {label}
+      <Icon name={ICONS[family] ?? 'file-text'} style={{ '--leo-icon-size': '14px' } as React.CSSProperties} />
     </span>
   )
 }

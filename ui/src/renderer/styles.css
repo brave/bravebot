@@ -1,40 +1,40 @@
 /* A three-column chat layout, native to macOS.
    Light and dark both defined; the app follows the system. */
 
+/* App tokens alias Leo (Nala). Light/dark come from Leo's prefers-color-scheme /
+   data-theme rules; this layer only maps local names so the rest of the sheet can
+   migrate call site by call site. Fonts stay system via Leo's --leo-font-* tokens. */
+
 :root {
   color-scheme: light dark;
-  --bg: #ffffff;
-  --bg-side: rgba(246, 246, 248, 0.7);
-  --ink: #1c1c1e;
-  --ink-dim: #6b6b70;
-  --ink-faint: #9a9aa0;
-  --line: rgba(0, 0, 0, 0.09);
-  --accent: #f2600c;
-  --accent-ink: #ffffff;
-  /* The accent with the shout taken out — the orange mixed about half and half with
-     `--ink-dim`. For text that should read as *ours* without competing with the accent
-     proper, which in this window means a selected row and a button somebody can press. */
-  --accent-quiet: #9b4315;
-  --accent-text: #9b4315;
-  --bubble-user: #f2600c;
-  --bubble-user-ink: #ffffff;
-  --bubble-agent: #f1f1f4;
-  --added: #1a7f37;
-  --added-bg: rgba(26, 127, 55, 0.1);
-  --removed: #c0392b;
-  --removed-bg: rgba(192, 57, 43, 0.09);
-  --warn: #9a6700;
-  --warn-bg: rgba(212, 167, 44, 0.14);
-  --confine: #6f42c1;
-  --confine-bg: rgba(111, 66, 193, 0.09);
-  --radius: 10px;
-  --code-bg: rgba(0, 0, 0, 0.055);
-  /* The ground under the file tree. Lighter than the column it sits in, which is what makes the
-     tree read as a surface with an edge rather than as text loose in the sidebar. Its own token
-     because the two themes want opposite things of it: the window's own white here, and a lift
-     off the dark ground there — `--code-bg` would darken this one and `--bg` would sink that one. */
-  --tree-bg: #ffffff;
-  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  --bg: var(--leo-color-page-background);
+  /* Translucent so the macOS sidebar vibrancy still shows through. */
+  --bg-side: color-mix(in srgb, var(--leo-color-container-background) 70%, transparent);
+  --ink: var(--leo-color-text-primary);
+  --ink-dim: var(--leo-color-text-secondary);
+  --ink-faint: var(--leo-color-text-tertiary);
+  --line: var(--leo-color-divider-subtle);
+  --accent: var(--leo-color-button-background);
+  --accent-ink: var(--leo-color-schemes-on-primary);
+  --accent-quiet: var(--leo-color-text-interactive);
+  --accent-text: var(--leo-color-text-interactive);
+  --bubble-user: var(--leo-color-schemes-primary-container);
+  --bubble-user-ink: var(--leo-color-schemes-on-primary-container);
+  --bubble-agent: var(--leo-color-container-highlight);
+  --added: var(--leo-color-systemfeedback-success-icon);
+  --added-bg: var(--leo-color-systemfeedback-success-background);
+  --removed: var(--leo-color-systemfeedback-error-icon);
+  --removed-bg: var(--leo-color-systemfeedback-error-background);
+  --warn: var(--leo-color-systemfeedback-warning-icon);
+  --warn-bg: var(--leo-color-systemfeedback-warning-background);
+  --confine: var(--leo-color-systemfeedback-info-icon);
+  --confine-bg: var(--leo-color-systemfeedback-info-background);
+  --radius: var(--leo-radius-m);
+  --code-bg: var(--leo-color-container-highlight);
+  --tree-bg: var(--leo-color-container-background);
+  --mono: var(--leo-font-monospace-default);
+  --scrim: var(--leo-color-dialogs-scrim-background);
+  --hover-wash: var(--leo-color-container-interactive);
   /* Where the inset traffic lights stop: 16px of inset, three 12px lights, two 8px gaps,
      and a little air after them so a control does not look crowded by the window's own. */
   --lights: 78px;
@@ -43,99 +43,11 @@
   --panel-motion: var(--panel-duration) cubic-bezier(0.32, 0.72, 0, 1);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #1c1c1e;
-    --bg-side: rgba(30, 30, 32, 0.6);
-    --ink: #f2f2f7;
-    --ink-dim: #a1a1a6;
-    --ink-faint: #6e6e73;
-    --line: rgba(255, 255, 255, 0.1);
-    /* Mixed against the dark theme's own `--ink-dim`, so it lifts off the darker ground
-       rather than sinking into it the way the light-mode value would. */
-    --accent-quiet: #efa77f;
-    --accent-text: #efa77f;
-    --bubble-agent: #2c2c2e;
-    --added: #3fb950;
-    --added-bg: rgba(63, 185, 80, 0.13);
-    --removed: #f85149;
-    --removed-bg: rgba(248, 81, 73, 0.12);
-    --warn: #d4a72c;
-    --warn-bg: rgba(212, 167, 44, 0.12);
-    --confine: #b392f0;
-    --confine-bg: rgba(179, 146, 240, 0.12);
-    --code-bg: rgba(255, 255, 255, 0.07);
-    --tree-bg: rgba(255, 255, 255, 0.06);
-  }
-}
-
-/* ------------------------------------------------------------------ a theme
-
-   The two blocks above are the `brave` theme: this window's own macOS palette, following the
-   system. Nothing below touches them, and with no theme applied nothing below applies either —
-   which is what makes `brave` cost nothing rather than be a theme that happens to look the same.
-
-   A theme names nine things: a ground, an ink, a quieter ink, and one colour each for finished,
-   failed, running, a confinement, the session's own voice and the person at the keyboard.
-   `src/renderer/theme.ts` writes those onto the root as `--role-*`, and the rest of the nineteen
-   tokens are mixed from them here, in the sheet, beside the tokens they replace. That is the whole
-   reason a palette is nine values and not nineteen: somebody writing one should be choosing
-   colours, not computing a rule at fourteen percent of their own ink.
-
-   The mixes are the same relationships the hand-picked pairs above already have — a faint ink is
-   a muted one carried toward the ground, a tinted panel is its own colour at about an eighth. What
-   is not mixed is the three things arithmetic cannot decide: whether text on the accent should be
-   black or white, the same for the user's bubble, and whether this window's native scrollbars
-   should be drawn dark. Those arrive computed, by the same luma test the terminal uses.
-
-   `--bg` and `--bg-side` are held back into their own block, because painting the ground is the
-   one thing here that costs something: the window is drawn over a native sidebar blur, and an
-   opaque background covers it. A palette that inherits its ground keeps the blur. */
-
-:root[data-theme] {
-  color-scheme: var(--role-scheme);
-  --ink: var(--role-text);
-  /* The quiet ink is carried a little back toward the text rather than taken as-is, and the
-     faintest one *is* the palette's muted. The other way round — faint mixed further toward the
-     ground — is the obvious reading of these two names and it is wrong: `muted` is already the
-     dimmest thing a palette offers an opinion about, and several of the schemes here set it barely
-     off their own background. Diluting it further turned every timestamp and every aside in the
-     sessions column into something you had to know was there. */
-  --ink-dim: color-mix(in srgb, var(--role-muted) 72%, var(--role-text));
-  --ink-faint: var(--role-muted);
-  --line: color-mix(in srgb, var(--role-text) 14%, transparent);
-  --code-bg: color-mix(in srgb, var(--role-text) 7%, transparent);
-  --tree-bg: color-mix(in srgb, var(--role-text) 6%, var(--role-background));
-  --bubble-agent: color-mix(in srgb, var(--role-text) 9%, var(--role-background));
-  --accent: var(--role-note);
-  --accent-text: var(--role-text);
-  --accent-ink: var(--role-note-ink);
-  --accent-quiet: color-mix(in srgb, var(--role-note) 55%, var(--role-muted));
-  --bubble-user: var(--role-primary);
-  --bubble-user-ink: var(--role-primary-ink);
-  --added: var(--role-ok);
-  --added-bg: color-mix(in srgb, var(--role-ok) 13%, transparent);
-  --removed: var(--role-fail);
-  --removed-bg: color-mix(in srgb, var(--role-fail) 12%, transparent);
-  --warn: var(--role-running);
-  --warn-bg: color-mix(in srgb, var(--role-running) 13%, transparent);
-  --confine: var(--role-accent);
-  --confine-bg: color-mix(in srgb, var(--role-accent) 12%, transparent);
-}
-
-/* Only where the theme brought a ground of its own. `--bg-side` keeps a little of its
-   translucency so the sessions column still reads as a surface set back from the transcript,
-   which is the job it was doing when the blur was underneath it. */
-:root[data-theme][data-ground] {
-  --bg: var(--role-background);
-  --bg-side: color-mix(in srgb, var(--role-text) 4%, var(--role-background));
-}
-
 * { box-sizing: border-box; }
 
 body {
   margin: 0;
-  font: 13px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  font: var(--leo-font-default-regular);
   color: var(--ink);
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
@@ -237,33 +149,17 @@ button { font: inherit; color: inherit; cursor: pointer; }
    The tabs carry the traffic-light clearance that `.sessions-head` used to, because they are what
    is at the top of the column now — and both bodies get the same head below them, so the offset
    has to be above the pair rather than inside each. */
+/* The Sessions / Bots switch is a Leo segmented control. Traffic-light clearance sits
+   above it; the control itself must not be a window-drag region. */
 .sidebar-tabs {
-  display: flex;
-  gap: 2px;
-  padding: 46px 12px 0;
-  -webkit-app-region: drag;
-}
-
-.sidebar-tab {
+  display: block;
+  width: calc(100% - 24px);
+  margin: 46px 12px 8px;
+  padding: 0;
   -webkit-app-region: no-drag;
-  flex: 1;
-  padding: 5px 8px;
-  border: none;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: var(--ink-faint);
-  font: inherit;
-  font-size: 12px;
+  flex: none;
+  --leo-segmented-control-width: 100%;
 }
-.sidebar-tab:hover { color: var(--ink-dim); }
-/* The state is in the underline and in the weight of the word, not in a filled pill: this sits
-   above two lists that are themselves full of selectable rows, and a second selected-looking thing
-   in the same column would compete with whichever row is open. */
-.sidebar-tab[aria-pressed='true'] {
-  color: var(--ink);
-  border-bottom-color: var(--accent);
-}
-.sidebar-tab:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
 
 /* Each body owns the rest of the column, and the one not chosen is hidden rather than unmounted —
    a filter somebody typed and a form half filled in both survive a look at the other tab. The
@@ -292,12 +188,12 @@ button { font: inherit; color: inherit; cursor: pointer; }
   width: 100%;
   padding: 7px 10px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--leo-radius-m);
   background: transparent;
   color: var(--ink-dim);
   text-align: left;
 }
-.new:hover { background: rgba(127, 127, 127, 0.1); color: var(--ink); }
+.new:hover { background: var(--hover-wash); color: var(--ink); }
 .plus { color: var(--accent-text); font-weight: 600; margin-right: 4px; }
 
 /* The filter and the grouping toggle share a row, so the spacing above them is set once
@@ -305,14 +201,14 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .session-tools { display: flex; gap: 4px; align-items: stretch; margin-top: 6px; }
 .sidebar-actions { display: flex; align-items: stretch; gap: 4px; }
 .sidebar-create { flex: 1; min-width: 0; }
-.sidebar-actions .new { border-color: transparent; color: var(--ink); font-size: 13px; }
+.sidebar-actions .new { border-color: transparent; color: var(--ink); font-size: var(--leo-typography-components-tableheader-font-size); }
 .sidebar-actions .new-split { width: 100%; }
 .sidebar-actions .new-recent { background: transparent; }
-.sidebar-search-toggle, .sidebar-actions .session-group { display: grid; place-items: center; flex: none; width: 30px; min-height: 32px; border: 0; border-radius: 6px; background: transparent; color: var(--ink-dim); }
+.sidebar-search-toggle, .sidebar-actions .session-group { display: grid; place-items: center; flex: none; width: 30px; min-height: 32px; border: 0; border-radius: var(--leo-radius-s); background: transparent; color: var(--ink-dim); }
 .sidebar-search-toggle:hover, .sidebar-actions .session-group:hover { background: var(--bubble-agent); color: var(--ink); }
 .sidebar-search-toggle[aria-expanded='true'], .sidebar-actions .session-group[aria-pressed='true'] { background: var(--bubble-agent); color: var(--accent-text); }
 .sidebar-search { display: flex; gap: 4px; margin-top: 8px; }
-.sidebar-search button { width: 28px; border: 0; background: transparent; border-radius: 6px; font-size: 18px; }
+.sidebar-search button { width: 28px; border: 0; background: transparent; border-radius: var(--leo-radius-s); font-size: var(--leo-typography-components-button-jumbo-font-size); }
 
 /* `no-drag` for the same reason `.new` has it: the header this sits in is a window drag
    region, and without it the box cannot be clicked into or selected in — the pointer moves
@@ -325,11 +221,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
   min-width: 0;
   padding: 5px 8px;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: var(--leo-radius-s);
   background: var(--bg);
   color: var(--ink);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--leo-typography-small-regular-font-size);
 }
 .session-find::placeholder { color: var(--ink-faint); }
 .session-find:focus { outline: none; border-color: var(--accent); }
@@ -344,10 +240,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
   width: 28px;
   padding: 0;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: var(--leo-radius-s);
   background: var(--bg);
   color: var(--ink-faint);
-  font-size: 12px;
+  font-size: var(--leo-typography-small-regular-font-size);
   line-height: 1;
 }
 .session-group:hover { color: var(--ink); }
@@ -392,7 +288,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   border: 0;
   background: transparent;
   text-align: left;
-  font-size: 11px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -407,7 +303,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
    two that happen to be adjacent. Painted *over* the ground rather than replacing it — see
    the note there. */
 .session-group-head:hover {
-  background: linear-gradient(rgba(127, 127, 127, 0.1), rgba(127, 127, 127, 0.1)), var(--ground);
+  background: linear-gradient(var(--hover-wash), var(--hover-wash)), var(--ground);
 }
 .session-group-fold:focus-visible,
 .session-group-new:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
@@ -423,7 +319,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   border: 0;
   background: transparent;
   color: var(--ink-faint);
-  font-size: 13px;
+  font-size: var(--leo-typography-components-tableheader-font-size);
   font-weight: 600;
   line-height: 1;
 }
@@ -435,18 +331,18 @@ button { font: inherit; color: inherit; cursor: pointer; }
   margin-left: auto;
   flex: none;
   padding: 1px 6px;
-  border-radius: 8px;
-  background: rgba(127, 127, 127, 0.18);
-  font-size: 10px;
+  border-radius: var(--leo-radius-m);
+  background: var(--hover-wash);
+  font-size: var(--leo-typography-x-small-regular-font-size);
 }
 .session-group-section + .session-group-section { margin-top: 8px; }
 
 .empty, .none {
   color: var(--ink-faint);
   padding: 8px 6px;
-  font-size: 12px;
+  font-size: var(--leo-typography-small-regular-font-size);
 }
-.empty code { font-family: var(--mono); font-size: 11px; }
+.empty code { font-family: var(--mono); font-size: var(--leo-typography-x-small-regular-font-size); }
 
 .session {
   display: flex;
@@ -456,14 +352,23 @@ button { font: inherit; color: inherit; cursor: pointer; }
   padding: 8px 10px;
   margin-bottom: 1px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--leo-radius-m);
   background: transparent;
   text-align: left;
 }
-.session:hover { background: rgba(127, 127, 127, 0.1); }
-.session.current { background: var(--accent); }
-.session.current .session-title,
-.session.current .session-where { color: var(--accent-ink); opacity: 1; }
+.session:hover { background: var(--hover-wash); }
+/* Quiet selection: a filled primary wash reads as a button, not a row. */
+.session.current {
+  background: var(--leo-color-container-interactive);
+}
+.session.current .session-title {
+  color: var(--ink);
+  font-weight: 600;
+}
+.session.current .session-where {
+  color: var(--ink-dim);
+  opacity: 1;
+}
 
 .session-title {
   font-weight: 500;
@@ -471,14 +376,14 @@ button { font: inherit; color: inherit; cursor: pointer; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.session-where { font-size: 11px; color: var(--ink-faint); }
-.session.current .session-where { opacity: 0.85; }
+.session-where { font-size: var(--leo-typography-x-small-regular-font-size); color: var(--ink-faint); }
+.session.current .session-where { color: var(--ink-dim); }
 
 .build {
   padding: 8px 14px;
   border-top: 1px solid var(--line);
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
   color: var(--ink-faint);
 }
 
@@ -495,7 +400,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   text-align: center;
   color: var(--ink-faint);
 }
-.transcript.empty-state .empty-body h1 { font-size: 17px; margin: 0 0 6px; color: var(--ink-dim); }
+.transcript.empty-state .empty-body h1 { font-size: var(--leo-typography-large-regular-font-size); margin: 0 0 6px; color: var(--ink-dim); }
 
 .transcript-head {
   position: relative;
@@ -520,13 +425,13 @@ button { font: inherit; color: inherit; cursor: pointer; }
    toggle off the edge of the window. */
 .head-titles { flex: 1; min-width: 0; }
 
-.transcript-head h1 { font-size: 14px; margin: 0; font-weight: 600; }
+.transcript-head h1 { font-size: var(--leo-typography-default-regular-font-size); margin: 0; font-weight: 600; }
 .transcript-head .where {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
   color: var(--ink-faint);
   font-family: var(--mono);
 }
@@ -544,13 +449,13 @@ button { font: inherit; color: inherit; cursor: pointer; }
   height: 22px;
   padding: 0;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--leo-radius-s);
   background: transparent;
   color: var(--ink-faint);
-  font-size: 15px;
+  font-size: var(--leo-typography-default-regular-font-size);
   line-height: 1;
 }
-.fold-toggle:hover { background: rgba(127, 127, 127, 0.12); color: var(--ink); }
+.fold-toggle:hover { background: var(--hover-wash); color: var(--ink); }
 .fold-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* Same duration and easing as the panels' chevrons, so both kinds of fold in this window
    read as one idea. A separate class from `.chevron`, though: sharing one would tie the
@@ -560,10 +465,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .note {
   margin: 6px 0 0;
   padding: 5px 9px;
-  border-radius: 6px;
+  border-radius: var(--leo-radius-s);
   background: var(--warn-bg);
   color: var(--warn);
-  font-size: 11px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
 }
 
 /* Said to a screen reader and to nobody else. Not `display: none`, which is not said at all. */
@@ -593,7 +498,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   height: 24px;
   padding: 0;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: var(--leo-radius-s);
   /* A chip rather than a bare glyph. `⑂` is a thin mark, and at this size, unbacked, it reads
      as a smudge beside the bubble rather than as something to press. */
   background: var(--bg);
@@ -633,10 +538,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .fork-banner {
   margin: 6px 0 0;
   padding: 5px 9px;
-  border-radius: 6px;
+  border-radius: var(--leo-radius-s);
   border: 1px solid var(--line);
   color: var(--ink-dim);
-  font-size: 11px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
 }
 
 /* A long title is the common case, and it must not push the sentence onto a second line and
@@ -671,7 +576,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
    one did I ask for" and then stops being a question. */
 .entry-hit.focused > * {
   animation: fork-landed 1.6s ease-out;
-  border-radius: 8px;
+  border-radius: var(--leo-radius-m);
 }
 /* Two rings, the inner one the page's own colour: a prompt bubble is already accent-coloured,
    and an accent ring drawn against it is not a mark at all. The gap is what makes this read on
@@ -736,10 +641,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
   margin: 0.9em 0 0.4em;
   font-weight: 600;
   line-height: 1.3;
-  font-size: 13px;
+  font-size: var(--leo-typography-components-tableheader-font-size);
 }
-.bubble.assistant h1 { font-size: 15px; }
-.bubble.assistant h2 { font-size: 14px; }
+.bubble.assistant h1 { font-size: var(--leo-typography-default-regular-font-size); }
+.bubble.assistant h2 { font-size: var(--leo-typography-default-regular-font-size); }
 
 .bubble.assistant ul,
 .bubble.assistant ol { margin: 0 0 0.7em; padding-left: 1.4em; }
@@ -756,9 +661,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 .bubble.assistant code {
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
   padding: 1px 4px;
-  border-radius: 4px;
+  border-radius: var(--leo-radius-xs);
   background: var(--code-bg);
 }
 .bubble.assistant pre {
@@ -766,7 +671,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   padding: 8px 10px;
   max-width: 100%;
   overflow-x: auto;
-  border-radius: 6px;
+  border-radius: var(--leo-radius-s);
   background: var(--code-bg);
 }
 .bubble.assistant pre code {
@@ -780,7 +685,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 
 .md-table-wrap { max-width: 100%; overflow-x: auto; margin: 0.7em 0; }
-.bubble.assistant table { border-collapse: collapse; font-size: 12px; }
+.bubble.assistant table { border-collapse: collapse; font-size: var(--leo-typography-small-regular-font-size); }
 .bubble.assistant th,
 .bubble.assistant td {
   border: 1px solid var(--line);
@@ -795,16 +700,16 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .md-dead-link { text-decoration: underline dotted var(--ink-faint); }
 .md-image {
   padding: 0 5px;
-  border-radius: 4px;
+  border-radius: var(--leo-radius-xs);
   background: var(--code-bg);
   color: var(--ink-dim);
-  font-size: 10px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
 }
 .bubble.failed {
   background: var(--removed-bg);
   color: var(--removed);
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--leo-typography-small-regular-font-size);
   max-width: 100%;
 }
 
@@ -818,11 +723,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
   padding: 3px 8px;
   margin: 2px 0;
   border-left: 2px solid var(--line);
-  font-size: 12px;
+  font-size: var(--leo-typography-small-regular-font-size);
   color: var(--ink-dim);
 }
 .tool .verb { font-weight: 600; color: var(--ink); }
-.tool .target { font-family: var(--mono); font-size: 11px; }
+.tool .target { font-family: var(--mono); font-size: var(--leo-typography-x-small-regular-font-size); }
 .tool .note { color: var(--ink-faint); }
 /* The planner's reason for the call, set apart from the outcome beside it. */
 .tool .why { font-style: italic; }
@@ -830,7 +735,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .tool.failed .note { color: var(--removed); }
 .tool.running .ellipsis { color: var(--accent-text); }
 /* A replayed line has no outcome to show, so it is drawn quieter than a live one. */
-.tool.replayed { opacity: 0.55; font-family: var(--mono); font-size: 11px; }
+.tool.replayed { opacity: 0.55; font-family: var(--mono); font-size: var(--leo-typography-x-small-regular-font-size); }
 
 /* A run of calls, and the lid on it. The header is the quietest thing in the transcript
    that is still a control: this is apparatus between a question and its answer, and it
@@ -845,7 +750,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   border-left: 2px solid var(--line);
   border-radius: 0;
   background: transparent;
-  font-size: 11px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
   color: var(--ink-faint);
 }
 .tool-run-head:hover { color: var(--ink-dim); }
@@ -853,10 +758,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 .confined {
   padding: 0 5px;
-  border-radius: 4px;
+  border-radius: var(--leo-radius-xs);
   background: var(--confine-bg);
   color: var(--confine);
-  font-size: 10px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
   text-transform: uppercase;
   letter-spacing: 0.03em;
 }
@@ -881,13 +786,13 @@ button { font: inherit; color: inherit; cursor: pointer; }
   padding: 6px 10px;
   background: var(--bg);
   border-bottom: 1px solid var(--confine);
-  font-size: 11px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
 }
 .quarantine-head .mark {
   color: var(--confine);
   font-weight: 700;
   text-transform: uppercase;
-  font-size: 10px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
 }
 .quarantine-head .origin { font-family: var(--mono); flex: 1; overflow: hidden; text-overflow: ellipsis; }
 .quarantine-head .label { font-family: var(--mono); color: var(--ink-faint); }
@@ -896,7 +801,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   padding: 8px 10px;
   background: var(--bg);
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
   white-space: pre-wrap;
   max-height: 180px;
   overflow: auto;
@@ -905,7 +810,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   padding: 5px 10px;
   background: var(--bg);
   border-top: 1px solid var(--line);
-  font-size: 10px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
   color: var(--ink-faint);
 }
 
@@ -951,14 +856,14 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .stages .argv {
   display: block;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--leo-typography-small-regular-font-size);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 .stages .resolved {
   display: block;
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
   color: var(--ink-faint);
   overflow-wrap: anywhere;
 }
@@ -976,7 +881,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .ask-question { margin: 0; padding: 10px 12px; border: 0; border-bottom: 1px solid var(--line); }
 .ask-question legend { display: flex; align-items: baseline; gap: 6px; padding: 0; }
 .ask-question .header {
-  font-size: 10px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -985,10 +890,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
 /* Said once, next to the question it applies to. A person picking a second option should
    not have to discover from the interface's behaviour that they were allowed to. */
 .ask-question .any {
-  font-size: 10px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
   padding: 0 5px;
-  border-radius: 4px;
-  background: rgba(127, 127, 127, 0.16);
+  border-radius: var(--leo-radius-xs);
+  background: var(--hover-wash);
   color: var(--ink-dim);
 }
 .ask-question .question { margin: 4px 0 8px; }
@@ -1000,13 +905,13 @@ button { font: inherit; color: inherit; cursor: pointer; }
   text-align: left;
   padding: 6px 9px;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: var(--leo-radius-s);
   background: transparent;
 }
 .choice:hover { border-color: var(--ink-faint); }
 .choice.picked { border-color: var(--accent); background: var(--warn-bg); }
-.choice .label { display: block; font-size: 12px; }
-.choice .detail { display: block; font-size: 11px; color: var(--ink-faint); }
+.choice .label { display: block; font-size: var(--leo-typography-small-regular-font-size); }
+.choice .detail { display: block; font-size: var(--leo-typography-x-small-regular-font-size); color: var(--ink-faint); }
 
 /* Every question keeps one, including those with choices: the options may all be wrong, and
    a person who has to pick anyway has been put words into their mouth. */
@@ -1014,18 +919,18 @@ button { font: inherit; color: inherit; cursor: pointer; }
   width: 100%;
   padding: 5px 8px;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: var(--leo-radius-s);
   background: var(--bg);
   color: var(--ink);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--leo-typography-small-regular-font-size);
 }
 
-.confirm-actions .approve .aside { opacity: 0.75; font-size: 11px; }
+.confirm-actions .approve .aside { opacity: 0.75; font-size: var(--leo-typography-x-small-regular-font-size); }
 
 .asked-answer { padding: 8px 12px; border-bottom: 1px solid var(--line); }
-.asked-answer .question { font-size: 12px; color: var(--ink-dim); }
-.asked-answer .given { font-size: 12px; margin-top: 2px; }
+.asked-answer .question { font-size: var(--leo-typography-small-regular-font-size); color: var(--ink-dim); }
+.asked-answer .given { font-size: var(--leo-typography-small-regular-font-size); margin-top: 2px; }
 .asked-answer .given::before { content: '→ '; color: var(--ink-faint); }
 
 /* Remembering answers every later question about these programs, so it is drawn as the
@@ -1042,19 +947,19 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 .confirm-head .intent {
   text-transform: uppercase;
-  font-size: 10px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
   font-weight: 700;
   color: var(--accent-text);
 }
-.confirm-head .path { font-family: var(--mono); font-size: 12px; flex: 1; }
-.confirm-head .counts { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); }
+.confirm-head .path { font-family: var(--mono); font-size: var(--leo-typography-small-regular-font-size); flex: 1; }
+.confirm-head .counts { font-family: var(--mono); font-size: var(--leo-typography-x-small-regular-font-size); color: var(--ink-faint); }
 
 .warn {
   margin: 0;
   padding: 7px 12px;
   background: var(--warn-bg);
   color: var(--warn);
-  font-size: 11px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
   border-bottom: 1px solid var(--line);
 }
 
@@ -1063,7 +968,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   max-height: 320px;
   overflow: auto;
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
   line-height: 1.45;
 }
 .diff .line { display: flex; padding: 0 8px; white-space: pre-wrap; }
@@ -1081,7 +986,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 .confirm-actions button, .trust-actions button {
   padding: 6px 14px;
-  border-radius: 7px;
+  border-radius: var(--leo-radius-s);
   border: 1px solid var(--line);
   background: transparent;
 }
@@ -1099,7 +1004,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .decided {
   padding: 8px 12px;
   border-top: 1px solid var(--line);
-  font-size: 11px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
 }
 .decided.approve { color: var(--added); }
 .decided.reject { color: var(--removed); }
@@ -1111,10 +1016,14 @@ button { font: inherit; color: inherit; cursor: pointer; }
   gap: 8px;
   padding: 8px 2px;
   color: var(--ink-dim);
-  font-size: 12px;
+  font-size: var(--leo-typography-small-regular-font-size);
+}
+.spinner, .working-ring {
+  width: 16px; height: 16px;
+  --leo-progressring-size: 16px;
+  --leo-progressring-color: var(--accent);
 }
 .spinner {
-  width: 9px; height: 9px;
   border: 2px solid var(--accent);
   border-right-color: transparent;
   border-radius: 50%;
@@ -1130,9 +1039,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
   margin-left: auto;
   padding: 3px 10px;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--leo-radius-s);
   background: transparent;
-  font-size: 11px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
 }
 
 .composer {
@@ -1158,27 +1067,25 @@ button { font: inherit; color: inherit; cursor: pointer; }
   resize: vertical;
 }
 .composer textarea:focus { outline: none; border-color: var(--accent); }
-.composer .send {
-  align-self: flex-end;
-  height: 38px;
-  padding: 9px 18px;
-  border: 0;
-  border-radius: var(--radius);
-  background: var(--accent);
-  color: var(--accent-ink);
-  font-weight: 500;
+/* Leo's button host defaults to flex-grow: 1; keep Send a compact trailing action. */
+.composer .send,
+.composer-toolbar .send,
+.composer-toolbar .stop {
+  flex-grow: 0;
+  align-self: center;
+  width: auto;
 }
 .composer .send:disabled { opacity: 0.4; cursor: default; }
 .composer .export-open { height: 38px; }
 
 .model-picker { position: relative; align-self: flex-end; flex: 0 1 auto; min-width: 70px; max-width: 160px; }
 .model-trigger {
-  display: flex; align-items: center; gap: 6px; width: 100%; height: 38px;
+  display: flex; align-items: center; gap: 6px; width: 100%; height: 36px;
   padding: 0 8px; border: 1px solid var(--line); border-radius: var(--radius);
   color: var(--ink-dim); background: var(--bg); cursor: pointer;
 }
 .model-trigger svg { flex: 0 0 auto; }
-.model-current { font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-current { font-size: var(--leo-typography-x-small-regular-font-size); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .model-trigger:hover, .model-trigger[aria-expanded="true"] { color: var(--accent-text); border-color: var(--accent); }
 .model-trigger:disabled { cursor: default; }
 .model-trigger:focus-visible, .model-refresh:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -1186,28 +1093,28 @@ button { font: inherit; color: inherit; cursor: pointer; }
   position: absolute; z-index: 30; bottom: calc(100% + 10px); left: 0;
   width: min(360px, 60vw); max-height: min(420px, 65vh);
   display: flex; flex-direction: column; padding: 12px;
-  border: 1px solid var(--line); border-radius: 12px; background: var(--bg);
-  box-shadow: 0 12px 36px #0003; color: var(--ink);
+  border: 1px solid var(--line); border-radius: var(--leo-radius-l); background: var(--bg);
+  box-shadow: var(--leo-effect-elevation-03); color: var(--ink);
 }
 .model-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
-.model-heading strong { font-size: 12px; font-weight: 600; }
-.model-refresh { border: 0; background: transparent; color: var(--accent-text); font: inherit; font-size: 11px; cursor: pointer; }
+.model-heading strong { font-size: var(--leo-typography-small-regular-font-size); font-weight: 600; }
+.model-refresh { border: 0; background: transparent; color: var(--accent-text); font: inherit; font-size: var(--leo-typography-x-small-regular-font-size); cursor: pointer; }
 .model-refresh:disabled { opacity: .45; cursor: default; }
-.model-search { width: 100%; padding: 8px 10px; font: inherit; color: var(--ink); background: var(--bg-side); border: 1px solid var(--line); border-radius: 6px; }
+.model-search { width: 100%; padding: 8px 10px; font: inherit; color: var(--ink); background: var(--bg-side); border: 1px solid var(--line); border-radius: var(--leo-radius-s); }
 .model-search:focus { outline: none; border-color: var(--accent); }
 .model-options { overflow-y: auto; min-height: 0; margin-top: 8px; }
-.model-option { display: flex; align-items: center; gap: 8px; padding: 8px 6px; border-radius: 6px; cursor: pointer; }
+.model-option { display: flex; align-items: center; gap: 8px; padding: 8px 6px; border-radius: var(--leo-radius-s); cursor: pointer; }
 .model-option.active { background: var(--bg-side); }
 .model-option[aria-selected="true"] .model-name { color: var(--accent-text); }
 .model-check { width: 14px; flex: 0 0 auto; color: var(--accent-text); }
 .model-description { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
-.model-name { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.model-detail { font-size: 10px; color: var(--ink-dim); }
+.model-name { font-size: var(--leo-typography-small-regular-font-size); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-detail { font-size: var(--leo-typography-x-small-regular-font-size); color: var(--ink-dim); }
 .model-capabilities { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
-.model-capability { font-size: 9px; line-height: 14px; padding: 0 4px; border: 1px solid var(--line); border-radius: 4px; color: var(--ink-dim); }
-.model-default { font-size: 10px; color: var(--ink-dim); border: 1px solid var(--line); padding: 2px 5px; border-radius: 4px; }
-.model-status { font-size: 11px; color: var(--ink-dim); margin: 8px 0 0; }
-.model-footnote { font-size: 10px; color: var(--ink-dim); border-top: 1px solid var(--line); margin-top: 8px; padding-top: 8px; }
+.model-capability { font-size: var(--leo-typography-x-small-regular-font-size); line-height: 14px; padding: 0 4px; border: 1px solid var(--line); border-radius: var(--leo-radius-xs); color: var(--ink-dim); }
+.model-default { font-size: var(--leo-typography-x-small-regular-font-size); color: var(--ink-dim); border: 1px solid var(--line); padding: 2px 5px; border-radius: var(--leo-radius-xs); }
+.model-status { font-size: var(--leo-typography-x-small-regular-font-size); color: var(--ink-dim); margin: 8px 0 0; }
+.model-footnote { font-size: var(--leo-typography-x-small-regular-font-size); color: var(--ink-dim); border-top: 1px solid var(--line); margin-top: 8px; padding-top: 8px; }
 
 /* ---------------------------------------------------------------- context */
 
@@ -1225,7 +1132,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .panel-bar {
   display: flex;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: var(--leo-radius-s);
   overflow: hidden;
   /* Nothing of its own. The lit segments are the light ones, so the ground has to be the
      column's, or the panels that are *off* would be the ones glowing white. */
@@ -1244,7 +1151,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   color: var(--ink-faint);
 }
 .panel-pick:first-child { border-left: 0; }
-.panel-pick:hover { background: rgba(127, 127, 127, 0.12); color: var(--ink-dim); }
+.panel-pick:hover { background: var(--hover-wash); color: var(--ink-dim); }
 /* On, in the accent and on a ground of its own. Two differences rather than one: colour alone
    would leave the state invisible to anybody who cannot see this particular orange, and
    `aria-pressed` is what says it to a screen reader either way. */
@@ -1266,7 +1173,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   padding: 10px 14px;
   border: 0;
   background: transparent;
-  font-size: 11px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -1277,9 +1184,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .panel-head .count {
   margin-left: auto;
   padding: 1px 6px;
-  border-radius: 8px;
-  background: rgba(127, 127, 127, 0.18);
-  font-size: 10px;
+  border-radius: var(--leo-radius-m);
+  background: var(--hover-wash);
+  font-size: var(--leo-typography-x-small-regular-font-size);
 }
 /* Opening a panel grows it into place rather than snapping. The mechanism is in Fold.tsx,
    which explains why it is a grid track and not a height. Shared with the runs of tool
@@ -1310,7 +1217,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 .panel-inner { padding: 0 14px 12px; }
 
-.todos, .files, .confined-list { list-style: none; margin: 0; padding: 0; font-size: 12px; }
+.todos, .files, .confined-list { list-style: none; margin: 0; padding: 0; font-size: var(--leo-typography-small-regular-font-size); }
 .todos li { display: flex; gap: 6px; padding: 3px 0; color: var(--ink-dim); }
 .todos li.done { text-decoration: line-through; color: var(--ink-faint); }
 .todos li.active { color: var(--ink); font-weight: 500; }
@@ -1324,14 +1231,14 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 .files code {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .files .tag {
   margin-left: auto;
-  font-size: 9px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
   text-transform: uppercase;
   color: var(--ink-faint);
 }
@@ -1341,8 +1248,8 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .files li.waiting .tag { color: var(--warn); }
 
 .confined-list li { padding: 5px 0; border-bottom: 1px solid var(--line); }
-.confined-list .origin { font-family: var(--mono); font-size: 11px; word-break: break-all; }
-.confined-list .detail { font-size: 10px; color: var(--ink-faint); }
+.confined-list .origin { font-family: var(--mono); font-size: var(--leo-typography-x-small-regular-font-size); word-break: break-all; }
+.confined-list .detail { font-size: var(--leo-typography-x-small-regular-font-size); color: var(--ink-faint); }
 
 /* ---------------------------------------------------------------- trust */
 
@@ -1351,29 +1258,29 @@ button { font: inherit; color: inherit; cursor: pointer; }
   inset: 0;
   display: grid;
   place-items: center;
-  background: rgba(0, 0, 0, 0.4);
+  background: var(--scrim);
   backdrop-filter: blur(3px);
 }
 .trust {
   width: 460px;
   padding: 22px 24px;
-  border-radius: 14px;
+  border-radius: var(--leo-radius-l);
   background: var(--bg);
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 18px 60px var(--scrim);
 }
-.trust h2 { margin: 0 0 10px; font-size: 15px; }
+.trust h2 { margin: 0 0 10px; font-size: var(--leo-typography-default-regular-font-size); }
 .trust .path {
   display: block;
   padding: 7px 10px;
   margin-bottom: 12px;
-  border-radius: 6px;
+  border-radius: var(--leo-radius-s);
   background: var(--bubble-agent);
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
   word-break: break-all;
 }
-.trust p { margin: 0 0 9px; color: var(--ink-dim); font-size: 12px; }
-.trust .aside { color: var(--ink-faint); font-size: 11px; }
+.trust p { margin: 0 0 9px; color: var(--ink-dim); font-size: var(--leo-typography-small-regular-font-size); }
+.trust .aside { color: var(--ink-faint); font-size: var(--leo-typography-x-small-regular-font-size); }
 .trust .aside code { font-family: var(--mono); word-break: break-all; }
 .trust-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 
@@ -1396,7 +1303,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   flex: 1;
   min-width: 0;
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
   color: var(--ink-faint);
   /* Ellipsised on the right with the tooltip carrying the whole string, the same bargain every
      other path in this column strikes. Clipping from the front would keep the more interesting
@@ -1412,16 +1319,16 @@ button { font: inherit; color: inherit; cursor: pointer; }
   height: 18px;
   padding: 0;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--leo-radius-xs);
   background: transparent;
   color: var(--ink-faint);
-  font-size: 11px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
   line-height: 1;
 }
-.tree-tool:hover { background: rgba(127, 127, 127, 0.14); color: var(--ink-dim); }
+.tree-tool:hover { background: var(--hover-wash); color: var(--ink-dim); }
 .tree-tool.on { color: var(--accent-text); }
 /* Wide enough for two characters, and in the mono face so `.*` reads as the filename it is. */
-.tree-tool.dotfiles { width: auto; padding: 0 4px; font-family: var(--mono); font-size: 10px; }
+.tree-tool.dotfiles { width: auto; padding: 0 4px; font-family: var(--mono); font-size: var(--leo-typography-x-small-regular-font-size); }
 
 /* The same box as the session filter next door, at the size this column speaks in. One shape for
    "type to narrow this list" wherever the window offers it. */
@@ -1431,11 +1338,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
   margin-bottom: 6px;
   padding: 4px 7px;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: var(--leo-radius-s);
   background: var(--tree-bg);
   color: var(--ink);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
 }
 .tree-find::placeholder { color: var(--ink-faint); }
 .tree-find:focus { outline: none; border-color: var(--accent); }
@@ -1443,13 +1350,13 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 .tree-note {
   margin: 0 0 6px;
-  font-size: 10px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
   color: var(--ink-faint);
 }
 
 .tree-problem {
   margin: 0 0 6px;
-  font-size: 11px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
   color: var(--warn);
 }
 
@@ -1480,7 +1387,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .tree-tools .tree-tool { display: grid; place-items: center; min-width: 28px; height: 28px; }
 .tree-search { display: flex; gap: 4px; flex: none; margin-bottom: 8px; }
 .tree-search .tree-find { flex: 1; min-width: 0; margin-bottom: 0; }
-.tree-search .tree-tool { width: 28px; height: 28px; font-size: 18px; }
+.tree-search .tree-tool { width: 28px; height: 28px; font-size: var(--leo-typography-components-button-jumbo-font-size); }
 
 .tree-list { list-style: none; margin: 0; padding: 0; }
 
@@ -1494,14 +1401,14 @@ button { font: inherit; color: inherit; cursor: pointer; }
   width: 100%;
   padding: 2px 4px 2px calc(4px + var(--depth) * 11px);
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--leo-radius-xs);
   background: transparent;
   /* Full-strength ink. These are names somebody is reading one by one to find one of them,
      unlike the dimmed lists above, which are read as a group and glanced at. */
   color: var(--ink);
   text-align: left;
 }
-.tree-row:hover { background: rgba(127, 127, 127, 0.16); }
+.tree-row:hover { background: var(--hover-wash); }
 /* A folder is the thing you aim at to get somewhere, so it takes the weight and a file does not. */
 .tree-row.directory { font-weight: 500; }
 
@@ -1509,23 +1416,20 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .tree-row .chevron {
   flex: none;
   width: 9px;
-  font-size: 11px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
   color: var(--ink-faint);
 }
-/* Two or three letters saying what kind of file this is. A fixed box so every name in the
-   folder starts at the same x — a badge that sized itself to its own letters would leave the
-   column ragged, which is the one thing a list of filenames cannot afford. */
+/* Icon badge saying what kind of file this is. A fixed box so every name in the
+   folder starts at the same x. */
 .tree-glyph {
   flex: none;
   width: 23px;
-  font-family: var(--mono);
-  font-size: 8px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  text-align: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   color: var(--ink-faint);
 }
-.tree-glyph.folder { font-size: 11px; font-weight: 400; }
+.tree-glyph.folder { color: var(--ink-faint); }
 .tree-glyph.code { color: var(--accent-quiet); }
 .tree-glyph.data { color: var(--warn); }
 .tree-glyph.markup { color: var(--confine); }
@@ -1536,7 +1440,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 .tree-name {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1544,11 +1448,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 /* Both of these are said in the panel rather than in a dialog: they are about one folder, and the
    folder is on screen. */
-.tree-body .none { padding: 4px 6px; font-size: 11px; }
+.tree-body .none { padding: 4px 6px; font-size: var(--leo-typography-x-small-regular-font-size); }
 .tree-list .none { padding-left: 12px; }
 .tree-more {
   padding: 3px 4px;
-  font-size: 10px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
   color: var(--ink-faint);
 }
 
@@ -1560,22 +1464,22 @@ button { font: inherit; color: inherit; cursor: pointer; }
   background: var(--bg);
   overflow-y: auto;
 }
-.unconfigured h2 { margin: 0 0 12px; font-size: 16px; }
+.unconfigured h2 { margin: 0 0 12px; font-size: var(--leo-typography-large-regular-font-size); }
 .unconfigured p { color: var(--ink-dim); max-width: 60ch; }
 .unconfigured ol { color: var(--ink-dim); max-width: 60ch; padding-left: 20px; }
 .unconfigured li { margin-bottom: 7px; }
 .unconfigured code {
   padding: 1px 5px;
-  border-radius: 4px;
+  border-radius: var(--leo-radius-xs);
   background: var(--bubble-agent);
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
 }
-.unconfigured .aside { font-size: 11px; color: var(--ink-faint); }
-.unconfigured details { margin-top: 18px; font-size: 11px; color: var(--ink-faint); }
+.unconfigured .aside { font-size: var(--leo-typography-x-small-regular-font-size); color: var(--ink-faint); }
+.unconfigured details { margin-top: 18px; font-size: var(--leo-typography-x-small-regular-font-size); color: var(--ink-faint); }
 .unconfigured pre {
   padding: 8px 10px;
-  border-radius: 6px;
+  border-radius: var(--leo-radius-s);
   background: var(--bubble-agent);
   font-family: var(--mono);
   white-space: pre-wrap;
@@ -1591,21 +1495,21 @@ button { font: inherit; color: inherit; cursor: pointer; }
   display: flex;
   flex-direction: column;
   padding: 22px 24px;
-  border-radius: 14px;
+  border-radius: var(--leo-radius-l);
   background: var(--bg);
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 18px 60px var(--scrim);
 }
-.notice h2 { margin: 0 0 12px; font-size: 15px; }
+.notice h2 { margin: 0 0 12px; font-size: var(--leo-typography-default-regular-font-size); }
 .notice-body {
   flex: 1;
   min-height: 0;
   margin: 0;
   padding: 10px 12px;
   overflow: auto;
-  border-radius: 6px;
+  border-radius: var(--leo-radius-s);
   background: var(--bubble-agent);
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
   line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
@@ -1625,10 +1529,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
   width: 26px;
   padding: 0;
   border: none;
-  border-radius: 7px;
+  border-radius: var(--leo-radius-s);
   background: var(--code-bg);
   color: var(--ink-dim);
-  font-size: 11px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
   cursor: pointer;
 }
 .new-recent:hover { color: var(--ink); }
@@ -1641,10 +1545,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
   min-width: 220px;
   max-width: 380px;
   padding: 4px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--bg);
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--leo-color-divider-subtle);
+  border-radius: var(--leo-radius-m);
+  background: var(--leo-color-container-background);
+  color: var(--leo-color-text-primary);
+  box-shadow: var(--leo-effect-elevation-03, 0 18px 60px var(--scrim));
   animation: popmenu-in 90ms ease-out;
 }
 @keyframes popmenu-in {
@@ -1656,29 +1561,29 @@ button { font: inherit; color: inherit; cursor: pointer; }
   width: 100%;
   padding: 5px 9px;
   border: none;
-  border-radius: 5px;
+  border-radius: var(--leo-radius-s, 5px);
   background: none;
-  color: var(--ink);
+  color: var(--leo-color-text-primary);
   font: inherit;
   text-align: left;
   cursor: pointer;
 }
 .popitem.active, .popitem:hover:not([aria-disabled]) {
-  background: var(--accent);
-  color: var(--accent-ink);
+  background: var(--leo-color-container-interactive);
+  color: var(--leo-color-text-interactive);
 }
 .popitem[aria-disabled] { opacity: 0.45; cursor: default; }
 .popitem-label { display: block; }
 .popitem-detail {
   display: block;
   font-family: var(--mono);
-  font-size: 10px;
-  color: var(--ink-faint);
+  font-size: var(--leo-typography-x-small-regular-font-size);
+  color: var(--leo-color-text-tertiary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.popitem.active .popitem-detail { color: var(--accent-ink); opacity: 0.75; }
+.popitem.active .popitem-detail { color: var(--leo-color-text-interactive); opacity: 0.75; }
 
 /* A menu with a setting in it keeps a tick column for every row, the way a native one does:
    the labels stay in one line down the left, and turning the setting on moves nothing. */
@@ -1689,14 +1594,14 @@ button { font: inherit; color: inherit; cursor: pointer; }
   align-items: baseline;
 }
 .popmenu.checkable .popitem-label, .popmenu.checkable .popitem-detail { grid-column: 2; }
-.popitem-tick { font-size: 11px; line-height: 1.2; }
+.popitem-tick { font-size: var(--leo-typography-x-small-regular-font-size); line-height: 1.2; color: var(--leo-color-icon-default, currentColor); }
 
 /* A rule where a group below is a different kind of thing — a setting above, the formats
    that read it below. Drawn on the first row of the group rather than as a row of its own,
    which would be an item the arrow keys had to learn to skip. */
 .popitem.separated {
   margin-top: 5px;
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--leo-color-divider-subtle);
   padding-top: 8px;
 }
 
@@ -1733,7 +1638,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
    glyph's own box to its ink, and the nudge is the measured remainder. In em, so it holds
    if the size changes. */
 .export-chevron {
-  font-size: 10px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
   line-height: 1;
   transform: translateY(-0.11em);
 }
@@ -1752,41 +1657,41 @@ button { font: inherit; color: inherit; cursor: pointer; }
   width: 320px;
   padding: 16px 18px 14px;
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: var(--leo-radius-l);
   background: var(--bg);
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 18px 60px var(--scrim);
 }
-.theme-picker h2 { margin: 0 0 10px; font-size: 13px; color: var(--ink-dim); font-weight: 600; }
+.theme-picker h2 { margin: 0 0 10px; font-size: var(--leo-typography-components-tableheader-font-size); color: var(--ink-dim); font-weight: 600; }
 .theme-list {
   max-height: 300px;
   overflow-y: auto;
   outline: none;
-  border-radius: 8px;
+  border-radius: var(--leo-radius-m);
 }
 .theme-row {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 5px 8px;
-  border-radius: 6px;
+  border-radius: var(--leo-radius-s);
   cursor: pointer;
 }
-.theme-row:hover { background: rgba(127, 127, 127, 0.12); }
+.theme-row:hover { background: var(--hover-wash); }
 .theme-row.active { background: var(--accent); color: var(--accent-ink); }
 .theme-name { flex: 1; font-variant-numeric: tabular-nums; }
-.theme-current { font-size: 10px; opacity: 0.75; text-transform: uppercase; letter-spacing: 0.04em; }
+.theme-current { font-size: var(--leo-typography-x-small-regular-font-size); opacity: 0.75; text-transform: uppercase; letter-spacing: 0.04em; }
 /* The palette's own inks, so a name is not the only thing to go on for twenty-two of them. */
 .theme-swatches { display: flex; gap: 3px; }
 .theme-swatches i { width: 8px; height: 8px; border-radius: 2px; }
-.theme-hint { margin: 10px 0 0; font-size: 11px; color: var(--ink-faint); }
+.theme-hint { margin: 10px 0 0; font-size: var(--leo-typography-x-small-regular-font-size); color: var(--ink-faint); }
 .theme-hint kbd {
   font: inherit;
   padding: 0 3px;
   border: 1px solid var(--line);
-  border-radius: 3px;
+  border-radius: var(--leo-radius-2xs);
 }
-.theme-aside { margin: 6px 0 0; font-size: 11px; color: var(--ink-faint); }
-.theme-aside code { font-family: var(--mono); font-size: 10px; }
+.theme-aside { margin: 6px 0 0; font-size: var(--leo-typography-x-small-regular-font-size); color: var(--ink-faint); }
+.theme-aside code { font-family: var(--mono); font-size: var(--leo-typography-x-small-regular-font-size); }
 
 
 /* ------------------------------------------------------------------ bots
@@ -1806,13 +1711,13 @@ button { font: inherit; color: inherit; cursor: pointer; }
   gap: 6px;
   padding: 5px 8px;
   border: none;
-  border-radius: 7px;
+  border-radius: var(--leo-radius-s);
   background: transparent;
   color: inherit;
   font: inherit;
   text-align: left;
 }
-.bot-open-button:hover { background: rgba(127, 127, 127, 0.08); }
+.bot-open-button:hover { background: var(--hover-wash); }
 .bot-open-button:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
 /* The same mark an open session gets, so "this is the one on screen" reads the same in both
    tabs. */
@@ -1822,7 +1727,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .bot-said { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
 .bot-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bot-where {
-  font-size: 11px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
   color: var(--ink-faint);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1834,7 +1739,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   width: 24px;
   padding: 0;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--leo-radius-s);
   background: transparent;
   color: var(--ink-faint);
   font: inherit;
@@ -1843,7 +1748,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   opacity: 0;
 }
 .bot:hover .bot-edit, .bot-edit:focus-visible { opacity: 1; }
-.bot-edit:hover { color: var(--ink); background: rgba(127, 127, 127, 0.12); }
+.bot-edit:hover { color: var(--ink); background: var(--hover-wash); }
 .bot-edit:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
 
 /* The avatar: a small figure turning slowly, drawn by the shared renderer in `avatar/stage.ts`.
@@ -1870,19 +1775,19 @@ button { font: inherit; color: inherit; cursor: pointer; }
   align-items: center;
   justify-content: center;
   box-sizing: content-box;
-  border: 1.5px solid var(--bg, #fff);
+  border: 1.5px solid var(--bg);
   border-radius: 50%;
-  color: var(--bg, #fff);
-  background: var(--ink-dim, #6b6b70);
-  font: 700 10px/1 system-ui;
+  color: var(--bg);
+  background: var(--ink-dim);
+  font: 700 var(--leo-typography-x-small-regular-font-size)/1 system-ui;
 }
-.bot-avatar-status-failed { background: #b83e43; color: #fff; }
+.bot-avatar-status-failed { background: var(--leo-color-systemfeedback-error-icon); color: var(--leo-color-fixed-foreground); }
 .bot-avatar-status svg { width: 90%; height: 90%; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 .bot-avatar {
   flex: none;
   display: block;
   border-radius: 50%;
-  background: rgba(127, 127, 127, 0.12);
+  background: var(--hover-wash);
 }
 /* The flat mark, which is what a machine with no WebGL gets instead. It carries its own fill — the
    same shades the figure would have been — so there is nothing to paint here beyond the chip above,
@@ -1897,7 +1802,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   margin: 4px 0;
   padding: 10px;
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: var(--leo-radius-m);
   background: var(--bg);
 }
 
@@ -1911,7 +1816,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .bot-form-identity input { min-width: 0; width: 100%; box-sizing: border-box; }
 .bot-form-model .model-picker { align-self: stretch; max-width: none; }
 .bot-form-model .model-trigger { height: 32px; }
-.bot-form-model .model-current { font-size: 12px; }
+.bot-form-model .model-current { font-size: var(--leo-typography-small-regular-font-size); }
 .bot-form-model .model-popover { top: calc(100% + 6px); bottom: auto; width: 100%; box-sizing: border-box; }
 
 .bot-form-avatar {
@@ -1931,7 +1836,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   height: 24px;
   padding: 0;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--leo-radius-s);
   background: transparent;
   color: var(--ink-dim);
   opacity: .6;
@@ -1941,15 +1846,15 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .bot-avatar-refresh:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .bot-field { display: flex; flex-direction: column; gap: 4px; }
-.bot-field > span { font-size: 11px; color: var(--ink-dim); }
+.bot-field > span { font-size: var(--leo-typography-x-small-regular-font-size); color: var(--ink-dim); }
 .bot-field input, .bot-field textarea {
   padding: 5px 8px;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: var(--leo-radius-s);
   background: var(--bg);
   color: var(--ink);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--leo-typography-small-regular-font-size);
   resize: vertical;
 }
 .bot-field input:focus, .bot-field textarea:focus { outline: none; border-color: var(--accent); }
@@ -1958,11 +1863,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
   margin: 0;
   padding: 5px 8px;
   border: 1px dashed var(--line);
-  border-radius: 7px;
+  border-radius: var(--leo-radius-s);
   background: transparent;
   color: var(--ink-dim);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--leo-typography-small-regular-font-size);
   text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1970,7 +1875,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 .bot-choose:hover { color: var(--ink); border-color: var(--accent); }
 
-.bot-note { margin: 0; font-size: 11px; color: var(--ink-faint); line-height: 1.4; }
+.bot-note { margin: 0; font-size: var(--leo-typography-x-small-regular-font-size); color: var(--ink-faint); line-height: 1.4; }
 .bot-note code { font-family: var(--mono); }
 
 /* What the bot has written about itself. Read-only here on purpose: it is the bot's own file, and
@@ -1981,11 +1886,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
   overflow: auto;
   margin: 0;
   padding: 8px;
-  border-radius: 7px;
+  border-radius: var(--leo-radius-s);
   background: var(--code-bg);
   color: var(--ink-dim);
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
   line-height: 1.5;
   white-space: pre-wrap;
 }
@@ -1995,11 +1900,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .bot-actions button {
   padding: 5px 10px;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: var(--leo-radius-s);
   background: transparent;
   color: var(--ink-dim);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--leo-typography-small-regular-font-size);
 }
 .bot-actions button:hover:not(:disabled) { color: var(--ink); border-color: var(--accent); }
 .bot-save[disabled] { opacity: 0.4; }
@@ -2026,11 +1931,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
   padding: 0 8px 4px;
 }
 .bot-archive .session-group-head { position: static; background: none; }
-.bot-archive .session-group-head:hover { background: rgba(127, 127, 127, 0.08); }
+.bot-archive .session-group-head:hover { background: var(--hover-wash); }
 .bot-archive .session-group-fold { color: var(--ink-faint); font-weight: 500; }
 .bot-archive .session-group-head:hover .session-group-fold { color: var(--ink-dim); }
 .bot-archive .session-group-fold .count {
-  background: rgba(127, 127, 127, 0.1);
+  background: var(--hover-wash);
   color: var(--ink-faint);
 }
 
@@ -2045,10 +1950,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
   align-items: center;
   gap: 6px;
   padding: 5px 8px;
-  border-radius: 7px;
+  border-radius: var(--leo-radius-s);
   color: var(--ink-dim);
 }
-.bot-archived:hover { background: rgba(127, 127, 127, 0.08); }
+.bot-archived:hover { background: var(--hover-wash); }
 .bot-archived .bot-said { flex: 1; }
 
 /* Text rather than bordered buttons, unlike the form's. Those sit in a row of their own at the
@@ -2058,11 +1963,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
   flex: none;
   padding: 3px 6px;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--leo-radius-s);
   background: transparent;
   color: var(--ink-faint);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
 }
 .bot-archived button:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
 .bot-restore:hover { color: var(--accent-text); }
@@ -2086,7 +1991,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   white-space: normal;
   overflow-wrap: anywhere;
   color: var(--removed);
-  font-size: 11px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
 }
 .bot-archived .bot-delete-armed {
   background: var(--removed);
@@ -2103,7 +2008,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .attached {
   margin: 8px 2px;
   color: var(--ink-faint);
-  font-size: 11px;
+  font-size: var(--leo-typography-x-small-regular-font-size);
   font-family: var(--mono);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2115,82 +2020,80 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .transcript-head h1 { display: flex; align-items: center; gap: 7px; }
 
 /* Conversation workspace: readable defaults, compact mode by choice. */
-:root { --accent-ink: #24180f; --ink-faint: #707078; --bubble-user: #fff0e5; --bubble-user-ink: #632c12; }
-@media (prefers-color-scheme: dark) {
-  :root { --ink-faint: #a6a6af; --bubble-user: #443125; --bubble-user-ink: #ffe2cc; }
-}
-body { font-size: 14px; }
+body { font-size: var(--leo-typography-default-regular-font-size); }
 button, input, textarea, select { font: inherit; }
 button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus-visible, a:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 3px;
 }
 .app { position: relative; }
 .app.comfortable .session { padding-top: 12px; padding-bottom: 12px; }
-.app .session-where, .app .where, .app .none, .app .model-current { font-size: 12px; }
-.app .panel-head { font-size: 12px; letter-spacing: .02em; text-transform: none; }
+.app .session-where, .app .where, .app .none, .app .model-current { font-size: var(--leo-typography-small-regular-font-size); }
+.app .panel-head { font-size: var(--leo-typography-small-regular-font-size); letter-spacing: .02em; text-transform: none; }
 .app .entries { padding: 24px clamp(18px, 3vw, 44px); gap: 18px; }
-.app .bubble { max-width: 100%; font-size: 14px; line-height: 1.65; }
-.app .bubble.user { max-width: 85%; align-self: flex-end; padding: 10px 16px; border-radius: 14px 14px 4px 14px; }
+.app .bubble { max-width: 100%; font-size: var(--leo-typography-default-regular-font-size); line-height: 1.65; }
+.app .bubble.user { max-width: 85%; align-self: flex-end; padding: 10px 16px; border-radius: var(--leo-radius-l) var(--leo-radius-l) var(--leo-radius-xs) var(--leo-radius-l); }
 .app .bubble.assistant { background: transparent; padding: 6px 0; width: 100%; }
-.app .bubble pre { font-size: 12px; }
+.app .bubble pre { font-size: var(--leo-typography-small-regular-font-size); }
 .app.compact .entries { gap: 10px; padding: 16px 22px; }
-.app.compact .bubble { font-size: 13px; line-height: 1.5; }
+.app.compact .bubble { font-size: var(--leo-typography-components-tableheader-font-size); line-height: 1.5; }
 .conversation-toolbar { display: flex; flex-wrap: wrap; gap: 6px; padding: 5px 20px 10px; align-items: center; }
-.conversation-toolbar > button, .conversation-toolbar .export-open { min-height: 30px; padding: 4px 10px; background: transparent; border: 1px solid var(--line); border-radius: 7px; font-size: 12px; }
+.conversation-toolbar > button, .conversation-toolbar .export-open { min-height: 30px; padding: 4px 10px; background: transparent; border: 1px solid var(--line); border-radius: var(--leo-radius-s); font-size: var(--leo-typography-small-regular-font-size); }
 .conversation-toolbar .export-menu { margin-left: auto; }
 .conversation-search { display: flex; align-items: center; gap: 6px; padding: 8px 20px; border-top: 1px solid var(--line); }
-.conversation-search input { flex: 1; min-width: 0; padding: 8px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); background: var(--bg); }
-.conversation-search button { min-width: 28px; min-height: 30px; border: 1px solid var(--line); background: var(--bg); border-radius: 6px; }
-.conversation-search span { font-size: 12px; white-space: nowrap; color: var(--ink-dim); }
+.conversation-search input { flex: 1; min-width: 0; padding: 8px; border: 1px solid var(--line); border-radius: var(--leo-radius-s); color: var(--ink); background: var(--bg); }
+.conversation-search button { min-width: 28px; min-height: 30px; border: 1px solid var(--line); background: var(--bg); border-radius: var(--leo-radius-s); }
+.conversation-search span { font-size: var(--leo-typography-small-regular-font-size); white-space: nowrap; color: var(--ink-dim); }
 .app .composer { display: flex; flex-direction: column; align-items: stretch; padding: 12px 20px 16px; gap: 10px; background: var(--bg); }
-.app .composer textarea { width: 100%; flex: none; min-height: 70px; max-height: 210px; line-height: 1.5; padding: 14px; resize: none; border-radius: 12px; }
+.app .composer textarea { width: 100%; flex: none; min-height: 70px; max-height: 210px; line-height: 1.5; padding: 14px; resize: none; border-radius: var(--leo-radius-l); }
 .composer-toolbar { display: flex; align-items: center; gap: 8px; }
 .composer-toolbar .model-picker { max-width: 220px; align-self: center; }
-.composer-hint { font-size: 11px; color: var(--ink-dim); flex: 1; }
-.composer-toolbar .stop { min-height: 36px; padding: 6px 12px; border: 1px solid var(--removed); color: var(--removed); background: var(--bg); border-radius: 8px; }
-.app .composer .send { white-space: nowrap; margin-left: auto; min-height: 36px; height: auto; }
-.attention-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 20px; color: var(--ink-dim); font-size: 12px; min-height: 34px; }
-.attention-bar button { border: 1px solid var(--line); border-radius: 7px; padding: 6px 10px; background: var(--bg); }
+.composer-hint { font-size: var(--leo-typography-x-small-regular-font-size); color: var(--ink-dim); flex: 1; }
+.composer-toolbar .stop { flex-grow: 0; }
+.app .composer .send { white-space: nowrap; margin-left: auto; flex-grow: 0; }
+.attention-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 20px; color: var(--ink-dim); font-size: var(--leo-typography-small-regular-font-size); min-height: 34px; }
+.attention-bar button { border: 1px solid var(--line); border-radius: var(--leo-radius-s); padding: 6px 10px; background: var(--bg); }
 .attention-bar .pending-jump { background: var(--warn-bg); color: var(--warn); text-align: left; font-weight: 600; }
-.queued-messages { font-size: 12px; padding: 8px 12px; border-radius: 8px; background: var(--bubble-agent); }
+.queued-messages { font-size: var(--leo-typography-small-regular-font-size); padding: 8px 12px; border-radius: var(--leo-radius-m); background: var(--bubble-agent); }
 .queued-messages > div { display: flex; align-items: center; gap: 8px; }
 .queued-messages span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .queued-messages button { border: 0; background: transparent; min-width: 28px; min-height: 28px; }
-.error-card { padding: 14px 16px; border: 1px solid color-mix(in srgb, var(--removed) 25%, var(--line)); border-left: 3px solid var(--removed); background: var(--removed-bg); border-radius: 10px; font-size: 13px; }
+.error-card { margin: 0; }
 .error-card p { margin: 6px 0 10px; line-height: 1.5; }
-.error-card details { margin-top: 10px; font-size: 12px; }
 .error-card pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 200px; overflow: auto; }
 .error-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.error-actions button { border: 1px solid var(--line); background: var(--bg); border-radius: 6px; padding: 6px 10px; }
-.modal { width: min(680px, calc(100vw - 48px)); max-height: calc(100vh - 64px); overflow-y: auto; padding: 28px; background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 24px 80px #0003; }
+.modal { width: min(680px, calc(100vw - 48px)); max-height: calc(100vh - 64px); overflow-y: auto; padding: 28px; background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: var(--leo-radius-xl); box-shadow: var(--leo-effect-elevation-05); }
 .modal h2 { margin-top: 0; }
 .scrim { z-index: 100; }
 .background-tasks { position: fixed; left: 12px; bottom: 12px; width: 220px; z-index: 25; display: grid; gap: 6px; }
-.background-tasks button { padding: 8px 10px; background: var(--bg); border: 1px solid var(--accent); border-radius: 8px; font-size: 12px; box-shadow: 0 3px 10px #0001; text-align: left; }
-.welcome-mark { width: 50px; height: 50px; display: grid; place-items: center; background: var(--accent); color: var(--accent-ink); font-size: 24px; font-weight: 700; border-radius: 15px; margin-bottom: 22px; }
+.background-tasks button { padding: 8px 10px; background: var(--bg); border: 1px solid var(--accent); border-radius: var(--leo-radius-m); font-size: var(--leo-typography-small-regular-font-size); box-shadow: var(--leo-effect-elevation-01); text-align: left; }
+.welcome-mark { width: 50px; height: 50px; display: grid; place-items: center; background: var(--accent); color: var(--accent-ink); font-size: var(--leo-typography-heading-h2-font-size); font-weight: 700; border-radius: var(--leo-radius-xl); margin-bottom: 22px; }
 .empty-body > div { width: min(560px, 100%); padding: 24px; }
-.empty-body h1 { font-size: 27px; line-height: 1.2; letter-spacing: -.5px; }
+.empty-body h1 { font-size: var(--leo-typography-heading-h1-font-size); line-height: 1.2; letter-spacing: -.5px; }
 .empty-body p { line-height: 1.6; }
-.primary { border: 0; border-radius: 8px; background: var(--accent); color: var(--accent-ink); padding: 10px 18px; font-weight: 600; }
+.primary { border: 0; border-radius: var(--leo-radius-m); background: var(--accent); color: var(--accent-ink); padding: 10px 18px; font-weight: 600; }
 .welcome-recents { display: grid; gap: 6px; margin-top: 32px; }
-.welcome-recents h2 { font-size: 13px; color: var(--ink-dim); }
-.welcome-recents button { display: flex; flex-direction: column; gap: 3px; text-align: left; padding: 10px 12px; background: transparent; border: 1px solid var(--line); border-radius: 8px; }
-.welcome-recents span { font-size: 12px; color: var(--ink-dim); overflow-wrap: anywhere; }
-.welcome-hint { font-size: 12px; color: var(--ink-dim); margin-top: 24px; }
+.welcome-recents h2 { font-size: var(--leo-typography-components-tableheader-font-size); color: var(--ink-dim); }
+.welcome-recents button { display: flex; flex-direction: column; gap: 3px; text-align: left; padding: 10px 12px; background: transparent; border: 1px solid var(--line); border-radius: var(--leo-radius-m); }
+.welcome-recents span { font-size: var(--leo-typography-small-regular-font-size); color: var(--ink-dim); overflow-wrap: anywhere; }
+.welcome-hint { font-size: var(--leo-typography-small-regular-font-size); color: var(--ink-dim); margin-top: 24px; }
 @media (max-width: 1120px) {
   .app { grid-template-columns: var(--col-left) 1px minmax(0, 1fr) 0 0; }
-  .app .context { position: absolute; right: 0; top: 0; bottom: 0; width: 310px; z-index: 35; background: var(--bg); box-shadow: -12px 0 32px #0002; }
+  .app .context { position: absolute; right: 0; top: 0; bottom: 0; width: 310px; z-index: 35; background: var(--bg); box-shadow: var(--leo-effect-elevation-02); }
   .app.right-folded .context { pointer-events: none; }
   .app .gutter.right { display: none; }
   .composer-hint { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { .entries { scroll-behavior: auto; } }
 
-.inspector-title { display: flex; justify-content: space-between; align-items: center; padding-bottom: 14px; font-size: 13px; }
-.inspector-title button { background: transparent; border: 0; min-width: 28px; min-height: 28px; font-size: 20px; }
-.inspector-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); }
-.inspector-tabs button { background: transparent; border: 0; border-bottom: 2px solid transparent; padding: 8px; font-size: 12px; flex: 1; }
-.inspector-tabs button[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--ink); font-weight: 600; }
+.inspector-title { display: flex; justify-content: space-between; align-items: center; padding-bottom: 14px; font-size: var(--leo-typography-components-tableheader-font-size); }
+.inspector-title button { background: transparent; border: 0; min-width: 28px; min-height: 28px; font-size: var(--leo-typography-heading-h3-font-size); }
+.inspector-tabs {
+  display: block;
+  width: 100%;
+  margin: 0 0 8px;
+  --leo-tabs-width: 100%;
+  border-bottom: none;
+}
 .app .context-head { padding: 14px 14px 8px; }
 .app .panel-inner .none { padding: 0; margin: 4px 0 10px; }
 .app .panel-inner { padding: 8px 14px 14px; }
@@ -2200,11 +2103,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .files .approved .tag, .files .applying .tag { color: var(--warn); }
 .files .failed .tag { color: var(--removed); }
 .conversation-toolbar .export-split { margin-left: auto; }
-.code-block, .diff-review { border: 1px solid var(--line); border-radius: 9px; overflow: hidden; margin: 12px 0; }
-.code-toolbar { display: flex; align-items: center; gap: 8px; padding: 7px 10px; background: var(--bubble-agent); border-bottom: 1px solid var(--line); font-size: 12px; }
+.code-block, .diff-review { border: 1px solid var(--line); border-radius: var(--leo-radius-m); overflow: hidden; margin: 12px 0; }
+.code-toolbar { display: flex; align-items: center; gap: 8px; padding: 7px 10px; background: var(--bubble-agent); border-bottom: 1px solid var(--line); font-size: var(--leo-typography-small-regular-font-size); }
 .code-toolbar > span { flex: 1; color: var(--ink-dim); }
-.code-toolbar h2 { flex: 1; margin: 0; font-size: 16px; }
-.code-toolbar button { font-size: 12px; border: 1px solid var(--line); border-radius: 5px; padding: 4px 8px; background: var(--bg); min-height: 28px; }
+.code-toolbar h2 { flex: 1; margin: 0; font-size: var(--leo-typography-large-regular-font-size); }
+.code-toolbar button { font-size: var(--leo-typography-small-regular-font-size); border: 1px solid var(--line); border-radius: var(--leo-radius-xs); padding: 4px 8px; background: var(--bg); min-height: 28px; }
 .app .code-block pre { margin: 0; border-radius: 0; }
 .app .code-block .code-wrapped, .app .code-block .code-wrapped code { white-space: pre-wrap; overflow-wrap: anywhere; }
 .diff.unwrapped .line { white-space: pre; }
@@ -2212,31 +2115,31 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .expanded-diff .diff { max-height: 65vh; }
 .confirm-actions { position: sticky; bottom: 0; z-index: 1; background: var(--bg); flex-wrap: wrap; }
 .confirm-actions .always { background: transparent; color: var(--ink); border-color: var(--line); }
-.permission-scope { margin: 0; padding: 10px 12px; font-size: 12px; border-top: 1px solid var(--line); color: var(--ink-dim); overflow-wrap: anywhere; }
+.permission-scope { margin: 0; padding: 10px 12px; font-size: var(--leo-typography-small-regular-font-size); border-top: 1px solid var(--line); color: var(--ink-dim); overflow-wrap: anywhere; }
 
 .session-scope { display: flex; gap: 4px; margin-top: 10px; }
-.session-scope button { flex: 1; min-height: 30px; font-size: 12px; border: 0; border-radius: 6px; background: transparent; color: var(--ink-dim); }
+.session-scope button { flex: 1; min-height: 30px; font-size: var(--leo-typography-small-regular-font-size); border: 0; border-radius: var(--leo-radius-s); background: transparent; color: var(--ink-dim); }
 .session-scope button[aria-pressed="true"] { background: var(--bubble-agent); color: var(--ink); font-weight: 600; }
-.session-row { position: relative; display: flex; align-items: center; border-radius: 9px; }
+.session-row { position: relative; display: flex; align-items: center; border-radius: var(--leo-radius-m); }
 .session-row .session { flex: 1; min-width: 0; padding-right: 32px; }
-.session-row .session-more { position: absolute; right: 4px; top: 10px; padding: 0; width: 28px; height: 28px; border: 0; background: transparent; border-radius: 5px; color: var(--ink-dim); }
-.session-row.current { background: var(--bubble-user); }
+.session-row .session-more { position: absolute; right: 4px; top: 10px; padding: 0; width: 28px; height: 28px; border: 0; background: transparent; border-radius: var(--leo-radius-xs); color: var(--ink-dim); }
+.session-row.current { background: var(--leo-color-container-interactive); }
 .session-row.current .session { background: transparent; color: var(--ink); }
-.session-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; font-size: 10px; }
-.session-badges > span { padding: 1px 5px; border-radius: 4px; background: var(--bubble-agent); color: var(--ink-dim); }
-.session-badges .working, .session-badges .needs-approval { color: var(--warn); background: var(--warn-bg); }
-.session-badges .failed { color: var(--removed); background: var(--removed-bg); }
-.session-badges .completed { color: var(--added); }
+.session-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; font-size: var(--leo-typography-x-small-regular-font-size); }
+.session-badges leo-label {
+  --leo-label-padding: 1px 6px;
+  --leo-label-font: var(--leo-font-x-small-regular);
+}
 
 .file-search-scope { display: flex; margin: 10px 0 8px; gap: 4px; }
-.file-search-scope button, .preview-actions button { padding: 6px 8px; border: 1px solid var(--line); background: var(--bg); border-radius: 6px; font-size: 12px; }
+.file-search-scope button, .preview-actions button { padding: 6px 8px; border: 1px solid var(--line); background: var(--bg); border-radius: var(--leo-radius-s); font-size: var(--leo-typography-small-regular-font-size); }
 .file-search-scope button[aria-pressed="true"] { background: var(--bubble-agent); font-weight: 600; }
 .file-search-results { padding: 6px; }
 .file-search-results > button { display: block; width: 100%; border: 0; background: transparent; text-align: left; padding: 8px; overflow-wrap: anywhere; font: 12px var(--mono); }
 .file-search-results > button:hover { background: var(--bubble-agent); }
 .file-preview { width: min(1000px, calc(100vw - 48px)); }
 .file-preview .code-toolbar strong { flex: 1; overflow-wrap: anywhere; }
-.preview-boundary { padding: 10px 12px; background: var(--confine-bg); border-left: 3px solid var(--confine); font-size: 12px; }
+.preview-boundary { padding: 10px 12px; background: var(--confine-bg); border-left: 3px solid var(--confine); font-size: var(--leo-typography-small-regular-font-size); }
 .preview-actions { display: flex; gap: 8px; }
 .file-preview pre { max-height: 60vh; overflow: auto; padding: 14px; font: 12px/1.6 var(--mono); background: var(--code-bg); }
 .file-preview pre.wrapped { white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -2245,100 +2148,118 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .bot-editor { scroll-padding-block: 28px 90px; }
 .bot-editor .bot-form { margin: 0; padding: 0; border: 0; background: transparent; }
 .bot-editor .bot-field { margin-top: 18px; }
-.bot-editor .bot-field > span { font-size: 13px; font-weight: 600; }
-.bot-editor .bot-field input, .bot-editor .bot-field textarea { font-size: 14px; padding: 10px 12px; }
+.bot-editor .bot-field > span { font-size: var(--leo-typography-components-tableheader-font-size); font-weight: 600; }
+.bot-editor .bot-field input, .bot-editor .bot-field textarea { font-size: var(--leo-typography-default-regular-font-size); padding: 10px 12px; }
 .bot-editor .bot-fixed { white-space: normal; overflow-wrap: anywhere; }
-.bot-editor button, .bot-overview button { min-height: 32px; border: 1px solid var(--line); border-radius: 7px; padding: 6px 12px; background: var(--bg); }
+.bot-editor button, .bot-overview button { min-height: 32px; border: 1px solid var(--line); border-radius: var(--leo-radius-s); padding: 6px 12px; background: var(--bg); }
 .bot-overview .primary { background: var(--accent); }
 .bot-overview-title { display: flex; gap: 16px; align-items: center; }
 .bot-overview-title h2 { margin: 0; }
-.bot-overview-title p { margin: 4px 0; font-size: 12px; color: var(--ink-dim); overflow-wrap: anywhere; }
-.bot-overview h3 { font-size: 13px; margin-top: 24px; }
+.bot-overview-title p { margin: 4px 0; font-size: var(--leo-typography-small-regular-font-size); color: var(--ink-dim); overflow-wrap: anywhere; }
+.bot-overview h3 { font-size: var(--leo-typography-components-tableheader-font-size); margin-top: 24px; }
 .bot-overview-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
-.bot-history-search { width: 100%; margin-bottom: 10px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--ink); }
+.bot-history-search { width: 100%; margin-bottom: 10px; padding: 9px 12px; border: 1px solid var(--line); border-radius: var(--leo-radius-s); background: var(--bg); color: var(--ink); }
 .bot-conversations { display: grid; gap: 6px; margin-bottom: 20px; max-height: 300px; overflow-y: auto; }
 .bot-conversations button, .bot-history-unavailable { display: grid; gap: 4px; text-align: left; padding: 10px 12px; }
-.bot-conversations strong { font-size: 13px; overflow-wrap: anywhere; }
-.bot-conversations span, .bot-conversations code { color: var(--ink-dim); font-size: 12px; }
-.bot-history-unavailable { border: 1px dashed var(--line); border-radius: 7px; }
+.bot-conversations strong { font-size: var(--leo-typography-components-tableheader-font-size); overflow-wrap: anywhere; }
+.bot-conversations span, .bot-conversations code { color: var(--ink-dim); font-size: var(--leo-typography-small-regular-font-size); }
+.bot-history-unavailable { border: 1px dashed var(--line); border-radius: var(--leo-radius-s); }
 .bot-edit { opacity: 1; }
 
 .bot-memory-panel { margin-top: 24px; border-top: 1px solid var(--line); padding-top: 16px; }
-.bot-memory-panel h3 { margin: 0 0 8px; font-size: 14px; }
+.bot-memory-panel h3 { margin: 0 0 8px; font-size: var(--leo-typography-default-regular-font-size); }
 .memory-tabs, .memory-actions { display: flex; gap: 6px; margin: 10px 0; }
 .memory-tabs button[aria-pressed="true"] { background: var(--bubble-agent); font-weight: 600; }
-.memory-readable { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.65; padding: 14px; background: var(--bubble-agent); max-height: 300px; overflow: auto; border-radius: 8px; }
+.memory-readable { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--leo-typography-default-regular-font-size); line-height: 1.65; padding: 14px; background: var(--bubble-agent); max-height: 300px; overflow: auto; border-radius: var(--leo-radius-m); }
 .memory-history details { padding: 10px 0; border-bottom: 1px solid var(--line); }
-.memory-history pre { max-height: 240px; overflow: auto; white-space: pre-wrap; font-size: 12px; }
-.bot-memory-panel > textarea { width: 100%; font: 13px/1.5 var(--mono); padding: 12px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: 8px; }
-.memory-reset { padding: 12px; border: 1px solid var(--warn); border-radius: 8px; }
+.memory-history pre { max-height: 240px; overflow: auto; white-space: pre-wrap; font-size: var(--leo-typography-small-regular-font-size); }
+.bot-memory-panel > textarea { width: 100%; font: 13px/1.5 var(--mono); padding: 12px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: var(--leo-radius-m); }
+.memory-reset { padding: 12px; border: 1px solid var(--warn); border-radius: var(--leo-radius-m); }
 .theme-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 12px; }
-.theme-actions button { border: 1px solid var(--line); background: var(--bg); border-radius: 6px; padding: 7px 12px; }
+.theme-actions button { border: 1px solid var(--line); background: var(--bg); border-radius: var(--leo-radius-s); padding: 7px 12px; }
 
-.backend-status { display: flex; flex-direction: column; gap: 5px; padding: 12px 20px; background: var(--warn-bg); font-size: 12px; }
+.backend-status { display: flex; flex-direction: column; gap: 5px; padding: 12px 20px; background: var(--warn-bg); font-size: var(--leo-typography-small-regular-font-size); }
 .backend-status > div { display: flex; gap: 6px; }
-.backend-status button { border: 1px solid var(--line); background: var(--bg); border-radius: 5px; padding: 5px 8px; }
-.app .model-capability, .app .model-detail, .app .model-footnote { font-size: 11px; }
-.app .model-name { font-size: 13px; }
+.backend-status button { border: 1px solid var(--line); background: var(--bg); border-radius: var(--leo-radius-xs); padding: 5px 8px; }
+.app .model-capability, .app .model-detail, .app .model-footnote { font-size: var(--leo-typography-x-small-regular-font-size); }
+.app .model-name { font-size: var(--leo-typography-components-tableheader-font-size); }
 
 .permission-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
-.permission-row code { font-size: 12px; overflow-wrap: anywhere; }
-.permission-row button { padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
+.permission-row code { font-size: var(--leo-typography-small-regular-font-size); overflow-wrap: anywhere; }
+.permission-row button { padding: 5px 10px; border: 1px solid var(--line); border-radius: var(--leo-radius-s); background: var(--bg); }
 
-.attach-files { border: 1px solid var(--line); border-radius: 7px; background: var(--bg); padding: 7px 9px; font-size: 12px; white-space: nowrap; }
-.attachment-chips { display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; }
+.attach-files {
+  border: 1px solid var(--line);
+  border-radius: var(--leo-radius-full);
+  background: var(--bg);
+  padding: 0 12px;
+  min-height: 36px;
+  font-size: var(--leo-typography-small-regular-font-size);
+  white-space: nowrap;
+  color: var(--ink);
+}
+.attach-files:hover { background: var(--hover-wash); }
+.attach-files:disabled { opacity: 0.45; cursor: default; }
+.attachment-chips { display: flex; flex-wrap: wrap; gap: 6px; font-size: var(--leo-typography-small-regular-font-size); }
 .attachment-chips p { width: 100%; margin: 0 0 4px; color: var(--warn); }
-.attachment-chips > span { display: flex; border: 1px solid var(--line); border-radius: 6px; max-width: 100%; }
+.attachment-chips > span { display: flex; border: 1px solid var(--line); border-radius: var(--leo-radius-s); max-width: 100%; }
 .attachment-chips button { background: transparent; border: 0; padding: 5px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .app.no-session { grid-template-columns: var(--col-left) 1px minmax(0, 1fr) 0 0; }
 .app.no-session .context, .app.no-session .gutter:last-of-type { visibility: hidden; }
 .app .transcript.empty-state .empty-body { text-align: left; align-items: flex-start; justify-content: center; overflow-y: auto; }
-.app .transcript.empty-state .empty-body h1 { font-size: 28px; margin: 0 0 14px; color: var(--ink); }
-.app .session.current .session-title { color: var(--ink); }
-.app .session.current .session-where { color: var(--ink-dim); opacity: 1; }
+.app .transcript.empty-state .empty-body h1 { font-size: var(--leo-typography-heading-h1-font-size); margin: 0 0 14px; color: var(--ink); }
 .app .panel:has(.none) .panel-inner { padding: 0 14px 4px; }
-.app .composer-toolbar { flex-wrap: wrap; }
+.app .composer-toolbar { flex-wrap: wrap; align-items: center; }
 .app .composer-hint { min-width: 130px; }
+
+/* Dense chrome: Leo buttons must not stretch to fill a flex row. */
+.composer-toolbar leo-button,
+.settings-actions leo-button,
+.theme-actions leo-button,
+.trust-actions leo-button,
+.error-actions leo-button {
+  flex-grow: 0;
+}
 
 /* Shared dialog controls retain visible keyboard focus and the app's visual language. */
 .modal button:not(:where(.model-trigger, .model-option, .theme-swatch)) {
   min-height: 32px; padding: 6px 12px; border: 1px solid var(--line);
-  border-radius: 7px; background: var(--bg); color: var(--ink); font: inherit;
+  border-radius: var(--leo-radius-s); background: var(--bg); color: var(--ink); font: inherit;
 }
 .modal button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* Information scoped to a turn, beneath its prompt and reply. */
-.turn-notices { border-left: 2px solid var(--line); margin: 12px 0 16px; padding: 0 0 0 12px; color: var(--ink-dim); font-size: 12px; }
+.turn-notices { border-left: 2px solid var(--line); margin: 12px 0 16px; padding: 0 0 0 12px; color: var(--ink-dim); font-size: var(--leo-typography-small-regular-font-size); }
 .turn-notices summary, .turn-statistics summary, .audit-inspector summary { cursor: pointer; padding: 5px 0; }
 .turn-notices ul { margin: 6px 0 0; padding-left: 18px; }
 .turn-notices li { white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; color: var(--ink); }
-.turn-footer { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin: -4px 0 18px; color: var(--ink-dim); font-size: 12px; }
+.turn-footer { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin: -4px 0 18px; color: var(--ink-dim); font-size: var(--leo-typography-small-regular-font-size); }
 .turn-statistics { min-width: 0; max-width: 100%; }
 .turn-statistics summary { overflow-wrap: anywhere; }
-.turn-statistics-body { background: var(--code-bg); padding: 12px 14px; margin: 6px 0; border-radius: 8px; color: var(--ink); }
+.turn-statistics-body { background: var(--code-bg); padding: 12px 14px; margin: 6px 0; border-radius: var(--leo-radius-m); color: var(--ink); }
 .turn-statistics-body strong { font-weight: 500; }
 .turn-statistics-body dl { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px 18px; margin: 10px 0; }
 .turn-statistics-body dt { color: var(--ink-dim); }
 .turn-statistics-body dd { text-align: right; margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .turn-statistics-body p { margin: 8px 0 0; color: var(--ink-dim); }
-.turn-audit-link { border: 0; background: transparent; color: var(--ink-dim); font: inherit; font-size: 12px; padding: 5px 0; cursor: pointer; text-align: left; }
+.turn-audit-link { border: 0; background: transparent; color: var(--ink-dim); font: inherit; font-size: var(--leo-typography-small-regular-font-size); padding: 5px 0; cursor: pointer; text-align: left; }
 .turn-audit-link:hover { color: var(--ink); text-decoration: underline; }
 .turn-audit-link.has-refusal { color: var(--warn); }
 .working { flex-wrap: wrap; }
-.audit-inspector { flex: 1; min-height: 0; overflow-y: auto; overflow-wrap: anywhere; padding: 14px; font-size: 12px; }
+.audit-inspector { flex: 1; min-height: 0; overflow-y: auto; overflow-wrap: anywhere; padding: 14px; font-size: var(--leo-typography-small-regular-font-size); }
 .audit-inspector .inspector-title { margin-bottom: 12px; }
-.audit-close { display: grid; place-items: center; border: 0; background: transparent; color: var(--ink-dim); width: 28px; height: 28px; font-size: 18px; cursor: pointer; flex: none; }
+.audit-close { display: grid; place-items: center; border: 0; background: transparent; color: var(--ink-dim); width: 28px; height: 28px; font-size: var(--leo-typography-components-button-jumbo-font-size); cursor: pointer; flex: none; }
 .audit-status, .audit-sequence { color: var(--ink-dim); }
 .audit-inspector p { margin: 8px 0; }
-.audit-event { padding: 12px; margin: 12px 0; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+.audit-event { padding: 12px; margin: 12px 0; background: var(--bg); border: 1px solid var(--line); border-radius: var(--leo-radius-m); }
 .audit-event strong { display: block; font-weight: 500; margin-top: 5px; }
 .audit-refusal { border-color: var(--warn); }
 .audit-refusal .audit-sequence, .audit-retention { color: var(--warn); }
 .audit-labels { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 8px; margin: 10px 0; }
 .audit-labels dt { color: var(--ink-dim); }
 .audit-labels dd { margin: 0; }
-.audit-event pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.6 var(--mono); padding: 8px; background: var(--code-bg); border-radius: 5px; }
+.audit-event pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.6 var(--mono); padding: 8px; background: var(--code-bg); border-radius: var(--leo-radius-xs); }
 .audit-all { margin: 16px 0; border-top: 1px solid var(--line); padding-top: 8px; }
 @media (pointer: coarse) {
   .turn-notices summary, .turn-statistics summary, .audit-inspector summary, .turn-audit-link, .audit-close { min-height: 44px; }
@@ -2349,7 +2270,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 
 .diff .line-number { width: 3.5em; flex: 0 0 3.5em; text-align: right; padding-right: .7em; color: var(--ink-dim); user-select: none; font-variant-numeric: tabular-nums; }
 
-.interrupted-request { padding: 12px 16px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink-dim); }
+.interrupted-request { padding: 12px 16px; border: 1px solid var(--line); border-radius: var(--leo-radius-m); color: var(--ink-dim); }
 .interrupted-request pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
 /* The card it was is drawn inside the fold, marking and all, so it needs room of its own. */
 .interrupted-request details { margin-top: 8px; }
@@ -2366,10 +2287,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .app .composer { padding-inline: max(20px, calc((100% - 880px) / 2)); }
 .app .attention-bar { padding-inline: max(20px, calc((100% - 880px) / 2)); }
 
-.diff { font-size: 13px; line-height: 1.65; }
+.diff { font-size: var(--leo-typography-components-tableheader-font-size); line-height: 1.65; }
 
 .modal .bot-avatar-refresh { padding: 0; width: 32px; height: 32px; display: grid; place-items: center; }
-.memory-readable h1, .memory-readable h2, .memory-readable h3 { font-size: 16px; line-height: 1.4; margin: 0 0 12px; }
+.memory-readable h1, .memory-readable h2, .memory-readable h3 { font-size: var(--leo-typography-large-regular-font-size); line-height: 1.4; margin: 0 0 12px; }
 .memory-readable ul, .memory-readable ol { padding-left: 22px; }
 .bot-editor .bot-actions { position: sticky; bottom: -28px; background: var(--bg); padding-block: 12px; z-index: 2; }
 
@@ -2382,23 +2303,23 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .about-stage::before { content: ''; position: absolute; width: 220px; height: 180px; top: -4px; pointer-events: none; background: radial-gradient(ellipse, color-mix(in srgb, var(--accent) 19%, transparent), transparent 70%); }
 .about .about-mascot { position: relative; display: grid; place-items: center; padding: 0; width: 156px; height: 156px; border: 0; border-radius: 50%; background: transparent; cursor: pointer; }
 .about-figure { display: block; }
-.about .about-hero h2 { margin: 14px 0 8px; font-size: 32px; font-weight: 650; letter-spacing: -1.1px; line-height: 1.15; }
-.about-version { display: inline-block; margin-top: 18px; padding: 5px 11px; border: 1px solid var(--line); border-radius: 20px; background: var(--code-bg); color: var(--ink-dim); font-size: 12px; overflow-wrap: anywhere; max-width: 100%; }
-.about-links { display: flex; flex-wrap: wrap; justify-content: center; gap: 24px; margin: 24px 0 28px; font-size: 13px; }
+.about .about-hero h2 { margin: 14px 0 8px; font-size: var(--leo-typography-heading-display3-font-size); font-weight: 650; letter-spacing: -1.1px; line-height: 1.15; }
+.about-version { display: inline-block; margin-top: 18px; padding: 5px 11px; border: 1px solid var(--line); border-radius: 20px; background: var(--code-bg); color: var(--ink-dim); font-size: var(--leo-typography-small-regular-font-size); overflow-wrap: anywhere; max-width: 100%; }
+.about-links { display: flex; flex-wrap: wrap; justify-content: center; gap: 24px; margin: 24px 0 28px; font-size: var(--leo-typography-components-tableheader-font-size); }
 .about a { color: var(--accent-text); text-decoration: none; text-underline-offset: 3px; }
 .about a:hover { text-decoration: underline; }
-.about a:focus-visible, .about summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 3px; }
+.about a:focus-visible, .about summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: var(--leo-radius-2xs); }
 .about-links a span { margin-left: 2px; opacity: .65; }
-.about-details { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); font-size: 12px; }
+.about-details { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); font-size: var(--leo-typography-small-regular-font-size); }
 .about-details summary { padding: 15px 0; color: var(--ink-dim); cursor: pointer; }
 .about-details summary:hover { color: var(--ink); }
 .about-details dl { margin: 0 0 16px; }
 .about-details dl > div { display: grid; grid-template-columns: 65px minmax(0, 1fr); gap: 12px; margin: 10px 0; }
 .about-details dt { color: var(--ink-dim); }
-.about-details dd { margin: 0; font-family: var(--mono); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; user-select: text; }
+.about-details dd { margin: 0; font-family: var(--mono); font-size: var(--leo-typography-x-small-regular-font-size); line-height: 1.6; overflow-wrap: anywhere; user-select: text; }
 .about-copy { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding-bottom: 16px; }
-.about-copy [role='status'] { color: var(--ink-dim); font-size: 11px; }
-.about-footer { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 20px; color: var(--ink-dim); font-size: 11px; }
+.about-copy [role='status'] { color: var(--ink-dim); font-size: var(--leo-typography-x-small-regular-font-size); }
+.about-footer { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 20px; color: var(--ink-dim); font-size: var(--leo-typography-x-small-regular-font-size); }
 .about-footer a { color: inherit; }
 @keyframes about-arrive { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) {
@@ -2410,21 +2331,25 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .settings-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
 .settings-heading h2 { margin-bottom: 8px; }
 .settings-heading p { margin-top: 0; color: var(--ink-dim); }
-.settings-tabs { display: flex; gap: 6px; border-bottom: 1px solid var(--line); padding-bottom: 10px; margin: 12px 0; }
-.settings-tabs button[aria-selected="true"] { color: var(--accent); border-color: var(--accent); }
+.settings-tabs {
+  display: block;
+  width: 100%;
+  margin: 12px 0;
+  --leo-tabs-width: 100%;
+}
 .settings-body section { padding: 12px 0; border-bottom: 1px solid var(--line); }
 .settings-body h3 { margin: 8px 0; }
 .settings-body p, .watch-settings p { line-height: 1.5; }
 .settings-body dl { display: grid; grid-template-columns: 140px 1fr; gap: 8px 16px; }
 .settings-body dt { color: var(--ink-dim); }
 .settings-body dd { margin: 0; overflow-wrap: anywhere; }
-.settings-body pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; padding: 10px; background: var(--bg); border-radius: 6px; }
-.settings-path { overflow-wrap: anywhere; font-family: var(--mono); font-size: 12px; }
+.settings-body pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--leo-typography-small-regular-font-size); padding: 10px; background: var(--bg); border-radius: var(--leo-radius-s); }
+.settings-path { overflow-wrap: anywhere; font-family: var(--mono); font-size: var(--leo-typography-small-regular-font-size); }
 .settings-error { border-left: 3px solid var(--accent); padding-left: 12px; }
 .settings-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 14px 0 4px; }
-.hook-editor { border: 1px solid var(--line); border-radius: 10px; margin: 16px 0; padding: 16px; }
+.hook-editor { border: 1px solid var(--line); border-radius: var(--leo-radius-m); margin: 16px 0; padding: 16px; }
 .hook-editor label, .watch-settings label { display: grid; gap: 6px; margin: 10px 0; }
-.hook-editor input, .hook-editor select, .watch-settings input { width: 100%; box-sizing: border-box; padding: 9px 10px; border: 1px solid var(--line); border-radius: 6px; color: inherit; background: var(--bg); }
+.hook-editor input, .hook-editor select, .watch-settings input { width: 100%; box-sizing: border-box; padding: 9px 10px; border: 1px solid var(--line); border-radius: var(--leo-radius-s); color: inherit; background: var(--bg); }
 .hook-argument { display: flex; align-items: center; gap: 8px; }
 .hook-argument label { flex: 1; }
 .watch-list { list-style: none; padding: 0; }
@@ -2433,8 +2358,16 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .watch-list p { margin: 6px 0; }
 .watch-list small { color: var(--ink-dim); }
 /* Keep the open width during folding, with room for both horizontal margins. */
-.sessions > .agent-settings-open { min-width: calc(var(--col-left-open) - 32px); margin: 10px 16px; flex-shrink: 0; }
-.vetting-notice, .processor-remark, .credential-finding { padding: 12px 16px; margin: 12px; border: 1px solid var(--line); border-radius: 8px; }
+.sessions > .agent-settings-open {
+  display: block;
+  width: calc(var(--col-left-open) - 32px);
+  min-width: calc(var(--col-left-open) - 32px);
+  margin: 10px 16px;
+  flex-shrink: 0;
+  flex-grow: 0;
+  box-sizing: border-box;
+}
+.vetting-notice, .processor-remark, .credential-finding { padding: 12px 16px; margin: 12px; border: 1px solid var(--line); border-radius: var(--leo-radius-m); }
 .vetting-notice.caution { border-left: 3px solid var(--accent); }
 .vetting-notice p, .processor-remark pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0; }
 .vetting-notice small, .processor-remark small, .credential-finding small { color: var(--ink-dim); line-height: 1.5; }
@@ -2443,8 +2376,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .credential-finding { background: var(--warn-bg); border-color: var(--warn); }
 .credential-finding strong { color: var(--warn); }
 .credential-finding ul { list-style: none; padding: 0; margin: 8px 0; }
-.credential-finding li { font-family: var(--mono); font-size: 11px; overflow-wrap: anywhere; margin: 4px 0; }
-.context-status { font-size: 11px; color: var(--ink-dim); padding: 6px 20px; flex-shrink: 0; }
+.credential-finding li { font-family: var(--mono); font-size: var(--leo-typography-x-small-regular-font-size); overflow-wrap: anywhere; margin: 4px 0; }
+.context-status { font-size: var(--leo-typography-x-small-regular-font-size); color: var(--ink-dim); padding: 6px 20px; flex-shrink: 0; }
 .watch-turn { display: grid; gap: 6px; padding: 12px 16px; border-left: 2px solid var(--accent); }
-.watch-turn span { font-size: 12px; color: var(--ink-dim); }
+.watch-turn span { font-size: var(--leo-typography-small-regular-font-size); color: var(--ink-dim); }
 @media (max-width: 640px) { .settings-body dl { grid-template-columns: 1fr; gap: 5px; } .settings-body dd { margin-bottom: 10px; } .settings-tabs { flex-wrap: wrap; } }

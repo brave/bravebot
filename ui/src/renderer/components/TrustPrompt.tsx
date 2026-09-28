@@ -1,4 +1,6 @@
 import { Modal } from './Modal'
+import { Alert, Button } from '../nala'
+
 interface Props {
   directory: string
   /** Where remembering the answer would write it, or null where remembering is not offered (TRUST-23). */
@@ -43,21 +45,21 @@ export function TrustPrompt({ directory, keeping, onAnswer }: Props): React.JSX.
             </p>
           </>
         )}
-        <p className="aside">
+        <Alert type="info" className="trust-aside">
           Trusted writes may apply directly. Changes involving untrusted content require review. This conversation keeps your answer{keeping ? ', and later sessions keep it only if you remember it' : ''}.
-        </p>
+        </Alert>
         <div className="trust-actions">
-          <button className="decline" onClick={() => onAnswer(false)}>
+          <Button kind="outline" size="small" onClick={() => onAnswer(false)} data-test="trust-decline">
             Don't trust
-          </button>
+          </Button>
           {keeping && (
-            <button onClick={() => onAnswer(true, true)}>
+            <Button kind="plain" size="small" onClick={() => onAnswer(true, true)} data-test="trust-remember">
               Trust and remember
-            </button>
+            </Button>
           )}
-          <button className="approve" onClick={() => onAnswer(true)}>
+          <Button kind="filled" size="small" onClick={() => onAnswer(true)} data-test="trust-approve">
             Trust this directory
-          </button>
+          </Button>
         </div>
     </Modal>
   )

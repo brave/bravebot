@@ -1,5 +1,6 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import { auditDescription, isRefusal, type AuditRecord, type TurnDetails } from '../turn-details'
+import { Collapse, Icon } from '../nala'
 
 const Evidence = memo(function Evidence({ record }: { record: AuditRecord }): React.JSX.Element {
   const { title, detail } = auditDescription(record.event)
@@ -13,7 +14,9 @@ const Evidence = memo(function Evidence({ record }: { record: AuditRecord }): Re
       {typeof label.integrity === 'string' && <><dt>Integrity</dt><dd>{label.integrity}</dd></>}
       {typeof label.confidentiality === 'string' && <><dt>Confidentiality</dt><dd>{label.confidentiality}</dd></>}
     </dl>}
-    <details><summary>Recorded evidence</summary><pre>{JSON.stringify(record.event, null, 2)}</pre></details>
+    <Collapse title="Recorded evidence" isOpen={undefined}>
+      <pre>{JSON.stringify(record.event, null, 2)}</pre>
+    </Collapse>
   </article>
 })
 
@@ -26,7 +29,9 @@ export function AuditInspector({ details, onClose }: { details?: TurnDetails; on
   return <section className="audit-inspector" id="turn-audit-inspector" aria-label="Turn audit"
     onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); onClose() } }}>
     <div className="inspector-title"><strong>Audit · {details ? `Turn ${details.turn}` : 'Saved reply'}</strong>
-      <button ref={close} className="audit-close" onClick={onClose} aria-label="Close audit inspector">×</button></div>
+      <button ref={close} className="audit-close" onClick={onClose} aria-label="Close audit inspector" data-test="audit-close">
+        <Icon name="close" style={{ '--leo-icon-size': '14px' } as React.CSSProperties} />
+      </button></div>
     <p className="audit-status">{!details ? 'Saved conversation' : details.status === 'running' ? 'Live · This turn' : incomplete ? 'Capture incomplete' : 'Captured during this session'}</p>
     {!details ? <p>Audit details aren’t available for this saved reply.</p> : <>
       {incomplete && <p>The event stream may be incomplete. Captured evidence is shown below.</p>}
@@ -35,10 +40,12 @@ export function AuditInspector({ details, onClose }: { details?: TurnDetails; on
       {!refusals.length && (details.clean === false ? <p>A policy refusal was reported, but its detailed evidence is unavailable.</p> :
         details.clean === true ? <p>No policy refusals recorded for this turn.</p> :
           <p>{details.status === 'running' ? 'Waiting for policy decisions. No refusals captured so far.' : 'No refusal summary is available for this turn.'}</p>)}
-      <details className="audit-all" onToggle={(event) => setAllOpen(event.currentTarget.open)}><summary>All captured events · {details.audit.length.toLocaleString()}</summary>
+      <Collapse className="audit-all" isOpen={allOpen}
+        title={`All captured events · ${details.audit.length.toLocaleString()}`}
+        onToggle={({ open }) => setAllOpen(open)} data-test="audit-all">
         {allOpen && details.audit.map((record) => <Evidence key={record.sequence} record={record} />)}
         {!details.audit.length && <p>No events available.</p>}
-      </details>
+      </Collapse>
       <p className="audit-status">Policy decisions describe individual operations.</p>
     </>}
   </section>
