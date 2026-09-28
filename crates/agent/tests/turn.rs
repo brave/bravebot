@@ -3365,6 +3365,75 @@ fn a_prompt_typed_while_a_delegate_runs_still_reaches_the_turn_that_spawned_it()
     );
 }
 
+/// Escape pressed while the round's last call runs ends the turn at the next request, and a line
+/// typed before it is left waiting for the turn it will start. The call itself says nothing of the
+/// stop, so the boundary it reaches has to ask.
+#[test]
+fn a_prompt_typed_before_a_stop_is_left_for_the_next_turn() {
+    #[derive(Default)]
+    struct StopsDuringTheCall {
+        cancel: bravebot_core::cancel::Cancel,
+        interjected: Vec<String>,
+    }
+
+    impl bravebot_agent::report::Reporter for StopsDuringTheCall {
+        fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+        fn tool_started(&mut self, _activity: bravebot_agent::report::Activity) {
+            self.cancel.cancel();
+        }
+
+        fn interjected(&mut self, said: String) {
+            self.interjected.push(said);
+        }
+    }
+
+    let scratch = Scratch::new("interject-stopped");
+    std::fs::write(scratch.path.join("a.txt"), "body").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"a.txt"}"#),
+        reply_with("never reached"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = StopsDuringTheCall::default();
+    let cancel = reporter.cancel.clone();
+    let mut confirmer = SaysOnce::new("look at b.txt instead");
+
+    let error = turn::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("what is in a.txt?"),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &cancel,
+    )
+    .expect_err("a stopped turn does not produce an answer");
+
+    assert!(error.to_string().contains("cancelled"), "got: {error}");
+    assert_eq!(
+        received.try_iter().count(),
+        1,
+        "a request went out after the stop"
+    );
+    assert!(
+        reporter.interjected.is_empty(),
+        "a line typed before the stop was handed to the turn being stopped: {:?}",
+        reporter.interjected
+    );
+    assert_eq!(
+        confirmer.said.as_deref(),
+        Some("look at b.txt instead"),
+        "the line was taken off the queue by a turn that could not read it"
+    );
+}
+
 /// Write a skill file that declares neither of the two keys a skill needs, so the turn has
 /// something to skip and something to say about it.
 fn write_half_declared_skill(root: &std::path::Path) {

@@ -468,7 +468,20 @@ for, and is drawn whether or not a turn is running. And **Ctrl-G** is refused, b
 terminal to an editor would take the screen from the turn drawing on it.
 
 Enter mid-turn takes the line out of the box and holds it. It is drawn under the box, marked, so you
-can see that what you sent went somewhere.
+can see that what you sent went somewhere. Beside the mark is where it is going:
+
+| Beside the mark | What it means |
+|---|---|
+| into this turn, next round | the running turn reads it once the calls in its current round are done |
+| a new turn after this | nothing running will read it, so it starts a turn when that ends: behind `/compact`, a plan or a goal check, or a turn you have asked to stop |
+| into the next turn | a prompt behind one that will start a turn, which that turn reads once the calls in its first round are done |
+| carried out after this | a slash command, carried out when what is running ends rather than sent into it |
+| run in your shell | a command line, which your shell runs when what is running ends, and whose output the model then reads |
+
+A turn that answers without another round never reaches the one its prompts were waiting for, so
+they wait for it to end instead, and the first becomes a turn of its own. On a terminal too narrow
+for the words, the mark stands alone, and on the last row the Ctrl-Enter offer keeps its place
+over them.
 
 **The turn in flight takes it.** A turn asks between rounds, after the round's tool calls have run
 and before the next request goes out. Everything waiting joins the conversation there, in the order

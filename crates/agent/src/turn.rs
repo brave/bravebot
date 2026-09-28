@@ -4132,16 +4132,19 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     // dropping the tail would answer some and leave others hanging. Stopping is what Escape
                     // is for.
                     //
-                    // After the cancel checks above, so a stop that arrived during the round is still what
-                    // happens: a person who pressed Escape and then typed is starting again, not adding to a
-                    // turn they have just stopped.
-                    take_interjections(
-                        task,
-                        &mut confirmer,
-                        &mut policy,
-                        conversation,
-                        &mut reporter,
-                    );
+                    // Guarded on the stop, because the checks above see one only before a call or from a
+                    // call that reports it, and Escape while the round's last call ran reaches neither: a
+                    // person who pressed Escape and then typed is starting again, not adding to a turn
+                    // they have just stopped.
+                    if !cancel.is_cancelled() {
+                        take_interjections(
+                            task,
+                            &mut confirmer,
+                            &mut policy,
+                            conversation,
+                            &mut reporter,
+                        );
+                    }
 
                     // Said after the round's results and any interjection, which is where a message from
                     // the driver belongs: the planner reads what its calls returned, then what it is being
