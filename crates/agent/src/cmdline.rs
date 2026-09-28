@@ -26,7 +26,7 @@
 //! worked out somewhere else, so a person shown the line has not been shown the plan. Quoting
 //! makes every one of them ordinary text, because a quoted `$` is a dollar sign and nothing more.
 
-use bravebot_core::command::{Joiner, Plan, Route, Step, Steps};
+use bravebot_core::command::{Joiner, Plan, Route, Step, Steps, is_the_null_device};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -1928,7 +1928,10 @@ impl Compiler<'_, '_> {
 
     fn writing(&mut self, target: &Word) -> Result<PathBuf, Refused> {
         let path = self.target(target)?;
-        self.writes.push(path.clone());
+        // Discarding a stream writes no file, so there is no destination to confine or endorse.
+        if !is_the_null_device(&path) {
+            self.writes.push(path.clone());
+        }
         Ok(path)
     }
 
@@ -1951,7 +1954,8 @@ impl Compiler<'_, '_> {
             return Err(refused());
         };
         let path = Path::new(one);
-        let path = if path.is_absolute() {
+        // The device keeps its spelling on Windows too, where `/dev/null` is not absolute.
+        let path = if path.is_absolute() || is_the_null_device(path) {
             path.to_path_buf()
         } else {
             self.directory.join(path)
@@ -2813,6 +2817,51 @@ mod tests {
         let plan = compiled("cat 2>&1", &tree.root);
         assert!(plan.writes.is_empty());
         assert_eq!(plan.steps.steps()[0].routes, [Route::StderrToStdout]);
+    }
+
+    /// Discarding a stream touches no file either, so `/dev/null` is not a destination to confine
+    /// or ask about. The route stays, which is what the prompt shows and exec reads.
+    #[test]
+    fn discarding_a_stream_writes_no_file() {
+        let tree = Tree::new("discard");
+        let null = PathBuf::from("/dev/null");
+        for (line, route) in [
+            (
+                "cat > /dev/null",
+                Route::Stdout {
+                    path: null.clone(),
+                    append: false,
+                },
+            ),
+            (
+                "cat >> /dev/null",
+                Route::Stdout {
+                    path: null.clone(),
+                    append: true,
+                },
+            ),
+            (
+                "cat 2> /dev/null",
+                Route::Stderr {
+                    path: null.clone(),
+                    append: false,
+                },
+            ),
+            ("cat &> /dev/null", Route::Both { path: null.clone() }),
+        ] {
+            let plan = compiled(line, &tree.root);
+            assert!(plan.writes.is_empty(), "`{line}` wrote {:?}", plan.writes);
+            assert_eq!(plan.steps.steps()[0].routes, [route], "`{line}`");
+        }
+    }
+
+    /// Only the device's own spelling is a discard. Any other way of reaching it is a path like any
+    /// other, held to the same confinement, so a link cannot pass for the device.
+    #[test]
+    fn another_spelling_of_the_null_device_is_a_write() {
+        let tree = Tree::new("discard-spelled");
+        let plan = compiled("cat > /dev/../dev/null 2> ./null", &tree.root);
+        assert_eq!(plan.writes.len(), 2, "{:?}", plan.writes);
     }
 
     /// A destination worked out from what is on disk is a destination that moves when the tree

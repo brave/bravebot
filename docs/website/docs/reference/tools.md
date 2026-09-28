@@ -631,6 +631,11 @@ at the prompt, and it takes every rule a write takes: the permission rules, the 
 for that path, and the confinement that keeps a write inside the workspace. `>>` is a write, and
 `2>&1` renames a stream and touches no file.
 
+**`> /dev/null` discards, so it is not a write.** Sending a stream to `/dev/null` (with `>`, `>>`,
+`2>`, `2>>` or `&>`) writes no file, so the path joins no write set and no write rule is asked about
+it; the prompt still shows where the stream went. Only that exact spelling counts: `/dev/../dev/null`,
+or a link to the device, is an ordinary path and is refused as one outside the workspace.
+
 **A redirection also records what it wrote.** Where the line's output is untrusted, every file the line
 opened for writing becomes untrusted, which is what stops a program's output being read back as
 trusted. Where the output is trusted the map is left as it was, because `>>` keeps whatever the file

@@ -1029,6 +1029,42 @@ fn both_streams_can_go_to_one_file() {
     assert!(written.contains("no-such-file"));
 }
 
+/// A stream sent to `/dev/null` is dropped and is no file effect, so nothing is reported for the
+/// trust map to reserve or mark. The stream the line did not discard still comes back, which is
+/// what tells a discard from a line that lost all of its output.
+#[test]
+fn a_discarded_stream_is_dropped_and_opens_nothing() {
+    let scratch = Scratch::new("line-discard");
+    std::fs::write(scratch.path.join("kept.txt"), "").expect("write");
+
+    let (ran, opened) = ran_and_opened("ls kept.txt no-such-file > /dev/null", &scratch.path);
+    assert!(opened.is_empty(), "a discard was reported: {opened:?}");
+    assert_eq!(ran.stdout, "", "standard output was not discarded");
+    assert!(
+        ran.stderr.contains("no-such-file"),
+        "standard error went with it: {:?}",
+        ran.stderr
+    );
+
+    let (ran, opened) = ran_and_opened("ls kept.txt no-such-file 2> /dev/null", &scratch.path);
+    assert!(opened.is_empty(), "a discard was reported: {opened:?}");
+    assert_eq!(ran.stdout, "kept.txt\n", "standard output went with it");
+    assert_eq!(ran.stderr, "", "standard error was not discarded");
+
+    for both in [
+        "ls kept.txt no-such-file > /dev/null 2>&1",
+        "ls kept.txt no-such-file &> /dev/null",
+    ] {
+        let (ran, opened) = ran_and_opened(both, &scratch.path);
+        assert!(opened.is_empty(), "`{both}` reported {opened:?}");
+        assert_eq!(
+            (ran.stdout.as_str(), ran.stderr.as_str()),
+            ("", ""),
+            "`{both}`"
+        );
+    }
+}
+
 /// A branch is an effect a person answered for up front, and it has to run when the line says it
 /// does and not otherwise.
 #[test]
