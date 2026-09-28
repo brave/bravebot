@@ -125,6 +125,8 @@ pub struct Refusals {
     pub caching: bool,
     /// The effort level, whose field belongs to the model's own provider.
     pub effort: bool,
+    /// The ask for tool arguments as they are written, which is a beta of one provider's.
+    pub arguments_as_written: bool,
 }
 
 /// What each model has refused so far.
@@ -155,13 +157,10 @@ pub fn refusals(model: &str) -> Refusals {
         .unwrap_or_default()
 }
 
-/// Record what a model refused, or take it back where the probe settled nothing.
+/// Record what a model refused.
 fn remember(model: &str, refusals: Refusals) {
     if let Ok(mut known) = learned().0.lock() {
-        match refusals == Refusals::default() {
-            true => known.remove(model),
-            false => known.insert(model.to_string(), refusals),
-        };
+        known.insert(model.to_string(), refusals);
     }
 }
 
@@ -272,8 +271,16 @@ pub struct BedrockClient<'a> {
     /// define one. The field belongs to the model's own provider rather than to this API, so a
     /// model from another provider refuses it by name.
     effort: bool,
-    /// The model the two above were loaded for, so what is learned is written back under it.
+    /// Whether streamed requests that offer tools still ask for arguments as they are written.
+    ///
+    /// True until a model refuses the ask. Without it the service holds an argument back until the
+    /// model has finished writing it, and a long file is a silence the connection is cut on.
+    arguments_as_written: bool,
+    /// The model the three above were loaded for, so what is learned is written back under it.
     learned_for: String,
+    /// What that model was known to refuse before this request, which a probe that settled nothing
+    /// puts back.
+    recalled: Refusals,
 }
 
 impl<'a> BedrockClient<'a> {
@@ -311,7 +318,9 @@ impl<'a> BedrockClient<'a> {
             cancel: None,
             breakpoints: true,
             effort: true,
+            arguments_as_written: true,
             learned_for: String::new(),
+            recalled: Refusals::default(),
         }
     }
 
@@ -341,7 +350,7 @@ impl<'a> BedrockClient<'a> {
                     self.breakpoints = false;
                     probed = true;
                 }
-                Err(error) if self.worth_dropping_effort(&error) => {
+                Err(error) if self.worth_dropping_effort(&error, request) => {
                     self.effort = false;
                     probed = true;
                 }
@@ -375,33 +384,68 @@ impl<'a> BedrockClient<'a> {
 
     /// Whether this failure is worth sending the same request again without its effort level.
     ///
-    /// The level is the other part of a request nobody asked for, and the only one a validation
-    /// refusal can be about once the breakpoints are gone.
-    fn worth_dropping_effort(&self, error: &BedrockError) -> bool {
-        self.effort && error.is_refused_on_contents()
+    /// Only where the request carried one: a request without a level was not refused for it, and
+    /// giving it up there would record a refusal nobody saw and tell the interface a level is not
+    /// in force that the model would have read. Tried before the ask for arguments as they are
+    /// written, which is refused with the same status: a model can take that ask and refuse the
+    /// level, and the order keeps the one that stops a long argument being cut off.
+    fn worth_dropping_effort(&self, error: &BedrockError, request: &ChatRequest) -> bool {
+        self.effort && request.effort.is_some() && error.is_refused_on_contents()
+    }
+
+    /// Whether this failure is worth sending the same streamed request again without the ask for
+    /// arguments as they are written.
+    ///
+    /// The last thing a validation refusal can be about, and only where the request carried it.
+    fn worth_dropping_arguments_as_written(
+        &self,
+        error: &BedrockError,
+        request: &ChatRequest,
+    ) -> bool {
+        self.streams_arguments(request, true) && error.is_refused_on_contents()
+    }
+
+    /// Whether this request asks for tool arguments as they are written.
+    ///
+    /// Streamed requests that offer a tool, and only those: a whole reply arrives at once however
+    /// its arguments are sent, so there the ask buys nothing and gives up the service's own check
+    /// that an argument parses.
+    fn streams_arguments(&self, request: &ChatRequest, streaming: bool) -> bool {
+        streaming
+            && self.arguments_as_written
+            && request
+                .tools
+                .as_deref()
+                .is_some_and(|tools| !tools.is_empty())
     }
 
     /// Settle what a probe found, once the request it was part of has finished one way or the other.
     ///
-    /// A probe that answered leaves the breakpoints dropped, which is the model saying it does not
-    /// read them. A probe that failed as well says they were not what the service refused, so they
-    /// go back: a request can be refused on its contents for reasons that have nothing to do with
-    /// them, and a session that gave them up for one of those pays full price for a prefix the
-    /// service would have read once, every round, for the rest of its life.
+    /// A probe that answered leaves what it gave up dropped, which is the model saying it does not
+    /// read it. A probe that failed as well says none of it was what the service refused, so each
+    /// goes back to what was known before the request: a request can be refused on its contents
+    /// for reasons that have nothing to do with them, and a session that gave the breakpoints up
+    /// for one of those pays full price for a prefix the service would have read once, every round,
+    /// for the rest of its life. Nothing is written then either, so what an earlier request found
+    /// is not forgotten because a later one failed.
     fn probe_settled(&mut self, probed: bool, failed: bool) {
-        if probed && failed {
-            self.breakpoints = true;
-            self.effort = true;
+        if !probed {
+            return;
         }
-        if probed {
-            remember(
-                &self.learned_for,
-                Refusals {
-                    caching: !self.breakpoints,
-                    effort: !self.effort,
-                },
-            );
+        if failed {
+            self.breakpoints = !self.recalled.caching;
+            self.effort = !self.recalled.effort;
+            self.arguments_as_written = !self.recalled.arguments_as_written;
+            return;
         }
+        remember(
+            &self.learned_for,
+            Refusals {
+                caching: !self.breakpoints,
+                effort: !self.effort,
+                arguments_as_written: !self.arguments_as_written,
+            },
+        );
     }
 
     /// Start a request from what this model has already been found to refuse.
@@ -412,7 +456,9 @@ impl<'a> BedrockClient<'a> {
         let refusals = refusals(model);
         self.breakpoints = !refusals.caching;
         self.effort = !refusals.effort;
+        self.arguments_as_written = !refusals.arguments_as_written;
         self.learned_for = model.to_string();
+        self.recalled = refusals;
     }
 
     fn complete_once<S: Sink>(
@@ -542,8 +588,12 @@ impl<'a> BedrockClient<'a> {
                     self.breakpoints = false;
                     probed = true;
                 }
-                Err(error) if self.worth_dropping_effort(&error) => {
+                Err(error) if self.worth_dropping_effort(&error, request) => {
                     self.effort = false;
+                    probed = true;
+                }
+                Err(error) if self.worth_dropping_arguments_as_written(&error, request) => {
+                    self.arguments_as_written = false;
                     probed = true;
                 }
                 Err(error) if worth_another_attempt(attempt, &error) => {
@@ -728,10 +778,20 @@ impl<'a> BedrockClient<'a> {
     /// Separate from [`BedrockClient::build`] so what a configuration puts in a request can be
     /// read without a credential: everything else that method does needs the AWS CLI to have
     /// answered, and the ceiling is decided here.
-    fn converse_for(&self, request: &ChatRequest, model: &str) -> protocol::ConverseRequest {
+    fn converse_for(
+        &self,
+        request: &ChatRequest,
+        model: &str,
+        streaming: bool,
+    ) -> protocol::ConverseRequest {
         let converse = protocol::request_from(&request.messages, request.tools.as_deref())
             .with_ceiling(self.config.output_limit(model))
             .with_effort(request.effort.filter(|_| self.effort));
+        let converse = if self.streams_arguments(request, streaming) {
+            converse.with_arguments_as_written()
+        } else {
+            converse
+        };
         let converse = if request.conversation_is_sent_again {
             converse
         } else {
@@ -753,15 +813,18 @@ impl<'a> BedrockClient<'a> {
         request: &ChatRequest,
         streaming: bool,
     ) -> Result<(Request, String), BedrockError> {
-        #[cfg(test)]
-        if let Some(http) = &self.test_request {
-            return Ok((http.clone(), self.model_for(request)?));
-        }
         let model = self.model_for(request)?;
 
-        let converse = self.converse_for(request, &model);
+        let converse = self.converse_for(request, &model, streaming);
         let body =
             serde_json::to_vec(&converse).map_err(|e| BedrockError::Encode(e.to_string()))?;
+
+        #[cfg(test)]
+        if let Some(http) = &self.test_request {
+            let mut http = http.clone();
+            http.body = Some(body);
+            return Ok((http, model));
+        }
 
         let resolved = credentials::resolve(self.config.profile.as_deref())?;
 
@@ -1020,7 +1083,9 @@ fn reported_usage(envelope: &serde_json::Value) -> Option<protocol::BedrockUsage
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bravebot_aichat::protocol::{Effort, Message, Tool};
     use bravebot_config::env_var;
+    use serde_json::json;
 
     /// The event that opens a tool call, which names it and carries none of its arguments.
     fn opening(id: &str, name: &str) -> protocol::BlockStart {
@@ -1062,7 +1127,8 @@ mod tests {
             refusals(model),
             Refusals {
                 caching: true,
-                effort: true
+                effort: true,
+                arguments_as_written: false,
             }
         );
 
@@ -1412,12 +1478,13 @@ mod tests {
         let config = config();
         let egress = Egress::new();
         let mut client = BedrockClient::new(&config, &egress);
+        let request = ChatRequest::new("opus-arn", vec![]).with_effort(Some(Effort::High));
 
         let refused = refusal(400);
-        assert!(client.worth_dropping_effort(&refused));
+        assert!(client.worth_dropping_effort(&refused, &request));
 
         client.effort = false;
-        assert!(!client.worth_dropping_effort(&refused));
+        assert!(!client.worth_dropping_effort(&refused, &request));
     }
 
     /// The two are told apart by status alone, so neither concession is spent on the other's
@@ -1428,11 +1495,14 @@ mod tests {
         let config = config();
         let egress = Egress::new();
         let client = BedrockClient::new(&config, &egress);
+        let request = writing_a_file("opus-arn").with_effort(Some(Effort::High));
 
         assert!(client.worth_dropping_breakpoints(&refusal(403)));
-        assert!(!client.worth_dropping_effort(&refusal(403)));
+        assert!(!client.worth_dropping_effort(&refusal(403), &request));
+        assert!(!client.worth_dropping_arguments_as_written(&refusal(403), &request));
 
-        assert!(client.worth_dropping_effort(&refusal(400)));
+        assert!(client.worth_dropping_effort(&refusal(400), &request));
+        assert!(client.worth_dropping_arguments_as_written(&refusal(400), &request));
         assert!(!client.worth_dropping_breakpoints(&refusal(400)));
     }
 
@@ -1474,6 +1544,7 @@ mod tests {
         let config = config();
         let egress = Egress::new();
         let client = BedrockClient::new(&config, &egress);
+        let request = writing_a_file("opus-arn").with_effort(Some(Effort::High));
 
         for status in [402, 404, 429, 500, 503] {
             let error = refusal(status);
@@ -1482,8 +1553,12 @@ mod tests {
                 "{status} dropped the breakpoints"
             );
             assert!(
-                !client.worth_dropping_effort(&error),
+                !client.worth_dropping_effort(&error, &request),
                 "{status} dropped the effort level"
+            );
+            assert!(
+                !client.worth_dropping_arguments_as_written(&error, &request),
+                "{status} dropped the ask for arguments as they are written"
             );
         }
 
@@ -1573,11 +1648,14 @@ mod tests {
         assert!(backoff(2) < backoff(3));
     }
     /// Use real loopback HTTP; no AWS credentials or account is involved.
-    fn refused_requests(statuses: Vec<u16>) -> (Request, std::sync::mpsc::Receiver<()>) {
-        scripted_responses(statuses.into_iter().map(|status| format!("HTTP/1.1 {status} Refused\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").into_bytes()).collect())
+    fn refused_requests(statuses: Vec<u16>) -> (Request, std::sync::mpsc::Receiver<Vec<u8>>) {
+        scripted_responses(statuses.into_iter().map(refused_with).collect())
     }
 
-    fn scripted_responses(responses: Vec<Vec<u8>>) -> (Request, std::sync::mpsc::Receiver<()>) {
+    /// Answer each request with the next of `responses`, and hand on the body each one carried.
+    fn scripted_responses(
+        responses: Vec<Vec<u8>>,
+    ) -> (Request, std::sync::mpsc::Receiver<Vec<u8>>) {
         use std::io::{BufRead, Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
@@ -1597,9 +1675,10 @@ mod tests {
                         length = value.trim().parse().unwrap();
                     }
                 }
-                reader.read_exact(&mut vec![0; length]).unwrap();
+                let mut body = vec![0; length];
+                reader.read_exact(&mut body).unwrap();
                 stream.write_all(&response).unwrap();
-                sent.send(()).unwrap();
+                sent.send(body).unwrap();
             }
         });
         (
@@ -1608,7 +1687,8 @@ mod tests {
         )
     }
 
-    /// Both entry points count cache and effort probes, which do not advance the retry ordinal.
+    /// Both entry points count every probe, none of which advances the retry ordinal. Only a
+    /// streamed request asks for arguments as they are written, so only it has a third to give up.
     #[test]
     fn request_counts_include_capability_probes() {
         use bravebot_core::{
@@ -1617,9 +1697,10 @@ mod tests {
             policy::{ReleasePlan, Routing},
         };
         for streaming in [false, true] {
+            let sent = if streaming { 4 } else { 3 };
             let config = config();
             let egress = Egress::new();
-            let (http, received) = refused_requests(vec![403, 400, 400]);
+            let (http, received) = refused_requests(vec![403, 400, 400, 400][..sent].to_vec());
             let mut client = BedrockClient::new(&config, &egress);
             client.test_request = Some(http);
             let mut sink = RecordingSink::new();
@@ -1634,7 +1715,7 @@ mod tests {
                 &mut sink,
             )
             .unwrap();
-            let request = ChatRequest::new("opus-arn", vec![]);
+            let request = writing_a_file("opus-arn").with_effort(Some(Effort::High));
             let result = if streaming {
                 client.complete_streaming(&mut policy, &request, |_| {})
             } else {
@@ -1647,11 +1728,310 @@ mod tests {
                     ..
                 }))
             ));
-            assert_eq!(client.attempts(), 3);
-            for _ in 0..3 {
+            assert_eq!(client.attempts() as usize, sent, "streaming={streaming}");
+            for _ in 0..sent {
                 received.recv_timeout(Duration::from_secs(2)).unwrap();
             }
         }
+    }
+
+    /// A configuration offering only `model`, so what a test teaches the process-wide record is
+    /// kept under a name no other test sends.
+    fn config_for(model: &'static str) -> Bedrock {
+        Bedrock::from_lookup(move |name| {
+            match name {
+                env_var::USE_BEDROCK => Some("1"),
+                env_var::AWS_REGION => Some("us-west-2"),
+                env_var::BEDROCK_OPUS_MODEL => Some(model),
+                _ => None,
+            }
+            .map(str::to_string)
+        })
+        .expect("configured")
+    }
+
+    fn streamed(frames: Vec<Vec<u8>>) -> Vec<u8> {
+        let body = frames.concat();
+        let mut response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        response.extend(body);
+        response
+    }
+
+    fn answered() -> Vec<u8> {
+        streamed(vec![
+            eventstream::tests::frame(
+                "contentBlockDelta",
+                br#"{"contentBlockIndex":0,"delta":{"text":"done"}}"#,
+            ),
+            eventstream::tests::frame("messageStop", br#"{"stopReason":"end_turn"}"#),
+            eventstream::tests::frame(
+                "metadata",
+                br#"{"usage":{"inputTokens":100,"outputTokens":7}}"#,
+            ),
+        ])
+    }
+
+    fn refused_with(status: u16) -> Vec<u8> {
+        format!("HTTP/1.1 {status} Refused\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .into_bytes()
+    }
+
+    /// Stream `request` to a server answering `responses` in turn, and return the body of each
+    /// attempt sent.
+    fn stream_against(
+        config: &Bedrock,
+        request: &ChatRequest,
+        responses: Vec<Vec<u8>>,
+    ) -> (Result<Completion, BedrockError>, Vec<serde_json::Value>) {
+        use bravebot_core::{
+            capability::{Capability, CapabilitySet},
+            event::RecordingSink,
+            policy::{ReleasePlan, Routing},
+        };
+        let (http, received) = scripted_responses(responses);
+        let egress = Egress::new();
+        let mut client = BedrockClient::new(config, &egress);
+        client.test_request = Some(http);
+        let mut sink = RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "test");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .unwrap();
+        let result = client.complete_streaming(&mut policy, request, |_| {});
+        let sent = (0..client.attempts())
+            .map(|_| {
+                let body = received
+                    .recv_timeout(Duration::from_secs(2))
+                    .expect("an attempt the server read");
+                serde_json::from_slice(&body).expect("a JSON body")
+            })
+            .collect();
+        (result, sent)
+    }
+
+    fn writing_a_file(model: &str) -> ChatRequest {
+        ChatRequest::new(model, vec![Message::user("write fish.py")]).with_tools(vec![
+            Tool::function("write_file", "Write a file", json!({})),
+        ])
+    }
+
+    /// Whether a sent body carried the level, and whether it carried the ask for arguments as they
+    /// are written.
+    fn carried(body: &serde_json::Value) -> (bool, bool) {
+        let fields = &body["additionalModelRequestFields"];
+        (
+            !fields["output_config"].is_null(),
+            !fields["anthropic_beta"].is_null(),
+        )
+    }
+
+    /// The ask goes where it buys something and nowhere else. A whole reply arrives at once however
+    /// its arguments are sent, so there it would only give up the service's check that an argument
+    /// parses. A request offering no tool has no argument to stream. A model that refused it is
+    /// not asked again.
+    #[test]
+    fn only_a_streamed_request_offering_a_tool_asks_for_arguments_as_they_are_written() {
+        let config = config();
+        let egress = Egress::new();
+        let mut client = BedrockClient::new(&config, &egress);
+        let offering = writing_a_file("opus-arn");
+        let bare = ChatRequest::new("opus-arn", vec![Message::user("hello")]);
+        let asks = |client: &BedrockClient, request: &ChatRequest, streaming: bool| {
+            let body = serde_json::to_value(client.converse_for(request, "opus-arn", streaming))
+                .expect("a body");
+            body.pointer("/additionalModelRequestFields/anthropic_beta")
+                .cloned()
+        };
+
+        assert_eq!(
+            asks(&client, &offering, true),
+            Some(json!([protocol::ARGUMENTS_AS_WRITTEN]))
+        );
+        assert_eq!(
+            asks(&client, &offering, false),
+            None,
+            "a whole reply gave up the service's check for nothing"
+        );
+        assert_eq!(
+            asks(&client, &bare, true),
+            None,
+            "a request offering no tool asked about tool arguments"
+        );
+
+        client.arguments_as_written = false;
+        assert_eq!(
+            asks(&client, &offering, true),
+            None,
+            "an ask the model refused was sent again"
+        );
+    }
+
+    /// A model that does not define the beta refuses the request on it, as a model from another
+    /// provider refuses the level. It is given up, the request answers, and the next turn starts
+    /// without it. The level is left alone: this request carried none, so none was refused, and
+    /// recording one would tell the interface that a level it is later given is not in force.
+    #[test]
+    fn a_refused_ask_for_arguments_as_written_is_given_up_and_remembered() {
+        let model = "a-model-that-refuses-the-beta";
+        let config = config_for(model);
+        let request = writing_a_file(model);
+
+        let (result, sent) = stream_against(&config, &request, vec![refused_with(400), answered()]);
+
+        result.expect("the request without the ask answers");
+        assert_eq!(
+            sent.iter().map(carried).collect::<Vec<_>>(),
+            [(false, true), (false, false)],
+            "(level, ask) of each attempt"
+        );
+        assert_eq!(
+            refusals(model),
+            Refusals {
+                arguments_as_written: true,
+                ..Refusals::default()
+            },
+            "the level was given up though no request carried one"
+        );
+
+        let egress = Egress::new();
+        let mut next = BedrockClient::new(&config, &egress);
+        next.recall(model);
+        let body = serde_json::to_value(next.converse_for(&request, model, true)).expect("a body");
+        assert!(
+            body.get("additionalModelRequestFields").is_none(),
+            "the next turn asked again: {body}"
+        );
+    }
+
+    /// The level and the ask are refused with the same status, so the order they are given up in
+    /// decides which is kept. Measured on Bedrock: Claude Haiku 4.5 takes the ask and refuses the
+    /// level, 400 "This model does not support the effort parameter." Giving up the ask first
+    /// would cost that model the field that stops a long argument being cut off, and the request
+    /// would still be refused.
+    #[test]
+    fn the_level_is_given_up_before_the_ask_for_arguments_as_written() {
+        let asked = |model: &str| writing_a_file(model).with_effort(Some(Effort::High));
+
+        let model = "a-model-that-refuses-the-level-only";
+        let (result, sent) = stream_against(
+            &config_for(model),
+            &asked(model),
+            vec![refused_with(400), answered()],
+        );
+        result.expect("the request without the level answers");
+        assert_eq!(
+            sent.iter().map(carried).collect::<Vec<_>>(),
+            [(true, true), (false, true)],
+            "(level, ask) of each attempt"
+        );
+        assert_eq!(
+            refusals(model),
+            Refusals {
+                effort: true,
+                ..Refusals::default()
+            },
+            "the ask was given up in place of the level"
+        );
+
+        let model = "a-model-that-refuses-the-level-and-the-beta";
+        let (result, sent) = stream_against(
+            &config_for(model),
+            &asked(model),
+            vec![refused_with(400), refused_with(400), answered()],
+        );
+        result.expect("the request without either answers");
+        assert_eq!(
+            sent.iter().map(carried).collect::<Vec<_>>(),
+            [(true, true), (false, true), (false, false)],
+            "(level, ask) of each attempt"
+        );
+        assert_eq!(
+            refusals(model),
+            Refusals {
+                caching: false,
+                effort: true,
+                arguments_as_written: true,
+            }
+        );
+    }
+
+    /// A request is refused on its contents for reasons that are no concession's, a prompt too long
+    /// for the model among them, and a request carrying the ask gives it up and is refused again.
+    /// That settles nothing, so it must not undo what an earlier request settled: forgetting a
+    /// refused level would send it again next turn, spending a refused request, and tell the
+    /// interface in the meantime that a level is in force which the model will not read.
+    #[test]
+    fn a_probe_that_settled_nothing_leaves_what_was_known() {
+        let model = "a-model-known-to-refuse-the-level";
+        let known = Refusals {
+            effort: true,
+            ..Refusals::default()
+        };
+        remember(model, known);
+
+        let (result, sent) = stream_against(
+            &config_for(model),
+            &writing_a_file(model).with_effort(Some(Effort::High)),
+            vec![refused_with(400), refused_with(400)],
+        );
+
+        assert!(result.is_err(), "{result:?}");
+        assert_eq!(
+            sent.iter().map(carried).collect::<Vec<_>>(),
+            [(false, true), (false, false)],
+            "(level, ask) of each attempt"
+        );
+        assert_eq!(
+            refusals(model),
+            known,
+            "a failed probe undid what was known"
+        );
+    }
+
+    /// With the ask in force the service no longer checks an argument before sending it on, so a
+    /// streamed call can arrive whose arguments do not parse. It is handed on exactly as written,
+    /// for the turn loop to answer as a failed call. Made whole here, by closing it or by standing
+    /// `{}` in for it, it would be a call the model never wrote, and one the turn loop would run.
+    #[test]
+    fn a_streamed_argument_that_does_not_parse_is_handed_on_as_written() {
+        let model = "a-model-whose-argument-broke-off";
+        let written = r#"{"path":"fish.py","content":"print("#;
+        let delta = json!({ "contentBlockIndex": 1, "delta": { "toolUse": { "input": written } } })
+            .to_string();
+        let reply = streamed(vec![
+            eventstream::tests::frame(
+                "contentBlockStart",
+                br#"{"contentBlockIndex":1,"start":{"toolUse":{"toolUseId":"a","name":"write_file"}}}"#,
+            ),
+            eventstream::tests::frame("contentBlockDelta", delta.as_bytes()),
+            eventstream::tests::frame("messageStop", br#"{"stopReason":"tool_use"}"#),
+            eventstream::tests::frame(
+                "metadata",
+                br#"{"usage":{"inputTokens":100,"outputTokens":7}}"#,
+            ),
+        ]);
+
+        let (result, _) = stream_against(&config_for(model), &writing_a_file(model), vec![reply]);
+
+        let completion = result.expect("a reply that asked for a call");
+        assert_eq!(completion.calls.len(), 1, "{:?}", completion.calls);
+        assert_eq!(
+            completion.calls[0].function.arguments.as_deref(),
+            Some(written)
+        );
+        assert!(
+            completion.calls[0].arguments().is_err(),
+            "an argument the model never finished became one that parses"
+        );
     }
 
     /// Announcing a retry before a wait must not count it as sent when the caller cancels.
@@ -1828,7 +2208,7 @@ mod tests {
         let ceiling = |config: &Bedrock, model: &str| {
             let client = BedrockClient::new(config, &egress);
             client
-                .converse_for(&ChatRequest::new(model, vec![]), model)
+                .converse_for(&ChatRequest::new(model, vec![]), model, false)
                 .inference_config
                 .max_tokens
         };
