@@ -5610,6 +5610,11 @@ fn manifest_animated(
                     bravebot_agent::confirm::CallDecision::reject(),
                 ));
             }
+            crate::remote_confirm::ToMain::Move(_) => {
+                let _ = answer_tx.send(crate::remote_confirm::Reply::Move(
+                    bravebot_agent::confirm::Decision::Reject,
+                ));
+            }
             // What is left announces rather than asks, so nothing waits on it. The manifest is the
             // task list, so no list changes; there is no planner to delegate or to be interjected
             // at; and a run's steps report through `Started` and `Finished` above.
@@ -6377,6 +6382,13 @@ fn run_turn_animated(
                     session.note(t!(session_stands_for_tool, tool = request.name()));
                 }
                 let _ = answer_tx.send(crate::remote_confirm::Reply::McpCall(answer.decision()));
+            }
+            crate::remote_confirm::ToMain::Move(request) => {
+                let answer = crate::confirm::ask_move(terminal, &request);
+                if answer.stops_the_turn() {
+                    stop_what_is_running(session, &cancel);
+                }
+                let _ = answer_tx.send(crate::remote_confirm::Reply::Move(answer.decision()));
             }
             crate::remote_confirm::ToMain::Ask(asking) => {
                 // A planner that loops back over the same decision should not make the user

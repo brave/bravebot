@@ -9424,6 +9424,13 @@ mod tests {
                 crate::confirm::CallDecision::reject()
             }
 
+            fn confirm_move(
+                &mut self,
+                _request: &crate::confirm::MoveRequest,
+            ) -> crate::confirm::Decision {
+                crate::confirm::Decision::Reject
+            }
+
             /// Refuses. A test double is not a person agreeing to start a process.
             fn confirm_server(&mut self, _request: &crate::confirm::ServerRequest) -> Decision {
                 Decision::Reject

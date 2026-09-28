@@ -340,6 +340,9 @@ pub struct Policy<'sink, S: Sink> {
     /// rule about a host: a machine runs many services on one address, and the declaration named
     /// one of them.
     calling_server: Option<String>,
+    /// Where the hop the egress gate last refused off a declared server was bound, until
+    /// [`Policy::take_server_hop`] hands it to whoever asks the person. A server's own bytes.
+    server_hop: Option<String>,
     /// The integrity of every observation this turn has made, met together.
     ///
     /// Starts trusted, since the task is the user's own words, and drops to untrusted the moment
@@ -444,6 +447,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             exposed: crate::credentials::Exposed::new(),
             fetching: None,
             calling_server: None,
+            server_hop: None,
             context: Integrity::Trusted,
         })
     }
@@ -559,6 +563,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             // would be writing them into whatever formats that refusal. The declared destination
             // is what a person wrote down, so a refusal names that.
             if crate::url::authority_of(url).unwrap_or_default() != declared {
+                // Kept for the prompt and nothing else: see `take_server_hop`.
+                self.server_hop = Some(url.to_string());
                 return Err(self.deny(
                     "network",
                     Principle::IntegrityGate,
@@ -697,12 +703,13 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// No rule widens this, which is the other difference from a fetch. A `WebFetch` rule says
     /// which websites the planner may reach, and that is not a statement that one server's
-    /// traffic may be sent somewhere else. An approval would widen it, and there is none to give:
-    /// a gate allows or refuses and cannot ask, so the question needs a prompt before the call and
-    /// a declaration to write the answer back into, and issue #83 is where both are. Until then a
-    /// hop that leaves the declared destination is refused and nothing is sent.
+    /// traffic may be sent somewhere else. Nor does an answer widen it: a gate allows or refuses
+    /// and cannot ask, so the hop is refused and nothing is sent to where it pointed, and
+    /// [`Policy::take_server_hop`] hands that destination to whoever puts it to the person. A yes
+    /// rewrites the declaration, and the request is made again to the url it now names.
     pub fn before_server_request(&mut self, url: &str) {
         self.calling_server = Some(crate::url::authority_of(url).unwrap_or_default());
+        self.server_hop = None;
     }
 
     /// Say that the request to a declared server has finished, however it went.
@@ -711,6 +718,52 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// turn's egress confined to a server's host.
     pub fn server_request_finished(&mut self) {
         self.calling_server = None;
+    }
+
+    /// Where the last request to a declared server was redirected off it, if it was.
+    ///
+    /// Taken rather than read, so one refusal is asked about once. `(U,pub)`: the url came out of
+    /// a `Location` header and is the server's own bytes, so it may be drawn for a person and
+    /// decides nothing until one of them says it is where the server now is (SERVERS-11).
+    pub fn take_server_hop(&mut self) -> Option<Labelled<String>> {
+        self.server_hop
+            .take()
+            .map(|url| Labelled::new(url, Label::untrusted_public()))
+    }
+
+    /// Record that a person approved the destination `alias`'s request was redirected to.
+    ///
+    /// Only a person mints this. Bypassing every check answers no question about a move, since a
+    /// move rewrites a declaration and the mode records nothing (SERVERS-13).
+    pub fn endorse_server_move(&mut self, alias: &str) {
+        self.issue_grant("mcp_move", "alias", alias.to_string());
+    }
+
+    /// Take a person's word that `destination` is where the server declared as `alias` now is.
+    ///
+    /// A promotion road of its own (LABEL-8). What is promoted is the url as it was drawn at the
+    /// prompt, which a yes rewrites the declaration to, so a server's bytes become a url somebody
+    /// wrote down only once somebody has read them. `(T,pub)`, so the url may be parsed, written
+    /// and connected to from then on.
+    pub fn promote_a_server_move(
+        &mut self,
+        alias: &str,
+        destination: &Labelled<String>,
+    ) -> Gated<Labelled<String>> {
+        self.consume_grant("mcp_move", "alias", alias)?;
+        let was = destination.label();
+        let proof =
+            Declassification::authorise("a destination a person approved a server moving to");
+        let url = destination.clone().declassify(&proof);
+        let label = Label::trusted_public();
+        self.allow(
+            "mcp_move",
+            format!(
+                "where {alias} was redirected was {was}; the user approved it as where the server \
+                 now is, so it is declared at {label}"
+            ),
+        );
+        Ok(Labelled::new(url, label))
     }
 
     /// Refuse a call to a server's tool a `deny` rule covers, before anybody is asked about it.
@@ -9474,9 +9527,9 @@ five
 
     /// A declared server is one destination and a redirect names another, so the hop is refused
     /// whatever the settings say. A `WebFetch` rule is a person naming websites the planner may
-    /// reach, which is not consent to send a server's call to a different service. What could
-    /// widen this is an approval of where that one server went, which is a prompt nothing raises
-    /// yet, so a rule remaining inert here is the whole of the behaviour and not half of it.
+    /// reach, which is not consent to send a server's call to a different service. What widens
+    /// this is a person approving where that one server went, which rewrites the declaration
+    /// rather than letting this hop through.
     #[test]
     fn a_rule_does_not_let_a_servers_request_be_redirected_off_its_host() {
         let mut sink = RecordingSink::new();
@@ -9525,6 +9578,77 @@ five
             !denial.message.contains("2375"),
             "the refusal repeated what a server chose: {}",
             denial.message
+        );
+    }
+
+    /// The destination a refused hop named is kept for the prompt, as the server's bytes, and
+    /// handed out once. A request that stayed where it was declared leaves nothing to ask about.
+    #[test]
+    fn a_refused_hop_off_a_server_is_kept_untrusted_for_the_prompt() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+
+        policy.before_server_request("https://mcp.example/api");
+        policy
+            .before_network("https://mcp.example/api")
+            .expect("the declared destination");
+        policy.server_request_finished();
+        assert!(policy.take_server_hop().is_none());
+
+        policy.before_server_request("https://mcp.example/api");
+        assert!(policy.before_network("https://moved.example/api").is_err());
+        policy.server_request_finished();
+        let hop = policy.take_server_hop().expect("the refused hop");
+        assert_eq!(hop.label(), Label::untrusted_public());
+        assert!(
+            policy.take_server_hop().is_none(),
+            "one refusal was handed out twice"
+        );
+
+        // Nor does a hop refused before survive a request that was not redirected.
+        assert!(policy.before_network("https://moved.example/api").is_ok());
+        policy.before_server_request("https://mcp.example/api");
+        assert!(policy.before_network("https://moved.example/api").is_err());
+        policy.before_server_request("https://mcp.example/api");
+        assert!(policy.take_server_hop().is_none());
+    }
+
+    /// Where a server was redirected becomes a url somebody wrote down only through a person's
+    /// yes about that server, and no other server's.
+    #[test]
+    fn a_server_move_is_promoted_only_through_an_endorsement() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let destination = Labelled::new(
+            "https://moved.example/api".to_string(),
+            Label::untrusted_public(),
+        );
+
+        assert!(
+            policy
+                .promote_a_server_move("weather", &destination)
+                .is_err()
+        );
+        policy.endorse_server_move("news");
+        assert!(
+            policy
+                .promote_a_server_move("weather", &destination)
+                .is_err()
+        );
+        policy.endorse_server_move("weather");
+        let promoted = policy
+            .promote_a_server_move("weather", &destination)
+            .expect("endorsed");
+        assert_eq!(promoted.label(), Label::trusted_public());
+        assert_eq!(
+            promoted.into_trusted().expect("trusted"),
+            "https://moved.example/api"
+        );
+        assert!(
+            policy
+                .promote_a_server_move("weather", &destination)
+                .is_err(),
+            "one yes promoted two moves"
         );
     }
 

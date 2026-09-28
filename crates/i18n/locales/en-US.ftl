@@ -751,6 +751,35 @@ mcp-call-path-not-one-line = the project's path cannot be written on one line
 mcp-record-too-large = it is larger than a record of answers has any reason to be, so it was left as it is
 mcp-record-not-read = it could not be read as text, so it was left as it is
 
+## A remote MCP server whose reply pointed somewhere it is not declared
+
+mcp-move-title = declare this server where its reply points?
+mcp-move-declared = { $alias } is declared at { $url }
+mcp-move-destination = and its reply points to { $url }
+mcp-move-reaching = reaching { $authority }
+mcp-move-explained =
+    Nothing was sent there. A yes declares the server at that address and sends it what was being
+    sent, and every later request to the server goes there too, in this session and the next. Say
+    no unless you know the server moved.
+mcp-move-this-session-only = nothing answered in this session is recorded, so a yes lasts until it ends
+mcp-move-yes = Yes, it moved there
+mcp-move-no = No
+mcp-move-declined =
+    { $alias } stays where it is declared: its reply pointed somewhere else, and nothing was sent there
+mcp-move-not-started =
+    { $alias } was not started: its reply to the handshake pointed somewhere it is not declared, and
+    nothing was sent there
+mcp-move-refused-by-managed = { $alias } was not moved where its reply points: { $reason }
+mcp-move-undeclarable = { $alias } was not moved: where its reply points cannot be declared: { $problem }
+mcp-move-moved = { $alias } was moved where its reply pointed
+mcp-move-edited =
+    { $alias } was not moved: its declaration changed while you were asked, so it was left as it is
+mcp-move-not-recorded =
+    { $alias } is used where its reply pointed in this session only, since the move could not be
+    recorded: { $error }
+mcp-move-no-handshake = { $alias } did not complete its handshake where its reply pointed: { $reason }
+mcp-move-again = { $alias } was redirected again, off where it was just moved, so that was refused
+
 ## Vouching for a directory, asked once when a session starts somewhere new
 
 trust-directory-title = trust this directory?

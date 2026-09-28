@@ -1979,6 +1979,13 @@ fn time_spent_waiting_for_an_approval_is_not_charged_to_the_tool() {
             bravebot_agent::confirm::CallDecision::reject()
         }
 
+        fn confirm_move(
+            &mut self,
+            _request: &bravebot_agent::confirm::MoveRequest,
+        ) -> bravebot_agent::confirm::Decision {
+            bravebot_agent::confirm::Decision::Reject
+        }
+
         fn ask_user(
             &mut self,
             _asking: &bravebot_core::ask::Asking,
@@ -2364,6 +2371,13 @@ impl bravebot_agent::Confirmer for RecordingConfirmer {
         _request: &bravebot_agent::confirm::McpCallRequest,
     ) -> bravebot_agent::confirm::CallDecision {
         bravebot_agent::confirm::CallDecision::reject()
+    }
+
+    fn confirm_move(
+        &mut self,
+        _request: &bravebot_agent::confirm::MoveRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     /// These tests are about writes. A question they did not set up gets no answer.
@@ -3169,6 +3183,13 @@ impl bravebot_agent::Confirmer for SaysOnce {
         _request: &bravebot_agent::confirm::McpCallRequest,
     ) -> bravebot_agent::confirm::CallDecision {
         bravebot_agent::confirm::CallDecision::reject()
+    }
+
+    fn confirm_move(
+        &mut self,
+        _request: &bravebot_agent::confirm::MoveRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn ask_user(
@@ -4203,6 +4224,13 @@ fn a_stale_edit_is_refused() {
             _request: &bravebot_agent::confirm::McpCallRequest,
         ) -> bravebot_agent::confirm::CallDecision {
             bravebot_agent::confirm::CallDecision::reject()
+        }
+
+        fn confirm_move(
+            &mut self,
+            _request: &bravebot_agent::confirm::MoveRequest,
+        ) -> bravebot_agent::confirm::Decision {
+            bravebot_agent::confirm::Decision::Reject
         }
         fn ask_user(
             &mut self,
@@ -6192,6 +6220,13 @@ fn a_cancelled_turn_stops_before_running_a_tool() {
             _request: &bravebot_agent::confirm::McpCallRequest,
         ) -> bravebot_agent::confirm::CallDecision {
             bravebot_agent::confirm::CallDecision::reject()
+        }
+
+        fn confirm_move(
+            &mut self,
+            _request: &bravebot_agent::confirm::MoveRequest,
+        ) -> bravebot_agent::confirm::Decision {
+            bravebot_agent::confirm::Decision::Reject
         }
 
         fn ask_user(
@@ -11045,6 +11080,13 @@ impl bravebot_agent::Confirmer for AnswersWith {
         bravebot_agent::confirm::CallDecision::reject()
     }
 
+    fn confirm_move(
+        &mut self,
+        _request: &bravebot_agent::confirm::MoveRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     /// Refuses. A test double is not a person agreeing to start a process.
     fn confirm_server(
         &mut self,
@@ -11547,6 +11589,13 @@ impl bravebot_agent::Confirmer for AskedAboutRuns {
         _request: &bravebot_agent::confirm::McpCallRequest,
     ) -> bravebot_agent::confirm::CallDecision {
         bravebot_agent::confirm::CallDecision::reject()
+    }
+
+    fn confirm_move(
+        &mut self,
+        _request: &bravebot_agent::confirm::MoveRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn ask_user(
@@ -13424,6 +13473,13 @@ impl bravebot_agent::Confirmer for ShownAfterAVet {
         _request: &bravebot_agent::confirm::McpCallRequest,
     ) -> bravebot_agent::confirm::CallDecision {
         bravebot_agent::confirm::CallDecision::reject()
+    }
+
+    fn confirm_move(
+        &mut self,
+        _request: &bravebot_agent::confirm::MoveRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn ask_user(
@@ -16270,6 +16326,13 @@ impl bravebot_agent::Confirmer for ReadsWhatItRan {
         bravebot_agent::confirm::CallDecision::reject()
     }
 
+    fn confirm_move(
+        &mut self,
+        _request: &bravebot_agent::confirm::MoveRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn ask_user(
         &mut self,
         _asking: &bravebot_core::ask::Asking,
@@ -16732,6 +16795,13 @@ impl bravebot_agent::Confirmer for VouchesForFiles {
         _request: &bravebot_agent::confirm::McpCallRequest,
     ) -> bravebot_agent::confirm::CallDecision {
         bravebot_agent::confirm::CallDecision::reject()
+    }
+
+    fn confirm_move(
+        &mut self,
+        _request: &bravebot_agent::confirm::MoveRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn ask_user(
@@ -22542,6 +22612,13 @@ impl bravebot_agent::Confirmer for ApprovesFetchesAndWrites {
         bravebot_agent::confirm::CallDecision::reject()
     }
 
+    fn confirm_move(
+        &mut self,
+        _request: &bravebot_agent::confirm::MoveRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn ask_user(
         &mut self,
         _asking: &bravebot_core::ask::Asking,
@@ -27610,6 +27687,13 @@ impl bravebot_agent::confirm::Confirmer for RemembersWrites {
         bravebot_agent::confirm::CallDecision::reject()
     }
 
+    fn confirm_move(
+        &mut self,
+        _request: &bravebot_agent::confirm::MoveRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn ask_user(&mut self, asking: &bravebot_core::ask::Asking) -> Vec<bravebot_core::ask::Answer> {
         bravebot_agent::confirm::ApproveWrites.ask_user(asking)
     }
@@ -27875,6 +27959,13 @@ impl bravebot_agent::confirm::Confirmer for RemembersExposures {
         _request: &bravebot_agent::confirm::McpCallRequest,
     ) -> bravebot_agent::confirm::CallDecision {
         bravebot_agent::confirm::CallDecision::reject()
+    }
+
+    fn confirm_move(
+        &mut self,
+        _request: &bravebot_agent::confirm::MoveRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn confirm_write(

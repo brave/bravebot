@@ -325,9 +325,9 @@ fn hosts_reached(sink: &RecordingSink) -> Vec<String> {
 
 /// A declaration names one destination, and everything a request to a server carries is meant
 /// for that destination. A `Location` header naming another host is the server's own choice, so
-/// following it would send the call somewhere nobody declared. Refused rather than asked about
-/// because nothing declares a server yet, so there is no prompt to raise and nothing an answer
-/// could be written back into: see `SERVERS-11` and issue #83.
+/// following it would send the call somewhere nobody declared. The transport refuses it and the
+/// policy keeps where it pointed for the person to be asked about, which is `SERVERS-11`'s
+/// question and is asked by whoever holds the declaration.
 #[test]
 fn a_redirect_to_another_host_is_refused() {
     // Nothing listens at the target, and nothing needs to: were the hop followed, the request
@@ -353,7 +353,11 @@ fn a_redirect_to_another_host_is_refused() {
     let error = server
         .initialize(&mut policy, &egress, "bravebot", "0.1.0")
         .expect_err("a redirect off the declared host must be refused");
+    let hop = policy
+        .take_server_hop()
+        .expect("the hop is kept for the prompt");
     drop(policy);
+    assert_eq!(hop.label(), Label::untrusted_public());
 
     let McpError::Denied(denial) = error else {
         panic!("got: {error}");

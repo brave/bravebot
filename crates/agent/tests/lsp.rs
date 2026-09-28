@@ -231,6 +231,13 @@ impl bravebot_agent::Confirmer for AskedAboutServers {
         bravebot_agent::confirm::CallDecision::reject()
     }
 
+    fn confirm_move(
+        &mut self,
+        _request: &bravebot_agent::confirm::MoveRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn ask_user(
         &mut self,
         _asking: &bravebot_core::ask::Asking,

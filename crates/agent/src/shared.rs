@@ -305,6 +305,10 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
         self.lent.hold().confirm_mcp_call(request)
     }
 
+    fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
+        self.lent.hold().confirm_move(request)
+    }
+
     fn confirm_server(&mut self, request: &crate::confirm::ServerRequest) -> Decision {
         self.lent.hold().confirm_server(request)
     }

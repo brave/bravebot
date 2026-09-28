@@ -9,8 +9,8 @@
 
 use bravebot_agent::confirm::{
     CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, Intent, ManifestRequest,
-    McpCallRequest, OutputRequest, RunDecision, RunRequest, ServerRequest, ToolListRequest,
-    VetRequest, VouchRequest, WriteRequest,
+    McpCallRequest, MoveRequest, OutputRequest, RunDecision, RunRequest, ServerRequest,
+    ToolListRequest, VetRequest, VouchRequest, WriteRequest,
 };
 use bravebot_agent::diff::Change;
 use bravebot_agent::report::{Reach, Shown};
@@ -92,6 +92,10 @@ impl<B: Backend> Confirmer for TerminalConfirmer<'_, B> {
 
     fn confirm_mcp_call(&mut self, request: &McpCallRequest) -> CallDecision {
         ask_mcp_call(self.terminal, request).decision()
+    }
+
+    fn confirm_move(&mut self, request: &MoveRequest) -> Decision {
+        ask_move(self.terminal, request).decision()
     }
 
     fn ask_user(&mut self, asking: &Asking) -> Vec<UserAnswer> {
@@ -1809,6 +1813,99 @@ fn draw_fetch(frame: &mut ratatui::Frame, request: &FetchRequest) {
     frame.render_widget(Paragraph::new(keys), rows[1]);
 }
 
+/// Ask whether a remote MCP server is now where its reply pointed, blocking until answered.
+pub fn ask_move<B: Backend>(terminal: &mut Terminal<B>, request: &MoveRequest) -> Answer {
+    loop {
+        if terminal.draw(|frame| draw_move(frame, request)).is_err() {
+            return Answer::Reject;
+        }
+
+        match input::read() {
+            Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => {
+                continue;
+            }
+            Ok(TermEvent::Key(key)) => match answer_for(key) {
+                Some(Response::Answer(answer)) => return answer,
+                // Nothing here scrolls: two addresses and a host, and nothing was fetched.
+                Some(Response::Scroll(_)) => continue,
+                None => continue,
+            },
+            Ok(_) => continue,
+            Err(_) => return Answer::Reject,
+        }
+    }
+}
+
+/// Draw the question of whether a server moved.
+///
+/// The destination came from the server's reply, so every line goes through the margin that
+/// replaces control characters, and the host it reaches is drawn on its own line for the reason
+/// the fetch question draws one.
+fn draw_move(frame: &mut ratatui::Frame, request: &MoveRequest) {
+    let area = centred(frame.area());
+    let inside = panel(frame, area, theme::note(), t!(mcp_move_title));
+    let width = inside.width as usize;
+    let muted = Style::default().fg(theme::muted());
+
+    let mut lines = indented(
+        t!(
+            mcp_move_declared,
+            alias = request.alias.as_str(),
+            url = request.declared.as_str()
+        ),
+        muted,
+        width,
+    );
+    lines.extend(indented(
+        t!(mcp_move_destination, url = request.destination.as_str()),
+        Style::default().add_modifier(Modifier::BOLD),
+        width,
+    ));
+    lines.extend(indented(
+        t!(mcp_move_reaching, authority = request.authority.as_str()),
+        Style::default().fg(theme::note()),
+        width,
+    ));
+    lines.push(Line::raw(""));
+    lines.extend(indented(t!(mcp_move_explained), muted, width));
+    if !request.may_record {
+        lines.push(Line::raw(""));
+        lines.extend(indented(t!(mcp_move_this_session_only), muted, width));
+    }
+
+    let keys = Line::from(vec![
+        Span::styled(
+            "  y",
+            Style::default()
+                .fg(theme::ok())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(format!(" {}    ", t!(mcp_move_yes))),
+        Span::styled(
+            "n",
+            Style::default()
+                .fg(theme::fail())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(format!(" {}    ", t!(mcp_move_no))),
+        Span::styled(
+            "ctrl-c",
+            Style::default()
+                .fg(theme::muted())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!(" {}", t!(stop_the_turn)), muted),
+    ]);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(inside);
+
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), rows[0]);
+    frame.render_widget(Paragraph::new(keys), rows[1]);
+}
+
 pub fn ask_vouch<B: Backend>(terminal: &mut Terminal<B>, request: &VouchRequest) -> Answer {
     let mut scroll = 0u16;
     loop {
@@ -2871,6 +2968,48 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect()
+    }
+
+    fn rendered_move(request: &MoveRequest) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(160, 24)).expect("terminal");
+        terminal
+            .draw(|frame| draw_move(frame, request))
+            .expect("draw");
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
+    fn a_move(may_record: bool) -> MoveRequest {
+        MoveRequest {
+            alias: "news".to_string(),
+            declared: "https://news.example/mcp".to_string(),
+            destination: "https://elsewhere.example/mcp".to_string(),
+            authority: "elsewhere.example:443".to_string(),
+            may_record,
+        }
+    }
+
+    /// SERVERS-11: the person is shown where the server is declared, where its reply points, and
+    /// the host and port that reaches, since a yes declares the server there. A session that writes
+    /// nothing says the yes lasts until it ends.
+    #[test]
+    fn a_move_prompt_shows_the_declaration_the_destination_and_what_it_reaches() {
+        let drawn = rendered_move(&a_move(true));
+        for shown in [
+            "news is declared at https://news.example/mcp",
+            "and its reply points to https://elsewhere.example/mcp",
+            "reaching elsewhere.example:443",
+        ] {
+            assert!(drawn.contains(shown), "{shown} is not drawn in {drawn}");
+        }
+        let only = t!(mcp_move_this_session_only).to_string();
+        assert!(!drawn.contains(&only), "{drawn}");
+        assert!(rendered_move(&a_move(false)).contains(&only));
     }
 
     /// A reviewer has to see the argv, the binary behind each name, and where it will run. All

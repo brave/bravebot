@@ -21,8 +21,8 @@
 
 use bravebot_agent::confirm::{
     CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, ManifestRequest,
-    McpCallRequest, OutputRequest, RunDecision, RunRequest, ServerRequest, ToolListRequest,
-    VetRequest, VouchRequest, WriteRequest,
+    McpCallRequest, MoveRequest, OutputRequest, RunDecision, RunRequest, ServerRequest,
+    ToolListRequest, VetRequest, VouchRequest, WriteRequest,
 };
 use bravebot_agent::report::{
     Activity, DelegateId, Delegation, Landing, Phase, Printed, Reported, Reporter, Returned, Shown,
@@ -109,6 +109,9 @@ pub enum ToMain {
     ToolList(ToolListRequest),
     /// A call to an MCP server's tool. The main thread must reply.
     McpCall(McpCallRequest),
+    /// A remote MCP server's reply pointed somewhere it is not declared. The main thread must
+    /// reply.
+    Move(MoveRequest),
     /// The planner is asking the user something. The main thread must reply.
     Ask(Asking),
     /// The task list changed. No reply.
@@ -176,6 +179,7 @@ pub enum Reply {
     Manifest(Decision),
     ToolList(Decision),
     McpCall(CallDecision),
+    Move(Decision),
     Ask(Vec<Answer>),
 }
 
@@ -298,6 +302,14 @@ impl Confirmer for RemoteConfirmer {
         match self.exchange(ToMain::McpCall(request.clone())) {
             Some(Reply::McpCall(decision)) => decision,
             _ => CallDecision::reject(),
+        }
+    }
+
+    /// A yes to the call is not a yes to where its reply pointed.
+    fn confirm_move(&mut self, request: &MoveRequest) -> Decision {
+        match self.exchange(ToMain::Move(request.clone())) {
+            Some(Reply::Move(decision)) => decision,
+            _ => Decision::Reject,
         }
     }
 
@@ -949,6 +961,7 @@ mod tests {
                     ToMain::Manifest(_) => seen.push("manifest"),
                     ToMain::ToolList(_) => seen.push("tool list"),
                     ToMain::McpCall(_) => seen.push("mcp call"),
+                    ToMain::Move(_) => seen.push("move"),
                     ToMain::Todos(_) => seen.push("todos"),
                     ToMain::Spent(_) => seen.push("spent"),
                     ToMain::PromptRecorded(_) => seen.push("prompt"),

@@ -23,8 +23,8 @@
 use crate::exit::{Ending, fail};
 use bravebot_agent::confirm::{
     CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, ManifestRequest,
-    McpCallRequest, OutputRequest, RunDecision, RunRequest, ServerRequest, ToolListRequest,
-    VetRequest, VouchRequest, WriteRequest,
+    McpCallRequest, MoveRequest, OutputRequest, RunDecision, RunRequest, ServerRequest,
+    ToolListRequest, VetRequest, VouchRequest, WriteRequest,
 };
 use bravebot_agent::diff::Change;
 use bravebot_agent::turn::{self, Task};
@@ -1050,6 +1050,25 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
         }
     }
 
+    /// The url a yes declares, pictured like every other word a server wrote, under the one the
+    /// declaration names now and above the host and port it reaches.
+    fn confirm_move(&mut self, request: &MoveRequest) -> Decision {
+        let mut lines = vec![
+            t!(
+                mcp_move_declared,
+                alias = shown(&request.alias),
+                url = shown(&request.declared)
+            ),
+            t!(mcp_move_destination, url = shown(&request.destination)),
+            t!(mcp_move_reaching, authority = shown(&request.authority)),
+            t!(mcp_move_explained).to_string(),
+        ];
+        if !request.may_record {
+            lines.push(t!(mcp_move_this_session_only).to_string());
+        }
+        self.ask(&lines, t!(mcp_move_title))
+    }
+
     /// The plan, before anything has run.
     ///
     /// The steps are the driver's own rendering rather than somebody else's bytes, and the task is
@@ -1328,6 +1347,40 @@ mod tests {
                 expected,
                 "{answer:?} was not read as {expected:?}"
             );
+        }
+    }
+
+    /// SERVERS-11 in lines: the declaration, the destination and what it reaches are put to the
+    /// person, and only the affirmative moves the server.
+    #[test]
+    fn a_move_is_asked_in_lines_and_only_a_yes_moves_the_server() {
+        let request = MoveRequest {
+            alias: "news".to_string(),
+            declared: "https://news.example/mcp".to_string(),
+            destination: "https://elsewhere.example/mcp".to_string(),
+            authority: "elsewhere.example:443".to_string(),
+            may_record: false,
+        };
+        for (answer, expected) in [
+            ("y\n", Decision::Approve),
+            ("n\n", Decision::Reject),
+            ("", Decision::Reject),
+        ] {
+            let mut asking = Prompting::new(
+                std::io::BufReader::new(std::io::Cursor::new(answer.as_bytes().to_vec())),
+                Vec::new(),
+            );
+            assert_eq!(asking.confirm_move(&request), expected, "{answer:?}");
+            let drawn = String::from_utf8(asking.output).expect("text");
+            for shown in [
+                "news is declared at https://news.example/mcp",
+                "and its reply points to https://elsewhere.example/mcp",
+                "reaching elsewhere.example:443",
+                t!(mcp_move_this_session_only),
+                t!(mcp_move_title),
+            ] {
+                assert!(drawn.contains(shown), "{shown} is not drawn in {drawn}");
+            }
         }
     }
 
