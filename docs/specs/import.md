@@ -103,6 +103,8 @@ when, is [IMPORT-10](#IMPORT-10)'s.
 Importing a host and a credential name from them would let a clone decide where the person's key is
 sent. `OLLAMA_HOST` is honoured on the footing `CLAUDE_CONFIG_DIR` is: it is the variable the other
 program itself reads. Only this machine is asked, so that no request leaves it before a question.
+A proxy the environment names carries this request as it carries every other
+([NET-8](network-egress.md#NET-8)), unless `NO_PROXY` names the address.
 
 `verified-by: bravebot_config::import::a_checkouts_opencode_json_is_never_read`
 `verified-by: bravebot_config::import::claude_config_dir_moves_where_claude_code_is_read`
@@ -400,7 +402,9 @@ file the import could write, so an incognito start opens no connection. A start 
 configured asks nothing.
 
 **What is asked.** One `GET <address>/api/tags` to the [IMPORT-2](#IMPORT-2) address, carrying no
-credential. It is bounded twice, because it is made before the start has said anything:
+credential. A redirect is followed only where it keeps that address and port, so whatever
+listens there cannot send the request off the machine. It is bounded twice, because it is made
+before the start has said anything:
 
 - 1 second each to resolve, to connect and to send, and 2 seconds for the reply to begin and 2
   more for its body, so a listener that accepts and never answers holds the start for seconds;
@@ -408,8 +412,8 @@ credential. It is bounded twice, because it is made before the start has said an
 
 Only each model's `name`, `modified_at` and `capabilities` are read.
 
-**A failure says nothing.** A refused connection, a timeout, an error status, a listing
-over the bound, or one that does not decode means there is no Ollama source, and nothing is said
+**A failure says nothing.** A refused connection, a timeout, an error status, a redirect
+elsewhere, a listing over the bound, or one that does not decode means there is no Ollama source, and nothing is said
 about it, because nothing on the machine said an Ollama was meant to be there.
 
 **The model.** The one written is the listed model with the latest `modified_at`, compared as
@@ -438,9 +442,11 @@ list every model twice in the model picker.
 `verified-by: bravebot_aichat::ollama::an_oversized_listing_is_not_read`
 `verified-by: bravebot_aichat::ollama::a_listener_that_never_answers_does_not_hold_the_start`
 `verified-by: bravebot_aichat::ollama::anything_but_a_listing_is_no_source`
+`verified-by: bravebot_aichat::ollama::a_redirect_off_the_address_asked_is_not_followed`
 `verified-by: bravebot_cli::import::an_ollama_already_configured_under_another_id_is_not_offered_again`
 `verified-by: bravebot_cli::import::an_opencode_entry_for_the_same_server_leaves_the_ollama_source_with_nothing_to_add`
 `verified-by: bravebot_cli::running::a_first_run_with_nothing_listening_refuses_as_before`
+`verified-by: bravebot_cli::running::a_first_run_whose_settings_file_cannot_be_imported_into_asks_ollama_once`
 
 ## Where this stands against the rule
 

@@ -117,15 +117,17 @@ fn at_the_start(a_service_is_configured: bool) -> Start {
     let Some(file) = destination_file() else {
         return Start::Refuse(Looked::default());
     };
+    // Opened before the sources are read, since the refusal for a file that cannot be written
+    // reads them itself, and Ollama is asked once per start.
+    let mut destination = match Destination::open(&file) {
+        Ok(destination) => destination,
+        Err(_) => return Start::Refuse(looked(false)),
+    };
     let found = import::found(&import::Places::from_env(), exported, ask_ollama);
     if found.is_empty() {
         return Start::Refuse(Looked::default());
     }
 
-    let mut destination = match Destination::open(&file) {
-        Ok(destination) => destination,
-        Err(_) => return Start::Refuse(looked(false)),
-    };
     // The process's own stdin, whose buffer is shared with every later reader of it, so an answer
     // typed ahead here reaches whatever asks next rather than a buffer that is dropped.
     let mut asking = Prompting::new(std::io::stdin().lock(), std::io::stderr());

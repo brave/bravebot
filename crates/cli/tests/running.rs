@@ -16,7 +16,8 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 /// A directory handed to a run as its own, removed when the test that made it ends.
@@ -3274,12 +3275,15 @@ const OLLAMA_LISTING: &str = r#"{"models": [
 ]}"#;
 
 /// An Ollama on loopback answering `/api/tags` with [`OLLAMA_LISTING`], as the `OLLAMA_HOST` that
-/// reaches it.
-fn an_ollama() -> String {
+/// reaches it, and a count of the connections it has taken.
+fn an_ollama() -> (String, Arc<AtomicUsize>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
     let port = listener.local_addr().expect("addr").port();
+    let asked = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&asked);
     std::thread::spawn(move || {
         while let Ok((mut stream, _)) = listener.accept() {
+            counted.fetch_add(1, Ordering::SeqCst);
             let mut reader = BufReader::new(stream.try_clone().expect("clone"));
             let mut request = String::new();
             let _ = reader.read_line(&mut request);
@@ -3297,7 +3301,7 @@ fn an_ollama() -> String {
             let _ = stream.flush();
         }
     });
-    format!("127.0.0.1:{port}")
+    (format!("127.0.0.1:{port}"), asked)
 }
 
 /// IMPORT-10: a first start on a machine where Ollama runs and nothing else is configured asks
@@ -3307,7 +3311,7 @@ fn an_ollama() -> String {
 #[test]
 fn a_first_run_with_ollama_running_offers_to_import_it() {
     let scratch = Scratch::new("cli-running-import-ollama");
-    let ollama = an_ollama();
+    let (ollama, _) = an_ollama();
     let environment = [NOTHING_CONFIGURED, &[("OLLAMA_HOST", ollama.as_str())]].concat();
 
     let output = in_a_terminal(&scratch.path, &environment, &["--plain"]);
@@ -3360,12 +3364,35 @@ fn a_first_run_with_nothing_listening_refuses_as_before() {
     assert!(transcript.contains("amazon-bedrock"), "{transcript}");
 }
 
+/// IMPORT-10: a settings file the import cannot write into ends the start in the refusal naming
+/// it, and Ollama is asked once on the way there rather than again for the refusal's lines.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_first_run_whose_settings_file_cannot_be_imported_into_asks_ollama_once() {
+    let scratch = Scratch::new("cli-running-import-ollama-not-a-document");
+    std::fs::create_dir_all(scratch.path.join(".bravebot")).expect("settings directory");
+    std::fs::write(scratch.settings(), "{ not json").expect("settings file");
+    let (ollama, asked) = an_ollama();
+    let environment = [NOTHING_CONFIGURED, &[("OLLAMA_HOST", ollama.as_str())]].concat();
+
+    let output = in_a_terminal(&scratch.path, &environment, &["--plain"]);
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{transcript}");
+    assert!(!transcript.contains("Import this"), "{transcript}");
+    assert!(
+        transcript.contains("does not hold a settings document"),
+        "{transcript}"
+    );
+    assert_eq!(asked.load(Ordering::SeqCst), 1, "{transcript}");
+}
+
 /// IMPORT-8 and IMPORT-10: a one-shot run has nobody to ask, so a running Ollama puts the command
 /// that asks into the refusal, in the words for a server rather than a file.
 #[test]
 fn a_one_shot_first_run_with_ollama_running_names_the_import_command() {
     let scratch = Scratch::new("cli-running-import-ollama-one-shot");
-    let ollama = an_ollama();
+    let (ollama, _) = an_ollama();
     let environment = [NOTHING_CONFIGURED, &[("OLLAMA_HOST", ollama.as_str())]].concat();
 
     let output = bravebot(&scratch.path, &environment, &["-p", "say something"]);

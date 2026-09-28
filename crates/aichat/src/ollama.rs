@@ -35,9 +35,9 @@ const TIMEOUTS: Timeouts = Timeouts {
 
 /// The models the Ollama at `host` lists, or `None` where nothing answered there with a listing.
 ///
-/// One `GET {host}/api/tags`. A refused connection, a timeout, an error status, a body past
-/// [`LISTING_BYTES`] and a body that is not a listing are all `None`, and none is said: an Ollama
-/// that is not running is the ordinary case.
+/// One `GET {host}/api/tags`, held to that address. A refused connection, a timeout, an error
+/// status, a redirect anywhere else, a body past [`LISTING_BYTES`] and a body that is not a
+/// listing are all `None`, and none is said: an Ollama that is not running is the ordinary case.
 pub fn installed<S: Sink>(host: &str, sink: &mut S) -> Option<Vec<Installed>> {
     let url = format!("{host}/api/tags");
     // The one destination is the address `OLLAMA_HOST` or the default names, which the caller has
@@ -51,6 +51,9 @@ pub fn installed<S: Sink>(host: &str, sink: &mut S) -> Option<Vec<Installed>> {
         sink,
     )
     .ok()?;
+    // Held to that address and port: whatever listens there could otherwise send the start off
+    // this machine with a `Location` header.
+    policy.before_server_request(&url);
     let request = Request::get(url.as_str()).header("accept", "application/json");
     let response = Egress::with_timeouts(TIMEOUTS)
         .fetch(&mut policy, request, Label::untrusted_public())
@@ -233,5 +236,21 @@ mod tests {
             let host = serve(http(status, body.as_bytes()));
             assert_eq!(asked(&host), None, "{status} {body}");
         }
+    }
+
+    /// IMPORT-10: the request reaches the address found to be this machine and nowhere else, so a
+    /// reply pointing elsewhere is not followed, whatever waits there. Another port stands in for
+    /// another machine: the hop is refused on leaving the address and port asked.
+    #[test]
+    fn a_redirect_off_the_address_asked_is_not_followed() {
+        let elsewhere = serve(http("200 OK", LISTING.as_bytes()));
+        let host = serve(
+            format!(
+                "HTTP/1.1 302 Found\r\nLocation: {elsewhere}/api/tags\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            )
+            .into_bytes(),
+        );
+
+        assert_eq!(asked(&host), None);
     }
 }
