@@ -7,6 +7,8 @@
 # No count is kept here. Two branches that each translate a message both edit the count, so it
 # conflicts where the lists themselves merge cleanly, and a count nothing reads is wrong quietly.
 
+fr:cli-bypass-unreachable
+fr:doctor-settings-narrowing-ignored
 fr:doctor-skill-key-unread
 fr:doctor-skill-keys-unread
 fr:session-rewind-cause-backup

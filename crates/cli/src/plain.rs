@@ -102,7 +102,8 @@ pub fn session(skip_permissions: bool, agent: Option<String>) -> ExitCode {
     }
 
     let settings = bravebot_config::Settings::load();
-    let mut workspace = match crate::current_workspace(&settings) {
+    let mut workspace = match crate::current_workspace(&settings, &bravebot_config::Managed::load())
+    {
         Ok(workspace) => workspace,
         Err(err) => return fail(Ending::Failed, t!(cli_workspace_problem, problem = err)),
     };

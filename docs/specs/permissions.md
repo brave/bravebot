@@ -6,6 +6,7 @@ governs:
   - crates/core/src/permissions.rs
   - crates/core/src/spelling.rs
   - crates/config/src/settings.rs
+  - crates/config/src/managed.rs
   - crates/agent/src/permissions.rs
   - crates/agent/src/workspace.rs
   - crates/tui/src/trust_prompt.rs
@@ -38,7 +39,16 @@ What a rule may decide is narrow, and the boundary is the point. A rule decides 
 is asked** and **whether an action happens at all**. It never decides what a value is trusted for,
 which is [labels.md](labels.md), and never what is reachable, which is
 [trust-map.md](trust-map.md). `defaultMode` is read and acted on by nothing: this spec covers the
-three lists and `additionalDirectories`.
+three lists, `additionalDirectories`, and the two keys of the block that are not rules.
+
+Those two are the block's other half and are not rules at all. `readsStayInWorkspace`
+([PERM-16](#PERM-16)) and `bypassUnreachable` ([PERM-17](#PERM-17)) name nothing they refuse, so no
+path, program or host is outside them, and neither decides whether a person is asked: each states an
+invariant that holds against a rule, against a mode, and against an answer given during the session.
+Every layer may write one and the strictest value any layer named is what holds, which is
+[PERM-18](#PERM-18). They are the one thing here that does decide what is reachable, and
+[trust-map.md](trust-map.md) is where reach is otherwise settled, so PERM-16 says what it takes back
+from [TRUST-9](trust-map.md#TRUST-9) and what it leaves alone.
 
 Who answers a prompt a rule permitted to exist is [permission-modes.md](permission-modes.md). The
 two are separate: a rule decides whether there is a question, and a mode answers one. A `deny` rule
@@ -629,6 +639,126 @@ about the first one's ([#843](https://github.com/brave/bravebot/issues/843)).
 `verified-by: bravebot_agent::incognito::a_rule_an_earlier_session_granted_is_still_honoured`
 `verified-by: bravebot_cli::running::doctor_says_an_allow_rule_a_checkout_wrote_is_granted_where_it_was`
 
+## Refusals nobody has to enumerate
+
+<a id="PERM-16"></a>
+### PERM-16: `readsStayInWorkspace` holds the file tools to the workspace, whatever else is written
+
+`"permissions": { "readsStayInWorkspace": true }` refuses every path outside the working directory,
+in every mode, whatever a rule, a mode, or an answer given during the session would otherwise open.
+No directory may be opened beside the workspace: `/add-dir` and `--add-dir` are refused, a name in
+`additionalDirectories` is refused rather than put to anybody, and a directory that was already open
+when the key was read is not reachable either, which is what a resume reopening the directories its
+own record holds arrives as ([PERM-10](#PERM-10)).
+
+**Where the refusal is made.** In the workspace, at the two places the reach exists: the one function
+every door onto a directory by name resolves through, and the test of where a path lands that every
+read, write, listing and search already goes through ([TRUST-10](trust-map.md#TRUST-10)). Not in the
+command that typed the path, because `/add-dir`, `--add-dir` and a name a settings file asked about
+are three doors onto one thing and a refusal written at one of them is two doors left open. Not in
+the kernel either: it does no I/O ([layering.md](layering.md#LAYER-1)), and where a path lands is a
+question only something that can resolve a name can answer, which is why the confinement this
+tightens is already there rather than in a policy gate. The value reaching the workspace is a boolean
+read from a settings file by whoever assembled the session, on the footing the search caps are read
+([SEARCH-9](tools/search.md#SEARCH-9)): nothing in the workspace reads a settings file, and nothing
+here is decided from a byte of content.
+
+A refusal says which key made it. Nothing a session did explains one, so a refusal that named neither
+the key nor a file would send somebody looking for a fault in the program.
+
+**What it does not refuse.** The directory the session was given for itself stays reachable: nobody
+was asked for it, no rule opened it, and a session whose own directory went unreachable would fail
+every read and write it makes there ([TRUST-16](trust-map.md#TRUST-16)). `/cd` is not refused either:
+it replaces the workspace and closes what it left ([TRUST-13](trust-map.md#TRUST-13)), so nothing is
+open beside the workspace at any moment, which is the whole of what this clause promises. A file a
+person dropped on the window keeps the reach [dropping.md](dropping.md) gives it, for the reason
+stated there: the path is fixed into routing by a gesture before a turn starts, so it is not reach a
+rule, a mode or an answer opened.
+
+**Why.** `deny` refuses, and every `deny` rule names the thing it refuses, so confinement written that
+way is a list of what somebody thought of and a path nobody named is a path no rule covers. This is
+the same refusal stated once, as an invariant rather than an enumeration: there is nothing to keep up
+to date and nothing to leave out. Refusing the question rather than asking it is what makes it an
+invariant at all, since a box that can only be answered one way trains answering without reading,
+which is [PERM-13](#PERM-13)'s reasoning about a question that changes nothing.
+
+`verified-by: bravebot_agent::workspace::a_directory_by_name_is_refused_where_reads_stay_in_the_workspace`
+`verified-by: bravebot_agent::workspace::a_directory_already_open_is_unreachable_where_reads_stay_in_the_workspace`
+`verified-by: bravebot_agent::workspace::the_sessions_own_directory_stays_reachable_where_reads_stay_in_the_workspace`
+`verified-by: bravebot_tui::app::a_named_directory_is_refused_rather_than_asked_about_where_reads_stay_in_the_workspace`
+`verified-by: bravebot_tui::app::add_dir_is_refused_where_reads_stay_in_the_workspace`
+`verified-by: bravebot_ui_bridge::workspace::a_turn_is_held_inside_the_project_where_its_settings_ask_for_it`
+`verified-by: bravebot_cli::running::add_dir_is_refused_where_a_layer_keeps_reads_in_the_workspace`
+
+<a id="PERM-17"></a>
+### PERM-17: `bypassUnreachable` makes the mode that asks about nothing unreachable, and refuses the flag
+
+`"permissions": { "bypassUnreachable": true }` puts the mode that answers every permission question
+out of reach on this machine, in this checkout, or for this person, depending on which layer wrote it.
+`--dangerously-skip-permissions` is then **refused** rather than ignored: the run stops, and what it
+says names the key and the file that asked for it, since the flag is documented and works everywhere
+else.
+
+**Where the refusal is made.** At the entry point, where the flag is taken off the command line
+before anything dispatches on it, so a session, a resumed session, a one-shot run and a session in
+lines are refused alike ([MODE-5](permission-modes.md#MODE-5)). Refusing there is what makes the mode
+unreachable rather than merely unselected: the key on the ladder is offered only where the flag was
+given, so a flag that never got through is a ladder with no fourth rung.
+
+Refused rather than downgraded to asking. A run told to stop asking and carried on with a notice is a
+run whose author believes it is unattended, and the notice is on a stream nobody is reading.
+
+**Why.** The command line asking for the mode is a real gate and it is the only one
+([MODE-5](permission-modes.md#MODE-5)): nothing a settings file said could make the mode unreachable,
+so a person who wanted that had nothing to write and an administrator had nothing to pin. What the
+mode gives up is written down under Known costs in
+[permission-modes.md](permission-modes.md), and the place it is wrong is a working machine, which is
+exactly the machine somebody else may have a legitimate say in.
+
+`verified-by: bravebot_cli::main::the_bypass_flag_is_refused_where_a_layer_made_the_mode_unreachable`
+`verified-by: bravebot_cli::running::the_skip_permissions_flag_is_refused_where_a_layer_made_bypass_unreachable`
+
+<a id="PERM-18"></a>
+### PERM-18: every layer may write either, and the strictest value any layer named holds
+
+Both keys are read from `~/.bravebot/settings.json`, from `.bravebot/settings.json`, from
+`.bravebot/settings.local.json`, from a file `--settings` named, and from the file an administrator
+pinned ([backends.md](backends.md)). A weaker layer asking for the restriction gets it, and no layer
+above can lift it: the merge takes the strictest value any layer named rather than the value of the
+strongest layer, which is the one merge rule here that is not the ordinary one.
+
+Absence means unset, the way `vetting.auto` does. A file naming neither key behaves exactly as one
+did before the keys existed ([PERM-12](#PERM-12)). `true` is the restrictive answer, and anything that
+is not a boolean is absence: `"true"` as a string, a number, a list, `null`. Each such key is
+reported, on `doctor` and in the session that read the file, with the file it was written in.
+`false` is an answer rather than absence, so a file that wrote it is reported as having named the key,
+and it does not lift what another layer asked for. Each key is read on its own: a file asking for one
+says nothing about the other.
+
+**Why.** `vetting.auto` is read from the home layer alone because a checkout could otherwise turn a
+person's screening *off*, and `allow` is read from the person's own file alone
+([PERM-14](#PERM-14)) because it grants. Neither of those is what these are. Both only ever refuse, so
+a checkout asking for one takes nothing from whoever cloned it, and the harm those two rules exist to
+stop cannot be done here in either direction. That also removes the ordering puzzle: with no raisable
+counterpart there is nothing for a stronger layer to lift, so "strictest wins" is not a precedence
+rule to remember but the only reading under which writing the key means anything.
+
+Reading them from every layer is what makes them worth having. A team that wants one checkout
+confined writes it in the checkout, a person who wants every session of theirs confined writes it in
+their own file, and an administrator who wants a machine confined pins it: the ordinary merge would
+have made each of those three depend on nobody else having spoken.
+
+`verified-by: bravebot_config::settings::a_file_naming_neither_refusing_key_refuses_nothing`
+`verified-by: bravebot_config::settings::any_layer_may_ask_for_either_refusal`
+`verified-by: bravebot_config::settings::a_stronger_layer_cannot_lift_what_a_weaker_one_asked_for`
+`verified-by: bravebot_config::settings::each_refusing_key_is_read_on_its_own`
+`verified-by: bravebot_config::settings::a_refusing_key_that_is_not_a_boolean_is_absence_and_is_named`
+`verified-by: bravebot_config::settings::saying_no_to_a_refusing_key_is_an_answer_rather_than_absence`
+`verified-by: bravebot_config::managed::the_two_keys_that_only_refuse_are_pinnable`
+`verified-by: bravebot_config::managed::a_pinned_refusal_that_is_not_a_boolean_is_absence_and_is_named`
+`verified-by: bravebot_config::managed::a_pinned_permission_rule_is_not_read`
+`verified-by: bravebot_cli::running::doctor_names_a_refusing_key_that_is_not_a_boolean`
+
 ## Known costs
 
 - **How many questions a session opens with is the file's to choose.** Every name in
@@ -674,6 +804,21 @@ about the first one's ([#843](https://github.com/brave/bravebot/issues/843)).
   Every run asks unless a person vouched for that exact command, so the prompt is what stands
   there; a `Bash` deny rule, or the sandbox, is what closes it. Naming a path in `deny` and
   expecting it to fence every subprocess would be believing something that is not true.
+- **`readsStayInWorkspace` is read when the session opens, so `/cd` does not read it again.** The two
+  keys are read once per session with the rest of the block ([PERM-12](#PERM-12)), and `/cd` reads the
+  destination's rules again but not these. A session already confined stays confined wherever it
+  moves, which is the direction to be wrong in; a session that was not confined and moves into a
+  checkout asking for it is confined from the next session there rather than from that turn. Closing
+  it would mean the restriction arriving partway through a session, and the file the session started
+  under is the one its author read.
+- **`readsStayInWorkspace` does not confine a program a `run` starts.** It governs the file tools, as
+  the path rules do, and the known cost above about a path rule not reaching a program's own file
+  access holds here word for word: `run cat ~/.ssh/id_rsa` is judged against the `Bash` rules and the
+  run prompt. [sandboxing.md](sandboxing.md) is what confines a process.
+- **Neither key can be written by a turn, and neither can be lifted by one.** That is the point, and
+  it is also the cost: a person who confines a session and then wants a sibling checkout open has to
+  edit a file and start again, with no way to say yes once. A prompt would be the way to say yes once,
+  and a prompt is what the key exists to remove.
 - **`defaultMode` is read and does nothing.** The key is parsed so the file is not rejected for
   carrying it, and no mode is selected from it. A person who wrote `acceptEdits` gets the prompts
   they would have got without it. The modes exist, and the command line and the mode key are what

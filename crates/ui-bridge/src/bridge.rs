@@ -663,8 +663,12 @@ impl Bridge {
         let output_cap = settings.run_output_cap();
         let deadlines = bravebot_agent::exec::Deadlines::resolve(settings.run_deadlines());
         let auto_vetting = open.auto_vetting;
-        let mut workspace = turn_workspace(open.project.clone(), &settings)
-            .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
+        let mut workspace = turn_workspace(
+            open.project.clone(),
+            &settings,
+            &bravebot_config::Managed::load(),
+        )
+        .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
 
         let project = open.project.clone();
         let state = Arc::clone(&open.state);
@@ -1237,11 +1241,25 @@ fn dropped_paths(request: &Request) -> Result<Vec<String>, Failure> {
 /// settings file reaches a search here or nowhere. A cap nobody named is `None`, which leaves the
 /// built-in one standing.
 ///
+/// Whether the file tools are held to the project comes over the same way (PERM-16), and from the
+/// managed file as well as the settings layers: both are layers that may ask for it, and the
+/// strictest thing either said is what holds (PERM-18).
+///
 /// A function of its own rather than three lines at the call site, so a test can build the
 /// workspace a turn is given without a backend to run one against.
-pub fn turn_workspace(project: PathBuf, settings: &Settings) -> Result<Workspace, WorkspaceError> {
+pub fn turn_workspace(
+    project: PathBuf,
+    settings: &Settings,
+    managed: &bravebot_config::Managed,
+) -> Result<Workspace, WorkspaceError> {
     let caps = settings.search();
-    Ok(Workspace::new(project)?.with_search_caps(caps.files, caps.time))
+    let inside = settings
+        .narrowing()
+        .strictest(managed.narrowing())
+        .keeps_reads_in_the_workspace();
+    Ok(Workspace::new(project)?
+        .with_search_caps(caps.files, caps.time)
+        .with_reads_kept_inside(inside))
 }
 
 /// Everything a worker needs to run one turn.

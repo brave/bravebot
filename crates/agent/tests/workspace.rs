@@ -2856,6 +2856,141 @@ fn closing_added_directories_makes_them_unreachable_again() {
     assert!(matches!(error, WorkspaceError::Escapes { .. }), "{error:?}");
 }
 
+/// PERM-16: a settings layer asking for the file tools to stay inside the workspace refuses every
+/// directory by name, and it refuses it here rather than at the command that typed it, so
+/// `/add-dir`, `--add-dir` and a name a settings file asked about are all refused by one rule. The
+/// refusal names the key, since nothing a session did explains it.
+///
+/// The failure this rejects is a refusal written into the `/add-dir` handler alone, which would
+/// leave `--add-dir` and the names a settings file proposes opening directories the key was asked to
+/// keep shut.
+#[test]
+fn a_directory_by_name_is_refused_where_reads_stay_in_the_workspace() {
+    let scratch = Scratch::new("inside-add-dir");
+    let other = outside("inside-add-dir");
+
+    let mut workspace = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .with_reads_kept_inside(true);
+    assert!(workspace.reads_stay_inside());
+
+    let named = other.path.to_str().expect("utf-8 path");
+    for error in [
+        workspace
+            .resolve_directory(named)
+            .expect_err("a directory must not resolve where reads stay in the workspace"),
+        workspace
+            .add_directory(named)
+            .expect_err("a directory must not open where reads stay in the workspace"),
+    ] {
+        let said = error.to_string();
+        assert!(
+            said.contains("permissions.readsStayInWorkspace"),
+            "the refusal did not name the key that made it: {said}"
+        );
+    }
+    assert!(
+        workspace.added_directories().is_empty(),
+        "a refused directory was opened anyway"
+    );
+
+    // And the same workspace without the key behaves exactly as one always has, so the refusal is
+    // the setting rather than something else this fixture did.
+    let mut ordinary = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .with_reads_kept_inside(false);
+    ordinary
+        .add_directory(named)
+        .expect("a directory opens where nothing asked for confinement");
+}
+
+/// PERM-16: the refusal is a standing invariant rather than a check at the door, so a directory that
+/// was already open when the restriction was read is not reachable either. That is the case a resume
+/// reopening the directories its own record holds produces, and the case a front end that opens them
+/// per turn produces.
+///
+/// The failure this rejects is enforcing the key only where a directory is opened, which would leave
+/// every session that had opened one already reaching outside the workspace for the rest of its life.
+#[test]
+fn a_directory_already_open_is_unreachable_where_reads_stay_in_the_workspace() {
+    let scratch = Scratch::new("inside-already-open");
+    let other = outside("inside-already-open");
+    std::fs::write(other.path.join("notes.md"), "a note").unwrap();
+
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let added = workspace
+        .add_directory(other.path.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let path = Labelled::trusted(added.join("notes.md").display().to_string());
+    workspace
+        .read(&mut policy, &path)
+        .expect("readable while nothing confines the tools");
+
+    let workspace = workspace.with_reads_kept_inside(true);
+    let error = workspace
+        .read(&mut policy, &path)
+        .expect_err("a file outside the workspace must be refused");
+    assert!(matches!(error, WorkspaceError::Escapes { .. }), "{error:?}");
+    let written = Labelled::trusted(added.join("fresh.md").display().to_string());
+    let refused = workspace
+        .write(
+            &mut policy,
+            &written,
+            &Labelled::trusted("written".to_string()),
+        )
+        .expect_err("a write outside the workspace must be refused");
+    assert!(
+        matches!(refused, WorkspaceError::Escapes { .. }),
+        "{refused:?}"
+    );
+    assert!(
+        workspace.confines(&added.join("fresh.md")).is_err(),
+        "a destination a command line would open was still admitted"
+    );
+}
+
+/// PERM-16 stops at the session's own directory, which is not something a rule, a mode or an answer
+/// opened: TRUST-16 gives it no trust and the session removes it when it ends, and a session whose
+/// own directory went unreachable would fail every read and write it makes there.
+#[test]
+fn the_sessions_own_directory_stays_reachable_where_reads_stay_in_the_workspace() {
+    let scratch = Scratch::new("inside-scratch-kept");
+    let session = outside("inside-scratch-kept");
+    std::fs::write(session.path.join("notes.md"), "a note").unwrap();
+    // Canonical, as the directory a session is given arrives: a path is confined against where it
+    // lands, so a name that resolves elsewhere would be outside the directory it names.
+    let given = session.path.canonicalize().expect("canonical scratch");
+
+    let mut workspace = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .with_reads_kept_inside(true);
+    workspace.open_scratch(Some(given.clone()));
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let path = Labelled::trusted(given.join("notes.md").display().to_string());
+    workspace
+        .read(&mut policy, &path)
+        .expect("the session's own directory is still the session's");
+}
+
 /// The point of the attachment read: a binary file, which every other read here refuses.
 #[test]
 fn an_attachment_is_read_as_a_data_uri_though_it_is_binary() {

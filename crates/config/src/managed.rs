@@ -21,6 +21,13 @@
 //! It may also keep an MCP server from starting, by the host it reaches or the command it runs, and
 //! never add one (SERVERS-12). A layer that could declare a server would install a program on every
 //! machine it reaches.
+//!
+//! And it may pin the two `permissions` keys that only refuse: that the file tools stay inside the
+//! workspace, and that the mode asking about nothing is unreachable here (PERM-16, PERM-17). Both fit
+//! the reading the server lists fit, since a name that can only remove capability is one two parties
+//! have a legitimate say in and neither is a preference. Nothing here lifts either: the strictest
+//! value any layer named is what holds (PERM-18), so this layer is one more voice that can only
+//! tighten rather than the last word.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -45,12 +52,16 @@ const MANAGED_DIR: &str = r"C:\ProgramData\bravebot";
 #[cfg(all(unix, not(target_os = "macos")))]
 const MANAGED_DIR: &str = "/etc/bravebot";
 
-/// The names a managed layer may pin, which are the ones that decide where a request goes.
+/// The variables a managed layer may pin, which are the ones that decide where a request goes.
 ///
 /// The endpoints and the AWS block, so that an approved host can be made the only host and the
 /// switch that reaches somebody's own AWS account can be turned off. Not the signing key or the key
 /// id: a layer that names a destination grants nothing, and a credential is the one value here that
 /// would.
+///
+/// The names this layer answers for that are not variables are the server lists and the two
+/// `permissions` keys that only refuse, each read in its own field: what they have in common with
+/// the list here is that none of them can widen anything.
 const PINNABLE: [&str; 8] = [
     env_var::ENDPOINT,
     env_var::PREMIUM_ENDPOINT,
@@ -145,6 +156,19 @@ pub struct Managed {
     allowed: Option<Vec<Rule>>,
     /// The servers it denies, which no allow entry brings back.
     denied: Vec<Rule>,
+    /// What it said about the two `permissions` keys that only refuse (PERM-16, PERM-17).
+    ///
+    /// Read from this layer for the reason the server lists are: neither key can add anything, so an
+    /// administrator asking for one takes nothing from the person at the machine. It is not pinned in
+    /// the sense the variables are: a caller takes the strictest of this and what the settings layers
+    /// said (PERM-18), so a person may ask for either where this file did not.
+    narrowing: crate::Narrowing,
+    /// The keys it named as something other than a boolean, for `doctor` to report.
+    ///
+    /// Absence, as it is in every other layer, and reported rather than dropped: an administrator who
+    /// quoted `"true"` in a file nobody at the machine can change is the person least likely to find
+    /// out the pin does nothing.
+    narrowing_unreadable: Vec<&'static str>,
     /// The file, where there is one there at all.
     ///
     /// Recorded for a file that exists rather than for one that was understood, so that a report can
@@ -179,7 +203,10 @@ impl Managed {
             };
         };
         let layer = Settings::from_map(&root);
+        let (narrowing, narrowing_unreadable) = crate::settings::narrowing_stated(&root);
         Self {
+            narrowing,
+            narrowing_unreadable,
             pins: PINNABLE
                 .iter()
                 .filter_map(|name| {
@@ -254,6 +281,20 @@ impl Managed {
         Some((self.path.as_deref()?, refusal?))
     }
 
+    /// What this layer said about the two `permissions` keys that only refuse.
+    ///
+    /// Answering is not the whole of it, unlike [`Managed::get`]: a caller takes
+    /// [`crate::Narrowing::strictest`] of this and what the settings layers said, because a key that
+    /// can only refuse is one every layer may ask for (PERM-18).
+    pub fn narrowing(&self) -> crate::Narrowing {
+        self.narrowing
+    }
+
+    /// The keys it named as something other than a boolean, which are absence.
+    pub fn narrowing_unreadable(&self) -> impl Iterator<Item = &str> {
+        self.narrowing_unreadable.iter().copied()
+    }
+
     /// The names it pinned, for `doctor` to report.
     ///
     /// Names rather than values, for the reason the settings report gives: everyone on the machine
@@ -266,6 +307,7 @@ impl Managed {
             .chain(self.gateways.is_some().then_some(PROVIDER_BLOCK))
             .chain(self.allowed.is_some().then_some(SERVER_ALLOW))
             .chain((!self.denied.is_empty()).then_some(SERVER_DENY))
+            .chain(self.narrowing.named())
     }
 
     /// The file, where there is one there at all, read or not.
@@ -481,6 +523,58 @@ mod tests {
         ] {
             assert_eq!(managed.get(name), None, "{name} is not pinnable");
         }
+    }
+
+    /// PERM-16 and PERM-17: the two `permissions` keys that only refuse may be pinned, on the
+    /// reasoning the server lists are read for. The failure this rejects is treating them as
+    /// preferences, which is what the test above does to every name that is not pinnable, and which
+    /// would leave an administrator with nothing to write.
+    #[test]
+    fn the_two_keys_that_only_refuse_are_pinnable() {
+        let managed = scratch(
+            "managed-narrowing",
+            r#"{"permissions": {"readsStayInWorkspace": true, "bypassUnreachable": true}}"#,
+        );
+        assert!(managed.narrowing().keeps_reads_in_the_workspace());
+        assert!(managed.narrowing().makes_bypass_unreachable());
+        assert_eq!(
+            managed.pinned().collect::<Vec<_>>(),
+            vec![
+                "permissions.readsStayInWorkspace",
+                "permissions.bypassUnreachable"
+            ]
+        );
+        assert!(!managed.is_empty());
+    }
+
+    /// The reading every layer gives these keys, here too: anything that is not a boolean is
+    /// absence, and it is named so that an administrator who quoted `"true"` in a file nobody at the
+    /// machine can edit is told the pin does nothing.
+    #[test]
+    fn a_pinned_refusal_that_is_not_a_boolean_is_absence_and_is_named() {
+        let managed = scratch(
+            "managed-narrowing-unreadable",
+            r#"{"permissions": {"bypassUnreachable": "true"}}"#,
+        );
+        assert!(managed.narrowing().is_empty(), "a quoted value was obeyed");
+        assert_eq!(
+            managed.narrowing_unreadable().collect::<Vec<_>>(),
+            vec![crate::Narrowing::BYPASS_UNREACHABLE]
+        );
+    }
+
+    /// The rules themselves are not this layer's to write. `deny` and `ask` narrow, but a rule names
+    /// a path, a program or a host, and a file pinning one would be deciding what a session may work
+    /// on rather than whether it may leave the tree at all: the two keys above are the whole of what
+    /// is read here, and PERM-14 already says which file may write a rule.
+    #[test]
+    fn a_pinned_permission_rule_is_not_read() {
+        let managed = scratch(
+            "managed-rules",
+            r#"{"permissions": {"deny": ["Read(./.env)"], "allow": ["Bash(rm *)"]}}"#,
+        );
+        assert!(managed.is_empty(), "a rule in the managed file was pinned");
+        assert!(managed.narrowing().is_empty());
     }
 
     /// Half of "our account or nothing": the switch that reaches somebody's own AWS account is one

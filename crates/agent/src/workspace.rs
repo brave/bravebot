@@ -263,6 +263,24 @@ pub struct Workspace {
     /// different things: a tree large enough to need a wider walk is not always slow enough to
     /// need a longer read.
     search_time: Duration,
+    /// Whether a settings layer asked for the file tools to stay inside the primary root
+    /// (PERM-16).
+    ///
+    /// A standing invariant rather than a rule: it names no path, so no path is outside it, and it
+    /// holds whatever a rule, a mode or an answer given during the session would otherwise open.
+    /// Two things read it, and both are refusals. A directory cannot be opened by name, so nothing
+    /// arrives in `added` while it is set, and a directory that was open before it was set is not
+    /// reachable either, so a route that opened one some other way does not get past this.
+    ///
+    /// A field handed over by whoever read the settings, for the reason the search caps are: a
+    /// workspace that read them itself would answer differently on a machine whose owner had
+    /// configured them, and every test in the tree builds one.
+    ///
+    /// The session's own directory is not what this refuses. It is outside the project and stays
+    /// reachable: nobody was asked for it and no rule opened it, so there is no answer here for a
+    /// standing refusal to override, and a session whose own directory went unreachable would fail
+    /// every read and write in it (TRUST-16).
+    reads_stay_inside: bool,
     /// What the files this turn has written held before it wrote to them.
     ///
     /// Behind a lock and a handle because a workspace is cloned into the turn that uses it, and a
@@ -432,6 +450,7 @@ impl Workspace {
             memories: None,
             search_files: MAX_SEARCH_FILES,
             search_time: MAX_SEARCH_TIME,
+            reads_stay_inside: false,
             backups: Arc::new(Mutex::new(Vec::new())),
             rewind: Arc::default(),
         })
@@ -452,6 +471,31 @@ impl Workspace {
         self.search_files = files.unwrap_or(self.search_files);
         self.search_time = time.unwrap_or(self.search_time);
         self
+    }
+
+    /// Keep every file tool inside the primary root, whatever else would open a directory beside it
+    /// (PERM-16).
+    ///
+    /// `false` is a workspace as one has always been: a directory may be opened by name and is then
+    /// reachable by its absolute path. `true` refuses that, at the two places the reach exists, and
+    /// nothing later in the session takes it back: there is no route here that clears it, because a
+    /// standing refusal a turn could lift is not one.
+    ///
+    /// A bool rather than the settings, on SEARCH-9's reasoning: whoever read the layers hands the
+    /// answer over, so a workspace built by a test is not confined by whatever the machine running
+    /// it happens to have configured.
+    #[must_use]
+    pub fn with_reads_kept_inside(mut self, kept: bool) -> Self {
+        self.reads_stay_inside = kept;
+        self
+    }
+
+    /// Whether the file tools here are held to the primary root by a settings layer (PERM-16).
+    ///
+    /// For a caller that has to say why a directory was refused before it asks the workspace, and
+    /// for `/status`, which says what a session may reach.
+    pub fn reads_stay_inside(&self) -> bool {
+        self.reads_stay_inside
     }
 
     /// The caps a search here runs under: how many files it may walk, and how long it may spend
@@ -508,8 +552,14 @@ impl Workspace {
     /// The directories the user opened and the session's own. They are reached the same way and
     /// differ in who asked for them, so every test of where a path lands has to cover both or the
     /// session would be handed a directory it cannot write to.
+    /// A directory a person opened counts for nothing where the settings keep the tools inside the
+    /// root (PERM-16). Resolution is where that has to hold rather than only the door a directory is
+    /// opened at: one already open when the restriction was read, which a resume reopening its own
+    /// record is, would otherwise stay reachable for the rest of the session.
     fn is_opened(&self, resolved: &Path) -> bool {
-        self.added.iter().any(|dir| resolved.starts_with(dir))
+        let added =
+            !self.reads_stay_inside && self.added.iter().any(|dir| resolved.starts_with(dir));
+        added
             || self
                 .scratch
                 .as_deref()
@@ -552,7 +602,24 @@ impl Workspace {
     /// And so is the session's own directory, for the reason a directory inside the root is: it is
     /// reachable already, and adding it would put a rule the user wrote over a directory whose whole
     /// point is carrying none.
+    ///
+    /// Every name is refused, before any of that, where a settings layer asked for the file tools to
+    /// stay inside the workspace: see [`Workspace::with_reads_kept_inside`] and PERM-16. A caller
+    /// that would have put the name to a person reports the refusal instead, which is what PERM-13
+    /// already requires of a name that cannot be opened whatever the answer.
     pub fn resolve_directory(&self, directory: &str) -> Result<PathBuf, WorkspaceError> {
+        // First, and without touching the filesystem: the refusal is a standing one, so it does not
+        // depend on what is at the name or on which of the reasons below a name would have failed
+        // for. Every door that opens a directory comes through here, `/add-dir`, `--add-dir` and a
+        // name a settings file asked about alike, so this is the one place it has to be said
+        // (PERM-16).
+        if self.reads_stay_inside {
+            return Err(WorkspaceError::Invalid {
+                path: directory.to_string(),
+                reason: "is outside the workspace, and permissions.readsStayInWorkspace keeps the \
+                         file tools inside it",
+            });
+        }
         let candidate = Path::new(directory);
         if !candidate.is_absolute() {
             return Err(WorkspaceError::Invalid {

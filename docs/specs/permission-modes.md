@@ -230,7 +230,7 @@ the wrong mode everywhere else, and it is named `--dangerously-skip-permissions`
 ## Choosing one
 
 <a id="MODE-5"></a>
-### MODE-5: bypassing is reachable only where the command line asked for it
+### MODE-5: bypassing is reachable only where the command line asked for it, and only where no layer made it unreachable
 
 `--dangerously-skip-permissions` does two things and they are inseparable: it opens the session in
 that mode, and it puts that mode on the ladder the key walks. Without it the mode cannot be reached
@@ -241,11 +241,28 @@ bare invocation, `-p`, `--resume`, `--continue`, `--mode` and `--incognito` alik
 asks for the same thing once. A one-shot run has no key to press, so the flag is the whole of what
 can say.
 
+**Unless a layer made the mode unreachable.** Where a settings layer in force wrote
+`permissions.bypassUnreachable` ([PERM-17](permissions.md#PERM-17)), the flag does neither of those
+two things and is **refused**: the run stops before it dispatches, and what it says names
+`permissions.bypassUnreachable` and the file that asked for it, so that a flag which is documented and
+works elsewhere is not left looking like a fault in the program. Nothing is downgraded to asking,
+because a run told to stop asking and carried on with a notice is a run whose author believes it is
+unattended. The mode is then unreachable rather than merely unselected: the fourth rung exists only
+where the flag got through, so the key cannot reach it either.
+
 **Why.** A mode that answers every question has to be asked for where the asking is recorded, which
 is the command line somebody typed. Honouring only the second half would leave the flag doing
 nothing a person could see, and disagreeing with what the same flag does to a one-shot run.
 
+The flag being the only gate is what the second half is for. It records that somebody accepted what
+the mode costs, and a record is not a bound: nothing a person or an administrator could write made the
+mode unreachable on a machine where it is the wrong mode, which is every machine but a sandbox. A key
+that can only refuse is the other half of that, and refusing the flag rather than ignoring it is what
+keeps the two halves from disagreeing.
+
 `verified-by: bravebot_agent::permission_mode::bypass_is_only_reachable_where_the_flag_was_given`
+`verified-by: bravebot_cli::main::the_bypass_flag_is_refused_where_a_layer_made_the_mode_unreachable`
+`verified-by: bravebot_cli::running::the_skip_permissions_flag_is_refused_where_a_layer_made_bypass_unreachable`
 `verified-by: bravebot_tui::app::the_key_cannot_reach_bypass_without_the_flag`
 `verified-by: bravebot_tui::app::the_flag_opens_the_session_in_bypass_and_can_be_cycled_out_of`
 `verified-by: bravebot_cli::main::permissions_are_enforced_unless_the_flag_is_given`
