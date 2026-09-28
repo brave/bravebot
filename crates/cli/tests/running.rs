@@ -2705,6 +2705,109 @@ fn doctor_reports_a_server_declared_in_a_checkouts_settings() {
     );
 }
 
+/// SERVERS-14, run where a person runs it: `mcp list` started in a checkout reads that checkout's
+/// request, and says per server which file requested it, whether a session there holds the grant
+/// to call it, and which standing answer is recorded there. `doctor` prints the same rows, and
+/// fails where a declaration cannot be used. Neither prints the value of a variable a declaration
+/// names (SERVERS-10).
+#[test]
+fn list_and_doctor_in_a_checkout_say_what_requested_each_server_and_what_a_session_there_holds() {
+    let url = "https://weather.example/mcp";
+    let digest = bravebot_config::mcp::Declaration::http(url.to_string())
+        .expect("a declaration")
+        .digest();
+    let scratch = Scratch::new("cli-running-mcp-list-here")
+        .with_state(
+            "mcp.json",
+            &format!(
+                r#"{{"servers": {{
+                    "weather": {{"transport": "http", "url": "{url}"}},
+                    "local": {{"transport": "stdio", "argv": ["/opt/local-mcp"], "variables": ["TOKEN"]}}
+                }}}}"#
+            ),
+        )
+        .with_state("mcp-approved", &format!("{digest} weather\n"))
+        .with_file(
+            "checkout/.bravebot/settings.json",
+            r#"{"mcp": {"request": ["weather", "calendar"]}}"#,
+        );
+    let cwd = scratch.path.join("checkout");
+    let scratch = scratch.with_state(
+        "mcp-tools",
+        &format!("weather get_forecast {}\n", cwd.display()),
+    );
+    let file = Path::new(".bravebot")
+        .join("settings.json")
+        .display()
+        .to_string();
+    let secret = "a-token-value";
+    let environment = [
+        ("SERVICES_KEY_AICHAT", "a-services-key"),
+        ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+        ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ("TOKEN", secret),
+    ];
+
+    let listed = bravebot_started_in(&scratch.path, &cwd, &environment, &["mcp", "list"]);
+    let (list, stderr) = said(&listed);
+    assert!(listed.status.success(), "{stderr}");
+    let under = |alias: &str| -> Vec<String> {
+        list.lines()
+            .skip_while(|line| line.split_whitespace().next() != Some(alias))
+            .skip(1)
+            .take_while(|line| line.starts_with("   "))
+            .map(|line| line.trim().to_string())
+            .collect()
+    };
+    assert_eq!(
+        under("weather"),
+        [
+            format!(
+                "requested by {file}: a session here starts it unasked, and holds a grant to call it"
+            ),
+            "answered here: call get_forecast without asking".to_string(),
+        ],
+        "{list}"
+    );
+    assert_eq!(
+        under("local"),
+        [
+            "not requested here, so no session here holds a grant to call it",
+            "nothing is answered for it here",
+        ],
+        "{list}"
+    );
+    assert!(
+        list.lines().any(|line| line.trim()
+            == format!(
+                "calendar  requested by {file}, and not declared: bravebot mcp add declares it"
+            )),
+        "{list}"
+    );
+
+    let doctor = bravebot_started_in(&scratch.path, &cwd, &environment, &["doctor"]);
+    let (report, stderr) = said(&doctor);
+    assert_eq!(doctor.status.code(), Some(0), "{report}{stderr}");
+    let rows: Vec<&str> = list.lines().skip(2).collect();
+    assert!(
+        report
+            .lines()
+            .collect::<Vec<_>>()
+            .windows(rows.len())
+            .any(|window| window == rows.as_slice()),
+        "doctor did not report what list does:\n{report}\n{list}"
+    );
+    assert!(!list.contains(secret) && !report.contains(secret) && !stderr.contains(secret));
+
+    let scratch = scratch.with_state(
+        "mcp.json",
+        r#"{"servers": {"weather": {"transport": "http"}}}"#,
+    );
+    let doctor = bravebot_started_in(&scratch.path, &cwd, &environment, &["doctor"]);
+    let (report, stderr) = said(&doctor);
+    assert_eq!(doctor.status.code(), Some(1), "{report}{stderr}");
+}
+
 /// Brave's own hosts with nothing imported, which is what a released binary arrives as: a machine
 /// BACKEND-39 refuses in the three-route case, where the import is offered.
 const NOTHING_CONFIGURED: &[(&str, &str)] = &[

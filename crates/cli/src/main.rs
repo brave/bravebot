@@ -2165,6 +2165,21 @@ fn doctor() -> ExitCode {
     }
 
     println!();
+    // Outside the configuration block too: which servers a session here starts is read from the
+    // state directory and the settings, and is what `bravebot mcp list` reports (SERVERS-14).
+    let home = mcp::Home {
+        directory: bravebot_agent::home::directory(),
+        writable: false,
+    };
+    let (lines, failed) = mcp::examined(&home, &managed, mcp::Here::current(&settings));
+    for line in lines {
+        println!("{line}");
+    }
+    if failed {
+        ending = ends_on(ending, Ending::Failed);
+    }
+
+    println!();
     // Outside the configuration block for the same reason the state directory is: what a handshake
     // is validated against and what a request is routed through are facts about the machine, and
     // they are most often what is wanted when the configuration above them looks right and nothing

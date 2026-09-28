@@ -11,6 +11,7 @@
 //! an effect nobody could be asked about is refused rather than applied unseen.
 
 use crate::exit::{Ending, fail};
+use crate::progress::printable;
 use bravebot_config::Managed;
 use bravebot_config::mcp::{
     self, Approvals, Declaration, Declarations, Entry, Field, Problem, Projects, Standing,
@@ -40,6 +41,28 @@ pub(crate) struct Person<R, W> {
 /// How a command ended, where it did not end done.
 pub(crate) type Stopped = (Ending, String);
 
+/// A session started in the directory this runs in: what SERVERS-14's request, grant and standing
+/// answers are read against.
+pub(crate) struct Here {
+    /// The project such a session takes, with its links followed as its workspace follows them.
+    pub(crate) project: PathBuf,
+    /// Each alias its settings request, with the file that requested it.
+    pub(crate) requested: Vec<(PathBuf, String)>,
+}
+
+impl Here {
+    /// A session started here, requesting what `settings` request.
+    pub(crate) fn current(settings: &bravebot_config::Settings) -> Result<Self, Stopped> {
+        Ok(Self {
+            project: project(None)?,
+            requested: settings
+                .mcp_requested()
+                .map(|(file, alias)| (file.to_path_buf(), alias.to_string()))
+                .collect(),
+        })
+    }
+}
+
 /// Run `bravebot mcp <command>`.
 pub fn command(args: &[String]) -> ExitCode {
     let home = Home {
@@ -54,18 +77,20 @@ pub fn command(args: &[String]) -> ExitCode {
         screen: std::io::stdout().lock(),
         present,
     };
-    match run(args, &home, &Managed::load(), &mut person) {
+    let here = || Here::current(&bravebot_config::Settings::load());
+    match run(args, &home, &Managed::load(), &here, &mut person) {
         Ok(()) => ExitCode::SUCCESS,
         Err((ending, message)) => fail(ending, message),
     }
 }
 
 /// `managed` is the machine's layer, read only to say which servers it keeps from starting
-/// (SERVERS-12).
+/// (SERVERS-12). `here` is read only by `list`, which is the one command reporting on a session.
 fn run<R: BufRead, W: Write>(
     args: &[String],
     home: &Home,
     managed: &Managed,
+    here: &dyn Fn() -> Result<Here, Stopped>,
     person: &mut Person<R, W>,
 ) -> Result<(), Stopped> {
     let Some((command, rest)) = args.split_first() else {
@@ -75,7 +100,7 @@ fn run<R: BufRead, W: Write>(
         "add" => add(rest, home, person),
         "get" => get(one_alias(command, rest)?, home, managed, person),
         "list" => match rest.first() {
-            None => list(home, managed, person),
+            None => list(home, managed, here, person),
             Some(extra) => Err(unexpected(command, extra)),
         },
         "approve" => approve(one_alias(command, rest)?, home, person),
@@ -383,13 +408,11 @@ fn refused(managed: &Managed, declaration: &Declaration) -> Option<String> {
         .map(|reason| t!(mcp_refused_by_managed, reason = reason).to_string())
 }
 
-/// SERVERS-14's list half: every declared alias, its transport, and whether it is approved.
-///
-/// An entry that cannot be used is listed with what is wrong with it rather than left out, since a
-/// list that dropped it would make a declaration somebody wrote look like one nobody read.
+/// SERVERS-14's `list`: [`report`] under the file it read and the directory it was read for.
 fn list<R: BufRead, W: Write>(
     home: &Home,
     managed: &Managed,
+    here: &dyn Fn() -> Result<Here, Stopped>,
     person: &mut Person<R, W>,
 ) -> Result<(), Stopped> {
     let (directory, declarations) = readable(home)?;
@@ -397,61 +420,25 @@ fn list<R: BufRead, W: Write>(
         say(person, no_state_directory());
         return Ok(());
     };
+    let here = here()?;
     let path = mcp::declarations_file(directory).display().to_string();
-    let entries = declarations.entries();
-    if entries.is_empty() {
-        say(person, t!(mcp_none_declared, path = &path));
+    let (rows, unusable) = report(directory, &declarations, managed, &here);
+    match declarations.entries().is_empty() {
+        true => say(person, t!(mcp_none_declared, path = &path)),
+        false => say(person, t!(mcp_list_declared_in, path = &path)),
+    }
+    if rows.is_empty() {
         return Ok(());
     }
-    say(person, t!(mcp_list_declared_in, path = &path));
-    let approvals = Approvals::read(directory);
-    let approved = t!(mcp_approved).to_string();
-    let unapproved = t!(mcp_unapproved).to_string();
-    let state = approved.chars().count().max(unapproved.chars().count());
-    let width = entries
-        .iter()
-        .map(|entry| shown(&entry.alias).chars().count())
-        .max()
-        .unwrap_or_default();
-    let mut unusable = 0usize;
-    for Entry { alias, declaration } in &entries {
-        let refusal = declaration
-            .as_ref()
-            .ok()
-            .and_then(|declaration| refused(managed, declaration));
-        let alias = pad(&shown(alias), width);
-        match declaration {
-            Ok(declaration) => {
-                let digest = declaration.digest();
-                let word = match approvals.approves(&digest) {
-                    true => &approved,
-                    false => &unapproved,
-                };
-                let line = format!(
-                    "  {alias}  {}  {}  {}",
-                    pad(declaration.transport(), 5),
-                    pad(word, state),
-                    digest.short()
-                );
-                say(
-                    person,
-                    match refusal {
-                        Some(refusal) => format!("{line}  {refusal}"),
-                        None => line,
-                    },
-                );
-            }
-            Err(found) => {
-                unusable += 1;
-                say(
-                    person,
-                    format!(
-                        "  {alias}  {}",
-                        t!(mcp_cannot_be_used, problem = problem(found))
-                    ),
-                );
-            }
-        }
+    say(
+        person,
+        t!(
+            mcp_list_here,
+            path = printable(&here.project.display().to_string())
+        ),
+    );
+    for row in rows {
+        say(person, row);
     }
     match unusable {
         0 => Ok(()),
@@ -460,6 +447,192 @@ fn list<R: BufRead, W: Write>(
             t!(mcp_list_unusable, count = count, path = &path).to_string(),
         )),
     }
+}
+
+/// SERVERS-14's half in `doctor`: the rows `list` prints, under one heading naming the file and the
+/// directory, and whether anything in them is a failure.
+///
+/// A failure where the declarations cannot be read or one cannot be used, which is where `list`
+/// fails too. Not the configuration status: a session here opens and works without that server.
+pub(crate) fn examined(
+    home: &Home,
+    managed: &Managed,
+    here: Result<Here, Stopped>,
+) -> (Vec<String>, bool) {
+    let Some(directory) = &home.directory else {
+        return (vec![no_state_directory()], false);
+    };
+    let here = match here {
+        Ok(here) => here,
+        Err((_, why)) => return (vec![why], true),
+    };
+    let declarations = match read(directory) {
+        Ok(declarations) => declarations,
+        Err((_, why)) => return (vec![why], true),
+    };
+    let path = mcp::declarations_file(directory).display().to_string();
+    let project = printable(&here.project.display().to_string());
+    let (rows, unusable) = report(directory, &declarations, managed, &here);
+    let heading = match declarations.entries().is_empty() {
+        true => t!(doctor_mcp_none, path = path, project = project),
+        false => t!(doctor_mcp_servers, path = path, project = project),
+    };
+    let mut lines = vec![heading.to_string()];
+    lines.extend(rows);
+    (lines, unusable > 0)
+}
+
+/// SERVERS-14's report: one row for each declared server and for each server requested here and
+/// declared nowhere, and how many declarations cannot be used.
+///
+/// A declaration's row is its transport, its approval, its digest, and where the managed layer
+/// refuses it, why. Under it, which checkout requested it and whether a session started `here`
+/// holds the grant to call it, read from the one place a session decides that
+/// ([`crate::servers::grant`]), and then what was answered about it here. An entry that cannot be
+/// used is listed with its problem rather than left out, since a list that dropped it would make a
+/// declaration somebody wrote look like one nobody read.
+pub(crate) fn report(
+    directory: &Path,
+    declarations: &Declarations,
+    managed: &Managed,
+    here: &Here,
+) -> (Vec<String>, usize) {
+    use crate::servers::{Grant, Unstarted, grant, named};
+
+    let entries = declarations.entries();
+    let undeclared: Vec<&(PathBuf, String)> = here
+        .requested
+        .iter()
+        .filter(|(_, alias)| declarations.get(alias).is_none())
+        .collect();
+    let approvals = Approvals::read(directory);
+    let projects = Projects::read(directory);
+    let standing = Standing::read(directory).in_project(&here.project);
+    let approved = t!(mcp_approved).to_string();
+    let unapproved = t!(mcp_unapproved).to_string();
+    let state = approved.chars().count().max(unapproved.chars().count());
+    let width = entries
+        .iter()
+        .map(|entry| entry.alias.as_str())
+        .chain(undeclared.iter().map(|(_, alias)| alias.as_str()))
+        .map(|alias| shown(alias).chars().count())
+        .max()
+        .unwrap_or_default();
+    let under = " ".repeat(2 + width + 2);
+    let mut rows = Vec::new();
+    let mut unusable = 0usize;
+    for Entry { alias, declaration } in &entries {
+        let file = here
+            .requested
+            .iter()
+            .find(|(_, requested)| requested == alias)
+            .map(|(file, _)| printable(&named(file, &here.project)));
+        let row = pad(&shown(alias), width);
+        let (request, covered) = match declaration {
+            Ok(declaration) => {
+                let digest = declaration.digest();
+                let covered = file.is_some() && !approvals.changed(alias, &digest);
+                let word = match approvals.approves(&digest) {
+                    true => &approved,
+                    false => &unapproved,
+                };
+                let line = format!(
+                    "  {row}  {}  {}  {}",
+                    pad(declaration.transport(), 5),
+                    pad(word, state),
+                    digest.short()
+                );
+                rows.push(match refused(managed, declaration) {
+                    Some(refusal) => format!("{line}  {refusal}"),
+                    None => line,
+                });
+                let request = file.map(|file| {
+                    match grant(
+                        alias,
+                        declaration,
+                        &here.project,
+                        &approvals,
+                        &projects,
+                        managed,
+                    ) {
+                        Grant::Held => t!(mcp_requested_held, file = file),
+                        Grant::Asked => t!(mcp_requested_asked, file = file),
+                        Grant::Withheld(Unstarted::Unplanned(reason)) => {
+                            t!(mcp_requested_withheld, file = file, reason = reason)
+                        }
+                        Grant::Withheld(Unstarted::Unconfined) => t!(
+                            mcp_requested_withheld,
+                            file = file,
+                            reason = t!(mcp_no_confinement_here)
+                        ),
+                        // Its row already ends on the managed layer's reason.
+                        Grant::Withheld(Unstarted::Refused(_)) => {
+                            t!(mcp_requested_not_started, file = file)
+                        }
+                    }
+                });
+                (request, covered)
+            }
+            Err(found) => {
+                unusable += 1;
+                rows.push(format!(
+                    "  {row}  {}",
+                    t!(mcp_cannot_be_used, problem = problem(found))
+                ));
+                (
+                    file.map(|file| t!(mcp_requested_not_started, file = file)),
+                    false,
+                )
+            }
+        };
+        let request = request.unwrap_or_else(|| t!(mcp_not_requested_here).to_string());
+        rows.push(format!("{under}{request}"));
+        let project = covered && projects.contains(&here.project);
+        for answer in answered(alias, project, &standing) {
+            rows.push(format!("{under}{answer}"));
+        }
+    }
+    for (file, alias) in undeclared {
+        rows.push(format!(
+            "  {}  {}",
+            pad(&shown(alias), width),
+            t!(
+                mcp_requested_undeclared,
+                file = printable(&named(file, &here.project))
+            )
+        ));
+        for answer in answered(alias, false, &standing) {
+            rows.push(format!("{under}{answer}"));
+        }
+    }
+    (rows, unusable)
+}
+
+/// The standing answers recorded for `alias` in the project `standing` was read for: answer 2 at
+/// the question before a server starts, where `project` says it is recorded and covers this one,
+/// and answer 2 at a call, one line naming each tool it covers.
+///
+/// The project answer covers a server the project requests whose declaration nobody saw as
+/// something else (SERVERS-5), so it is said under no other.
+fn answered(alias: &str, project: bool, standing: &[String]) -> Vec<String> {
+    // Each is `alias:tool`, and neither an alias nor a tool word holds a colon.
+    let tools: Vec<&str> = standing
+        .iter()
+        .filter_map(|answer| answer.split_once(':'))
+        .filter(|(answered, _)| *answered == alias)
+        .map(|(_, tool)| tool)
+        .collect();
+    let mut lines = Vec::new();
+    if project {
+        lines.push(t!(mcp_standing_project).to_string());
+    }
+    if !tools.is_empty() {
+        lines.push(t!(mcp_standing_tools, tools = tools.join(", ")).to_string());
+    }
+    if lines.is_empty() {
+        lines.push(t!(mcp_standing_none).to_string());
+    }
+    lines
 }
 
 fn approve<R: BufRead, W: Write>(
@@ -899,6 +1072,20 @@ mod tests {
     /// Run a command as a person at a terminal who types `typed`. The machine's layer is
     /// `managed.json` in `directory`, absent unless a test writes it.
     fn typing(directory: &Path, args: &[&str], typed: &str) -> (Result<(), Stopped>, String) {
+        let nothing = Here {
+            project: directory.join("checkout"),
+            requested: Vec::new(),
+        };
+        typing_in(directory, &nothing, args, typed)
+    }
+
+    /// The same, where `here` is the directory the command runs in and what its settings request.
+    fn typing_in(
+        directory: &Path,
+        here: &Here,
+        args: &[&str],
+        typed: &str,
+    ) -> (Result<(), Stopped>, String) {
         let home = Home {
             directory: Some(directory.to_path_buf()),
             writable: true,
@@ -909,7 +1096,13 @@ mod tests {
             present: true,
         };
         let managed = Managed::at(&directory.join("managed.json"));
-        let outcome = run(&words(args), &home, &managed, &mut person);
+        let here = || {
+            Ok(Here {
+                project: here.project.clone(),
+                requested: here.requested.clone(),
+            })
+        };
+        let outcome = run(&words(args), &home, &managed, &here, &mut person);
         (outcome, String::from_utf8(person.screen).unwrap())
     }
 
@@ -990,6 +1183,334 @@ mod tests {
         );
         let (_, docs) = typing(&directory, &["get", "docs"], "");
         assert!(!docs.contains(&path), "{docs}");
+    }
+
+    /// A checkout under `directory` whose settings file requests `aliases`, as a session there
+    /// finds it.
+    fn requesting(directory: &Path, aliases: &[&str]) -> Here {
+        let checkout = directory.join("checkout");
+        std::fs::create_dir_all(checkout.join(".bravebot")).expect("checkout");
+        let project = checkout.canonicalize().expect("canonical");
+        let file = project.join(".bravebot/settings.json");
+        std::fs::write(&file, "{}").expect("settings");
+        Here {
+            project,
+            requested: aliases
+                .iter()
+                .map(|alias| (file.clone(), alias.to_string()))
+                .collect(),
+        }
+    }
+
+    /// That settings file as a row names it, relative to the checkout.
+    fn requested_by() -> String {
+        Path::new(".bravebot")
+            .join("settings.json")
+            .display()
+            .to_string()
+    }
+
+    /// The lines `list` printed under `alias`'s row, up to the next row.
+    fn under<'a>(listed: &'a str, alias: &str) -> Vec<&'a str> {
+        listed
+            .lines()
+            .skip_while(|line| line.split_whitespace().next() != Some(alias))
+            .skip(1)
+            .take_while(|line| line.starts_with("   "))
+            .map(str::trim)
+            .collect()
+    }
+
+    /// SERVERS-14's other columns: under each server, which checkout here requested it, whether a
+    /// session started here holds the grant to call it or asks first, and which of answer 2 at
+    /// either question stands for it here. Answers given in another project are not these.
+    #[test]
+    fn list_says_who_requested_each_server_whether_a_session_here_holds_its_grant_and_what_stands()
+    {
+        let directory = scratch("cli-mcp-list-here");
+        for (add, typed) in [
+            (
+                &["add", "weather", "--http", "https://weather.example/mcp"][..],
+                "y\n",
+            ),
+            (
+                &["add", "docs", "--http", "https://docs.example/mcp"],
+                "n\n",
+            ),
+            (
+                &["add", "maps", "--http", "https://maps.example/mcp"],
+                "n\n",
+            ),
+        ] {
+            let (outcome, _) = typing(&directory, add, typed);
+            assert!(outcome.is_ok(), "{add:?}: {outcome:?}");
+        }
+        let here = requesting(&directory, &["docs", "weather", "calendar"]);
+        let mut standing = Standing::default();
+        assert!(standing.add("weather", "get_forecast", &here.project));
+        assert!(standing.add("weather", "get_alerts", &directory.join("elsewhere")));
+        assert!(standing.add("calendar", "list_events", &here.project));
+        std::fs::write(mcp::tools_file(&directory), standing.to_text()).expect("tools");
+        let file = &requested_by();
+
+        let (outcome, listed) = typing_in(&directory, &here, &["list"], "");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let project = here.project.display().to_string();
+        assert!(
+            listed
+                .lines()
+                .any(|line| line == t!(mcp_list_here, path = project.clone())),
+            "{listed}"
+        );
+        assert_eq!(
+            under(&listed, "weather"),
+            [
+                t!(mcp_requested_held, file = file),
+                t!(mcp_standing_tools, tools = "get_forecast"),
+            ],
+            "{listed}"
+        );
+        assert_eq!(
+            under(&listed, "docs"),
+            [
+                t!(mcp_requested_asked, file = file),
+                t!(mcp_standing_none).to_string(),
+            ],
+            "{listed}"
+        );
+        assert_eq!(
+            under(&listed, "maps"),
+            [
+                t!(mcp_not_requested_here).to_string(),
+                t!(mcp_standing_none).to_string(),
+            ],
+            "{listed}"
+        );
+        let calendar = listed
+            .lines()
+            .find(|line| line.split_whitespace().next() == Some("calendar"))
+            .unwrap_or_else(|| panic!("a request nothing declares is left out: {listed}"));
+        assert!(
+            calendar.ends_with(&t!(mcp_requested_undeclared, file = file)),
+            "{listed}"
+        );
+        assert_eq!(
+            under(&listed, "calendar"),
+            [t!(mcp_standing_tools, tools = "list_events")],
+            "{listed}"
+        );
+
+        // Answer 2 at the question before a server starts, recorded for this project: every server
+        // it requests is started unasked, except one whose declaration changed since it was seen,
+        // and the answer is said under those alone.
+        let mut projects = Projects::default();
+        assert!(projects.add(&here.project));
+        std::fs::write(mcp::projects_file(&directory), projects.to_text()).expect("projects");
+        let (outcome, _) = typing(
+            &directory,
+            &["add", "weather", "--http", "https://weather.example/v2"],
+            "n\n",
+        );
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let (_, listed) = typing_in(&directory, &here, &["list"], "");
+        let project_answer = t!(mcp_standing_project).to_string();
+        assert_eq!(
+            under(&listed, "docs"),
+            [t!(mcp_requested_held, file = file), project_answer],
+            "{listed}"
+        );
+        assert_eq!(
+            under(&listed, "weather"),
+            [
+                t!(mcp_requested_asked, file = file),
+                t!(mcp_standing_tools, tools = "get_forecast"),
+            ],
+            "{listed}"
+        );
+        assert_eq!(
+            under(&listed, "maps"),
+            [
+                t!(mcp_not_requested_here).to_string(),
+                t!(mcp_standing_none).to_string(),
+            ],
+            "{listed}"
+        );
+    }
+
+    /// A requested server no session here starts is said to hold no grant, with the reason where
+    /// its row does not already give one: a program nothing resolves, a server the managed layer
+    /// refuses, and a declaration that cannot be used.
+    #[test]
+    fn list_says_a_requested_server_no_session_here_starts_holds_no_grant() {
+        let directory = scratch("cli-mcp-list-withheld");
+        std::fs::write(
+            mcp::declarations_file(&directory),
+            r#"{"servers": {
+                "local": {"transport": "stdio", "argv": ["local-mcp"]},
+                "maps": {"transport": "http", "url": "https://maps.example/mcp"},
+                "leaky": {"transport": "stdio", "argv": ["x"], "env": {"TOKEN": "hunter2"}}
+            }}"#,
+        )
+        .expect("mcp.json");
+        std::fs::write(
+            directory.join("managed.json"),
+            r#"{"mcp": {"allow": [{"command": ["/opt/docs-mcp"]}]}}"#,
+        )
+        .expect("managed.json");
+        let here = requesting(&directory, &["local", "maps", "leaky"]);
+        let file = &requested_by();
+
+        let (outcome, listed) = typing_in(&directory, &here, &["list"], "");
+        assert_eq!(
+            outcome.map_err(|(ending, _)| ending),
+            Err(Ending::Configuration),
+            "{listed}"
+        );
+        assert_eq!(
+            under(&listed, "local").first().copied(),
+            Some(
+                t!(
+                    mcp_requested_withheld,
+                    file = file,
+                    reason = t!(servers_program_without_path, program = "local-mcp")
+                )
+                .as_str()
+            ),
+            "{listed}"
+        );
+        let not_started = t!(mcp_requested_not_started, file = file);
+        assert_eq!(
+            under(&listed, "maps").first().copied(),
+            Some(not_started.as_str()),
+            "{listed}"
+        );
+        assert_eq!(
+            under(&listed, "leaky").first().copied(),
+            Some(not_started.as_str()),
+            "{listed}"
+        );
+        assert!(!listed.contains("hunter2"), "{listed}");
+    }
+
+    /// A control character in the directory or in a settings file's path is shown as its picture,
+    /// so a name cannot write a row of its own in `list` or in `doctor`.
+    #[test]
+    fn a_control_character_in_a_path_cannot_write_a_row() {
+        let directory = scratch("cli-mcp-list-pictured");
+        let (outcome, _) = typing(
+            &directory,
+            &["add", "maps", "--http", "https://maps.example/mcp"],
+            "n\n",
+        );
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let project = directory.join("app\nweather  stdio  approved");
+        let here = Here {
+            project: project.clone(),
+            requested: vec![
+                (project.join("maps\n.json"), "maps".to_string()),
+                (project.join("calendar\n.json"), "calendar".to_string()),
+            ],
+        };
+
+        let (outcome, listed) = typing_in(&directory, &here, &["list"], "");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(
+            listed.lines().all(|line| !line.starts_with("weather")),
+            "{listed}"
+        );
+        for pictured in [
+            "app\u{240a}weather",
+            "maps\u{240a}.json",
+            "calendar\u{240a}.json",
+        ] {
+            assert!(listed.contains(pictured), "{pictured}: {listed}");
+        }
+
+        let home = Home {
+            directory: Some(directory.clone()),
+            writable: false,
+        };
+        let (lines, _) = examined(&home, &Managed::default(), Ok(here));
+        assert!(lines.iter().all(|line| !line.contains('\n')), "{lines:?}");
+    }
+
+    /// `doctor` reports the rows `list` does, under one heading naming the file and the directory,
+    /// and fails where `list` does, on declarations it cannot read or use. A state directory that
+    /// declares nothing, or a machine with none, is no failure.
+    #[test]
+    fn doctor_reports_what_list_does_and_fails_where_it_does() {
+        let directory = scratch("cli-mcp-examined");
+        let here = requesting(&directory, &["weather"]);
+        let home = Home {
+            directory: Some(directory.clone()),
+            writable: false,
+        };
+        let managed = Managed::default();
+        let again = || {
+            Ok(Here {
+                project: here.project.clone(),
+                requested: here.requested.clone(),
+            })
+        };
+        let path = mcp::declarations_file(&directory).display().to_string();
+        let project = here.project.display().to_string();
+
+        let (lines, failed) = examined(&home, &managed, again());
+        assert!(!failed, "{lines:?}");
+        assert_eq!(
+            lines[0],
+            t!(
+                doctor_mcp_none,
+                path = path.clone(),
+                project = project.clone()
+            )
+        );
+        assert!(
+            lines[1].ends_with(&t!(mcp_requested_undeclared, file = requested_by())),
+            "{lines:?}"
+        );
+
+        let (outcome, _) = typing(
+            &directory,
+            &["add", "weather", "--http", "https://weather.example/mcp"],
+            "y\n",
+        );
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let (lines, failed) = examined(&home, &managed, again());
+        assert!(!failed, "{lines:?}");
+        let (_, listed) = typing_in(&directory, &here, &["list"], "");
+        assert_eq!(
+            lines,
+            std::iter::once(t!(
+                doctor_mcp_servers,
+                path = path.clone(),
+                project = project.clone()
+            ))
+            .chain(listed.lines().skip(2).map(str::to_string))
+            .collect::<Vec<_>>(),
+            "{listed}"
+        );
+
+        std::fs::write(
+            mcp::declarations_file(&directory),
+            r#"{"servers": {"weather": {"transport": "stdio"}}}"#,
+        )
+        .expect("mcp.json");
+        let (lines, failed) = examined(&home, &managed, again());
+        assert!(failed, "an unusable declaration: {lines:?}");
+
+        std::fs::write(mcp::declarations_file(&directory), "not json").expect("mcp.json");
+        let (lines, failed) = examined(&home, &managed, again());
+        assert!(failed, "an unreadable file: {lines:?}");
+        assert_eq!(lines.len(), 1, "{lines:?}");
+
+        let nowhere = Home {
+            directory: None,
+            writable: false,
+        };
+        let (lines, failed) = examined(&nowhere, &managed, again());
+        assert!(!failed);
+        assert_eq!(lines, [no_state_directory()]);
     }
 
     #[test]
@@ -1297,7 +1818,13 @@ mod tests {
             screen: Vec::new(),
             present: true,
         };
-        let outcome = run(&words(&["forget"]), &home, &Managed::default(), &mut person);
+        let outcome = run(
+            &words(&["forget"]),
+            &home,
+            &Managed::default(),
+            &|| unreachable!("forget reports on no session"),
+            &mut person,
+        );
         assert_eq!(outcome.map_err(|(ending, _)| ending), Err(Ending::Failed));
     }
 }

@@ -64,10 +64,12 @@ one is asked about again. Each call is then put to them with three answers, afte
 rule naming the server or the tool ([SERVERS-7](#SERVERS-7)). Bypassing answers both questions and
 records neither ([SERVERS-13](#SERVERS-13)).
 
-What is not built: [SERVERS-11](#SERVERS-11)'s question about a hop, which is refused in its place;
-the columns of `list` and `doctor`'s half of [SERVERS-14](#SERVERS-14); and a server in the desktop
-application, which starts none. The first two are stated as unbuilt in the clause each belongs to,
-and the third among the known costs at the end.
+What is not built: [SERVERS-11](#SERVERS-11)'s question about a hop, which is refused in its place,
+as that clause states.
+
+The desktop application starts no server, and says so as a session opens where one is requested
+([SERVERS-2](#SERVERS-2)). That is a cost it pays on purpose, and the known costs at the end give the
+reason.
 
 Issue #83 is where the unwired client was written down, and it names the four things wiring needs
 decided first: where a server is declared, what a name and an argv is trusted for, how the untrusted
@@ -164,10 +166,11 @@ bravebot mcp forget [path]
 `add` writes a declaration and then asks. `approve` is the same question for a declaration that is
 already written, which is what a checkout's request and a changed digest both produce. `get` shows
 one declaration in full, including its digest and the variables it will receive. `list` says, per
-alias, the transport, whether it is approved, whether a capability grants calls to it, and whether
-anything requested it. `remove` deletes the declaration and its approval together, because an
-approval outliving its declaration is a digest nothing resolves. `forget` drops the standing answers
-recorded for a project, defaulting to this one.
+alias, the transport, whether it is approved and the digest, which file here requested it, whether a
+session started here holds a grant to call it, and what is answered about it here; `doctor` says
+the same ([SERVERS-14](#SERVERS-14)). `remove` deletes the declaration and its approval together,
+because an approval outliving its declaration is a digest nothing resolves. `forget` drops the
+standing answers recorded for a project, defaulting to this one.
 
 A bare `--` takes the program and its arguments after it, as argv and never as a line, and every
 word after it is the server's, a flag of bravebot's included. `--stdio --` is the same and may be
@@ -183,8 +186,7 @@ links followed, as answer 2 recorded it, and one that no longer resolves, a dele
 taken as typed and made absolute. It drops that project from `mcp-projects` and every standing
 answer about a tool in it from `mcp-tools`, says a line for each answer it dropped or that nothing
 was recorded, and leaves every other project's as it was. An incognito session writes nothing, so
-`forget` is refused there. The columns of `list` that report a capability and a request are unbuilt
-([SERVERS-14](#SERVERS-14)).
+`forget` is refused there.
 
 ### Coming from Claude Code
 
@@ -275,9 +277,16 @@ saying that `bravebot mcp add` declares one. The file is named relative to the c
 inside it, a checkout reached through a link included. A declared alias no checkout requested is
 not started, approved or not.
 
+The desktop application starts none of what is requested (see the known costs). A session it
+starts, reopens or forks where the settings request servers names them, and says the desktop app
+does not start them and that `bravebot mcp list`, run there in a terminal, says which a session
+there would, so a request it passed over does not read as one it honoured. A requested name that is not an alias is shown quoted, with its escapes.
+
 `verified-by: bravebot_config::settings::every_layers_request_is_read_and_each_alias_is_kept_once`
 `verified-by: bravebot_cli::servers::a_request_nobody_declared_is_reported_and_nothing_is_started_for_it`
 `verified-by: bravebot_cli::servers::a_checkout_reached_through_a_link_names_its_settings_file_inside_it`
+`verified-by: bravebot_session::sessions::a_desktop_session_names_the_servers_it_does_not_start`
+`verified-by: bravebot_ui_bridge::servers::every_way_a_desktop_session_opens_names_the_servers_its_project_requests`
 
 <a id="SERVERS-3"></a>
 ### SERVERS-3: adding a server is a command a person types, and typing it is not the approval
@@ -1086,12 +1095,32 @@ none are.
 interface reports a property that is not in force. A list that quietly omitted the unapproved would
 make a declaration somebody wrote and never answered for look like a file that was never read.
 
-`bravebot mcp list` is built for what a declaration alone can answer: per alias, the transport,
-whether it is approved, and the digest, under the path of the file that declared it, and, where the
-managed layer refuses the server, the file that refused it and why ([SERVERS-12](#SERVERS-12)). A declaration
-that cannot be used is listed with its problem, and the list then fails. The capability, the
-requesting checkout and the standing answers are unbuilt with the things they report, and so is
-`doctor`'s half.
+`bravebot mcp list` says, per alias, the transport, whether it is approved, and the digest, under
+the path of the file that declared it and the directory a session would start in, and, where the
+managed layer refuses the server, the file that refused it and why ([SERVERS-12](#SERVERS-12)).
+
+Under each row is the file here that requested it and whether a session started here holds the
+grant to call it ([SERVERS-9](#SERVERS-9)). One it starts unasked does. One it asks about first
+does after a yes. One it would not start does not, with the reason where the row does not already
+give it. The answer comes from the same decision a session makes as it opens, so the list and the
+session cannot disagree. A server nothing here requested holds no grant, and says so. The rows
+answer for a session at a terminal: where nobody can be asked, one it would ask about is absent
+([SERVERS-4](#SERVERS-4)), and one bypassing the prompts starts it unasked
+([SERVERS-13](#SERVERS-13)).
+
+Then come the standing answers recorded for it here: answer 2 at the server question, said under
+each server the project requests whose declaration nobody saw as something else, since that is what
+it covers ([SERVERS-5](#SERVERS-5)), and the tools answer 2 at a call covers. Where there are none,
+the list says that nothing is answered. A server requested here and declared nowhere is a row of its
+own. A declaration that cannot be used is listed with its problem, and the list then fails.
+
+`doctor` prints the same rows after the state directory, under a heading that names the declarations
+file and the directory. It fails where the list does, with the status for a failed check rather
+than the one for a configuration nothing ran on, since a session here still opens without that
+server. A machine with no state directory says so and does not fail, since no session there starts
+a server. Neither prints the value of a variable a declaration names
+([SERVERS-10](#SERVERS-10)), and a control character in the directory or a settings file's path is
+shown as its picture, so a name cannot write a row of its own.
 
 The session's display is built in the full-screen interface, whose `/status` has a line naming the
 MCP servers the session started,
@@ -1104,6 +1133,10 @@ the report [SANDBOX-10](sandboxing.md#SANDBOX-10) would otherwise make untrue.
 
 `verified-by: bravebot_cli::running::an_added_server_nobody_was_asked_about_is_declared_and_listed_unapproved`
 `verified-by: bravebot_cli::running::a_declaration_that_cannot_be_used_is_listed_with_its_problem`
+`verified-by: bravebot_cli::mcp::list_says_who_requested_each_server_whether_a_session_here_holds_its_grant_and_what_stands`
+`verified-by: bravebot_cli::mcp::list_says_a_requested_server_no_session_here_starts_holds_no_grant`
+`verified-by: bravebot_cli::mcp::doctor_reports_what_list_does_and_fails_where_it_does`
+`verified-by: bravebot_cli::running::list_and_doctor_in_a_checkout_say_what_requested_each_server_and_what_a_session_there_holds`
 `verified-by: bravebot_tui::status::the_servers_a_session_started_are_named_and_what_is_confined_follows_them`
 `verified-by: bravebot_tui::status::each_servers_note_says_how_its_tools_stand`
 
@@ -1299,6 +1332,10 @@ This spec cannot land without these. Each is named by what the clause says rathe
   a name, so a link, a copy or another name for the same machine is not denied, and a command match
   leaves out the variables a server starts with. The allow list is the form that holds
   ([SERVERS-12](#SERVERS-12)).
-- **The desktop application starts no server.** The terminal client's three sessions settle a
-  request; a desktop session reads the same settings file, starts nothing for it, and says nothing
-  about it.
+- **The desktop application starts no server.** It has none of the three questions a server is put
+  through: the server question ([SERVERS-4](#SERVERS-4)), the tool list
+  ([SERVERS-8](#SERVERS-8)) and the call ([SERVERS-7](#SERVERS-7)). It answers each of them no, so
+  a server it started would be one nobody was asked about. A desktop session reads the same
+  settings file as the terminal's three sessions, starts nothing for a request, and names what was
+  requested as it opens ([SERVERS-2](#SERVERS-2)), so a person who needs the servers knows to start
+  the session in a terminal.
