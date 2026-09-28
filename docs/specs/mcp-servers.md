@@ -10,6 +10,7 @@ governs:
   - crates/config/src/mcp.rs
   - crates/config/src/managed.rs
   - crates/config/src/settings.rs
+  - crates/config/src/import.rs
   - crates/cli/src/mcp.rs
   - crates/cli/src/servers.rs
   - crates/core/src/capability.rs
@@ -35,8 +36,9 @@ surface that spec has none of.
 
 Declaring a server is built, and so are starting one, offering its tools and calling one.
 `bravebot mcp` writes `~/.bravebot/mcp.json`, asks the question that approves one, records the digest
-it was asked about, lists what is declared, and forgets a project's standing answers
-([SERVERS-1](#SERVERS-1), [SERVERS-3](#SERVERS-3), [SERVERS-5](#SERVERS-5), and the `list` half of
+it was asked about, writes and takes out the request in the settings file `-s` names, lists what is
+declared, and forgets a project's standing answers ([SERVERS-1](#SERVERS-1),
+[SERVERS-2](#SERVERS-2), [SERVERS-3](#SERVERS-3), [SERVERS-5](#SERVERS-5), and the `list` half of
 [SERVERS-14](#SERVERS-14)). `doctor` names a settings layer that tries to declare one.
 
 The machine's managed layer can keep a server from starting, by the host its url names or the
@@ -92,11 +94,11 @@ is not, and [the divergence](#the-one-place-this-diverges-from-claude-code) says
 |---|---|---|
 | Declaration file | `.mcp.json` at the repo root, or user scope | `~/.bravebot/mcp.json`, the person's own directory only |
 | A file in the checkout may declare a server | yes, argv included | **no**, an alias may be requested and nothing more |
-| Scopes | local, project, user | home declares; a checkout requests; a machine-level layer removes |
+| Scopes | local, project, user | home declares; a checkout or the home layer requests, in the file `-s` names; a machine-level layer removes |
 | Prompt when a server is first reachable | three answers: use it, use it and all future servers in this project, continue without it | same three answers, same meanings |
 | Prompt on every tool call | three answers: yes, yes and stop asking for this tool here, no | same three answers, same meanings |
 | *Where "stop asking" is recorded* | *`.claude/settings.local.json`, inside the checkout* | *the state directory, keyed by the project path* |
-| Adding one from the command line | `claude mcp add` | `bravebot mcp add`, and the typing is not the approval |
+| Adding one from the command line | `claude mcp add [-s <scope>]` | `bravebot mcp add [-s <scope>]`, and the typing is not the approval; the scope says where the request goes, and the declaration is in one place whatever it says |
 | Re-approval when the declaration changes | not on argv change | **yes**, an approval binds to a digest |
 | Environment reaching the server | the whole process environment, plus `env` | the named variables and nothing else |
 | Unpinned command (`npx -y pkg@latest`) | run as written, silently | named at the prompt as code that differs per run |
@@ -154,17 +156,24 @@ machine asks again, and a deliberate `rm -rf` of the workspace no longer forgets
 ## The command line
 
 ```
-bravebot mcp add <alias> [--env <name>]... [--dir <path>] [--stdio] -- <program> [args...]
-bravebot mcp add <alias> --http <url>
+bravebot mcp add <alias> [-s <scope>] [--env <name>]... [--dir <path>] [--stdio] -- <program> [args...]
+bravebot mcp add <alias> [-s <scope>] --http <url>
 bravebot mcp get <alias>
 bravebot mcp list
 bravebot mcp approve <alias>
+bravebot mcp enable <alias> [-s <scope>]
+bravebot mcp disable <alias> [-s <scope>]
 bravebot mcp remove <alias>
 bravebot mcp forget [path]
 ```
 
-`add` writes a declaration and then asks. `approve` is the same question for a declaration that is
-already written, which is what a checkout's request and a changed digest both produce. `get` shows
+`add` writes a declaration and then asks, and a yes also requests the server. `approve` is the same
+question for a declaration that is already written, which is what a checkout's request and a
+changed digest both produce. `enable` requests a declared server, asking first where it is not
+approved, and `disable` takes the request out ([SERVERS-2](#SERVERS-2)). `-s` names the file a
+request goes in, as Claude Code's `-s` names where its declaration goes: `local`, the default, is
+`.bravebot/settings.local.json` in the current directory, `project` is `.bravebot/settings.json`
+there, and `user` is `~/.bravebot/settings.json`, which every session reads. `get` shows
 one declaration in full, including its digest and the variables it will receive. `list` says, per
 alias, the transport, whether it is approved and the digest, which file here requested it, whether a
 session started here holds a grant to call it, and what is answered about it here; `doctor` says
@@ -193,10 +202,10 @@ was recorded, and leaves every other project's as it was. An incognito session w
 | Claude Code | Here | Note |
 |---|---|---|
 | `claude mcp add weather -- npx -y @dangahagan/weather-mcp@latest` | `bravebot mcp add weather -- npx -y @dangahagan/weather-mcp@latest` | The same line. It declares `PATH` for `npx`, and the question shows it. |
-| `claude mcp add weather -s user -- ...` | `bravebot mcp add weather -- ...` | Already the only scope that may declare, so the flag would have one value. |
-| `claude mcp add weather -s project -- ...` | no equivalent | [SERVERS-1](#SERVERS-1). The checkout may request the alias; it may not carry the argv. |
+| `claude mcp add weather -s user -- ...` | `bravebot mcp add weather -s user -- ...` | The declaration goes in `~/.bravebot/mcp.json` whatever the scope. The request goes in `~/.bravebot/settings.json`, so every session starts it. |
+| `claude mcp add weather -s project -- ...` | `bravebot mcp add weather -s project -- ...` | [SERVERS-1](#SERVERS-1). The checkout's `.bravebot/settings.json` gets the alias and not the argv. |
 | `claude mcp get weather` | `bravebot mcp get weather` | Also prints the digest, which is what an approval is against. |
-| `claude mcp remove weather -s project` | edit `"mcp": { "request": [...] }` in `.bravebot/settings.json` | A request is a line in a file somebody commits, so it is removed the way it was added. |
+| `claude mcp remove weather -s project` | `bravebot mcp disable weather -s project` | Takes the alias out of `.bravebot/settings.json` and leaves the declaration, which is in no checkout to remove. |
 | `claude mcp list` | `bravebot mcp list` | Unapproved declarations are listed as unapproved rather than omitted. |
 
 ## Where things are stored
@@ -209,7 +218,7 @@ was recorded, and leaves every other project's as it was. An incognito session w
 | "use all future servers in this project", one project path per line | `~/.bravebot/mcp-projects` | the person's own directory | until `mcp forget` |
 | "stop asking for this tool here", one alias, tool and project path per line | `~/.bravebot/mcp-tools` | the person's own directory | until `mcp forget` |
 | What a local server writes in its own home, such as a runner's cache ([SERVERS-10](#SERVERS-10)) | `~/.bravebot/mcp-home/<digest>` | one declaration | until somebody removes it |
-| A request for an alias, `"mcp": { "request": ["weather"] }` | `.bravebot/settings.json` beside the work | that checkout | that checkout |
+| A request for an alias, `"mcp": { "request": ["weather"] }` | `.bravebot/settings.json` or `.bravebot/settings.local.json` beside the work, or `~/.bravebot/settings.json` | that checkout, or every session | until `mcp disable` or an edit takes it out |
 | What may start, `"mcp": { "allow": [{ "host": "*.corp.example" }], "deny": [{ "command": ["/opt/weather-mcp"] }] }` | the managed layer | the machine | as long as it is pinned |
 | A declaration, an argv, a url, or a variable's value | `.bravebot/settings.json` or `.bravebot/settings.local.json` | **nothing.** [SERVERS-1](#SERVERS-1) | n/a |
 | A variable's value | nowhere. The declaration names variables; the values are the person's own environment at launch | n/a | n/a |
@@ -282,11 +291,44 @@ starts, reopens or forks where the settings request servers names them, and says
 does not start them and that `bravebot mcp list`, run there in a terminal, says which a session
 there would, so a request it passed over does not read as one it honoured. A requested name that is not an alias is shown quoted, with its escapes.
 
+`bravebot mcp enable <alias>` writes the request into the file its scope names, the one the reader
+takes that layer from: `.bravebot/settings.local.json` in the current directory where `-s` is absent
+or `local`, `.bravebot/settings.json` there for `project`, and `~/.bravebot/settings.json` for
+`user`. It creates the file, the `mcp` block and its list where each is missing, adds the alias
+once, and leaves every other key and alias as it was. An alias that is not declared is refused, and
+so is one the person does not approve at [SERVERS-3](#SERVERS-3)'s question, since a request for a
+server nobody approved is one every session stops to ask about. `bravebot mcp disable <alias>`
+takes the alias out of that file's list, and without `-s` out of each of the three that holds it,
+naming each; where none does, it says so and names the files it read. The declaration and its
+approval stay.
+
+A file that does not parse is refused and left as it was, and `enable` refuses one whose `mcp` or
+`mcp.request` the reader would not take as a block and a list, since replacing it would lose what
+somebody wrote there; a `request` that is `null` holds nothing to lose, and is replaced. `disable`
+reads every file before it writes any, so one it cannot read leaves the alias in all of them rather
+than gone from some, and reads a file two scopes name once: run from the directory the state
+directory is in, the checkout's `.bravebot/settings.json` is the user's own. In a checkout, a link at
+`.bravebot` or at the file is refused and not followed: it arrived with the clone, so where it leads
+is the choice of whoever wrote the checkout. A file in the state directory is written through a link,
+as an import writes it, whichever scope named it. The links are looked at again just before the
+write, so one made while the question waited is refused too.
+
 `verified-by: bravebot_config::settings::every_layers_request_is_read_and_each_alias_is_kept_once`
 `verified-by: bravebot_cli::servers::a_request_nobody_declared_is_reported_and_nothing_is_started_for_it`
 `verified-by: bravebot_cli::servers::a_checkout_reached_through_a_link_names_its_settings_file_inside_it`
 `verified-by: bravebot_session::sessions::a_desktop_session_names_the_servers_it_does_not_start`
 `verified-by: bravebot_ui_bridge::servers::every_way_a_desktop_session_opens_names_the_servers_its_project_requests`
+`verified-by: bravebot_cli::mcp::enable_requests_the_server_in_the_file_its_scope_names`
+`verified-by: bravebot_cli::mcp::enable_adds_the_alias_once_and_keeps_the_rest_of_the_file`
+`verified-by: bravebot_cli::mcp::enable_leaves_a_settings_file_it_cannot_add_to_as_it_is`
+`verified-by: bravebot_cli::mcp::enable_writes_through_no_link_in_a_checkout`
+`verified-by: bravebot_cli::mcp::disable_takes_the_request_out_of_each_file_that_holds_it`
+`verified-by: bravebot_cli::mcp::disable_writes_no_file_where_one_cannot_be_read`
+`verified-by: bravebot_cli::mcp::disable_where_the_state_directory_is_writes_its_file_once`
+`verified-by: bravebot_cli::mcp::a_linked_state_directory_is_written_through_from_the_directory_it_is_in`
+`verified-by: bravebot_cli::mcp::a_link_made_while_the_question_waits_is_not_written_through`
+`verified-by: bravebot_config::import::a_destination_requests_a_server_once_and_withdraws_only_it`
+`verified-by: bravebot_cli::running::a_server_enabled_in_a_checkout_is_requested_there_until_disabled`
 
 <a id="SERVERS-3"></a>
 ### SERVERS-3: adding a server is a command a person types, and typing it is not the approval
@@ -299,15 +341,26 @@ still not an endorsement of what the line will do on the tenth run. Splitting th
 record of what was approved is a record of a thing somebody read, and it is what makes the
 re-approval in [SERVERS-5](#SERVERS-5) meaningful rather than a formality.
 
-The question `add` and `approve` ask draws what [SERVERS-4](#SERVERS-4) shows, less the checkout
+The question `add`, `approve` and `enable` ask draws what [SERVERS-4](#SERVERS-4) shows, less the checkout
 that requested it, and is answered in a line with `y` or `n`: that clause's answers 1 and 3. Answer 2
 records a project path, and a command typed outside a session has no project to record, so it is
 asked where a checkout's request is: at a session's start. Only the yes records
 anything, and a blank line, any other word, or the end of the input is
 the no. The question is put only where stdin and stdout are both a terminal; with either one piped
-nobody is asked, `add` still writes the declaration and says how to approve it, and `approve` is
-refused. An incognito session writes nothing to the state directory, so each of `add`, `approve`
-and `remove` is refused there and leaves the files as they were.
+nobody is asked, `add` still writes the declaration and names the `enable` that asks again, and
+`approve` and `enable` are refused. An incognito session writes nothing to the state directory, so
+each of `add`, `approve`, `enable`, `disable` and `remove` is refused there and leaves the files as
+they were.
+
+`add` takes `-s` with `enable`'s values and default, before the alias or among the flags after it,
+and requests the server in that file where the answer is yes or the digest was approved already. A
+no, or nobody to ask, leaves it declared and requested nowhere, and the line names the `enable`
+with the same `-s`; where that file requests the alias already, the line says so instead, since the
+next session that reads it asks, and `enable` ends refused the same way. A scope is `local`,
+`project` or `user`, given once; any other value, a `-s` with none, or a second `-s` is refused
+before anything is written. So is a settings file [SERVERS-2](#SERVERS-2) refuses to write, or one
+the request would take past the size a settings file may be, which `add` reads before the
+declaration, so a refused request leaves no declaration behind it.
 
 `verified-by: bravebot_cli::mcp::a_yes_at_the_question_records_the_digest_and_nothing_else_does`
 `verified-by: bravebot_cli::mcp::approve_records_only_on_a_yes_and_a_no_ends_refused`
@@ -317,6 +370,12 @@ and `remove` is refused there and leaves the files as they were.
 `verified-by: bravebot_cli::running::a_flag_of_bravebots_after_the_bare_dashes_is_the_servers_argument`
 `verified-by: bravebot_cli::running::approving_with_nobody_to_ask_is_refused_and_records_nothing`
 `verified-by: bravebot_cli::running::a_server_is_not_declared_in_an_incognito_session`
+`verified-by: bravebot_cli::mcp::enable_writes_nothing_without_a_yes`
+`verified-by: bravebot_cli::mcp::add_requests_the_server_in_its_scope_only_once_approved`
+`verified-by: bravebot_cli::mcp::a_scope_is_one_of_three_and_given_once`
+`verified-by: bravebot_cli::mcp::enable_and_disable_write_nothing_incognito`
+`verified-by: bravebot_cli::mcp::add_refuses_a_request_the_file_cannot_hold_before_declaring_anything`
+`verified-by: bravebot_cli::mcp::a_no_says_a_request_already_in_the_file_still_stands`
 
 <a id="SERVERS-4"></a>
 ### SERVERS-4: a server reachable for the first time is put to the person, with three answers
@@ -928,8 +987,9 @@ to one, or pre-answer any of the three prompts.
 A server the layer refuses is not started in any mode. Nothing is asked about it and nothing is
 recorded for it. The session says, once as it opens, that it was not started, which file refused it
 and why: that the file's allow list does not name it, or the deny entry that does. `bravebot mcp
-list` and `get` say the same beside whatever the person's own declaration and approval say, and
-`doctor` names `mcp.allow` and `mcp.deny` among the names the layer pins.
+list` and `get` say the same beside whatever the person's own declaration and approval say, `add`
+and `enable` say it after writing a request for one, and `doctor` names `mcp.allow` and `mcp.deny`
+among the names the layer pins.
 
 **Why.** The machine-level layer exists to make an approved destination the only destination, and
 the names it may pin are the ones that decide where a request goes. A layer that could add a server
@@ -1005,6 +1065,7 @@ not to request it.
 `verified-by: bravebot_cli::servers::a_server_the_managed_layer_does_not_refuse_is_settled_as_before`
 `verified-by: bravebot_cli::servers::a_remote_server_is_refused_by_its_host`
 `verified-by: bravebot_cli::mcp::list_and_get_say_why_the_managed_layer_refuses_a_server_and_no_other`
+`verified-by: bravebot_cli::mcp::enabling_a_server_the_managed_layer_refuses_says_it_is_not_started`
 
 <a id="SERVERS-13"></a>
 ### SERVERS-13: bypassing answers this spec's three prompts and reaches nothing else here
@@ -1156,18 +1217,21 @@ The declaration lands in `~/.bravebot/mcp.json`, naming `PATH` for `npx`
 
 **2. Answer the server question.** `add` asks [SERVERS-3](#SERVERS-3)'s question, naming `npx` as a
 runner that fetches its own code and `@latest` as unpinned ([SERVERS-6](#SERVERS-6)). `y` records
-the digest. Declining here and answering at a session's start is the same approval, asked with
-[SERVERS-4](#SERVERS-4)'s three answers instead.
+the digest and requests the server in the current directory's `.bravebot/settings.local.json`, the
+file `-s` names by default. Declining leaves it declared and requested nowhere, and
+`bravebot mcp enable weather` asks again.
 
-**3. Let a checkout ask for it.** Put this in `.bravebot/settings.json`:
+**3. Let a checkout ask for it.** To share the request with whoever clones the checkout, type:
 
-```json
-{ "mcp": { "request": ["weather"] } }
+```
+bravebot mcp enable weather -s project
 ```
 
-On the next session the alias resolves against the declaration and is reachable. Change the request
-to an alias nobody declared and the session reports it and installs nothing
-([SERVERS-2](#SERVERS-2)).
+It puts `{ "mcp": { "request": ["weather"] } }` in `.bravebot/settings.json` and leaves the rest of
+the file as it was. On the next session the alias resolves against the declaration and is
+reachable. Change the request to an alias nobody declared and the session reports it and installs
+nothing ([SERVERS-2](#SERVERS-2)). `bravebot mcp disable weather` takes the request out of each
+file that holds it.
 
 **4. Answer the list question, then the call question.** At the first turn,
 [SERVERS-8](#SERVERS-8)'s prompt shows every tool the server lists as `weather:<tool>`, with its
@@ -1255,6 +1319,10 @@ This spec cannot land without these. Each is named by what the clause says rathe
 
 ## Open questions
 
+- **Whether `remove` should take `-s`.** Claude Code's `remove -s project` takes a server out of the
+  project's file. Here the declaration is in one file only, and what a project's file holds is a
+  request, which `disable -s project` takes out, so a `remove -s` would be a second spelling of
+  `disable` or a `remove` that leaves the request in place.
 - **Whether answer 2 at the server prompt should survive a new declaration in the same project.** As
   written it does: a project path is recorded, and a server declared later is reachable there without
   asking. That is what the Claude Code wording promises and it is the point of the answer. It also
@@ -1271,6 +1339,17 @@ This spec cannot land without these. Each is named by what the clause says rathe
 
 ## Known costs
 
+- **A settings file `mcp` writes is rewritten whole.** `enable`, `disable` and an `add` that requests
+  keep every value, and not the file's spacing or key order, for the reason
+  [import.md](import.md)'s known cost gives.
+- **A checkout's link is not written through.** Where `.bravebot` in a checkout, or its settings
+  file, is a link, `enable` and `disable` refuse it, and the request is written by hand in the file
+  it leads to.
+- **A file `mcp` writes in a checkout is the person's own.** On Unix it is written readable by its
+  owner alone, as the state directory's files are, an existing one included, and a `.bravebot` it
+  creates there is too, so a file other accounts on the machine read is set readable again by hand.
+- **Nothing keeps `settings.local.json` out of a commit.** It is the per-person file only by name,
+  and the checkout's own ignore file is what keeps it there.
 - **An approval is a channel, not code.** [SERVERS-6](#SERVERS-6) says so at the prompt and cannot do
   better. For the distribution form nearly every server uses, the digest binds the argv and the argv
   names a package whose contents change. The only real fix is pinning with an integrity hash, which

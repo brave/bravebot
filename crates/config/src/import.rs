@@ -879,7 +879,8 @@ fn model_entry(stated: &Value, aws: bool) -> Map<String, Value> {
     kept
 }
 
-/// The user's own settings file, as a document an import may add names to.
+/// A settings file, as a document an import may add names to or `bravebot mcp` may add a request
+/// to or take one out of.
 ///
 /// Holds what the file says, so it clears itself when it goes. Nothing here writes: [`text`] is what
 /// the caller puts on disk.
@@ -1002,6 +1003,65 @@ impl Destination {
         if !self.holds_model() {
             self.root.0.insert("model".to_string(), Value::from(model));
         }
+    }
+
+    /// Whether `mcp.request` names `alias`, as the settings reader reads a request.
+    pub fn requests(&self, alias: &str) -> bool {
+        match self
+            .root
+            .0
+            .get("mcp")
+            .and_then(|block| block.get("request"))
+        {
+            Some(Value::Array(names)) => names.iter().any(|name| name.as_str() == Some(alias)),
+            _ => false,
+        }
+    }
+
+    /// Add `alias` to `mcp.request`, making the block or the list where there is none, and say
+    /// whether it went in.
+    ///
+    /// Not where `mcp` is something other than a block or `mcp.request` something other than a
+    /// list: the settings reader ignores either, and replacing it would lose what the person wrote.
+    /// A `null` list says nothing to lose, and is replaced.
+    pub fn request(&mut self, alias: &str) -> bool {
+        let block = match self
+            .root
+            .0
+            .entry("mcp")
+            .or_insert_with(|| Value::Object(Map::new()))
+        {
+            Value::Object(block) => block,
+            _ => return false,
+        };
+        let names = block.entry("request").or_insert(Value::Null);
+        if names.is_null() {
+            *names = Value::Array(Vec::new());
+        }
+        match names {
+            Value::Array(names) => {
+                if !names.iter().any(|name| name.as_str() == Some(alias)) {
+                    names.push(Value::from(alias));
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Take every mention of `alias` out of `mcp.request`, and say whether there was one.
+    pub fn withdraw(&mut self, alias: &str) -> bool {
+        let Some(Value::Array(names)) = self
+            .root
+            .0
+            .get_mut("mcp")
+            .and_then(|block| block.get_mut("request"))
+        else {
+            return false;
+        };
+        let before = names.len();
+        names.retain(|name| name.as_str() != Some(alias));
+        names.len() != before
     }
 
     /// The whole file as it would be written.
@@ -1834,6 +1894,78 @@ mod tests {
         assert_eq!(Destination::open(&path).err(), Some(Unwritable::TooLarge));
         home.write("settings.json", "  \n");
         assert!(Destination::open(&path).is_ok(), "an empty file is refused");
+    }
+
+    /// SERVERS-2: a request goes in once, beside what the file already requests, and comes out
+    /// leaving the rest; a `mcp` or `mcp.request` the settings reader would not take as a list is
+    /// not replaced by one.
+    #[test]
+    fn a_destination_requests_a_server_once_and_withdraws_only_it() {
+        let home = Scratch::new("import-destination-request");
+        let path = home.write(
+            "settings.json",
+            r#"{"mcp": {"request": ["docs"], "other": 1}, "theme": "dark"}"#,
+        );
+        let mut destination = Destination::open(&path).expect("a document");
+        assert!(destination.requests("docs"));
+        assert!(!destination.requests("weather"));
+        assert!(destination.request("weather"));
+        assert!(destination.request("weather"));
+        assert!(destination.requests("weather"));
+        let text = destination.text().expect("small");
+        let written: Value = serde_json::from_str(text.expose()).expect("json");
+        assert_eq!(
+            written,
+            serde_json::json!({
+                "mcp": {"request": ["docs", "weather"], "other": 1},
+                "theme": "dark"
+            })
+        );
+        assert!(destination.withdraw("docs"));
+        assert!(!destination.withdraw("docs"));
+        let text = destination.text().expect("small");
+        let written: Value = serde_json::from_str(text.expose()).expect("json");
+        assert_eq!(
+            written,
+            serde_json::json!({"mcp": {"request": ["weather"], "other": 1}, "theme": "dark"})
+        );
+
+        let mut empty = Destination::open(&home.path.join("absent.json")).expect("empty");
+        assert!(!empty.withdraw("weather"));
+        assert!(empty.request("weather"));
+        let text = empty.text().expect("small");
+        let written: Value = serde_json::from_str(text.expose()).expect("json");
+        assert_eq!(
+            written,
+            serde_json::json!({"mcp": {"request": ["weather"]}})
+        );
+
+        home.write("settings.json", r#"{"mcp": {"request": null, "other": 1}}"#);
+        let mut destination = Destination::open(&path).expect("a document");
+        assert!(destination.request("weather"));
+        let written: Value =
+            serde_json::from_str(destination.text().expect("small").expose()).expect("json");
+        assert_eq!(
+            written,
+            serde_json::json!({"mcp": {"request": ["weather"], "other": 1}})
+        );
+
+        // A null block is one `doctor` reports, unlike a null list, so it is left for the person.
+        for text in [
+            r#"{"mcp": {"request": "weather"}}"#,
+            r#"{"mcp": ["weather"]}"#,
+            r#"{"mcp": null}"#,
+        ] {
+            home.write("settings.json", text);
+            let mut destination = Destination::open(&path).expect("a document");
+            assert!(!destination.requests("weather"), "{text}");
+            assert!(!destination.request("docs"), "{text}");
+            assert!(!destination.withdraw("weather"), "{text}");
+            let written: Value =
+                serde_json::from_str(destination.text().expect("small").expose()).expect("json");
+            let read: Value = serde_json::from_str(text).expect("json");
+            assert_eq!(written, read, "{text}");
+        }
     }
 
     /// IMPORT-6: a substitution inside a longer value is one this program does not make, so the text

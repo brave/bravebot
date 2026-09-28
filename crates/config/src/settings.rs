@@ -345,6 +345,20 @@ pub fn user_settings_file(directory: &Path) -> PathBuf {
     directory.join(SETTINGS_FILE)
 }
 
+/// The settings file a checkout shares with whoever clones it, whether or not it exists yet.
+///
+/// Named here for the same reason as [`user_settings_file`]: a command that writes a layer has to
+/// write the file [`Settings::layered`] reads, and a second spelling of the path would be a write
+/// nothing reads.
+pub fn project_settings_file(checkout: &Path) -> PathBuf {
+    checkout.join(PROJECT_DIR).join(SETTINGS_FILE)
+}
+
+/// The settings file a checkout keeps for this person alone, whether or not it exists yet.
+pub fn local_settings_file(checkout: &Path) -> PathBuf {
+    checkout.join(PROJECT_DIR).join(LOCAL_SETTINGS_FILE)
+}
+
 impl Settings {
     /// Read every settings layer in force for this user, in this directory, plus the file the
     /// command line named.
@@ -382,12 +396,11 @@ impl Settings {
         named: Option<&Path>,
         started: Option<&Path>,
     ) -> Self {
-        let project = cwd.map(|cwd| cwd.join(PROJECT_DIR));
-        let home_layer = home.map(|home| home.join(SETTINGS_FILE));
+        let home_layer = home.map(|home| user_settings_file(&home));
         let paths = [
             home_layer.clone(),
-            project.as_ref().map(|dir| dir.join(SETTINGS_FILE)),
-            project.as_ref().map(|dir| dir.join(LOCAL_SETTINGS_FILE)),
+            cwd.map(project_settings_file),
+            cwd.map(local_settings_file),
             named.map(Path::to_path_buf),
         ];
 
