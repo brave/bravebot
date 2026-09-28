@@ -134,6 +134,9 @@ A long body keeps the question on screen and offers the rest, which can be scrol
 edit in a large file shows only the change. An empty output says so, and so does a slot with nothing in it
 and a file with nothing to preview. A diff that cannot be computed says so rather than showing nothing. A plan longer
 than the box is scrolled to rather than cut short, and the question stays on screen while it is.
+The questions a session opens with keep their question and their keys on screen the same way, with
+what lies between scrolled by the keys the write and run prompts use, a page moving one row fewer
+than the box shows, and none of them takes a yes at a draw that cuts either off.
 A processor's remark is bounded in **drawn rows**, so a claim cannot push the bytes it is a claim
 about below the fold, and the block says how many lines it is not showing.
 
@@ -149,6 +152,14 @@ on a passage rather than a whole body. A prompt that scrolled the question away 
 `verified-by: bravebot_tui::confirm::an_uncomputable_diff_says_so`
 `verified-by: bravebot_tui::confirm::a_long_plan_keeps_the_question_on_screen_and_offers_the_rest`
 `verified-by: bravebot_tui::confirm::a_long_remark_does_not_push_the_diff_off_the_screen`
+`verified-by: bravebot_tui::trust_prompt::a_list_longer_than_the_box_keeps_the_question_and_the_keys_and_says_how_many_rules_are_below`
+`verified-by: bravebot_tui::trust_prompt::the_rest_of_a_long_list_can_be_scrolled_to`
+`verified-by: bravebot_tui::trust_prompt::a_directory_question_longer_than_the_box_keeps_its_keys_and_scrolls_to_the_rest`
+`verified-by: bravebot_tui::trust_prompt::the_arrows_scroll_the_question_and_answer_nothing`
+`verified-by: bravebot_tui::trust_prompt::a_scroll_moves_from_where_the_box_was_drawn`
+`verified-by: bravebot_tui::trust_prompt::paging_through_a_list_on_a_short_terminal_reads_every_rule`
+`verified-by: bravebot_tui::trust_prompt::a_question_a_small_terminal_cuts_off_takes_no_answer`
+`verified-by: bravebot_tui::trust_prompt::a_question_that_fits_its_box_says_nothing_of_scrolling`
 
 ## What an answer means
 

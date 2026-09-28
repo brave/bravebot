@@ -444,6 +444,16 @@ each came from. Accepting grants exactly those rules, for this session and for l
 in that workspace on the surface that asks; declining grants none and the session continues. Leaving
 at it starts no session.
 
+A list longer than the box scrolls between the question and the keys, which stay on the screen, and
+the row above the keys says how many rules have not been shown. A yes is taken only once every rule
+has been on the screen with its file, the rule and the file whole in one draw, and only at a draw
+with the question and the keys whole; until then `y` grants nothing, while `n` and leaving answer
+from the first draw. A rule too long for the box to show whole, a rule past the last row a scroll
+reaches, and a terminal too small to show the question, one rule with its file and the keys at once,
+are all places where no yes is taken; where a rule not shown yet is taller than the box, the row
+above the keys says it does not fit rather than pointing at the arrows. A page moves one row fewer
+than the box shows, so a rule of two rows split by the bottom edge is whole on the next page.
+
 The surface that asks is the interface. A run nobody is watching installs no `allow` rule at all
 ([PERM-8](#PERM-8)'s reasoning, as `for_an_unattended_run` applies it), and a session in lines asks
 nothing here and so grants nothing: a grant is read where it can be asked for, and neither of those
@@ -489,6 +499,14 @@ capability, which is the defect wearing a consent story rather than consent to i
 makes the answer informed consent for specific grants, on the reasoning [PERM-13](#PERM-13) gives for
 resolving a directory before showing it.
 
+Listed means shown, because one key grants the whole list. The checkout's author chooses the list,
+its order and the length of each rule, and so which rules fall below the bottom edge; a `y` that
+granted those would install a rule nobody was shown, and that rule answers the run prompt for every
+command it matches, in this session and every later one in the workspace
+([#954](https://github.com/brave/bravebot/issues/954)). Reaching the bottom is not the test: a jump
+to the end passes over the rules between, and a rule counted as shown on any one of its rows would be
+granted on a part of it.
+
 One question rather than thirty is the other half. A directory grants reach over a tree of its own,
 which is why [PERM-10](#PERM-10) asks about each; rules are a list a person reads at once, and the
 known cost recorded below about `additionalDirectories` opening thirty boxes is the thing not to
@@ -510,6 +528,15 @@ about the first one's ([#843](https://github.com/brave/bravebot/issues/843)).
 `verified-by: bravebot_tui::trust_prompt::leaving_at_the_rules_question_grants_nothing_and_starts_no_session`
 `verified-by: bravebot_tui::trust_prompt::the_rules_prompt_names_every_rule_and_the_file_it_came_from`
 `verified-by: bravebot_tui::trust_prompt::the_rules_prompt_explains_what_granting_does`
+`verified-by: bravebot_tui::trust_prompt::a_list_longer_than_the_box_keeps_the_question_and_the_keys_and_says_how_many_rules_are_below`
+`verified-by: bravebot_tui::trust_prompt::y_grants_nothing_while_a_rule_has_not_been_on_the_screen`
+`verified-by: bravebot_tui::trust_prompt::jumping_to_the_end_of_a_list_leaves_the_rules_it_skipped_unread`
+`verified-by: bravebot_tui::trust_prompt::a_rule_that_wraps_past_the_box_is_never_granted`
+`verified-by: bravebot_tui::trust_prompt::a_terminal_too_small_for_a_rule_and_the_keys_grants_nothing`
+`verified-by: bravebot_tui::trust_prompt::a_rule_past_the_last_row_a_scroll_reaches_is_never_granted`
+`verified-by: bravebot_tui::trust_prompt::a_question_a_small_terminal_cuts_off_takes_no_answer`
+`verified-by: bravebot_tui::trust_prompt::the_hint_says_when_no_scroll_can_show_what_a_key_waits_for`
+`verified-by: bravebot_tui::trust_prompt::paging_through_a_list_on_a_short_terminal_reads_every_rule`
 `verified-by: bravebot_tui::app::a_person_asked_about_the_workspace_is_asked_about_the_rules_a_checkout_proposed`
 `verified-by: bravebot_tui::app::a_rule_granted_in_an_earlier_session_is_in_force_rather_than_asked_about_again`
 `verified-by: bravebot_tui::app::one_rule_text_in_two_files_is_granted_for_the_file_it_was_granted_in`
@@ -552,6 +579,10 @@ about the first one's ([#843](https://github.com/brave/bravebot/issues/843)).
   it costs is the box: a checkout whose rules change gets another one, and a person who declines is
   asked about each action as they were before. The way to waive a prompt everywhere is still the
   person's own file, or a file `--settings` names for one run.
+- **A long list is read through before it is granted.** Thirty rules on a short terminal are
+  several screens to scroll through before `y` does anything, and a rule longer than the box can
+  show, or a terminal too small for one rule and the keys, is never granted there at all. Both fail
+  closed: `n` still answers, and the person is asked about each action as they would have been.
 - **A grant outlives the session that gave it, which no other answer here does.** PERM-15's record
   makes a later session in that workspace honour a rule without asking, where the startup trust
   answer is asked afresh unless the person said to remember it, and then only for that one

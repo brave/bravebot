@@ -751,6 +751,8 @@ trust-directory-remember-explained =
 trust-directory-remember-exact =
     La question reste posée à une session démarrée dans un répertoire qu'il contient ou qui le contient, ou dans un répertoire supprimé puis recréé ici.
 trust-directory-remember-where = /forget-trust revient dessus, et c'est noté ici :
+trust-directory-remember-unseen = ↑↓ r ne retient rien : ce qu'il écrit n'est pas encore affiché
+trust-directory-remember-too-small = r ne retient rien : ce qu'il écrit dépasse la hauteur du cadre
 quit = quitter
 trust-quit-again = encore
 
@@ -784,6 +786,12 @@ granted-rules-regardless =
     s'appliquent toujours.
 granted-rules-yes = les accorder
 granted-rules-no = continuer à me demander
+granted-rules-unseen =
+    { $count ->
+        [one] ↑↓ y n'accorde rien : { $count } règle pas encore affichée
+       *[other] ↑↓ y n'accorde rien : { $count } règles pas encore affichées
+    }
+granted-rules-too-small = y n'accorde rien : une règle dépasse la hauteur du cadre
 
 
 ## Choisir un thème, un modèle, ou une session à reprendre

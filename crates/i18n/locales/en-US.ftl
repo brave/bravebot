@@ -830,6 +830,12 @@ trust-directory-remember-explained =
 trust-directory-remember-exact =
     A session started inside or above this directory is still asked, and so is one started in a directory deleted and made again here.
 trust-directory-remember-where = /forget-trust takes it back, and it is written down here:
+# Above the keys while the lines saying what r does and where it writes have not been on the screen
+# together, which is when r is not taken. What r does comes first, so a narrow terminal that cuts the
+# line off keeps it.
+trust-directory-remember-unseen = ↑↓ r remembers nothing: what it writes is not shown yet
+# The same where those lines are taller than the box, so no scroll shows them together.
+trust-directory-remember-too-small = r remembers nothing: what it writes is taller than this box
 quit = quit
 trust-quit-again = again
 
@@ -863,6 +869,16 @@ granted-rules-regardless =
     rules in ~/.bravebot/settings.json are your own and always apply.
 granted-rules-yes = grant them
 granted-rules-no = keep asking me
+# Above the keys while a rule has not yet been on the screen with its file, which is when y is not
+# taken: a key that did nothing and said nothing would read as a question that had stopped answering.
+# What y does comes first, so a narrow terminal that cuts the line off keeps it.
+granted-rules-unseen =
+    { $count ->
+        [one] ↑↓ y grants nothing: { $count } rule not shown yet
+       *[other] ↑↓ y grants nothing: { $count } rules not shown yet
+    }
+# The same where a rule not shown yet is taller than the box, so no scroll shows it whole.
+granted-rules-too-small = y grants nothing: a rule is taller than this box
 
 
 ## Choosing a theme, a model, or a session to pick up
