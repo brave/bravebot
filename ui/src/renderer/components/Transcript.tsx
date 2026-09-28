@@ -22,7 +22,7 @@ import { ErrorCard } from './ErrorCard'
 import { FilePreview } from './FilePreview'
 import { TurnFooter, TurnNotices, type OpenAudit } from './TurnDetails'
 import type { Turns, TurnDisclosure } from '../turn-details'
-import { Button, Collapse, ProgressRing } from '../nala'
+import { Button, Collapse, Icon, ProgressRing } from '../nala'
 
 interface Live {
   model: string | null
@@ -405,7 +405,7 @@ export function Transcript({
             <div className="welcome-mark">B</div>
             <h1>What would you like to build?</h1>
             <p>Work with an agent in your project. Track changes and review approval requests as you work.</p>
-            <button className="primary" onClick={() => onNew()}>Open project</button>
+            <Button kind="filled" size="medium" className="welcome-open" onClick={() => onNew()} data-test="open-project">Open project</Button>
             {!!recents.length && <div className="welcome-recents"><h2>Recent projects</h2>{recents.slice(0, 5).map((directory) =>
               <button key={directory} onClick={() => onNew(directory)}><strong>{projectLabel(directory)}</strong><span>{directory}</span></button>)}</div>}
             <p className="welcome-hint">Choose a conversation to resume work, or create a bot with a purpose and persistent memory.</p>
@@ -514,11 +514,14 @@ export function Transcript({
             }
           }} />
         <div className="composer-toolbar">
-          <ModelPicker session={live.handle} scope={bot ? 'bot' : 'conversation'} key={live.handle} model={live.model} disabled={live.running} onChoose={onModel} />
-          <button className="attach-files" onClick={onAttach} disabled={attachments.length >= 5} title="Choose project files to share as trusted context">Attach files</button>
+          <Button kind="plain-faint" size="medium" className="attach-files" onClick={onAttach} isDisabled={attachments.length >= 5} title="Choose project files to share as trusted context">
+            <Icon name="attachment" slot="icon-before" />
+            Attach files
+          </Button>
           <span className="composer-hint">Enter to send · Shift+Enter for newline</span>
-          {live.running && <Button kind="outline" size="small" className="stop" onClick={onCancel} data-test="stop-turn">Stop</Button>}
-          <Button kind="filled" size="small" className="send" onClick={() => { latest(); live.running ? onQueue() : onSubmit() }}
+          {live.running && <Button kind="outline" size="medium" className="stop" onClick={onCancel} data-test="stop-turn">Stop</Button>}
+          <ModelPicker session={live.handle} scope={bot ? 'bot' : 'conversation'} key={live.handle} model={live.model} disabled={live.running} onChoose={onModel} />
+          <Button kind="filled" size="medium" className="send" onClick={() => { latest(); live.running ? onQueue() : onSubmit() }}
             isDisabled={!draft.trim() || !!live.askingTrust || backendReady === false}
             data-test="send-message">
             {live.running ? 'Queue message' : 'Send'}

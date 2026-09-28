@@ -90,7 +90,7 @@ export function Context({ live, onClose, audit }: { live: Live | null; onClose: 
             <Icon name="close" style={{ '--leo-icon-size': '14px' } as React.CSSProperties} />
           </button>
         </div>
-        <Tabs className="inspector-tabs" value={tab} data-test="inspector-tabs"
+        <Tabs className="inspector-tabs" size="medium" value={tab} data-test="inspector-tabs"
           onChange={({ value }) => { if (value === 'overview' || value === 'files') setTab(value) }}>
           <TabItem value="overview">Overview</TabItem>
           <TabItem value="files">Files</TabItem>

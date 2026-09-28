@@ -56,6 +56,12 @@ body {
 
 button { font: inherit; color: inherit; cursor: pointer; }
 
+/* Leo Collapse titles ship as heading-h3 (20px). Remap to default size on the host so
+   the shadow tree inherits it; keep semibold so the summary still reads as a title. */
+leo-collapse {
+  --leo-font-heading-h3: var(--leo-font-default-semibold);
+}
+
 .app {
   display: grid;
   /* The side widths are set from JS; the transcript takes what is left. `minmax(0, 1fr)`
@@ -153,7 +159,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
    above it; the control itself must not be a window-drag region. */
 .sidebar-tabs {
   display: block;
+  /* `.sessions > *` pins min-width to the full open column so a fold does not reflow
+     children; that would eat the right margin here, so keep the same pin minus the
+     12px sides. */
   width: calc(100% - 24px);
+  min-width: calc(var(--col-left-open) - 24px);
   margin: 46px 12px 8px;
   padding: 0;
   -webkit-app-region: no-drag;
@@ -178,79 +188,50 @@ button { font: inherit; color: inherit; cursor: pointer; }
   -webkit-app-region: drag;
 }
 
-/* Every header control must opt out of native window dragging, including scope tabs. */
-.sessions-head :is(button, input, select, textarea, a) {
+/* Every header control must opt out of native window dragging, including scope tabs.
+   Leo hosts are custom elements, so they need naming alongside the native ones. */
+.sessions-head :is(button, input, select, textarea, a, leo-button, leo-input, leo-tabs, leo-tabitem) {
   -webkit-app-region: no-drag;
 }
 
-.new {
-  -webkit-app-region: no-drag;
+/* Primary create action: Leo outline owns the chrome; this only sizes the host. */
+.sidebar-actions .new {
   width: 100%;
-  padding: 7px 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--leo-radius-m);
-  background: transparent;
-  color: var(--ink-dim);
-  text-align: left;
+  flex-grow: 1;
 }
-.new:hover { background: var(--hover-wash); color: var(--ink); }
-.plus { color: var(--accent-text); font-weight: 600; margin-right: 4px; }
 
 /* The filter and the grouping toggle share a row, so the spacing above them is set once
    here rather than by whichever of them happens to come first. */
 .session-tools { display: flex; gap: 4px; align-items: stretch; margin-top: 6px; }
 .sidebar-actions { display: flex; align-items: stretch; gap: 4px; }
 .sidebar-create { flex: 1; min-width: 0; }
-.sidebar-actions .new { border-color: transparent; color: var(--ink); font-size: var(--leo-typography-components-tableheader-font-size); }
 .sidebar-actions .new-split { width: 100%; }
-.sidebar-actions .new-recent { background: transparent; }
-.sidebar-search-toggle, .sidebar-actions .session-group { display: grid; place-items: center; flex: none; width: 30px; min-height: 32px; border: 0; border-radius: var(--leo-radius-s); background: transparent; color: var(--ink-dim); }
-.sidebar-search-toggle:hover, .sidebar-actions .session-group:hover { background: var(--bubble-agent); color: var(--ink); }
-.sidebar-search-toggle[aria-expanded='true'], .sidebar-actions .session-group[aria-pressed='true'] { background: var(--bubble-agent); color: var(--accent-text); }
-.sidebar-search { display: flex; gap: 4px; margin-top: 8px; }
-.sidebar-search button { width: 28px; border: 0; background: transparent; border-radius: var(--leo-radius-s); font-size: var(--leo-typography-components-button-jumbo-font-size); }
+/* Leo's button host defaults to flex-grow: 1; keep the icon actions compact. */
+.sidebar-actions .sidebar-search-toggle,
+.sidebar-actions .session-group,
+.sidebar-actions .new-recent,
+.sidebar-search leo-button {
+  flex: none;
+  flex-grow: 0;
+}
+.sidebar-search { display: flex; gap: 4px; margin-top: 8px; align-items: center; }
 
-/* `no-drag` for the same reason `.new` has it: the header this sits in is a window drag
-   region, and without it the box cannot be clicked into or selected in — the pointer moves
-   the window instead. `appearance: none` drops Chromium's search decorations, which arrive
-   with their own colours and ignore the sheet. */
+/* Leo Input owns the field chrome. Only size the host here — painting background/border
+   on `leo-input` left a gray frame around the real control. */
 .session-find {
   -webkit-app-region: no-drag;
-  appearance: none;
   flex: 1;
   min-width: 0;
-  padding: 5px 8px;
-  border: 1px solid var(--line);
-  border-radius: var(--leo-radius-s);
-  background: var(--bg);
-  color: var(--ink);
-  font: inherit;
-  font-size: var(--leo-typography-small-regular-font-size);
 }
-.session-find::placeholder { color: var(--ink-faint); }
-.session-find:focus { outline: none; border-color: var(--accent); }
-.session-find::-webkit-search-cancel-button { appearance: none; }
 
-/* Borrows the box the filter beside it is in, so the row reads as one control rather than
-   two unrelated ones. `no-drag` for the same reason: the header is a window drag region and
-   without it the button moves the window instead of being pressed. */
-.session-group {
-  -webkit-app-region: no-drag;
-  flex: none;
-  width: 28px;
-  padding: 0;
-  border: 1px solid var(--line);
-  border-radius: var(--leo-radius-s);
-  background: var(--bg);
-  color: var(--ink-faint);
-  font-size: var(--leo-typography-small-regular-font-size);
-  line-height: 1;
+.session-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
 }
-.session-group:hover { color: var(--ink); }
-.session-group[aria-pressed='true'] { border-color: var(--accent); color: var(--accent-text); }
-.session-group:focus-visible { outline: none; border-color: var(--accent); }
-
-.session-list { flex: 1; overflow-y: auto; padding: 4px 8px 12px; }
 
 /* The same language the context panels' own headings speak — 11px, uppercase, a count
    pushed to the right — so the two columns do not each invent a way to head a section.
@@ -350,13 +331,12 @@ button { font: inherit; color: inherit; cursor: pointer; }
   gap: 2px;
   width: 100%;
   padding: 8px 10px;
-  margin-bottom: 1px;
   border: 0;
   border-radius: var(--leo-radius-m);
   background: transparent;
   text-align: left;
 }
-.session:hover { background: var(--hover-wash); }
+.session:hover:not(.current) { background: var(--leo-color-container-highlight); }
 /* Quiet selection: a filled primary wash reads as a button, not a row. */
 .session.current {
   background: var(--leo-color-container-interactive);
@@ -1078,23 +1058,23 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .composer .send:disabled { opacity: 0.4; cursor: default; }
 .composer .export-open { height: 38px; }
 
-.model-picker { position: relative; align-self: flex-end; flex: 0 1 auto; min-width: 70px; max-width: 160px; }
-.model-trigger {
-  display: flex; align-items: center; gap: 6px; width: 100%; height: 36px;
-  padding: 0 8px; border: 1px solid var(--line); border-radius: var(--radius);
-  color: var(--ink-dim); background: var(--bg); cursor: pointer;
-}
-.model-trigger svg { flex: 0 0 auto; }
-.model-current { font-size: var(--leo-typography-x-small-regular-font-size); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.model-trigger:hover, .model-trigger[aria-expanded="true"] { color: var(--accent-text); border-color: var(--accent); }
-.model-trigger:disabled { cursor: default; }
-.model-trigger:focus-visible, .model-refresh:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.model-picker { position: relative; align-self: center; flex: 0 1 auto; min-width: 70px; max-width: 220px; }
+/* Layout only — size, type, and icons come from Leo Button medium defaults. */
+.model-trigger { width: 100%; flex-grow: 0; }
+.model-current { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-refresh:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .model-popover {
-  position: absolute; z-index: 30; bottom: calc(100% + 10px); left: 0;
-  width: min(360px, 60vw); max-height: min(420px, 65vh);
-  display: flex; flex-direction: column; padding: 12px;
-  border: 1px solid var(--line); border-radius: var(--leo-radius-l); background: var(--bg);
-  box-shadow: var(--leo-effect-elevation-03); color: var(--ink);
+  position: fixed;
+  z-index: 40;
+  max-height: min(420px, 65vh);
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--leo-radius-l);
+  background: var(--bg);
+  box-shadow: var(--leo-effect-elevation-03);
+  color: var(--ink);
 }
 .model-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .model-heading strong { font-size: var(--leo-typography-small-regular-font-size); font-weight: 600; }
@@ -1524,53 +1504,64 @@ button { font: inherit; color: inherit; cursor: pointer; }
 /* ------------------------------------------------------------- popmenu */
 
 .new-split { display: flex; gap: 4px; align-items: stretch; }
-.new-split .new { flex: 1; }
-.new-recent {
-  width: 26px;
-  padding: 0;
-  border: none;
-  border-radius: var(--leo-radius-s);
-  background: var(--code-bg);
-  color: var(--ink-dim);
-  font-size: var(--leo-typography-x-small-regular-font-size);
-  cursor: pointer;
-}
-.new-recent:hover { color: var(--ink); }
+.new-split .new { flex: 1; flex-grow: 1; }
+.new-split .new-recent { flex: none; flex-grow: 0; }
 
 /* Opaque, not translucent. The window is already `vibrancy: 'sidebar'`, and a blurred panel
-   over a blurred window blurs twice into something neither legible nor Mac-like. */
+   over a blurred window blurs twice into something neither legible nor Mac-like.
+
+   Chrome and item metrics follow Leo ButtonMenu / Menu defaults
+   (https://nala.s.brave.dev/?path=/story/components-buttonmenu--default): soft highlight on
+   hover or keyboard focus, interactive blue only while pressed — never on the focused row
+   alone, or the first item would look chosen the moment the menu opens. */
 .popmenu {
   position: fixed;
   z-index: 10;
   min-width: 220px;
   max-width: 380px;
-  padding: 4px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--leo-spacing-s);
   border: 1px solid var(--leo-color-divider-subtle);
-  border-radius: var(--leo-radius-m);
+  border-radius: var(--leo-radius-l);
   background: var(--leo-color-container-background);
   color: var(--leo-color-text-primary);
-  box-shadow: var(--leo-effect-elevation-03, 0 18px 60px var(--scrim));
+  box-shadow: var(--leo-effect-elevation-03);
   animation: popmenu-in 90ms ease-out;
 }
 @keyframes popmenu-in {
-  from { opacity: 0; transform: translateY(-2px); }
-  to { opacity: 1; transform: none; }
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
 }
 .popitem {
   display: block;
-  width: 100%;
-  padding: 5px 9px;
+  width: auto;
+  margin: 0 var(--leo-spacing-s);
+  padding: var(--leo-spacing-m) var(--leo-spacing-xl);
   border: none;
-  border-radius: var(--leo-radius-s, 5px);
+  border-radius: var(--leo-radius-m);
   background: none;
   color: var(--leo-color-text-primary);
-  font: inherit;
+  font: var(--leo-font-default-regular);
   text-align: left;
   cursor: pointer;
 }
-.popitem.active, .popitem:hover:not([aria-disabled]) {
+.popitem:first-child { margin-top: var(--leo-spacing-s); }
+.popitem:last-child { margin-bottom: var(--leo-spacing-s); }
+.popitem:hover:not([aria-disabled]) {
+  background: var(--leo-color-container-highlight);
+  color: var(--leo-color-text-primary);
+}
+.popitem:active:not([aria-disabled]) {
   background: var(--leo-color-container-interactive);
   color: var(--leo-color-text-interactive);
+}
+.popitem:focus-visible {
+  outline: none;
+  box-shadow:
+    0px 0px 0px 1.5px rgba(255, 255, 255, 0.5),
+    0px 0px 4px 2px #423eee;
 }
 .popitem[aria-disabled] { opacity: 0.45; cursor: default; }
 .popitem-label { display: block; }
@@ -1583,7 +1574,6 @@ button { font: inherit; color: inherit; cursor: pointer; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.popitem.active .popitem-detail { color: var(--leo-color-text-interactive); opacity: 0.75; }
 
 /* A menu with a setting in it keeps a tick column for every row, the way a native one does:
    the labels stay in one line down the left, and turning the setting on moves nothing. */
@@ -1600,9 +1590,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
    that read it below. Drawn on the first row of the group rather than as a row of its own,
    which would be an item the arrow keys had to learn to skip. */
 .popitem.separated {
-  margin-top: 5px;
+  margin-top: var(--leo-spacing-s);
   border-top: 1px solid var(--leo-color-divider-subtle);
-  padding-top: 8px;
+  border-radius: 0 0 var(--leo-radius-m) var(--leo-radius-m);
+  padding-top: calc(var(--leo-spacing-m) + var(--leo-spacing-s));
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1815,9 +1806,6 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .bot-form-identity .bot-field { min-width: 0; padding-bottom: 20px; }
 .bot-form-identity input { min-width: 0; width: 100%; box-sizing: border-box; }
 .bot-form-model .model-picker { align-self: stretch; max-width: none; }
-.bot-form-model .model-trigger { height: 32px; }
-.bot-form-model .model-current { font-size: var(--leo-typography-small-regular-font-size); }
-.bot-form-model .model-popover { top: calc(100% + 6px); bottom: auto; width: 100%; box-sizing: border-box; }
 
 .bot-form-avatar {
   position: relative;
@@ -2047,9 +2035,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .app .composer textarea { width: 100%; flex: none; min-height: 70px; max-height: 210px; line-height: 1.5; padding: 14px; resize: none; border-radius: var(--leo-radius-l); }
 .composer-toolbar { display: flex; align-items: center; gap: 8px; }
 .composer-toolbar .model-picker { max-width: 220px; align-self: center; }
-.composer-hint { font-size: var(--leo-typography-x-small-regular-font-size); color: var(--ink-dim); flex: 1; }
-.composer-toolbar .stop { flex-grow: 0; }
-.app .composer .send { white-space: nowrap; margin-left: auto; flex-grow: 0; }
+.composer-hint { font-size: var(--leo-typography-x-small-regular-font-size); color: var(--ink-dim); flex: 1; min-width: 0; }
+/* Keep Stop, model, and Send as one trailing group on the right. */
+.composer-toolbar .stop,
+.composer-toolbar .model-picker { margin-left: auto; flex-grow: 0; }
+.composer-toolbar .stop ~ .model-picker { margin-left: 0; }
+.app .composer .send { white-space: nowrap; flex-grow: 0; }
 .attention-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 20px; color: var(--ink-dim); font-size: var(--leo-typography-small-regular-font-size); min-height: 34px; }
 .attention-bar button { border: 1px solid var(--line); border-radius: var(--leo-radius-s); padding: 6px 10px; background: var(--bg); }
 .attention-bar .pending-jump { background: var(--warn-bg); color: var(--warn); text-align: left; font-weight: 600; }
@@ -2070,6 +2061,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .empty-body > div { width: min(560px, 100%); padding: 24px; }
 .empty-body h1 { font-size: var(--leo-typography-heading-h1-font-size); line-height: 1.2; letter-spacing: -.5px; }
 .empty-body p { line-height: 1.6; }
+.empty-body .welcome-open { flex-grow: 0; margin-top: 8px; }
 .primary { border: 0; border-radius: var(--leo-radius-m); background: var(--accent); color: var(--accent-ink); padding: 10px 18px; font-weight: 600; }
 .welcome-recents { display: grid; gap: 6px; margin-top: 32px; }
 .welcome-recents h2 { font-size: var(--leo-typography-components-tableheader-font-size); color: var(--ink-dim); }
@@ -2094,6 +2086,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
   --leo-tabs-width: 100%;
   border-bottom: none;
 }
+/* Equal halves, centered labels, body-default type size on both sidebars. */
+.session-scope leo-tabitem,
+.inspector-tabs leo-tabitem {
+  flex: 1 1 0;
+  min-width: 0;
+  justify-content: center;
+  --leo-tab-item-font: var(--leo-font-default-semibold);
+}
 .app .context-head { padding: 14px 14px 8px; }
 .app .panel-inner .none { padding: 0; margin: 4px 0 10px; }
 .app .panel-inner { padding: 8px 14px 14px; }
@@ -2117,12 +2117,19 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .confirm-actions .always { background: transparent; color: var(--ink); border-color: var(--line); }
 .permission-scope { margin: 0; padding: 10px 12px; font-size: var(--leo-typography-small-regular-font-size); border-top: 1px solid var(--line); color: var(--ink-dim); overflow-wrap: anywhere; }
 
-.session-scope { display: flex; gap: 4px; margin-top: 10px; }
-.session-scope button { flex: 1; min-height: 30px; font-size: var(--leo-typography-small-regular-font-size); border: 0; border-radius: var(--leo-radius-s); background: transparent; color: var(--ink-dim); }
-.session-scope button[aria-pressed="true"] { background: var(--bubble-agent); color: var(--ink); font-weight: 600; }
+/* Conversations / Archived as Leo Tabs, equal halves across the sidebar. */
+.session-scope {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+  -webkit-app-region: no-drag;
+  --leo-tabs-width: 100%;
+}
 .session-row { position: relative; display: flex; align-items: center; border-radius: var(--leo-radius-m); }
 .session-row .session { flex: 1; min-width: 0; padding-right: 32px; }
 .session-row .session-more { position: absolute; right: 4px; top: 10px; padding: 0; width: 28px; height: 28px; border: 0; background: transparent; border-radius: var(--leo-radius-xs); color: var(--ink-dim); }
+.session-row:hover:not(.current) { background: var(--leo-color-container-highlight); }
+.session-row:hover:not(.current) .session { background: transparent; }
 .session-row.current { background: var(--leo-color-container-interactive); }
 .session-row.current .session { background: transparent; color: var(--ink); }
 .session-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; font-size: var(--leo-typography-x-small-regular-font-size); }
@@ -2188,18 +2195,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .permission-row code { font-size: var(--leo-typography-small-regular-font-size); overflow-wrap: anywhere; }
 .permission-row button { padding: 5px 10px; border: 1px solid var(--line); border-radius: var(--leo-radius-s); background: var(--bg); }
 
-.attach-files {
-  border: 1px solid var(--line);
-  border-radius: var(--leo-radius-full);
-  background: var(--bg);
-  padding: 0 12px;
-  min-height: 36px;
-  font-size: var(--leo-typography-small-regular-font-size);
-  white-space: nowrap;
-  color: var(--ink);
-}
-.attach-files:hover { background: var(--hover-wash); }
-.attach-files:disabled { opacity: 0.45; cursor: default; }
+.attach-files { white-space: nowrap; }
 .attachment-chips { display: flex; flex-wrap: wrap; gap: 6px; font-size: var(--leo-typography-small-regular-font-size); }
 .attachment-chips p { width: 100%; margin: 0 0 4px; color: var(--warn); }
 .attachment-chips > span { display: flex; border: 1px solid var(--line); border-radius: var(--leo-radius-s); max-width: 100%; }

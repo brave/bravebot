@@ -4,7 +4,7 @@ import { Modal } from './Modal'
 import { botHistory } from '../../shared/bot-history'
 import { useExperience } from '../experience'
 import type { SessionSummary } from '../../shared/protocol'
-import { Icon } from '../nala'
+import { Button, Icon } from '../nala'
 /**
  * The other list in the left column: the bots somebody has defined.
  *
@@ -86,12 +86,10 @@ export function Bots({
       <header className="sessions-head">
         {/* The same control the session list's own opens with, so the two tabs begin the same
             way. No split beside it: a bot's folder is asked for once, in the form. */}
-        <SidebarTools query={query} onQuery={setQuery} label="Search bots" action={<button className="new" onClick={() => setEditing('new')}>
-          <span className="plus" aria-hidden="true">
-            +
-          </span>
+        <SidebarTools query={query} onQuery={setQuery} label="Search bots" action={<Button kind="outline" size="small" className="new" onClick={() => setEditing('new')}>
+          <Icon name="plus-add" slot="icon-before" />
           New bot
-        </button>} />
+        </Button>} />
       </header>
 
       <div className="session-list">

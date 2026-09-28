@@ -1,5 +1,5 @@
 import { useId, useRef, useState, type ReactNode } from 'react'
-import { Icon, Input } from '../nala'
+import { Button, Icon, Input } from '../nala'
 
 /** Keep search optional, while never hiding an active filter. */
 export function SidebarTools({ action, children, query, onQuery, label }: {
@@ -10,17 +10,17 @@ export function SidebarTools({ action, children, query, onQuery, label }: {
   label: string
 }): React.JSX.Element {
   const [expanded, setExpanded] = useState(false)
-  const trigger = useRef<HTMLButtonElement>(null)
+  const trigger = useRef<HTMLElement>(null)
   const id = useId()
   const close = () => { onQuery(''); setExpanded(false); trigger.current?.focus() }
   return <>
     <div className="sidebar-actions">
       <div className="sidebar-create">{action}</div>
-      <button ref={trigger} className="sidebar-search-toggle" aria-label={label} title={label}
+      <Button ref={trigger} kind="outline" size="small" fab className="sidebar-search-toggle" aria-label={label} title={label}
         aria-expanded={expanded} aria-controls={id} data-test="sidebar-search-toggle"
         onClick={() => expanded ? close() : setExpanded(true)}>
-        <Icon name="search" style={{ '--leo-icon-size': '16px' } as React.CSSProperties} />
-      </button>
+        <Icon name="search" slot="icon-before" />
+      </Button>
       {children}
     </div>
     {expanded && <div className="sidebar-search" id={id}>
@@ -33,9 +33,9 @@ export function SidebarTools({ action, children, query, onQuery, label }: {
             close()
           }
         }} />
-      <button aria-label="Close search" title="Clear and close search" onClick={close}>
-        <Icon name="close" style={{ '--leo-icon-size': '14px' } as React.CSSProperties} />
-      </button>
+      <Button kind="plain-faint" size="small" fab aria-label="Close search" title="Clear and close search" onClick={close}>
+        <Icon name="close" slot="icon-before" />
+      </Button>
     </div>}
   </>
 }

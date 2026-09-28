@@ -1,4 +1,5 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { ModelCatalogue, ModelOption } from '../../shared/protocol'
 import { setExperience, useExperience } from '../experience'
 import { Button, Icon, Input } from '../nala'
@@ -31,10 +32,12 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(0)
   const [revision, setRevision] = useState(0)
-  const root = useRef<HTMLDivElement>(null)
-  const trigger = useRef<HTMLButtonElement>(null)
+  const [at, setAt] = useState<{ left: number; top: number; width: number } | null>(null)
+  const trigger = useRef<HTMLElement>(null)
+  const popover = useRef<HTMLDivElement>(null)
   const search = useRef<HTMLElement>(null)
   const list = useRef<HTMLDivElement>(null)
+  const focused = useRef(false)
   const id = useId()
   const close = () => { setOpen(false); trigger.current?.focus() }
 
@@ -43,7 +46,6 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
     let gone = false
     setLoading(true)
     setProblem(null)
-    search.current?.focus()
     void window.bravebot.request<ModelCatalogue>('models.list', { session }).then((answer) => {
       if (gone) return
       if (answer.error) setProblem(answer.error.message)
@@ -53,17 +55,6 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
     }).finally(() => { if (!gone) setLoading(false) })
     return () => { gone = true }
   }, [open, revision, session])
-
-  useEffect(() => {
-    if (!open) return
-    const outside = (event: PointerEvent) => {
-      if (!root.current?.contains(event.target as Node)) setOpen(false)
-    }
-    document.addEventListener('pointerdown', outside)
-    return () => document.removeEventListener('pointerdown', outside)
-  }, [open])
-
-  useEffect(() => { if (disabled) setOpen(false) }, [disabled])
 
   const options = useMemo(() => {
     const rows = [...(catalogue?.models ?? [])]
@@ -81,6 +72,51 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
       return rank(a) - rank(b)
     })
   }, [catalogue, model, query, preferences.recentModels])
+
+  // Fixed to the viewport so the menu never expands the toolbar or scrolls the transcript.
+  useLayoutEffect(() => {
+    if (!open) {
+      setAt(null)
+      focused.current = false
+      return
+    }
+    const button = trigger.current
+    const box = popover.current
+    if (!button || !box) return
+    const from = button.getBoundingClientRect()
+    const size = box.getBoundingClientRect()
+    const width = Math.min(360, window.innerWidth - 16)
+    const left = Math.max(8, Math.min(from.right - width, window.innerWidth - width - 8))
+    const below = from.bottom + 8
+    const top = below + size.height > window.innerHeight - 8
+      ? from.top - size.height - 8
+      : below
+    setAt({ left, top: Math.max(8, top), width })
+    if (!focused.current) {
+      focused.current = true
+      search.current?.focus()
+    }
+  }, [open, loading, catalogue, options.length])
+
+  useEffect(() => {
+    if (!open) return
+    const outside = (event: PointerEvent) => {
+      const where = event.target as Node
+      if (trigger.current?.contains(where) || popover.current?.contains(where)) return
+      setOpen(false)
+    }
+    const away = (): void => setOpen(false)
+    document.addEventListener('pointerdown', outside)
+    window.addEventListener('resize', away)
+    window.addEventListener('scroll', away, true)
+    return () => {
+      document.removeEventListener('pointerdown', outside)
+      window.removeEventListener('resize', away)
+      window.removeEventListener('scroll', away, true)
+    }
+  }, [open])
+
+  useEffect(() => { if (disabled) setOpen(false) }, [disabled])
   useEffect(() => { setActive(0) }, [query, catalogue])
   useEffect(() => {
     list.current?.querySelector(`[data-index="${active}"]`)?.scrollIntoView({ block: 'nearest' })
@@ -95,21 +131,19 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
     onChoose(row.id); close()
   }
 
-  return <div className="model-picker" ref={root} onBlur={(event) => {
-    if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false)
-  }}>
-    <button ref={trigger} className="model-trigger" type="button" disabled={disabled}
-      title={`Choose model · ${model ?? label}`} aria-label={`Choose model: ${label}`}
-      aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? id : undefined}
-      data-test="model-trigger"
-      onClick={() => { setQuery(''); setActive(0); setOpen((value) => !value) }}>
-      <Icon name="layers" style={{ '--leo-icon-size': '20px' } as React.CSSProperties} />
-      <span className="model-current" aria-hidden="true">{compactLabel}</span>
-    </button>
-    {open && <div id={id} className="model-popover" role="dialog" aria-label={heading} data-test="model-popover"
+  const menu = open ? createPortal(
+    <div
+      ref={popover}
+      id={id}
+      className="model-popover"
+      role="dialog"
+      aria-label={heading}
+      data-test="model-popover"
+      style={at ? { left: at.left, top: at.top, width: at.width } : { opacity: 0, pointerEvents: 'none' }}
       onKeyDown={(event) => {
         if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close() }
-      }}>
+      }}
+    >
       <div className="model-heading"><strong>{heading}</strong>
         <Button size="small" kind="plain-faint" isDisabled={loading} onClick={() => setRevision((n) => n + 1)} data-test="model-refresh">Refresh</Button>
       </div>
@@ -153,6 +187,20 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
       {!loading && options.length === 0 && <p className="model-status">{query ? 'No models match your search.' : 'No models available. Check your backend settings.'}</p>}
       <div className="model-footnote">{scope === 'bot' ? 'Saved with this bot. Applies to its next message.' : 'Applies to the next message in this conversation.'}</div>
       <p className="model-footnote">Brave Bot uses text and tools. Other provider capabilities, such as image or audio generation, are not available here. Pricing is not supplied by this catalogue.</p>
-    </div>}
+    </div>,
+    document.body,
+  ) : null
+
+  return <div className="model-picker">
+    <Button ref={trigger} kind="plain-faint" size="medium" className="model-trigger" isDisabled={disabled}
+      title={`Choose model · ${model ?? label}`} aria-label={`Choose model: ${label}`}
+      aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? id : undefined}
+      data-test="model-trigger"
+      onClick={() => { setQuery(''); setActive(0); setOpen((value) => !value) }}>
+      <Icon name="layers" slot="icon-before" />
+      <span className="model-current" aria-hidden="true">{compactLabel}</span>
+      <Icon name={open ? 'carat-up' : 'carat-down'} slot="icon-after" />
+    </Button>
+    {menu}
   </div>
 }

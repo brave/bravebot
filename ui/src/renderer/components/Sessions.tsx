@@ -9,7 +9,7 @@ import { ForkIcon } from './ForkIcon'
 import { PopMenu, type PopItem } from './PopMenu'
 import { conversationKey } from '../../shared/experience'
 import { useExperience, setConversation } from '../experience'
-import { Icon, Label } from '../nala'
+import { Button, Icon, Label, TabItem, Tabs } from '../nala'
 export const SessionInfo = createContext<Record<string, { bot?: string; state?: string }>>({})
 
 interface Props {
@@ -112,17 +112,29 @@ export function Sessions({
           {/* The label stays put and `aria-pressed` carries the state, with the verb in the
               tooltip — the same disclosure discipline the column folds follow. A control
               that renamed itself would be one the reader has to re-find after every press. */}
-          <button
+          <Button
+            kind="outline"
+            size="small"
+            fab
             className="session-group"
             aria-pressed={grouped}
             aria-label="Group by project"
             title={grouped ? 'Show one flat list' : 'Group by project'}
             onClick={() => onGroup(!grouped)}
           >
-            <span aria-hidden="true">▤</span>
-          </button>
+            <Icon name="list" slot="icon-before" />
+          </Button>
         </SidebarTools>
-        <div className="session-scope"><button aria-pressed={!archive} onClick={() => setArchive(false)}>Conversations</button><button aria-pressed={archive} onClick={() => setArchive(true)}>Archived</button></div>
+        <Tabs
+          className="session-scope"
+          size="medium"
+          value={archive ? 'archived' : 'conversations'}
+          data-test="session-scope"
+          onChange={({ value }) => setArchive(value === 'archived')}
+        >
+          <TabItem value="conversations">Conversations</TabItem>
+          <TabItem value="archived">Archived</TabItem>
+        </Tabs>
       </header>
 
       <div className="session-list">
@@ -305,7 +317,7 @@ function Session({
 function NewSession({ onNew }: { onNew: (directory?: string) => void }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [directories, setDirectories] = useState<string[]>([])
-  const chevron = useRef<HTMLButtonElement>(null)
+  const chevron = useRef<HTMLElement>(null)
 
   // Read when the menu is opened rather than held and kept in step: the list changes in the
   // main process, and a copy up here would be one more thing that can be stale.
@@ -328,11 +340,15 @@ function NewSession({ onNew }: { onNew: (directory?: string) => void }): React.J
 
   return (
     <div className="new-split">
-      <button className="new" onClick={() => onNew()} title="Open a project" data-test="new-session">
-        <Icon name="plus-add" style={{ '--leo-icon-size': '14px' } as React.CSSProperties} /> New session
-      </button>
-      <button
+      <Button kind="outline" size="small" className="new" onClick={() => onNew()} title="Open a project" data-test="new-session">
+        <Icon name="plus-add" slot="icon-before" />
+        New session
+      </Button>
+      <Button
         ref={chevron}
+        kind="outline"
+        size="small"
+        fab
         className="new-recent"
         aria-haspopup="menu"
         aria-expanded={open}
@@ -340,8 +356,8 @@ function NewSession({ onNew }: { onNew: (directory?: string) => void }): React.J
         title="Projects opened before"
         onClick={() => (open ? setOpen(false) : show())}
       >
-        <span aria-hidden="true">⌄</span>
-      </button>
+        <Icon name="carat-down" slot="icon-before" />
+      </Button>
       <PopMenu
         open={open}
         anchor={chevron}
