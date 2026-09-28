@@ -144,7 +144,7 @@ export function Sidebar({
         />
       </div>
 
-      <Button kind="outline" size="small" className="agent-settings-open" onClick={onSettings} data-test="agent-settings">
+      <Button kind="plain" size="small" className="agent-settings-open" onClick={onSettings} data-test="agent-settings">
         Agent settings
       </Button>
       {build && (

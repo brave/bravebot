@@ -10,9 +10,9 @@
 // of the run holds it to that: with the setting on the calls appear and the diffs and cards
 // still do not, and the footer changes to match what the file actually carried.
 //
-// Two behaviours here are covered nowhere else in the suite: that a menu anchored to a control
-// at the bottom of the window flips *above* it, and that the offscreen window a PDF is printed
-// from is destroyed afterwards. A leaked print window is invisible and would never be noticed.
+// Two behaviours here are covered nowhere else in the suite: that the header menu opens beneath
+// its button and stays inside the window, and that the offscreen window a PDF is printed from
+// is destroyed afterwards. A leaked print window is invisible and would never be noticed.
 //
 // Costs nothing: it opens a stored session rather than sending a prompt. The save sheet is
 // modal and would hang the run, so `dialog.showSaveDialog` is replaced in the main process —
@@ -122,29 +122,33 @@ if (count === 0) {
     'and says so with aria-expanded',
   )
 
-  // `menuitem` and not `menuitemcheckbox`, so this counts the formats and not the setting
-  // sitting above them.
-  const labels = await page.locator('[role="menuitem"] .popitem-label').allTextContents()
+  // The format rows, not the setting sitting above them. The extension sits in parentheses
+  // on the same line as the name.
+  const labels = await page.locator('[role="menuitem"] .export-format').allTextContents()
+  const names = labels.map((label) => label.replace(/\s+/g, ' ').trim())
   check(
-    labels.join() === 'Plain Text,Markdown,PDF',
-    `it offers the three formats in order (${labels.join(', ')})`,
+    names.join() === 'Plain Text (.txt),Markdown (.md),PDF (.pdf)',
+    `it offers the three formats in order (${names.join(', ')})`,
   )
-  const details = await page.locator('[role="menuitem"] .popitem-detail').allTextContents()
-  check(details.join() === '.txt,.md,.pdf', `each named by its extension (${details.join(', ')})`)
 
-  const toggle = page.locator('[role="menuitemcheckbox"]')
+  const toggle = page.locator('.export-tools')
   check(await toggle.count() === 1, 'above them sits the tool-calls setting')
   check(
     (await toggle.getAttribute('aria-checked')) === 'false',
     'announced as a checkbox that is off',
   )
 
-  // The one behaviour a bottom-of-window menu depends on, and nothing else covers it.
+  // The control sits in the header, so the menu hangs beneath it and has to stay on screen.
   const anchorBox = await button.boundingBox()
   const menuBox = await menu.boundingBox()
+  const view = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))
   check(
-    menuBox && anchorBox && menuBox.y + menuBox.height <= anchorBox.y + 1,
-    'the menu flips above the button rather than off the bottom of the window',
+    !!menuBox && !!anchorBox &&
+      menuBox.y >= anchorBox.y + anchorBox.height - 2 &&
+      menuBox.y + menuBox.height <= view.height + 1 &&
+      menuBox.x >= -1 &&
+      menuBox.x + menuBox.width <= view.width + 1,
+    'the menu opens beneath the header button and stays inside the window',
   )
 
   await page.screenshot({ path: join(OUT, '15-export-menu.png') })
@@ -240,13 +244,13 @@ if (count === 0) {
   const onScreenCalls = await page.locator('.tool').count()
   await button.click()
   await page.waitForTimeout(200)
-  await page.locator('[role="menuitemcheckbox"]').click()
+  await page.locator('.export-tools').click()
   await page.waitForTimeout(400)
   check((await toolsItem())?.checked === true, 'ticking the row ticks the File menu item too')
   await button.click()
   await page.waitForTimeout(200)
   check(
-    (await page.locator('[role="menuitemcheckbox"]').getAttribute('aria-checked')) === 'true',
+    (await page.locator('.export-tools').getAttribute('aria-checked')) === 'true',
     'and the menu shows it on when it is reopened',
   )
   await page.keyboard.press('Escape')
@@ -291,7 +295,7 @@ if (count === 0) {
   // Back off, so the PDF below is the default document.
   await button.click()
   await page.waitForTimeout(200)
-  await page.locator('[role="menuitemcheckbox"]').click()
+  await page.locator('.export-tools').click()
   await page.waitForTimeout(300)
   check((await toolsItem())?.checked === false, 'and the setting turns back off')
 

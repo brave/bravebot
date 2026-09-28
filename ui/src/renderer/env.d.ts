@@ -24,6 +24,10 @@ declare module 'react' {
         React.HTMLAttributes<HTMLElement> & { value?: string },
         HTMLElement
       >
+      'leo-menu-section': React.DetailedHTMLProps<
+        React.HTMLAttributes<HTMLElement>,
+        HTMLElement
+      >
     }
   }
 }

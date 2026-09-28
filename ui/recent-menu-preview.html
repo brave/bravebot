@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <link rel="stylesheet" href="/node_modules/@brave/leo/tokens/css/variables.css" />
+  <link rel="stylesheet" href="/src/renderer/styles.css" />
+  <style>
+    body { margin: 0; background: var(--leo-color-page-background); }
+    .stage { display: grid; grid-template-columns: 280px 1fr; height: 100vh; }
+    .col { --col-left-open: 280px; }
+    .main { background: var(--leo-color-container-background); }
+  </style>
+</head>
+<body>
+  <div class="stage">
+    <aside class="sessions col recents-open">
+      <header class="sessions-head" style="margin-top: 24px;">
+        <div class="sidebar-actions">
+          <div class="sidebar-create">
+            <div class="new-split">
+              <leo-button kind="plain" size="small" class="new">
+                <leo-icon name="plus-add" slot="icon-before"></leo-icon>
+                New session
+              </leo-button>
+              <leo-buttonmenu id="menu" class="new-recent recent-menu" aria-label="Projects opened before">
+                <leo-button slot="anchor-content" kind="plain" size="small" fab aria-label="Projects opened before">
+                  <leo-icon name="carat-down" slot="icon-before"></leo-icon>
+                </leo-button>
+                <leo-menu-item data-directory="/Users/agustinruiz/Documents/GitHub/bravebot/ui">
+                  <span class="recent-name">ui</span>
+                  <span class="recent-path">/Users/agustinruiz/Documents/GitHub/bravebot/ui</span>
+                </leo-menu-item>
+                <leo-menu-item data-directory="/Users/agustinruiz/Documents/GitHub/bravebot">
+                  <span class="recent-name">bravebot</span>
+                  <span class="recent-path">/Users/agustinruiz/Documents/GitHub/bravebot</span>
+                </leo-menu-item>
+                <leo-menu-item data-directory="/var/folders/xj/rrlvc6sj6lzcqxlb740219q80000gn/T/bravebot-ui-drive-bots">
+                  <span class="recent-name">bravebot-ui-drive-bots</span>
+                  <span class="recent-path">/var/folders/xj/rrlvc6sj6lzcqxlb740219q80000gn/T/bravebot-ui-drive-bots</span>
+                </leo-menu-item>
+              </leo-buttonmenu>
+            </div>
+          </div>
+        </div>
+      </header>
+    </aside>
+    <div class="main"></div>
+  </div>
+  <script type="module">
+    import { setIconBasePath } from '/node_modules/@brave/leo/web-components/icon.js'
+    setIconBasePath('/node_modules/@brave/leo/icons')
+    await import('/node_modules/@brave/leo/web-components/button.js')
+    await import('/node_modules/@brave/leo/web-components/icon.js')
+    await import('/node_modules/@brave/leo/web-components/buttonMenu.js')
+    const menu = document.getElementById('menu')
+    menu.isOpen = true
+    menu.positionStrategy = 'fixed'
+  </script>
+</body>
+</html>

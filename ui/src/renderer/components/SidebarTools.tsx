@@ -16,7 +16,7 @@ export function SidebarTools({ action, children, query, onQuery, label }: {
   return <>
     <div className="sidebar-actions">
       <div className="sidebar-create">{action}</div>
-      <Button ref={trigger} kind="outline" size="small" fab className="sidebar-search-toggle" aria-label={label} title={label}
+      <Button ref={trigger} kind="plain" size="small" fab className="sidebar-search-toggle" aria-label={label} title={label}
         aria-expanded={expanded} aria-controls={id} data-test="sidebar-search-toggle"
         onClick={() => expanded ? close() : setExpanded(true)}>
         <Icon name="search" slot="icon-before" />

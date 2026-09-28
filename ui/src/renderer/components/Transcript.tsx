@@ -13,7 +13,6 @@ import { ModelPicker } from './ModelPicker'
 import { ForkIcon } from './ForkIcon'
 import { ago, contextMenu } from './Sessions'
 import { Markdown } from './Markdown'
-import { PopMenu, type PopItem } from './PopMenu'
 import { BotAvatar, type Doing } from './BotAvatar'
 import type { Bot } from '../../shared/bots'
 import { projectLabel } from '../../shared/recents'
@@ -22,7 +21,7 @@ import { ErrorCard } from './ErrorCard'
 import { FilePreview } from './FilePreview'
 import { TurnFooter, TurnNotices, type OpenAudit } from './TurnDetails'
 import type { Turns, TurnDisclosure } from '../turn-details'
-import { Alert, Button, Collapse, Icon, ProgressRing, type IconName } from '../nala'
+import { Alert, Button, ButtonMenu, Collapse, Icon, ProgressRing, type IconName } from '../nala'
 
 interface Live {
   model: string | null
@@ -399,10 +398,10 @@ export function Transcript({
         <ColumnToggle side="right" collapsed={collapsed.right} onToggle={onToggle} />
       </div>
       {live && <div className="conversation-toolbar">
-        <button onClick={() => setSearching((value) => !value)} aria-expanded={searching}>Find</button>
-        <button onClick={() => setPermissions(true)}>Permissions</button>
-        <button onClick={() => setWatches(true)}>Watches</button>
-        <button onClick={() => {
+        <Button kind={searching ? 'filled' : 'plain'} size="small" onClick={() => setSearching((value) => !value)} aria-expanded={searching}>Find</Button>
+        <Button kind={permissions ? 'filled' : 'plain'} size="small" onClick={() => setPermissions(true)} aria-expanded={permissions}>Permissions</Button>
+        <Button kind={watches ? 'filled' : 'plain'} size="small" onClick={() => setWatches(true)} aria-expanded={watches}>Watches</Button>
+        <Button kind={focusedLayout ? 'filled' : 'plain'} size="small" aria-pressed={focusedLayout !== null} onClick={() => {
           if (focusedLayout) {
             for (const side of ['left', 'right'] as const) if (collapsed[side] !== focusedLayout[side]) onToggle(side)
             setFocusedLayout(null)
@@ -410,10 +409,10 @@ export function Transcript({
             setFocusedLayout({ ...collapsed })
             for (const side of ['left', 'right'] as const) if (!collapsed[side]) onToggle(side)
           }
-        }}>{focusedLayout ? 'Exit focus' : 'Focus'}</button>
-        <button onClick={() => setExperience('density', preferences.density === 'compact' ? 'comfortable' : 'compact')}>
+        }}>{focusedLayout ? 'Exit focus' : 'Focus'}</Button>
+        <Button kind={preferences.density === 'compact' ? 'filled' : 'plain'} size="small" aria-pressed={preferences.density === 'compact'} onClick={() => setExperience('density', preferences.density === 'compact' ? 'comfortable' : 'compact')}>
           {preferences.density === 'compact' ? 'Comfortable view' : 'Compact view'}
-        </button>
+        </Button>
         <ExportMenu canExport={canExport} includeTools={includeTools} onToggleTools={onToggleTools} onExport={onExport} />
       </div>}
       {backendReady === false && <div className="backend-status" role="status"><strong>Backend setup needed</strong><span>You can browse conversations and prepare drafts.</span><div><button onClick={onSetup}>Setup help</button><button onClick={onCheckBackend}>Check again</button><button onClick={onDiagnostics}>Diagnostics</button></div></div>}
@@ -577,22 +576,11 @@ export function Transcript({
 }
 
 /** The three files a conversation can become. Ordered plainest first. */
-const FORMATS: readonly PopItem[] = [
+const FORMATS: readonly { id: ExportFormat; label: string; detail: string }[] = [
   { id: 'txt', label: 'Plain Text', detail: '.txt' },
   { id: 'md', label: 'Markdown', detail: '.md' },
   { id: 'pdf', label: 'PDF', detail: '.pdf' },
 ]
-
-/**
- * What the file will contain, asked above what it will be called.
- *
- * The question really belongs in the save sheet, next to the filename — but a native save
- * panel takes no controls of ours, and a second dialog in front of it would put a question
- * between somebody and the thing they asked for every time they exported. So it is a row in
- * this menu, ticked or not, and the File menu carries the same one: see the note beside
- * `session.export-tools` in `shared/commands.ts`.
- */
-const TOOLS = 'tools'
 
 /**
  * The control that writes the conversation to a file.
@@ -603,8 +591,7 @@ const TOOLS = 'tools'
  * exported a `.txt` because somebody clicked slightly to the left would be worse than one
  * that always asks.
  *
- * Placed before Send rather than after it, so the accent-coloured primary action stays in
- * the corner it has always been in.
+ * It sits at the end of the conversation toolbar, plain until the menu is open.
  */
 function ExportMenu({
   canExport,
@@ -618,52 +605,52 @@ function ExportMenu({
   onExport: (format: ExportFormat) => void
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
-  const trigger = useRef<HTMLButtonElement>(null)
-
-  // Rebuilt with the tick rather than held in state: the setting lives in `App`, which is
-  // also what the File menu's copy of this row is drawn from, and a second copy here could
-  // disagree with the one in the menu bar.
-  const items: readonly PopItem[] = [
-    {
-      id: TOOLS,
-      label: 'Include Tool Calls',
-      // No second line saying "on" or "off": the tick is the state, and a row that said it
-      // twice would be the only one in the app that did.
-      checked: includeTools,
-      // Never greyed, unlike the formats below and like its File-menu twin: it is a setting
-      // rather than an action, and it is worth being able to set it in a session with
-      // nothing said in it yet.
-    },
-    ...FORMATS.map((format, index) => (index === 0 ? { ...format, separated: true } : format)),
-  ]
+  const trigger = useRef<HTMLElement>(null)
 
   return (
-    <div className="export-split">
-      <button
+    <ButtonMenu
+      className="export-menu"
+      isOpen={open}
+      placement="bottom-end"
+      positionStrategy="fixed"
+      onChange={(detail) => {
+        setOpen(detail.isOpen)
+        // Focus returns to the control that opened the menu, including after Escape.
+        if (!detail.isOpen) trigger.current?.focus()
+      }}
+    >
+      <Button
         ref={trigger}
+        slot="anchor-content"
         className="export-open"
+        kind={open ? 'filled' : 'plain'}
+        size="small"
+        isDisabled={!canExport}
         aria-haspopup="menu"
         aria-expanded={open}
-        disabled={!canExport}
         title={canExport ? 'Export this conversation' : 'Nothing has been said yet'}
-        onClick={() => setOpen(!open)}
       >
         Export
-        <span className="export-chevron" aria-hidden="true">
-          ⌄
+        <Icon name={open ? 'carat-up' : 'carat-down'} slot="icon-after" />
+      </Button>
+      {/* What the file will contain, asked above what it will be called. A native save
+          panel takes no controls of ours, so the question lives here, ticked or not, and
+          the File menu carries the same row: see `session.export-tools` in
+          `shared/commands.ts`. The tick is the state; a second line would say it twice.
+          Choosing it closes the menu, the way a checkable menu item does. */}
+      <leo-menu-item className="export-tools" aria-checked={includeTools ? 'true' : 'false'} onClick={() => onToggleTools()}>
+        <span className="export-tools-row">
+          <Icon name={includeTools ? 'checkbox-checked' : 'checkbox-unchecked'} />
+          Include Tool Calls
         </span>
-      </button>
-      {/* `PopMenu` already flips above its anchor when there is no room below, which is the
-          whole reason a menu can hang off a control at the bottom of the window. */}
-      <PopMenu
-        open={open}
-        anchor={trigger}
-        items={items}
-        label="Export the conversation as"
-        onChoose={(id) => (id === TOOLS ? onToggleTools() : onExport(id as ExportFormat))}
-        onClose={() => setOpen(false)}
-      />
-    </div>
+      </leo-menu-item>
+      <hr />
+      {FORMATS.map((format) => (
+        <leo-menu-item key={format.id} onClick={() => onExport(format.id)}>
+          <span className="export-format">{format.label} ({format.detail})</span>
+        </leo-menu-item>
+      ))}
+    </ButtonMenu>
   )
 }
 

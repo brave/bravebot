@@ -26,7 +26,10 @@ export default {
     else await openNewest(s, { hold: 1.2 })
 
     const trigger = page.locator('.export-open')
-    if ((await trigger.getAttribute('disabled')) !== null) s.skip('nothing has been said in this session yet')
+    const unavailable = await trigger.evaluate((el) =>
+      el.hasAttribute('disabled') || el.hasAttribute('isdisabled') || el.getAttribute('aria-disabled') === 'true',
+    )
+    if (unavailable) s.skip('nothing has been said in this session yet')
 
     // The transcript scrolls itself to the bottom when a session opens, and `PopMenu` closes
     // on any scroll — so the menu goes up only once the column has stopped moving.
@@ -62,7 +65,7 @@ export default {
     // claim about one.
     await s.say('Include Tool Calls', 'Adds the steps between: the same verb, target and outcome, and nothing more.')
     await s.openMenu(trigger)
-    const checkbox = page.locator('[role="menuitemcheckbox"]').first()
+    const checkbox = page.locator('.export-tools').first()
     await s.click(checkbox)
     await s.beat(0.8)
 

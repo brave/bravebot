@@ -210,7 +210,7 @@ check(
   'and the form shows what the bot has remembered',
 )
 await page.screenshot({ path: '/tmp/bravebot-ui/23-bots-form.png' })
-await page.locator('.bot-form input').fill('Release Notes (weekly)')
+await page.locator('.bot-form').getByLabel('Name', { exact: true }).fill('Release Notes (weekly)')
 await page.locator('.bot-save').click()
 await page.waitForTimeout(600)
 
@@ -275,7 +275,7 @@ check(
 // remember — the same reason the session id and the compaction watermark are not its to set.
 await backMine.locator('.bot-edit').click()
 await back.waitForTimeout(300)
-await back.locator('.bot-form input').fill('Release Notes (weekly)')
+await back.locator('.bot-form').getByLabel('Name', { exact: true }).fill('Release Notes (weekly)')
 await back.locator('.bot-save').click()
 await back.waitForTimeout(600)
 check(

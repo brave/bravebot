@@ -140,6 +140,8 @@ leo-collapse {
   background: var(--bg);
   overflow: hidden;
 }
+/* The recents menu is anchored inside this clip, and it has to paint past the column. */
+.sessions.recents-open { overflow: visible; }
 
 /* A folded column must not be tabbable or read out, and a zero-width track does neither on
    its own. Hiding waits for the fold to finish so there is something to watch on the way
@@ -199,20 +201,14 @@ leo-collapse {
 
 /* Every header control must opt out of native window dragging, including scope tabs.
    Leo hosts are custom elements, so they need naming alongside the native ones. */
-.sessions-head :is(button, input, select, textarea, a, leo-button, leo-input, leo-tabs, leo-tabitem) {
+.sessions-head :is(button, input, select, textarea, a, leo-button, leo-buttonmenu, leo-input, leo-tabs, leo-tabitem) {
   -webkit-app-region: no-drag;
 }
 
-/* Primary create action: Leo outline owns the chrome; this only sizes the host. */
+/* Primary create action: Leo plain owns the chrome; this only sizes the host. */
 .sidebar-actions .new {
   width: 100%;
   flex-grow: 1;
-}
-
-/* Outline row uses secondary ink rather than interactive purple. */
-.sidebar-actions leo-button {
-  --leo-button-color: var(--leo-color-text-secondary);
-  --icon-color: var(--leo-color-icon-primary);
 }
 
 /* The filter and the grouping toggle share a row, so the spacing above them is set once
@@ -1056,45 +1052,84 @@ leo-collapse {
   width: auto;
 }
 .composer .send:disabled { opacity: 0.4; cursor: default; }
-.composer .export-open { height: 38px; }
 
 .model-picker { position: relative; align-self: center; flex: 0 1 auto; min-width: 70px; max-width: 220px; }
 /* Layout only — size, type, and icons come from Leo Button medium defaults. */
-.model-trigger { width: 100%; flex-grow: 0; }
+.model-trigger { width: 100%; max-width: 100%; min-width: 0; flex-grow: 0; }
 .model-current { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.model-refresh:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.model-popover {
-  position: fixed;
-  z-index: 40;
-  max-height: min(420px, 65vh);
+
+/* Leo ButtonMenu draws the popup. These rules only size the rows inside it.
+   Nested options do not receive the menu's ::slotted item metrics, which match
+   direct children only, so the same tokens are applied here. */
+.model-menu { --model-menu-width: min(360px, calc(100vw - 16px)); display: block; max-width: 100%; }
+.model-heading,
+.model-menu .model-search,
+.model-menu .model-notices,
+.model-menu leo-menu-section,
+.model-menu .model-footnote,
+.model-menu leo-hr { width: var(--model-menu-width); box-sizing: border-box; }
+.model-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--leo-spacing-m);
+  padding: var(--leo-spacing-l) var(--leo-spacing-xl) var(--leo-spacing-s);
+}
+.model-heading-title { font: var(--leo-font-small-semibold); min-width: 0; }
+.model-heading leo-button { flex: none; flex-grow: 0; }
+.model-menu .model-search {
+  width: calc(var(--model-menu-width) - 2 * var(--leo-spacing-xl));
+  margin: 0 var(--leo-spacing-xl) var(--leo-spacing-s);
+}
+.model-notices:empty { display: none; }
+.model-menu leo-menu-section {
   display: flex;
   flex-direction: column;
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--leo-radius-l);
-  background: var(--bg);
-  box-shadow: var(--leo-effect-elevation-03);
-  color: var(--ink);
+  max-height: min(240px, 40vh);
+  overflow-y: auto;
+  padding: var(--leo-spacing-s) 0;
 }
-.model-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
-.model-heading strong { font-size: var(--leo-typography-small-regular-font-size); font-weight: 600; }
-.model-refresh { border: 0; background: transparent; color: var(--accent-text); font: inherit; font-size: var(--leo-typography-x-small-regular-font-size); cursor: pointer; }
-.model-refresh:disabled { opacity: .45; cursor: default; }
-.model-search { width: 100%; padding: 8px 10px; font: inherit; color: var(--ink); background: var(--bg-side); border: 1px solid var(--line); border-radius: var(--leo-radius-s); }
-.model-search:focus { outline: none; border-color: var(--accent); }
-.model-options { overflow-y: auto; min-height: 0; margin-top: 8px; }
-.model-option { display: flex; align-items: center; gap: 8px; padding: 8px 6px; border-radius: var(--leo-radius-s); cursor: pointer; }
-.model-option.active { background: var(--bg-side); }
-.model-option[aria-selected="true"] .model-name { color: var(--accent-text); }
-.model-check { width: 14px; flex: 0 0 auto; color: var(--accent-text); }
+.model-menu leo-option {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-m);
+  margin: 0 var(--leo-spacing-s);
+  padding: var(--leo-spacing-m) var(--leo-spacing-l);
+  border-radius: var(--leo-radius-m);
+  cursor: pointer;
+  color: var(--leo-color-text-primary);
+}
+.model-menu leo-option:hover,
+.model-menu leo-option.active { background: var(--leo-color-container-highlight); }
+.model-menu leo-option:active {
+  background: var(--leo-color-container-interactive);
+  color: var(--leo-color-text-interactive);
+}
+.model-menu leo-option:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.model-menu leo-option[data-current='true'] .model-name { color: var(--leo-color-text-interactive); }
+.model-check {
+  width: 16px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  color: var(--leo-color-text-interactive);
+}
+.model-check leo-icon { --leo-icon-size: 16px; }
 .model-description { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
-.model-name { font-size: var(--leo-typography-small-regular-font-size); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.model-detail { font-size: var(--leo-typography-x-small-regular-font-size); color: var(--ink-dim); }
-.model-capabilities { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
-.model-capability { font-size: var(--leo-typography-x-small-regular-font-size); line-height: 14px; padding: 0 4px; border: 1px solid var(--line); border-radius: var(--leo-radius-xs); color: var(--ink-dim); }
-.model-default { font-size: var(--leo-typography-x-small-regular-font-size); color: var(--ink-dim); border: 1px solid var(--line); padding: 2px 5px; border-radius: var(--leo-radius-xs); }
-.model-status { font-size: var(--leo-typography-x-small-regular-font-size); color: var(--ink-dim); margin: 8px 0 0; }
-.model-footnote { font-size: var(--leo-typography-x-small-regular-font-size); color: var(--ink-dim); border-top: 1px solid var(--line); margin-top: 8px; padding-top: 8px; }
+.model-name { font: var(--leo-font-small-regular); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-detail { font: var(--leo-font-x-small-regular); color: var(--leo-color-text-tertiary); }
+.model-capabilities { display: flex; flex-wrap: wrap; gap: var(--leo-spacing-xs); margin-top: 3px; }
+.model-menu .model-capability,
+.model-menu .model-default { flex: none; }
+.model-status { font: var(--leo-font-x-small-regular); color: var(--leo-color-text-tertiary); margin: 0; padding: var(--leo-spacing-s) var(--leo-spacing-xl); }
+.model-footnote {
+  margin: 0;
+  padding: var(--leo-spacing-m) var(--leo-spacing-xl);
+  font: var(--leo-font-x-small-regular);
+  color: var(--leo-color-text-tertiary);
+}
 
 /* ---------------------------------------------------------------- context */
 
@@ -1507,6 +1542,29 @@ leo-collapse {
 .new-split .new { flex: 1; flex-grow: 1; }
 .new-split .new-recent { flex: none; flex-grow: 0; }
 
+/* Leo ButtonMenu owns the popup. These rows are the project name and the path under it. */
+.recent-menu leo-menu-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: min(380px, calc(100vw - 24px));
+  box-sizing: border-box;
+  overflow: hidden;
+}
+.recent-name { display: block; }
+.recent-path {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* `--mono` is a full font shorthand, so it has to be `font`, not `font-family`. */
+  font: var(--leo-font-monospace-default);
+  font-size: var(--leo-typography-x-small-regular-font-size);
+  color: var(--leo-color-text-tertiary);
+}
+.recent-menu leo-menu-item[aria-disabled='true'] { opacity: 0.45; cursor: default; }
+
 /* Opaque, not translucent. The window is already `vibrancy: 'sidebar'`, and a blurred panel
    over a blurred window blurs twice into something neither legible nor Mac-like.
 
@@ -1602,39 +1660,16 @@ leo-collapse {
 
 /* ---------------------------------------------------------------- export */
 
-/* Quiet, and beside Send rather than above it: exporting is something somebody does when a
-   conversation is finished, so it sits at the end of one. Bordered rather than filled,
-   because a surface with two accent-coloured buttons on it has no primary action. */
-.export-split { align-self: flex-end; }
-.export-open {
-  display: inline-flex;
-  /* The label and the chevron are centred against each other rather than sharing a
-     baseline: `⌄` is drawn low in its em box, so a baseline would sit it visibly below the
-     middle of the word beside it. */
+/* The trigger is a plain Leo button until the menu is open. The rows themselves are
+   ButtonMenu items; these only arrange the label, the extension, and the tool-calls tick. */
+.export-menu { margin-left: auto; flex-grow: 0; }
+.export-tools-row {
+  display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 9px 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: transparent;
-  color: var(--ink-dim);
-  font: inherit;
-  white-space: nowrap;
+  gap: var(--leo-spacing-m);
 }
-/* Centring the boxes is not enough on its own, and the target is not what it first looks
-   like either. `⌄` is drawn sitting on the baseline, so a centred box still reads low; and
-   "Export" carries a descender, which drags the *word's* box centre below the middle of the
-   letters somebody actually looks at. So the mark is aligned to the label's cap centre —
-   half its ascent above the baseline — rather than to its box. `line-height: 1` trims the
-   glyph's own box to its ink, and the nudge is the measured remainder. In em, so it holds
-   if the size changes. */
-.export-chevron {
-  font-size: var(--leo-typography-x-small-regular-font-size);
-  line-height: 1;
-  transform: translateY(-0.11em);
-}
-.export-open:hover:not(:disabled) { color: var(--ink); background: var(--code-bg); }
-.export-open:disabled { opacity: 0.4; cursor: default; }
+.export-tools-row leo-icon { --leo-icon-size: 18px; }
+.export-format { white-space: nowrap; }
 
 /* ---------------------------------------------------------------- theme picker
 
@@ -1798,8 +1833,11 @@ leo-collapse {
   gap: 12px;
 }
 .bot-form-identity .bot-field { min-width: 0; padding-bottom: 20px; }
-.bot-form-identity input { min-width: 0; width: 100%; box-sizing: border-box; }
-.bot-form-model .model-picker { align-self: stretch; max-width: none; }
+.bot-form-identity leo-input { min-width: 0; width: 100%; }
+.bot-form-model .model-picker { align-self: flex-start; width: max-content; max-width: 100%; flex: none; }
+.bot-form-model .model-trigger { width: auto; }
+/* The menu's minimum is the anchor. Keep the popup at its own width once the anchor shrinks. */
+.bot-form-model .model-menu { --model-menu-width: min(360px, calc(100vw - 48px)); width: max-content; max-width: min(360px, calc(100vw - 48px)); }
 
 .bot-form-avatar {
   position: relative;
@@ -1811,37 +1849,18 @@ leo-collapse {
   position: absolute;
   right: 0;
   bottom: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  flex: none;
+  flex-grow: 0;
   width: 24px;
   height: 24px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--leo-radius-s);
-  background: transparent;
-  color: var(--ink-dim);
-  opacity: .6;
-  cursor: pointer;
 }
-.bot-avatar-refresh:hover { color: var(--ink); opacity: 1; }
-.bot-avatar-refresh:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .bot-field { display: flex; flex-direction: column; gap: 4px; }
 .bot-field > span { font-size: var(--leo-typography-x-small-regular-font-size); color: var(--ink-dim); }
-.bot-field input, .bot-field textarea {
-  padding: 5px 8px;
-  border: 1px solid var(--line);
-  border-radius: var(--leo-radius-s);
-  background: var(--bg);
-  color: var(--ink);
-  font: inherit;
-  font-size: var(--leo-typography-small-regular-font-size);
-  resize: vertical;
-}
-.bot-field input:focus, .bot-field textarea:focus { outline: none; border-color: var(--accent); }
+.bot-field leo-input,
+.bot-field leo-textarea { width: 100%; min-width: 0; }
 
-.bot-choose, .bot-fixed {
+.bot-fixed {
   margin: 0;
   padding: 5px 8px;
   border: 1px dashed var(--line);
@@ -1855,7 +1874,8 @@ leo-collapse {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.bot-choose:hover { color: var(--ink); border-color: var(--accent); }
+.bot-choose { align-self: flex-start; width: auto; max-width: 100%; flex-grow: 0; }
+.bot-choose-label { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .bot-note { margin: 0; font-size: var(--leo-typography-x-small-regular-font-size); color: var(--ink-faint); line-height: 1.4; }
 .bot-note code { font-family: var(--mono); }
@@ -1879,18 +1899,9 @@ leo-collapse {
 
 .bot-actions { display: flex; align-items: center; gap: 6px; }
 .bot-spacer { flex: 1; }
-.bot-actions button {
-  padding: 5px 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--leo-radius-s);
-  background: transparent;
-  color: var(--ink-dim);
-  font: inherit;
-  font-size: var(--leo-typography-small-regular-font-size);
-}
-.bot-actions button:hover:not(:disabled) { color: var(--ink); border-color: var(--accent); }
-.bot-save[disabled] { opacity: 0.4; }
-.bot-save:not([disabled]) { border-color: var(--accent-quiet); color: var(--accent-quiet); }
+.bot-actions leo-button,
+.bot-overview-actions leo-button,
+.bot-overview-done { flex: none; flex-grow: 0; }
 
 /* The archive. (Not `.bot-archive-button`, which is the control in the *form* that puts a bot in
    here — two similar names for a place and for the door into it.)
@@ -2021,8 +2032,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .app.compact .entries { gap: 10px; padding: 16px 22px; }
 .app.compact .bubble { font-size: var(--leo-typography-components-tableheader-font-size); line-height: 1.5; }
 .conversation-toolbar { display: flex; flex-wrap: wrap; gap: 6px; padding: 5px 20px 10px; align-items: center; }
-.conversation-toolbar > button, .conversation-toolbar .export-open { min-height: 30px; padding: 4px 10px; background: transparent; border: 1px solid var(--line); border-radius: var(--leo-radius-s); font-size: var(--leo-typography-small-regular-font-size); }
-.conversation-toolbar .export-menu { margin-left: auto; }
+.conversation-toolbar > leo-button,
+.conversation-toolbar > leo-buttonmenu { flex-grow: 0; }
 .conversation-search { display: flex; align-items: center; gap: 6px; padding: 8px 20px; border-top: 1px solid var(--line); }
 .conversation-search input { flex: 1; min-width: 0; padding: 8px; border: 1px solid var(--line); border-radius: var(--leo-radius-s); color: var(--ink); background: var(--bg); }
 .conversation-search button { min-width: 28px; min-height: 30px; border: 1px solid var(--line); background: var(--bg); border-radius: var(--leo-radius-s); }
@@ -2114,7 +2125,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .context-link:hover { text-decoration: underline; }
 .files .approved .tag, .files .applying .tag { color: var(--warn); }
 .files .failed .tag { color: var(--removed); }
-.conversation-toolbar .export-split { margin-left: auto; }
 .code-block, .diff-review { border: 1px solid var(--line); border-radius: var(--leo-radius-m); overflow: hidden; margin: 12px 0; }
 .code-toolbar { display: flex; align-items: center; gap: 8px; padding: 7px 10px; background: var(--bubble-agent); border-bottom: 1px solid var(--line); font-size: var(--leo-typography-small-regular-font-size); }
 .code-toolbar > span { flex: 1; color: var(--ink-dim); }
@@ -2149,11 +2159,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .bot-open { background: var(--leo-color-container-background); }
 .session-row.current .session,
 .bot-open .bot-open-button { background: transparent; color: var(--ink); }
-.session-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; font-size: var(--leo-typography-x-small-regular-font-size); }
-.session-badges leo-label {
-  --leo-label-padding: 1px 6px;
-  --leo-label-font: var(--leo-font-x-small-regular);
-}
+.session-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
 
 .file-search-scope { display: flex; margin: 10px 0 8px; gap: 4px; }
 .file-search-scope button, .preview-actions button { padding: 6px 8px; border: 1px solid var(--line); background: var(--bg); border-radius: var(--leo-radius-s); font-size: var(--leo-typography-small-regular-font-size); }
@@ -2173,16 +2179,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .bot-editor .bot-form { margin: 0; padding: 0; border: 0; background: transparent; }
 .bot-editor .bot-field { margin-top: 18px; }
 .bot-editor .bot-field > span { font-size: var(--leo-typography-components-tableheader-font-size); font-weight: 600; }
-.bot-editor .bot-field input, .bot-editor .bot-field textarea { font-size: var(--leo-typography-default-regular-font-size); padding: 10px 12px; }
 .bot-editor .bot-fixed { white-space: normal; overflow-wrap: anywhere; }
-.bot-editor button, .bot-overview button { min-height: 32px; border: 1px solid var(--line); border-radius: var(--leo-radius-s); padding: 6px 12px; background: var(--bg); }
-.bot-overview .primary { background: var(--accent); }
 .bot-overview-title { display: flex; gap: 16px; align-items: center; }
 .bot-overview-title h2 { margin: 0; }
 .bot-overview-title p { margin: 4px 0; font-size: var(--leo-typography-small-regular-font-size); color: var(--ink-dim); overflow-wrap: anywhere; }
 .bot-overview h3 { font-size: var(--leo-typography-components-tableheader-font-size); margin-top: 24px; }
 .bot-overview-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
-.bot-history-search { width: 100%; margin-bottom: 10px; padding: 9px 12px; border: 1px solid var(--line); border-radius: var(--leo-radius-s); background: var(--bg); color: var(--ink); }
+.bot-history-search { width: 100%; margin-bottom: 10px; }
 .bot-conversations { display: grid; gap: 6px; margin-bottom: 20px; max-height: 300px; overflow-y: auto; }
 .bot-conversations button, .bot-history-unavailable { display: grid; gap: 4px; text-align: left; padding: 10px 12px; }
 .bot-conversations strong { font-size: var(--leo-typography-components-tableheader-font-size); overflow-wrap: anywhere; }
@@ -2278,7 +2281,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
   .audit-close { min-width: 44px; }
 }
 .modal button:disabled { opacity: .5; }
-.modal .bot-save, .modal button.primary { background: var(--accent); color: var(--accent-ink); }
 
 .diff .line-number { width: 3.5em; flex: 0 0 3.5em; text-align: right; padding-right: .7em; color: var(--ink-dim); user-select: none; font-variant-numeric: tabular-nums; }
 
@@ -2299,10 +2301,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 
 .diff { font-size: var(--leo-typography-components-tableheader-font-size); line-height: 1.65; }
 
-.modal .bot-avatar-refresh { padding: 0; width: 32px; height: 32px; display: grid; place-items: center; }
+.modal .bot-avatar-refresh { width: 32px; height: 32px; }
 .memory-readable h1, .memory-readable h2, .memory-readable h3 { font-size: var(--leo-typography-large-regular-font-size); line-height: 1.4; margin: 0 0 12px; }
 .memory-readable ul, .memory-readable ol { padding-left: 22px; }
-.bot-editor .bot-actions { position: sticky; bottom: -28px; background: var(--bg); padding-block: 12px; z-index: 2; }
+.bot-editor .bot-actions { background: transparent; padding-block: 12px; }
 
 /* About: a small stage for the app's own mascot. */
 .modal.about { position: relative; width: min(440px, calc(100vw - 32px)); padding: 30px 28px 22px; animation: about-arrive 220ms ease-out; }

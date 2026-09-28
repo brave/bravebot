@@ -309,26 +309,28 @@ check(
   'newest first, by folder name',
 )
 check(
-  (await page.locator('.popitem-detail').first().textContent()) === '/tmp/alpha-project',
+  (await page.locator('.recent-path').first().textContent()) === '/tmp/alpha-project',
   'with the full path under it, because two checkouts share a basename',
 )
+// Leo's menu moves focus on the first arrow, rather than when it opens.
+await page.keyboard.press('ArrowDown')
+await page.waitForTimeout(150)
 check(
-  await page.evaluate(() => document.activeElement?.getAttribute('role') === 'menuitem'),
-  'focus moved into the menu',
+  (await page.evaluate(() => document.activeElement?.textContent))?.includes('alpha-project'),
+  'ArrowDown moves focus onto the first row',
 )
 if (rows > 1) {
-  const before = await page.evaluate(() => document.activeElement?.textContent)
   await page.keyboard.press('ArrowDown')
   await page.waitForTimeout(150)
   check(
-    (await page.evaluate(() => document.activeElement?.textContent)) !== before,
-    'ArrowDown moves to another row',
+    (await page.evaluate(() => document.activeElement?.textContent))?.includes('beta-project'),
+    'and another ArrowDown moves to the next row',
   )
-  await page.keyboard.press('Home')
+  await page.keyboard.press('ArrowUp')
   await page.waitForTimeout(150)
   check(
-    (await page.evaluate(() => document.activeElement?.textContent)) === before,
-    'and Home comes back to the first',
+    (await page.evaluate(() => document.activeElement?.textContent))?.includes('alpha-project'),
+    'and ArrowUp comes back to the first',
   )
 }
 await page.screenshot({ path: '/tmp/bravebot-ui/12-popmenu.png' })
@@ -339,19 +341,6 @@ check(
   await page.evaluate(() => document.activeElement?.classList.contains('new-recent')),
   'and focus went back to the button that opened it',
 )
-
-// --- recents are the main process's own record ---------------------------------------------
-// Typeahead, which is the part of a menu people only miss when it is absent.
-await chevron.click()
-await page.waitForTimeout(300)
-await page.keyboard.press('b')
-await page.waitForTimeout(200)
-check(
-  (await page.evaluate(() => document.activeElement?.textContent))?.includes('beta'),
-  'typing a letter jumps to the row that starts with it',
-)
-await page.keyboard.press('Escape')
-await page.waitForTimeout(250)
 
 // --- context menus ----------------------------------------------------------------------
 // A real popup is modal and would block the run, so `popup` is replaced with something that

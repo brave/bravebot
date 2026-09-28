@@ -1,15 +1,15 @@
 import { SidebarTools } from './SidebarTools'
-import { createContext, useContext, useCallback, useMemo, useRef, useState } from 'react'
+import { createContext, useContext, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SessionSummary } from '../../shared/protocol'
 import type { ContextTarget } from '../../shared/commands'
 import { keyOf } from '../../shared/forks'
 import { projectLabel } from '../../shared/recents'
 import { Fold } from './Fold'
 import { ForkIcon } from './ForkIcon'
-import { PopMenu, type PopItem } from './PopMenu'
+import { PopMenu } from './PopMenu'
 import { conversationKey } from '../../shared/experience'
 import { useExperience, setConversation } from '../experience'
-import { Button, Icon, Label, TabItem, Tabs } from '../nala'
+import { Button, ButtonMenu, Icon, Label, TabItem, Tabs } from '../nala'
 export const SessionInfo = createContext<Record<string, { bot?: string; state?: string }>>({})
 
 interface Props {
@@ -113,7 +113,7 @@ export function Sessions({
               tooltip — the same disclosure discipline the column folds follow. A control
               that renamed itself would be one the reader has to re-find after every press. */}
           <Button
-            kind="outline"
+            kind="plain"
             size="small"
             fab
             className="session-group"
@@ -291,11 +291,10 @@ function Session({
       </span>
       <span className="session-where">{session.project}{session.branch && <span className="branch"> · {session.branch}</span>} · {ago(session.updated)}</span>
       {(info?.bot || info?.state) && <span className="session-badges">
-        {info.bot && <Label color="secondary" mode="outline">{info.bot}</Label>}
+        {info.bot && <Label color="secondary">{info.bot}</Label>}
         {info.state && <Label
           className={`session-state ${info.state.toLowerCase().replaceAll(' ', '-')}`}
           color={info.state.toLowerCase().includes('fail') ? 'red' : info.state.toLowerCase().includes('need') || info.state.toLowerCase().includes('work') ? 'yellow' : info.state.toLowerCase().includes('complete') ? 'green' : 'neutral'}
-          mode="outline"
         >{info.state}</Label>}
       </span>}
     </button>
@@ -317,55 +316,96 @@ function Session({
 function NewSession({ onNew }: { onNew: (directory?: string) => void }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [directories, setDirectories] = useState<string[]>([])
-  const chevron = useRef<HTMLElement>(null)
+  const menu = useRef<HTMLElement>(null)
+  // A load that returns after the menu was shut must not open it again.
+  const opening = useRef(0)
 
   // Read when the menu is opened rather than held and kept in step: the list changes in the
   // main process, and a copy up here would be one more thing that can be stale.
   const show = useCallback(() => {
+    const ticket = ++opening.current
     void window.bravebot.readRecents().then((found) => {
+      if (ticket !== opening.current) return
       setDirectories(found)
       setOpen(true)
     })
   }, [])
 
-  const items: PopItem[] = directories.length
-    ? directories.map((directory) => ({
-        id: directory,
-        label: projectLabel(directory),
-        // Two checkouts of one project share a basename, and picking the wrong one is a
-        // mistake nothing later would announce.
-        detail: directory,
-      }))
-    : [{ id: 'none', label: 'No projects opened yet', enabled: false }]
+  // The column clips overflow so a fold can slide under it. This menu has to paint past that
+  // edge, over the transcript, for as long as it is open.
+  useEffect(() => {
+    const column = menu.current?.closest('.sessions')
+    column?.classList.toggle('recents-open', open)
+    menu.current?.setAttribute('aria-expanded', String(open))
+    return () => column?.classList.remove('recents-open')
+  }, [open])
+
+  const choose = useCallback((event: Event) => {
+    const item = event.composedPath().find(
+      (node): node is HTMLElement => node instanceof HTMLElement && node.tagName === 'LEO-MENU-ITEM',
+    )
+    const directory = item?.dataset.directory
+    if (directory) onNew(directory)
+  }, [onNew])
+
+  useEffect(() => {
+    const host = menu.current
+    if (!host) return
+    host.addEventListener('click', choose)
+    return () => host.removeEventListener('click', choose)
+  }, [choose])
+
+  const shut = (detail: { reason: string }): void => {
+    if (detail.reason === 'cancel' || detail.reason === 'select') {
+      menu.current?.shadowRoot?.querySelector<HTMLElement>('[role="button"]')?.focus()
+    }
+  }
 
   return (
     <div className="new-split">
-      <Button kind="outline" size="small" className="new" onClick={() => onNew()} title="Open a project" data-test="new-session">
+      <Button kind="plain" size="small" className="new" onClick={() => onNew()} title="Open a project" data-test="new-session">
         <Icon name="plus-add" slot="icon-before" />
         New session
       </Button>
-      <Button
-        ref={chevron}
-        kind="outline"
-        size="small"
-        fab
-        className="new-recent"
+      <ButtonMenu
+        ref={menu}
+        className="new-recent recent-menu"
+        isOpen={open}
+        positionStrategy="fixed"
         aria-haspopup="menu"
-        aria-expanded={open}
         aria-label="Projects opened before"
-        title="Projects opened before"
-        onClick={() => (open ? setOpen(false) : show())}
+        onChange={({ isOpen: next }) => {
+          if (next) show()
+          else {
+            opening.current += 1
+            setOpen(false)
+          }
+        }}
+        onClose={shut}
       >
-        <Icon name="carat-down" slot="icon-before" />
-      </Button>
-      <PopMenu
-        open={open}
-        anchor={chevron}
-        items={items}
-        label="Projects opened before"
-        onChoose={(id) => onNew(id)}
-        onClose={() => setOpen(false)}
-      />
+        <Button
+          slot="anchor-content"
+          kind="plain"
+          size="small"
+          fab
+          aria-label="Projects opened before"
+          title="Projects opened before"
+        >
+          <Icon name="carat-down" slot="icon-before" />
+        </Button>
+        {directories.length === 0 ? (
+          <leo-menu-item aria-disabled="true">No projects opened yet</leo-menu-item>
+        ) : (
+          directories.map((directory) => (
+            <leo-menu-item key={directory} data-directory={directory}>
+              <span className="recent-name">{projectLabel(directory)}</span>
+              {/* Two checkouts of one project share a basename, and picking the wrong one is a
+                  mistake nothing later would announce. */}
+              <span className="recent-path">{directory}</span>
+            </leo-menu-item>
+          ))
+        )}
+      </ButtonMenu>
     </div>
   )
 }

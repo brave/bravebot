@@ -4,7 +4,7 @@ import { Modal } from './Modal'
 import { botHistory } from '../../shared/bot-history'
 import { useExperience } from '../experience'
 import type { SessionSummary } from '../../shared/protocol'
-import { Button, Icon } from '../nala'
+import { Button, Icon, Input, TextArea } from '../nala'
 /**
  * The other list in the left column: the bots somebody has defined.
  *
@@ -23,7 +23,7 @@ import { Button, Icon } from '../nala'
  * something that takes one sentence to say.
  */
 
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { activeBots, retiredBots, type Bot } from '../../shared/bots'
 import { newAvatarSeed } from '../../shared/avatar'
 import { projectLabel } from '../../shared/recents'
@@ -65,10 +65,19 @@ export function Bots({
   const [overviewSlug, setOverviewSlug] = useState<string | null>(null)
   const overview = bots.find(bot => bot.slug === overviewSlug) ?? null
   const [historyQuery, setHistoryQuery] = useState('')
+  const historySearch = useRef<HTMLElement>(null)
   const preferences = useExperience()
   const history = overview ? botHistory(overview, sessions, preferences) : []
   const filteredHistory = history.filter(row => `${row.session?.title ?? ''} ${row.id}`.toLowerCase().includes(historyQuery.toLowerCase()))
   const setOverview = (bot: Bot | null) => { setOverviewSlug(bot?.slug ?? null); setHistoryQuery('') }
+  // Leo's React wrapper assigns `aria-label` as a property on the host. The field
+  // Playwright and assistive tech read is the input inside the shadow tree.
+  useEffect(() => {
+    const apply = () => historySearch.current?.shadowRoot?.querySelector('input')?.setAttribute('aria-label', 'Search bot conversations')
+    apply()
+    const timer = window.setTimeout(apply, 0)
+    return () => window.clearTimeout(timer)
+  })
   const [editing, setEditing] = useState<string | null>(null)
   // Whether the archive is open. Local for the same reason, and closed to begin with: the archive
   // is where things go to stop being in the way, and one that opened itself every launch would be
@@ -86,7 +95,7 @@ export function Bots({
       <header className="sessions-head">
         {/* The same control the session list's own opens with, so the two tabs begin the same
             way. No split beside it: a bot's folder is asked for once, in the form. */}
-        <SidebarTools query={query} onQuery={setQuery} label="Search bots" action={<Button kind="outline" size="small" className="new" onClick={() => setEditing('new')}>
+        <SidebarTools query={query} onQuery={setQuery} label="Search bots" action={<Button kind="plain" size="small" className="new" onClick={() => setEditing('new')}>
           <Icon name="plus-add" slot="icon-before" />
           New bot
         </Button>} />
@@ -112,7 +121,6 @@ export function Bots({
           doing={bot.slug === openSlug ? openDoing : bot.session === null ? 'waiting' : 'idle'}
           onOpen={() => setOverview(bot)} onEdit={() => setEditing(bot.slug)} />)}
         {editing && <Modal title={editing === 'new' ? 'Create bot' : 'Edit bot'} onClose={() => setEditing(null)} className="bot-editor">
-          <h2>{editing === 'new' ? 'Create a bot' : 'Edit bot'}</h2>
           <BotForm bot={bots.find((bot) => bot.slug === editing)} onCancel={() => setEditing(null)}
             onSave={async (next) => { const saved = await onSave(next); if (saved) setEditing(null); return saved }}
             onArchive={editing === 'new' ? undefined : () => { onRetire(editing, true); setEditing(null) }} />
@@ -122,12 +130,13 @@ export function Bots({
           <h3>Purpose</h3><p>{overview.purpose}</p>
           <p className="bot-note">This bot carries its purpose and saved memory into each conversation. Conversation history belongs to individual tasks.</p>
           <div className="bot-overview-actions">
-            <button className="primary" onClick={() => { onNewConversation(overview); setOverview(null) }}>New conversation</button>
-            <button onClick={() => { setEditing(overview.slug); setOverview(null) }}>Edit bot and memory</button>
+            <Button kind="filled" size="small" onClick={() => { onNewConversation(overview); setOverview(null) }}>New conversation</Button>
+            <Button kind="outline" size="small" onClick={() => { setEditing(overview.slug); setOverview(null) }}>Edit bot and memory</Button>
           </div>
           <h3>Conversation history ({history.length})</h3>
           <p className="bot-note">All conversations for this bot, including archived conversations and drafts. Starting a new conversation keeps the earlier ones here.</p>
-          {history.length > 0 && <input className="bot-history-search" type="search" aria-label="Search bot conversations" placeholder="Search conversations…" value={historyQuery} onChange={event => setHistoryQuery(event.target.value)} />}
+          {history.length > 0 && <Input ref={historySearch} className="bot-history-search" type="search" placeholder="Search conversations…" value={historyQuery}
+            onInput={({ value }) => setHistoryQuery(value)} onChange={({ value }) => setHistoryQuery(value)} />}
           <div className="bot-conversations" aria-label="Bot conversation history">
             {filteredHistory.map(({ id, session, archived }) => session ?
               <button key={id} onClick={() => { onConversation(overview, session); setOverview(null) }}>
@@ -136,7 +145,7 @@ export function Bots({
             {history.length === 0 && <p>No conversations yet.</p>}
             {history.length > 0 && filteredHistory.length === 0 && <p>No conversations match “{historyQuery}”.</p>}
           </div>
-          <button onClick={() => setOverview(null)}>Done</button>
+          <Button kind="outline" size="small" className="bot-overview-done" onClick={() => setOverview(null)}>Done</Button>
         </Modal>}
       </div>
 
@@ -375,6 +384,47 @@ function BotForm({
 
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
+  const formRef = useRef<HTMLFormElement>(null)
+  const nameField = useRef<HTMLElement>(null)
+  const purposeField = useRef<HTMLElement>(null)
+  // The host does not forward `type` or `aria-label` into the shadow control.
+  // Name and Purpose keep their visible captions; the inner fields need the
+  // same names so labels and the drive tests still find them.
+  useEffect(() => {
+    // Leo rebuilds a button's shadow tree when its slot changes, which drops
+    // `type` and `aria-label` set during the commit. Apply again after that.
+    let frame = 0
+    let timer = 0
+    const apply = () => {
+      nameField.current?.shadowRoot?.querySelector('input')?.setAttribute('aria-label', 'Name')
+      purposeField.current?.shadowRoot?.querySelector('textarea')?.setAttribute('aria-label', 'Purpose')
+      formRef.current?.querySelectorAll('leo-button').forEach((host) => {
+        const button = host.shadowRoot?.querySelector('button')
+        if (!button) return
+        button.type = host.classList.contains('bot-save') ? 'submit' : 'button'
+        if (host.classList.contains('bot-avatar-refresh')) button.setAttribute('aria-label', 'Refresh avatar')
+      })
+    }
+    apply()
+    frame = requestAnimationFrame(apply)
+    timer = window.setTimeout(apply, 0)
+    return () => {
+      cancelAnimationFrame(frame)
+      window.clearTimeout(timer)
+    }
+  })
+  const onEscape = ({ innerEvent }: { innerEvent: Event }) => {
+    if ((innerEvent as KeyboardEvent).key === 'Escape') onCancel()
+  }
+  // The save control lives in Leo's shadow tree, so the browser does not treat
+  // it as this form's submit button. Enter in the name field and the button's
+  // own click ask the form to submit.
+  const submitForm = () => formRef.current?.requestSubmit()
+  const onNameKey = ({ innerEvent }: { innerEvent: Event }) => {
+    const key = (innerEvent as KeyboardEvent).key
+    if (key === 'Escape') onCancel()
+    if (key === 'Enter') { innerEvent.preventDefault(); submitForm() }
+  }
   const save = async (value: Parameters<typeof onSave>[0]) => {
     if (saving) return
     setSaving(true); setSaveError('')
@@ -388,9 +438,16 @@ function BotForm({
 
   return (
     <form
+      ref={formRef}
       className="bot-form"
       onSubmit={(event) => {
         event.preventDefault()
+        const submitter = (event.nativeEvent as SubmitEvent).submitter
+        if (submitter) {
+          const root = submitter.getRootNode()
+          const host = root instanceof ShadowRoot ? root.host : submitter
+          if (!host.classList.contains('bot-save')) return
+        }
         if (ready) {
           void save({ slug: bot?.slug, avatar: bot ? undefined : avatar, model, name: name.trim(), purpose: purpose.trim(), directory })
         }
@@ -400,38 +457,45 @@ function BotForm({
         {!bot && (
           <div className="bot-form-avatar">
             <BotAvatar seed={avatar} size={76} doing="waiting" />
-            <button
-              type="button"
+            <Button
+              kind="plain-faint"
+              size="tiny"
+              fab
               className="bot-avatar-refresh"
-              aria-label="Refresh avatar"
               title="Try a new avatar appearance"
               onClick={() => setAvatar(newAvatarSeed(crypto.randomUUID()))}
             >
-              <Icon name="refresh" style={{ '--leo-icon-size': '12px' } as React.CSSProperties} />
-            </button>
+              <Icon name="refresh" slot="icon-before" style={{ '--leo-icon-size': '12px' } as React.CSSProperties} />
+            </Button>
           </div>
         )}
 
         <label className="bot-field">
           <span>Name</span>
-          <input
+          <Input
+            ref={nameField}
+            autofocus
             value={name}
-            autoFocus
             placeholder="Web dev bot"
-            onChange={(event) => setName(event.target.value)}
-            onKeyDown={(event) => event.key === 'Escape' && onCancel()}
+            onInput={({ value }) => setName(value)}
+            onChange={({ value }) => setName(value)}
+            onKeyDown={onNameKey}
           />
         </label>
       </div>
 
       <label className="bot-field">
         <span>Purpose</span>
-        <textarea
+        <TextArea
+          ref={purposeField}
           value={purpose}
-          rows={4}
+          minRows={4}
+          maxRows={12}
+          resizeable
           placeholder="Build responsive pages, fix UI bugs, and improve accessibility. Follow the project’s existing styles and test your changes."
-          onChange={(event) => setPurpose(event.target.value)}
-          onKeyDown={(event) => event.key === 'Escape' && onCancel()}
+          onInput={({ value }) => setPurpose(value)}
+          onChange={({ value }) => setPurpose(value)}
+          onKeyDown={onEscape}
         />
       </label>
 
@@ -445,11 +509,11 @@ function BotForm({
         {bot ? (
           <div><p className="bot-fixed" title={bot.directory}>{bot.directory}</p>
           <p className="bot-note">The project stays fixed to keep this bot’s memory and conversations together.</p>
-          <button type="button" onClick={() => { void window.bravebot.chooseDirectory().then((folder) => { if (folder) void save({ name: `${name} copy`, purpose, model, directory: folder }) }) }}>Duplicate into another project</button></div>
+          <Button kind="outline" size="small" onClick={() => { void window.bravebot.chooseDirectory().then((folder) => { if (folder) void save({ name: `${name} copy`, purpose, model, directory: folder }) }) }}>Duplicate into another project</Button></div>
         ) : (
-          <button type="button" className="bot-choose" onClick={() => void choose()}>
-            {directory || 'Choose a folder…'}
-          </button>
+          <Button kind="plain" size="medium" className="bot-choose" title={directory || undefined} onClick={() => void choose()}>
+            <span className="bot-choose-label">{directory || 'Choose a folder…'}</span>
+          </Button>
         )}
       </div>
 
@@ -467,8 +531,9 @@ function BotForm({
       {saveError && <p role="alert">{saveError}</p>}
       <div className="bot-actions">
         {onArchive && (
-          <button
-            type="button"
+          <Button
+            kind="outline"
+            size="medium"
             className="bot-archive-button"
             // The one thing worth saying about a bot leaving the list is what it does *not* do,
             // since a row disappearing looks like everything about it disappearing. It used to
@@ -480,15 +545,15 @@ function BotForm({
             onClick={onArchive}
           >
             Archive
-          </button>
+          </Button>
         )}
         <span className="bot-spacer" />
-        <button type="button" onClick={onCancel}>
+        <Button kind="outline" size="medium" onClick={onCancel}>
           Cancel
-        </button>
-        <button type="submit" className="bot-save" disabled={!ready || saving}>
+        </Button>
+        <Button kind="filled" size="medium" type="submit" className="bot-save" isDisabled={!ready || saving} onClick={submitForm}>
           {saving ? 'Saving…' : bot ? 'Save' : 'Create'}
-        </button>
+        </Button>
       </div>
     </form>
   )

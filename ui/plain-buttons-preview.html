@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <link rel="stylesheet" href="/node_modules/@brave/leo/tokens/css/variables.css" />
+  <link rel="stylesheet" href="/src/renderer/styles.css" />
+  <style>
+    body { margin: 0; background: var(--leo-color-page-background); }
+    .col { width: 280px; --col-left-open: 280px; padding: 24px 0; }
+  </style>
+</head>
+<body>
+  <aside class="sessions col">
+    <header class="sessions-head">
+      <div class="sidebar-actions">
+        <div class="sidebar-create">
+          <div class="new-split">
+            <leo-button kind="plain" size="small" class="new" id="new-session">
+              <leo-icon name="plus-add" slot="icon-before"></leo-icon>
+              New session
+            </leo-button>
+            <leo-button kind="plain" size="small" fab class="new-recent" id="recent" aria-label="Projects opened before">
+              <leo-icon name="carat-down" slot="icon-before"></leo-icon>
+            </leo-button>
+          </div>
+        </div>
+        <leo-button kind="plain" size="small" fab class="sidebar-search-toggle" id="search" aria-label="Filter sessions">
+          <leo-icon name="search" slot="icon-before"></leo-icon>
+        </leo-button>
+        <leo-button kind="plain" size="small" fab class="session-group" id="group" aria-label="Group by project">
+          <leo-icon name="list" slot="icon-before"></leo-icon>
+        </leo-button>
+      </div>
+    </header>
+    <leo-button kind="plain" size="small" class="agent-settings-open" id="settings">Agent settings</leo-button>
+  </aside>
+  <script type="module">
+    import { setIconBasePath } from '/node_modules/@brave/leo/web-components/icon.js'
+    setIconBasePath('/node_modules/@brave/leo/icons')
+    await import('/node_modules/@brave/leo/web-components/button.js')
+    await import('/node_modules/@brave/leo/web-components/icon.js')
+  </script>
+</body>
+</html>
