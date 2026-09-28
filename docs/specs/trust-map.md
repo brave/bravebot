@@ -330,13 +330,13 @@ where the preview would be.
 
 What does decide it is the path, and the question is put only where the path names a file. Never a
 picture, because what a yes grants is that a file's text may be read and a picture's text is never
-read whatever the map says. [VET-4](tools/vet-content.md#VET-4), which nothing builds yet, would
-let one picture reach the planner through an endorsement of one slot, which is not a yes here and
-writes nothing in the map. Never a directory or a path that names nothing either: a yes writes a
-rule covering everything beneath the name it was given, so a prompt titled with one file would hand
-over the trust half of what [`/add-dir`](#TRUST-9) grants, every file beneath the name at once, over
-a string the planner chose rather than one a person typed. Reach it would not grant, which is the
-only part of that gesture this could not have imitated.
+read whatever the map says. [VET-4](tools/vet-content.md#VET-4) lets one picture reach the planner
+through an endorsement of one slot, which is not a yes here and writes nothing in the map. Never a
+directory or a path that names nothing either: a yes writes a rule covering everything beneath the
+name it was given, so a prompt titled with one file would hand over the trust half of what
+[`/add-dir`](#TRUST-9) grants, every file beneath the name at once, over a string the planner chose
+rather than one a person typed. Reach it would not grant, which is the only part of that gesture
+this could not have imitated.
 
 A confined check reads the file before the question is drawn, and the word it gave is on the screen
 with the preview. It reads **the whole file** and not the preview, because a yes grants the whole

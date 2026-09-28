@@ -78,13 +78,13 @@ resolve its path differently.
 `verified-by: bravebot_agent::workspace::an_attachment_inside_an_added_directory_is_readable`
 
 <a id="READ-5"></a>
-### READ-5: a picture is quarantined whatever the trust map says, and only a processor looks at it
+### READ-5: a picture is quarantined whatever the trust map says, and leaves quarantine only through `vet_content`
 
 A file whose extension names a picture or a PDF is read as bytes, encoded into a `data:` URI, and
-handed back as a reference. The planner is never shown one, and a vouched-for directory does not
-change that: what the trust map answers is whether a file's **text** may be read, and a picture has
-none. Nothing offers to vouch for one either, because a yes would grant the reading of text there
-is none of.
+handed back as a reference. The planner is shown one only where `vet_content` let it through, and a
+vouched-for directory does not change that: what the trust map answers is whether a file's **text**
+may be read, and a picture has none. Nothing offers to vouch for one either, because a yes would
+grant the reading of text there is none of.
 
 The reference says what kind of thing it is rather than how many lines it has, because a line count
 over base64 describes nothing a reader can act on. Given to `spawn_processor`, it reaches the
@@ -92,26 +92,19 @@ processor as a picture in its own part of the request, so the model looks at it 
 base64 as words. The answer is quarantined like any other processor's, per
 [PROC-5](../processors.md#PROC-5).
 
-**Why the trust map does not decide this.** A screenshot carries whatever words are in it, and a
-picture reaching a planner's context is exactly what [PASTE-2](../pasting.md#PASTE-2) restricts to
-pictures a person put there themselves. That clause names the case directly: never an image a path
-in model output named. This is that path, so the picture goes where untrusted content goes, and the
-one component that may read untrusted content is the one that looks at it.
+**Why the trust map does not decide this.** A screenshot carries whatever words are in it, so a
+picture reaches a planner's context in two ways and no others: a person put it there, pasted or
+dropped, which is [PASTE-2](../pasting.md#PASTE-2)'s, or an endorsement of one read let it through
+after a check had looked at it. The paste clause names this case directly: never an image a path in model
+output named. This is that path, so the picture goes where untrusted content goes, and until an
+endorsement says otherwise the one component that looks at it is one that may read untrusted
+content.
 
-**A way out through `vet_content` is specified for one picture, and is not built.**
-[VET-4](vet-content.md#VET-4) gives the planner one picture it read, once, where a check looked at
-it and a person shown its path said yes, or where auto-vetting took the check's safe verdict as the
-answer. Until something builds it, the planner is shown no picture a tool read, and this clause is
-the whole of what happens to one. Built, three things here change. The title ends "and leaves
-quarantine only through `vet_content`" rather than "and only a processor looks at it". "The planner
-is never shown one" becomes "The planner is shown one only where `vet_content` let it through". And
-the reason above no longer reads [PASTE-2](../pasting.md#PASTE-2) as the only way a picture reaches
-a planner, nor a processor as the only thing that looks at one: a picture a person put there,
-pasted or dropped, is one way, and an endorsement of one read is the other, after a check has
-looked at it. The rest stands. The trust map decides nothing about a picture, nothing offers to
-vouch for one, and the read quarantines it. Unlike a promotion of text, a run bypassing permissions
-with no screening asked for does not promote a picture, and it does not pass through the gate a
-paste does.
+**The way out is `vet_content`.** [VET-4](vet-content.md#VET-4) gives the planner one picture it
+read, once: where a check looked at it and a person handed a copy of it said yes, where auto-vetting
+took the check's safe verdict as the answer, or where a run bypassing permissions answered for them
+as it answers for text. It never passes through the gate a paste does, and the trust map, the vouch
+offer and the read are untouched by it.
 
 **The media type is the driver's.** From a closed table of extensions, shared with the one a drop
 uses, never sniffed from the bytes. It ends up in the `data:` URI where it is routing, so deciding
@@ -122,6 +115,7 @@ either way the extension is what was decided from, and it is part of a path a pe
 `verified-by: bravebot_agent::turn::a_picture_is_never_shown_to_the_planner`
 `verified-by: bravebot_agent::turn::a_picture_is_not_offered_for_vouching`
 `verified-by: bravebot_agent::turn::a_processor_is_given_a_picture_as_a_picture`
+`verified-by: bravebot_agent::turn::a_picture_a_person_opens_and_lets_through_is_attached_after_the_results`
 `verified-by: bravebot_agent::workspace::the_media_type_comes_from_the_extension`
 `verified-by: bravebot_agent::workspace::a_file_that_names_no_picture_is_not_one`
 

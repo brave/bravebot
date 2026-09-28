@@ -67,6 +67,18 @@ pub enum Composed {
     /// reason. The agent's own two tags stay the agent's: see `wire::composed` in
     /// `bravebot-ui-bridge` for the word a request may carry and the ones it may not.
     Consolidation,
+    /// A picture or a PDF `vet_content` let through, attached for the planner after the round's
+    /// results (VET-4).
+    ///
+    /// The fields are the driver's: the reference is a counter's name and the media type comes
+    /// from its table of extensions. Neither is anything the file said, so a surface may draw a
+    /// row of its own from them.
+    Vetted {
+        /// The reference the file was promoted out of.
+        reference: String,
+        /// Its media type.
+        media: String,
+    },
 }
 
 /// One message as the record holds it: what was sent, and why the agent wrote it.

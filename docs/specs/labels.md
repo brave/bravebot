@@ -18,7 +18,7 @@ guards:
       - crates/agent/tests/workspace.rs: 30
       - crates/aichat/src/lib.rs: 4
       - crates/bedrock/src/lib.rs: 5
-      - crates/core/src/policy.rs: 98
+      - crates/core/src/policy.rs: 100
       - crates/core/src/slot.rs: 5
       - crates/core/src/value.rs: 7
       - crates/mcp/src/http.rs: 2
@@ -32,14 +32,14 @@ guards:
       - crates/agent/src/manifest.rs: 5
       - crates/agent/src/mcp.rs: 2
       - crates/agent/src/processor.rs: 1
-      - crates/agent/src/tools.rs: 32
+      - crates/agent/src/tools.rs: 33
       - crates/agent/src/turn.rs: 4
-      - crates/agent/src/vet.rs: 1
+      - crates/agent/src/vet.rs: 2
       - crates/agent/src/workspace.rs: 1
       - crates/agent/tests/workspace.rs: 44
       - crates/aichat/tests/client.rs: 2
       - crates/bedrock/src/lib.rs: 1
-      - crates/core/src/policy.rs: 55
+      - crates/core/src/policy.rs: 59
       - crates/core/src/value.rs: 1
       - crates/mcp/tests/http.rs: 2
       - crates/mcp/tests/stdio.rs: 4
@@ -51,7 +51,7 @@ guards:
       - crates/agent/src/manifest.rs: 10
       - crates/agent/src/preamble.rs: 1
       - crates/agent/src/skills.rs: 3
-      - crates/agent/src/tools.rs: 16
+      - crates/agent/src/tools.rs: 17
       - crates/agent/src/turn.rs: 5
       - crates/agent/src/workspace.rs: 9
       - crates/tui/tests/sessions.rs: 4
@@ -66,7 +66,7 @@ guards:
       - crates/core/src/value.rs: 4
   - symbol: Declassification::authorise
     sites:
-      - crates/core/src/policy.rs: 52
+      - crates/core/src/policy.rs: 56
   - symbol: SlotStore::path_of
     sites:
       - crates/core/src/policy.rs: 5
@@ -96,7 +96,7 @@ guards:
       - crates/core/src/policy.rs: 1
   - symbol: VettingSpec::where_it_came_from
     sites:
-      - crates/core/src/policy.rs: 4
+      - crates/core/src/policy.rs: 5
       - crates/core/src/vetting.rs: 1
   - symbol: Policy::present
     sites:
@@ -111,7 +111,7 @@ guards:
       - crates/agent/src/manifest.rs: 7
       - crates/agent/src/mcp.rs: 1
       - crates/agent/src/skills.rs: 2
-      - crates/agent/src/tools.rs: 24
+      - crates/agent/src/tools.rs: 25
       - crates/agent/src/turn.rs: 1
       - crates/core/src/policy.rs: 6
   - symbol: Policy::render_pair_in_place
@@ -328,8 +328,8 @@ an HTTP body, a human's screen, or the standard input of a program a person endo
 putting content in front of the planner, one for reshaping it for display, and one for reading
 trusted content. A declassification anywhere else is almost certainly a violation.
 
-The copy of a picture [VET-4](tools/vet-content.md#VET-4) specifies, which nothing writes yet,
-would be one more filesystem write on this list, at a gate of its own for that one file.
+The copy of a picture a person is asked to open ([VET-4](tools/vet-content.md#VET-4)) is one more
+filesystem write on this list, at a gate of its own for that one file.
 
 A program's standard input is on that list for the reason the other three are, and not because a
 subprocess is trusted: the bytes are carried to a descriptor and read by something that is neither
@@ -421,13 +421,9 @@ and the content has no say in it.
 | what a processor produced | taint over the inputs it was given | `verified-by: bravebot_core::policy::an_output_is_labelled_by_taint_over_the_inputs` |
 | one slot's bytes a person read on their screen and vouched for | trusted and private, because a person read them and said so, and the slot itself keeps what it had | `verified-by: bravebot_core::policy::output_a_person_vouched_for_comes_back_trusted` `verified-by: bravebot_core::policy::vetted_content_a_person_vouched_for_comes_back_trusted` |
 | a server's tool list a person vouched for, or the mode that answers for them | trusted and public, because a person read the whole list as it is drawn and said yes, and a digest records which list that was | `verified-by: bravebot_core::policy::a_tool_list_reaches_the_planner_only_through_an_endorsement` `verified-by: bravebot_core::policy::a_recorded_tool_list_is_promoted_only_where_it_is_the_one_vouched_for` |
+| a picture or a PDF `vet_content` let through | trusted and private on the endorsement that let it through, as promoted text is, and the slot keeps what it had; it goes to the planner in a message of its own rather than joining the user's, so it takes a label where a paste takes none | `verified-by: bravebot_core::policy::a_picture_is_promoted_once_by_any_endorsement_and_attached_as_itself` |
 | a picture pasted at the keyboard | none, because it joins the user's own message, which carries none either, so it is recorded instead | `verified-by: bravebot_core::policy::a_pasted_image_is_recorded_in_the_audit_trail` |
 | a prompt typed while a turn is running | none, for the same reason, and recorded the same way | `verified-by: bravebot_core::policy::an_interjection_is_recorded_in_the_audit_trail` |
-
-[VET-4](tools/vet-content.md#VET-4), which nothing builds yet, would add a row: a picture
-`vet_content` let through, trusted and private on the endorsement that let it through, as promoted
-text is, with the slot keeping what it had. It does not join the user's own message, so it takes a
-label where a paste takes none.
 
 Where a path is known, integrity is the trust map's answer about that path rather than the
 capability's, which is what the three rows for reads say and why the first row is the label a read
@@ -479,9 +475,9 @@ content states one: a preview of quarantined bytes, and a remark accompanying a 
 neither reads the content nor decides the label, so what arrives is what the gate released, and a
 carrier added later states one too.
 
-The copy of a picture [VET-4](tools/vet-content.md#VET-4) specifies, which nothing writes yet,
-would be the one exception: it is opened in the person's own viewer, which reads no label, and
-VET-4 states that as a cost.
+The copy of a picture a person is asked to open ([VET-4](tools/vet-content.md#VET-4)) is the one
+exception: it is opened in the person's own viewer, which reads no label, and that is stated there
+as a cost.
 
 **Why.** A surface can only mark content it can still tell apart, and out there the label is the
 whole of what it has to tell it apart by: the bytes arrive over a pipe carrying no provenance of
@@ -561,15 +557,15 @@ arrives at all.
     promoted until a person says so, so this buys a quieter sentence above content the reader is
     still reading. On the vouch prompt the bytes drawn are the head of the file rather than all of
     it, so what the quieter sentence sits above is a preview; the answer still writes nothing on
-    its own. At a prompt about a picture, which [VET-4](tools/vet-content.md#VET-4) specifies and
-    nothing builds yet, the picture is a file to open rather than bytes on the screen, so the
-    quieter sentence can be all a person reads; it still buys no yes.
+    its own. At a prompt about a picture ([VET-4](tools/vet-content.md#VET-4)), the picture is a
+    file to open rather than bytes on the screen, so the quieter sentence can be all a person
+    reads; it still buys no yes.
   - **Put the key that turns auto-vetting on in front of the person.** The standing key at a vetting
     prompt is drawn only where the check found nothing, so forcing `safe` is what offers it
     ([PROMPT-6](prompting.md#PROMPT-6)). It buys the offer and not the grant: the person has to
     press it, with the bytes on the same screen and a line beside the key saying what it turns on.
-    At a prompt about a picture, which [VET-4](tools/vet-content.md#VET-4) specifies and nothing
-    builds yet, the bytes are a path away rather than on the screen.
+    At a prompt about a picture ([VET-4](tools/vet-content.md#VET-4)), the bytes are a path away
+    rather than on the screen.
     It is drawn only on the two prompts that promote one slot's bytes, and the other direction is
     held shut, since a warning or a check that could not be made offers nothing. The reason the
     offer is put where the mode would have saved a keystroke rather than left out of the interface
@@ -583,10 +579,10 @@ arrives at all.
     slot, whichever one the planner named, once, at `(T,priv)` so nothing leaves the machine and
     nothing becomes routing, with no trust rule written, and only on the routes
     [CHECK-12](vetting.md#CHECK-12) covers, so vouching for a path and a server's tool list are
-    still asked about. The slot is still the planner's choice and not the content's. A picture,
-    which [VET-4](tools/vet-content.md#VET-4) specifies and nothing builds yet, is the easier case
-    of this: no encoding stands between the words drawn in it and the checker
-    ([CHECK-15](vetting.md#CHECK-15)), and what it buys is the same one slot, once.
+    still asked about. The slot is still the planner's choice and not the content's. A picture
+    ([VET-4](tools/vet-content.md#VET-4)) is the easier case of this: no encoding stands between the
+    words drawn in it and the checker ([CHECK-15](vetting.md#CHECK-15)), and what it buys is the
+    same one slot, once.
   - **Force the word `unsafe`, or reply with nothing a verdict can be read out of.** That lands on
     the prompt with the warning, which is the direction this is built to fail in.
   - **Put their words in the reason.** It reaches a person's screen and stops there. It is drawn
@@ -601,6 +597,5 @@ arrives at all.
   for: the vouch offer, which is the one that writes such a rule, and a server's tool list, which
   puts a server's words in front of the planner for every turn after
   ([CHECK-12](vetting.md#CHECK-12)). While auto-vetting is off, reaching the planner at all is not
-  on it either, and a verdict is advice about bytes already on a person's screen. A picture, which
-  [VET-4](tools/vet-content.md#VET-4) specifies and nothing builds yet, is a path away from it
-  instead.
+  on it either, and a verdict is advice about bytes already on a person's screen. A picture
+  ([VET-4](tools/vet-content.md#VET-4)) is a path away from it instead.

@@ -1352,6 +1352,9 @@ pub struct Output {
     /// rather than as a body. Its presence is also what forces a reference: a picture is never put
     /// in the planner's context, whatever the label on the file it came from says.
     pub picture: Option<String>,
+    /// A picture `vet_content` promoted, which the turn attaches to the planner's next request in a
+    /// message of its own after the round's results (VET-4). Never carried in `text`.
+    pub attached: Option<bravebot_core::vetting::Attached>,
     /// When the planner asked for the next tick of a self-paced loop.
     ///
     /// Travels back to whoever started the loop, which is the only thing that knows there is one.
@@ -1431,6 +1434,13 @@ pub struct Tools<'a> {
     /// `home` would put every home-relative path the planner writes inside `~/.bravebot`
     /// (CMDLINE-4).
     pub profile: Option<&'a std::path::Path>,
+    /// The directory the platform keeps this user's disposable files in, usually
+    /// [`crate::home::cache`].
+    ///
+    /// Where the copy of a picture goes that a person opens before answering `vet_content`'s
+    /// prompt about it. `None` refuses that prompt rather than writing the copy somewhere a
+    /// confined program can reach.
+    pub cache: Option<&'a std::path::Path>,
     /// Whether this turn is itself a delegate's, and so may not ask a person, write the task
     /// list on their screen, or reach a host.
     ///
@@ -1808,6 +1818,8 @@ struct Produced {
     /// Recorded on the slot by the turn loop, and what makes a picture reach a processor as a part
     /// rather than as a body. The driver's own, from a table of extensions.
     picture: Option<String>,
+    /// A picture `vet_content` promoted, for the turn to attach after the round's results.
+    attached: Option<bravebot_core::vetting::Attached>,
     /// The delegates the kernel has approved and nobody has started yet.
     ///
     /// Started by the turn rather than here, because a delegate outlives the call that asked for
@@ -1847,6 +1859,7 @@ impl Produced {
             covered_by_record: false,
             read_asked: false,
             picture: None,
+            attached: None,
             wakeup: None,
             watch: None,
             delegate: Vec::new(),
@@ -1887,6 +1900,7 @@ impl Produced {
             covered_by_record: false,
             read_asked: false,
             picture: None,
+            attached: None,
             delegate: Vec::new(),
         }
     }
@@ -1946,6 +1960,12 @@ impl Produced {
     /// body. The planner is never shown it, whatever the label says.
     fn of_a_picture(mut self, media: &str) -> Self {
         self.picture = Some(media.to_string());
+        self
+    }
+
+    /// Say this carries a picture `vet_content` promoted, for the turn to attach.
+    fn attaching(mut self, attached: bravebot_core::vetting::Attached) -> Self {
+        self.attached = Some(attached);
         self
     }
 
@@ -2405,6 +2425,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
                 covered_by_record: produced.covered_by_record,
                 read_asked: produced.read_asked,
                 picture: produced.picture,
+                attached: produced.attached,
                 wakeup: produced.wakeup,
                 watch: produced.watch,
                 delegate: produced.delegate,
@@ -2565,6 +2586,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         covered_by_record: produced.covered_by_record,
         read_asked: produced.read_asked,
         picture: produced.picture,
+        attached: produced.attached,
         wakeup: produced.wakeup,
         watch: produced.watch,
         delegate: produced.delegate,
@@ -4724,10 +4746,17 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
         return Produced::problem(refusal);
     }
 
-    // Before the gate below rather than inside it: what this refuses is the content, and bypassing
-    // with no screening asked for makes no check to refuse it in. Before the prompt too, so a
-    // picture is never released for a screen on its way to the refusal `promote_vetted` makes.
-    if let Err(denial) = policy.before_promoting(&slot, tools.slots) {
+    // The driver's own record of what kind of file the slot holds, from its table of extensions at
+    // the read. Which way this goes is never decided by the bytes.
+    let picture = tools.slots.picture_of(&slot).map(str::to_string);
+
+    // Before the gate below rather than inside it: a model the roster lists as not taking this
+    // kind of file can neither check it nor be given it, and bypassing with no screening makes no
+    // check to refuse it in. The list asked for is the one for the model this turn runs on, which
+    // is also the model the check runs on.
+    let model = tools.chat.model.unwrap_or(&tools.chat.config.default_model);
+    let listed = tools.chat.config.listed_inputs(model);
+    if let Err(denial) = policy.before_promoting(&slot, tools.slots, listed) {
         return Produced::problem(format!("refused: {denial}"));
     }
 
@@ -4787,6 +4816,8 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
         Endorsed::ByAPerson | Endorsed::ByBypassing => true,
         Endorsed::ByASafeVerdict => false,
     };
+    // Held until the prompt below has closed, which is what removes the copy however it closes.
+    let mut _copy = None;
     if ask {
         // Released for the person to read, which is the whole of what a prompt here is for. A
         // display release cannot feed an effect, and both of these feed a screen. Inside the
@@ -4799,17 +4830,52 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
         // Counted inside the reshape, as `read_output` counts what it shows, and for the same
         // reason: the bytes below are released for a screen and nothing in this crate may read
         // them, a count included.
-        let (shown, lines) = {
-            let content = match policy.resolve("vet_content", &slot, tools.slots) {
-                Ok(content) => content,
-                Err(denial) => return Produced::problem(format!("refused: {denial}")),
-            };
-            let measured = policy.render_in_place("vet_content", &content, |text| {
-                let lines = text.lines().count();
-                (text, lines)
-            });
-            let proof = policy.authorise_display_release("content the planner asked to be shown");
-            measured.declassify(&proof)
+        //
+        // A picture is put in front of the person as a copy to open rather than as text, and not
+        // at all where the mode answers without drawing anything: bypassing answers this from the
+        // verdict alone, so a copy there would be a file written for nobody to open, and a machine
+        // naming no cache directory would refuse what the mode answers yes.
+        let (shown, lines, shown_picture) = match &picture {
+            None => {
+                let content = match policy.resolve("vet_content", &slot, tools.slots) {
+                    Ok(content) => content,
+                    Err(denial) => return Produced::problem(format!("refused: {denial}")),
+                };
+                let measured = policy.render_in_place("vet_content", &content, |text| {
+                    let lines = text.lines().count();
+                    (text, lines)
+                });
+                let proof =
+                    policy.authorise_display_release("content the planner asked to be shown");
+                let (shown, lines) = measured.declassify(&proof);
+                (shown, lines, None)
+            }
+            Some(_) if tools.permission_mode == crate::PermissionMode::Bypass => {
+                (String::new(), 0, None)
+            }
+            Some(media) => match copy_a_picture(policy, tools.slots, tools.cache, &slot, media) {
+                Ok((copy, bytes)) => {
+                    let shown = crate::confirm::PictureShown {
+                        path: copy.path().to_path_buf(),
+                        media: media.clone(),
+                        bytes,
+                    };
+                    _copy = Some(copy);
+                    (String::new(), 0, Some(shown))
+                }
+                Err(detail) => {
+                    return Produced::refused_with_a_note(
+                        format!(
+                            "refused: {slot} was kept back from you. Do not ask for it again. \
+                             Work with what you have, pass {slot} to spawn_processor, or say in \
+                             your reply what you needed from it."
+                        ),
+                        detail,
+                    )
+                    .costing(spent)
+                    .waiting(waited);
+                }
+            },
         };
         let reason = said.map(|reason| {
             let proof = policy.authorise_display_release("what a check said about content");
@@ -4847,6 +4913,7 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
             lines,
             verdict,
             reason,
+            picture: shown_picture,
         };
 
         // Says the bytes are not coming and not who decided that, for the reason `read_output`
@@ -4863,20 +4930,106 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
         }
     }
 
+    // The prompt has closed, so the copy goes before anything is promoted.
+    drop(_copy);
+
     // The endorsement is what makes these bytes readable, and it is bound to this exact reference
     // whichever of the two answered.
     policy.issue_grant("vet_content", "ref", slot.to_string());
 
-    match policy.promote_vetted(&slot, tools.slots, endorsed) {
-        Ok(text) => {
-            let lines = tally(counted, "line", "lines");
-            Produced::new(text, format!("what {slot} held"), format!("{lines}, read"))
-                .of_content()
+    match &picture {
+        None => match policy.promote_vetted(&slot, tools.slots, endorsed) {
+            Ok(text) => {
+                let lines = tally(counted, "line", "lines");
+                Produced::new(text, format!("what {slot} held"), format!("{lines}, read"))
+                    .of_content()
+                    .costing(spent)
+                    .waiting(waited)
+            }
+            Err(denial) => Produced::problem(format!("refused: {denial}")),
+        },
+        // The result is the driver's words and not the file: a picture is looked at, and a data
+        // URI in the text of a result is read as characters. The turn attaches it after the round's
+        // results, in a message of its own (VET-4).
+        Some(media) => match policy.promote_vetted_picture(&slot, tools.slots, endorsed) {
+            Ok(attached) => {
+                let kind = kind_of_file(media);
+                Produced::new(
+                    Labelled::trusted(format!(
+                        "{slot} was let through. It is {kind}, and it is attached to the message \
+                         after these results, where you can look at it."
+                    )),
+                    format!("what {slot} held"),
+                    format!("{kind}, attached"),
+                )
+                .attaching(attached)
                 .costing(spent)
                 .waiting(waited)
-        }
-        Err(denial) => Produced::problem(format!("refused: {denial}")),
+            }
+            Err(denial) => Produced::problem(format!("refused: {denial}")),
+        },
     }
+}
+
+/// How a picture or a PDF is named to the planner and to the person watching.
+pub(crate) fn kind_of_file(media: &str) -> &'static str {
+    match media == bravebot_core::vetting::PDF {
+        true => "a PDF",
+        false => "a picture",
+    }
+}
+
+/// The extension a copy of a file of this media type is written under, from the driver's table.
+fn extension_for(media: &str) -> &'static str {
+    crate::workspace::ATTACHABLE
+        .iter()
+        .find(|(_, named)| *named == media)
+        .map_or("bin", |(extension, _)| *extension)
+}
+
+/// Write the picture `slot` holds to a copy the person can open, with how many bytes it holds.
+///
+/// The bytes are the ones the slot's data URI encodes, turned back inside the kernel's reshape and
+/// released at a gate of their own, which the trail records as a copy written for the person to
+/// open. The URI is the driver's own encoding from the read, so turning it back cannot fail on
+/// anything the picture holds. An `Err` is the driver's sentence for the person watching.
+fn copy_a_picture<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    slots: &SlotStore,
+    cache: Option<&std::path::Path>,
+    slot: &SlotId,
+    media: &str,
+) -> Result<(crate::vet::PictureCopy, usize), String> {
+    let Some(cache) = cache else {
+        return Err(format!(
+            "{slot} holds {}, and this machine names no cache directory to put a copy in for you \
+             to open, so it was kept back",
+            kind_of_file(media)
+        ));
+    };
+    let content = policy
+        .resolve("vet_content", slot, slots)
+        .map_err(|denial| format!("refused: {denial}"))?;
+    let decoded = policy.render_in_place("vet_content", &content, |uri| {
+        use base64::Engine;
+        let encoded = uri.split_once(',').map_or("", |(_, encoded)| encoded);
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .unwrap_or_default();
+        let size = bytes.len();
+        (bytes, size)
+    });
+    let proof = policy.authorise_a_copy_of_a_picture(slot, media);
+    let (bytes, size) = decoded.declassify(&proof);
+    let copy =
+        crate::vet::PictureCopy::write(cache, extension_for(media), &bytes).map_err(|error| {
+            format!(
+                "{slot} holds {}, and a copy could not be written for you to open ({error}), so \
+                 it was kept back",
+                kind_of_file(media)
+            )
+        })?;
+    Ok((copy, size))
 }
 
 /// The record of lines somebody asked to be remembered past this session, for this workspace.
@@ -10720,6 +10873,7 @@ mod tests {
                 armed: &mut armed,
                 home: None,
                 profile: None,
+                cache: None,
                 delegated: false,
                 confined_to: None,
                 servers: None,

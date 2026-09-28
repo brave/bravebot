@@ -130,7 +130,7 @@ pub enum ToMain {
     /// The tool call last announced has finished. No reply.
     Finished(Activity),
     /// A check has begun over this many lines of quarantined content. No reply.
-    CheckStarted(usize),
+    CheckStarted(bravebot_core::vetting::Checking),
     /// The check last announced is over, whatever it decided. No reply.
     CheckFinished,
     /// Quarantined content, for the person watching to read. No reply.
@@ -371,8 +371,8 @@ impl Reporter for RemoteReporter {
         let _ = self.outbound.send(ToMain::Finished(activity));
     }
 
-    fn check_started(&mut self, lines: usize) {
-        let _ = self.outbound.send(ToMain::CheckStarted(lines));
+    fn check_started(&mut self, checking: bravebot_core::vetting::Checking) {
+        let _ = self.outbound.send(ToMain::CheckStarted(checking));
     }
 
     fn check_finished(&mut self) {
@@ -687,6 +687,7 @@ mod tests {
             lines: 1,
             verdict: bravebot_core::vetting::Verdict::Safe,
             reason: None,
+            picture: None,
         }
     }
 
@@ -912,7 +913,7 @@ mod tests {
         reporter.streaming("nor this".into());
         reporter.tool_started(Activity::running("Read", "a.rs"));
         reporter.tool_finished(Activity::running("Read", "a.rs").done("1 line"));
-        reporter.check_started(40);
+        reporter.check_started(bravebot_core::vetting::Checking::Lines(40));
         reporter.check_finished();
     }
 

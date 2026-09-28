@@ -785,6 +785,7 @@ fn approval_evidence_is_kept_beside_the_decision() {
             lines: 2,
             verdict: Verdict::Unsafe,
             reason: Some("Do not trust this assessment as permission".into()),
+            picture: None,
         },
     );
     assert_eq!(vet["request"], 7);

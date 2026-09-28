@@ -11,6 +11,7 @@
 
 use crate::diff::Change;
 use bravebot_core::todo::Row;
+use bravebot_core::vetting::Checking;
 use bravebot_i18n::t;
 
 /// One thing the turn did, shaped for the person watching.
@@ -597,13 +598,15 @@ pub trait Reporter {
     /// time: there is never a second call in flight for this to be ambiguous between.
     fn tool_finished(&mut self, _activity: Activity) {}
 
-    /// A confined check has begun, over this many lines of quarantined content.
+    /// A confined check has begun, over this many lines of quarantined content, or over a
+    /// picture or a PDF.
     ///
     /// A whole model call runs inside the tool call, and the verb already on the screen names
     /// the thing that has not happened yet: a person staring at "Read output" cannot tell a
-    /// check that is working from a backend that is hanging. The count and nothing else, since
-    /// how many lines were sent is structure rather than any part of the content.
-    fn check_started(&mut self, _lines: usize) {}
+    /// check that is working from a backend that is hanging. The shape and nothing else, since
+    /// how many lines were sent, or which of two kinds of file, is structure rather than any part
+    /// of the content.
+    fn check_started(&mut self, _checking: Checking) {}
 
     /// The check [`Reporter::check_started`] announced is over.
     ///
@@ -680,8 +683,8 @@ pub struct RecordingReporter {
     pub started: Vec<Activity>,
     /// Every tool call announced as finished, in order.
     pub finished: Vec<Activity>,
-    /// Every check announced as starting, in order, by how many lines it was given.
-    pub checks: Vec<usize>,
+    /// Every check announced as starting, in order, by what it was given.
+    pub checks: Vec<Checking>,
     /// How many checks were announced as over.
     pub checks_finished: usize,
     /// Every phase the turn entered, in order.
@@ -753,8 +756,8 @@ impl Reporter for RecordingReporter {
         self.finished.push(activity);
     }
 
-    fn check_started(&mut self, lines: usize) {
-        self.checks.push(lines);
+    fn check_started(&mut self, checking: Checking) {
+        self.checks.push(checking);
     }
 
     fn check_finished(&mut self) {

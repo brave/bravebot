@@ -143,6 +143,12 @@ export function fromSaid(said: Said[]): Entry[] {
         return watchFired(entry.number, entry.path)
       case 'consolidation':
         return { kind: 'consolidation', id: nextId() } as const
+      // The agent's own message carrying a file vet_content let through. A narration built from
+      // the two fields, which are a reference name and a media type the agent chose.
+      case 'vetted':
+        return narrated(
+          `The ${entry.media === 'application/pdf' ? 'PDF' : 'picture'} ${entry.reference} held was let through and attached for the model`,
+        )
       default: {
         // A tag from a newer agent than this window. Drawn as a plain message and never as one of
         // the interface's own rows: those rows assert something about the conversation that this

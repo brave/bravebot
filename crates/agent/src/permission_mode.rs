@@ -449,6 +449,7 @@ mod tests {
             lines: 1,
             verdict,
             reason: None,
+            picture: None,
         }
     }
 

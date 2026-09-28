@@ -13096,6 +13096,8 @@ fn vouching_for_one_command_does_not_trust_another_of_the_same_program() {
 struct ShownAfterAVet {
     allow: bool,
     shown: std::sync::Arc<std::sync::Mutex<Vec<bravebot_agent::confirm::VetRequest>>>,
+    /// What the copy of a picture held while its prompt was open, as a person opening it would see.
+    opened: std::sync::Arc<std::sync::Mutex<Vec<Option<Vec<u8>>>>>,
 }
 
 impl ShownAfterAVet {
@@ -13103,6 +13105,7 @@ impl ShownAfterAVet {
         Self {
             allow,
             shown: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            opened: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         }
     }
 }
@@ -13144,6 +13147,12 @@ impl bravebot_agent::Confirmer for ShownAfterAVet {
         request: &bravebot_agent::confirm::VetRequest,
     ) -> bravebot_agent::confirm::Decision {
         self.shown.lock().unwrap().push(request.clone());
+        if let Some(picture) = &request.picture {
+            self.opened
+                .lock()
+                .unwrap()
+                .push(std::fs::read(&picture.path).ok());
+        }
         if self.allow {
             bravebot_agent::Decision::Approve
         } else {
@@ -13787,16 +13796,15 @@ fn bypassing_fills_in_a_verdict_that_claims_nothing() {
     );
 }
 
-/// A picture is refused in the one mode that makes no check before promoting. What VET-2 refuses
-/// is the content rather than the check: the bytes behind a picture slot are a data URI, so a
-/// promotion would hand the planner base64 nobody read as text it may trust. Bypassing with no
-/// screening asked for makes no check, so the refusal must not depend on one.
+/// Bypassing with no screening asked for lets a picture through as it lets text through: the mode
+/// answers the prompt yes without drawing it, so no check is made and no copy is written for a
+/// person to open, and the picture is attached to the planner's next request.
 ///
-/// Wrapped in the mode's own confirmer, as a caller must, over a double that would approve. The
-/// refusal comes before anything is released for a prompt, so the trail never says a picture was
-/// shown to the user on its way to being refused.
+/// Wrapped in the mode's own confirmer, as a caller must, over a double that would refuse, so a
+/// prompt that did reach it would keep the picture back. No cache directory is given: a copy nobody
+/// opens is not a reason to refuse what the mode answers yes.
 #[test]
-fn bypassing_with_no_screening_still_refuses_to_promote_a_picture() {
+fn bypassing_with_no_screening_attaches_a_picture_unshown() {
     let scratch = Scratch::new("vet-content-bypass-picture");
     std::fs::write(scratch.path.join("shot.png"), a_png()).unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
@@ -13812,7 +13820,8 @@ fn bypassing_with_no_screening_still_refuses_to_promote_a_picture() {
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
-    let mut shown = ShownAfterAVet::new(true);
+    let mut shown = ShownAfterAVet::new(false);
+    let asked = std::sync::Arc::clone(&shown.shown);
     let mut confirmer =
         bravebot_agent::Confining::new(&mut shown, bravebot_agent::PermissionMode::Bypass, false);
 
@@ -13834,36 +13843,393 @@ fn bypassing_with_no_screening_still_refuses_to_promote_a_picture() {
     .outcome
     .expect("the turn runs");
 
-    let wait = std::time::Duration::from_secs(5);
-    let _read = received.recv_timeout(wait).expect("the round that read");
-    let _vetted = received.recv_timeout(wait).expect("the round that asked");
-    let answered = received
-        .recv_timeout(wait)
-        .expect("the round after vet_content answered");
     assert!(
-        !answered.contains("iVBORw0KGgo"),
-        "a picture's data URI reached the planner's context: {answered}"
+        asked.lock().unwrap().is_empty(),
+        "the mode's prompt reached a person"
     );
+    let sent: Vec<String> = received.try_iter().collect();
     assert!(
-        answered.contains("ref:1 is a picture"),
-        "the planner was not told the picture was refused: {answered}"
+        !sent.iter().any(|body| body.contains(A_CHECK_ASKING)),
+        "a check was made in the mode that reads no verdict"
     );
+    let answered = sent.last().expect("the round after vet_content answered");
     assert!(
-        sink.events().iter().any(|event| matches!(
-            event,
-            Event::GateBlocked { gate: "vetting", reason, .. } if reason.contains("ref:1 is a picture")
-        )),
-        "the refusal left no record in the trail: {:#?}",
-        sink.events()
+        answered.contains("data:image/png;base64,iVBORw0KGgo"),
+        "the mode answered yes and the picture was not attached: {answered}"
     );
     assert!(
         !sink.events().iter().any(|event| matches!(
             event,
-            Event::GatePassed { gate: "display", detail }
-                if detail.contains("content the planner asked to be shown")
+            Event::GatePassed { detail, .. } if detail.contains("written to a copy")
         )),
-        "the trail says a picture was shown to the user on its way to being refused: {:#?}",
+        "a copy was written for a prompt nobody is shown: {:#?}",
         sink.events()
+    );
+}
+
+/// The turn every picture test below takes: it reads `file`, asks `vet_content` for `ref:1`, and
+/// finishes, with the check answered by `check` and any copy written under `cache`.
+fn vet_a_picture(
+    name: &str,
+    file: (&str, Vec<u8>),
+    check: &str,
+    task: Task,
+    cache: Option<PathBuf>,
+    confirmer: &mut ShownAfterAVet,
+    configure: impl FnOnce(&mut Config),
+) -> (Vec<String>, RecordingSink, bravebot_agent::Conversation) {
+    let scratch = Scratch::new(name);
+    std::fs::write(scratch.path.join(file.0), file.1).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence_answering_checks_with(
+        vec![reply_with(check)],
+        vec![
+            tool_request("read_file", &format!(r#"{{"path":"{}"}}"#, file.0)),
+            tool_request(
+                "vet_content",
+                r#"{"ref":"ref:1","expects":"a screenshot of the login page"}"#,
+            ),
+            reply_with("done"),
+        ],
+    );
+    let mut config = config_for(&endpoint);
+    configure(&mut config);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &task.with_cache(cache),
+        &mut conversation,
+        confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    (received.try_iter().collect(), sink, conversation)
+}
+
+const A_SAFE_VERDICT: &str = r#"{"verdict": "safe", "reason": "a login form and nothing else"}"#;
+
+/// The whole of VET-4 for a person at the keyboard: a check looks at the picture itself, the
+/// person is handed a path to a copy holding the slot's own bytes, and on their yes the picture is
+/// attached to the planner's next request in a message of its own, after the result that says so.
+/// The copy is gone once the prompt has closed.
+#[test]
+fn a_picture_a_person_opens_and_lets_through_is_attached_after_the_results() {
+    use bravebot_agent::conversation::{Composed, Said};
+
+    let cache = Scratch::new("vet-picture-cache");
+    let mut confirmer = ShownAfterAVet::new(true);
+    let (shown, opened) = (confirmer.shown.clone(), confirmer.opened.clone());
+    let (sent, sink, conversation) = vet_a_picture(
+        "vet-picture-yes",
+        ("shot.png", a_png()),
+        A_SAFE_VERDICT,
+        Task::new("look at the screenshot"),
+        Some(cache.path.clone()),
+        &mut confirmer,
+        |_| {},
+    );
+
+    let asked = shown.lock().unwrap();
+    let request = asked.first().expect("the person was asked");
+    let picture = request
+        .picture
+        .as_ref()
+        .expect("the prompt carried no copy");
+    assert_eq!(picture.media, "image/png");
+    assert_eq!(picture.bytes, a_png().len());
+    assert!(
+        picture.path.starts_with(&cache.path),
+        "the copy was written outside the cache directory: {}",
+        picture.path.display()
+    );
+    assert!(
+        !request.content.contains("iVBORw0KGgo"),
+        "the prompt carried the picture as text: {}",
+        request.content
+    );
+    assert_eq!(
+        opened.lock().unwrap().as_slice(),
+        &[Some(a_png())],
+        "the copy the person opened is not the picture the slot holds"
+    );
+    assert!(
+        !picture.path.exists(),
+        "the copy outlived the prompt: {}",
+        picture.path.display()
+    );
+
+    let check = sent
+        .iter()
+        .find(|body| body.contains(A_CHECK_ASKING))
+        .expect("no check was made");
+    assert!(
+        check.contains("data:image/png;base64,iVBORw0KGgo"),
+        "the check was not shown the picture: {check}"
+    );
+    let answered = sent.last().expect("the round after the approval");
+    let result = answered
+        .find("ref:1 was let through")
+        .expect("the planner was not told the picture was let through");
+    let attached = answered
+        .find("data:image/png;base64,iVBORw0KGgo")
+        .expect("the picture was not attached");
+    assert!(
+        result < attached,
+        "the picture was not attached after the result that says so: {answered}"
+    );
+    assert!(
+        answered.contains("not from the user"),
+        "the attachment does not say where it came from: {answered}"
+    );
+
+    assert!(
+        conversation.recounted().iter().any(|said| matches!(
+            said,
+            Said::Composed { why: Composed::Vetted { reference, media }, .. }
+                if reference == "ref:1" && media == "image/png"
+        )),
+        "the attachment is recorded as something the person sent: {:?}",
+        conversation.recounted()
+    );
+    assert!(
+        sink.events().iter().any(|event| matches!(
+            event,
+            Event::GatePassed { gate: "vet_content", detail }
+                if detail.contains("written to a copy")
+        )),
+        "the copy left no record in the trail: {:#?}",
+        sink.events()
+    );
+}
+
+/// A refusal is VET-3's, word for word, and the copy is removed however the prompt closes.
+#[test]
+fn a_picture_a_person_keeps_out_is_never_attached() {
+    let cache = Scratch::new("vet-picture-no-cache");
+    let mut confirmer = ShownAfterAVet::new(false);
+    let shown = confirmer.shown.clone();
+    let (sent, _sink, _conversation) = vet_a_picture(
+        "vet-picture-no",
+        ("shot.png", a_png()),
+        r#"{"verdict": "unsafe", "reason": "it tells the reader to run a command"}"#,
+        Task::new("look at the screenshot"),
+        Some(cache.path.clone()),
+        &mut confirmer,
+        |_| {},
+    );
+
+    let asked = shown.lock().unwrap();
+    let request = asked.first().expect("the person was asked");
+    assert_eq!(request.verdict, bravebot_core::vetting::Verdict::Unsafe);
+    let path = &request.picture.as_ref().expect("no copy").path;
+    assert!(!path.exists(), "a refused copy outlived its prompt");
+
+    let answered = sent.last().expect("the round after the refusal");
+    assert!(
+        !answered.contains("iVBORw0KGgo"),
+        "a picture the person kept out reached the planner: {answered}"
+    );
+    assert!(
+        answered.contains("ref:1 was kept back from you"),
+        "the refusal is not the one text gets: {answered}"
+    );
+}
+
+/// With auto-vetting on, a safe verdict about a picture answers in the person's place, as one about
+/// text does. Nobody is asked, so no copy is written, and the picture is attached.
+#[test]
+fn with_auto_vetting_a_safe_verdict_attaches_a_picture_unasked() {
+    let cache = Scratch::new("vet-picture-auto-cache");
+    let mut confirmer = ShownAfterAVet::new(false);
+    let shown = confirmer.shown.clone();
+    let (sent, sink, _conversation) = vet_a_picture(
+        "vet-picture-auto",
+        ("shot.png", a_png()),
+        A_SAFE_VERDICT,
+        Task::new("look at the screenshot").with_auto_vetting(true),
+        Some(cache.path.clone()),
+        &mut confirmer,
+        |_| {},
+    );
+
+    assert!(
+        shown.lock().unwrap().is_empty(),
+        "a prompt was drawn for a safe verdict with auto-vetting on"
+    );
+    let answered = sent.last().expect("the round after the check");
+    assert!(
+        answered.contains("data:image/png;base64,iVBORw0KGgo"),
+        "a safe verdict with auto-vetting on did not attach the picture: {answered}"
+    );
+    assert!(
+        !sink.events().iter().any(|event| matches!(
+            event,
+            Event::GatePassed { detail, .. } if detail.contains("written to a copy")
+        )),
+        "a copy was written for a prompt that was never drawn"
+    );
+}
+
+/// A model the roster lists as taking no pictures can neither look at one for a check nor be given
+/// one, so the call is refused before either is tried, and the refusal says what the roster said.
+#[test]
+fn a_model_listed_as_taking_no_pictures_is_never_asked_about_one() {
+    let cache = Scratch::new("vet-picture-roster-cache");
+    let mut confirmer = ShownAfterAVet::new(true);
+    let shown = confirmer.shown.clone();
+    let (sent, _sink, _conversation) = vet_a_picture(
+        "vet-picture-roster",
+        ("shot.png", a_png()),
+        A_SAFE_VERDICT,
+        Task::new("look at the screenshot"),
+        Some(cache.path.clone()),
+        &mut confirmer,
+        |config| {
+            let model = config.default_model.clone();
+            config.adopt_inputs(&model, &["text".to_string()]);
+        },
+    );
+
+    assert!(shown.lock().unwrap().is_empty(), "the person was asked");
+    assert!(
+        !sent.iter().any(|body| body.contains(A_CHECK_ASKING)),
+        "a check was made on a model listed as unable to look at the picture"
+    );
+    let answered = sent.last().expect("the round after the refusal");
+    assert!(
+        !answered.contains("iVBORw0KGgo"),
+        "the picture reached a model listed as not taking one: {answered}"
+    );
+    assert!(
+        answered.contains("listed as taking text and not image"),
+        "the refusal does not say what the roster said: {answered}"
+    );
+}
+
+/// The list speaks for the model it was listed for. A turn on another model, which is what a
+/// definition naming its own model runs, is told nothing by it: the picture goes to the check.
+#[test]
+fn a_list_for_another_model_refuses_no_picture() {
+    let cache = Scratch::new("vet-picture-other-model-cache");
+    let mut confirmer = ShownAfterAVet::new(true);
+    let shown = confirmer.shown.clone();
+    let (sent, _sink, _conversation) = vet_a_picture(
+        "vet-picture-other-model",
+        ("shot.png", a_png()),
+        A_SAFE_VERDICT,
+        Task::new("look at the screenshot").with_model(Some("a-model-that-looks".to_string())),
+        Some(cache.path.clone()),
+        &mut confirmer,
+        |config| {
+            let model = config.default_model.clone();
+            config.adopt_inputs(&model, &["text".to_string()]);
+        },
+    );
+
+    assert!(
+        sent.iter().any(|body| body.contains(A_CHECK_ASKING)),
+        "a picture was refused on a list taken for a model the turn does not run on"
+    );
+    assert_eq!(shown.lock().unwrap().len(), 1, "the person was not asked");
+    let answered = sent.last().expect("the round after the approval");
+    assert!(
+        answered.contains("data:image/png;base64,iVBORw0KGgo"),
+        "the picture was not attached: {answered}"
+    );
+}
+
+/// A machine naming no cache directory has nowhere to put a copy only the person can read, so the
+/// picture is kept back rather than written somewhere a confined program could reach it.
+#[test]
+fn a_picture_with_nowhere_to_copy_it_is_kept_back() {
+    let mut confirmer = ShownAfterAVet::new(true);
+    let shown = confirmer.shown.clone();
+    let (sent, _sink, _conversation) = vet_a_picture(
+        "vet-picture-uncached",
+        ("shot.png", a_png()),
+        A_SAFE_VERDICT,
+        Task::new("look at the screenshot"),
+        None,
+        &mut confirmer,
+        |_| {},
+    );
+
+    assert!(
+        shown.lock().unwrap().is_empty(),
+        "the person was asked about a picture they had no copy of"
+    );
+    let answered = sent.last().expect("the round after the refusal");
+    assert!(
+        !answered.contains("iVBORw0KGgo"),
+        "a picture nobody could open reached the planner: {answered}"
+    );
+    assert!(
+        answered.contains("ref:1 was kept back from you"),
+        "the planner was not told the picture is not coming: {answered}"
+    );
+}
+
+/// A PDF goes the way a raster picture goes: the check is given the file, the person a copy under
+/// its own extension, and a yes attaches it.
+#[test]
+fn a_pdf_a_person_lets_through_is_attached_as_a_file() {
+    let cache = Scratch::new("vet-pdf-cache");
+    let mut confirmer = ShownAfterAVet::new(true);
+    let (shown, opened) = (confirmer.shown.clone(), confirmer.opened.clone());
+    let (sent, _sink, _conversation) = vet_a_picture(
+        "vet-pdf-yes",
+        ("notes.pdf", a_pdf()),
+        A_SAFE_VERDICT,
+        Task::new("read the notes"),
+        Some(cache.path.clone()),
+        &mut confirmer,
+        |config| {
+            let model = config.default_model.clone();
+            config.adopt_inputs(&model, &["text".to_string(), "file".to_string()]);
+        },
+    );
+
+    let asked = shown.lock().unwrap();
+    let picture = asked
+        .first()
+        .and_then(|request| request.picture.as_ref())
+        .expect("the person was not handed a copy");
+    assert_eq!(picture.media, "application/pdf");
+    assert_eq!(
+        picture.path.extension().and_then(|e| e.to_str()),
+        Some("pdf")
+    );
+    assert_eq!(opened.lock().unwrap().as_slice(), &[Some(a_pdf())]);
+
+    let check = sent
+        .iter()
+        .find(|body| body.contains(A_CHECK_ASKING))
+        .expect("no check was made");
+    assert!(
+        check.contains("data:application/pdf;base64,JVBERi"),
+        "the check was not shown the PDF: {check}"
+    );
+    let answered = sent.last().expect("the round after the approval");
+    assert!(
+        answered.contains("data:application/pdf;base64,JVBERi"),
+        "the PDF was not attached: {answered}"
+    );
+    assert!(
+        answered.contains("It is a PDF"),
+        "the planner was not told it is a PDF: {answered}"
     );
 }
 
@@ -15339,7 +15705,7 @@ fn a_check_says_how_many_lines_it_is_reading_and_then_that_it_is_over() {
 
     assert_eq!(
         reporter.checks,
-        vec![3],
+        vec![bravebot_core::vetting::Checking::Lines(3)],
         "the check did not say how much it was given"
     );
     assert_eq!(
@@ -15457,7 +15823,7 @@ fn a_check_whose_call_fails_still_says_it_is_over() {
     );
     assert_eq!(
         reporter.checks,
-        vec![3],
+        vec![bravebot_core::vetting::Checking::Lines(3)],
         "the check did not say how much it was given"
     );
     assert_eq!(
@@ -22976,6 +23342,11 @@ fn a_refused_background_run_starts_nothing() {
     );
 }
 
+/// The smallest file a PDF reader opens, for the same reason.
+fn a_pdf() -> Vec<u8> {
+    b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n".to_vec()
+}
+
 /// A 1x1 PNG, so a test can name a real picture without carrying a fixture file.
 fn a_png() -> Vec<u8> {
     // The smallest valid PNG: signature, IHDR, one IDAT, IEND.
@@ -22988,7 +23359,8 @@ fn a_png() -> Vec<u8> {
 
 /// The property images rest on. A screenshot carries whatever words are in it, so a planner that
 /// could look at one could be instructed by one: the bytes go to a slot and the planner is handed a
-/// reference, exactly as an untrusted file's text is.
+/// reference, exactly as an untrusted file's text is. What lets one through is `vet_content`, one
+/// slot at a time, and never the read.
 #[test]
 fn a_picture_is_never_shown_to_the_planner() {
     let scratch = Scratch::new("picture-quarantined");

@@ -152,7 +152,7 @@ fn every_other_report_is_passed_through_unfiltered() {
 fn a_check_crosses_as_a_pair_carrying_only_its_size() {
     let (mut reporter, events) = harness();
 
-    reporter.check_started(3);
+    reporter.check_started(bravebot_core::vetting::Checking::Lines(3));
     reporter.check_finished();
 
     assert_eq!(names(&events), vec!["check.started", "check.finished"]);
@@ -166,6 +166,21 @@ fn a_check_crosses_as_a_pair_carrying_only_its_size() {
         "a check said more than how much it was given"
     );
     assert_eq!(events[1].data, serde_json::json!({}));
+}
+
+/// CHECK-14: a picture or a PDF has no lines to count, so the event names the kind of file and
+/// still says nothing else about it.
+#[test]
+fn a_check_over_a_file_crosses_naming_the_kind_of_file_and_nothing_else() {
+    use bravebot_core::vetting::Checking;
+    let (mut reporter, events) = harness();
+
+    reporter.check_started(Checking::Picture);
+    reporter.check_started(Checking::Pdf);
+
+    let events = events.lock().expect("not poisoned");
+    assert_eq!(events[0].data, serde_json::json!({ "file": "picture" }));
+    assert_eq!(events[1].data, serde_json::json!({ "file": "pdf" }));
 }
 
 /// What a call spent at a model of its own, on the event drawing that call. A front-end has no

@@ -24,6 +24,11 @@ guards:
   - symbol: Policy::vetting_verdict
   - symbol: Policy::vetting_did_not_complete
   - symbol: Policy::promote_vetted
+  - symbol: Policy::before_promoting
+  - symbol: Policy::compose_vetting_picture
+  - symbol: Policy::promote_vetted_picture
+  - symbol: Policy::attach_vetted_picture
+  - symbol: Policy::authorise_a_copy_of_a_picture
 documented-by: docs/website/docs/security/vetting.md
 ---
 
@@ -108,9 +113,8 @@ what is holding.
 The last thing in the request is the driver's, after the content rather than only before it, and
 it says both that the block was data and what an answer looks like.
 
-A check over a picture, which [CHECK-15](#CHECK-15) specifies and nothing builds yet, has no string
-to encode: the picture goes in a part of its own, and CHECK-15 says why nothing mechanical holds it
-there.
+A check over a picture has no string to encode: the picture goes in a part of its own, and
+[CHECK-15](#CHECK-15) says why nothing mechanical holds it there.
 
 `verified-by: bravebot_core::vetting::encoded_content_occupies_one_line`
 `verified-by: bravebot_core::vetting::content_that_spells_the_fence_cannot_forge_one`
@@ -119,6 +123,7 @@ there.
 `verified-by: bravebot_core::policy::the_metadata_is_a_separate_block_before_the_content`
 `verified-by: bravebot_core::policy::a_composed_check_input_is_still_quarantined`
 `verified-by: bravebot_agent::vet::control_is_re_asserted_after_the_content`
+`verified-by: bravebot_core::policy::a_check_over_a_picture_carries_the_file_apart_from_its_metadata`
 
 <a id="CHECK-3"></a>
 ### CHECK-3: what the planner says it expects is a prompt, must not be private, and is often absent
@@ -178,8 +183,8 @@ The one key a verdict does decide is the one that answers no question: the stand
 auto-vetting on, offered at either promoting prompt only where the check completed and found nothing
 ([PROMPT-6](prompting.md#PROMPT-6)). It is unbound where it is not drawn.
 
-A picture, which [CHECK-15](#CHECK-15) specifies and nothing builds yet, differs in one way: what is
-put in front of the person is a file to open rather than bytes on the screen.
+A picture differs in one way: what is put in front of the person is a file to open rather than
+bytes on the screen ([tools/vet-content.md](tools/vet-content.md#VET-4)).
 
 With auto-vetting on, one verdict answers the two promoting questions in the person's place, and
 [CHECK-12](#CHECK-12) is the whole of what that changes. Everything in this clause holds of the
@@ -206,6 +211,7 @@ the decision is which sentence a person reads before answering for themselves.
 `verified-by: bravebot_tui::confirm::the_vouch_prompt_says_what_a_check_found`
 `verified-by: bravebot_tui::confirm::a_vouch_prompt_says_when_no_check_was_made`
 `verified-by: bravebot_tui::confirm::a_tool_list_says_what_a_check_found`
+`verified-by: bravebot_tui::confirm::a_picture_is_put_to_the_person_as_a_copy_to_open`
 
 <a id="CHECK-6"></a>
 ### CHECK-6: promoting is an assertion about one slot's bytes, and writes no rule
@@ -252,9 +258,9 @@ reader cannot check, and one that credited a check nobody made would name a call
 placed. Everything else about the endorsement is the same whichever it was: one slot, once, and no
 other question answered.
 
-For a picture, which [CHECK-15](#CHECK-15) specifies and nothing builds yet, only the first two
-mint one: a run bypassing permissions with no screening asked for refuses a picture rather than
-answering for it ([tools/vet-content.md](tools/vet-content.md#VET-4)).
+For a picture all three mint one, as they do for text, and what the endorsement buys is an
+attachment rather than text: the picture goes to the planner's next request in a message of its own
+([tools/vet-content.md](tools/vet-content.md#VET-4)), and is never read back as text.
 
 `verified-by: bravebot_core::policy::content_cannot_be_promoted_without_an_endorsement`
 `verified-by: bravebot_core::policy::an_approval_to_vet_cannot_be_replayed`
@@ -267,6 +273,8 @@ answering for it ([tools/vet-content.md](tools/vet-content.md#VET-4)).
 `verified-by: bravebot_core::policy::an_approval_to_read_output_is_not_an_approval_to_vet`
 `verified-by: bravebot_tui::remote_confirm::an_approved_output_read_does_not_approve_a_vetted_read`
 `verified-by: bravebot_tui::remote_confirm::a_closed_channel_refuses_a_vetted_read`
+`verified-by: bravebot_core::policy::a_picture_is_promoted_once_by_any_endorsement_and_attached_as_itself`
+`verified-by: bravebot_agent::turn::bypassing_with_no_screening_attaches_a_picture_unshown`
 
 <a id="CHECK-9"></a>
 ### CHECK-9: what the check says reaches a person, and no model
@@ -426,8 +434,7 @@ Every other verdict falls back to that prompt, carrying the banner it would have
 [CHECK-5](#CHECK-5) governs it from there. Unsafe and a check that did not complete are still told
 apart on the screen, because the reason for asking is different in the two cases.
 
-A picture, which [CHECK-15](#CHECK-15) specifies and nothing builds yet, is answered the same way,
-on the first of the routes in the table below.
+A picture is answered the same way, on the first of the routes in the table below.
 
 **Where there is nobody to fall back to, the fallback is a refusal.** A run bypassing permissions
 ([MODE-4](permission-modes.md#MODE-4)) puts no prompt to anybody, so a verdict that is not `safe` has
@@ -484,6 +491,7 @@ owns the content gains from this, which is the reason it is off by default.
 `verified-by: bravebot_core::policy::a_promotion_nobody_was_asked_about_is_no_wider`
 `verified-by: bravebot_core::policy::output_released_by_a_safe_verdict_is_no_wider`
 `verified-by: bravebot_core::policy::the_trail_says_which_of_the_three_released_the_output`
+`verified-by: bravebot_agent::turn::with_auto_vetting_a_safe_verdict_attaches_a_picture_unasked`
 
 <a id="CHECK-13"></a>
 ### CHECK-13: every surface a promotion prompt reaches is given the verdict, and none of them is given an answer
@@ -524,9 +532,8 @@ person's answer.
 A check is announced as it begins, with how many lines it was given, and announced as over however
 it ended. Neither half carries anything else: not a fragment of the content, not the verdict, not
 the sentence. The count is the shape of what was sent rather than any part of what it holds, and it
-is the one figure that predicts how long the wait will be. A check over a picture, which
-[CHECK-15](#CHECK-15) specifies and nothing builds yet, is announced as a picture or as a PDF
-instead.
+is the one figure that predicts how long the wait will be. A check over a picture is announced as
+a picture or as a PDF instead ([CHECK-15](#CHECK-15)).
 
 The end is announced on every way out, the failure that becomes a verdict nobody could read
 included. A display left saying a check is running because the backend was down is the state this
@@ -554,17 +561,18 @@ ask them anything: progress announces, and a listener that has gone away is not 
 `verified-by: bravebot_tui::state::a_running_check_names_the_indicator_ahead_of_the_phase`
 `verified-by: bravebot_tui::state::a_check_that_is_over_gives_the_word_back_to_the_phase`
 `verified-by: bravebot_tui::state::a_finished_turn_leaves_no_check_running`
+`verified-by: bravebot_tui::state::a_check_over_a_file_names_the_kind_of_file`
+`verified-by: bravebot_ui_bridge::reporting::a_check_over_a_file_crosses_naming_the_kind_of_file_and_nothing_else`
+`verified-by: bravebot_core::policy::a_check_says_what_kind_of_file_it_reads`
 `verified-by: bravebot_ui_bridge::reporting::a_check_crosses_as_a_pair_carrying_only_its_size`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so it is pinned instead by ui/scripts/ux-state.test.mjs, which folds the pair through the window's own reducer and reads the word both places draw it from, asserting that a running check takes the word from every phase, that a count of one reads as one line and a count of zero is still a check, that the word goes back to the phase once the check is over, and that a check whose end was never heard does not outlive a consolidating or failed turn; make check-ui and the Front end CI job both run it, and the governs list above holds the file to existing)`
 
 <a id="CHECK-15"></a>
 ### CHECK-15: a check over a picture or a PDF is given the file itself, and its verdict counts as one about text does
 
-Nothing builds this yet. It is the check half of the picture route
-[tools/vet-content.md](tools/vet-content.md#VET-4) specifies, and until that is built no check is
-made over a picture, because [VET-2](tools/vet-content.md#VET-2) refuses one before a check runs. A
-PDF is a picture here, as [READ-5](tools/read-file.md#READ-5) reads one, and this clause says where
-it goes differently.
+It is the check half of the picture route [tools/vet-content.md](tools/vet-content.md#VET-4)
+governs. A PDF is a picture here, as [READ-5](tools/read-file.md#READ-5) reads one, and this clause
+says where it goes differently.
 
 The check is given the picture in a part of its own, as a processor is given one, after the driver's
 block of facts about it and before the driver's words that close the request. A PDF goes in the part
@@ -620,7 +628,12 @@ line, so the count would describe nothing.
 
 What the rest of the route costs is in [tools/vet-content.md](tools/vet-content.md#VET-4).
 
-`verified-by: none`
+`verified-by: bravebot_core::policy::a_check_over_a_picture_carries_the_file_apart_from_its_metadata`
+`verified-by: bravebot_core::policy::a_picture_the_model_is_listed_as_not_taking_is_refused_before_a_check`
+`verified-by: bravebot_agent::vet::a_checker_over_a_file_is_told_it_is_a_file_under_the_same_rules`
+`verified-by: bravebot_agent::turn::a_picture_a_person_opens_and_lets_through_is_attached_after_the_results`
+`verified-by: bravebot_agent::turn::a_pdf_a_person_lets_through_is_attached_as_a_file`
+`verified-by: bravebot_agent::turn::a_picture_a_person_keeps_out_is_never_attached`
 
 ## Known costs
 
@@ -647,9 +660,9 @@ What the rest of the route costs is in [tools/vet-content.md](tools/vet-content.
   reachable and can lie: nothing holds a sentence against the content it describes, and nothing
   could. What keeps it from deciding anything is that the bytes are on the same screen, so a
   person who reads them sees what they are agreeing to whatever the sentence said. The residue is
-  the same alarm fatigue as [issue #23](https://github.com/brave/bravebot/issues/23). A picture,
-  which [CHECK-15](#CHECK-15) specifies and nothing builds yet, is a file to open rather than bytes
-  on the screen, and [tools/vet-content.md](tools/vet-content.md#VET-4) states what that costs.
+  the same alarm fatigue as [issue #23](https://github.com/brave/bravebot/issues/23). A picture is
+  a file to open rather than bytes on the screen, and
+  [tools/vet-content.md](tools/vet-content.md#VET-4) states what that costs.
 
 - **With auto-vetting on, the bytes are on no screen at all.** [CHECK-12](#CHECK-12) is a person
   saying in advance that a check finding nothing is enough, so on the routes it covers nobody reads

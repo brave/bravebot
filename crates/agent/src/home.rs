@@ -112,6 +112,39 @@ pub fn writable() -> Option<PathBuf> {
     directory()
 }
 
+/// The directory the platform keeps this user's disposable files in, or `None` where it names none.
+///
+/// Where a copy goes that has to be somewhere only this user can reach and outlives no more than a
+/// prompt. Not the system temporary directory, which every program a session confines may write
+/// (SANDBOX-12), and not [`directory`], which an incognito session adds nothing to. macOS names
+/// `~/Library/Caches`, Windows `%LOCALAPPDATA%`, and every other platform `$XDG_CACHE_HOME` where
+/// it is an absolute path and `~/.cache` where it is not.
+pub fn cache() -> Option<PathBuf> {
+    platform_cache()
+}
+
+#[cfg(target_os = "macos")]
+fn platform_cache() -> Option<PathBuf> {
+    profile().map(|profile| profile.join("Library").join("Caches"))
+}
+
+#[cfg(windows)]
+fn platform_cache() -> Option<PathBuf> {
+    std::env::var_os("LOCALAPPDATA")
+        .filter(|named| !named.is_empty())
+        .map(PathBuf::from)
+}
+
+#[cfg(all(not(target_os = "macos"), not(windows)))]
+fn platform_cache() -> Option<PathBuf> {
+    // A relative value is one the XDG specification says to ignore, since it would name a
+    // directory under wherever the session happened to start.
+    std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .filter(|named| named.is_absolute())
+        .or_else(|| profile().map(|profile| profile.join(".cache")))
+}
+
 /// The single path segment standing for a working directory.
 ///
 /// Separators become dashes and anything that is not a plain path character goes the same way, so

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   AskAnswer,
   BridgeEvent,
+  Checking,
   ForkedSession,
   KeptTrust,
   OpenedSession,
@@ -60,8 +61,8 @@ interface Live {
   todos: TodoRow[]
   quarantine: Shown[]
   phase: Phase | null
-  /** Lines a running confined check was given. Beside the phase, which a check does not change. */
-  checking: number | null
+  /** What a running confined check was given. Beside the phase, which a check does not change. */
+  checking: Checking | null
   tokens: number
   contextTokens?: number
   running: boolean
@@ -1400,7 +1401,7 @@ export function apply(
         return { ...old, phase: message.data.phase }
       // The phase is left alone: it is what the word goes back to once the check is over.
       case 'check.started':
-        return { ...old, checking: message.data.lines }
+        return { ...old, checking: message.data }
       case 'check.finished':
         return { ...old, checking: null }
       case 'tokens':
