@@ -23,6 +23,7 @@ person typed. This is the mode that declines to keep it. The audit trail's conte
 
 One file in that directory is still written, and [INCOG-8](#INCOG-8) states it: the imported
 credentials, which a session spends and records as spent.
+[MEMORY-5](definition-memory.md#MEMORY-5) would add a second, which nothing yet builds.
 
 The boundary here is the directory this process owns. It is not confinement:
 [sandboxing.md](sandboxing.md) is the operating-system boundary, it applies to subprocesses running
@@ -66,6 +67,10 @@ including by the session itself.
 An ordinary session from before may still be resumed and read. It stops being updated for as long
 as the incognito session runs, so what is on disk afterwards is what the last ordinary session left
 there.
+
+[MEMORY-5](definition-memory.md#MEMORY-5), which nothing yet builds, leaves one trace: a
+definition's memory the session left untrusted is recorded by its path, which says the project was
+worked in.
 
 **Why.** An empty directory is a record. It says a session ran, in this project, at this time, which
 is most of what the record was for. The directory is therefore asked about before it is created
@@ -206,6 +211,10 @@ more than what it leaves behind:
   created `0600` and refuses to reuse an existing name, and is removed when the prompt closes. A
   process killed with the prompt open leaves it behind. [VET-4](tools/vet-content.md#VET-4) governs
   it.
+
+[MEMORY-5](definition-memory.md#MEMORY-5) adds a ninth, which nothing yet builds: the record that a
+definition's memory was left untrusted, naming its path and nothing else, kept under `~/.bravebot`
+so that no later session reads what this one left untrusted as trusted.
 
 **Why.** A stated limit is worth more than an unstated one. Someone who knows the third of these
 can decide not to open an editor; someone who assumed the mode covered it has been misled by their

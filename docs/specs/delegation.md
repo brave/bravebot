@@ -44,7 +44,7 @@ lands.
 | | |
 |---|---|
 | Tools | its kind's, which are what its capabilities reach, and a way to delegate only above the bottom of the tree |
-| Memory | none of its parent's exchange: it begins with the task it was given |
+| Memory | none of its parent's exchange: it begins with the task it was given, and, where its definition keeps a memory, with where that memory is, which it reads itself ([MEMORY-4](definition-memory.md#MEMORY-4), which nothing yet builds) |
 | Conversation | a loop of its own, bounded |
 | Reads | whatever its capabilities and the paths a person vouched for allow |
 | Writes | files, each shown to a person first, and slots in a quarantine of its own |
@@ -170,6 +170,10 @@ The driver's own words bracket the body and are never replaceable by it: the gui
 planner here gets comes before it, and what the delegate cannot do comes after. A body that could
 displace the second would be a checked-in file telling a delegate it may do what its kind cannot,
 which is [DELEGATE-4](#DELEGATE-4)'s sentence read backwards.
+
+[MEMORY-4](definition-memory.md#MEMORY-4), which nothing yet builds, adds a sentence of the
+driver's after the body: where the definition's memory is and what the trust map says of it. No word
+of the memory itself goes in, since a planner can write one.
 
 **What it cannot do is chosen from what it holds, not from its kind.** The two stopped agreeing
 the moment either could be narrowed: a `worker` spawned by a run that cannot write, or one whose
@@ -650,6 +654,10 @@ the last round what it refuses on the first. They are held to the ceiling of the
 replacement is loaded as, so a project writing a `worker`'s number under the name of a `reader` a
 person wrote gets a `reader`'s ceiling, and is told so ([DELEGATE-6](#DELEGATE-6)).
 
+The `memory:` key is taken over as the body is, because a memory changes what a run knows and
+never what it may do. [MEMORY-2](definition-memory.md#MEMORY-2) specifies that key, and nothing yet
+builds it.
+
 DELEGATE-19 says a checked-in file granting a capability would make the file the author of
 authority rather than the person who vouched for it, and a wider `kind:` for a name that person
 already defined is that grant written another way. The vouch that let the project's file be read at
@@ -703,8 +711,10 @@ definition and is not: by then the source it came from is one somebody vouched f
 named is its path rather than the name it asked for. A file from a directory nobody vouched for is
 never reached at all, and is counted with the rest.
 
-There is no length limit and no character class. A name is compared, never resolved against
-anything, so what it may hold is [SKILL-8](skills.md#SKILL-8)'s question and not this one.
+There is no length limit and no character class for a definition that keeps no memory. Its name is
+compared, never resolved against anything, so what it may hold is [SKILL-8](skills.md#SKILL-8)'s
+question and not this one. The name of a definition that keeps a memory also names a file, and
+[MEMORY-3](definition-memory.md#MEMORY-3), which nothing yet builds, holds it to a slug.
 
 `verified-by: bravebot_agent::agents::a_name_that_is_or_folds_to_a_colon_is_refused`
 

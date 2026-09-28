@@ -18,4 +18,15 @@ docs/specs/credential-protection.md:CRED-21: accepting a finding expires
 docs/specs/credential-protection.md:CRED-22: the baseline is not writable by a turn
 docs/specs/credential-protection.md:CRED-24: a credential never travels as a command-line argument
 docs/specs/credential-protection.md:CRED-26: where a credential can be bound to its presenter, that is the form asked for
+docs/specs/definition-memory.md:MEMORY-1: the definition file holds what a bot is for, and the desktop's store holds what happened to it
+docs/specs/definition-memory.md:MEMORY-2: `memory: project` or `local` keeps one file in the working directory, and no other value keeps one anywhere
+docs/specs/definition-memory.md:MEMORY-3: only a definition whose name is a slug keeps a memory
+docs/specs/definition-memory.md:MEMORY-4: the run is told where its memory is and what the map says of it, and reads it itself
+docs/specs/definition-memory.md:MEMORY-5: a memory a write left untrusted is still untrusted in the next session
+docs/specs/definition-memory.md:MEMORY-6: a memory is kept with the tools the run holds, and keeping one adds none
+docs/specs/definition-memory.md:MEMORY-7: a definition works in the checkout its session is in, and no file names one
+docs/specs/definition-memory.md:MEMORY-8: making a desktop bot writes a definition in the person's own directory
+docs/specs/definition-memory.md:MEMORY-9: editing a bot rewrites only the fields the form shows
+docs/specs/definition-memory.md:MEMORY-10: every turn in a bot's conversation addresses the bot's definition
+docs/specs/definition-memory.md:MEMORY-11: a bot made before this keeps its notes where they are, untrusted until a person reads them
 docs/specs/trust-map.md:TRUST-20: a directory such a helper is pinned to is one a person opened
