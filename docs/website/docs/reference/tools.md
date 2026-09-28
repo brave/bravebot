@@ -1006,7 +1006,7 @@ of capabilities, and gets back one report.
 |---|---|---|
 | `reader` | reading | finding something out |
 | `checker` | reading, running programs, and asking a language server | finding out whether something works |
-| `worker` | reading, running programs, asking a language server, and writing files | finishing a sub-task |
+| `worker` | reading, running programs, asking a language server, writing files, and calling the [MCP servers](../customize/mcp-servers.md) its parent may | finishing a sub-task |
 
 The call answers as soon as the delegate has been approved, so the planner has its round back while
 the work goes on behind it, and what the delegate says arrives on its own later. Several delegates
@@ -1031,7 +1031,8 @@ delegate that never learns it. It cannot come back for more, since there is no c
 along. A run whose own context has met something untrusted cannot delegate at all.
 
 **Delegation saves context, never an approval.** Every write and every run a delegate makes reaches you
-with its own single-use endorsement, so you see the path and the diff whoever proposed them. What you
+with its own single-use endorsement, so you see the path and the diff whoever proposed them, and every
+call a worker makes to a server's tool is put to you as the turn's own is. What you
 vouched for inside one comes back to the session, because that answer was about your machine rather
 than about the run that happened to be going.
 

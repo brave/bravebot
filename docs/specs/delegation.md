@@ -118,14 +118,22 @@ The three kinds are ordered, so choosing a wider one never costs a narrower one'
 |---|---|---|
 | `reader` | reading | finding something out |
 | `checker` | reading, running programs, asking a language server | finding out whether something works |
-| `worker` | reading, running programs, asking a language server, writing files | finishing a sub-task |
+| `worker` | reading, running programs, asking a language server, writing files, calling each MCP server its parent may | finishing a sub-task |
 
 A language server goes with running programs and never without it, because starting one runs the
 project's build tooling ([LSP-9](tools/lsp.md#LSP-9)).
 
+A reader and a checker hold no MCP server's grant ([SERVERS-9](mcp-servers.md#SERVERS-9)). What a
+server's tool does is the server's to say, so a call to one may write or run anything, and a worker
+is the one kind already let write and run. No kind names a server, since which servers a session
+reached is not known until it starts, so a worker holds a server's grant only where its parent
+does. A definition with a `tools:` line holds none: the line names this program's tools and no
+server's.
+
 Every kind additionally reaches the network, because a planner is a model call and the request out
-is egress like any other. No tool a delegate is offered reaches it, so what it buys is the ability
-to ask the endpoint on that delegate's behalf. A kind without it is a kind that cannot think.
+is egress like any other. No tool of this program's that a delegate is offered reaches it, so what
+it buys is the ability to ask the endpoint on that delegate's behalf. A kind without it is a kind
+that cannot think.
 
 A delegate naming a tool that reaches the network anyway is answered the way any other unknown
 name is. The capability is held, so no gate refuses that call, which is why the absence from the
@@ -139,6 +147,12 @@ tool list is written out a second time as a refusal.
 `verified-by: bravebot_agent::tools::no_kind_is_offered_a_tool_that_reaches_the_network`
 `verified-by: bravebot_agent::turn::a_delegate_naming_fetch_url_reaches_no_host`
 `verified-by: bravebot_agent::delegate::no_kind_is_told_it_may_reach_the_network`
+`verified-by: bravebot_core::delegate::only_a_worker_holds_the_servers_of_the_run_it_is_carved_from`
+`verified-by: bravebot_core::delegate::a_worker_holds_no_server_its_parent_does_not`
+`verified-by: bravebot_core::delegate::a_worker_naming_its_tools_holds_no_server`
+`verified-by: bravebot_core::policy::a_worker_delegate_holds_the_servers_its_parent_holds_and_no_other`
+`verified-by: bravebot_agent::mcp::a_reader_or_a_checker_delegate_holds_no_server_and_reaches_none`
+`verified-by: bravebot_agent::mcp::a_worker_is_offered_only_the_servers_its_parent_holds`
 
 <a id="DELEGATE-5"></a>
 ### DELEGATE-5: the prompt belongs to the definition, and the planner writes no word of it
@@ -312,13 +326,18 @@ its parent's context would have moved the log rather than absorbed it.
 <a id="DELEGATE-10"></a>
 ### DELEGATE-10: a delegate's effects are gated on their own
 
-Every write and every run passes the same gates with its own single-use endorsement, so a person
-sees the path and the diff whoever proposed them. An approval given inside a delegate cannot be
-replayed by its parent, and one the parent already holds does not carry in.
+Every write, every run and every call to a server's tool passes the same gates with its own
+single-use endorsement, so a person sees the path and the diff, or the tool and its arguments,
+whoever proposed them. An approval given inside a delegate cannot be replayed by its parent, and
+one the parent already holds does not carry in. A rule, and an answer that stops asking for one
+server's tool in one project ([SERVERS-7](mcp-servers.md#SERVERS-7)), decide a delegate's call as
+they decide the turn's, since each is a standing decision about the person's machine rather than an
+approval of one call.
 
 Delegation saves context. It never saves an approval.
 
 `verified-by: bravebot_agent::turn::a_delegates_write_is_approved_on_its_own`
+`verified-by: bravebot_agent::mcp::a_workers_call_to_a_servers_tool_is_put_to_the_person`
 
 <a id="DELEGATE-11"></a>
 ### DELEGATE-11: what a person vouched for outlives the delegate
@@ -770,12 +789,13 @@ has.
   character Unicode adds to that set later is one [DELEGATE-21](#DELEGATE-21) would not catch
   until the list is extended.
 
-- **A definition cannot point its delegate at an MCP server.** Holding a server is a capability and
-  no kind holds one, so a delegate holds no server's grant and is offered no server's tool
-  ([SERVERS-9](mcp-servers.md#SERVERS-9)), and a definition naming one would widen its delegate
-  past its kind, which [DELEGATE-4](#DELEGATE-4) forbids. An `mcpServers:` key is ignored like any
-  other key this does not read, so a definition written to talk to one server says nothing about
-  it here.
+- **A definition cannot choose which MCP servers its delegate holds.** A worker holds every server
+  its parent holds, and a reader, a checker and a definition with a `tools:` line hold none
+  ([DELEGATE-4](#DELEGATE-4)). An `mcpServers:` key is ignored like any other key this does not
+  read, so a definition written to talk to one server is either a worker offered every other
+  server's tools too or a delegate offered none. Each call still passes the gates the turn's own
+  would ([DELEGATE-10](#DELEGATE-10)), so the cost is tools offered that the definition never meant
+  to use, and not a call nobody decided.
 
 - **A `skills:` line is split the way a `tools:` line is.** Commas and spaces separate names and a
   list's bullets are dropped, so a skill whose name holds a space cannot be named, and a YAML flow

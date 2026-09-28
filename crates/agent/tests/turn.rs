@@ -19833,6 +19833,7 @@ fn a_delegate_spends_the_wallet_the_turn_lent_it() {
         false,
         &bravebot_config::Attribution::default(),
         None,
+        None,
         &bravebot_core::cancel::Cancel::new(),
         &mut bravebot_agent::confirm::ApproveWrites,
         &mut bravebot_agent::IgnoreReports,

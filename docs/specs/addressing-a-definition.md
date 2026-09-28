@@ -210,10 +210,13 @@ the trail says what was dropped. The run is told what it holds in the words a de
 them, less the sentence about an agent that asked it, because the planner's own guidance around
 them is written for a turn that can edit and run.
 
-No kind holds an MCP server, so no addressed run does: it is offered none of the tools of the
-servers this session reached, and no server's list is put to the person for it. A `checker` and a
-`worker` hold a language server and a `reader` does not ([LSP-9](tools/lsp.md#LSP-9)), so a run
-addressed to either of the first two keeps the `lsp` tool the session holds.
+An MCP server's grant is held on a delegate's terms ([DELEGATE-4](delegation.md#DELEGATE-4)): a
+run under a worker that names no tools keeps every server this session reached, is put their lists
+as the session's own turn is, and is offered their tools beside the ones its definition leaves it.
+A run under any other definition holds no server's grant, is offered none of their tools, and no
+server's list is put to the person for it. A `checker` and a `worker` hold a language server and a
+`reader` does not ([LSP-9](tools/lsp.md#LSP-9)), so a run addressed to either of the first two
+keeps the `lsp` tool the session holds.
 
 **Why.** Addressing a definition is a person choosing which of their own capabilities to work
 under, so it can only take away. This is the same direction a delegate's capabilities are computed
@@ -228,7 +231,9 @@ authority, which is the one thing a definition is not.
 `verified-by: bravebot_core::policy::an_addressed_turn_is_offered_only_the_tools_its_definition_named`
 `verified-by: bravebot_agent::turn::a_tool_an_addressed_definition_left_out_is_refused_when_the_model_calls_it`
 `verified-by: bravebot_agent::turn::an_addressed_turn_is_told_what_its_definition_left_it`
-`verified-by: bravebot_agent::mcp::an_addressed_turn_is_offered_no_servers_tool_and_asks_about_no_list`
+`verified-by: bravebot_agent::mcp::an_addressed_reader_is_offered_no_servers_tool_and_asks_about_no_list`
+`verified-by: bravebot_agent::mcp::an_addressed_worker_is_put_the_list_and_calls_the_servers_tool`
+`verified-by: bravebot_core::policy::an_addressed_worker_keeps_the_sessions_servers_and_a_reader_gives_them_up`
 
 <a id="ADDRESS-8"></a>
 ### ADDRESS-8: the tools withheld from every delegate are not withheld here, except what arms a later turn

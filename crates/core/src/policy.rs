@@ -2818,7 +2818,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// The capabilities are the kind's, narrowed by what this run holds. Delegation redistributes
     /// authority and never creates it, so the intersection is taken here rather than trusted to
     /// be empty: a kind asking for something the parent lacks gets a delegate without it, and the
-    /// trail says what was dropped.
+    /// trail says what was dropped. A kind that holds servers carries every server this run holds
+    /// and no other, so a delegate can call what the turn already may (SERVERS-9).
     ///
     /// The number is minted here, beneath this run's own, and a refusal spends one as a delegate
     /// would. Two bounds are this call's to keep: a run at [`MAX_DEPTH`] spawns nothing, and a
@@ -2935,10 +2936,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         }
 
         let wanted = selected.capabilities();
-        let held: CapabilitySet = wanted
-            .iter()
-            .filter(|capability| self.capabilities.contains(capability))
-            .collect();
+        let held = selected.held_out_of(&self.capabilities);
         let dropped: Vec<&str> = wanted
             .iter()
             .filter(|capability| !self.capabilities.contains(capability))
@@ -2993,8 +2991,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// composes what steers a new run, and here the person did: the name and the task are both
     /// their line, so nothing this context has met reaches either (ADDRESS-4).
     ///
-    /// The turn keeps only what it holds that the definition also asks for, so a definition can
-    /// take away and never add (ADDRESS-7). What stays offered is `offered` less every tool whose
+    /// The turn keeps only what it holds that the definition also asks for, and its servers only
+    /// where the definition holds servers, so a definition can take away and never add
+    /// (ADDRESS-7). What stays offered is `offered` less every tool whose
     /// capability is gone and every tool the definition did not name. [`NEVER_DELEGATED`] plays
     /// no part, because this is the person's own turn and not a delegate (ADDRESS-8). Both
     /// narrowings are recorded, so the trail says what the definition cost.
@@ -3020,11 +3019,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         };
 
         let wanted = selected.capabilities();
-        let held: CapabilitySet = self
-            .capabilities
-            .iter()
-            .filter(|capability| wanted.contains(capability))
-            .collect();
+        let held = selected.held_out_of(&self.capabilities);
         let given_up: Vec<String> = self
             .capabilities
             .iter()
@@ -12831,6 +12826,45 @@ five
             );
         }
 
+        /// SERVERS-9 through DELEGATE-4. A worker holds every server the run that spawned it holds
+        /// and no other, and a reader and a checker hold none, so what a delegate may call is a
+        /// server the turn already may. The trail names the server the worker was handed.
+        #[test]
+        fn a_worker_delegate_holds_the_servers_its_parent_holds_and_no_other() {
+            let weather = Capability::McpCall(ServerAlias::new("weather"));
+            let notes = Capability::McpCall(ServerAlias::new("notes"));
+            for name in Kind::NAMES {
+                let mut sink = RecordingSink::new();
+                let mut policy = Policy::begin(
+                    routing_with("task", "look into it"),
+                    ReleasePlan::new(),
+                    all_capabilities().iter().chain([weather.clone()]).collect(),
+                    &mut sink,
+                )
+                .unwrap();
+
+                let spec = policy
+                    .before_delegate(&argument(name), &argument("look it up"))
+                    .expect("an enumerated kind");
+                let kind = Kind::from_name(name).expect("enumerated");
+                assert_eq!(
+                    spec.capabilities().contains(&weather),
+                    kind == Kind::Worker,
+                    "a {name} and the server its parent holds"
+                );
+                assert!(
+                    !spec.capabilities().contains(&notes),
+                    "a {name} was handed a server its parent never held"
+                );
+                let trail = format!("{:?}", sink.events());
+                assert_eq!(
+                    trail.contains("mcp_call:weather"),
+                    kind == Kind::Worker,
+                    "{name}: {trail}"
+                );
+            }
+        }
+
         /// The bound belongs to the definition, so nothing about a call can lengthen it. A
         /// planner that could set it would be setting its own delegate's budget from a sentence it
         /// wrote.
@@ -13484,6 +13518,43 @@ five
                     keeps,
                     "a turn addressed to a {name}"
                 );
+            }
+        }
+
+        /// ADDRESS-7 for a server. An addressed worker keeps every server the session holds; a
+        /// reader, and a worker whose definition named its tools, give each one up, and the gate
+        /// refuses a call to it whatever the tool list offers.
+        #[test]
+        fn an_addressed_worker_keeps_the_sessions_servers_and_a_reader_gives_them_up() {
+            let weather = Capability::McpCall(ServerAlias::new("weather"));
+            let session = || -> CapabilitySet {
+                all_capabilities().iter().chain([weather.clone()]).collect()
+            };
+            for (name, keeps) in [
+                ("worker", true),
+                ("rule-reviewer", false),
+                ("narrow", false),
+            ] {
+                let mut sink = RecordingSink::new();
+                let mut policy = addressing(name, session(), &mut sink);
+                let addressed = policy
+                    .address(&OFFERED)
+                    .expect("a resolved name is addressed")
+                    .expect("the line named a definition");
+                assert_eq!(addressed.capabilities().contains(&weather), keeps, "{name}");
+                assert_eq!(
+                    policy.before_capability(weather.clone()).is_ok(),
+                    keeps,
+                    "{name}"
+                );
+                let trail = trail(&sink);
+                let gave_up = trail.split("runs without").skip(1).any(|after| {
+                    after
+                        .split('"')
+                        .next()
+                        .is_some_and(|list| list.contains("mcp_call:weather"))
+                });
+                assert_eq!(gave_up, !keeps, "{name}: {trail}");
             }
         }
 

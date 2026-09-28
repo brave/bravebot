@@ -764,8 +764,8 @@ pub struct Task {
     pub servers: Vec<bravebot_core::capability::ServerAlias>,
     /// The servers themselves, whose tools a turn offers once somebody vouched for their lists.
     ///
-    /// `None` for a caller that reached none. A delegate is offered none of them whatever this
-    /// holds, since its capabilities come from its spec and no kind names a server.
+    /// `None` for a caller that reached none. A delegate is handed its parent's and offered the
+    /// tools of the servers its spec holds, which for a kind that holds no servers is none.
     pub mcp: Option<crate::mcp::Session>,
 }
 
@@ -1104,7 +1104,8 @@ impl Task {
 /// A delegate holds what the kernel worked out before it existed, which is its kind's set
 /// narrowed by whatever the run that spawned it held. Taken from the spec rather than recomputed
 /// here, because a second computation of the same thing is a second answer waiting to disagree
-/// with the one the trail recorded. No kind names a server, so no delegate holds one.
+/// with the one the trail recorded. The servers it holds are there too, where its kind holds
+/// servers, and are every one its parent held.
 fn held(task: &Task) -> CapabilitySet {
     match &task.delegate {
         Some(spec) => spec.capabilities().clone(),
@@ -2788,11 +2789,25 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
 
         // The lists of the servers this session reached, settled at the start of a turn somebody asked
         // for, a tick of their loop included, which is where there is a person to put a list to
-        // (SERVERS-8). A delegate is offered no tool of theirs, and its capabilities name no server to
-        // call one with. Nor is a turn addressed to a definition: no kind holds a server, so what the
-        // session and the kind both hold names none either (ADDRESS-7).
-        let mcp = match (&task.delegate, &addressed, &task.mcp) {
-            (None, None, Some(session)) => {
+        // (SERVERS-8). A delegate settles none, since it puts no question to a person (DELEGATE-12),
+        // and is offered what its parent's turn already settled. Every run is offered the tools of the
+        // servers it holds a grant for and no other, so a run of a definition that holds no servers is
+        // offered none and, being put no list, is asked about none either (ADDRESS-7).
+        let holding = match (&task.delegate, &addressed) {
+            (Some(spec), _) => spec.capabilities().clone(),
+            (None, Some(addressed)) => addressed.capabilities().clone(),
+            (None, None) => held(task),
+        };
+        let holds_a_server = holding
+            .iter()
+            .any(|capability| matches!(capability, Capability::McpCall(_)));
+        let mcp = match (&task.delegate, &task.mcp) {
+            (_, Some(_)) if !holds_a_server => None,
+            (Some(_), Some(session)) => Some((
+                session.offer().holding(&holding),
+                bravebot_aichat::protocol::Usage::default(),
+            )),
+            (None, Some(session)) => {
                 let settled = session.settle(
                     &mut policy,
                     &mut crate::processor::Chat {
@@ -2814,9 +2829,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         .into_iter()
                         .map(crate::skills::Notice::from_message),
                 );
-                Some((session.offer(), settled.usage))
+                Some((session.offer().holding(&holding), settled.usage))
             }
-            _ => None,
+            (_, None) => None,
         };
         if let Some((offer, _)) = &mcp {
             offered.extend(offer.functions());
@@ -3415,6 +3430,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                     task.auto_vetting,
                                     &task.attribution,
                                     task.output_cap,
+                                    task.mcp.as_ref(),
                                     cancel,
                                     &mut confirmer,
                                     &mut reporter,
@@ -4379,10 +4395,11 @@ mod tests {
         );
     }
 
-    /// A turn holds a grant for each server the session reached and for no other, and a delegate
-    /// it spawns holds none: the widest kind is a worker, and a worker names no server.
+    /// A turn holds a grant for each server the session reached and for no other. A worker it
+    /// spawns holds the same ones, and a reader and a checker hold none, whatever servers the
+    /// delegate's own task names: its grants are its spec's.
     #[test]
-    fn a_turn_holds_a_grant_per_server_it_was_handed_and_its_delegate_holds_none() {
+    fn a_turn_holds_a_grant_per_server_it_was_handed_and_only_its_worker_holds_them_too() {
         use bravebot_core::capability::ServerAlias;
         let call = |alias: &str| Capability::McpCall(ServerAlias::new(alias));
 
@@ -4395,23 +4412,32 @@ mod tests {
             "a turn handed no server holds a grant for one"
         );
 
-        let mut sink = bravebot_core::event::RecordingSink::new();
-        let mut routing = Routing::new();
-        routing.insert_trusted("task", "look it up");
-        let mut policy = Policy::begin(routing, ReleasePlan::new(), held, &mut sink).unwrap();
-        let spec = policy
-            .before_delegate(
-                &Labelled::trusted("worker".to_string()),
-                &Labelled::trusted("look it up".to_string()),
-            )
-            .expect("a trusted run may delegate");
-        let delegated =
-            super::held(&Task::delegated(spec).with_servers(vec![ServerAlias::new("weather")]));
-        assert!(
-            !delegated
+        for kind in bravebot_core::delegate::Kind::NAMES {
+            let mut sink = bravebot_core::event::RecordingSink::new();
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "look it up");
+            let mut policy =
+                Policy::begin(routing, ReleasePlan::new(), held.clone(), &mut sink).unwrap();
+            let spec = policy
+                .before_delegate(
+                    &Labelled::trusted(kind.to_string()),
+                    &Labelled::trusted("look it up".to_string()),
+                )
+                .expect("a trusted run may delegate");
+            let delegated = super::held(
+                &Task::delegated(spec)
+                    .with_servers(vec![ServerAlias::new("weather"), ServerAlias::new("docs")]),
+            );
+            let servers: Vec<String> = delegated
                 .iter()
-                .any(|c| matches!(c, Capability::McpCall(_))),
-            "a delegate holds a server grant: {delegated:?}"
-        );
+                .filter(|c| matches!(c, Capability::McpCall(_)))
+                .map(|c| c.to_string())
+                .collect();
+            let expected: &[&str] = match kind {
+                "worker" => &["mcp_call:weather"],
+                _ => &[],
+            };
+            assert_eq!(servers, expected, "a {kind}'s server grants");
+        }
     }
 }
