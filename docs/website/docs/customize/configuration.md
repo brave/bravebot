@@ -1236,11 +1236,15 @@ rather than falling back to the default.
 
 ## How long a reply may run
 
-A Bedrock request states a ceiling on the reply, and a model that states none is assumed to allow
-**8,192** tokens. That figure is deliberately low, for the reason the context window's is, with the
-asymmetry the other way round: a ceiling below what a model allows costs the tail of a long answer,
-while one above what it allows is a request the service refuses outright and refuses every time. A
-guess upward would not cost a reply its ending, it would cost the model the ability to answer at all.
+A Bedrock request states a ceiling on the reply, and a model that states none is sent **32,000**
+tokens, which every model on Anthropic's current lineup allows. A model that allows less refuses the
+request, and is asked again with **8,192**: once per model for as long as bravebot runs, so the
+refusal costs one request rather than every answer. A figure you state is never lowered, so a model
+that refuses one you chose fails with the service's refusal.
+
+The ceiling is also what Bedrock reserves against the account's tokens-per-minute quota while each
+request runs, so on an inference profile a team shares, a larger one means fewer requests at once
+before any of them is throttled.
 
 Raise it for every model this build reaches:
 

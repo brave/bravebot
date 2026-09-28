@@ -189,18 +189,25 @@ const _: () = assert!(CONTEXT_WINDOW > crate::DEFAULT_CONTEXT_BUDGET);
 
 /// How many tokens a Bedrock reply may run to, where nothing states another figure.
 ///
-/// The error leans low here for the opposite reason it does for [`CONTEXT_WINDOW`], and with the
-/// opposite consequence. A ceiling under what the model would allow costs the tail of a long
-/// answer; one above what it allows is a request the service refuses outright, and refuses every
-/// time, so a model that would have answered at all answers nothing. Bedrock fronts models from
-/// several providers whose ceilings differ by an order of magnitude, an inference-profile ARN does
-/// not say which model is behind it, and no endpoint reports the figure, so there is nothing to
-/// resolve a guess against.
+/// Within what every model on Anthropic's current lineup allows, 64,000 for the smallest. A model
+/// allowing less refuses the request carrying it, and is then sent [`OUTPUT_LIMIT_FALLBACK`]
+/// instead, once per model per process, so a figure above some models' costs one refused request
+/// rather than every answer. The figure is also reserved against the account's tokens-per-minute
+/// quota when each request starts and refunded when it ends, so it is kept well below the largest
+/// any model allows: a larger one lets fewer requests share an inference profile at once.
 ///
-/// Low enough to hurt, therefore, and the answer to that is to state a better one rather than to
-/// guess a better one here: a `provider` block states it per model beside the window, and
-/// [`env_var::OUTPUT_BUDGET`] states it for a tier, which has no block to state anything in.
-pub const OUTPUT_LIMIT: u64 = 8_192;
+/// A `provider` block states a figure per model beside the window, and [`env_var::OUTPUT_BUDGET`]
+/// states one for a tier, which has no block to state anything in. A stated figure is never
+/// stepped down: it is somebody's statement about the model, and a refusal of it is theirs to see.
+pub const OUTPUT_LIMIT: u64 = 32_000;
+
+/// The ceiling sent to a model that refused [`OUTPUT_LIMIT`].
+///
+/// Low, because nothing names the model that refused and this has to hold for one that allows
+/// little: the models Bedrock fronts differ in what they allow by an order of magnitude.
+pub const OUTPUT_LIMIT_FALLBACK: u64 = 8_192;
+
+const _: () = assert!(OUTPUT_LIMIT_FALLBACK < OUTPUT_LIMIT);
 
 impl Bedrock {
     /// Read Bedrock configuration from a lookup, or `None` if this build is not pointed at it.
@@ -290,9 +297,14 @@ impl Bedrock {
     /// would fail on the name long before the ceiling mattered, and a caller holding an
     /// `Option<u64>` here would have to invent the same fallback.
     pub fn output_limit(&self, model: &str) -> u64 {
+        self.stated_output_limit(model).unwrap_or(OUTPUT_LIMIT)
+    }
+
+    /// The ceiling somebody stated for `model`, exported or in its block, and `None` where
+    /// [`OUTPUT_LIMIT`] is assumed.
+    pub fn stated_output_limit(&self, model: &str) -> Option<u64> {
         self.output_budget
             .or_else(|| self.entry(model).and_then(|entry| entry.output_limit))
-            .unwrap_or(OUTPUT_LIMIT)
     }
 
     /// Every configured model, strongest tier first.
