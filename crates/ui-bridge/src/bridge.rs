@@ -1323,6 +1323,7 @@ fn work(work: Work) {
         .already_asked_about(state.asked_about.clone())
         .already_exposed(state.exposed.clone())
         .with_home(bravebot_agent::home::directory())
+        .with_cache(bravebot_agent::home::cache())
         // No bound on the rounds, as the terminal passes: there is a person in front of this
         // window, they see what the turn is doing, and `turn.cancel` reaches it mid-round. A
         // number would only interrupt work that was going fine (TURN-2).

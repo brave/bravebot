@@ -56,6 +56,18 @@ test('a replayed transcript draws the record, not what a message says about itse
   assert.equal(drawn[6].text, 'still said', 'a tag this build does not know is quoted, not dropped')
 })
 
+test('a replayed file vet_content let through is drawn from its tag, and is no prompt', () => {
+  const t = load('src/renderer/transcript.ts')
+  const drawn = t.fromSaid([
+    { kind: 'vetted', reference: 'ref:3', media: 'image/png' },
+    { kind: 'vetted', reference: 'ref:4', media: 'application/pdf' },
+  ])
+  assert.deepEqual(drawn.map((entry) => entry.kind), ['narration', 'narration'])
+  assert.equal(drawn[0].text, 'The picture ref:3 held was let through and attached for the model')
+  assert.equal(drawn[1].text, 'The PDF ref:4 held was let through and attached for the model')
+  assert.equal(drawn[0].prompt, undefined, 'a fork has nothing to cut on here')
+})
+
 test('a prompt keeps the ordinal it arrived with, whatever row it is drawn on', () => {
   const t = load('src/renderer/transcript.ts')
   // The ordinals are upstream's, over its user messages: the attachment, the watch and the
@@ -337,6 +349,12 @@ test('a running check takes the working word from every phase, and gives it back
   // An empty slot is still a check running, so a count of `0` must not read as no check.
   session.send('check.started', { lines: 0 })
   assert.equal(session.word(), 'Checking 0 lines')
+  session.send('check.finished', {})
+  // A picture or a PDF has no lines to count, and is named as what it is.
+  session.send('check.started', { file: 'picture' })
+  assert.equal(session.word(), 'Checking a picture')
+  session.send('check.started', { file: 'pdf' })
+  assert.equal(session.word(), 'Checking a PDF')
 })
 
 // A turn that is done but consolidating is still drawn as running, so a check whose end never

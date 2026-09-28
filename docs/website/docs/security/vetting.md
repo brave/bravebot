@@ -64,9 +64,30 @@ check so a page can be judged against what it was supposed to be. It must not be
 must not become another model's prompt. Where the content came from is said in Brave Bot's words, as a
 path, a URL or a command, because a reference name means something to the planner and nothing to you.
 
-It refuses a reference to nothing, a picture (a check reads text, and the planner would be handed the
-picture's encoded bytes as text it trusts), a private sentence, and a call from a delegate. A reference to a file nothing has read yet is opened rather than refused, since naming one is
-the ordinary way for the planner to ask about a file it may not read.
+It refuses a reference to nothing, a private sentence, and a call from a delegate. A reference to a file
+nothing has read yet is opened rather than refused, since naming one is the ordinary way for the planner
+to ask about a file it may not read.
+
+## A picture or a PDF
+
+A PNG, JPEG, GIF, WebP or PDF file the planner read goes the same way as text, with two differences. The
+check is given the file itself and told it is a file, so it reads words drawn in the picture. And since
+neither the terminal nor the desktop window draws a picture, the prompt shows you a path to a copy of it
+instead of the bytes, with its media type, its size and what the check said.
+
+Open it in your own viewer, zoom in if you need to, and press `y` to let the planner see it. The copy is
+the bytes that were read, not the file as it is now, is readable only by your account, and is removed
+when the prompt closes. With auto-vetting on, a check that found nothing lets the picture through
+unasked; bypassing permissions with no screening lets it through with no check made.
+
+A picture that is let through is attached to the planner's next request, never pasted into your own
+message, and comes once: the next read of the same file is quarantined again. It is refused before a
+check where the gateway lists the model in use as not taking pictures (or PDFs), and where the machine
+names no cache directory to put a copy in.
+
+A yes about a picture is weaker than a yes about text. A file can hold bytes no viewer draws, such as
+metadata, or a PDF's text layer, and a model may be handed them. Opening it also hands attacker-owned bytes
+to your viewer, outside every confinement Brave Bot has.
 
 A delegate is not offered it because the prompt would belong to you, about content you never asked to
 see, in the middle of work you are not reading.

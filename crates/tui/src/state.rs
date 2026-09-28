@@ -1372,7 +1372,7 @@ pub struct Session {
     /// a tool call, the phase the round is in does not change while it runs, and it ends at a
     /// moment of its own. A phase is replaced by the next phase, and the moment this has to stop
     /// being drawn is the moment before a prompt is put up, which no phase is announced at.
-    checking: Option<usize>,
+    checking: Option<bravebot_core::vetting::Checking>,
     /// The points this session can be put back to, oldest first.
     ///
     /// Private, because the depth and the budget hold over the whole list rather than over any
@@ -1836,8 +1836,13 @@ impl Session {
         // session is waiting on. With auto-vetting on and a safe verdict no prompt is ever drawn
         // for it either, so without this the two words on that row are the whole of what a person
         // sees for the whole wait.
-        if let Some(lines) = self.checking {
-            return Some(t!(indicator_checking, lines = lines).to_string());
+        if let Some(checking) = self.checking {
+            use bravebot_core::vetting::Checking;
+            return Some(match checking {
+                Checking::Lines(lines) => t!(indicator_checking, lines = lines).to_string(),
+                Checking::Picture => t!(indicator_checking_picture).to_string(),
+                Checking::Pdf => t!(indicator_checking_pdf).to_string(),
+            });
         }
 
         // Only the phases that say something a person cannot see elsewhere. Planning is the
@@ -2240,13 +2245,13 @@ impl Session {
         self.streaming.clear();
     }
 
-    /// Record that a check is running over this many lines.
+    /// Record that a check is running over this many lines, or over a picture or a PDF.
     ///
     /// The tail is left alone, unlike [`Session::set_phase`]: a check runs in the middle of a
     /// round, so the reply the round has written so far is still the reply, and clearing it here
     /// would take a visible answer off the screen because a tool call went to a model.
-    pub fn checking(&mut self, lines: usize) {
-        self.checking = Some(lines);
+    pub fn checking(&mut self, checking: bravebot_core::vetting::Checking) {
+        self.checking = Some(checking);
     }
 
     /// Record that the check is over.
@@ -14056,8 +14061,20 @@ mod tests {
         fn a_running_check_names_the_indicator_ahead_of_the_phase() {
             let mut s = working();
             s.set_phase(Phase::Planning);
-            s.checking(3);
+            s.checking(bravebot_core::vetting::Checking::Lines(3));
             assert_eq!(s.indicator().expect("working").verb, "Checking 3 lines");
+        }
+
+        /// CHECK-14: a picture has no lines to count, and "Checking 1 line" over a photograph is
+        /// a figure that predicts nothing. It is announced as what it is instead.
+        #[test]
+        fn a_check_over_a_file_names_the_kind_of_file() {
+            use bravebot_core::vetting::Checking;
+            let mut s = working();
+            s.checking(Checking::Picture);
+            assert_eq!(s.indicator().expect("working").verb, "Checking a picture");
+            s.checking(Checking::Pdf);
+            assert_eq!(s.indicator().expect("working").verb, "Checking a PDF");
         }
 
         /// And gives it back. The word is drawn while the status is Working, which a prompt about
@@ -14067,7 +14084,7 @@ mod tests {
         fn a_check_that_is_over_gives_the_word_back_to_the_phase() {
             let mut s = working();
             s.set_phase(Phase::Planning);
-            s.checking(3);
+            s.checking(bravebot_core::vetting::Checking::Lines(3));
             s.checked();
             assert_eq!(s.indicator().expect("working").verb, "Planning");
         }
@@ -14079,7 +14096,7 @@ mod tests {
         fn a_check_leaves_what_the_round_has_written() {
             let mut s = working();
             s.streaming("half an answer");
-            s.checking(3);
+            s.checking(bravebot_core::vetting::Checking::Lines(3));
             assert!(
                 !s.streaming.is_empty(),
                 "a check wiped the reply the round had written"
@@ -14091,7 +14108,7 @@ mod tests {
         #[test]
         fn a_finished_turn_leaves_no_check_running() {
             let mut s = working();
-            s.checking(3);
+            s.checking(bravebot_core::vetting::Checking::Lines(3));
             s.complete("done", Vec::new(), 0);
             assert!(s.checking.is_none(), "a check outlived the turn");
         }

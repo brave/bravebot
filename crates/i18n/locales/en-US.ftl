@@ -982,6 +982,25 @@ vet-always-covers =
     a stops this question wherever a check finds nothing, in this session and the next, until
     you change it. Kept in ~/.bravebot/vetting.
 
+## Letting the model see one quarantined picture or PDF a check has looked at
+
+vet-picture-title = let the model see this?
+vet-picture-verb = Show
+vet-picture-file = { $bytes ->
+    [one] { $media }, { $bytes } byte
+   *[other] { $media }, { $bytes } bytes
+    }
+# Above the path of the copy the prompt wrote, which is how a person sees what a terminal cannot
+# draw. The copy is deleted once the question is answered, and the line has to say so.
+vet-picture-open = open this copy to see what the model would be shown. It is deleted when you answer:
+# The part of the file a person reading it is most likely to miss and a model is not.
+vet-picture-words =
+    a model reads words in a picture that a person can miss: small, faint, or nearly the colour
+    of what is behind them. Look for writing before letting it through.
+vet-pdf-hidden-text =
+    a PDF can also hold text that no page draws, and the model is given that text too.
+vet-picture-yes = let it see this
+
 
 ## Fetching a URL
 
@@ -1247,6 +1266,9 @@ indicator-checking = { $lines ->
     [one] Checking { $lines } line
    *[other] Checking { $lines } lines
     }
+# The same, over a picture or a PDF, which has no lines to count.
+indicator-checking-picture = Checking a picture
+indicator-checking-pdf = Checking a PDF
 # Abbreviated counts, already rounded to one place.
 tokens-thousands = { $thousands }k
 tokens-millions = { $millions }M

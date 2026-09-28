@@ -388,7 +388,7 @@ pub struct VetRequest {
     pub origin: String,
     /// What the planner said it expects the slot to hold, in its own words.
     pub expects: String,
-    /// The content, in full.
+    /// The content, in full. Empty for a picture, which is shown as a file to open instead.
     pub content: String,
     /// How many lines that is, counted before the bytes were released, as
     /// [`OutputRequest::lines`] is.
@@ -397,16 +397,52 @@ pub struct VetRequest {
     pub verdict: Verdict,
     /// The check's own sentence about why, where it wrote one.
     pub reason: Option<String>,
+    /// Where the slot holds a picture or a PDF, the copy of it the person is asked to open.
+    ///
+    /// `None` for text, and for a picture on a run bypassing permissions, where the mode answers
+    /// the prompt from the verdict without drawing it and so no copy is written for nobody to open.
+    pub picture: Option<PictureShown>,
+}
+
+/// A picture or a PDF put in front of a person as a file to open (VET-4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PictureShown {
+    /// The copy, removed when the prompt closes. Named by the driver, never by the content.
+    pub path: std::path::PathBuf,
+    /// The media type, from the driver's table of extensions.
+    pub media: String,
+    /// How many bytes the file holds, counted before they were released.
+    pub bytes: usize,
+}
+
+impl PictureShown {
+    /// Whether this is a PDF, which can hold text no page draws, rather than a raster picture.
+    pub fn is_a_pdf(&self) -> bool {
+        self.media == bravebot_core::vetting::PDF
+    }
 }
 
 impl VetRequest {
     /// A short description for a prompt line.
     pub fn summary(&self) -> String {
-        format!(
-            "let the model read {} from {}",
-            tally(self.lines, "line", "lines"),
-            self.origin
-        )
+        match &self.picture {
+            Some(picture) => format!(
+                "let the model see {} ({}, {}) from {}",
+                if picture.is_a_pdf() {
+                    "a PDF"
+                } else {
+                    "a picture"
+                },
+                picture.media,
+                tally(picture.bytes, "byte", "bytes"),
+                self.origin
+            ),
+            None => format!(
+                "let the model read {} from {}",
+                tally(self.lines, "line", "lines"),
+                self.origin
+            ),
+        }
     }
 }
 

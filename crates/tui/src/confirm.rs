@@ -1386,22 +1386,34 @@ pub fn ask_vet<B: Backend>(terminal: &mut Terminal<B>, request: &VetRequest) -> 
 /// of the page.
 fn draw_vet(frame: &mut ratatui::Frame, request: &VetRequest, scroll: u16) -> u16 {
     let area = centred(frame.area());
-    let inside = panel(frame, area, theme::brand_primary(), t!(vet_title));
+    let title = match &request.picture {
+        Some(_) => t!(vet_picture_title),
+        None => t!(vet_title),
+    };
+    let inside = panel(frame, area, theme::brand_primary(), title);
+    let (verb, what) = match &request.picture {
+        Some(picture) => (
+            t!(vet_picture_verb),
+            t!(
+                vet_picture_file,
+                media = &picture.media,
+                bytes = picture.bytes
+            ),
+        ),
+        None => (t!(vet_verb), t!(vet_lines, count = request.lines)),
+    };
 
     let marked = Style::default().fg(theme::running());
     let margin = Span::styled("┃ ", marked);
     let mut lines = vec![
         Line::from(vec![
             Span::styled(
-                format!("{} ", t!(vet_verb)),
+                format!("{verb} "),
                 Style::default()
                     .fg(theme::brand_primary())
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(
-                t!(vet_lines, count = request.lines),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
+            Span::styled(what, Style::default().add_modifier(Modifier::BOLD)),
             Span::styled(
                 format!("  {}", t!(vet_from, origin = &request.origin)),
                 Style::default().fg(theme::muted()),
@@ -1452,24 +1464,57 @@ fn draw_vet(frame: &mut ratatui::Frame, request: &VetRequest, scroll: u16) -> u1
         lines.push(Line::raw(""));
     }
 
-    // Empty content is a fact worth stating. Drawing nothing would read as a prompt that failed
-    // to render, and the reviewer would be deciding about a blank box.
-    if request.content.is_empty() {
-        lines.extend(marked_rows(
-            &margin,
-            &[Span::styled(
-                t!(vet_empty),
+    match &request.picture {
+        // A terminal cannot draw a picture, so the person is given one to open. The path is the
+        // driver's own, a random name under a directory only they can read, so it is drawn outside
+        // the margin: nothing in it came from the file.
+        Some(picture) => {
+            lines.extend(indented(
+                t!(vet_picture_open),
                 Style::default().fg(theme::muted()),
-            )],
-            inside.width as usize,
-        ));
-    }
-    for line in request.content.lines() {
-        lines.extend(marked_rows(
-            &margin,
-            &[Span::raw(line.to_string())],
-            inside.width as usize,
-        ));
+                inside.width as usize,
+            ));
+            lines.push(Line::from(Span::styled(
+                format!("  {}", picture.path.display()),
+                Style::default().add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::raw(""));
+            // What looking at it is for. A check and a person are fooled by different things,
+            // and this is the one a person is fooled by.
+            lines.extend(indented(
+                t!(vet_picture_words),
+                Style::default().fg(theme::running()),
+                inside.width as usize,
+            ));
+            if picture.is_a_pdf() {
+                lines.extend(indented(
+                    t!(vet_pdf_hidden_text),
+                    Style::default().fg(theme::running()),
+                    inside.width as usize,
+                ));
+            }
+        }
+        None => {
+            // Empty content is a fact worth stating. Drawing nothing would read as a prompt that
+            // failed to render, and the reviewer would be deciding about a blank box.
+            if request.content.is_empty() {
+                lines.extend(marked_rows(
+                    &margin,
+                    &[Span::styled(
+                        t!(vet_empty),
+                        Style::default().fg(theme::muted()),
+                    )],
+                    inside.width as usize,
+                ));
+            }
+            for line in request.content.lines() {
+                lines.extend(marked_rows(
+                    &margin,
+                    &[Span::raw(line.to_string())],
+                    inside.width as usize,
+                ));
+            }
+        }
     }
 
     let mut key_spans = vec![
@@ -1479,7 +1524,13 @@ fn draw_vet(frame: &mut ratatui::Frame, request: &VetRequest, scroll: u16) -> u1
                 .fg(theme::ok())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(format!(" {}    ", t!(vet_yes))),
+        Span::raw(format!(
+            " {}    ",
+            match &request.picture {
+                Some(_) => t!(vet_picture_yes),
+                None => t!(vet_yes),
+            }
+        )),
     ];
     // Offered only where the check completed and found nothing. It is not an answer to the
     // question on the screen: it turns off the asking, so the moment the check reported an
@@ -3471,6 +3522,7 @@ mod tests {
             lines: content.lines().count(),
             verdict,
             reason: reason.map(str::to_string),
+            picture: None,
         }
     }
 
@@ -3488,6 +3540,41 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect()
+    }
+
+    /// VET-4: a terminal cannot draw a picture, so the prompt names a copy to open and says what a
+    /// person looking at one is most likely to miss. A PDF says the one thing more it can hide.
+    #[test]
+    fn a_picture_is_put_to_the_person_as_a_copy_to_open() {
+        let mut request = a_vetting(Verdict::Safe, None, "");
+        request.picture = Some(bravebot_agent::confirm::PictureShown {
+            path: "/cache/bravebot/vetting/0f.png".into(),
+            media: "image/png".into(),
+            bytes: 2048,
+        });
+        let drawn = rendered_vet(&request);
+        assert!(drawn.contains("let the model see this?"), "{drawn}");
+        assert!(drawn.contains("Show image/png, 2048 bytes"), "{drawn}");
+        assert!(drawn.contains("/cache/bravebot/vetting/0f.png"), "{drawn}");
+        assert!(
+            drawn.contains("a model reads words in a picture"),
+            "{drawn}"
+        );
+        assert!(drawn.contains("let it see this"), "{drawn}");
+        assert!(
+            !drawn.contains("(there is nothing in it)"),
+            "a picture was drawn as empty text: {drawn}"
+        );
+        assert!(!drawn.contains("no page draws"), "{drawn}");
+
+        request.picture = Some(bravebot_agent::confirm::PictureShown {
+            path: "/cache/bravebot/vetting/0f.pdf".into(),
+            media: bravebot_core::vetting::PDF.into(),
+            bytes: 1,
+        });
+        let drawn = rendered_vet(&request);
+        assert!(drawn.contains("application/pdf, 1 byte "), "{drawn}");
+        assert!(drawn.contains("no page draws"), "{drawn}");
     }
 
     /// The bytes are what the person decides about, verdict or no verdict, so they are on the

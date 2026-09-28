@@ -235,6 +235,12 @@ fn said(said: &Said) -> Value {
             why: Composed::Consolidation,
             ..
         } => json!({ "kind": "consolidation" }),
+        // Both fields are the driver's, a counter's name and a media type from its own table, so
+        // the row is drawn from them as the two above are drawn from theirs.
+        Said::Composed {
+            why: Composed::Vetted { reference, media },
+            ..
+        } => json!({ "kind": "vetted", "reference": reference, "media": media }),
     }
 }
 
@@ -534,8 +540,15 @@ fn vetting(verdict: bravebot_core::vetting::Verdict, reason: Option<&str>) -> Va
     } })
 }
 
+/// A vetted read put to the person. Where the slot holds a picture or a PDF, `content` is empty
+/// and `picture` names the copy to open, the file's media type and its size, all of them the
+/// driver's (VET-4).
 pub fn vet_request(id: u64, request: &VetRequest) -> Value {
+    let picture = request.picture.as_ref().map(|picture| {
+        json!({ "path": picture.path.display().to_string(), "media": picture.media,
+            "bytes": picture.bytes })
+    });
     json!({ "request": id, "origin": request.origin, "expects": request.expects,
-        "content": request.content, "lines": request.lines,
+        "content": request.content, "lines": request.lines, "picture": picture,
         "vetting": vetting(request.verdict, request.reason.as_deref()) })
 }

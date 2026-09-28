@@ -198,6 +198,51 @@ pub struct VettingSpec {
     named: String,
     origin: Origin,
     expects: Option<String>,
+    picture: Option<String>,
+}
+
+/// What a check is given, as a person watching is told it: the shape of it and never a byte.
+///
+/// A count of lines for text, which is the figure that predicts the wait. A picture or a PDF is a
+/// data URI, which is one line whatever it shows, so a count would describe nothing and the kind of
+/// file is said instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Checking {
+    /// Text, and how many lines of it.
+    Lines(usize),
+    /// A raster picture, in a part of its own.
+    Picture,
+    /// A PDF, in a part of its own.
+    Pdf,
+}
+
+/// The media type a PDF is read under, from the driver's own table of extensions.
+pub const PDF: &str = "application/pdf";
+
+/// A picture somebody endorsed for the planner, on its way into the next request.
+///
+/// Opaque, and built only by [`crate::policy::Policy::promote_vetted_picture`]: the only thing that
+/// opens one is [`crate::policy::Policy::attach_vetted_picture`], which hands back the data URI for
+/// a part of its own. There is no way to turn one into the text of a result, which is where a model
+/// reads base64 as characters rather than looking at a picture. Not `Clone`, so each one is
+/// attached once.
+#[derive(Debug)]
+pub struct Attached {
+    pub(crate) slot: crate::slot::SlotId,
+    pub(crate) media: String,
+    pub(crate) data: Labelled<String>,
+}
+
+impl Attached {
+    /// The reference the picture was promoted out of. A counter's name, never anything read.
+    pub fn slot(&self) -> &crate::slot::SlotId {
+        &self.slot
+    }
+
+    /// The media type, from the driver's own table of extensions.
+    pub fn media(&self) -> &str {
+        &self.media
+    }
 }
 
 /// Where the content a check reads came from, as the route that fixed the spec already knew it.
@@ -221,6 +266,7 @@ impl VettingSpec {
         named: impl Into<String>,
         origin: Origin,
         expects: Option<String>,
+        picture: Option<String>,
         _authority: &SpecAuthority,
     ) -> Self {
         Self {
@@ -228,6 +274,25 @@ impl VettingSpec {
             named: named.into(),
             origin,
             expects,
+            picture,
+        }
+    }
+
+    /// The media type of the picture this check reads, or `None` where it reads text.
+    ///
+    /// The driver's, from the closed table of extensions a read is sent under, and recorded on the
+    /// slot where the slot was minted. Nothing read decides it, so a check cannot become one over a
+    /// picture by being handed something that looks like one.
+    pub fn picture(&self) -> Option<&str> {
+        self.picture.as_deref()
+    }
+
+    /// What the check is given, as it is announced.
+    pub fn checking(&self) -> Checking {
+        match self.picture() {
+            None => Checking::Lines(self.lines()),
+            Some(PDF) => Checking::Pdf,
+            Some(_) => Checking::Picture,
         }
     }
 

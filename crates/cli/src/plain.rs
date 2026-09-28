@@ -417,6 +417,7 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
             .with_mcp(self.mcp.clone())
             .with_home(self.home.clone())
             .with_profile(self.profile.clone())
+            .with_cache(bravebot_agent::home::cache())
             // No bound on the rounds, as a session passes: there is a person watching, and they
             // are a better bound than any number. The terminal's own interrupt is how they use
             // it, this session having taken none of the keyboard.
@@ -876,8 +877,24 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             t!(vet_unseen).to_string(),
             checked(request.verdict),
         ];
-        lines.extend(quarantined(&request.content));
-        self.ask(&lines, t!(vet_title))
+        match &request.picture {
+            // A picture is not a thing this mode can print, so the person is given a copy to
+            // open. The path is the driver's own, which is why it goes out as any line of this
+            // program's does rather than inside the margin.
+            Some(picture) => {
+                lines.push(t!(vet_picture_open).to_string());
+                lines.push(shown(&picture.path.display().to_string()));
+                lines.push(t!(vet_picture_words).to_string());
+                if picture.is_a_pdf() {
+                    lines.push(t!(vet_pdf_hidden_text).to_string());
+                }
+                self.ask(&lines, t!(vet_picture_title))
+            }
+            None => {
+                lines.extend(quarantined(&request.content));
+                self.ask(&lines, t!(vet_title))
+            }
+        }
     }
 
     fn confirm_fetch(&mut self, request: &FetchRequest) -> Decision {

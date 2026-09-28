@@ -842,6 +842,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 "what the MCP server {alias} listed when it started"
             )),
             None,
+            None,
         )
     }
 
@@ -3526,7 +3527,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             "slot",
             format!(
                 "{slot} holds a {media} picture, which a processor may look at and the planner \
-                 may not"
+                 may not until vet_content promotes it"
             ),
         );
     }
@@ -3543,7 +3544,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// that could not hold it could not send it. Private is refused for the same reason it is
     /// refused there, since the user's own data must not become another model's prompt.
     ///
-    /// A picture is refused outright, by [`Policy::before_promoting`].
+    /// A picture is checked as a picture: the spec carries the media type the slot was marked with
+    /// where it was minted, and the check is given the file in a part of its own
+    /// ([`Policy::compose_vetting_picture`]). Whether the session's model takes that file at all is
+    /// [`Policy::before_promoting`]'s question, asked before this.
     pub fn before_vetting(
         &mut self,
         slot: &SlotId,
@@ -3565,8 +3569,6 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 format!("{slot} names a file nothing has read, so there is nothing to check yet"),
             ));
         }
-
-        self.before_promoting(slot, slots)?;
 
         let expects = match expects {
             Some(expects) => {
@@ -3602,27 +3604,45 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             slot.to_string(),
             crate::vetting::Origin::Recorded(origin),
             expects,
+            slots.picture_of(slot).map(str::to_string),
         ))
     }
 
-    /// Refuse a slot whose bytes must never be promoted, whether or not a check is made first.
+    /// Refuse a picture the session's model is listed as not taking, before a check is made.
     ///
-    /// A picture. What a check reads is text, and the bytes behind a picture slot are a data URI,
-    /// so a check over one would be a check over base64 that answers confidently about nothing, and
-    /// a promotion would hand the planner that base64 as text it may trust.
+    /// The check runs on that model, and a promotion would put the file into every request after
+    /// it, so a model that cannot look at one would be asked about a picture it is never shown.
+    /// `inputs` is what the gateway's roster lists the model in force as taking, in the roster's
+    /// own words: `image` for a raster picture and `file` for a PDF. A roster that says nothing
+    /// about a model claims nothing, and neither does a backend with no roster, so an empty list
+    /// goes ahead.
     ///
-    /// Apart from [`Policy::before_vetting`] because a run bypassing permissions with no screening
-    /// asked for makes no check, and a refusal only that gate held would be one such a run never
-    /// meets. [`Policy::promote_vetted`] makes it again, so a route to a promotion that never asked
-    /// here is refused where the bytes would cross.
-    pub fn before_promoting(&mut self, slot: &SlotId, slots: &crate::slot::SlotStore) -> Gated<()> {
-        if slots.is_a_picture(slot) {
+    /// Text is never refused here. What the roster says is the service's word about its own model,
+    /// and the media type is the driver's, recorded where the slot was minted, so nothing read
+    /// decides this.
+    pub fn before_promoting(
+        &mut self,
+        slot: &SlotId,
+        slots: &crate::slot::SlotStore,
+        inputs: &[String],
+    ) -> Gated<()> {
+        let Some(media) = slots.picture_of(slot) else {
+            return Ok(());
+        };
+        let needs = if media == crate::vetting::PDF {
+            "file"
+        } else {
+            "image"
+        };
+        if !inputs.is_empty() && !inputs.iter().any(|input| input == needs) {
+            let listed = inputs.join(", ");
             return Err(self.deny(
                 "vetting",
                 Principle::Confinement,
                 format!(
-                    "{slot} is a picture, and a check reads text. There is no way to ask about \
-                     what a picture shows"
+                    "{slot} is a {media} file, and the model in use is listed as taking {listed} \
+                     and not {needs}, so neither a check nor you can look at it. Say in your reply \
+                     what you needed from it"
                 ),
             ));
         }
@@ -3713,6 +3733,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             path.to_string(),
             crate::vetting::Origin::TheFileItself,
             None,
+            None,
         )
     }
 
@@ -3724,12 +3745,14 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         named: String,
         origin: crate::vetting::Origin,
         expects: Option<String>,
+        picture: Option<String>,
     ) -> crate::vetting::VettingSpec {
         let spec = crate::vetting::VettingSpec::new(
             content,
             named,
             origin,
             expects,
+            picture,
             &SpecAuthority::mint(),
         );
         let described = Self::describe_check(&spec);
@@ -3774,6 +3797,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// What comes back carries the content's own label, so the driver hands it to the model call
     /// and nothing else.
+    ///
+    /// A picture has no body here. Its metadata block is the whole of this text, saying the media
+    /// type where text says a count of lines, and the file itself goes in a part of its own, which
+    /// [`Policy::compose_vetting_picture`] hands over. Base64 in a block would be read as
+    /// characters rather than looked at, and a count of its lines would describe nothing.
     pub fn compose_vetting_input(
         &mut self,
         spec: &crate::vetting::VettingSpec,
@@ -3785,6 +3813,33 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
         let content = spec.reads();
         let label = content.label();
+
+        if let Some(media) = spec.picture() {
+            let expectation = match spec.expects() {
+                Some(expects) => {
+                    format!(", \"expects\": {}", crate::vetting::as_json_string(expects))
+                }
+                None => String::new(),
+            };
+            let metadata = format!(
+                "{{\"origin\": {}, \"media\": {}{expectation}}}",
+                crate::vetting::as_json_string(spec.where_it_came_from(&PathAuthority::mint())),
+                crate::vetting::as_json_string(media),
+            );
+            self.allow(
+                "vetting",
+                format!(
+                    "{}: its metadata assembled into a check's input inside the kernel, with the \
+                     {media} file to follow in a part of its own",
+                    Self::describe_check(spec)
+                ),
+            );
+            return Labelled::new(
+                format!("{TRUSTED_METADATA_BEGINS}\n{metadata}\n{TRUSTED_METADATA_ENDS}\n"),
+                label,
+            );
+        }
+
         let measured = crate::slot::Measured::of(&content);
 
         let proof = Declassification::authorise("assembled into a check's input");
@@ -3824,6 +3879,27 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             ),
         );
         Labelled::new(composed, label)
+    }
+
+    /// The picture a check over a picture is given, in a part of its own, or `None` for text.
+    ///
+    /// The data URI the driver built at the read, at the label the slot was quarantined at, so the
+    /// driver hands it to the model call as it does the metadata beside it and reads neither.
+    /// Whether there is one is the spec's media type, which the driver recorded where the slot was
+    /// minted from its own table of extensions: nothing in the bytes decides it.
+    pub fn compose_vetting_picture(
+        &mut self,
+        spec: &crate::vetting::VettingSpec,
+    ) -> Option<Labelled<String>> {
+        let media = spec.picture()?;
+        self.allow(
+            "vetting",
+            format!(
+                "{}: the {media} file given to the check in a part of its own, never as text",
+                Self::describe_check(spec)
+            ),
+        );
+        Some(spec.reads())
     }
 
     /// Authorise handing a check's input to the model call its spec describes.
@@ -3935,14 +4011,24 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// is called, that let the driver mint one in a person's place. In a run bypassing permissions
     /// that asked for no screening it is the mode that did, with nobody shown the bytes and no
     /// check made, and the trail says so rather than crediting a person.
+    ///
+    /// A picture is refused, before the endorsement is spent: the bytes behind one are a data URI,
+    /// and handed back as text a model reads them as characters rather than looking at a picture.
+    /// [`Policy::promote_vetted_picture`] is how one is promoted.
     pub fn promote_vetted(
         &mut self,
         slot: &SlotId,
         slots: &crate::slot::SlotStore,
         by: crate::vetting::Endorsed,
     ) -> Gated<Labelled<String>> {
+        if slots.is_a_picture(slot) {
+            return Err(self.deny(
+                "vet_content",
+                Principle::Confinement,
+                format!("{slot} is a picture, and a picture is attached rather than given as text"),
+            ));
+        }
         self.consume_grant("vet_content", "ref", slot.as_str())?;
-        self.before_promoting(slot, slots)?;
 
         let content = slots.take_for_effect(slot).map_err(|e| Denial {
             principle: Principle::Confinement,
@@ -3966,6 +4052,105 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             ),
         );
         Ok(Labelled::new(text, label))
+    }
+
+    /// [`Policy::promote_vetted`], for a slot that holds a picture or a PDF.
+    ///
+    /// The same endorsement, spent the same way, at the same label: one slot, once, `(T,priv)`, and
+    /// no trust rule. What differs is what comes back. Not text, but an
+    /// [`crate::vetting::Attached`] that nothing can read as text and that only
+    /// [`Policy::attach_vetted_picture`] opens, for a part of its own in the planner's next
+    /// request.
+    ///
+    /// Every one of the three endorsements mints one, a run bypassing permissions with no screening
+    /// asked for included, which is the mode answering yes to a prompt it never draws as it does
+    /// for text. The trail says which it was.
+    pub fn promote_vetted_picture(
+        &mut self,
+        slot: &SlotId,
+        slots: &crate::slot::SlotStore,
+        by: crate::vetting::Endorsed,
+    ) -> Gated<crate::vetting::Attached> {
+        let Some(media) = slots.picture_of(slot).map(str::to_string) else {
+            return Err(self.deny(
+                "vet_content",
+                Principle::Confinement,
+                format!("{slot} is not a picture, so there is nothing to attach"),
+            ));
+        };
+        self.consume_grant("vet_content", "ref", slot.as_str())?;
+
+        let content = slots.take_for_effect(slot).map_err(|e| Denial {
+            principle: Principle::Confinement,
+            message: format!("{slot} could not be read: {e}"),
+        })?;
+
+        // As for text: the bytes leave at the label they were quarantined at, uninspected, and
+        // what is returned is a new value at the label the endorsement established.
+        let was = content.label();
+        let proof = Declassification::authorise("a picture that was endorsed for the planner");
+        let data = content.declassify(&proof);
+
+        let label = Label::trusted_private();
+        self.allow(
+            "vet_content",
+            format!(
+                "{slot} was {was}; {}, so the planner is given the {media} file it holds at \
+                 {label}, attached to its next request in a message of its own. {slot} is \
+                 unchanged and no path was vouched for",
+                by.describe()
+            ),
+        );
+        Ok(crate::vetting::Attached {
+            slot: slot.clone(),
+            media,
+            data: Labelled::new(data, label),
+        })
+    }
+
+    /// Open a promoted picture for the part of the planner's next request that carries it.
+    ///
+    /// The one way an [`crate::vetting::Attached`] becomes bytes, and the one place a promoted
+    /// picture enters the planner's context, so the context absorbs its label here as it absorbs a
+    /// trusted result in [`Policy::present`]. It goes in a message of its own, after the round's
+    /// results, beside the driver's words about where it came from. It is never joined to a message
+    /// of the person's own: what let it through was an endorsement of one slot, not a paste, and
+    /// the trail records it as that.
+    pub fn attach_vetted_picture(&mut self, attached: crate::vetting::Attached) -> String {
+        let crate::vetting::Attached { slot, media, data } = attached;
+        let label = data.label();
+        self.absorb(label.integrity);
+        self.allow(
+            "present",
+            format!(
+                "the {media} file vet_content promoted out of {slot} is attached to the planner's \
+                 next request at {label}, in a message of its own that says it came from {slot} \
+                 and not from the user"
+            ),
+        );
+        let proof = Declassification::authorise("a vetted picture attached for the planner");
+        data.declassify(&proof)
+    }
+
+    /// Authorise writing a copy of a picture slot's bytes to a file, for a person to open.
+    ///
+    /// A release of its own rather than the display release a prompt's text is: a file outlives
+    /// the screen and is read by a program that is not this one. Recorded so the trail says the
+    /// bytes left the process, where they went is the caller's to choose from a directory only the
+    /// person can read, and the caller removes the file when the prompt closes.
+    pub fn authorise_a_copy_of_a_picture(
+        &mut self,
+        slot: &SlotId,
+        media: &str,
+    ) -> Declassification {
+        self.allow(
+            "vet_content",
+            format!(
+                "the {media} file {slot} holds written to a copy for the user to open before \
+                 answering, in a directory only they can read, removed when the prompt closes"
+            ),
+        );
+        Declassification::authorise("a picture copied to a file for the user to open")
     }
 
     /// Record what the processor that produced a document said about it.
@@ -9636,27 +9821,106 @@ five
         );
     }
 
-    /// A picture's bytes are a data URI, so a check over one would be a confident answer about
-    /// base64. Refused rather than run and disbelieved.
+    /// A slot holding a picture, as a read of one leaves it: the driver's data URI, marked with
+    /// the media type from its own table.
+    fn a_picture(media: &str) -> (SlotStore, SlotId) {
+        let (mut slots, slot) = fetched(&format!("data:{media};base64,iVBORw0KGgo="));
+        slots.mark_picture(&slot, media);
+        (slots, slot)
+    }
+
+    /// VET-4 and CHECK-15: a check over a picture is fixed as one over a picture. Its input is the
+    /// driver's block of facts with the media type where text has a count of lines, and no body:
+    /// base64 in a block is read as characters, and the file goes in a part of its own.
     #[test]
-    fn a_check_over_a_picture_is_refused() {
+    fn a_check_over_a_picture_carries_the_file_apart_from_its_metadata() {
         let mut sink = RecordingSink::new();
         let mut policy = open_policy(&mut sink);
-        let (mut slots, slot) = fetched("data:image/png;base64,AAAA");
-        slots.mark_picture(&slot, "image/png");
+        let (slots, slot) = a_picture("image/png");
 
+        let spec = policy
+            .before_vetting(&slot, Some(&expects("a screenshot")), &slots)
+            .expect("a picture is checked");
+        assert_eq!(spec.picture(), Some("image/png"));
+        assert_eq!(spec.checking(), crate::vetting::Checking::Picture);
+
+        let proof = Declassification::authorise("a test reading what was composed");
+        let text = policy.compose_vetting_input(&spec).declassify(&proof);
+        assert!(text.contains("\"media\": \"image/png\""), "{text}");
+        assert!(text.contains("\"expects\": \"a screenshot\""), "{text}");
         assert!(
-            policy
-                .before_vetting(&slot, Some(&expects("a screenshot")), &slots)
-                .is_err(),
-            "a check was fixed over a picture"
+            !text.contains("base64") && !text.contains(crate::vetting::UNTRUSTED_CONTENT_BEGINS),
+            "a picture's bytes were written into the check's text: {text}"
+        );
+        assert!(!text.contains("\"lines\""), "{text}");
+
+        let picture = policy
+            .compose_vetting_picture(&spec)
+            .expect("a check over a picture is given the picture");
+        assert_eq!(picture.label(), Label::untrusted_private());
+        assert_eq!(
+            picture.declassify(&proof),
+            "data:image/png;base64,iVBORw0KGgo="
         );
     }
 
-    /// The promotion refuses a picture itself, whoever endorsed it, so a caller that never asked
-    /// [`Policy::before_promoting`] still cannot hand the planner a data URI.
+    /// CHECK-14 and CHECK-15: a PDF is announced as a PDF, and text as its count of lines, with
+    /// no picture to give either way.
     #[test]
-    fn a_picture_is_never_promoted_whoever_endorsed_it() {
+    fn a_check_says_what_kind_of_file_it_reads() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let (slots, slot) = a_picture(crate::vetting::PDF);
+        let spec = a_spec(&mut policy, &slots, &slot);
+        assert_eq!(spec.checking(), crate::vetting::Checking::Pdf);
+
+        let (slots, slot) = fetched("one\ntwo\n");
+        let spec = a_spec(&mut policy, &slots, &slot);
+        assert_eq!(spec.checking(), crate::vetting::Checking::Lines(2));
+        assert!(policy.compose_vetting_picture(&spec).is_none());
+    }
+
+    /// VET-4: a model the roster lists as not taking the file is refused before a check, `image`
+    /// for a raster picture and `file` for a PDF. A roster that lists nothing claims nothing, and
+    /// text is never refused here.
+    #[test]
+    fn a_picture_the_model_is_listed_as_not_taking_is_refused_before_a_check() {
+        let listed = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+        let cases = [
+            ("image/png", listed(&["text"]), false),
+            ("image/png", listed(&["text", "file"]), false),
+            ("image/png", listed(&["text", "image"]), true),
+            ("image/png", listed(&[]), true),
+            (crate::vetting::PDF, listed(&["text", "image"]), false),
+            (crate::vetting::PDF, listed(&["text", "file"]), true),
+            (crate::vetting::PDF, listed(&[]), true),
+        ];
+        for (media, inputs, goes_ahead) in cases {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            let (slots, slot) = a_picture(media);
+            assert_eq!(
+                policy.before_promoting(&slot, &slots, &inputs).is_ok(),
+                goes_ahead,
+                "{media} on a model listed as taking {inputs:?}"
+            );
+        }
+
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let (slots, slot) = fetched("a page");
+        assert!(
+            policy
+                .before_promoting(&slot, &slots, &listed(&["image"]))
+                .is_ok(),
+            "text was refused for what the roster says about pictures"
+        );
+    }
+
+    /// VET-2: a picture is never handed to the planner as text, whoever endorsed it. The refusal
+    /// comes before the endorsement is spent, so the one route that attaches it still can.
+    #[test]
+    fn a_picture_is_never_promoted_as_text_whoever_endorsed_it() {
         for by in [
             Endorsed::ByAPerson,
             Endorsed::ByBypassing,
@@ -9664,24 +9928,114 @@ five
         ] {
             let mut sink = RecordingSink::new();
             let mut policy = open_policy(&mut sink);
-            let (mut slots, slot) = fetched("data:image/png;base64,AAAA");
-            slots.mark_picture(&slot, "image/png");
+            let (slots, slot) = a_picture("image/png");
             policy.issue_grant("vet_content", "ref", slot.as_str());
 
             assert!(
                 policy.promote_vetted(&slot, &slots, by).is_err(),
-                "a picture was promoted on {by:?}"
+                "a picture was promoted as text on {by:?}"
             );
-            drop(policy);
             assert!(
-                sink.events().iter().any(|event| matches!(
-                    event,
-                    Event::GateBlocked { reason, .. } if reason.contains("is a picture")
-                )),
-                "refusing a picture on {by:?} left no record in the trail: {:#?}",
-                sink.events()
+                policy.promote_vetted_picture(&slot, &slots, by).is_ok(),
+                "refusing it as text spent the endorsement on {by:?}"
             );
         }
+    }
+
+    /// VET-4 and CHECK-8: every one of the three endorsements promotes a picture, bypassing with
+    /// no screening included, at `(T,priv)` and once. What comes back opens only as the data URI
+    /// for a part of its own, and the trail records both the promotion and the attachment.
+    #[test]
+    fn a_picture_is_promoted_once_by_any_endorsement_and_attached_as_itself() {
+        for by in [
+            Endorsed::ByAPerson,
+            Endorsed::ByBypassing,
+            Endorsed::ByASafeVerdict,
+        ] {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            let (slots, slot) = a_picture("image/webp");
+            policy.issue_grant("vet_content", "ref", slot.as_str());
+
+            let attached = policy
+                .promote_vetted_picture(&slot, &slots, by)
+                .unwrap_or_else(|denial| panic!("{by:?} did not promote a picture: {denial}"));
+            assert_eq!(attached.slot(), &slot);
+            assert_eq!(attached.media(), "image/webp");
+            assert!(
+                policy.promote_vetted_picture(&slot, &slots, by).is_err(),
+                "one endorsement promoted a picture twice on {by:?}"
+            );
+
+            let uri = policy.attach_vetted_picture(attached);
+            assert_eq!(uri, "data:image/webp;base64,iVBORw0KGgo=");
+            assert_eq!(policy.context_integrity(), Integrity::Trusted);
+            drop(policy);
+
+            let trail: Vec<&str> = sink
+                .events()
+                .iter()
+                .filter_map(|event| match event {
+                    Event::GatePassed { detail, .. } => Some(detail.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                trail
+                    .iter()
+                    .any(|line| line.contains(by.describe()) && line.contains("attached")),
+                "the promotion on {by:?} left no record of who endorsed it: {trail:#?}"
+            );
+            assert!(
+                trail
+                    .iter()
+                    .any(|line| line.contains("in a message of its own")
+                        && line.contains("not from the user")),
+                "the attachment left no record: {trail:#?}"
+            );
+        }
+    }
+
+    /// Text has nothing to attach, so the picture route refuses it rather than handing back a
+    /// page as though it were a picture.
+    #[test]
+    fn text_is_never_attached_as_a_picture() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let (slots, slot) = fetched("a page");
+        policy.issue_grant("vet_content", "ref", slot.as_str());
+
+        assert!(
+            policy
+                .promote_vetted_picture(&slot, &slots, Endorsed::ByAPerson)
+                .is_err()
+        );
+        assert!(
+            policy
+                .promote_vetted(&slot, &slots, Endorsed::ByAPerson)
+                .is_ok(),
+            "refusing text as a picture spent the endorsement"
+        );
+    }
+
+    /// VET-4: a copy written for a person to open is a release the trail records, apart from the
+    /// release that draws text on a prompt.
+    #[test]
+    fn a_copy_of_a_picture_is_a_recorded_release() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let slot = SlotId::new("ref:3");
+        let _ = policy.authorise_a_copy_of_a_picture(&slot, "image/png");
+        drop(policy);
+        assert!(
+            sink.events().iter().any(|event| matches!(
+                event,
+                Event::GatePassed { detail, .. }
+                    if detail.contains("ref:3") && detail.contains("copy for the user to open")
+            )),
+            "{:#?}",
+            sink.events()
+        );
     }
 
     /// What a verdict buys on its own: nothing. The word is advice for the person answering the

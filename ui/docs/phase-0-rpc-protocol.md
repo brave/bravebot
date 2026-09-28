@@ -260,7 +260,7 @@ implementation should have one serialisation function per row and a round-trip t
 | `report::Reach` | `"not_the_planner"` \| `"no_model"` | |
 | `report::Landing` | `"context"` \| `"quarantined"` \| `"reserved"` | |
 | `todo::Status` | `"pending"` \| `"active"` \| `"done"` | |
-| `conversation::Said` | `{"kind":"user"\|"assistant"\|"tool","text":"…"}` with `"prompt":N` on `user` only and `"why":"…"` on `tool` only, `{"kind":"attached","path":"…"}`, `{"kind":"watch","number":N,"path":"…"}` or `{"kind":"consolidation"}` | from `recounted()`, §7.1 |
+| `conversation::Said` | `{"kind":"user"\|"assistant"\|"tool","text":"…"}` with `"prompt":N` on `user` only and `"why":"…"` on `tool` only, `{"kind":"attached","path":"…"}`, `{"kind":"watch","number":N,"path":"…"}`, `{"kind":"consolidation"}` or `{"kind":"vetted","reference":"…","media":"…"}` | from `recounted()`, §7.1 |
 | `core::event::Event` | as `audit::as_json` already produces, `refusal` included | **reuse verbatim**, do not re-derive |
 | `label::Label` | `{"integrity":"trusted"\|"untrusted","confidentiality":"public"\|"private"}` | as `audit::label_json` |
 | `SystemTime` seconds | JSON number, seconds since epoch | matches `Record::started`/`updated` |
@@ -354,9 +354,11 @@ Loads the `Record` via `sessions::load` and the trail and todos via `sessions::r
   `note`; replayed ones do not, and inventing an outcome would be worse than the gap.
 - **A message composed rather than typed carries a tag and no text.** A file somebody named
   arrives as `{"kind":"attached","path":"…"}`, a watch that fired as
-  `{"kind":"watch","number":N,"path":"…"}`, and a prompt a front end composed on its own account
-  as `{"kind":"consolidation"}`. All three are user-role messages in the request, because that is
-  how a file reaches a planner, and none is a prompt: the client writes its own row from the tag
+  `{"kind":"watch","number":N,"path":"…"}`, a prompt a front end composed on its own account
+  as `{"kind":"consolidation"}`, and a picture or a PDF `vet_content` let through as
+  `{"kind":"vetted","reference":"…","media":"…"}`, the reference it was held under and its media
+  type. All four are user-role messages in the request, because that is how a file reaches a
+  planner, and none is a prompt: the client writes its own row from the tag
   and whatever fields come with it. The text is withheld rather than merely unused. The words of
   an attached message are a line the agent wrote followed by **the file's own bytes**, so a client
   that read them back to decide what to draw would let whoever wrote that file choose which row it
@@ -433,8 +435,8 @@ differently: the front-end puts it in the composer and the person edits it.
   A mismatch is `bad_request`; a fork taken one prompt away from where somebody pointed is worse
   than one that did not happen.
 - **A message composed rather than typed is not a prompt on either side.** It is tagged in the
-  record and reported as `attached`, `watch` or `consolidation`, so neither the window nor the cut
-  has to recognise one by its wording. That is what keeps the two counts aligned rather than
+  record and reported as `attached`, `watch`, `consolidation` or `vetted`, so neither the window nor
+  the cut has to recognise one by its wording. That is what keeps the two counts aligned rather than
   approximately aligned: while an attachment was recognised by its first line, a file whose own
   first line read `Contents of x:` moved every later ordinal in the session, and one that did not
   read that way moved none.
@@ -712,7 +714,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `narration` | `{ text }` | `Reporter::narration`, **empty ones dropped** |
 | `tool.started` | `Activity` | `Reporter::tool_started` |
 | `tool.finished` | `Activity` | `Reporter::tool_finished` |
-| `check.started` | `{ lines }` | `Reporter::check_started` |
+| `check.started` | `{ lines }` or `{ file }` | `Reporter::check_started` |
 | `check.finished` | `{}` | `Reporter::check_finished` |
 | `landed` | `{ landing }` | `Reporter::landed` |
 | `quarantined` | `Shown` | `Reporter::quarantined` |
@@ -751,7 +753,8 @@ because a model was slow is indistinguishable from a slow program. A wait under 
 arrives as `0` and is not worth drawing.
 
 `check.started` and `check.finished` bracket a confined check that runs *inside* a call
-already reported, over `lines` of quarantined content. The pair carries nothing else: not
+already reported, over `lines` of quarantined content, or over one `file` that is a
+`"picture"` or a `"pdf"` and has no lines to count. The pair carries nothing else: not
 a fragment of the content, not the verdict, not the checker's sentence. What it decided
 reaches a person on the approval card and no model at all (`CHECK-9`). The end arrives
 however the check ended, the backend failure that yields no verdict included, so a client
@@ -1086,8 +1089,10 @@ Still open:
 
 ## 0.9 desktop extensions
 
-- `vet.request` carries `request`, `origin`, `expects`, full `content`, `lines` and
-  `vetting: { verdict, reason, detail }`. `vet.reply` carries the session, request and
+- `vet.request` carries `request`, `origin`, `expects`, full `content`, `lines`, `picture` and
+  `vetting: { verdict, reason, detail }`. `picture` is `null` for text. For a picture or a PDF it
+  is `{ path, media, bytes }`, a copy of the file for the person to open, deleted once the request
+  is answered, and `content` is empty. `vet.reply` carries the session, request and
   explicit decision. Its kind is distinct from output and path-vouch replies.
 - `output.request` and `vouch.request` include `vetting`. `confirm.request` includes an
   optional `remark: { preview, lines, label }`. None is interpreted as an approval.

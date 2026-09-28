@@ -532,6 +532,7 @@ fn vetted_content_never_approves_itself_or_consumes_another_kind_of_reply() {
                 lines: 1,
                 verdict,
                 reason: None,
+                picture: None,
             }),
             Decision::Reject
         );
@@ -555,6 +556,7 @@ fn vetted_content_requires_its_own_explicit_approval() {
             lines: 1,
             verdict: bravebot_core::vetting::Verdict::Unsafe,
             reason: Some("instructions".into()),
+            picture: None,
         }),
         Decision::Approve
     );

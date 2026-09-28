@@ -2,7 +2,7 @@ import { Watches } from './Watches'
 import type { FileAttachment } from '../../shared/files'
 import { Permissions } from './Permissions'
 import { useLayoutEffect, useEffect, useMemo, useRef, useState } from 'react'
-import { isConfined, type AskAnswer, type AskPrompt, type KeptTrust, type Phase, type Shown, type TodoRow } from '../../shared/protocol'
+import { isConfined, type AskAnswer, type AskPrompt, type Checking, type KeptTrust, type Phase, type Shown, type TodoRow } from '../../shared/protocol'
 import * as t from '../transcript'
 import type { Side } from '../columns'
 import type { Asked } from '../App'
@@ -32,7 +32,7 @@ interface Live {
   todos: TodoRow[]
   quarantine: Shown[]
   phase: Phase | null
-  checking: number | null
+  checking: Checking | null
   contextTokens?: number
   archived?: number
   tokens: number
@@ -647,8 +647,9 @@ function waitedWord(waited: number | null): string {
  * What the session is waiting on. A running check wins over the phase, which a check does not
  * change, and one function serves both places the word is drawn so they cannot disagree.
  */
-export function workingWord(phase: Phase | null, checking: number | null): string {
-  if (checking !== null) return `Checking ${checking} ${checking === 1 ? 'line' : 'lines'}`
+export function workingWord(phase: Phase | null, checking: Checking | null): string {
+  if (checking !== null && 'file' in checking) return checking.file === 'pdf' ? 'Checking a PDF' : 'Checking a picture'
+  if (checking !== null) return `Checking ${checking.lines} ${checking.lines === 1 ? 'line' : 'lines'}`
   return phase ? phaseWord(phase) : 'Working'
 }
 
@@ -1343,6 +1344,23 @@ function Card({
 
     case 'vet': {
       const { request, decision } = entry
+      if (request.picture) {
+        const picture = request.picture
+        return <div className="confirm vetted-read">
+          <div className="confirm-head"><span className="intent">see once</span><code className="path">{request.origin}</code><span>{picture.media}, {picture.bytes} bytes</span></div>
+          <p className="permission-scope">Expected contents: {request.expects}</p>
+          <VettingNotice vetting={request.vetting} />
+          <p className="warn">Approval shows the planner only this file. It does not trust this file for future reads.</p>
+          <p>Open this copy to see what the planner would be shown. It is deleted when you answer:</p>
+          <pre className="preview">{picture.path}</pre>
+          <p className="warn">A model reads words in a picture that a person can miss: small, faint, or nearly the colour of what is behind them. Look for writing before letting it through.</p>
+          {picture.media === 'application/pdf' && <p className="warn">A PDF can also hold text that no page draws, and the planner is given that text too.</p>}
+          {!answerable ? <Unanswered /> : decision === null ? <div className="confirm-actions">
+            <button className="reject" onClick={() => onDecide('vet', request.request, false)}>Keep it out</button>
+            <button className="approve" onClick={() => onDecide('vet', request.request, true)}>Let the planner see it once</button>
+          </div> : <div className={`decided ${decision}`}>{decision === 'approve' ? 'You allowed this file once' : 'You kept this file out'}</div>}
+        </div>
+      }
       return <div className="confirm vetted-read">
         <div className="confirm-head"><span className="intent">read once</span><code className="path">{request.origin}</code><span>{request.lines} lines</span></div>
         <p className="permission-scope">Expected contents: {request.expects}</p>

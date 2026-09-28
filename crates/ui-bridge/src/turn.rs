@@ -178,10 +178,16 @@ impl Reporter for BridgeReporter {
     /// A check running, which is news here for the same reason a phase is: a whole model call
     /// inside the tool call already reported, and no front-end can time it from the outside.
     ///
-    /// The count and nothing else. What the check reads and what it decides go to a person on the
-    /// prompt, and this event crosses a pipe to a program.
-    fn check_started(&mut self, lines: usize) {
-        self.say("check.started", json!({ "lines": lines }));
+    /// The count, or which kind of file, and nothing else. What the check reads and what it
+    /// decides go to a person on the prompt, and this event crosses a pipe to a program.
+    fn check_started(&mut self, checking: bravebot_core::vetting::Checking) {
+        use bravebot_core::vetting::Checking;
+        let shape = match checking {
+            Checking::Lines(lines) => json!({ "lines": lines }),
+            Checking::Picture => json!({ "file": "picture" }),
+            Checking::Pdf => json!({ "file": "pdf" }),
+        };
+        self.say("check.started", shape);
     }
 
     /// Sent however the check ended, including the failure nobody could read a verdict out of: a

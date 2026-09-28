@@ -876,6 +876,19 @@ vet-empty = (il n'y a rien dedans)
 vet-yes = le laisser lire ceci
 vet-always = ne plus demander
 vet-no = le garder pour vous
+vet-picture-title = laisser le modèle voir ceci ?
+vet-picture-verb = Montrer
+vet-picture-file = { $bytes ->
+    [one] { $media }, { $bytes } octet
+   *[other] { $media }, { $bytes } octets
+    }
+vet-picture-open = ouvrez cette copie pour voir ce que le modèle recevrait. Elle est supprimée quand vous répondez :
+vet-picture-words =
+    un modèle lit dans une image des mots qu'une personne peut manquer : petits, pâles, ou
+    presque de la couleur du fond. Cherchez de l'écrit avant de la laisser passer.
+vet-pdf-hidden-text =
+    un PDF peut aussi contenir du texte qu'aucune page n'affiche, et le modèle reçoit aussi ce texte.
+vet-picture-yes = le laisser voir ceci
 vet-always-covers =
     a supprime cette question partout où une vérification ne trouve rien, dans cette session et
     la suivante, jusqu'à ce que vous changiez d'avis. Conservé dans ~/.bravebot/vetting.
@@ -1108,6 +1121,8 @@ indicator-checking = { $lines ->
     [one] Vérification de { $lines } ligne
    *[other] Vérification de { $lines } lignes
     }
+indicator-checking-picture = Vérification d'une image
+indicator-checking-pdf = Vérification d'un PDF
 tokens-thousands = { $thousands } k
 tokens-millions = { $millions } M
 turn-done = tour { $turn } terminé

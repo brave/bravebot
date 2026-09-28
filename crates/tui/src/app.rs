@@ -4048,6 +4048,8 @@ fn adopt_budget_for_current_model(session: &mut Session, config: &mut Config) {
     if config.adopt_window(advertised_window(&models, session.model())) {
         session.note(t!(session_context_budget, budget = config.context_budget));
     }
+    let in_force = session.model().unwrap_or(&config.default_model).to_string();
+    config.adopt_inputs(&in_force, advertised_inputs(&models, session.model()));
     // Outside the note, because a budget that did not move can still have stopped being one the
     // endpoint advertised: nothing changed for compaction, and what the hint line may claim did.
     session.update_budget(config.context_budget, config.budget_is_guessed());
@@ -4107,6 +4109,7 @@ pub fn adopt_listing_for_model(config: &mut Config, model: &str) -> bool {
         return true;
     };
     config.adopt_window(advertised_window(&models, Some(model)));
+    config.adopt_inputs(model, advertised_inputs(&models, Some(model)));
     reads_effort(&models, Some(model))
 }
 
@@ -4141,6 +4144,20 @@ fn advertised_window(
         .conversation_tokens
 }
 
+/// What the listing says `chosen` takes, or nothing where it does not describe it.
+///
+/// Split from the fetch for the reason [`advertised_window`] is, and empty for the same cases:
+/// neither `automatic` nor a model the listing leaves out is the roster saying it takes only text,
+/// so a picture put to one goes ahead (VET-4).
+fn advertised_inputs<'a>(
+    models: &'a [bravebot_aichat::models::Model],
+    chosen: Option<&str>,
+) -> &'a [String] {
+    chosen
+        .and_then(|name| models.iter().find(|model| model.key == name))
+        .map_or(&[], |model| model.advertised.input_modalities.as_slice())
+}
+
 fn choose_model(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     session: &mut Session,
@@ -4159,6 +4176,7 @@ fn choose_model(
                     session.note(t!(session_context_budget, budget = config.context_budget));
                 }
                 session.update_budget(config.context_budget, config.budget_is_guessed());
+                config.adopt_inputs(&chosen.key, &chosen.advertised.input_modalities);
                 // Which service answers is said here as well as in the picker: the row that
                 // carried it is gone by the time the note is read, and the same slug reached
                 // through two services is two bills.
@@ -5378,6 +5396,7 @@ fn manifest_animated(
     let mut worker_task = Task::new(task)
         .with_home(bravebot_agent::home::directory())
         .with_profile(bravebot_agent::home::profile())
+        .with_cache(bravebot_agent::home::cache())
         .with_model(session.model().map(str::to_string))
         .with_effort(session.effort_in_force())
         .with_permissions(permissions.clone())
@@ -5535,7 +5554,7 @@ fn manifest_animated(
             crate::remote_confirm::ToMain::Streaming(text) => session.streaming(&text),
             crate::remote_confirm::ToMain::Started(activity) => session.start_activity(activity),
             crate::remote_confirm::ToMain::Finished(activity) => session.finish_activity(activity),
-            crate::remote_confirm::ToMain::CheckStarted(lines) => session.checking(lines),
+            crate::remote_confirm::ToMain::CheckStarted(checking) => session.checking(checking),
             crate::remote_confirm::ToMain::CheckFinished => session.checked(),
             crate::remote_confirm::ToMain::Quarantined(shown) => session.show(shown),
             crate::remote_confirm::ToMain::Returned(returned) => session.returned(returned),
@@ -6044,6 +6063,7 @@ fn run_turn_animated(
         .with_rounds(None)
         .with_home(bravebot_agent::home::directory())
         .with_profile(bravebot_agent::home::profile())
+        .with_cache(bravebot_agent::home::cache())
         // There is somebody in front of this, so a run prompt here may offer the key whose answer
         // outlives the session. A one-shot run says nothing here and reads no record.
         .remembering(Some(session_id.to_string()))
@@ -6391,7 +6411,7 @@ fn run_turn_animated(
             crate::remote_confirm::ToMain::Streaming(text) => session.streaming(&text),
             crate::remote_confirm::ToMain::Started(activity) => session.start_activity(activity),
             crate::remote_confirm::ToMain::Finished(activity) => session.finish_activity(activity),
-            crate::remote_confirm::ToMain::CheckStarted(lines) => session.checking(lines),
+            crate::remote_confirm::ToMain::CheckStarted(checking) => session.checking(checking),
             crate::remote_confirm::ToMain::CheckFinished => session.checked(),
             crate::remote_confirm::ToMain::Quarantined(shown) => session.show(shown),
             crate::remote_confirm::ToMain::Printed(output) => session.command_printed(output),
@@ -7510,6 +7530,23 @@ mod tests {
     fn a_model_that_advertises_nothing_has_no_window() {
         let models = [listed("quiet-model", None)];
         assert_eq!(advertised_window(&models, Some("quiet-model")), None);
+    }
+
+    /// VET-4: what the roster lists the model in force as taking is what a picture is refused
+    /// against, so it has to be that model's list. `automatic` and a model the listing leaves out
+    /// claim nothing, and a claim of nothing is what lets the picture go ahead.
+    #[test]
+    fn the_inputs_adopted_are_the_chosen_models_own() {
+        let mut texts = listed("text-only", None);
+        texts.advertised.input_modalities = vec!["text".into()];
+        let mut looks = listed("looks", None);
+        looks.advertised.input_modalities = vec!["text".into(), "image".into()];
+        let models = [texts, looks];
+
+        assert_eq!(advertised_inputs(&models, Some("looks")), ["text", "image"]);
+        assert_eq!(advertised_inputs(&models, Some("text-only")), ["text"]);
+        assert!(advertised_inputs(&models, None).is_empty());
+        assert!(advertised_inputs(&models, Some("withdrawn-model")).is_empty());
     }
 
     /// A configuration whose roster is what a settings file named and whose Brave credentials are

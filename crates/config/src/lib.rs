@@ -871,6 +871,13 @@ pub struct Config {
     budget_was_chosen: bool,
     /// Whether the context budget was adopted from an advertised window.
     budget_was_advertised: bool,
+    /// What the gateway's roster lists one model as taking, in the roster's own words, beside the
+    /// name of that model.
+    ///
+    /// Empty until a listing is adopted, and empty where the listing said nothing about the model:
+    /// neither is a claim that the model takes only text. Read by the one thing that decides on it,
+    /// which is whether a picture the planner asks to see can be put to a model that looks at it.
+    listed_inputs: Option<(String, Vec<String>)>,
 }
 
 /// A value captured when this binary was built, or `None` if the build had none.
@@ -1089,7 +1096,26 @@ impl Config {
             context_budget,
             budget_was_chosen,
             budget_was_advertised,
+            listed_inputs: None,
         })
+    }
+
+    /// Take what the roster lists `model` as taking, replacing what was listed before.
+    ///
+    /// Taken wherever the window is, from the same entry, because both belong to the model and a
+    /// session that changed model and kept the old list would decide on a model no longer in force.
+    pub fn adopt_inputs(&mut self, model: &str, listed: &[String]) {
+        self.listed_inputs = Some((model.to_string(), listed.to_vec()));
+    }
+
+    /// What the roster lists `model` as taking. Empty where it said nothing, and for every model
+    /// but the one the list was taken for: a turn addressed to a definition runs on the model the
+    /// definition names, which the listing adopted for the session never described.
+    pub fn listed_inputs(&self, model: &str) -> &[String] {
+        match &self.listed_inputs {
+            Some((listed_for, inputs)) if listed_for == model => inputs,
+            _ => &[],
+        }
     }
 
     /// Whether the context budget is a guess rather than set by hand or advertised by the model.
@@ -1305,6 +1331,22 @@ mod tests {
     fn the_default_model_is_automatic() {
         let config = Config::from_lookup(complete_env).unwrap();
         assert_eq!(config.default_model, DEFAULT_MODEL);
+    }
+
+    /// VET-4: the list decides whether a picture is refused before a check, so it may only speak
+    /// for the model it was listed for. Another model's turn is told nothing by it.
+    #[test]
+    fn listed_inputs_speak_only_for_the_model_they_were_listed_for() {
+        let mut config = Config::from_lookup(complete_env).unwrap();
+        assert!(config.listed_inputs("text-only").is_empty());
+
+        config.adopt_inputs("text-only", &["text".to_string()]);
+        assert_eq!(config.listed_inputs("text-only"), ["text"]);
+        assert!(config.listed_inputs("looks").is_empty());
+
+        config.adopt_inputs("looks", &["text".to_string(), "image".to_string()]);
+        assert_eq!(config.listed_inputs("looks"), ["text", "image"]);
+        assert!(config.listed_inputs("text-only").is_empty());
     }
 
     #[test]

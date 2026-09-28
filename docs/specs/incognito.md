@@ -161,7 +161,7 @@ mode points.
 <a id="INCOG-8"></a>
 ### INCOG-8: what the mode does not cover, and says so
 
-Seven things still reach the filesystem in an incognito session, each because refusing it would cost
+Eight things still reach the filesystem in an incognito session, each because refusing it would cost
 more than what it leaves behind:
 
 - **The workspace.** `write_file` and `edit_file` go on editing the project. Those edits are the
@@ -200,10 +200,12 @@ more than what it leaves behind:
   are spent, and nothing about which project or which prompts. Renewing an order is not importing
   one, which [INCOG-7](#INCOG-7) refuses outright, and the file itself is governed by
   [premium-credentials.md](premium-credentials.md).
-
-A built [VET-4](tools/vet-content.md#VET-4) would add an eighth, which nothing writes yet: the copy
-of a picture a person is asked to open, in a directory of its own under their cache directory and
-removed when the prompt closes.
+- **The copy of a picture a person is asked to open.** A vetting prompt about a picture hands them a
+  file to open in their own viewer, since neither front end draws one. It goes to `bravebot/vetting`
+  under their cache directory rather than `~/.bravebot` or the system temporary directory, is
+  created `0600` and refuses to reuse an existing name, and is removed when the prompt closes. A
+  process killed with the prompt open leaves it behind. [VET-4](tools/vet-content.md#VET-4) governs
+  it.
 
 **Why.** A stated limit is worth more than an unstated one. Someone who knows the third of these
 can decide not to open an editor; someone who assumed the mode covered it has been misled by their

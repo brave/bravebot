@@ -16,6 +16,9 @@
 
 export type Intent = 'create' | 'overwrite' | 'edit'
 export type Phase = 'planning' | 'thinking' | 'compacting' | 'reconnecting'
+
+/** What a running confined check was given: lines of text, or one picture or PDF, which has none. */
+export type Checking = { lines: number } | { file: 'picture' | 'pdf' }
 export type Reach = 'not_the_planner' | 'no_model'
 export type Landing = 'context' | 'quarantined' | 'reserved'
 export type TodoStatus = 'pending' | 'active' | 'done'
@@ -90,6 +93,11 @@ export type Said =
    * tag a request may claim.
    */
   | { kind: 'consolidation' }
+  /**
+   * A picture or a PDF `vet_content` let through and attached for the model. Both fields are the
+   * agent's own: a reference name and a media type from its table of extensions.
+   */
+  | { kind: 'vetted'; reference: string; media: string }
 
 export interface TodoRow {
   content: string
@@ -212,7 +220,13 @@ export interface ForkedSession {
 }
 
 export interface Vetting { verdict: string; reason?: string | null; detail?: string | null }
-export interface VetRequest { request: number; origin: string; expects: string; content: string; lines: number; vetting: Vetting }
+/**
+ * A picture or a PDF put to the person as a copy to open, since a transcript row cannot show what
+ * the model would be shown. The copy is deleted once the question is answered.
+ */
+export interface VetPicture { path: string; media: string; bytes: number }
+
+export interface VetRequest { request: number; origin: string; expects: string; content: string; lines: number; picture?: VetPicture | null; vetting: Vetting }
 
 export interface ConfirmRequest {
   remark?: { preview: string[]; lines: number; label: string } | null
@@ -427,7 +441,7 @@ export interface EventMap {
   narration: { text: string }
   'tool.started': Activity
   'tool.finished': Activity
-  'check.started': { lines: number }
+  'check.started': Checking
   'check.finished': Record<string, never>
   landed: { landing: Landing }
   quarantined: Shown

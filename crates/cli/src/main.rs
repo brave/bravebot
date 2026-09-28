@@ -671,6 +671,7 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
     let mut task = Task::new(prompt)
         .with_home(bravebot_agent::home::directory())
         .with_profile(bravebot_agent::home::profile())
+        .with_cache(bravebot_agent::home::cache())
         .with_model(model_asked_for(
             named,
             bravebot_session::store::model(bravebot_session::store::load_model(), &settings),
