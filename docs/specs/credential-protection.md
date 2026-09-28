@@ -547,14 +547,16 @@ decide whether to ask would be a decision taken from untrusted content, which
 [labels.md](labels.md) admits nowhere. It is the same bound a credential written through a
 reference falls under, and the Known costs record both.
 
-**What the question covers, and for how long.** The file, for the session. An answer writes no
-rule, moves no credential between tiers and grants nothing a gate reads: the read was already
-allowed by the trust map before the scan ran, which is what CRED-17 means by a finding deciding
-nothing. Remembering it per path is what stops a planner reading the same `.env` on round after
-round putting the same question up each time. A file's history is that file's: a key a commit
-shows is asked about under the path it was committed at, so agreeing to one file's key agrees to
-nothing about another's. It does not outlive the session, and the Known costs say what that rests
-on.
+**What the question covers, and for how long.** The file, for the session or until the working
+directory moves. An answer writes no rule, moves no credential between tiers and grants nothing a
+gate reads: the read was already allowed by the trust map before the scan ran, which is what
+CRED-17 means by a finding deciding nothing. Remembering it per path is what stops a planner
+reading the same `.env` on round after round putting the same question up each time. A file's
+history is that file's: a key a commit shows is asked about under the path it was committed at, so
+agreeing to one file's key agrees to nothing about another's. It does not outlive the session, and
+the Known costs say what that rests on. Nor does it outlive a move of the working directory: a file
+inside it is kept under its name from there, which from the new one names another file, so every
+answer is dropped ([TRUST-13](trust-map.md#TRUST-13)).
 
 A live session keeps these answers after a turn fails or is cancelled, including when a later
 context load fails. They are not written into the session record, so reopening asks again.
@@ -573,6 +575,7 @@ owns the tree and is the one who can say which it is.
 `verified-by: bravebot_agent::turn::the_read_prompt_says_which_value_it_is_asking_about`
 `verified-by: bravebot_agent::turn::a_file_agreed_to_once_is_not_asked_about_again_this_session`
 `verified-by: bravebot_agent::turn::a_file_agreed_to_in_an_earlier_turn_is_not_asked_about_again`
+`verified-by: bravebot_tui::app::an_answer_to_show_a_file_does_not_cover_the_file_by_that_name_after_moving`
 `verified-by: bravebot_agent::turn::a_read_of_a_file_nobody_vouched_for_is_not_scanned`
 `verified-by: bravebot_agent::turn::a_read_of_a_file_holding_no_credential_is_not_asked_about`
 `verified-by: bravebot_agent::turn::a_credential_in_history_is_held_back_until_the_person_agrees`
@@ -1111,7 +1114,10 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   path while the session lives and is written nowhere, so the next session asks about the same
   `.env` again. Carrying it forward needs a name an answer can be filed under across runs, which is
   the durable salt and the store the entry above describes: a path alone is not one, since the file
-  at that path is not the file that was answered about.
+  at that path is not the file that was answered about. A move of the working directory drops them
+  all, including an answer about a file the new directory still reaches, which is asked about
+  again: telling those apart would mean renaming each answer for the new directory, to save one
+  question per file.
 
 - **Half of CRED-14 is pinned and half is argued.** The tests on it are the environment of a program
   this agent starts. That what it holds reaches no session record rests on

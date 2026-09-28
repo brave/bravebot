@@ -1041,7 +1041,8 @@ expose-explained =
     le modèle peut lire ce fichier, et ce qu'il lit parvient à qui effectue l'inférence.
     L'analyse y a trouvé quelque chose qui ressemble à un identifiant. L'envoyer divulgue
     cette valeur ; refuser garde le texte de ce fichier hors du modèle et ne change rien
-    d'autre. Une réponse couvre ce fichier pour le reste de cette session.
+    d'autre. Une réponse couvre ce fichier jusqu'à la fin de cette session ou un changement
+    de répertoire.
 expose-found = ce que l'analyse a trouvé, sans rien de la valeur :
 expose-yes = l'envoyer quand même
 expose-no = le garder à l'écart
@@ -1405,7 +1406,7 @@ session-trust-forget-incognito =
 session-not-trusting =
     ce répertoire n'est pas approuvé ; chaque écriture vous sera montrée
 session-vouched-for = { $path } approuvé pour cette session
-session-exposed = { $path } montré au modèle pour cette session, identifiant compris
+session-exposed = { $path } montré au modèle jusqu'à la fin de cette session ou un changement de répertoire, identifiant compris
 session-vetting-on =
     une vérification qui ne trouve rien donnera désormais le contenu au modèle sans vous
     demander (~/.bravebot/vetting)

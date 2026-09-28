@@ -2721,8 +2721,8 @@ fn event_loop(
     // the list of programs it vouched for has.
     let mut asked_about = AskedAbout::new();
     // And every file this session has agreed the planner may be given despite the credential
-    // scan. Same lifetime and same reason: the answer is worth honouring while the session
-    // lasts, and a session that ends forgets it.
+    // scan. The same lifetime, except that `/cd` drops it: an answer is kept under the file's
+    // name from the working directory, which after a move names another file.
     let mut exposed = bravebot_core::credentials::Exposed::new();
     let (mut conversation, mut stored, mut programs) = match start {
         // Already answered before the loop was entered: the picker runs once, in `run`.
@@ -3111,6 +3111,7 @@ fn event_loop(
                     &mut trust,
                     &mut servers,
                     &mut rules,
+                    &mut exposed,
                     stored.id(),
                     &directory,
                     |asking, carried| crate::trust_prompt::ask_granted(terminal, asking, carried),
@@ -3642,6 +3643,9 @@ fn add_directory(
 /// The permission rules are read again for the new root, PERM-15: a rule granted for the old
 /// checkout's file is not a rule anybody granted here, and this checkout's own `deny` rules are in
 /// force from the first turn. What it proposes is put to the person through `ask`.
+///
+/// The answers to the credential question are dropped, TRUST-13: one about a file inside the old
+/// root is remembered under its name from there, and from the new one that name is another file.
 #[allow(clippy::too_many_arguments)]
 fn change_directory(
     session: &mut Session,
@@ -3649,6 +3653,7 @@ fn change_directory(
     trust: &mut TrustStore,
     servers: &mut Option<LanguageServers>,
     rules: &mut Rules,
+    exposed: &mut bravebot_core::credentials::Exposed,
     id: &str,
     directory: &str,
     ask: impl FnOnce(&[bravebot_agent::granted::Proposed], &mut String) -> Option<bool>,
@@ -3675,6 +3680,7 @@ fn change_directory(
         }
     };
 
+    *exposed = bravebot_core::credentials::Exposed::new();
     *trust = trust.rebased(std::path::Path::new(&bravebot_agent::workspace::key_of(
         &moved.root,
     )));
@@ -17254,6 +17260,7 @@ mod tests {
                 &mut trust,
                 &mut None,
                 &mut rules,
+                &mut bravebot_core::credentials::Exposed::new(),
                 "a-session",
                 b.to_str().expect("utf-8 path"),
                 |_, _| {
@@ -17304,6 +17311,7 @@ mod tests {
                 &mut trust,
                 &mut None,
                 &mut rules,
+                &mut bravebot_core::credentials::Exposed::new(),
                 "a-session",
                 b.to_str().expect("utf-8 path"),
                 never_asked,
@@ -17345,6 +17353,7 @@ mod tests {
                 &mut trust,
                 &mut None,
                 &mut rules,
+                &mut bravebot_core::credentials::Exposed::new(),
                 "a-session",
                 b.to_str().expect("utf-8 path"),
                 |asking, _| {
@@ -17402,6 +17411,7 @@ mod tests {
                 &mut trust,
                 &mut None,
                 &mut rules,
+                &mut bravebot_core::credentials::Exposed::new(),
                 "a-session",
                 b.to_str().expect("utf-8 path"),
                 |_, _| None,
@@ -17435,6 +17445,7 @@ mod tests {
                 &mut trust,
                 &mut None,
                 &mut rules,
+                &mut bravebot_core::credentials::Exposed::new(),
                 "a-session",
                 b.to_str().expect("utf-8 path"),
                 never_asked,
@@ -17493,6 +17504,7 @@ mod tests {
                 &mut trust,
                 &mut None,
                 &mut rules,
+                &mut bravebot_core::credentials::Exposed::new(),
                 "a-session",
                 b.to_str().expect("utf-8 path"),
                 |asking, _| {
@@ -17581,6 +17593,7 @@ mod tests {
                 &mut trust,
                 &mut None,
                 &mut rules,
+                &mut bravebot_core::credentials::Exposed::new(),
                 "a-session",
                 other.to_str().expect("utf-8 path"),
                 never_asked,
@@ -17634,6 +17647,7 @@ mod tests {
                 &mut trust,
                 &mut None,
                 &mut rules,
+                &mut bravebot_core::credentials::Exposed::new(),
                 "a-session",
                 other.to_str().expect("utf-8 path"),
                 never_asked,
@@ -17695,6 +17709,7 @@ mod tests {
                 &mut trust,
                 &mut servers,
                 &mut rules,
+                &mut bravebot_core::credentials::Exposed::new(),
                 "a-session",
                 other.to_str().expect("utf-8 path"),
                 never_asked,
@@ -17736,6 +17751,7 @@ mod tests {
                 &mut trust,
                 &mut None,
                 &mut rules,
+                &mut bravebot_core::credentials::Exposed::new(),
                 "a-session",
                 other.to_str().expect("utf-8 path"),
                 never_asked,
@@ -17783,6 +17799,7 @@ mod tests {
                 &mut trust,
                 &mut None,
                 &mut rules,
+                &mut bravebot_core::credentials::Exposed::new(),
                 "a-session",
                 "src",
                 never_asked,
@@ -17802,8 +17819,67 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    /// An answer to show a file that holds a credential is kept under the name the file has from
+    /// the root. After a move that name is another file, so the answer must not cover it.
+    #[test]
+    fn an_answer_to_show_a_file_does_not_cover_the_file_by_that_name_after_moving() {
+        let root = crate::testutil::scratch_dir("bravebot-cd-exposed-test");
+        let project = root.join("project");
+        let other = root.join("other");
+        std::fs::create_dir_all(project.join("src")).expect("scratch");
+        std::fs::create_dir_all(&other).expect("scratch");
+
+        let mut workspace = Workspace::new(&project).expect("workspace");
+        let mut session = Session::new("none");
+        let mut trust = TrustStore::new(workspace.root());
+        let mut rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        let mut exposed = bravebot_core::credentials::Exposed::new();
+
+        exposed.allow(".env");
+        assert_eq!(
+            change_directory(
+                &mut session,
+                &mut workspace,
+                &mut trust,
+                &mut None,
+                &mut rules,
+                &mut exposed,
+                "a-session",
+                "src",
+                never_asked,
+            ),
+            Changed::Moved
+        );
+        assert!(
+            !exposed.holds(".env"),
+            "a yes for the root's .env covered src/.env after moving into src"
+        );
+
+        exposed.allow(".env");
+        assert_eq!(
+            change_directory(
+                &mut session,
+                &mut workspace,
+                &mut trust,
+                &mut None,
+                &mut rules,
+                &mut exposed,
+                "a-session",
+                other.to_str().expect("utf-8 path"),
+                never_asked,
+            ),
+            Changed::Moved
+        );
+        assert!(
+            !exposed.holds(".env"),
+            "a yes for one checkout's .env covered another checkout's"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     /// A path that names nothing moves nothing, and says so. Half a move would leave the session
-    /// vouching for a directory it is not in.
+    /// vouching for a directory it is not in, or asking again about files it has not left.
     #[test]
     fn a_directory_that_is_not_there_moves_nothing() {
         let root = crate::testutil::scratch_dir("bravebot-cd-missing-test");
@@ -17813,6 +17889,8 @@ mod tests {
         let mut session = Session::new("none");
         let mut trust = TrustStore::new("/work");
         let mut rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        let mut exposed = bravebot_core::credentials::Exposed::new();
+        exposed.allow(".env");
         let before = workspace.root().to_path_buf();
 
         assert_eq!(
@@ -17822,6 +17900,7 @@ mod tests {
                 &mut trust,
                 &mut None,
                 &mut rules,
+                &mut exposed,
                 "a-session",
                 "nowhere",
                 never_asked,
@@ -17830,6 +17909,10 @@ mod tests {
         );
         assert_eq!(workspace.root(), before);
         assert!(trust.is_empty(), "a refused move vouched for something");
+        assert!(
+            exposed.holds(".env"),
+            "a refused move dropped an answer about a file the session has not left"
+        );
 
         std::fs::remove_dir_all(&root).ok();
     }

@@ -172,6 +172,10 @@ checkout proposes is put to you in the box a session opening there would show, s
 for the directory you left answers nothing here. See
 [Rules you write down in advance](../security/permissions.md#rules-you-write-down-in-advance).
 
+Nor do your answers about reading a file that holds what looks like a credential. Each is kept under
+the file's name from the directory you left, which here can name another file, so such a file is asked
+about again.
+
 ## `/forget-trust`
 
 Takes back the answer you said to remember at the question a session asks about its directory, with

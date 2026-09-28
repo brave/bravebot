@@ -4736,8 +4736,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
     /// Record that a person, having read the question, agreed to this file reaching the planner.
     ///
-    /// Only ever called because somebody answered. The path is the one the trust map is keyed by,
-    /// so the spelling a planner used does not decide whether the question comes back.
+    /// Only ever called because somebody answered. The path is the name the workspace reduces a
+    /// planner's spelling to, relative to the working directory for a file inside it, so the
+    /// spelling a planner used does not decide whether the question comes back.
     pub fn allow_exposing_read(&mut self, path: &str) {
         self.exposed.allow(path);
         self.allow(
