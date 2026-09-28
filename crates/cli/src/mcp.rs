@@ -1,9 +1,9 @@
-//! `bravebot mcp`: declaring an MCP server, approving a declaration (SERVERS-3), and forgetting the
-//! standing answers given in a project.
+//! `bravebot mcp`: declaring an MCP server, approving a declaration (SERVERS-3), requesting one in a
+//! settings file (SERVERS-2), and forgetting the standing answers given in a project.
 //!
-//! What this writes is the files [`bravebot_config::mcp`] reads, and the one question it asks is
-//! whether the person approves a declaration they were just shown. Nothing here starts a server or
-//! offers one to a session.
+//! What this writes is the files [`bravebot_config::mcp`] reads and the `mcp.request` list of the
+//! settings file `-s` names, and the one question it asks is whether the person approves a
+//! declaration they were just shown. Nothing here starts a server or offers one to a session.
 //!
 //! Typing `add` is not the approval. The line a person typed says what to run; the answer to the
 //! question says they read what it resolved to, and only that answer is recorded. Where nobody can
@@ -13,6 +13,7 @@
 use crate::exit::{Ending, fail};
 use crate::progress::printable;
 use bravebot_config::Managed;
+use bravebot_config::import::{Destination, Unwritable};
 use bravebot_config::mcp::{
     self, Approvals, Declaration, Declarations, Entry, Field, Problem, Projects, Standing,
     Unreadable,
@@ -63,6 +64,10 @@ impl Here {
     }
 }
 
+/// The directory this runs in, which is the checkout a `local` or `project` request is written
+/// into, or why it could not be read.
+type Cwd<'a> = Result<&'a Path, &'a str>;
+
 /// Run `bravebot mcp <command>`.
 pub fn command(args: &[String]) -> ExitCode {
     let home = Home {
@@ -77,8 +82,12 @@ pub fn command(args: &[String]) -> ExitCode {
         screen: std::io::stdout().lock(),
         present,
     };
+    // The directory the settings reader takes a checkout's layers from, and for the same reason
+    // not an ancestor of it: a request written anywhere else is one no session here reads.
+    let cwd = std::env::current_dir().map_err(|error| error.to_string());
+    let cwd = cwd.as_deref().map_err(String::as_str);
     let here = || Here::current(&bravebot_config::Settings::load());
-    match run(args, &home, &Managed::load(), &here, &mut person) {
+    match run(args, cwd, &home, &Managed::load(), &here, &mut person) {
         Ok(()) => ExitCode::SUCCESS,
         Err((ending, message)) => fail(ending, message),
     }
@@ -88,6 +97,7 @@ pub fn command(args: &[String]) -> ExitCode {
 /// (SERVERS-12). `here` is read only by `list`, which is the one command reporting on a session.
 fn run<R: BufRead, W: Write>(
     args: &[String],
+    cwd: Cwd<'_>,
     home: &Home,
     managed: &Managed,
     here: &dyn Fn() -> Result<Here, Stopped>,
@@ -97,7 +107,9 @@ fn run<R: BufRead, W: Write>(
         return Err(refused_with_the_forms(t!(mcp_needs_a_command).to_string()));
     };
     match command.as_str() {
-        "add" => add(rest, home, person),
+        "add" => add(rest, cwd, home, managed, person),
+        "enable" => enable(rest, cwd, home, managed, person),
+        "disable" => disable(rest, cwd, home, person),
         "get" => get(one_alias(command, rest)?, home, managed, person),
         "list" => match rest.first() {
             None => list(home, managed, here, person),
@@ -122,8 +134,10 @@ fn refused_with_the_forms(message: String) -> Stopped {
     said.push('\n');
     said.push_str(t!(mcp_forms_heading));
     for form in [
-        "bravebot mcp add <alias> [--env <name>]... [--dir <path>] [--stdio] -- <program> [args...]",
-        "bravebot mcp add <alias> --http <url>",
+        "bravebot mcp add <alias> [-s <scope>] [--env <name>]... [--dir <path>] [--stdio] -- <program> [args...]",
+        "bravebot mcp add <alias> [-s <scope>] --http <url>",
+        "bravebot mcp enable <alias> [-s <scope>]",
+        "bravebot mcp disable <alias> [-s <scope>]",
         "bravebot mcp get <alias>",
         "bravebot mcp list",
         "bravebot mcp approve <alias>",
@@ -163,12 +177,24 @@ fn one_alias<'a>(command: &str, rest: &'a [String]) -> Result<&'a str, Stopped> 
     }
 }
 
+/// Declare a server, ask whether it is approved, and on a yes request it in the settings file `-s`
+/// names, so the declaration a person just typed is one the next session in that scope starts.
 fn add<R: BufRead, W: Write>(
     rest: &[String],
+    cwd: Cwd<'_>,
     home: &Home,
+    managed: &Managed,
     person: &mut Person<R, W>,
 ) -> Result<(), Stopped> {
-    let Some((alias, flags)) = rest.split_first() else {
+    // Before the alias as well as among the flags after it, since Claude Code's own examples put
+    // its options first.
+    let mut scope = None;
+    let mut start = 0;
+    while matches!(rest.get(start).map(String::as_str), Some("-s" | "--scope")) {
+        take_scope(rest.get(start + 1), &mut scope)?;
+        start += 2;
+    }
+    let Some((alias, flags)) = rest[start..].split_first() else {
         return Err((
             Ending::Argument,
             t!(mcp_needs_an_alias, command = "add").to_string(),
@@ -180,16 +206,21 @@ fn add<R: BufRead, W: Write>(
             t!(mcp_not_an_alias, alias = shown(alias)).to_string(),
         ));
     }
-    let declaration = declared(flags).map_err(|refusal| match refusal {
+    let declaration = declared(flags, start + 1, &mut scope).map_err(|refusal| match refusal {
         Refusal::Said(stopped) => stopped,
         Refusal::Problem(found) => (
             Ending::Argument,
             t!(mcp_not_added, alias = alias, problem = problem(&found)).to_string(),
         ),
     })?;
+    let scope = scope.unwrap_or(Scope::Local);
 
-    let directory = writable(home)?;
+    let directory = writable(home, "add")?;
     let mut declarations = read(directory)?;
+    // Read before anything is written, so a settings file the request cannot go in stops the
+    // declaration too rather than leaving half of what was typed done.
+    let mut settings = settings(scope, cwd, directory)?;
+    let requested = requested(&mut settings, alias)?;
     let before = declarations
         .get(alias)
         .and_then(|entry| entry.declaration.ok());
@@ -224,9 +255,29 @@ fn add<R: BufRead, W: Write>(
             )?;
             say(person, recorded(alias, &declaration));
         }
-        Asked::No => say(person, t!(mcp_left_unapproved, alias = alias)),
-        Asked::Nobody => say(person, t!(mcp_nobody_asked, alias = alias)),
+        Asked::No | Asked::Nobody if requested => {
+            say(person, still_requested(&settings, alias));
+            return Ok(());
+        }
+        Asked::No => {
+            let command = enable_command(alias, scope);
+            say(
+                person,
+                t!(mcp_declared_not_enabled, alias = alias, command = command),
+            );
+            return Ok(());
+        }
+        Asked::Nobody => {
+            let command = enable_command(alias, scope);
+            say(
+                person,
+                t!(mcp_nobody_asked, alias = alias, command = command),
+            );
+            return Ok(());
+        }
     }
+    enabled(&settings, directory, alias, requested, "add", person)?;
+    kept_from_starting(managed, alias, &declaration, person);
     Ok(())
 }
 
@@ -248,7 +299,13 @@ impl From<Stopped> for Refusal {
 ///
 /// Everything after a bare `--`, or after `--stdio --`, is the program and its arguments, as words
 /// and never as a line, so a flag of this command written after it is an argument of the server's.
-fn declared(flags: &[String]) -> Result<Declaration, Refusal> {
+/// A `-s` before it is read into `scope`. `before` is how many words after `add` precede `flags`,
+/// so a stray word is named by its place in what was typed.
+fn declared(
+    flags: &[String],
+    before: usize,
+    scope: &mut Option<Scope>,
+) -> Result<Declaration, Refusal> {
     let mut variables = Vec::new();
     let mut directory = None;
     let mut transport = None;
@@ -288,16 +345,12 @@ fn declared(flags: &[String]) -> Result<Declaration, Refusal> {
                 transport = Some(Transport::Stdio(argv));
                 break;
             }
-            // Shown up to its `=`, since `--env=NAME=value` and `--http=https://user:pass@host`
-            // carry the very value SERVERS-10 never repeats.
-            other if other.starts_with('-') => {
-                let flag = other.split('=').next().unwrap_or(other);
-                return Err(argument(t!(cli_unknown_option, flag = shown(flag))).into());
-            }
+            "-s" | "--scope" => take_scope(value, scope)?,
+            other if other.starts_with('-') => return Err(unknown_option(other).into()),
             // Named by its place and not by its text: a stray word here is most often a value,
             // as in `--env TOKEN sk-live` or `--env PATH TOKEN=sk-live`.
             _ => {
-                let position = index as i64 + 2;
+                let position = (before + index + 1) as i64;
                 return Err(argument(t!(mcp_add_stray_argument, position = position)).into());
             }
         }
@@ -341,6 +394,74 @@ fn argument(message: impl std::fmt::Display) -> Stopped {
     (Ending::Argument, message.to_string())
 }
 
+/// A flag no form takes, shown up to its `=`, since `--env=NAME=value` and
+/// `--http=https://user:pass@host` carry the very value SERVERS-10 never repeats.
+fn unknown_option(typed: &str) -> Stopped {
+    let flag = typed.split('=').next().unwrap_or(typed);
+    argument(t!(cli_unknown_option, flag = shown(flag)))
+}
+
+/// Which settings file a request is written to, under the names Claude Code's `-s` gives its
+/// three.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Scope {
+    /// `.bravebot/settings.local.json` in the directory this runs in, which is this person's own.
+    Local,
+    /// `.bravebot/settings.json` there, which whoever clones the checkout reads too.
+    Project,
+    /// `settings.json` in the state directory, which a session in any directory reads.
+    User,
+}
+
+impl Scope {
+    /// In the order the settings reader lays them over one another.
+    const ALL: [Self; 3] = [Self::User, Self::Project, Self::Local];
+
+    /// The file its request is kept in.
+    fn file(self, cwd: Cwd<'_>, directory: &Path) -> Result<PathBuf, Stopped> {
+        match self {
+            Self::User => Ok(bravebot_config::user_settings_file(directory)),
+            Self::Project => Ok(bravebot_config::project_settings_file(checkout(cwd)?)),
+            Self::Local => Ok(bravebot_config::local_settings_file(checkout(cwd)?)),
+        }
+    }
+
+    /// What names it on a command line after the alias, which for the default is nothing.
+    fn flag(self) -> &'static str {
+        match self {
+            Self::Local => "",
+            Self::Project => " -s project",
+            Self::User => " -s user",
+        }
+    }
+}
+
+/// Read the value of a `-s` into `scope`, refusing a second one rather than letting the last win:
+/// the two name different files, and writing whichever came last would be a guess at which was
+/// meant.
+fn take_scope(value: Option<&String>, scope: &mut Option<Scope>) -> Result<(), Stopped> {
+    let value = value.ok_or_else(|| argument(t!(mcp_scope_needs_a_value)))?;
+    if scope.is_some() {
+        return Err(argument(t!(mcp_two_scopes)));
+    }
+    *scope = Some(match value.as_str() {
+        "local" => Scope::Local,
+        "project" => Scope::Project,
+        "user" => Scope::User,
+        other => return Err(argument(t!(mcp_not_a_scope, scope = shown(other)))),
+    });
+    Ok(())
+}
+
+fn checkout(cwd: Cwd<'_>) -> Result<&Path, Stopped> {
+    cwd.map_err(|error| {
+        (
+            Ending::Failed,
+            t!(mcp_no_current_directory, error = error).to_string(),
+        )
+    })
+}
+
 /// The directory `--dir` named, as the absolute path of the place it is.
 ///
 /// Resolved here rather than written as typed, so the declaration and its digest name a place and
@@ -366,17 +487,7 @@ fn get<R: BufRead, W: Write>(
     let (Some(directory), Some(entry)) = (directory, declarations.get(alias)) else {
         return Err(not_declared(alias));
     };
-    let declaration = entry.declaration.map_err(|found| {
-        (
-            Ending::Configuration,
-            t!(
-                mcp_unusable,
-                alias = shown(alias),
-                problem = problem(&found)
-            )
-            .to_string(),
-        )
-    })?;
+    let declaration = entry.declaration.map_err(|found| unusable(alias, &found))?;
     let path = mcp::declarations_file(directory);
     let digest = declaration.digest();
     say(
@@ -640,20 +751,10 @@ fn approve<R: BufRead, W: Write>(
     home: &Home,
     person: &mut Person<R, W>,
 ) -> Result<(), Stopped> {
-    let directory = writable(home)?;
+    let directory = writable(home, "approve")?;
     let declarations = read(directory)?;
     let entry = declarations.get(alias).ok_or_else(|| not_declared(alias))?;
-    let declaration = entry.declaration.map_err(|found| {
-        (
-            Ending::Configuration,
-            t!(
-                mcp_unusable,
-                alias = shown(alias),
-                problem = problem(&found)
-            )
-            .to_string(),
-        )
-    })?;
+    let declaration = entry.declaration.map_err(|found| unusable(alias, &found))?;
     let mut approvals = Approvals::read(directory);
     match ask(alias, &declaration, &[], &approvals, person) {
         Asked::Already => say(person, already(alias, &declaration)),
@@ -683,12 +784,319 @@ fn approve<R: BufRead, W: Write>(
     Ok(())
 }
 
+/// Request a declared server in the settings file `-s` names, which is what makes a session there
+/// start it (SERVERS-2), asking SERVERS-3's question first where it is not approved yet.
+///
+/// Nothing is written unless the answer is yes or was yes before: the question is the approval,
+/// and a request for a server nobody approved is one every session would stop to ask about.
+fn enable<R: BufRead, W: Write>(
+    rest: &[String],
+    cwd: Cwd<'_>,
+    home: &Home,
+    managed: &Managed,
+    person: &mut Person<R, W>,
+) -> Result<(), Stopped> {
+    let (alias, scope) = alias_and_scope("enable", rest)?;
+    let scope = scope.unwrap_or(Scope::Local);
+    let directory = writable(home, "enable")?;
+    let declarations = read(directory)?;
+    let entry = declarations.get(alias).ok_or_else(|| not_declared(alias))?;
+    let declaration = entry.declaration.map_err(|found| unusable(alias, &found))?;
+    let mut settings = settings(scope, cwd, directory)?;
+    let requested = requested(&mut settings, alias)?;
+    let mut approvals = Approvals::read(directory);
+    match ask(alias, &declaration, &[], &approvals, person) {
+        Asked::Already => say(person, already(alias, &declaration)),
+        Asked::Yes => {
+            record(
+                directory,
+                &declarations,
+                &mut approvals,
+                alias,
+                &declaration,
+            )?;
+            say(person, recorded(alias, &declaration));
+        }
+        Asked::No | Asked::Nobody if requested => {
+            return Err((Ending::Refused, still_requested(&settings, alias)));
+        }
+        Asked::No => {
+            return Err((
+                Ending::Refused,
+                t!(mcp_not_enabled, alias = alias).to_string(),
+            ));
+        }
+        Asked::Nobody => {
+            let command = enable_command(alias, scope);
+            return Err((
+                Ending::Refused,
+                t!(mcp_nobody_to_enable, alias = alias, command = command).to_string(),
+            ));
+        }
+    }
+    enabled(&settings, directory, alias, requested, "enable", person)?;
+    kept_from_starting(managed, alias, &declaration, person);
+    Ok(())
+}
+
+/// Take a server out of `mcp.request`: in the file `-s` names, or in each of the three that holds
+/// it where no `-s` was given, since a person who wants it gone does not have to know which file
+/// asked for it.
+///
+/// The declaration and its approval stay, so `enable` puts the request back without asking again.
+fn disable<R: BufRead, W: Write>(
+    rest: &[String],
+    cwd: Cwd<'_>,
+    home: &Home,
+    person: &mut Person<R, W>,
+) -> Result<(), Stopped> {
+    let (alias, scope) = alias_and_scope("disable", rest)?;
+    let directory = writable(home, "disable")?;
+    let scopes = match scope {
+        Some(scope) => vec![scope],
+        None => Scope::ALL.to_vec(),
+    };
+    // Every file is read before any is written, so one that cannot be read leaves all of them as
+    // they were rather than the alias gone from some.
+    let mut files: Vec<Destination> = Vec::new();
+    for scope in scopes {
+        let path = scope.file(cwd, directory)?;
+        // Run from the directory the state directory is in, a checkout's file is the user's own:
+        // the settings reader reads it once, and a second copy would find the first one's write.
+        if files.iter().any(|file| file.path() == path) {
+            continue;
+        }
+        files.push(open_settings(&path, directory)?);
+    }
+    let mut withdrawn = false;
+    for file in &mut files {
+        if file.withdraw(alias) {
+            write_settings(file, directory, "disable")?;
+            say(
+                person,
+                t!(
+                    mcp_disabled,
+                    alias = shown(alias),
+                    path = file_named(file.path())
+                ),
+            );
+            withdrawn = true;
+        }
+    }
+    if !withdrawn {
+        let paths: Vec<String> = files.iter().map(|file| file_named(file.path())).collect();
+        say(
+            person,
+            t!(
+                mcp_enabled_nowhere,
+                alias = shown(alias),
+                paths = paths.join(", ")
+            ),
+        );
+    }
+    Ok(())
+}
+
+/// The alias and the `-s` that `enable` and `disable` take, in either order.
+///
+/// The alias is not checked against [`mcp::is_alias`], for the reason [`one_alias`] gives.
+fn alias_and_scope<'a>(
+    command: &str,
+    rest: &'a [String],
+) -> Result<(&'a str, Option<Scope>), Stopped> {
+    let mut alias = None;
+    let mut scope = None;
+    let mut index = 0;
+    while index < rest.len() {
+        match rest[index].as_str() {
+            "-s" | "--scope" => {
+                take_scope(rest.get(index + 1), &mut scope)?;
+                index += 1;
+            }
+            flag if flag.starts_with('-') => return Err(unknown_option(flag)),
+            extra if alias.is_some() => return Err(unexpected(command, extra)),
+            word => alias = Some(word),
+        }
+        index += 1;
+    }
+    let alias = alias.ok_or_else(|| {
+        (
+            Ending::Argument,
+            t!(mcp_needs_an_alias, command = command).to_string(),
+        )
+    })?;
+    Ok((alias, scope))
+}
+
+/// The command that asks again about `alias` and requests it in `scope`.
+fn enable_command(alias: &str, scope: Scope) -> String {
+    format!("bravebot mcp enable {}{}", shown(alias), scope.flag())
+}
+
+/// The settings file `scope` names, read to be written back.
+fn settings(scope: Scope, cwd: Cwd<'_>, directory: &Path) -> Result<Destination, Stopped> {
+    open_settings(&scope.file(cwd, directory)?, directory)
+}
+
+fn open_settings(path: &Path, directory: &Path) -> Result<Destination, Stopped> {
+    unlinked(path, directory)?;
+    Destination::open(path).map_err(|why| settings_unwritable(why, path, ""))
+}
+
+/// Refuse a link in a checkout, at `.bravebot` or at the file, rather than follow or replace it.
+///
+/// It arrives with a clone, so where it leads is whoever wrote the checkout's choice: following it
+/// would put the request in whichever of this person's files they named, and replacing it would
+/// copy what that file holds into the checkout. A file in the state directory itself is followed,
+/// as an import follows the user's: that is the user's file, and run from the directory the state
+/// directory is in, the other two.
+fn unlinked(path: &Path, directory: &Path) -> Result<(), Stopped> {
+    let project = path.parent().unwrap_or(path);
+    if project == directory {
+        return Ok(());
+    }
+    match [project, path].into_iter().find(|at| is_link(at)) {
+        Some(link) => Err((
+            Ending::Configuration,
+            t!(mcp_settings_link, path = file_named(link)).to_string(),
+        )),
+        None => Ok(()),
+    }
+}
+
+fn is_link(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|found| found.file_type().is_symlink())
+}
+
+/// Put `alias` in the request `settings` holds, in memory, and say whether it was there already.
+///
+/// Refused where `mcp` or `mcp.request` is something other than what the settings reader reads,
+/// since replacing it would lose what somebody wrote there, and where the file would outgrow what
+/// the reader reads: both before the question, so a refusal leaves nothing declared or approved.
+fn requested(settings: &mut Destination, alias: &str) -> Result<bool, Stopped> {
+    if settings.requests(alias) {
+        return Ok(true);
+    }
+    if !settings.request(alias) {
+        return Err((
+            Ending::Configuration,
+            t!(mcp_settings_not_a_list, path = file_named(settings.path())).to_string(),
+        ));
+    }
+    settings
+        .text()
+        .map_err(|why| settings_unwritable(why, settings.path(), ""))?;
+    Ok(false)
+}
+
+/// Write the request [`requested`] made, where it was not there before, and say where it is.
+fn enabled<R, W: Write>(
+    settings: &Destination,
+    directory: &Path,
+    alias: &str,
+    already: bool,
+    command: &str,
+    person: &mut Person<R, W>,
+) -> Result<(), Stopped> {
+    let path = file_named(settings.path());
+    if already {
+        say(person, t!(mcp_already_enabled, alias = alias, path = path));
+        return Ok(());
+    }
+    write_settings(settings, directory, command)?;
+    say(person, t!(mcp_enabled, alias = alias, path = path));
+    Ok(())
+}
+
+/// What a no, or nobody to ask, comes to where the file already requests `alias`: the request
+/// stands, and the next session that reads it asks.
+fn still_requested(settings: &Destination, alias: &str) -> String {
+    t!(
+        mcp_requested_not_approved,
+        alias = alias,
+        path = file_named(settings.path())
+    )
+    .to_string()
+}
+
+/// Say so where the managed layer keeps a server just enabled from starting, which is the line
+/// [`get`] draws too (SERVERS-12).
+fn kept_from_starting<R, W: Write>(
+    managed: &Managed,
+    alias: &str,
+    declaration: &Declaration,
+    person: &mut Person<R, W>,
+) {
+    let environment = |name: &str| std::env::var_os(name);
+    if let Some(reason) = crate::servers::refused_declaration(managed, declaration, &environment) {
+        say(
+            person,
+            t!(mcp_enabled_not_started, alias = alias, reason = reason),
+        );
+    }
+}
+
+/// Put a settings file on disk whole, in place of the one it was read from.
+///
+/// Through a link rather than over it, so a settings file kept among somebody's dotfiles stays
+/// where they keep it. A checkout's link is refused again here and not only when the file was
+/// read, since one may have been made while the question waited.
+fn write_settings(settings: &Destination, directory: &Path, command: &str) -> Result<(), Stopped> {
+    let path = settings.path();
+    // The question takes as long as the person does, and another program may write the file
+    // meanwhile.
+    if settings.changed() {
+        return Err(settings_unwritable(Unwritable::Changed, path, command));
+    }
+    unlinked(path, directory)?;
+    let text = settings
+        .text()
+        .map_err(|why| settings_unwritable(why, path, command))?;
+    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if let Some(parent) = target.parent() {
+        bravebot_agent::home::create_directory(parent).map_err(|error| {
+            (
+                Ending::Failed,
+                t!(
+                    mcp_not_written,
+                    path = parent.display().to_string(),
+                    error = error.to_string()
+                )
+                .to_string(),
+            )
+        })?;
+    }
+    replace(&target, text.expose())
+}
+
+fn settings_unwritable(why: Unwritable, path: &Path, command: &str) -> Stopped {
+    let path = file_named(path);
+    match why {
+        Unwritable::NotADocument => (
+            Ending::Configuration,
+            t!(mcp_settings_not_a_document, path = path).to_string(),
+        ),
+        Unwritable::TooLarge => (
+            Ending::Configuration,
+            t!(mcp_settings_too_large, path = path).to_string(),
+        ),
+        Unwritable::Changed => (
+            Ending::Failed,
+            t!(mcp_settings_changed, path = path, command = command).to_string(),
+        ),
+    }
+}
+
+fn file_named(path: &Path) -> String {
+    shown(&path.display().to_string())
+}
+
 fn remove<R: BufRead, W: Write>(
     alias: &str,
     home: &Home,
     person: &mut Person<R, W>,
 ) -> Result<(), Stopped> {
-    let directory = writable(home)?;
+    let directory = writable(home, "remove")?;
     let mut declarations = read(directory)?;
     if !declarations.remove(alias) {
         return Err(not_declared(alias));
@@ -711,7 +1119,7 @@ fn forget<R: BufRead, W: Write>(
     home: &Home,
     person: &mut Person<R, W>,
 ) -> Result<(), Stopped> {
-    let directory = writable(home)?;
+    let directory = writable(home, "forget")?;
     let project = project(path)?;
     let unreadable = |file: PathBuf, why: Unreadable| -> Stopped {
         (
@@ -920,6 +1328,13 @@ fn recorded(alias: &str, declaration: &Declaration) -> String {
     .to_string()
 }
 
+fn unusable(alias: &str, found: &Problem) -> Stopped {
+    (
+        Ending::Configuration,
+        t!(mcp_unusable, alias = shown(alias), problem = problem(found)).to_string(),
+    )
+}
+
 fn not_declared(alias: &str) -> Stopped {
     (
         Ending::Argument,
@@ -939,11 +1354,14 @@ pub(crate) fn no_state_directory() -> String {
     .to_string()
 }
 
-/// The state directory, where this run may write to it.
-fn writable(home: &Home) -> Result<&Path, Stopped> {
+/// The state directory, where this run of `command` may write to it.
+fn writable<'a>(home: &'a Home, command: &str) -> Result<&'a Path, Stopped> {
     match (&home.directory, home.writable) {
         (Some(directory), true) => Ok(directory),
-        (Some(_), false) => Err((Ending::Failed, t!(mcp_not_while_incognito).to_string())),
+        (Some(_), false) => Err((
+            Ending::Failed,
+            t!(mcp_not_while_incognito, command = command).to_string(),
+        )),
         (None, _) => Err((Ending::Configuration, no_state_directory())),
     }
 }
@@ -1069,11 +1487,18 @@ mod tests {
         "weather-mcp",
     ];
 
-    /// Run a command as a person at a terminal who types `typed`. The machine's layer is
-    /// `managed.json` in `directory`, absent unless a test writes it.
+    /// The checkout a command run by [`typing`] runs in, made where it is not there yet.
+    fn checkout(directory: &Path) -> PathBuf {
+        let checkout = directory.join("checkout");
+        std::fs::create_dir_all(&checkout).expect("create the checkout");
+        checkout
+    }
+
+    /// Run a command as a person at a terminal who types `typed`, in [`checkout`]. The machine's
+    /// layer is `managed.json` in `directory`, absent unless a test writes it.
     fn typing(directory: &Path, args: &[&str], typed: &str) -> (Result<(), Stopped>, String) {
         let nothing = Here {
-            project: directory.join("checkout"),
+            project: checkout(directory),
             requested: Vec::new(),
         };
         typing_in(directory, &nothing, args, typed)
@@ -1096,13 +1521,14 @@ mod tests {
             present: true,
         };
         let managed = Managed::at(&directory.join("managed.json"));
+        let cwd = here.project.clone();
         let here = || {
             Ok(Here {
                 project: here.project.clone(),
                 requested: here.requested.clone(),
             })
         };
-        let outcome = run(&words(args), &home, &managed, &here, &mut person);
+        let outcome = run(&words(args), Ok(&cwd), &home, &managed, &here, &mut person);
         (outcome, String::from_utf8(person.screen).unwrap())
     }
 
@@ -1543,7 +1969,7 @@ mod tests {
         let directory = scratch("cli-mcp-bare-dashes");
         let place = std::fs::canonicalize(&directory).unwrap();
         let place = place.to_str().unwrap();
-        let declared_by = |flags: &[&str]| declared(&words(flags)).ok();
+        let declared_by = |flags: &[&str]| declared(&words(flags), 1, &mut None).ok();
 
         assert_eq!(
             declared_by(&["--", "npx", "-y", "weather-mcp"]),
@@ -1562,7 +1988,7 @@ mod tests {
             Some(flagged)
         );
 
-        let refused = |flags: &[&str]| match declared(&words(flags)) {
+        let refused = |flags: &[&str]| match declared(&words(flags), 1, &mut None) {
             Err(Refusal::Said((Ending::Argument, said))) => said,
             _ => panic!("{flags:?} was not refused as an argument"),
         };
@@ -1590,7 +2016,8 @@ mod tests {
             (&["--", "bin/weather-mcp"], &[]),
             (&["--env", "TOKEN", "--", "/opt/weather-mcp"], &["TOKEN"]),
         ] {
-            let Ok(Declaration::Stdio { variables, .. }) = declared(&words(flags)) else {
+            let Ok(Declaration::Stdio { variables, .. }) = declared(&words(flags), 1, &mut None)
+            else {
                 panic!("{flags:?} declared no local server");
             };
             assert_eq!(variables, words(expected), "{flags:?}");
@@ -1820,11 +2247,678 @@ mod tests {
         };
         let outcome = run(
             &words(&["forget"]),
+            Ok(&directory),
             &home,
             &Managed::default(),
             &|| unreachable!("forget reports on no session"),
             &mut person,
         );
         assert_eq!(outcome.map_err(|(ending, _)| ending), Err(Ending::Failed));
+    }
+
+    /// Run a command with nobody at a terminal, in [`checkout`].
+    fn unattended(directory: &Path, args: &[&str]) -> (Result<(), Stopped>, String) {
+        let home = Home {
+            directory: Some(directory.to_path_buf()),
+            writable: true,
+        };
+        let mut person = Person {
+            answers: "".as_bytes(),
+            screen: Vec::new(),
+            present: false,
+        };
+        let cwd = checkout(directory);
+        let outcome = run(
+            &words(args),
+            Ok(&cwd),
+            &home,
+            &Managed::default(),
+            &|| unreachable!("{} reports on no session", args[0]),
+            &mut person,
+        );
+        (outcome, String::from_utf8(person.screen).unwrap())
+    }
+
+    /// What the settings layers in force in [`checkout`] request, as a session there reads them.
+    fn requested_in(directory: &Path) -> Vec<(PathBuf, String)> {
+        let settings = bravebot_config::Settings::layered(
+            Some(directory.to_path_buf()),
+            Some(&checkout(directory)),
+            None,
+        );
+        settings
+            .mcp_requested()
+            .map(|(path, alias)| (path.to_path_buf(), alias.to_string()))
+            .collect()
+    }
+
+    fn text(path: &Path) -> String {
+        std::fs::read_to_string(path).expect("written")
+    }
+
+    /// A file requesting weather alone, as bravebot writes one.
+    const WEATHER_ALONE: &str =
+        "{\n  \"mcp\": {\n    \"request\": [\n      \"weather\"\n    ]\n  }\n}\n";
+
+    /// SERVERS-2: each of `-s`'s three values writes the file the settings reader takes that layer
+    /// from, local where none is given, with `-s` before the alias or after it.
+    #[test]
+    fn enable_requests_the_server_in_the_file_its_scope_names() {
+        let directory = scratch("cli-mcp-enable-scopes");
+        let checkout = checkout(&directory);
+        let local = bravebot_config::local_settings_file(&checkout);
+        let project = bravebot_config::project_settings_file(&checkout);
+        let user = bravebot_config::user_settings_file(&directory);
+        for (args, file) in [
+            (&["enable", "weather"][..], &local),
+            (&["enable", "weather", "-s", "local"], &local),
+            (&["enable", "weather", "-s", "project"], &project),
+            (&["enable", "-s", "user", "weather"], &user),
+            (&["enable", "weather", "--scope", "project"], &project),
+        ] {
+            for file in [&local, &project, &user] {
+                let _ = std::fs::remove_file(file);
+            }
+            let _ = std::fs::remove_file(mcp::approvals_file(&directory));
+            let (outcome, _) = typing(&directory, ADD, "n\n");
+            assert!(outcome.is_ok(), "{outcome:?}");
+
+            let (outcome, screen) = typing(&directory, args, "y\n");
+            assert!(outcome.is_ok(), "{args:?}: {outcome:?}");
+            assert_eq!(
+                requested_in(&directory),
+                [(file.clone(), "weather".to_string())],
+                "{args:?}"
+            );
+            assert!(approved(&directory, &weather()), "{args:?}");
+            let enabled = t!(mcp_enabled, alias = "weather", path = file_named(file));
+            assert!(screen.contains(&enabled.to_string()), "{args:?}: {screen}");
+        }
+    }
+
+    /// The file a request is added to keeps every other key, and a request already there is not
+    /// written twice.
+    #[test]
+    fn enable_adds_the_alias_once_and_keeps_the_rest_of_the_file() {
+        let directory = scratch("cli-mcp-enable-kept");
+        let local = bravebot_config::local_settings_file(&checkout(&directory));
+        std::fs::create_dir_all(local.parent().unwrap()).unwrap();
+        std::fs::write(
+            &local,
+            r#"{"theme": "dark", "env": {"A": "1"}, "mcp": {"request": ["docs"]}}"#,
+        )
+        .unwrap();
+        let (outcome, _) = typing(&directory, ADD, "n\n");
+        assert!(outcome.is_ok(), "{outcome:?}");
+
+        let (outcome, _) = typing(&directory, &["enable", "weather"], "y\n");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let expected = r#"{
+  "env": {
+    "A": "1"
+  },
+  "mcp": {
+    "request": [
+      "docs",
+      "weather"
+    ]
+  },
+  "theme": "dark"
+}
+"#;
+        assert_eq!(text(&local), expected);
+
+        let before = std::fs::read(&local).unwrap();
+        let (outcome, screen) = typing(&directory, &["enable", "weather"], "");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert_eq!(std::fs::read(&local).unwrap(), before);
+        let already = t!(
+            mcp_already_enabled,
+            alias = "weather",
+            path = file_named(&local)
+        );
+        assert!(screen.contains(&already.to_string()), "{screen}");
+    }
+
+    /// SERVERS-3: `enable` is the approval's question as well as the request, so a no, or nobody
+    /// to ask, writes neither and ends refused, naming the command that asks again.
+    #[test]
+    fn enable_writes_nothing_without_a_yes() {
+        let directory = scratch("cli-mcp-enable-no");
+        let checkout = checkout(&directory);
+        let (outcome, _) = typing(&directory, ADD, "n\n");
+        assert!(outcome.is_ok(), "{outcome:?}");
+
+        let (outcome, _) = typing(&directory, &["enable", "weather"], "n\n");
+        assert_eq!(outcome.map_err(|(ending, _)| ending), Err(Ending::Refused));
+        let (outcome, _) = unattended(&directory, &["enable", "weather", "-s", "project"]);
+        let (ending, said) = outcome.expect_err("nobody was asked and it was enabled");
+        assert_eq!(ending, Ending::Refused);
+        assert!(
+            said.contains("bravebot mcp enable weather -s project"),
+            "{said}"
+        );
+
+        assert!(!approved(&directory, &weather()));
+        assert!(requested_in(&directory).is_empty());
+        assert!(!checkout.join(".bravebot").exists());
+    }
+
+    /// A file the request cannot go in without losing what it says is left byte for byte as it was,
+    /// and so is everything else: the question is not asked and nothing is approved.
+    #[test]
+    fn enable_leaves_a_settings_file_it_cannot_add_to_as_it_is() {
+        let directory = scratch("cli-mcp-enable-unreadable");
+        let local = bravebot_config::local_settings_file(&checkout(&directory));
+        std::fs::create_dir_all(local.parent().unwrap()).unwrap();
+        let (outcome, _) = typing(&directory, ADD, "n\n");
+        assert!(outcome.is_ok(), "{outcome:?}");
+
+        for text in [
+            r#"{"mcp": {"#,
+            r#"{"mcp": {"request": "weather"}}"#,
+            r#"{"mcp": ["weather"]}"#,
+            "[]",
+        ] {
+            std::fs::write(&local, text).unwrap();
+            let (outcome, _) = typing(&directory, &["enable", "weather"], "y\n");
+            assert_eq!(
+                outcome.map_err(|(ending, _)| ending),
+                Err(Ending::Configuration),
+                "{text}"
+            );
+            assert_eq!(std::fs::read_to_string(&local).unwrap(), text);
+            assert!(!approved(&directory, &weather()), "{text}");
+        }
+
+        let (outcome, _) = typing(&directory, &["enable", "nowhere"], "y\n");
+        assert_eq!(outcome.map_err(|(ending, _)| ending), Err(Ending::Argument));
+        assert_eq!(std::fs::read_to_string(&local).unwrap(), "[]");
+    }
+
+    /// A checkout's link leads wherever its author pointed it, so a request is not written through
+    /// one, whether the link is the file or the directory it is in. The user's own file is written
+    /// through a link, where it stays.
+    #[cfg(unix)]
+    #[test]
+    fn enable_writes_through_no_link_in_a_checkout() {
+        let directory = scratch("cli-mcp-enable-link");
+        let checkout = checkout(&directory);
+        let (outcome, _) = typing(&directory, ADD, "y\n");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        std::fs::remove_dir_all(checkout.join(".bravebot")).unwrap();
+        let elsewhere = directory.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let theirs = elsewhere.join("settings.json");
+        std::fs::write(&theirs, "{}").unwrap();
+
+        std::fs::create_dir_all(checkout.join(".bravebot")).unwrap();
+        let local = bravebot_config::local_settings_file(&checkout);
+        std::os::unix::fs::symlink(&theirs, &local).unwrap();
+        let (outcome, _) = typing(&directory, &["enable", "weather"], "");
+        assert_eq!(
+            outcome.map_err(|(ending, _)| ending),
+            Err(Ending::Configuration)
+        );
+        // Refused as the file is read, before anything is declared or approved.
+        let (outcome, _) = typing(&directory, &["add", "docs", "--", "/opt/docs-mcp"], "y\n");
+        assert_eq!(
+            outcome.map_err(|(ending, _)| ending),
+            Err(Ending::Configuration)
+        );
+        assert!(
+            Declarations::read(&directory)
+                .unwrap()
+                .get("docs")
+                .is_none()
+        );
+
+        std::fs::remove_dir_all(checkout.join(".bravebot")).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, checkout.join(".bravebot")).unwrap();
+        let (outcome, _) = typing(&directory, &["enable", "weather", "-s", "project"], "");
+        assert_eq!(
+            outcome.map_err(|(ending, _)| ending),
+            Err(Ending::Configuration)
+        );
+        assert_eq!(std::fs::read_to_string(&theirs).unwrap(), "{}");
+
+        let user = bravebot_config::user_settings_file(&directory);
+        std::os::unix::fs::symlink(&theirs, &user).unwrap();
+        let (outcome, _) = typing(&directory, &["enable", "weather", "-s", "user"], "");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(user.symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(text(&theirs), WEATHER_ALONE);
+    }
+
+    /// Without `-s`, `disable` takes the alias out of every file that requests it and names each;
+    /// with one, out of that file alone. Every other key and alias stays, and so do the declaration
+    /// and its approval.
+    #[test]
+    fn disable_takes_the_request_out_of_each_file_that_holds_it() {
+        let directory = scratch("cli-mcp-disable");
+        let checkout = checkout(&directory);
+        let (outcome, _) = typing(&directory, ADD, "y\n");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let files = [
+            bravebot_config::user_settings_file(&directory),
+            bravebot_config::project_settings_file(&checkout),
+            bravebot_config::local_settings_file(&checkout),
+        ];
+        let both = r#"{"theme": "dark", "mcp": {"request": ["weather", "docs"]}}"#;
+        let docs = r#"{
+  "mcp": {
+    "request": [
+      "docs"
+    ]
+  },
+  "theme": "dark"
+}
+"#;
+        for file in &files {
+            std::fs::write(file, both).unwrap();
+        }
+
+        let (outcome, screen) = typing(&directory, &["disable", "weather", "-s", "project"], "");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert_eq!(text(&files[1]), docs);
+        assert_eq!(std::fs::read_to_string(&files[0]).unwrap(), both);
+        assert_eq!(std::fs::read_to_string(&files[2]).unwrap(), both);
+        assert_eq!(screen.lines().count(), 1, "{screen}");
+
+        let (outcome, screen) = typing(&directory, &["disable", "weather"], "");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        for file in &files {
+            assert_eq!(text(file), docs, "{}", file.display());
+        }
+        for file in [&files[0], &files[2]] {
+            let disabled = t!(mcp_disabled, alias = "weather", path = file_named(file));
+            assert!(screen.contains(&disabled.to_string()), "{screen}");
+        }
+        assert_eq!(screen.lines().count(), 2, "{screen}");
+        assert!(approved(&directory, &weather()));
+        assert!(
+            Declarations::read(&directory)
+                .unwrap()
+                .get("weather")
+                .is_some()
+        );
+
+        let (outcome, screen) = typing(&directory, &["disable", "weather"], "");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(screen.contains("weather is not enabled in"), "{screen}");
+    }
+
+    /// One file `disable` cannot read stops it before any is written, so the alias is not left
+    /// requested in the one file nobody could see into and gone from the rest.
+    #[test]
+    fn disable_writes_no_file_where_one_cannot_be_read() {
+        let directory = scratch("cli-mcp-disable-unreadable");
+        let checkout = checkout(&directory);
+        let user = bravebot_config::user_settings_file(&directory);
+        let local = bravebot_config::local_settings_file(&checkout);
+        std::fs::create_dir_all(local.parent().unwrap()).unwrap();
+        let requested = r#"{"mcp": {"request": ["weather"]}}"#;
+        std::fs::write(&user, requested).unwrap();
+        std::fs::write(&local, r#"{"mcp": "#).unwrap();
+
+        let (outcome, _) = typing(&directory, &["disable", "weather"], "");
+        let (ending, said) = outcome.expect_err("an unreadable file was passed over");
+        assert_eq!(ending, Ending::Configuration);
+        assert!(said.contains(&file_named(&local)), "{said}");
+        assert_eq!(std::fs::read_to_string(&user).unwrap(), requested);
+        assert_eq!(std::fs::read_to_string(&local).unwrap(), r#"{"mcp": "#);
+    }
+
+    /// `add` takes `-s` as `enable` does, before the alias or among its flags, and requests the
+    /// server in that scope once it is approved. A no, or nobody to ask, leaves it declared and
+    /// requested nowhere, and says which `enable` asks again.
+    #[test]
+    fn add_requests_the_server_in_its_scope_only_once_approved() {
+        let directory = scratch("cli-mcp-add-scope");
+        let checkout = checkout(&directory);
+        let user = bravebot_config::user_settings_file(&directory);
+        let project = bravebot_config::project_settings_file(&checkout);
+        let argv = ["--", "npx", "-y", "weather-mcp"];
+
+        let mut args = vec!["add", "weather", "-s", "user"];
+        args.extend(argv);
+        let (outcome, screen) = typing(&directory, &args, "n\n");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(requested_in(&directory).is_empty());
+        let again = t!(
+            mcp_declared_not_enabled,
+            alias = "weather",
+            command = "bravebot mcp enable weather -s user"
+        );
+        assert!(screen.contains(&again.to_string()), "{screen}");
+
+        let (outcome, screen) = unattended(&directory, &args);
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(requested_in(&directory).is_empty());
+        let asked = t!(
+            mcp_nobody_asked,
+            alias = "weather",
+            command = "bravebot mcp enable weather -s user"
+        );
+        assert!(screen.contains(&asked.to_string()), "{screen}");
+
+        let (outcome, _) = typing(&directory, &args, "y\n");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert_eq!(requested_in(&directory), [(user, "weather".to_string())]);
+
+        let mut first = vec!["add", "--scope", "project", "weather"];
+        first.extend(argv);
+        let (outcome, _) = typing(&directory, &first, "");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert_eq!(text(&project), WEATHER_ALONE);
+        assert!(!bravebot_config::local_settings_file(&checkout).exists());
+    }
+
+    /// `-s` names one of three files, and names one: a missing, unknown or second value is refused
+    /// before anything is written, and a word after it is counted in the place a stray one is named
+    /// by.
+    #[test]
+    fn a_scope_is_one_of_three_and_given_once() {
+        let directory = scratch("cli-mcp-scope-refused");
+        let (outcome, _) = typing(&directory, ADD, "y\n");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let _ = std::fs::remove_dir_all(checkout(&directory).join(".bravebot"));
+        for args in [
+            &["enable", "weather", "-s", "global"][..],
+            &["enable", "weather", "-s"],
+            &["enable", "-s", "user", "weather", "-s", "project"],
+            &["enable", "weather", "--scope=user"],
+            &["disable", "weather", "-s", "everywhere"],
+            &["add", "-s"],
+            &["add", "-s", "user", "-s", "user", "weather", "--", "npx"],
+            &[
+                "add", "weather", "-s", "user", "--scope", "project", "--", "npx",
+            ],
+            &["add", "weather", "-s", "shared", "--", "npx"],
+        ] {
+            let (outcome, _) = typing(&directory, args, "y\n");
+            assert_eq!(
+                outcome.map_err(|(ending, _)| ending),
+                Err(Ending::Argument),
+                "{args:?}"
+            );
+        }
+        assert!(requested_in(&directory).is_empty());
+        assert!(!bravebot_config::user_settings_file(&directory).exists());
+
+        let stray = ["add", "-s", "user", "weather", "--env", "TOKEN", "sk-live"];
+        let (outcome, _) = typing(&directory, &stray, "y\n");
+        let (_, said) = outcome.expect_err("a stray word was taken");
+        assert_eq!(said, t!(mcp_add_stray_argument, position = 6).to_string());
+    }
+
+    /// An incognito session writes nothing, so `enable` and `disable` are refused there as every
+    /// other writing command is, and the refusal names the command.
+    #[test]
+    fn enable_and_disable_write_nothing_incognito() {
+        let directory = scratch("cli-mcp-enable-incognito");
+        let (outcome, _) = typing(&directory, ADD, "y\n");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let local = bravebot_config::local_settings_file(&checkout(&directory));
+        let before = std::fs::read(&local).expect("add enabled it");
+        let home = Home {
+            directory: Some(directory.clone()),
+            writable: false,
+        };
+        for (command, args) in [
+            ("disable", &["disable", "weather"][..]),
+            ("enable", &["enable", "weather", "-s", "user"]),
+        ] {
+            let mut person = Person {
+                answers: "y\n".as_bytes(),
+                screen: Vec::new(),
+                present: true,
+            };
+            let cwd = checkout(&directory);
+            let outcome = run(
+                &words(args),
+                Ok(&cwd),
+                &home,
+                &Managed::default(),
+                &|| unreachable!("{} reports on no session", args[0]),
+                &mut person,
+            );
+            assert_eq!(
+                outcome,
+                Err((
+                    Ending::Failed,
+                    t!(mcp_not_while_incognito, command = command).to_string()
+                ))
+            );
+        }
+        assert_eq!(std::fs::read(&local).unwrap(), before);
+        assert!(!bravebot_config::user_settings_file(&directory).exists());
+    }
+
+    /// Run a command at a terminal in `cwd`, with `directory` as the state directory.
+    fn typing_from(
+        cwd: &Path,
+        directory: &Path,
+        args: &[&str],
+        typed: &str,
+    ) -> (Result<(), Stopped>, String) {
+        let home = Home {
+            directory: Some(directory.to_path_buf()),
+            writable: true,
+        };
+        let mut person = Person {
+            answers: typed.as_bytes(),
+            screen: Vec::new(),
+            present: true,
+        };
+        let outcome = run(
+            &words(args),
+            Ok(cwd),
+            &home,
+            &Managed::default(),
+            &|| unreachable!("{} reports on no session", args[0]),
+            &mut person,
+        );
+        (outcome, String::from_utf8(person.screen).unwrap())
+    }
+
+    /// Run from the directory the state directory is in, a checkout's settings file is the user's
+    /// own, and `disable` reads and writes it once, as the settings reader reads it once.
+    #[test]
+    fn disable_where_the_state_directory_is_writes_its_file_once() {
+        let home = scratch("cli-mcp-disable-home");
+        let directory = home.join(".bravebot");
+        std::fs::create_dir_all(&directory).unwrap();
+        let (outcome, _) = typing_from(&home, &directory, ADD, "y\n");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let (outcome, _) = typing_from(&home, &directory, &["enable", "weather", "-s", "user"], "");
+        assert!(outcome.is_ok(), "{outcome:?}");
+
+        let (outcome, screen) = typing_from(&home, &directory, &["disable", "weather"], "");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let empty = "{\n  \"mcp\": {\n    \"request\": []\n  }\n}\n";
+        for file in [
+            bravebot_config::user_settings_file(&directory),
+            bravebot_config::local_settings_file(&home),
+        ] {
+            assert_eq!(text(&file), empty, "{}", file.display());
+        }
+        assert_eq!(screen.lines().count(), 2, "{screen}");
+    }
+
+    /// A state directory kept among somebody's dotfiles is theirs, so a request is written through
+    /// it from the directory it is in, where a checkout's `.bravebot` link would be refused.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_state_directory_is_written_through_from_the_directory_it_is_in() {
+        let home = scratch("cli-mcp-enable-home-link");
+        let kept = home.join("dotfiles");
+        std::fs::create_dir_all(&kept).unwrap();
+        let directory = home.join(".bravebot");
+        std::os::unix::fs::symlink(&kept, &directory).unwrap();
+        let (outcome, _) = typing_from(&home, &directory, ADD, "y\n");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let (outcome, _) = typing_from(
+            &home,
+            &directory,
+            &["enable", "weather", "-s", "project"],
+            "",
+        );
+        assert!(outcome.is_ok(), "{outcome:?}");
+
+        assert_eq!(text(&kept.join("settings.local.json")), WEATHER_ALONE);
+        assert_eq!(text(&kept.join("settings.json")), WEATHER_ALONE);
+        assert!(
+            directory
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    /// Answers once it has made `link` lead to `target`: a checkout changing while the question
+    /// waits.
+    #[cfg(unix)]
+    struct Relinking<'a> {
+        link: &'a Path,
+        target: &'a Path,
+        answer: &'a [u8],
+    }
+
+    #[cfg(unix)]
+    impl std::io::Read for Relinking<'_> {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            if self.link.symlink_metadata().is_err() {
+                std::os::unix::fs::symlink(self.target, self.link)?;
+            }
+            std::io::Read::read(&mut self.answer, buffer)
+        }
+    }
+
+    /// A link made in a checkout after its file was read and before the answer came is refused as
+    /// one there from the start is, so the request does not go wherever it leads.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_made_while_the_question_waits_is_not_written_through() {
+        let directory = scratch("cli-mcp-enable-relinked");
+        let checkout = checkout(&directory);
+        let (outcome, _) = typing(&directory, ADD, "n\n");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let elsewhere = directory.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let link = checkout.join(".bravebot");
+        assert!(link.symlink_metadata().is_err());
+
+        let home = Home {
+            directory: Some(directory.clone()),
+            writable: true,
+        };
+        let mut person = Person {
+            answers: std::io::BufReader::new(Relinking {
+                link: &link,
+                target: &elsewhere,
+                answer: b"y\n",
+            }),
+            screen: Vec::new(),
+            present: true,
+        };
+        let args = words(&["enable", "weather", "-s", "project"]);
+        let outcome = run(
+            &args,
+            Ok(&checkout),
+            &home,
+            &Managed::default(),
+            &|| unreachable!("enable reports on no session"),
+            &mut person,
+        );
+        assert_eq!(
+            outcome.map_err(|(ending, _)| ending),
+            Err(Ending::Configuration)
+        );
+        assert!(link.symlink_metadata().is_ok(), "the question was not put");
+        assert!(!elsewhere.join("settings.json").exists());
+    }
+
+    /// A request that would take the file past what the settings reader reads is refused before
+    /// the declaration is written or the question put, so the refusal leaves nothing behind.
+    #[test]
+    fn add_refuses_a_request_the_file_cannot_hold_before_declaring_anything() {
+        let directory = scratch("cli-mcp-add-too-large");
+        let local = bravebot_config::local_settings_file(&checkout(&directory));
+        std::fs::create_dir_all(local.parent().unwrap()).unwrap();
+        // Under the limit as written, and past it once each entry is on a line of its own.
+        let entries = vec!["0"; 20_000].join(",");
+        let written = format!("{{\"list\":[{entries}]}}");
+        std::fs::write(&local, &written).unwrap();
+
+        let (outcome, _) = typing(&directory, ADD, "y\n");
+        assert_eq!(
+            outcome.map_err(|(ending, _)| ending),
+            Err(Ending::Configuration)
+        );
+        assert!(!mcp::declarations_file(&directory).exists());
+        assert!(!approved(&directory, &weather()));
+        assert_eq!(text(&local), written);
+    }
+
+    /// A no, or nobody to ask, where the file already requests the server leaves the request
+    /// standing and says so, rather than that the server is not enabled.
+    #[test]
+    fn a_no_says_a_request_already_in_the_file_still_stands() {
+        let directory = scratch("cli-mcp-no-still-requested");
+        let local = bravebot_config::local_settings_file(&checkout(&directory));
+        std::fs::create_dir_all(local.parent().unwrap()).unwrap();
+        let requested = r#"{"mcp": {"request": ["weather"]}}"#;
+        std::fs::write(&local, requested).unwrap();
+        let stands = t!(
+            mcp_requested_not_approved,
+            alias = "weather",
+            path = file_named(&local)
+        )
+        .to_string();
+
+        let (outcome, screen) = typing(&directory, ADD, "n\n");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(screen.contains(&stands), "{screen}");
+        let (outcome, screen) = unattended(&directory, ADD);
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(screen.contains(&stands), "{screen}");
+        let (outcome, _) = typing(&directory, &["enable", "weather"], "n\n");
+        assert_eq!(outcome, Err((Ending::Refused, stands.clone())));
+        let (outcome, _) = unattended(&directory, &["enable", "weather"]);
+        assert_eq!(outcome, Err((Ending::Refused, stands)));
+        assert_eq!(std::fs::read_to_string(&local).unwrap(), requested);
+    }
+
+    /// SERVERS-12: a server the managed layer refuses is still enabled where it is asked for, since
+    /// the request is the person's, and the line after it says no session starts it, and why.
+    #[test]
+    fn enabling_a_server_the_managed_layer_refuses_says_it_is_not_started() {
+        let directory = scratch("cli-mcp-enable-managed");
+        let managed = directory.join("managed.json");
+        std::fs::write(
+            &managed,
+            r#"{"mcp": {"deny": [{"command": ["/opt/weather-mcp"]}]}}"#,
+        )
+        .unwrap();
+        let reason = t!(
+            managed_denied,
+            path = managed.display().to_string(),
+            entry = "command /opt/weather-mcp"
+        );
+        let refused = t!(mcp_enabled_not_started, alias = "weather", reason = reason).to_string();
+
+        let add = ["add", "weather", "--", "/opt/weather-mcp"];
+        let (outcome, screen) = typing(&directory, &add, "y\n");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(screen.contains(&refused), "{screen}");
+        let (outcome, screen) = typing(&directory, &["enable", "weather", "-s", "project"], "");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(screen.contains(&refused), "{screen}");
+
+        let (outcome, screen) = typing(&directory, &["add", "docs", "--", "/opt/docs-mcp"], "y\n");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(!screen.contains("not started"), "{screen}");
     }
 }

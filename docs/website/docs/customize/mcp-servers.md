@@ -61,6 +61,7 @@ argument, and a flag of bravebot's own among them, such as `--settings`, is the 
 | `--dir <path>` | the directory the server runs in, kept as the absolute path it resolves to |
 | `-- <program> [args...]` | a program on this machine; `--stdio --` means the same |
 | `--http <url>` | a service at this url; takes neither `--env` nor `--dir` |
+| `-s <scope>` | which settings file [asks for the server](#asking-for-one-from-a-checkout) once you approve it: `local`, the default, `project` or `user`; it may come before the alias |
 
 ### A server gets only the variables you name
 
@@ -93,12 +94,17 @@ declared weather in /Users/you/.bravebot/mcp.json
   Use this MCP server? [y/N]
 ```
 
-`y` approves it. Anything else, a blank line included, leaves it declared and not approved.
-`bravebot mcp approve weather` asks the same question later.
+`y` approves it and [asks for it](#asking-for-one-from-a-checkout) in the file `-s` names, so a
+session in this directory starts it. Anything else, a blank line included, leaves it declared, not
+approved and asked for nowhere, unless that file asks for it already: then `add` says so, since the
+next session there asks you again. `bravebot mcp enable weather` asks the same question later and
+asks for it too; `bravebot mcp approve weather` asks it alone. Where
+[an administrator refuses](#refused-by-an-administrator) the server, `add` and `enable` still ask
+for it and say it will not start.
 
 The question is asked only where both standard input and standard output are a terminal. With
-either piped, `add` writes the declaration and tells you to run `approve` at a terminal, and
-`approve` is refused.
+either piped, `add` writes the declaration and tells you to run `enable` at a terminal, and
+`approve` and `enable` are refused.
 
 ### An approval is of what you were shown
 
@@ -122,11 +128,31 @@ The old approval is gone whatever you answer, since nothing declares what it app
 
 ## Asking for one from a checkout
 
-A checkout says which servers it expects in its `.bravebot/settings.json`:
+A settings file says which servers a session starts, as a list under `mcp.request`, and
+`bravebot mcp enable` writes it:
+
+```sh
+bravebot mcp enable weather             # .bravebot/settings.local.json here, yours alone
+bravebot mcp enable weather -s project  # .bravebot/settings.json here, shared with the checkout
+bravebot mcp enable weather -s user     # ~/.bravebot/settings.json, every session
+```
+
+Each asks the approval question where you have not approved the server, and on a yes adds it to
+that file, creating the file where it is missing and leaving the rest of it as it was:
 
 ```json
 { "mcp": { "request": ["weather"] } }
 ```
+
+`bravebot mcp disable weather` takes it out of each of the three files that asks for it, and says
+which; with `-s`, out of that one. The declaration and its approval stay, so `enable` puts it back
+without asking. A file that does not parse, or whose `mcp.request` is not a list, is left as it
+was, and so is a link in the checkout: where `.bravebot` or the file in it is a link, bravebot
+does not write through it. `~/.bravebot` itself may be a link, and is written through.
+
+`settings.local.json` is yours alone by name only: add it to the checkout's `.gitignore` to keep it
+out of a commit. On macOS and Linux a file these commands write is readable by you alone, as the
+files under `~/.bravebot` are.
 
 That is a list of aliases and nothing more. Each one is looked up among the servers *you* declared.
 One you have not declared is reported as the session opens, and nothing is fetched, installed or
@@ -415,7 +441,8 @@ bravebot mcp remove docs
 ```
 
 Removes the declaration and its approval together. An approval another declaration still resolves
-to is kept.
+to is kept. A settings file that asks for it still does, and is reported as asking for a server
+nobody declared: `bravebot mcp disable docs` takes that out.
 
 ## Refused by an administrator
 
@@ -477,13 +504,15 @@ to be rid of a server yourself, [remove it](#removing-one).
 ## Where nothing is written
 
 An [incognito session](../using/sessions.md#a-session-that-leaves-nothing-behind) writes nothing
-under `~/.bravebot`, so `add`, `approve` and `remove` are refused in one. A server started in one is
+under `~/.bravebot`, so `add`, `approve`, `enable`, `disable` and `remove` are refused in one. A server started in one is
 given a home directory in the temporary directory instead, removed once it stops, so a runner
 fetches its package again each session. On a machine that names no
 profile directory there is no `~/.bravebot` at all: nothing is declared there, and nothing can be.
 
 ## Known costs
 
+- **A settings file `bravebot mcp` writes comes back with its keys sorted.** Every value is kept,
+  and the spacing and order are not.
 - **The full-screen interface asks before it asks about the directory.** A server you approve can
   start for a session whose directory you then decline, and runs until bravebot exits.
 - **Nothing removes a server's old home.** Changing a declaration leaves the directory the one

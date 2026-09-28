@@ -344,24 +344,32 @@ and refuses in an incognito session. See
 ## `mcp`
 
 ```sh
-bravebot mcp add <alias> [--env <name>]... [--dir <path>] [--stdio] -- <program> [args...]
-bravebot mcp add <alias> --http <url>
+bravebot mcp add <alias> [-s <scope>] [--env <name>]... [--dir <path>] [--stdio] -- <program> [args...]
+bravebot mcp add <alias> [-s <scope>] --http <url>
 bravebot mcp get <alias>
 bravebot mcp list
 bravebot mcp approve <alias>
+bravebot mcp enable <alias> [-s <scope>]
+bravebot mcp disable <alias> [-s <scope>]
 bravebot mcp remove <alias>
 bravebot mcp forget [path]
 ```
 
-Declares a server in `~/.bravebot/mcp.json`, and approves one. `add` writes the declaration and then
-asks whether to use it; `approve` asks again later. The question is put only where stdin and stdout
-are both a terminal, and only `y` approves. `approve` with nobody to ask, or answered with anything
-else, exits 4. `list` exits 3 where a declaration in the file cannot be used. `list` and `get` name
-the machine-level file beside a server it
+Declares a server in `~/.bravebot/mcp.json`, approves one, and
+[asks for one](../customize/mcp-servers.md#asking-for-one-from-a-checkout) in a settings file.
+`add` writes the declaration and then asks whether to use it; `approve` asks again later. `enable`
+asks where the server is not approved and adds it to `mcp.request`, and `disable` takes it out. `-s`
+names the file for `add`, `enable` and `disable`: `local`, the default, is
+`.bravebot/settings.local.json` in the current directory, `project` is `.bravebot/settings.json`
+there, and `user` is `~/.bravebot/settings.json`. Without `-s`, `disable` takes the server out of
+each of the three. The question is put only where stdin and stdout are both a terminal, and only
+`y` approves. `approve` and `enable` with nobody to ask, or answered with anything else, exit 4.
+`list` exits 3 where a declaration in the file cannot be used. `list` and `get` name the
+machine-level file beside a server it
 [refuses](../customize/mcp-servers.md#refused-by-an-administrator), and why. `forget` drops the
 standing answers recorded for a project, the current directory unless a path is given, so its
-servers and tools are asked about again. `add`, `approve`, `remove` and `forget` are refused in an
-incognito session. See [MCP servers](../customize/mcp-servers.md).
+servers and tools are asked about again. `add`, `approve`, `enable`, `disable`, `remove` and
+`forget` are refused in an incognito session. See [MCP servers](../customize/mcp-servers.md).
 
 ## Interactive keys
 

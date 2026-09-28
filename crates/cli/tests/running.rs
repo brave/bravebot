@@ -2384,32 +2384,54 @@ fn approvals(scratch: &Scratch) -> String {
 }
 
 /// SERVERS-3: typing `mcp add` writes the declaration and is not the approval. With nobody at a
-/// terminal to put the question to, the server is declared, left unapproved, and listed as that
-/// rather than left out (SERVERS-14). Typed as `claude mcp add` takes it, it declares the same.
+/// terminal to put the question to, the server is declared, left unapproved, requested nowhere, and
+/// listed as that rather than left out (SERVERS-14), and what is said names the `enable` that asks
+/// again in the scope `-s` gave. Typed as `claude mcp add` takes it, it declares the same.
 #[test]
 fn an_added_server_nobody_was_asked_about_is_declared_and_listed_unapproved() {
-    for (name, flags) in [
+    for (name, flags, enable) in [
         (
             "cli-running-mcp-add",
             &["--env", "PATH", "--stdio", "--"][..],
+            "run bravebot mcp enable weather at",
         ),
-        ("cli-running-mcp-add-short", &["--"]),
+        (
+            "cli-running-mcp-add-short",
+            &["--"],
+            "run bravebot mcp enable weather at",
+        ),
+        (
+            "cli-running-mcp-add-user",
+            &["-s", "user", "--"],
+            "run bravebot mcp enable weather -s user at",
+        ),
     ] {
-        declared_and_listed_unapproved(name, flags);
+        declared_and_listed_unapproved(name, flags, enable);
     }
 }
 
-fn declared_and_listed_unapproved(name: &str, flags: &[&str]) {
+fn declared_and_listed_unapproved(name: &str, flags: &[&str], enable: &str) {
     let scratch = Scratch::new(name);
+    let checkout = scratch.path.join("checkout");
+    std::fs::create_dir_all(&checkout).expect("create the checkout");
     let mut args = vec!["mcp", "add", "weather"];
     args.extend(flags);
     args.extend(["npx", "-y", "weather-mcp"]);
-    let added = bravebot(&scratch.path, &[], &args);
+    let added = bravebot_started_in(&scratch.path, &checkout, &[], &args);
     let (stdout, stderr) = said(&added);
     assert!(added.status.success(), "{stderr}");
     assert!(
-        stdout.contains("bravebot mcp approve weather"),
-        "nothing said how to approve it: {stdout}"
+        stdout.contains(enable),
+        "nothing said how to enable it: {stdout}"
+    );
+    assert!(!checkout.join(".bravebot").exists(), "{flags:?}");
+    assert!(
+        !scratch
+            .path
+            .join(".bravebot")
+            .join("settings.json")
+            .exists(),
+        "{flags:?}"
     );
 
     let (declaration, _) = weather();
@@ -2500,7 +2522,7 @@ fn a_value_in_a_stray_word_or_a_joined_flag_is_never_repeated() {
 }
 
 /// SERVERS-3: everything after a bare `--`, alone or after `--stdio`, is the server's argv,
-/// bravebot's own flags included.
+/// bravebot's own flags included, and `add`'s own `-s` among them.
 #[test]
 fn a_flag_of_bravebots_after_the_bare_dashes_is_the_servers_argument() {
     let argv = [
@@ -2510,18 +2532,26 @@ fn a_flag_of_bravebots_after_the_bare_dashes_is_the_servers_argument() {
         "--incognito",
         "--vet",
         "--dangerously-skip-permissions",
+        "-s",
+        "project",
     ];
     for (name, dashes) in [
         ("cli-running-mcp-foreign", &["--stdio", "--"][..]),
         ("cli-running-mcp-foreign-short", &["--"]),
     ] {
         let scratch = Scratch::new(name);
+        let checkout = scratch.path.join("checkout");
+        std::fs::create_dir_all(&checkout).expect("create the checkout");
         let mut args = vec!["mcp", "add", "srv"];
         args.extend(dashes);
         args.extend(argv);
-        let output = bravebot(&scratch.path, &[], &args);
-        let (_, stderr) = said(&output);
+        let output = bravebot_started_in(&scratch.path, &checkout, &[], &args);
+        let (stdout, stderr) = said(&output);
         assert!(output.status.success(), "{dashes:?}: {stderr}");
+        assert!(
+            stdout.contains("run bravebot mcp enable srv at"),
+            "{dashes:?}: the server's -s was read as add's: {stdout}"
+        );
         let written = std::fs::read_to_string(scratch.path.join(".bravebot").join("mcp.json"))
             .expect("the declaration was written");
         let read = bravebot_config::mcp::Declarations::parse(&written).expect("it reads back");
@@ -2588,6 +2618,78 @@ fn approving_with_nobody_to_ask_is_refused_and_records_nothing() {
     let (_, stderr) = said(&output);
     assert_eq!(output.status.code(), Some(4), "{stderr}");
     assert!(!approvals(&scratch).contains(&declaration.digest().to_string()));
+}
+
+/// SERVERS-2: `enable -s project` writes the request where a session in the checkout reads it,
+/// and `disable` with no scope finds it there and takes it out. With nobody to ask, an unapproved
+/// server is not enabled and the run ends refused; incognito, nothing is written at all.
+#[test]
+fn a_server_enabled_in_a_checkout_is_requested_there_until_disabled() {
+    let (declaration, entry) = weather();
+    let scratch = Scratch::new("cli-running-mcp-enable")
+        .with_state(
+            "mcp.json",
+            &format!(
+                r#"{{"servers": {{"weather": {entry}, "docs": {{"transport": "http", "url": "https://docs.example.com/mcp"}}}}}}"#
+            ),
+        )
+        .with_state("mcp-approved", &format!("{}\n", declaration.digest()));
+    let checkout = scratch.path.join("checkout");
+    std::fs::create_dir_all(&checkout).expect("create the checkout");
+    let state = scratch.path.join(".bravebot");
+    let project = checkout.join(".bravebot").join("settings.json");
+    let requested = || {
+        bravebot_config::Settings::layered(Some(state.clone()), Some(&checkout), None)
+            .mcp_requested()
+            .map(|(path, alias)| (path.to_path_buf(), alias.to_string()))
+            .collect::<Vec<_>>()
+    };
+
+    let enabled = bravebot_started_in(
+        &scratch.path,
+        &checkout,
+        &[],
+        &["mcp", "enable", "weather", "-s", "project"],
+    );
+    let (stdout, stderr) = said(&enabled);
+    assert!(enabled.status.success(), "{stderr}");
+    assert!(stdout.contains("enabled weather in"), "{stdout}");
+    assert_eq!(requested(), [(project.clone(), "weather".to_string())]);
+
+    let refused = bravebot_started_in(&scratch.path, &checkout, &[], &["mcp", "enable", "docs"]);
+    let (_, stderr) = said(&refused);
+    assert_eq!(refused.status.code(), Some(4), "{stderr}");
+    assert!(stderr.contains("bravebot mcp enable docs"), "{stderr}");
+    assert!(
+        !checkout
+            .join(".bravebot")
+            .join("settings.local.json")
+            .exists()
+    );
+
+    let incognito = bravebot_started_in(
+        &scratch.path,
+        &checkout,
+        &[],
+        &["--incognito", "mcp", "disable", "weather"],
+    );
+    let (_, stderr) = said(&incognito);
+    assert_eq!(incognito.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("incognito"), "{stderr}");
+    assert_eq!(requested(), [(project.clone(), "weather".to_string())]);
+
+    let disabled = bravebot_started_in(
+        &scratch.path,
+        &checkout,
+        &[],
+        &["mcp", "disable", "weather"],
+    );
+    let (stdout, stderr) = said(&disabled);
+    assert!(disabled.status.success(), "{stderr}");
+    assert!(stdout.contains("disabled weather in"), "{stdout}");
+    assert!(stdout.contains("settings.json"), "{stdout}");
+    assert_eq!(requested(), []);
+    assert!(approvals(&scratch).contains(&declaration.digest().to_string()));
 }
 
 /// SERVERS-5: `get` prints the whole digest, which is what an approval is recorded against.

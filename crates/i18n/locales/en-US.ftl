@@ -512,7 +512,10 @@ mcp-needs-an-alias = { $command } needs the alias of a server
 mcp-unexpected-argument = { $command } does not take { $argument }
 mcp-add-stray-argument =
     word { $position } after add is not a flag, and is not repeated since it may be a value:
-    --env, --dir and --http take one word each, and -- takes the rest
+    --env, --dir, --http and -s take one word each, and -- takes the rest
+mcp-scope-needs-a-value = -s needs a scope: local, project or user
+mcp-not-a-scope = { $scope } is not a scope: -s takes local, project or user
+mcp-two-scopes = -s is given twice, and a request is written to one file
 mcp-not-an-alias =
     { $alias } cannot name a server: an alias is letters, digits, - and _, starts with a letter or
     a digit, and is at most 64 characters
@@ -554,7 +557,7 @@ mcp-unreadable-not-an-object = it is not a JSON object
 mcp-unreadable-servers = servers is not an object
 mcp-unreadable-key = { $key } is not a key it has: it holds servers and nothing else
 mcp-not-while-incognito =
-    declaring, approving or forgetting writes to disk, which an incognito session will not do
+    bravebot mcp { $command } writes to disk, which an incognito session will not do
 mcp-no-state-directory =
     there is no state directory, so no MCP server is declared: none of { $variables } names a
     profile directory
@@ -570,10 +573,37 @@ mcp-already-approved = { $alias } is approved, against digest { $digest }
 mcp-recorded = approved { $alias }, against digest { $digest }
 mcp-left-unapproved = { $alias } is declared and not approved
 mcp-nobody-asked =
-    nobody could be asked about { $alias }, so it is declared and not approved: run
-    bravebot mcp approve { $alias } at a terminal
+    nobody could be asked about { $alias }, so it is declared and not enabled: run { $command } at
+    a terminal
 mcp-nobody-to-ask =
     nobody can be asked about { $alias }: run bravebot mcp approve { $alias } at a terminal
+mcp-declared-not-enabled =
+    { $alias } is declared and not approved, so it is not enabled: { $command } asks again
+# Said by `bravebot mcp enable` and `disable`, and by `add` once the server is approved. The path
+# is the settings file whose mcp.request was written.
+mcp-enabled = enabled { $alias } in { $path }
+mcp-already-enabled = { $alias } is already enabled in { $path }
+mcp-not-enabled = { $alias } is not approved, so it was not enabled
+mcp-nobody-to-enable =
+    nobody can be asked about { $alias }, so it was not enabled: run { $command } at a terminal
+mcp-requested-not-approved =
+    { $alias } is not approved, and { $path } still requests it, so the next session that reads it
+    asks about { $alias }
+# The reason is the managed layer's own, naming its file.
+mcp-enabled-not-started = { $alias } is requested and not started: { $reason }
+mcp-disabled = disabled { $alias } in { $path }
+mcp-enabled-nowhere = { $alias } is not enabled in { $paths }
+mcp-settings-not-a-document =
+    { $path } does not hold a settings document, so it was left as it is
+mcp-settings-too-large =
+    { $path } is past what bravebot reads, or would be with the change in it, so it was not written
+mcp-settings-changed =
+    { $path } changed after bravebot mcp { $command } read it, so it was not written: run it again
+mcp-settings-not-a-list =
+    mcp.request in { $path } is not a list of aliases, so it was left as it is
+mcp-settings-link =
+    { $path } is a link, and a checkout's link leads wherever whoever wrote the checkout pointed
+    it, so it was not written
 mcp-removed = removed { $alias }, and any approval that only it held
 # Said by `bravebot mcp forget`, once for each standing answer it dropped.
 mcp-forgot-servers = { $path } no longer starts every server it requests without asking

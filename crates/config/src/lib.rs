@@ -30,7 +30,8 @@ mod testutil;
 pub use managed::{Managed, Refusal, Rule, Server, managed_file};
 pub use settings::{
     Attribution, NotADocument, PermissionLists, RunDeadlines, Settings, check_document,
-    name_a_settings_file, named_settings_file, user_settings_file,
+    local_settings_file, name_a_settings_file, named_settings_file, project_settings_file,
+    user_settings_file,
 };
 
 pub mod bedrock;

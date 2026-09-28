@@ -433,7 +433,10 @@ mcp-needs-an-alias = { $command } a besoin de l'alias d'un serveur
 mcp-unexpected-argument = { $command } ne prend pas { $argument }
 mcp-add-stray-argument =
     le mot { $position } après add n'est pas une option, et n'est pas répété car il peut être une
-    valeur : --env, --dir et --http prennent un mot chacun, et -- prend le reste
+    valeur : --env, --dir, --http et -s prennent un mot chacun, et -- prend le reste
+mcp-scope-needs-a-value = -s a besoin d'une portée : local, project ou user
+mcp-not-a-scope = { $scope } n'est pas une portée : -s prend local, project ou user
+mcp-two-scopes = -s est donné deux fois, et une demande est écrite dans un seul fichier
 mcp-not-an-alias =
     { $alias } ne peut pas nommer un serveur : un alias est fait de lettres, de chiffres, de - et
     de _, commence par une lettre ou un chiffre, et fait au plus 64 caractères
@@ -477,7 +480,7 @@ mcp-unreadable-servers = servers n'est pas un objet
 mcp-unreadable-key =
     { $key } n'est pas une clé qu'il possède : il contient servers et rien d'autre
 mcp-not-while-incognito =
-    déclarer, approuver ou oublier écrit sur le disque, ce qu'une session incognito ne fera pas
+    bravebot mcp { $command } écrit sur le disque, ce qu'une session incognito ne fera pas
 mcp-no-state-directory =
     il n'y a pas de répertoire d'état, aucun serveur MCP n'est donc déclaré : { $variables } ne
     nomme aucun répertoire de profil
@@ -493,10 +496,38 @@ mcp-recorded = { $alias } approuvé, pour l'empreinte { $digest }
 mcp-left-unapproved = { $alias } est déclaré et n'est pas approuvé
 mcp-nobody-asked =
     personne n'a pu être interrogé au sujet de { $alias }, il est donc déclaré et n'est pas
-    approuvé : lancez bravebot mcp approve { $alias } dans un terminal
+    activé : lancez { $command } dans un terminal
 mcp-nobody-to-ask =
     personne ne peut être interrogé au sujet de { $alias } : lancez
     bravebot mcp approve { $alias } dans un terminal
+mcp-declared-not-enabled =
+    { $alias } est déclaré et n'est pas approuvé, il n'est donc pas activé : { $command } pose de
+    nouveau la question
+mcp-enabled = { $alias } activé dans { $path }
+mcp-already-enabled = { $alias } est déjà activé dans { $path }
+mcp-not-enabled = { $alias } n'est pas approuvé, il n'a donc pas été activé
+mcp-nobody-to-enable =
+    personne ne peut être interrogé au sujet de { $alias }, il n'a donc pas été activé : lancez
+    { $command } dans un terminal
+mcp-requested-not-approved =
+    { $alias } n'est pas approuvé, et { $path } le réclame toujours, donc la prochaine session qui
+    le lit posera la question au sujet de { $alias }
+mcp-enabled-not-started = { $alias } est réclamé et n'est pas démarré : { $reason }
+mcp-disabled = { $alias } désactivé dans { $path }
+mcp-enabled-nowhere = { $alias } n'est pas activé dans { $paths }
+mcp-settings-not-a-document =
+    { $path } ne contient pas de document de réglages, il a donc été laissé tel quel
+mcp-settings-too-large =
+    { $path } dépasse ce que bravebot lit, ou le dépasserait avec la modification, il n'a donc pas
+    été écrit
+mcp-settings-changed =
+    { $path } a changé après que bravebot mcp { $command } l'a lu, il n'a donc pas été écrit :
+    relancez la commande
+mcp-settings-not-a-list =
+    mcp.request dans { $path } n'est pas une liste d'alias, il a donc été laissé tel quel
+mcp-settings-link =
+    { $path } est un lien, et un lien dans un dépôt mène là où l'auteur du dépôt l'a dirigé, il
+    n'a donc pas été écrit
 mcp-removed = { $alias } retiré, avec toute approbation que lui seul portait
 mcp-forgot-servers = { $path } ne démarre plus sans demander chaque serveur qu'il réclame
 mcp-forgot-tool = { $tool } fait de nouveau l'objet d'une question avant chaque appel dans { $path }
