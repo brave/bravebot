@@ -1777,6 +1777,22 @@ watches-cleared = { $count ->
    *[other] { $count } live watches have ended with the conversation they were armed in
     }
 
+## Where a line sent while something runs is going, beside the mark under it
+
+# At most 26 characters each: the last row also carries the key that sends everything now, and the
+# two have to fit one 80-column row together. Longer, and these words are the ones left out.
+#
+# A prompt the running turn reads once its current round's calls are done.
+queued-into-this-turn = into this turn, next round
+# A prompt that nothing running will read, which starts a turn when what is running ends.
+queued-its-own-turn = a new turn after this
+# A prompt behind one of those, which the turn that one starts reads at its first round.
+queued-into-the-next-turn = into the next turn
+# A command: carried out by this program when what is running ends, rather than sent into it.
+queued-carried-out = carried out after this
+# A command line: run by the person's own shell, whose output then reaches the model.
+queued-run = run in your shell
+
 ## Pasting, dropping and attaching
 
 paste-arrived-empty =

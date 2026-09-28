@@ -22,7 +22,7 @@ use unicode_width::UnicodeWidthChar;
 use crate::keybindings::Keybindings;
 use crate::logo;
 use crate::markdown;
-use crate::state::{Delegate, Laid, Output, Session, Speaker, Status, Watched};
+use crate::state::{Bound, Delegate, Laid, Output, Session, Speaker, Status, Watched};
 use crate::table;
 use crate::theme;
 use crate::wrap;
@@ -2734,9 +2734,9 @@ fn stashed_lines(session: &Session, width: u16) -> Vec<Line<'static>> {
     ])]
 }
 
-/// Prompts that have been sent and are waiting for the turn in flight to end.
+/// Lines sent while something was running, each waiting for its place in the queue.
 ///
-/// The line as it was typed, and under it the word saying what has happened to it. Marked rather
+/// The line as it was typed, and under it the mark saying what has happened to it. Marked rather
 /// than merely indented, because a person who pressed Enter has to be able to tell at a glance
 /// that the words went somewhere: a line sitting quietly under the box is what this replaced, and
 /// it read as a key press that had been ignored.
@@ -2749,6 +2749,12 @@ fn stashed_lines(session: &Session, width: u16) -> Vec<Line<'static>> {
 /// go to different places and the row is the only thing that says which: `echo pwned` under the
 /// box with nothing in front of it reads as words on their way to the model.
 ///
+/// Beside each mark, where the line is going: into the turn in flight, into a turn of its own or
+/// the one after, or carried out rather than sent. A person deciding whether to stop a turn over a
+/// correction needs to know whether the correction is about to be read, and the mark alone says
+/// only that it waits. Dropped whole where the width will not hold it, since half of it could say
+/// the wrong thing.
+///
 /// The last one's mark says how to have them all go now, where the key that does it reaches this
 /// program. Beside the mark rather than on a row of its own, so the rows under the box do not grow by
 /// one the moment anything is queued, and dropped whole where the width will not hold it.
@@ -2759,9 +2765,13 @@ fn queued_lines(session: &Session, width: u16) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for (at, waiting) in session.queued.iter().enumerate() {
         let room = (width as usize).saturating_sub(4);
-        let lead = match waiting.is_a_command_line() {
-            true => "! ",
-            false => "  ",
+        let goes = session.where_it_goes(at);
+        let lead = match goes {
+            Bound::Run => "! ",
+            Bound::IntoThisTurn
+            | Bound::ItsOwnTurn
+            | Bound::IntoTheNextTurn
+            | Bound::CarriedOut => "  ",
         };
         lines.push(Line::from(vec![
             Span::styled(lead, Style::default().fg(theme::brand_primary())),
@@ -2780,9 +2790,32 @@ fn queued_lines(session: &Session, width: u16) -> Vec<Line<'static>> {
                     .add_modifier(Modifier::BOLD),
             ),
         ];
-        let last = at + 1 == session.queued.len();
-        let fits = 2 + BADGE.chars().count() + SEND_NOW.chars().count() <= width as usize;
-        if last && fits && session.offers_to_send_now() {
+        // The offer before the words, where both will not fit, since it is the one way to hurry
+        // what is waiting and the rows above still say where theirs are going.
+        let used = 2 + wrap::display_width(BADGE);
+        let offer = at + 1 == session.queued.len()
+            && session.offers_to_send_now()
+            && used + wrap::display_width(SEND_NOW) <= width as usize;
+        let offered = if offer {
+            wrap::display_width(SEND_NOW)
+        } else {
+            0
+        };
+        let left = (width as usize).saturating_sub(used + offered);
+        let bound = format!(
+            "  {}",
+            match goes {
+                Bound::IntoThisTurn => t!(queued_into_this_turn),
+                Bound::ItsOwnTurn => t!(queued_its_own_turn),
+                Bound::IntoTheNextTurn => t!(queued_into_the_next_turn),
+                Bound::CarriedOut => t!(queued_carried_out),
+                Bound::Run => t!(queued_run),
+            }
+        );
+        if wrap::display_width(&bound) <= left {
+            mark.push(Span::styled(bound, dim()));
+        }
+        if offer {
             mark.push(Span::styled(SEND_NOW, dim()));
         }
         lines.push(Line::from(mark));
@@ -5480,6 +5513,204 @@ mod tests {
             );
         }
 
+        const INTO_THIS_TURN: &str = "into this turn, next round";
+        const ITS_OWN_TURN: &str = "a new turn after this";
+        const INTO_THE_NEXT_TURN: &str = "into the next turn";
+        const CARRIED_OUT: &str = "carried out after this";
+        const RUN: &str = "run in your shell";
+
+        fn queued_behind(mut session: Session, line: &str) -> Session {
+            for c in line.chars() {
+                session.type_char(c);
+            }
+            assert!(session.queue());
+            session
+        }
+
+        /// A correction sent while a turn runs is read by that turn, and a person deciding whether
+        /// to stop the turn over it needs to know that it is about to be.
+        #[test]
+        fn a_prompt_waiting_on_a_running_turn_is_said_to_go_into_it() {
+            let session = queued_behind(working(), "actually look at b.txt");
+
+            let output = rendered(&session);
+            assert!(output.contains(INTO_THIS_TURN), "{output}");
+            assert!(!output.contains(ITS_OWN_TURN), "{output}");
+        }
+
+        /// An aside such as `/compact` is handed a queue of its own and reads nothing sent behind
+        /// it, so the prompt starts a turn when the aside ends. Said to go into what is running, it
+        /// would be a promise that the thing drawing the spinner is about to read it.
+        #[test]
+        fn a_prompt_waiting_on_an_aside_is_said_to_go_as_its_own_turn() {
+            let mut session = Session::new("kernel-enforced");
+            session.begin_aside();
+            let session = queued_behind(session, "actually look at b.txt");
+
+            let output = rendered(&session);
+            assert!(output.contains(ITS_OWN_TURN), "{output}");
+            assert!(!output.contains(INTO_THIS_TURN), "{output}");
+        }
+
+        /// A turn asked to stop takes nothing at the boundary it stops at, so what waits behind it
+        /// goes once it has stopped, as a turn of its own.
+        #[test]
+        fn a_prompt_waiting_on_a_turn_being_stopped_is_said_to_go_as_its_own_turn() {
+            let mut session = queued_behind(working(), "actually look at b.txt");
+            session.stop_asked();
+
+            let output = rendered(&session);
+            assert!(output.contains(ITS_OWN_TURN), "{output}");
+            assert!(!output.contains(INTO_THIS_TURN), "{output}");
+        }
+
+        /// The stop was asked of one turn. The next one takes what is sent behind it like any other,
+        /// and a stop still standing would say every later prompt is going to wait.
+        #[test]
+        fn a_prompt_waiting_on_the_turn_after_a_stop_is_said_to_go_into_it() {
+            let mut session = queued_behind(queued_behind(working(), "one"), "two");
+            session.stop_asked();
+            session.stopped(Some(0));
+            session.restore("a");
+            assert_eq!(session.send_queued().as_deref(), Some("one"));
+
+            let output = rendered(&session);
+            assert!(output.contains(INTO_THIS_TURN), "{output}");
+            assert!(!output.contains(ITS_OWN_TURN), "{output}");
+        }
+
+        /// Only the prompt that starts a turn leaves the buffer that turn reads, so the prompts behind
+        /// it go into the turn it starts, a command between them or not. Said to be turns of their
+        /// own, each would promise a turn that never begins. A command ahead of the first is no
+        /// prompt, so the first still starts the turn.
+        #[test]
+        fn the_prompts_behind_the_one_that_starts_a_turn_are_said_to_go_into_it() {
+            let mut session = Session::new("kernel-enforced");
+            session.begin_aside();
+            for line in ["/usage", "read one.txt", "/clear", "read two.txt"] {
+                for c in line.chars() {
+                    session.type_char(c);
+                }
+                if line.starts_with('/') {
+                    assert!(session.queue_command());
+                } else {
+                    assert!(session.queue());
+                }
+            }
+
+            let output = rendered(&session);
+            let at = |said: &str| {
+                output
+                    .find(said)
+                    .unwrap_or_else(|| panic!("{said:?} is not drawn: {output}"))
+            };
+            let order = [
+                at("/usage"),
+                at(CARRIED_OUT),
+                at("read one.txt"),
+                at(ITS_OWN_TURN),
+                at("/clear"),
+                at("read two.txt"),
+                at(INTO_THE_NEXT_TURN),
+            ];
+            assert!(order.is_sorted(), "{order:?}: {output}");
+            assert_eq!(output.matches(ITS_OWN_TURN).count(), 1, "{output}");
+        }
+
+        /// A command and a command line are carried out rather than sent into the turn, and the row
+        /// is the only thing on screen that says so. Each row says it of its own line, in the order
+        /// they were typed.
+        #[test]
+        fn each_waiting_line_says_where_it_is_going() {
+            let mut session = queued_behind(working(), "look at b.txt");
+            for c in "/clear".chars() {
+                session.type_char(c);
+            }
+            assert!(session.queue_command());
+            session.shell = true;
+            for c in "ls -la".chars() {
+                session.type_char(c);
+            }
+            assert!(session.queue_shell());
+
+            let output = rendered(&session);
+            let at = |said: &str| {
+                output
+                    .find(said)
+                    .unwrap_or_else(|| panic!("{said:?} is not drawn: {output}"))
+            };
+            let order = [
+                at("look at b.txt"),
+                at(INTO_THIS_TURN),
+                at("/clear"),
+                at(CARRIED_OUT),
+                at("! ls -la"),
+                at(RUN),
+            ];
+            assert!(order.is_sorted(), "{order:?}: {output}");
+        }
+
+        /// Cut off, it could stop at "into this" over a prompt that is not going into anything, so
+        /// where the width will not hold it the mark stands alone.
+        #[test]
+        fn where_it_is_going_is_dropped_whole_where_it_does_not_fit() {
+            let session = queued_behind(working(), "do some long task");
+
+            let output = rendered_at(&session, 36, 24);
+            assert!(output.contains("QUEUED"), "nothing said it was waiting");
+            assert!(!output.contains("into"), "{output}");
+        }
+
+        /// The last row carries both where its line is going and the key that sends the queue now,
+        /// and on an 80-column terminal it holds both whatever that line is. The offer is only made
+        /// while a turn runs and has not been asked to stop, so those three are every line it can
+        /// sit beside.
+        #[test]
+        fn the_offer_to_send_now_fits_beside_where_the_last_line_goes() {
+            let into = waiting_behind_a_turn(&["do some long task"]);
+            let mut command = waiting_behind_a_turn(&[]);
+            for c in "/clear".chars() {
+                command.type_char(c);
+            }
+            assert!(command.queue_command());
+            let mut shell = waiting_behind_a_turn(&[]);
+            shell.shell = true;
+            for c in "ls -la".chars() {
+                shell.type_char(c);
+            }
+            assert!(shell.queue_shell());
+
+            for (session, goes) in [(into, INTO_THIS_TURN), (command, CARRIED_OUT), (shell, RUN)] {
+                let rows = rows_at(&session, 80, 24);
+                assert!(
+                    rows.iter()
+                        .any(|row| row.contains(goes) && row.contains(SEND_NOW)),
+                    "{goes:?} and the offer are not on one row: {rows:#?}"
+                );
+            }
+        }
+
+        /// Narrower than that, the last row keeps the key and drops the words, since the key is the
+        /// one way to hurry what is waiting and the rows above it still say where theirs are going.
+        #[test]
+        fn the_offer_to_send_now_is_kept_over_where_the_last_line_goes() {
+            let session = waiting_behind_a_turn(&["do some long task", "and another one"]);
+
+            let rows = rows_at(&session, 60, 24);
+            let offer = rows
+                .iter()
+                .find(|row| row.contains(SEND_NOW))
+                .unwrap_or_else(|| panic!("the offer was dropped: {rows:#?}"));
+            assert!(!offer.contains(INTO_THIS_TURN), "{rows:#?}");
+            assert_eq!(
+                rows.iter()
+                    .filter(|row| row.contains(INTO_THIS_TURN))
+                    .count(),
+                1,
+                "the first line no longer says where it is going: {rows:#?}"
+            );
+        }
+
         /// Nearly every call reads into the planner's context, so a line saying so appeared
         /// under nearly every call and distinguished nothing. It crowded out the lines that do.
         #[test]
@@ -8134,6 +8365,24 @@ mod tests {
                     .collect::<String>()
                     .trim_end()
                     .to_string()
+            })
+            .collect()
+    }
+
+    /// Each row of the screen at a chosen size, for what has to be on one row together.
+    fn rows_at(session: &Session, width: u16, height: u16) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                draw(frame, session);
+            })
+            .expect("draw succeeds");
+        let buffer = terminal.backend().buffer();
+        (0..height)
+            .map(|row| {
+                (0..width)
+                    .map(|column| buffer.cell((column, row)).expect("cell").symbol())
+                    .collect()
             })
             .collect()
     }

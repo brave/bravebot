@@ -100,7 +100,8 @@ See [Interactive mode](using/interactive-mode.md#stopping-and-leaving).
 closes the scroller and the next one reaches the turn. The screen says which.
 
 **Enter did nothing while a turn was running.** It queued the prompt. A running turn refuses sending
-and nothing else; the queued prompt is drawn under the box until its own turn begins.
+and nothing else; the queued prompt is drawn under the box, with where it is going beside the mark,
+until the planner is given it.
 
 **A key press was ignored.** While the scroller is open, every key is the scroller's and a key it does
 not name does nothing at all. `?` says what it takes.

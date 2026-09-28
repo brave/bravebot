@@ -445,15 +445,26 @@ pub struct Queued {
     hurried: bool,
 }
 
-impl Queued {
-    /// Whether the line is a command line for a shell rather than anything for this program or
-    /// the planner.
+/// Where a waiting line is going, which is what its row under the box says.
+///
+/// What a person watching a turn needs before deciding whether to stop it: whether the line they
+/// sent is about to be read, is waiting for the turn to end, or is carried out rather than sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Bound {
+    /// A prompt the turn in flight takes at its next round boundary.
+    IntoThisTurn,
+    /// A prompt that waits for what is running to end and then becomes a turn of its own.
+    ItsOwnTurn,
+    /// A prompt behind one of those, which the turn that one begins takes at its first round
+    /// boundary, since only the prompt that begins a turn leaves the buffer the turn reads.
+    IntoTheNextTurn,
+    /// A command, carried out when the queue reaches it.
+    CarriedOut,
+    /// A command line, run through the shell when the queue reaches it.
     ///
-    /// What the row under the box reads from, since a command line drawn as a waiting prompt
-    /// would say the words were on their way to the model.
-    pub fn is_a_command_line(&self) -> bool {
-        self.waiting == Waiting::Shell
-    }
+    /// Apart from [`Bound::CarriedOut`] because the two go to different places, and a command line
+    /// drawn as anything else would read as words on their way to the model.
+    Run,
 }
 
 /// What a queued line is waiting to become when the turn in flight ends.
@@ -1403,6 +1414,12 @@ pub struct Session {
     /// Only a turn is stopped by Ctrl-Enter, since only a turn is what the queue is waiting behind.
     /// The others read their keys through the same handler and have no turn to stop.
     turn_in_flight: bool,
+    /// Whether the person has asked for what is running to stop, since the last turn began.
+    ///
+    /// A turn being stopped takes nothing more at its round boundaries, so a prompt waiting behind
+    /// it is not going into it. Only the rows under the box read this, and only while a turn is in
+    /// flight, which is why the next turn beginning is the one place it goes down.
+    stopping: bool,
     /// Whether the terminal tells Ctrl-Enter from Enter.
     ///
     /// Only the hint under the queue reads it. Where the terminal sends the same thing for both,
@@ -1668,6 +1685,7 @@ impl Session {
             running: None,
             queued: Vec::new(),
             turn_in_flight: false,
+            stopping: false,
             ctrl_enter_arrives: false,
             looping: None,
             watches: watch::Watches::new(),
@@ -6642,8 +6660,40 @@ impl Session {
 
     /// Whether Ctrl-Enter would stop the turn in flight and send what is waiting, which is when the
     /// row under the queue says so.
+    ///
+    /// Not once a stop has been asked for: the queue goes when the turn has stopped all the same, so
+    /// the key would stop a turn already stopping.
     pub fn offers_to_send_now(&self) -> bool {
-        self.ctrl_enter_arrives && self.a_turn_is_running() && !self.queued.is_empty()
+        self.ctrl_enter_arrives
+            && self.a_turn_is_running()
+            && !self.stopping
+            && !self.queued.is_empty()
+    }
+
+    /// Where the line waiting at `at` is going, for the row under the box to say.
+    ///
+    /// A prompt goes into the turn in flight only where that turn will ask for it. An aside is
+    /// handed a queue of its own and takes nothing, and a turn being stopped takes nothing at the
+    /// boundary it stops at, so the first prompt waiting behind either becomes a turn of its own and
+    /// the ones after it go into that turn.
+    pub fn where_it_goes(&self, at: usize) -> Bound {
+        match self.queued[at].waiting {
+            Waiting::Command => Bound::CarriedOut,
+            Waiting::Shell => Bound::Run,
+            Waiting::Prompt if self.a_turn_is_running() && !self.stopping => Bound::IntoThisTurn,
+            Waiting::Prompt if self.queued[..at].iter().any(|line| line.waiting.is_sent()) => {
+                Bound::IntoTheNextTurn
+            }
+            Waiting::Prompt => Bound::ItsOwnTurn,
+        }
+    }
+
+    /// Record that the person asked for what is running to stop.
+    ///
+    /// At the press, rather than when the turn reports that it stopped, because a turn can take a
+    /// while to get there and a prompt sent in between would otherwise be drawn as going into it.
+    pub fn stop_asked(&mut self) {
+        self.stopping = true;
     }
 
     fn a_turn_is_running(&self) -> bool {
@@ -7434,6 +7484,7 @@ impl Session {
         self.transcript.push(Entry::user(prompt.clone()));
         self.status = Status::Working;
         self.turn_in_flight = true;
+        self.stopping = false;
         self.back_to_the_tail();
         self.turns += 1;
         // The last turn's figures are not this one's, and a line reporting a finished turn while
@@ -13296,6 +13347,21 @@ mod tests {
         s.begin_aside();
         queue_lines(&mut s, &["two"]);
         assert!(!s.hurry(), "hurried a request that is not a turn");
+        assert!(!s.offers_to_send_now());
+    }
+
+    /// Once a stop has been asked for, what is waiting goes when the turn has stopped, which is all
+    /// the key would do. Offered then, it is advice to stop a turn that is already stopping.
+    #[test]
+    fn the_offer_is_not_made_to_a_turn_already_stopping() {
+        let mut s = session();
+        s.ctrl_enter_arrives = true;
+        s.type_char('a');
+        s.submit().expect("submitted");
+        queue_lines(&mut s, &["one"]);
+        assert!(s.offers_to_send_now());
+
+        s.stop_asked();
         assert!(!s.offers_to_send_now());
     }
 

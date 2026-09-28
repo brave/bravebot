@@ -634,6 +634,7 @@ fn escape_is_the_boxs(session: &Session) -> bool {
 fn stop_what_is_running(session: &mut Session, cancel: &Cancel) {
     session.cleared_by_interrupt = false;
     session.abandon_half_typed();
+    session.stop_asked();
     cancel.cancel();
 }
 
@@ -14829,6 +14830,30 @@ mod tests {
 
         turn_key(&mut session, ctrl_enter(), &cancel);
         assert!(cancel.is_cancelled(), "Ctrl-Enter left the turn running");
+    }
+
+    /// A turn asked to stop takes nothing more, and the interface hears that it has stopped only
+    /// when it gets there. A prompt sent in between is drawn as going into the turn unless the stop
+    /// is recorded at the press that asked for it.
+    #[test]
+    fn a_stop_is_recorded_at_the_press_that_asks_for_it() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "first");
+        handle_key(&mut session, key(KeyCode::Enter));
+        let cancel = Cancel::new();
+        for c in "second".chars() {
+            turn_key(&mut session, key(KeyCode::Char(c)), &cancel);
+        }
+        turn_key(&mut session, key(KeyCode::Enter), &cancel);
+        assert_eq!(session.where_it_goes(0), crate::state::Bound::IntoThisTurn);
+
+        stop_what_is_running(&mut session, &cancel);
+
+        assert_eq!(
+            session.where_it_goes(0),
+            crate::state::Bound::ItsOwnTurn,
+            "still drawn as going into the turn being stopped"
+        );
     }
 
     /// Over an empty box there is nothing to queue, and what is already waiting can go all the same.

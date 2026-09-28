@@ -1551,6 +1551,15 @@ watches-cleared = { $count ->
     }
 
 
+## Où va une ligne envoyée pendant que quelque chose tourne, à côté de sa marque
+
+queued-into-this-turn = au prochain cycle du tour
+queued-its-own-turn = un nouveau tour ensuite
+queued-into-the-next-turn = dans le tour suivant
+queued-carried-out = exécutée après ceci
+queued-run = lancée dans votre shell
+
+
 ## Coller, déposer et joindre
 
 paste-arrived-empty =

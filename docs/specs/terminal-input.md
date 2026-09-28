@@ -390,6 +390,27 @@ watching an agent read the wrong file and typing "no, the other one" is talking 
 happening now; delivered after the answer, it arrives after the thing it was meant to prevent, and
 the work it would have redirected has been done. This is what Claude Code does, and for this reason.
 
+**The mark says where the line is going.** Beside it, one of five: into this turn at its next
+round, for a prompt behind a turn that will take it; as a turn of its own afterwards, for the first
+prompt behind something that will not, which is a request of its own such as `/compact`, a plan or
+a goal check, or a turn the person has asked to stop; into the next turn, for a prompt behind that
+one, since only the prompt that begins a turn leaves the queue it reads; carried out after this,
+for a command; run in the person's shell, for a command line. A turn asked to stop is drawn as one
+from the press that asked, since it takes nothing at the boundary it stops at and the interface
+hears that it has stopped only once it has. The words say what the next round will do, and a turn
+that answers without another has no next round: what was going into it waits instead, and the first
+of it becomes a turn of its own. Where the width will not hold the words they are left out whole,
+and the mark stands alone. On the last row they share the width with the key that sends the queue
+now (INPUT-36). Each is short enough that an 80-column row holds both, and where a row does not, the
+key keeps its place and the words go.
+
+**Why.** Whether a correction is about to be read is what decides whether to stop the turn over it.
+A mark saying only that the line waits leaves that to a guess, and the guess that it will be read is
+wrong behind a `/compact` or a turn already stopping, in the direction that costs: the person waits
+for a correction that is not coming. Cut short, the words could say the same wrong thing by
+stopping at "into this". The key outranks them on the last row because it is the one way to hurry
+what is waiting, and the rows above it still say where theirs are going.
+
 **The turn in flight is the one on the screen.** Work handed out to a delegate is a turn of its own,
 and the person typing may not know one is running at all, so what they send waits for the turn they
 are watching rather than going to the delegate. A delegate does not ask for one either: the queue is
@@ -422,8 +443,10 @@ drawn as waiting only until then. What it names is settled when it is queued, no
 because a file the person took off the line afterwards was never part of that prompt. It is in the
 prompt history from the moment it is queued, since from the person's side that is when they sent it.
 
-Stopping a turn leaves the queue alone. The next waiting prompt begins its turn as it would after
-any turn, and the rest go on waiting in order. A prompt is taken back out of the queue by asking
+Stopping a turn leaves the queue alone. The turn being stopped takes nothing from it, even at a
+boundary it reaches after the stop because the stop came while the round's last call ran and that
+call did not say so. The next waiting prompt begins its turn as it would after any turn, and the
+rest go on waiting in order. A prompt is taken back out of the queue by asking
 for it (INPUT-18), and until then it goes.
 
 The stopped prompt does **not** come back to the box when something is waiting. It stays in the
@@ -477,6 +500,17 @@ while the first is in flight, and the queue is what makes that refusal visible i
 `verified-by: bravebot_tui::render::a_waiting_prompt_is_shown_as_waiting`
 `verified-by: bravebot_tui::render::a_prompt_stops_waiting_once_its_turn_begins`
 `verified-by: bravebot_tui::render::a_prompt_stops_waiting_once_the_running_turn_takes_it`
+`verified-by: bravebot_tui::render::a_prompt_waiting_on_a_running_turn_is_said_to_go_into_it`
+`verified-by: bravebot_tui::render::a_prompt_waiting_on_an_aside_is_said_to_go_as_its_own_turn`
+`verified-by: bravebot_tui::render::a_prompt_waiting_on_a_turn_being_stopped_is_said_to_go_as_its_own_turn`
+`verified-by: bravebot_tui::render::a_prompt_waiting_on_the_turn_after_a_stop_is_said_to_go_into_it`
+`verified-by: bravebot_tui::render::each_waiting_line_says_where_it_is_going`
+`verified-by: bravebot_tui::render::where_it_is_going_is_dropped_whole_where_it_does_not_fit`
+`verified-by: bravebot_tui::render::the_prompts_behind_the_one_that_starts_a_turn_are_said_to_go_into_it`
+`verified-by: bravebot_tui::render::the_offer_to_send_now_fits_beside_where_the_last_line_goes`
+`verified-by: bravebot_tui::render::the_offer_to_send_now_is_kept_over_where_the_last_line_goes`
+`verified-by: bravebot_tui::app::a_stop_is_recorded_at_the_press_that_asks_for_it`
+`verified-by: bravebot_agent::turn::a_prompt_typed_before_a_stop_is_left_for_the_next_turn`
 
 <a id="INPUT-11"></a>
 ### INPUT-11: what is attached is drawn nearest the box, above what is waiting
@@ -2100,8 +2134,9 @@ box whole, every prompt in it leaving the history as a single stopped prompt doe
 
 **The offer is drawn beside the last waiting row.** While a turn runs with something waiting, and
 only where the chord can arrive ([INPUT-5](#INPUT-5)), the mark under the last queued line says
-`ctrl-enter to stop the turn and send now`. One offer for the whole queue, since the key sends the
-whole queue, and dropped whole where the width will not hold it. The key list names it too
+`ctrl-enter to stop the turn and send now`. Not once a stop has been asked for, since the turn is
+already stopping and what waits goes when it has. One offer for the whole queue, since the key sends
+the whole queue, and dropped whole where the width will not hold it. The key list names it too
 ([INPUT-13](#INPUT-13)).
 
 **Why.** A queued prompt waits for the answer being written, which is right while the person wants
@@ -2123,6 +2158,7 @@ would have typed had they known in advance.
 `verified-by: bravebot_tui::state::stopping_a_hurried_turn_forgets_every_prompt_in_it`
 `verified-by: bravebot_tui::render::the_offer_to_send_now_is_drawn_under_the_last_waiting_prompt`
 `verified-by: bravebot_tui::render::the_offer_to_send_now_is_dropped_whole_where_it_does_not_fit`
+`verified-by: bravebot_tui::state::the_offer_is_not_made_to_a_turn_already_stopping`
 `verified-by: bravebot_tui::render::the_list_names_the_chord_that_sends_what_is_queued`
 `verified-by: bravebot_tui::state::a_count_says_how_much_of_the_extent_an_operator_takes`
 `verified-by: bravebot_tui::state::a_counted_change_is_one_change_and_one_undo_step`
