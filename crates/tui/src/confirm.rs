@@ -1496,16 +1496,28 @@ fn vetting_answer_for(key: KeyEvent, verdict: Verdict) -> Option<VetResponse> {
 /// is offered only where the check completed and found nothing.
 pub fn ask_vet<B: Backend>(terminal: &mut Terminal<B>, request: &VetRequest) -> VetAnswer {
     let mut scroll = 0u16;
+    let mut picture = vetting_preview(terminal, request);
     loop {
+        picture.settle();
         let mut most = 0u16;
         // A terminal that cannot be drawn to cannot show the content, and approving content
         // nobody was shown is the one thing this question cannot mean. The verdict does not
         // rescue it: a word from a model is not a person having read something.
         if terminal
-            .draw(|frame| most = draw_vet(frame, request, scroll))
+            .draw(|frame| most = draw_vet(frame, request, scroll, picture.thumb()))
             .is_err()
         {
             return VetAnswer::Reject;
+        }
+
+        // While the picture is still being made, wait a moment rather than for a key, so it is
+        // drawn when it arrives and not at the next press.
+        if picture.is_pending() {
+            match input::poll(std::time::Duration::from_millis(50)) {
+                Ok(false) => continue,
+                Ok(true) => {}
+                Err(_) => return VetAnswer::Reject,
+            }
         }
 
         match input::read() {
@@ -1527,6 +1539,61 @@ pub fn ask_vet<B: Backend>(terminal: &mut Terminal<B>, request: &VetRequest) -> 
     }
 }
 
+/// How large the picture on a vetting prompt is drawn on a terminal of `size`, or `None` where the
+/// prompt has no room to draw one that means anything.
+///
+/// Large, because a person is looking for writing that is small: as much of the width as the prompt
+/// has, and as many rows as are left once the rows above it (the verdict, what a yes does, where the
+/// picture came from and the path) are on the screen. A terminal without that many still gets a
+/// picture of a usable height, which is drawn once it is scrolled into view.
+fn vetting_fit(size: ratatui::layout::Size) -> Option<crate::preview::Fit> {
+    /// The rows a prompt about a picture spends above the picture, and the keys below it.
+    const AROUND: u16 = 24;
+    const LEAST: u16 = 8;
+    const MOST: u16 = 28;
+    let inside = centred(Rect::new(0, 0, size.width, size.height));
+    // The frame of the prompt, then the margin bar and the space after it.
+    let columns = inside.width.saturating_sub(2 + 2 + 2).min(100);
+    let rows = inside.height.saturating_sub(AROUND).clamp(LEAST, MOST);
+    (columns >= 16 && inside.height >= LEAST + 6)
+        .then_some(crate::preview::Fit::Within(columns, rows))
+}
+
+/// The picture to draw on a vetting prompt, or none where it stays a path to open.
+///
+/// Drawn only where the terminal draws real pictures ([`crate::preview::draws_in_a_vetting_prompt`]),
+/// from the private copy the prompt names: it is the file the person is told to open, so what they
+/// see here is what they would see there.
+fn vetting_preview<B: Backend>(
+    terminal: &Terminal<B>,
+    request: &VetRequest,
+) -> crate::preview::Preview {
+    match terminal
+        .size()
+        .ok()
+        .and_then(|size| vetting_source(crate::preview::protocol(), request, size))
+    {
+        Some((source, fit)) => crate::preview::Preview::start(source, fit),
+        None => crate::preview::Preview::nothing(),
+    }
+}
+
+/// What a vetting prompt draws, or `None` where it stays a path to open.
+fn vetting_source(
+    protocol: Option<ratatui_image::picker::ProtocolType>,
+    request: &VetRequest,
+    size: ratatui::layout::Size,
+) -> Option<(crate::preview::Source, crate::preview::Fit)> {
+    let picture = request.picture.as_ref()?;
+    if !crate::preview::draws_in_a_vetting_prompt(protocol, &picture.media) {
+        return None;
+    }
+    Some((
+        crate::preview::Source::File(picture.path.clone()),
+        vetting_fit(size)?,
+    ))
+}
+
 /// Draw the vetted read for review, returning how far it can be scrolled.
 ///
 /// Two things on this screen came from somewhere nobody vouched for: the content, and the
@@ -1535,7 +1602,12 @@ pub fn ask_vet<B: Backend>(terminal: &mut Terminal<B>, request: &VetRequest) -> 
 /// verdict it was is the driver's own words and is outside the margin, which is the distinction
 /// the bar exists to make: a reader can tell which line the program wrote and which line came out
 /// of the page.
-fn draw_vet(frame: &mut ratatui::Frame, request: &VetRequest, scroll: u16) -> u16 {
+fn draw_vet(
+    frame: &mut ratatui::Frame,
+    request: &VetRequest,
+    scroll: u16,
+    picture: Option<&crate::preview::Thumb>,
+) -> u16 {
     let area = centred(frame.area());
     let title = match &request.picture {
         Some(_) => t!(vet_picture_title),
@@ -1615,21 +1687,35 @@ fn draw_vet(frame: &mut ratatui::Frame, request: &VetRequest, scroll: u16) -> u1
         lines.push(Line::raw(""));
     }
 
+    let mut picture_at = None;
     match &request.picture {
-        // A terminal cannot draw a picture, so the person is given one to open. The path is the
-        // driver's own, a random name under a directory only they can read, so it is drawn outside
-        // the margin: nothing in it came from the file.
-        Some(picture) => {
+        // The person is given a copy to open, and where the terminal draws real pictures the
+        // picture as well. The path is the driver's own, a random name under a directory only they
+        // can read, so it is drawn outside the margin: nothing in it came from the file. The
+        // picture is the file, so it is drawn inside the margin, on every row it reaches.
+        Some(shown) => {
             lines.extend(indented(
                 t!(vet_picture_open),
                 Style::default().fg(theme::muted()),
                 inside.width as usize,
             ));
             lines.push(Line::from(Span::styled(
-                format!("  {}", picture.path.display()),
+                format!("  {}", shown.path.display()),
                 Style::default().add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::raw(""));
+            if let Some(thumb) = picture {
+                picture_at = Some(lines.len());
+                for _ in 0..thumb.height() {
+                    lines.push(Line::from(margin.clone()));
+                }
+                lines.extend(indented(
+                    t!(vet_picture_drawn),
+                    Style::default().fg(theme::muted()),
+                    inside.width as usize,
+                ));
+                lines.push(Line::raw(""));
+            }
             // What looking at it is for. A check and a person are fooled by different things,
             // and this is the one a person is fooled by.
             lines.extend(indented(
@@ -1637,7 +1723,7 @@ fn draw_vet(frame: &mut ratatui::Frame, request: &VetRequest, scroll: u16) -> u1
                 Style::default().fg(theme::running()),
                 inside.width as usize,
             ));
-            if picture.is_a_pdf() {
+            if shown.is_a_pdf() {
                 lines.extend(indented(
                     t!(vet_pdf_hidden_text),
                     Style::default().fg(theme::running()),
@@ -1723,11 +1809,32 @@ fn draw_vet(frame: &mut ratatui::Frame, request: &VetRequest, scroll: u16) -> u1
         .constraints([Constraint::Min(1), Constraint::Length(1)])
         .split(inside);
 
+    // Where the picture's rows begin once the rows above it are wrapped, which is not the line
+    // they were pushed at.
+    let picture_row = picture_at.map(|at| {
+        Paragraph::new(lines[..at].to_vec())
+            .wrap(Wrap { trim: false })
+            .line_count(rows[0].width) as u16
+    });
     let body = Paragraph::new(lines).wrap(Wrap { trim: false });
     let drawn = body.line_count(rows[0].width) as u16;
     let furthest = drawn.saturating_sub(rows[0].height);
     let offset = scroll.min(furthest);
     frame.render_widget(body.scroll((offset, 0)), rows[0]);
+    // Whole or not at all: half of a graphics protocol is worse than none, and the path is above.
+    if let (Some(row), Some(thumb)) = (picture_row, picture)
+        && row >= offset
+        && row - offset + thumb.height() <= rows[0].height
+        && thumb.width() + 2 <= rows[0].width
+    {
+        let at = Rect::new(
+            rows[0].x + 2,
+            rows[0].y + row - offset,
+            thumb.width(),
+            thumb.height(),
+        );
+        thumb.draw(frame, at);
+    }
 
     let mut keys = keys;
     if furthest > 0 {
@@ -3846,7 +3953,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(100, 40)).expect("terminal");
         terminal
             .draw(|frame| {
-                draw_vet(frame, request, 0);
+                draw_vet(frame, request, 0, None);
             })
             .expect("draw");
         terminal
@@ -3858,8 +3965,8 @@ mod tests {
             .collect()
     }
 
-    /// VET-4: a terminal cannot draw a picture, so the prompt names a copy to open and says what a
-    /// person looking at one is most likely to miss. A PDF says the one thing more it can hide.
+    /// VET-4: whatever the terminal draws, the prompt names a copy to open and says what a person
+    /// looking at one is most likely to miss. A PDF says the one thing more it can hide.
     #[test]
     fn a_picture_is_put_to_the_person_as_a_copy_to_open() {
         let mut request = a_vetting(Verdict::Safe, None, "");
@@ -3891,6 +3998,174 @@ mod tests {
         let drawn = rendered_vet(&request);
         assert!(drawn.contains("application/pdf, 1 byte "), "{drawn}");
         assert!(drawn.contains("no page draws"), "{drawn}");
+    }
+
+    fn a_picture_request(media: &str) -> VetRequest {
+        let mut request = a_vetting(Verdict::Safe, None, "");
+        request.picture = Some(bravebot_agent::confirm::PictureShown {
+            path: "/cache/bravebot/vetting/0f.png".into(),
+            media: media.into(),
+            bytes: 2048,
+        });
+        request
+    }
+
+    /// A picture drawn with `protocol`, large, as the prompt asks for one.
+    fn drawn_with(protocol: ratatui_image::picker::ProtocolType) -> crate::preview::Thumb {
+        crate::preview::thumbnail_with(
+            &crate::preview::tests::drawing_with(protocol),
+            &crate::preview::tests::png(800, 400),
+            crate::preview::Fit::Within(60, 10),
+        )
+        .expect("a PNG decodes")
+    }
+
+    fn drawn_cells(
+        request: &VetRequest,
+        scroll: u16,
+        picture: Option<&crate::preview::Thumb>,
+        size: (u16, u16),
+    ) -> Vec<(u16, u16, String)> {
+        let mut terminal = Terminal::new(TestBackend::new(size.0, size.1)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                draw_vet(frame, request, scroll, picture);
+            })
+            .expect("draw");
+        let buffer = terminal.backend().buffer().clone();
+        let mut cells = Vec::new();
+        for y in 0..size.1 {
+            for x in 0..size.0 {
+                cells.push((x, y, buffer[(x, y)].symbol().to_string()));
+            }
+        }
+        cells
+    }
+
+    fn text_of(cells: &[(u16, u16, String)]) -> String {
+        cells.iter().map(|(_, _, symbol)| symbol.as_str()).collect()
+    }
+
+    /// The Kitty graphics escape a picture is sent in, which is what a terminal that draws real
+    /// pictures is given and a block of colour never contains.
+    fn has_graphics(cells: &[(u16, u16, String)]) -> bool {
+        cells.iter().any(|(_, _, symbol)| symbol.contains("\x1b_G"))
+    }
+
+    /// A terminal that draws real pictures is given the picture on the prompt, and the path is
+    /// still there: the person can open the copy and zoom in, which the drawing cannot do.
+    #[test]
+    fn a_picture_is_drawn_on_the_prompt_beside_the_path_to_its_copy() {
+        let request = a_picture_request("image/png");
+        let thumb = drawn_with(ratatui_image::picker::ProtocolType::Kitty);
+        let cells = drawn_cells(&request, 0, Some(&thumb), (100, 50));
+        assert!(has_graphics(&cells), "no graphics escape was drawn");
+        let drawn = text_of(&cells);
+        assert!(drawn.contains("/cache/bravebot/vetting/0f.png"), "{drawn}");
+        assert!(
+            drawn.contains("the picture as this terminal draws it"),
+            "{drawn}"
+        );
+        assert!(
+            drawn.contains("a model reads words in a picture"),
+            "{drawn}"
+        );
+    }
+
+    /// The picture is the file's, so it is drawn inside the margin on every row it reaches, and
+    /// the path above it is not.
+    #[test]
+    fn a_drawn_picture_sits_inside_the_margin_bar() {
+        let request = a_picture_request("image/png");
+        let thumb = drawn_with(ratatui_image::picker::ProtocolType::Kitty);
+        let cells = drawn_cells(&request, 0, Some(&thumb), (100, 50));
+        let (x, y, _) = cells
+            .iter()
+            .find(|(_, _, symbol)| symbol.contains("\x1b_G"))
+            .expect("a graphics escape");
+        let bar = |row: u16, column: u16| {
+            cells
+                .iter()
+                .find(|(cx, cy, _)| *cx == column && *cy == row)
+                .map(|(_, _, symbol)| symbol.as_str())
+        };
+        for row in *y..*y + thumb.height() {
+            assert_eq!(
+                bar(row, x - 2),
+                Some("\u{2503}"),
+                "row {row} has no margin bar"
+            );
+        }
+    }
+
+    /// Without a real graphics protocol the prompt is what it was: a path, no drawing, and no
+    /// sentence about a drawing that is not there.
+    #[test]
+    fn a_picture_is_not_drawn_without_a_real_graphics_protocol() {
+        let request = a_picture_request("image/png");
+        let cells = drawn_cells(&request, 0, None, (100, 50));
+        assert!(!has_graphics(&cells));
+        let drawn = text_of(&cells);
+        assert!(drawn.contains("/cache/bravebot/vetting/0f.png"), "{drawn}");
+        assert!(
+            !drawn.contains("the picture as this terminal draws it"),
+            "{drawn}"
+        );
+    }
+
+    /// Which prompts are given a picture is decided from the protocol and the media type, and a
+    /// blocks-of-colour terminal, no answer and a PDF are all refused.
+    #[test]
+    fn only_a_real_protocol_and_a_raster_picture_are_given_a_drawing() {
+        use ratatui_image::picker::ProtocolType;
+        let size = ratatui::layout::Size::new(120, 50);
+        let png = a_picture_request("image/png");
+        for real in [
+            ProtocolType::Kitty,
+            ProtocolType::Iterm2,
+            ProtocolType::Sixel,
+        ] {
+            assert!(vetting_source(Some(real), &png, size).is_some(), "{real:?}");
+        }
+        assert!(vetting_source(Some(ProtocolType::Halfblocks), &png, size).is_none());
+        assert!(vetting_source(None, &png, size).is_none());
+        let pdf = a_picture_request(bravebot_core::vetting::PDF);
+        assert!(vetting_source(Some(ProtocolType::Kitty), &pdf, size).is_none());
+        let text = a_vetting(Verdict::Safe, None, "text");
+        assert!(vetting_source(Some(ProtocolType::Kitty), &text, size).is_none());
+    }
+
+    /// The picture is large where there is room and absent where there is not, so a small terminal
+    /// keeps the path, the verdict and the keys and loses only the drawing.
+    #[test]
+    fn the_drawing_is_sized_to_the_terminal_and_dropped_when_it_would_not_fit() {
+        use crate::preview::Fit;
+        let Some(Fit::Within(columns, rows)) = vetting_fit(ratatui::layout::Size::new(120, 50))
+        else {
+            panic!("a roomy terminal gets no picture");
+        };
+        assert!(columns > crate::preview::COLUMNS && rows > crate::preview::ROWS);
+        assert!(columns <= 100 && rows <= 28);
+        assert_eq!(vetting_fit(ratatui::layout::Size::new(20, 10)), None);
+        assert_eq!(vetting_fit(ratatui::layout::Size::new(120, 12)), None);
+    }
+
+    /// Half of a graphics protocol is worse than none, so a picture that does not fit the visible
+    /// part of the prompt is not drawn at all, at any scroll position, and the path remains.
+    #[test]
+    fn a_picture_that_does_not_fit_the_visible_prompt_is_not_drawn() {
+        let request = a_picture_request("image/png");
+        let thumb = drawn_with(ratatui_image::picker::ProtocolType::Kitty);
+        for scroll in [0, 1, 2, 3] {
+            let cells = drawn_cells(&request, scroll, Some(&thumb), (100, 30));
+            assert!(!has_graphics(&cells), "drawn at scroll {scroll}");
+        }
+        // Scrolled far enough that all of it is on the screen, it is drawn: the rule is about what
+        // fits, not a refusal to draw at this size.
+        let cells = drawn_cells(&request, u16::MAX, Some(&thumb), (100, 30));
+        assert!(has_graphics(&cells), "not drawn once it fits");
+        let cells = drawn_cells(&request, 0, Some(&thumb), (100, 30));
+        assert!(text_of(&cells).contains("/cache/bravebot/vetting/0f.png"));
     }
 
     /// The bytes are what the person decides about, verdict or no verdict, so they are on the

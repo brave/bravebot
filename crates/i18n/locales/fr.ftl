@@ -1060,6 +1060,9 @@ vet-picture-open = ouvrez cette copie pour voir ce que le modèle recevrait. Ell
 vet-picture-words =
     un modèle lit dans une image des mots qu'une personne peut manquer : petits, pâles, ou
     presque de la couleur du fond. Cherchez de l'écrit avant de la laisser passer.
+vet-picture-drawn =
+    l'image telle que ce terminal la dessine. Un texte petit ou pâle peut ne pas apparaître à cette
+    taille : ouvrez la copie ci-dessus et zoomez.
 vet-pdf-hidden-text =
     un PDF peut aussi contenir du texte qu'aucune page n'affiche, et le modèle reçoit aussi ce texte.
 vet-picture-yes = le laisser voir ceci

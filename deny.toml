@@ -67,7 +67,7 @@ deny = [
 # workspace first, before it can say anything about a real `*`.
 
 # Every duplicate the build compiles, and why it cannot be unified here. Cargo.lock lists
-# ten crates at more than one version; the five not here are reachable only through
+# sixteen crates at more than one version; the four not here are reachable only through
 # dev-dependencies of dependencies or through an optional feature no crate here turns on, so
 # no build of this workspace resolves them.
 #
@@ -80,7 +80,14 @@ skip = [
     { crate = "base64:0.22", reason = "the version challenge-bypass-ristretto 2.1 pins, and the workspace pins it to match; ureq 3.4 is on 0.23 internally" },
     { crate = "getrandom:0.2", reason = "rand 0.8, pinned to match challenge-bypass-ristretto, is on it; gix-utils, under read_git's plumbing, is on 0.4" },
     { crate = "hashbrown:0.16", reason = "kasuari 0.4 pins it while the rest of ratatui 0.30 is on 0.17; neither is a dependency of this workspace" },
+    { crate = "linux-raw-sys:0.4", reason = "Linux only; rustix 0.38, which ratatui-image pins, is on it while rustix 1 is on 0.12" },
+    { crate = "miniz_oxide:0.8", reason = "png 0.18 pins it while flate2 1.1 is on 0.9; both come in with the picture decoders, PNG only" },
+    { crate = "rand:0.8", reason = "the version challenge-bypass-ristretto pins, which ratatui-image asks for too; quantette, under icy_sixel, is on 0.10" },
+    { crate = "rand_core:0.6", reason = "goes with rand 0.8 and curve25519-dalek; rand 0.10 is on 0.10" },
+    { crate = "rustix:0.38", reason = "ratatui-image pins it for the terminal query; the rest of the workspace is on 1" },
     { crate = "syn:2", reason = "proc macros only, so nothing of either version is in the binary; ratatui's macro crates are on 2 and serde_derive is on 3" },
+    { crate = "thiserror:1", reason = "ratatui-image is on 1 while icy_sixel and the rest of the workspace are on 2" },
+    { crate = "thiserror-impl:1", reason = "the derive half of thiserror 1; proc macro only, so nothing of it is in the binary" },
     { crate = "windows-sys:0.52", reason = "compiled for the Windows targets only; ring 0.17 pins it while rustix and mio are on 0.61" },
 ]
 

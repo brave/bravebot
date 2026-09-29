@@ -651,12 +651,25 @@ pub fn draw(frame: &mut Frame, session: &Session) -> Laid {
     let beneath = lines_beneath_the_box(session, frame.area().width, &offered);
     let offered_height = (beneath.len() as u16).min(room);
 
+    // Thumbnails of the pictures the line carries, between the box and the rows that describe
+    // them. Only as many rows as the screen can spare after everything above, so a small terminal
+    // loses the thumbnail before it loses the transcript.
+    let thumbs = session.previews_on_the_line();
+    let spare = room.saturating_sub(offered_height);
+    let preview_height = thumbs
+        .iter()
+        .map(|thumb| thumb.height())
+        .max()
+        .unwrap_or(0)
+        .min(spare);
+
     let areas = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(1),                 // transcript
             Constraint::Length(status_height),  // what is running
             Constraint::Length(input_height),   // input
+            Constraint::Length(preview_height), // pictures the line carries
             Constraint::Length(offered_height), // what is being offered
             Constraint::Length(1),              // hint line
         ])
@@ -665,8 +678,9 @@ pub fn draw(frame: &mut Frame, session: &Session) -> Laid {
     let laid = draw_transcript(frame, areas[0], session);
     draw_status(frame, areas[1], session);
     draw_input(frame, areas[2], session);
-    frame.render_widget(Paragraph::new(beneath), areas[3]);
-    draw_hint(frame, areas[4], session);
+    draw_previews(frame, areas[3], &thumbs);
+    frame.render_widget(Paragraph::new(beneath), areas[4]);
+    draw_hint(frame, areas[5], session);
 
     // Last, over everything: the selection is of the screen rather than of any one widget, and
     // the user swept it over whatever happened to be there.
@@ -675,6 +689,22 @@ pub fn draw(frame: &mut Frame, session: &Session) -> Laid {
     }
 
     laid
+}
+
+/// Draw the thumbnails side by side, leftmost first, each only where it fits whole.
+///
+/// A picture is drawn at the size it was made at or not at all: a half-drawn image protocol is
+/// worse than none, and the marker row beneath still says the picture is there.
+fn draw_previews(frame: &mut Frame, area: Rect, thumbs: &[&crate::preview::Thumb]) {
+    let mut x = area.x + 2;
+    for thumb in thumbs {
+        let (width, height) = (thumb.width(), thumb.height());
+        if height > area.height || x + width > area.x + area.width {
+            break;
+        }
+        thumb.draw(frame, Rect::new(x, area.y, width, height));
+        x += width + 2;
+    }
 }
 
 /// Draw the delegate view: the list of them, or the one somebody opened.
@@ -9036,6 +9066,85 @@ mod tests {
             output.contains("prompt 78"),
             "the recalled prompt is not shown: {output}"
         );
+    }
+
+    mod previews {
+        use super::*;
+        use ratatui_image::picker::Picker;
+
+        fn thumb() -> crate::preview::Thumb {
+            crate::preview::thumbnail_with(
+                &Picker::halfblocks(),
+                &crate::preview::tests::png(600, 300),
+                crate::preview::Fit::Thumbnail,
+            )
+            .expect("a PNG decodes")
+        }
+
+        /// Rows holding a half-block that the same screen without the thumbnail does not have.
+        ///
+        /// Compared with a drawing of the same line and no thumbnail, because the interface draws
+        /// half-blocks of its own (the banner), and only the difference is the picture.
+        fn picture_rows(session: &Session, without: &Session, width: u16, height: u16) -> Vec<u16> {
+            let draw_rows = |session: &Session| {
+                let mut terminal =
+                    Terminal::new(TestBackend::new(width, height)).expect("terminal");
+                terminal
+                    .draw(|frame| {
+                        draw(frame, session);
+                    })
+                    .expect("draw succeeds");
+                let buffer = terminal.backend().buffer().clone();
+                (0..height)
+                    .map(|y| {
+                        (0..width)
+                            .filter(|&x| buffer[(x, y)].symbol() == "\u{2580}")
+                            .count()
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let (with, base) = (draw_rows(session), draw_rows(without));
+            (0..height)
+                .filter(|&y| with[usize::from(y)] > base[usize::from(y)])
+                .collect()
+        }
+
+        #[test]
+        fn a_staged_picture_is_drawn_under_the_box_while_the_line_names_it() {
+            let mut session = typed("what is wrong here [Image #1]");
+            session.stage_preview("[Image #1]", thumb());
+            let plain = typed("what is wrong here [Image #1]");
+            let rows = picture_rows(&session, &plain, 80, 24);
+            assert!(!rows.is_empty(), "no thumbnail was drawn");
+            assert!(
+                rows.len() <= usize::from(crate::preview::ROWS),
+                "the thumbnail is taller than its allowance: {rows:?}"
+            );
+            // Under the input box and above the hint line.
+            assert!(rows.iter().all(|&row| row < 23), "{rows:?}");
+        }
+
+        #[test]
+        fn rubbing_out_the_marker_takes_the_thumbnail_with_it() {
+            let mut unmarked = typed("what is wrong here");
+            unmarked.stage_preview("[Image #1]", thumb());
+            let plain = typed("what is wrong here");
+            assert!(
+                picture_rows(&unmarked, &plain, 80, 24).is_empty(),
+                "a thumbnail outlived the marker that named it"
+            );
+        }
+
+        #[test]
+        fn a_short_screen_gives_up_the_thumbnail_before_the_transcript() {
+            let mut session = typed("[Image #1]");
+            session.stage_preview("[Image #1]", thumb());
+            let plain = typed("[Image #1]");
+            assert!(
+                picture_rows(&session, &plain, 60, 7).len() < usize::from(crate::preview::ROWS),
+                "the thumbnail was not shortened for a small screen"
+            );
+        }
     }
 
     mod todos {

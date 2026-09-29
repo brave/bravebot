@@ -1186,6 +1186,11 @@ vet-picture-open = open this copy to see what the model would be shown. It is de
 vet-picture-words =
     a model reads words in a picture that a person can miss: small, faint, or nearly the colour
     of what is behind them. Look for writing before letting it through.
+# Beneath the picture a terminal that draws real pictures shows on the prompt. It says what the
+# drawing is, and why the copy is still worth opening.
+vet-picture-drawn =
+    the picture as this terminal draws it. Small or faint writing may not show at this size: open
+    the copy above and zoom in.
 vet-pdf-hidden-text =
     a PDF can also hold text that no page draws, and the model is given that text too.
 vet-picture-yes = let it see this
