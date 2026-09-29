@@ -941,7 +941,8 @@ impl Bridge {
                         .programs
                         .iter()
                         .find(|command| {
-                            json!({"program": command.program, "args": command.args}) == *selected
+                            json!({"program": command.program, "startedAs": command.started_as, "args": command.args})
+                                == *selected
                         })
                         .cloned()
                         .ok_or_else(|| {
@@ -967,7 +968,7 @@ impl Bridge {
         }
         Ok(json!({
             "paths": rules_json(&state.trust),
-            "commands": state.programs.iter().map(|command| json!({"program": command.program, "args": command.args, "display": command.display()})).collect::<Vec<_>>(),
+            "commands": state.programs.iter().map(|command| json!({"program": command.program, "startedAs": command.started_as, "args": command.args, "display": command.display()})).collect::<Vec<_>>(),
             // Read now rather than when the session opened: the record belongs to every session
             // begun in the directory, and another may have kept or withdrawn the answer since.
             "remembered": remembered_json(&open.project),
@@ -1854,6 +1855,49 @@ mod coverage_tests {
 #[cfg(test)]
 mod permissions_tests {
     use super::*;
+
+    /// A command grant is picked by every path in its key, so revoking the one started through a
+    /// link leaves the one started by the file it leads to.
+    #[test]
+    fn revoking_a_command_picks_it_by_the_path_that_starts_it() {
+        let file =
+            bravebot_core::programs::Command::new("/usr/bin/python3", vec!["-V".into()], "/work");
+        let link = file.clone().started_as("/work/.venv/bin/python");
+        let mut state = State::fresh(TrustStore::new("/work"));
+        state.programs = bravebot_core::programs::TrustedPrograms::from_iter([file, link]);
+        let mut bridge = Bridge::new(Box::new(|_| {}));
+        let handle = bridge.mint(Open {
+            project: "/work".into(),
+            state: Arc::new(Mutex::new(state)),
+            answered_trust: true,
+            keeping: None,
+            running: None,
+            model: None,
+            watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
+            auto_vetting: false,
+        });
+        let revoke = Request::parse(
+            &json!({"id": 1, "method": "permissions.revoke", "params": {
+                "session": handle, "kind": "command", "command": {
+                    "program": "/usr/bin/python3",
+                    "startedAs": "/work/.venv/bin/python",
+                    "args": ["-V"],
+                }
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let after = bridge.dispatch(&revoke).unwrap();
+        assert_eq!(
+            after["commands"].as_array().map(Vec::len),
+            Some(1),
+            "{after}"
+        );
+        assert_eq!(
+            after["commands"][0]["startedAs"], "/usr/bin/python3",
+            "{after}"
+        );
+    }
 
     #[test]
     fn an_undecided_boundary_is_visible_but_cannot_be_revoked() {

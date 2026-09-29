@@ -823,7 +823,7 @@ fn draw_run(frame: &mut ratatui::Frame, request: &RunRequest, scroll: u16) -> u1
         // The binary, under the name. A name is not a program: $PATH decides what `grep` means,
         // and a person about to vouch for one should be looking at what they are vouching for.
         lines.push(Line::from(Span::styled(
-            format!("       {}", step.resolved.display()),
+            format!("       {}", step.binary()),
             Style::default().fg(theme::muted()),
         )));
     }
@@ -2998,6 +2998,7 @@ mod tests {
         let step = |program: &str, args: &[&str]| bravebot_core::command::Step {
             program: program.to_string(),
             resolved: std::path::PathBuf::from(format!("/usr/bin/{program}")),
+            started_as: std::path::PathBuf::from(format!("/usr/bin/{program}")),
             args: args.iter().map(|arg| (*arg).to_string()).collect(),
             environment: Vec::new(),
             routes: Vec::new(),
@@ -3170,6 +3171,30 @@ mod tests {
         assert!(drawn.contains("sed -n 1,10p"), "{drawn}");
         assert!(drawn.contains("/usr/bin/git"), "the binary is not shown");
         assert!(drawn.contains("/home/someone/project"), "{drawn}");
+    }
+
+    /// A name that reached its file through a link is drawn with the link beside the file, since
+    /// the link is what starts and an entry for the line is keyed on both.
+    #[test]
+    fn a_run_prompt_shows_the_link_a_program_is_started_by() {
+        let mut request = a_run(false);
+        if let bravebot_core::command::Steps::Pipeline(steps) = &mut request.plan.steps {
+            steps[0].started_as = "/home/someone/project/.venv/bin/git".into();
+        }
+        let drawn = rendered_run(&request);
+        let rows: Vec<String> = drawn
+            .chars()
+            .collect::<Vec<_>>()
+            .chunks(160)
+            .map(|row| row.iter().collect())
+            .collect();
+        assert!(
+            rows.iter().any(|row| {
+                row.trim_matches(|c: char| c.is_whitespace() || c == '│')
+                    == "/home/someone/project/.venv/bin/git -> /usr/bin/git"
+            }),
+            "the line under the name does not show the link: {drawn}"
+        );
     }
 
     /// Said every time, because it is true every time and it is the thing a reviewer is most
@@ -3354,6 +3379,7 @@ mod tests {
         let reading = bravebot_core::command::Step {
             program: "cat".to_string(),
             resolved: std::path::PathBuf::from("/bin/cat"),
+            started_as: std::path::PathBuf::from("/bin/cat"),
             args: Vec::new(),
             environment: Vec::new(),
             routes: vec![bravebot_core::command::Route::Stdin {
@@ -3434,6 +3460,7 @@ mod tests {
         let step = bravebot_core::command::Step {
             program: "git".to_string(),
             resolved: std::path::PathBuf::from("/usr/bin/git"),
+            started_as: std::path::PathBuf::from("/usr/bin/git"),
             args: vec!["log".to_string()],
             environment: vec![("LD_PRELOAD".to_string(), "./evil.so".to_string())],
             routes: Vec::new(),
@@ -3496,6 +3523,7 @@ mod tests {
         let step = bravebot_core::command::Step {
             program: "sh".to_string(),
             resolved: std::path::PathBuf::from("/bin/sh"),
+            started_as: std::path::PathBuf::from("/bin/sh"),
             args: vec!["check.sh".to_string()],
             environment: Vec::new(),
             routes: vec![bravebot_core::command::Route::Stdout {

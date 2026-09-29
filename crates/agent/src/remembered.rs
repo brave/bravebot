@@ -278,6 +278,12 @@ enum WrittenJoiner {
 struct WrittenStep {
     program: String,
     resolved: WrittenPath,
+    /// Absent where the step was started by `resolved` itself. An entry written before this field
+    /// existed has none, and the build that wrote it started every program by the file it resolved
+    /// to. Written only where the two paths differ, so that build still reads every entry it could
+    /// have written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    started_as: Option<WrittenPath>,
     args: Vec<String>,
     environment: Vec<(String, String)>,
     routes: Vec<WrittenRoute>,
@@ -380,6 +386,7 @@ impl From<&RememberedStep> for WrittenStep {
         let RememberedStep {
             program,
             resolved,
+            started_as,
             args,
             environment,
             routes,
@@ -387,6 +394,7 @@ impl From<&RememberedStep> for WrittenStep {
         Self {
             program: program.clone(),
             resolved: WrittenPath::of(resolved),
+            started_as: (started_as != resolved).then(|| WrittenPath::of(started_as)),
             args: args.clone(),
             environment: environment.clone(),
             routes: routes.iter().map(WrittenRoute::from).collect(),
@@ -454,9 +462,14 @@ impl WrittenShape {
 
 impl WrittenStep {
     fn into_step(self) -> Option<RememberedStep> {
+        let resolved = self.resolved.to_path()?;
         Some(RememberedStep {
             program: self.program,
-            resolved: self.resolved.to_path()?,
+            started_as: match self.started_as {
+                Some(written) => written.to_path()?,
+                None => resolved.clone(),
+            },
+            resolved,
             args: self.args,
             environment: self.environment,
             routes: self
@@ -528,6 +541,7 @@ mod tests {
             steps: Steps::Pipeline(vec![Step {
                 program: program.to_string(),
                 resolved: PathBuf::from(format!("/usr/bin/{program}")),
+                started_as: PathBuf::from(format!("/usr/local/bin/{program}")),
                 args: args.iter().map(|arg| (*arg).to_string()).collect(),
                 environment: vec![("CI".to_string(), "1".to_string())],
                 routes: vec![Route::StderrToStdout],
@@ -588,6 +602,7 @@ mod tests {
             without(&recorded, |step| step.routes.clear()),
             without(&recorded, |step| step.program = "gmake".to_string()),
             without(&recorded, |step| step.resolved = PathBuf::from("/tmp/make")),
+            without(&recorded, |step| step.started_as = step.resolved.clone()),
         ] {
             assert!(
                 !read.covers(&narrower),
@@ -748,6 +763,33 @@ mod tests {
         assert!(
             store.read().is_empty(),
             "an entry naming a rendering of a path still covered a line"
+        );
+    }
+
+    /// RUN-19: an entry with no start path covers the line started by its own file and no link to
+    /// that file.
+    #[test]
+    fn an_entry_with_no_start_path_covers_only_the_file_started_as_itself() {
+        let scratch = Scratch::new("remembered-no-start-path");
+        let store = scratch.store("/work");
+        let plain = without(&plan("make", &["check"]), |step| {
+            step.started_as = step.resolved.clone()
+        });
+        store.remember(&RememberedLine::of(&plain), "a-session");
+
+        let written = std::fs::read_to_string(store.path()).expect("the record");
+        assert!(
+            !written.contains("started_as"),
+            "a line started by its own file was written in a form an earlier build refuses"
+        );
+        let read = store.read();
+        assert!(
+            read.covers(&plain),
+            "the line that was answered for was not read back"
+        );
+        assert!(
+            !read.covers(&plan("make", &["check"])),
+            "an entry about the file covered a link to it"
         );
     }
 

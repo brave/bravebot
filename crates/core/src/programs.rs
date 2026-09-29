@@ -35,6 +35,10 @@
 //! recording the string would let a later change inherit an assertion made about a different
 //! binary. Resolution happens outside this crate, which performs no I/O; see `bravebot_agent::programs`.
 //!
+//! And the **path it is started by**, beside the file, because some programs read the path they
+//! were started by. An entry holding only the file would cover `venv/bin/python` and the
+//! interpreter it links to.
+//!
 //! The path itself and not a rendering of it, for the same reason: a path is bytes, and
 //! `to_string_lossy` maps every byte it cannot read to one replacement character, so two binaries
 //! whose names differ only in such bytes would share one entry while a run spawns whichever of them
@@ -67,12 +71,16 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-/// One command a user vouched for: a resolved program, the exact arguments it runs with, and the
-/// tree it was vouched for in.
+/// One command a user vouched for: a resolved program, the path it is started by, the exact
+/// arguments it runs with, and the tree it was vouched for in.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Command {
     /// The absolute path the program name resolved to.
     pub program: PathBuf,
+    /// The path it is started by, which is [`Command::program`] unless the line reached it
+    /// through a link. Part of the entry because it decides what runs
+    /// ([`crate::command::Step::started_as`]).
+    pub started_as: PathBuf,
     /// The arguments, in order. Empty is a real value and different from any non-empty list.
     pub args: Vec<String>,
     /// The directory the vouch was given in, absolute and canonical.
@@ -83,15 +91,26 @@ pub struct Command {
 }
 
 impl Command {
+    /// A command started by the resolved path itself.
     pub fn new(
         program: impl Into<PathBuf>,
         args: Vec<String>,
         directory: impl Into<PathBuf>,
     ) -> Self {
+        let program = program.into();
         Self {
-            program: program.into(),
+            started_as: program.clone(),
+            program,
             args,
             directory: directory.into(),
+        }
+    }
+
+    /// The same command, started by `path` instead.
+    pub fn started_as(self, path: impl Into<PathBuf>) -> Self {
+        Self {
+            started_as: path.into(),
+            ..self
         }
     }
 
@@ -104,12 +123,12 @@ impl Command {
     ///
     /// Lossy, as every rendering of a path is. This is the one thing here that is read rather than
     /// matched on, and a path with no text spelling still has to reach the screen.
+    ///
+    /// A command started through a link is drawn as `ls -l` draws one, the link and then the file,
+    /// so two entries for one binary under two spellings draw as two lines.
     pub fn display(&self) -> String {
-        crate::command::Stage::new(
-            self.program.to_string_lossy().to_string(),
-            self.args.clone(),
-        )
-        .display()
+        let program = crate::command::started_through(&self.started_as, &self.program);
+        crate::command::Stage::new(program, self.args.clone()).display()
     }
 
     /// Whether this is the same program under the same arguments, wherever either was run.
@@ -150,16 +169,26 @@ impl TrustedPrograms {
         self.commands.remove(command)
     }
 
-    /// Whether this exact program and argument list was vouched for, in this exact tree.
+    /// Whether this exact program, started by this exact path, under this exact argument list was
+    /// vouched for, in this exact tree.
     ///
-    /// All three, and `directory` by equality rather than by prefix: an entry given in `sub/`
+    /// All four, and `directory` by equality rather than by prefix: an entry given in `sub/`
     /// covers `sub/` and neither the root above it nor a `nested/` below it. A prefix test would
     /// leave the hole it closes one level down, since a relative argument names a different file
     /// in every tree it is read in.
-    pub fn contains(&self, program: &Path, args: &[String], directory: &Path) -> bool {
-        self.commands
-            .iter()
-            .any(|c| c.program == program && c.args == args && c.directory == directory)
+    pub fn contains(
+        &self,
+        program: &Path,
+        started_as: &Path,
+        args: &[String],
+        directory: &Path,
+    ) -> bool {
+        self.commands.iter().any(|c| {
+            c.program == program
+                && c.started_as == started_as
+                && c.args == args
+                && c.directory == directory
+        })
     }
 
     /// Every command vouched for, in a stable order.
@@ -266,14 +295,24 @@ mod tests {
     fn nothing_is_vouched_for_to_begin_with() {
         let programs = TrustedPrograms::new();
         assert!(programs.is_empty());
-        assert!(!programs.contains(Path::new("/usr/bin/git"), &["log".to_string()], root()));
+        assert!(!programs.contains(
+            Path::new("/usr/bin/git"),
+            Path::new("/usr/bin/git"),
+            &["log".to_string()],
+            root()
+        ));
     }
 
     #[test]
     fn a_command_that_was_vouched_for_is_recognised() {
         let mut programs = TrustedPrograms::new();
         programs.trust(git_log());
-        assert!(programs.contains(Path::new("/usr/bin/git"), &["log".to_string()], root()));
+        assert!(programs.contains(
+            Path::new("/usr/bin/git"),
+            Path::new("/usr/bin/git"),
+            &["log".to_string()],
+            root()
+        ));
     }
 
     /// The reason entries are not keyed by program alone. Vouching for `git log` says nothing
@@ -284,7 +323,12 @@ mod tests {
         let mut programs = TrustedPrograms::new();
         programs.trust(git_log());
         assert!(
-            !programs.contains(Path::new("/usr/bin/git"), &["push".to_string()], root()),
+            !programs.contains(
+                Path::new("/usr/bin/git"),
+                Path::new("/usr/bin/git"),
+                &["push".to_string()],
+                root()
+            ),
             "an assertion about one command covered a different one"
         );
     }
@@ -306,7 +350,12 @@ mod tests {
             vec!["-n".to_string(), "5".to_string(), "log".to_string()],
         ] {
             assert!(
-                !programs.contains(Path::new("/usr/bin/git"), &other, root()),
+                !programs.contains(
+                    Path::new("/usr/bin/git"),
+                    Path::new("/usr/bin/git"),
+                    &other,
+                    root()
+                ),
                 "{other:?} matched an entry it is not"
             );
         }
@@ -317,8 +366,13 @@ mod tests {
     fn no_arguments_is_its_own_entry() {
         let mut programs = TrustedPrograms::new();
         programs.trust(Command::new("/bin/pwd", Vec::new(), ROOT));
-        assert!(programs.contains(Path::new("/bin/pwd"), &[], root()));
-        assert!(!programs.contains(Path::new("/bin/pwd"), &["-L".to_string()], root()));
+        assert!(programs.contains(Path::new("/bin/pwd"), Path::new("/bin/pwd"), &[], root()));
+        assert!(!programs.contains(
+            Path::new("/bin/pwd"),
+            Path::new("/bin/pwd"),
+            &["-L".to_string()],
+            root()
+        ));
     }
 
     /// Matched on the resolved path, so an assertion does not follow a name onto a different
@@ -329,6 +383,7 @@ mod tests {
         programs.trust(Command::new("/usr/bin/grep", vec!["x".into()], ROOT));
         assert!(
             !programs.contains(
+                Path::new("/opt/homebrew/bin/grep"),
                 Path::new("/opt/homebrew/bin/grep"),
                 &["x".to_string()],
                 root()
@@ -352,11 +407,11 @@ mod tests {
         let mut programs = TrustedPrograms::new();
         programs.trust(Command::new(at(0xff), vec!["x".into()], ROOT));
         assert!(
-            programs.contains(&at(0xff), &["x".to_string()], root()),
+            programs.contains(&at(0xff), &at(0xff), &["x".to_string()], root()),
             "the binary that was vouched for was not recognised"
         );
         assert!(
-            !programs.contains(&at(0xfe), &["x".to_string()], root()),
+            !programs.contains(&at(0xfe), &at(0xfe), &["x".to_string()], root()),
             "an assertion about one binary covered another that renders the same way"
         );
     }
@@ -375,11 +430,21 @@ mod tests {
         let mut programs = TrustedPrograms::new();
         programs.trust(Command::new("/bin/sh", vec!["check.sh".into()], tree(0xff)));
         assert!(
-            programs.contains(Path::new("/bin/sh"), &["check.sh".to_string()], &tree(0xff)),
+            programs.contains(
+                Path::new("/bin/sh"),
+                Path::new("/bin/sh"),
+                &["check.sh".to_string()],
+                &tree(0xff)
+            ),
             "the tree the vouch was given in was not recognised"
         );
         assert!(
-            !programs.contains(Path::new("/bin/sh"), &["check.sh".to_string()], &tree(0xfe)),
+            !programs.contains(
+                Path::new("/bin/sh"),
+                Path::new("/bin/sh"),
+                &["check.sh".to_string()],
+                &tree(0xfe)
+            ),
             "a vouch given in one tree covered another that renders the same way"
         );
     }
@@ -397,7 +462,12 @@ mod tests {
         let mut programs = TrustedPrograms::new();
         programs.trust(git_log());
         assert!(programs.forget(&git_log()));
-        assert!(!programs.contains(Path::new("/usr/bin/git"), &["log".to_string()], root()));
+        assert!(!programs.contains(
+            Path::new("/usr/bin/git"),
+            Path::new("/usr/bin/git"),
+            &["log".to_string()],
+            root()
+        ));
         assert!(
             !programs.forget(&git_log()),
             "forgetting twice found nothing"
@@ -429,11 +499,17 @@ mod tests {
         ));
         assert!(programs.contains(
             Path::new("/bin/sh"),
+            Path::new("/bin/sh"),
             &["check.sh".to_string()],
             Path::new("/work/sub")
         ));
         assert!(
-            !programs.contains(Path::new("/bin/sh"), &["check.sh".to_string()], root()),
+            !programs.contains(
+                Path::new("/bin/sh"),
+                Path::new("/bin/sh"),
+                &["check.sh".to_string()],
+                root()
+            ),
             "an answer given in a subdirectory covered a different file at the root"
         );
     }
@@ -451,6 +527,7 @@ mod tests {
         ));
         assert!(
             !programs.contains(
+                Path::new("/bin/sh"),
                 Path::new("/bin/sh"),
                 &["check.sh".to_string()],
                 Path::new("/work/sub/nested")
@@ -472,6 +549,43 @@ mod tests {
             "/work/sub",
         ));
         assert_eq!(programs.len(), 2);
+    }
+
+    /// RUN-8: the path a program is started by is in the key, so an answer about a venv's `python`
+    /// does not cover the interpreter it links to.
+    #[test]
+    fn two_spellings_of_one_binary_are_two_entries() {
+        let interpreter = Path::new("/usr/local/bin/python3.12");
+        let link = Path::new("/work/venv/bin/python");
+        let version = ["-V".to_string()];
+        let mut programs = TrustedPrograms::new();
+        programs.trust(Command::new(interpreter, version.to_vec(), ROOT).started_as(link));
+        assert!(programs.contains(interpreter, link, &version, root()));
+        assert!(
+            !programs.contains(interpreter, interpreter, &version, root()),
+            "an answer about the venv's python covered the interpreter started as itself"
+        );
+        programs.trust(Command::new(interpreter, version.to_vec(), ROOT));
+        assert_eq!(programs.len(), 2);
+    }
+
+    /// Drawn as `ls -l` draws a link, so the two entries above are two lines on `/status`.
+    #[test]
+    fn a_command_started_through_a_link_reads_back_as_the_link_and_the_file() {
+        let venv = Command::new("/usr/local/bin/python3.12", vec!["-V".into()], ROOT)
+            .started_as("/work/venv/bin/python");
+        assert_eq!(
+            venv.display(),
+            "/work/venv/bin/python -> /usr/local/bin/python3.12 -V"
+        );
+    }
+
+    /// A file given the arrow and the link's target as arguments draws apart from the link.
+    #[test]
+    fn arguments_that_spell_a_link_draw_apart_from_the_link() {
+        let link = Command::new("/usr/bin/b", Vec::new(), ROOT).started_as("/work/a");
+        let spelled = Command::new("/work/a", vec!["->".into(), "/usr/bin/b".into()], ROOT);
+        assert_ne!(link.display(), spelled.display());
     }
 
     /// Written down and read back the same way, so a resumed session vouches for what the record
@@ -597,6 +711,7 @@ mod varying {
         let programs = TrustedPrograms::new();
         assert!(programs.is_empty());
         assert!(!programs.contains(
+            Path::new("/usr/bin/git"),
             Path::new("/usr/bin/git"),
             &["commit".to_string()],
             Path::new("/work")

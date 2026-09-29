@@ -19,10 +19,12 @@
 //!
 //! # What runs is what was resolved
 //!
-//! Each stage is spawned by the resolved path its caller worked out, not by the name in the
-//! [`Pipeline`]. The name was resolved once, before the person was asked; spawning by name here
-//! would resolve it a second time, leaving a window in which `$PATH` changed and something other
-//! than what they approved ran. See [`crate::programs`].
+//! Each stage is spawned by the absolute path its name was found by, not by the name in the
+//! [`Pipeline`]. The name was looked up once, before the person was asked; spawning by name here
+//! would look it up a second time, leaving a window in which `$PATH` changed and something other
+//! than what they approved ran. Before a pipeline starts, each path is followed again, and the
+//! pipeline is refused if a step no longer reaches the file that was approved. See
+//! [`crate::programs`].
 //!
 //! # Not confined
 //!
@@ -357,6 +359,7 @@ pub fn run_within(
         .map(|(stage, path)| Step {
             program: stage.program.clone(),
             resolved: path.clone(),
+            started_as: path.clone(),
             args: stage.args.clone(),
             environment: Vec::new(),
             routes: Vec::new(),
@@ -533,6 +536,7 @@ impl<'a> Running<'a> {
         if steps.is_empty() {
             return Err(ExecError::Io("no stages to run".to_string()));
         }
+        still_approved(steps)?;
 
         let mut children = ForegroundChildren(Vec::with_capacity(steps.len()));
         // Nothing is typed at a program bravebot started, so a step with nothing upstream reads an
@@ -572,13 +576,15 @@ impl<'a> Running<'a> {
             let Step {
                 program: _,
                 resolved: _,
+                started_as,
                 args: _,
                 environment: _,
                 routes: _,
             } = step;
-            // The resolved path, never the name. The name was resolved once, before the person was
-            // asked, and looking it up again here would leave a window in which `$PATH` changed.
-            let mut command = Command::new(&step.resolved);
+            // Started by the path the name was found by, which some programs read
+            // ([`Step::started_as`]). A second lookup here would let a `$PATH` changed since the
+            // question decide what runs.
+            let mut command = Command::new(started_as);
             // The vector, never a string. Nothing here builds a command line, so nothing has to
             // unbuild one.
             command.args(&step.args).current_dir(self.directory);
@@ -954,6 +960,36 @@ fn stop(children: &mut [Child]) {
     }
 }
 
+/// Refuse the pipeline unless every step's start path still leads to the file that was approved.
+///
+/// A link can be repointed after the person approved the file it led to, so each path is resolved
+/// again here. Every step is checked before any starts, so a refusal leaves nothing running and no
+/// file opened. RUN-2 accepts the gap between this check and the last step's spawn, and the steps
+/// before it are already running during part of that gap.
+///
+/// The detail names no path, because whoever repointed the link chose the path it now leads to.
+/// The message already names the program the line used.
+fn still_approved(steps: &[Step]) -> Result<(), ExecError> {
+    for step in steps {
+        // Reads the two paths that decide what runs. Nothing here is a key.
+        let Step {
+            program,
+            resolved,
+            started_as,
+            args: _,
+            environment: _,
+            routes: _,
+        } = step;
+        if started_as.canonicalize().ok().as_ref() != Some(resolved) {
+            return Err(ExecError::NotStarted {
+                program: program.clone(),
+                detail: "it no longer leads to the program that was approved".to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// A pipeline left running, and what it has printed so far.
 ///
 /// For the program that is doing exactly what was asked and will never exit: a server told to
@@ -1193,6 +1229,7 @@ pub fn start(
         .map(|(stage, path)| Step {
             program: stage.program.clone(),
             resolved: path.clone(),
+            started_as: path.clone(),
             args: stage.args.clone(),
             environment: Vec::new(),
             routes: Vec::new(),
@@ -1215,6 +1252,7 @@ pub fn start_steps(
     if steps.is_empty() {
         return Err(ExecError::Io("no stages to run".to_string()));
     }
+    still_approved(steps)?;
 
     let mut children: Vec<Child> = Vec::with_capacity(steps.len());
     let mut upstream = Stdio::null();
@@ -1227,11 +1265,12 @@ pub fn start_steps(
         let Step {
             program: _,
             resolved: _,
+            started_as,
             args: _,
             environment: _,
             routes: _,
         } = step;
-        let mut command = Command::new(&step.resolved);
+        let mut command = Command::new(started_as);
         command.args(&step.args).current_dir(directory);
         // In front of the step's own assignments, as in the foreground.
         if let Some(directory) = scratch {

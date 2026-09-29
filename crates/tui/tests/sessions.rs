@@ -446,6 +446,7 @@ fn sessions_are_written_read_back_and_kept_per_directory() {
     let vouched = record.trusted_programs(std::path::Path::new(&record.directory));
     assert!(vouched.contains(
         Path::new("/usr/bin/git"),
+        Path::new("/usr/bin/git"),
         &["log".to_string()],
         std::path::Path::new("/work")
     ));
@@ -453,11 +454,13 @@ fn sessions_are_written_read_back_and_kept_per_directory() {
     // still an entry about `sub/` and not one the root inherited.
     assert!(vouched.contains(
         Path::new("/usr/bin/make"),
+        Path::new("/usr/bin/make"),
         &["check".to_string()],
         std::path::Path::new("/work/sub")
     ));
     assert!(
         !vouched.contains(
+            Path::new("/usr/bin/make"),
             Path::new("/usr/bin/make"),
             &["check".to_string()],
             std::path::Path::new("/work")
@@ -466,6 +469,7 @@ fn sessions_are_written_read_back_and_kept_per_directory() {
     );
     assert!(
         !vouched.contains(
+            Path::new("/usr/bin/git"),
             Path::new("/usr/bin/git"),
             &["push".to_string()],
             std::path::Path::new("/work")

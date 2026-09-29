@@ -70,8 +70,9 @@ syntax. The move here is to keep the ban on the interpreter and drop the ban on 
 > same argv stages `run` executes today, and refuses to compile when it cannot say exactly what
 > would happen.
 
-Nothing is ever passed to `sh -c`. The compiled plan is what runs, spawned by resolved path with
-an argument vector, through the same process plumbing as today. So:
+Nothing is ever passed to `sh -c`. The compiled plan is what runs. Each stage is spawned with an
+argument vector by the absolute path its name was found by, after a check that the path still leads
+to the binary it resolved to, through the same process plumbing as today. So:
 
 - **The routing field exists again.** It is the compiled plan: a list of stages with resolved
   binaries and literal argv, plus every file the plan would write. That is a thing a person can
