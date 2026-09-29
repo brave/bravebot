@@ -273,9 +273,10 @@ fn a_list_in_pages_is_offered_whole() {
     let _ = std::fs::remove_file(&script);
 }
 
-/// A tool result is untrusted content, whatever the server says it is.
+/// A tool result is untrusted content, whatever the server says it is, and private, because what
+/// the server read to produce it may be the person's own.
 #[test]
-fn a_tool_result_is_labelled_untrusted() {
+fn a_tool_result_is_labelled_untrusted_and_private() {
     let _spawning = one_at_a_time();
     let Some(sandbox) = sandbox_or_skip() else {
         return;
@@ -307,7 +308,7 @@ fn a_tool_result_is_labelled_untrusted() {
         .call_tool(&mut policy, "echo", serde_json::json!({"text": "hi"}))
         .expect("tool call succeeds");
 
-    assert_eq!(result.label(), Label::untrusted_public());
+    assert_eq!(result.label(), Label::untrusted_private());
     assert!(policy.finish());
 
     let _ = std::fs::remove_file(&script);
@@ -615,7 +616,7 @@ fn a_tool_level_error_is_reported_as_a_failure() {
         panic!("got: {error}");
     };
     assert_eq!(tool, "echo");
-    assert_eq!(detail.label(), Label::untrusted_public());
+    assert_eq!(detail.label(), Label::untrusted_private());
 
     let proof = policy.authorise_display_release("test inspects the failure");
     assert_eq!(detail.declassify(&proof), "no such record");

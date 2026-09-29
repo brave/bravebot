@@ -2,9 +2,10 @@
 """Check that the implementation matches docs/specs.
 
 Two passes. This script is the first: everything that can be decided without a model,
-which is most of the bookkeeping a spec carries. Clause numbering, the tests a clause
-names, the paths it governs, the symbols it guards, and the table in the specs README
-are all facts, and a fact does not need a review.
+which is most of the bookkeeping a spec carries. Clause numbering, whether an id still
+names the clause it named on main, the tests a clause names, the paths it governs, the
+symbols it guards, and the table in the specs README are all facts, and a fact does not
+need a review.
 
     check-spec.py --mechanical-only          the whole first pass, human readable
     check-spec.py --mechanical-only labels   one spec, by name or by id
@@ -31,7 +32,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from specs import EM_DASH, README, SPEC_DIR, TestIndex, crate_directories, load_specs  # noqa: E402
+from specs import (  # noqa: E402
+    EM_DASH,
+    README,
+    SPEC_DIR,
+    TestIndex,
+    clause_headings,
+    crate_directories,
+    load_specs,
+)
 
 ERROR = "error"
 WARNING = "warning"
@@ -51,6 +60,7 @@ FRONT_MATTER_KEYS = {
 }
 
 UNVERIFIED_FILE = Path("agents/unverified-clauses.txt")
+RENUMBERED_FILE = Path("agents/renumbered-clauses.txt")
 
 UNVERIFIED_HEADER = """\
 # Spec clauses whose verified-by value is none.
@@ -109,8 +119,13 @@ def check_front_matter(spec):
 
 
 def check_clause_numbering(spec):
+    """One file's ids: the prefix they carry, a duplicate, and a gap.
+
+    The ids are checked as a set, not in file order. A clause added mid-spec takes the next free
+    id where it stands, so nothing after it has to be renumbered. Whether an id still names the
+    clause it named is `check_clause_history`'s question: a file renumbered to close a gap reads
+    `1..N` and passes here."""
     seen = {}
-    expected = 1
     for clause in spec.clauses:
         if clause.prefix != spec.id:
             yield finding(
@@ -131,17 +146,6 @@ def check_clause_numbering(spec):
                 evidence=f"{spec.rel}:{clause.line} and {spec.rel}:{seen[clause.number]}",
             )
         seen[clause.number] = clause.line
-        if clause.number != expected:
-            yield finding(
-                spec.rel,
-                ERROR,
-                "clause-numbering",
-                f"`{clause.id}` follows {expected - 1}: ids are allocated in order and never renumbered",
-                clause=clause.id,
-                evidence=f"{spec.rel}:{clause.line}",
-                fix="a withdrawn clause stays in place, marked withdrawn, rather than leaving a gap",
-            )
-        expected = max(expected, clause.number) + 1
         if clause.withdrawn and "replaced" not in clause.text.lower():
             yield finding(
                 spec.rel,
@@ -151,6 +155,204 @@ def check_clause_numbering(spec):
                 clause=clause.id,
                 evidence=f"{spec.rel}:{clause.line}",
             )
+    for missing in sorted(set(range(1, max(seen, default=0) + 1)) - set(seen)):
+        after = min(number for number in seen if number > missing)
+        yield finding(
+            spec.rel,
+            ERROR,
+            "clause-numbering",
+            f"`{spec.id}-{missing}` is missing: ids are allocated in order, with no gap",
+            clause=f"{spec.id}-{missing}",
+            evidence=f"{spec.rel}:{seen[after]}",
+            fix="a withdrawn clause stays in place, marked withdrawn, rather than leaving a gap",
+        )
+
+
+_TOPLEVEL = {}
+_BASE = {}
+
+
+def git_output(arguments, directory):
+    """What one read-only git command printed in `directory`, or `None` where git did not answer.
+
+    `None` covers every way that happens and tells the caller nothing further: no git on the path,
+    a directory in no checkout, a revision or a path that is not in one. A check comparing against
+    a record has to be able to say there is no record, because guessing at an empty one reads a
+    fresh clone as a tree where every clause was just invented."""
+    try:
+        done = subprocess.run(
+            ["git", "-C", str(directory), *arguments],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def checkout_of(path):
+    """The checkout holding `path`, as `(root, path within it)`, or `(None, None)`.
+
+    Asked of the file rather than of the process, because the answer has to be the tree the spec
+    being checked is in. One repository with several worktrees checked out at once is the case
+    that decides it: they share a `.git`, their specs differ, and a run handed one worktree's
+    files must compare them against that worktree's history and not whichever one the shell
+    happened to be sitting in."""
+    absolute = Path(path).resolve()
+    directory = str(absolute.parent)
+    if directory not in _TOPLEVEL:
+        answer = git_output(["rev-parse", "--show-toplevel"], directory)
+        _TOPLEVEL[directory] = Path(answer.strip()).resolve() if answer and answer.strip() else None
+    root = _TOPLEVEL[directory]
+    if root is None:
+        return None, None
+    try:
+        return root, absolute.relative_to(root).as_posix()
+    except ValueError:
+        return None, None
+
+
+def history_base(root):
+    """The revision to compare `root`'s specs against: main, before this change.
+
+    `HEAD` would miss a committed renumber, because the file and `HEAD` then match. In CI's
+    checkout of a pull request, main is the merge commit's first parent. Elsewhere it is the merge
+    base with upstream/main, or origin/main without one, as in affected-checks.py. `HEAD` is the
+    fallback where neither is available."""
+    if root not in _BASE:
+        base = None
+        if os.environ.get("GITHUB_EVENT_NAME") == "pull_request":
+            parents = (git_output(["rev-list", "--parents", "-n", "1", "HEAD"], root) or "").split()
+            if len(parents) == 3:
+                base = parents[1]
+        for main in ("upstream/main", "origin/main"):
+            if base is None:
+                answer = (git_output(["merge-base", "HEAD", main], root) or "").strip()
+                base = answer or None
+        _BASE[root] = base or "HEAD"
+    return _BASE[root]
+
+
+def committed_headings(spec):
+    """What each clause id in this file named at `history_base`, or `None` where it had no file.
+
+    `None` rather than an empty mapping, because the two say different things. A spec added on
+    this branch has no committed form at all, and reading that as a file that held no clauses
+    would make every id in it look like one taken from something."""
+    root, inside = checkout_of(spec.path)
+    if root is None:
+        return None
+    text = git_output(["show", f"{history_base(root)}:{inside}"], root)
+    return None if text is None else clause_headings(text.split("\n"))
+
+
+def declared_renumbers(path=RENUMBERED_FILE):
+    """The renumbers somebody wrote down, as `(spec path, clause id, heading)`, and a finding for
+    every line that is not one of those.
+
+    The grammar is `agents/unverified-clauses.txt`'s, `path:CLAUSE-ID: heading`, so a reader of
+    one file reads the other. Hand written rather than generated: nothing in a tree can work out
+    that a renumber was meant, which is the whole of why it has to be said. An entry names the id
+    the clause has now, not the one it had, so it is a statement about a clause that is there and
+    stays checkable against the tree for as long as it is kept."""
+    declared = set()
+    problems = []
+    if not path.exists():
+        return declared, problems
+    for number, line in enumerate(path.read_text(encoding="utf-8").split("\n"), start=1):
+        if not line.strip() or line.startswith("#"):
+            continue
+        where, separator, heading = line.partition(": ")
+        spec_path, colon, clause_id = where.rpartition(":")
+        if not (separator and heading.strip() and colon and spec_path and "-" in clause_id):
+            problems.append(
+                finding(
+                    str(path),
+                    ERROR,
+                    "renumber-declaration-malformed",
+                    f"line {number} is not `path:CLAUSE-ID: heading`",
+                    evidence=f"{path}:{number}",
+                    fix="one line per clause that moved, naming the id it carries now",
+                )
+            )
+            continue
+        declared.add((spec_path, clause_id, heading.strip()))
+    return declared, problems
+
+
+def check_clause_history(spec, declared):
+    """A clause id still names the clause it named on main.
+
+    The counter above sees a gap and a duplicate, and cannot see the thing it was named for. A
+    file renumbered to close a gap reads `1..N`, so nothing about the file alone is wrong, while
+    every citation of a moved id still resolves and now points at another clause: a cross-spec
+    link, a `verified-by` line and an issue title all keep working and all lie. Two commits in
+    this repository's history did exactly that and passed.
+
+    What fires is a heading that is still in the file under a different id, which is a clause that
+    changed its name. A heading gone from the file is a rewording or a removal, and rewording one
+    is expected rather than suspect: the specs README says the anchor exists because somebody
+    improves the wording. Faulting every changed heading would have failed 73 rewordings in this
+    history against 4 moved clauses, and a check that fires on the ordinary edit is one somebody
+    deletes rather than satisfies.
+
+    Within one file. A clause moved to another spec takes that spec's prefix, so it is a new
+    clause with the old one withdrawn behind it, and the two files share no id to compare."""
+    committed = committed_headings(spec)
+    if committed is None:
+        return
+    lives_at = {}
+    at_line = {}
+    for clause in spec.clauses:
+        lives_at.setdefault(clause.title.strip(), set()).add(clause.id)
+        at_line[clause.id] = clause.line
+    for was, heading in committed.items():
+        now = lives_at.get(heading)
+        # Absent is a rewording or a removal. Still under its own id covers the file that holds
+        # one heading twice, where the id asked about is among the ids carrying it.
+        if not now or was in now:
+            continue
+        if any((spec.rel, one, heading) in declared for one in now):
+            continue
+        moved = ", ".join(f"`{one}`" for one in sorted(now))
+        yield finding(
+            spec.rel,
+            ERROR,
+            "clause-renumbered",
+            f"the clause `{was}` named is numbered {moved} now: an id is never renumbered",
+            clause=was,
+            evidence=f"{spec.rel}:{min(at_line[one] for one in now)}",
+            fix=f"leave the ids where they are, or declare the renumber in {RENUMBERED_FILE}",
+        )
+
+
+def check_renumbered_file(specs, declared):
+    """Every declared renumber is one this tree still has.
+
+    A declaration says that a heading is deliberately under an id, whatever id it was under
+    before, so an entry naming an id the tree has not got, or a heading that id does not carry,
+    has stopped being true of anything and is reported. Pinning the heading is what keeps the
+    entry to the one renumber it was written for: the same id moved again carries different words
+    and fires here.
+
+    Nothing prunes the file. An entry goes on saying nothing once the renumber is committed, and
+    that is the point of it: somebody following a citation of the old id needs to be told where
+    the clause went, and a declaration that expired the moment it landed would be one nobody
+    could keep."""
+    live = {
+        (spec.rel, clause.id, clause.title.strip()) for spec in specs for clause in spec.clauses
+    }
+    for spec_path, clause_id, heading in sorted(declared - live):
+        yield finding(
+            str(RENUMBERED_FILE),
+            ERROR,
+            "renumber-declaration-stale",
+            f"`{clause_id}` in `{spec_path}` is declared renumbered and is not a clause saying that",
+            clause=clause_id,
+            evidence=f"{spec_path}:{clause_id}: {heading}",
+            fix="a declaration names a clause the tree has: correct the line, or take it out",
+        )
 
 
 def check_coverage(spec, index, crates):
@@ -1136,6 +1338,8 @@ def main():
         finding(str(SPEC_DIR), ERROR, "unknown-spec", f"no spec named `{name}`")
         for name in unknown
     ]
+    declared, malformed = declared_renumbers()
+    findings.extend(malformed)
 
     sources = load_sources()
     crates = crate_directories()
@@ -1145,6 +1349,7 @@ def main():
     for spec in chosen:
         findings.extend(check_front_matter(spec))
         findings.extend(check_clause_numbering(spec))
+        findings.extend(check_clause_history(spec, declared))
         findings.extend(check_coverage(spec, index, crates))
         findings.extend(check_anchors(spec))
         findings.extend(check_governs(spec))
@@ -1152,12 +1357,13 @@ def main():
         findings.extend(check_isolation(spec, prefixes))
         findings.extend(check_prose(spec))
         findings.extend(check_documentation(spec))
-    # Both of these are about the whole tree rather than one spec, so a run given a filter has
-    # not read enough to judge either: the table would look short of rows, and the list short
-    # of clauses.
+    # All three of these are about the whole tree rather than one spec, so a run given a filter
+    # has not read enough to judge any: the table would look short of rows, the list short of
+    # clauses, and a declaration naming a spec the filter left out would read as stale.
     if len(chosen) == len(specs):
         findings.extend(check_readme(specs))
         findings.extend(check_unverified_file(specs, index, crates))
+        findings.extend(check_renumbered_file(specs, declared))
 
     failed = any(f["severity"] == ERROR for f in findings) or (
         args.strict and bool(findings)

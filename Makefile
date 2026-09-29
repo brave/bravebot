@@ -167,6 +167,10 @@ check-toolchain:
 # what a clause says needs a reading of the governed source: run the check-spec skill for
 # that half.
 #
+# Numbering is read against main as well as within the file, because a file renumbered
+# to close a gap still reads 1..N and leaves every citation of a moved id pointing at another
+# clause. A renumber meant on purpose is declared in agents/renumbered-clauses.txt, by hand.
+#
 # The screenshot renderer rides along because it is the other half's tool: the skill pastes what
 # it prints into issue bodies, it is standard library Python like everything else here, and a
 # renderer that is quietly wrong sends a plausible and untrue screen to whoever has to fix the bug.
@@ -353,8 +357,10 @@ check-affected-containers:
 	@targets="$$(python3 contrib/affected-checks.py --containers $(if $(BASE),--base '$(BASE)'))" && \
 		{ [ -z "$$targets" ] || $(MAKE) --no-print-directory -k $$targets; }
 
-.PHONY: check-scripts check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest
-check-scripts: check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest
+.PHONY: check-scripts check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
+	check-peer-advisories-selftest
+check-scripts: check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
+	check-peer-advisories-selftest
 
 check-all-selftest:
 	python3 contrib/check-all-selftest.py
@@ -367,6 +373,9 @@ check-reviewdog-selftest:
 
 check-rebase-selftest:
 	python3 agents/skills/rebase/selftest.py
+
+check-peer-advisories-selftest:
+	python3 agents/skills/peer-advisories/selftest.py
 
 # CI and local runs share the same desktop checks. Linux uses a virtual display;
 # macOS uses the logged-in desktop session.

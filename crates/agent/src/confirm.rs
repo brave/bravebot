@@ -219,6 +219,7 @@ impl RunRequest {
             .map(|(stage, path)| bravebot_core::command::Step {
                 program: stage.program.clone(),
                 resolved: std::path::PathBuf::from(path),
+                started_as: std::path::PathBuf::from(path),
                 args: stage.args.clone(),
                 environment: Vec::new(),
                 routes: Vec::new(),

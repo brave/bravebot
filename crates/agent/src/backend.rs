@@ -444,6 +444,59 @@ pub fn serving(config: &Config, egress: &Egress, model: &str) -> Serving {
     }
 }
 
+/// What a recorded `/model` pick puts in force.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Pick {
+    /// Nothing was picked, or the settings in force outrank the pick.
+    Absent,
+    /// The model the pick names.
+    InForce(String),
+    /// The pick as it was recorded, which nothing configured serves.
+    SetAside(String),
+}
+
+impl Pick {
+    /// The model the pick puts in force, if it puts one.
+    pub fn into_model(self) -> Option<String> {
+        match self {
+            Pick::InForce(model) => Some(model),
+            Pick::Absent | Pick::SetAside(_) => None,
+        }
+    }
+}
+
+/// What `recorded`, a pick the settings in force do not outrank, puts in force (BACKEND-47).
+///
+/// The record is read as a tier word is, and set aside where [`serving`] refuses it and serves the
+/// configured default.
+pub fn pick(config: &Config, recorded: Option<String>) -> Pick {
+    let Some(recorded) = recorded else {
+        return Pick::Absent;
+    };
+    let model = config.model_named(&recorded);
+    let egress = Egress::new();
+    match sets_aside(serving(config, &egress, &model), || {
+        serving(config, &egress, &config.default_model)
+    }) {
+        true => Pick::SetAside(recorded),
+        false => Pick::InForce(model),
+    }
+}
+
+/// Whether a pick [`serving`] answered `pick` for gives way to a default it answers `default` for.
+///
+/// Not where a stored Leo Premium batch was refused: that pick is served once the batch is imported
+/// again, and the refusal is what says so.
+fn sets_aside(pick: Serving, default: impl FnOnce() -> Serving) -> bool {
+    matches!(
+        pick,
+        Serving::NothingConfigured {
+            subscription: None,
+            ..
+        }
+    ) && default() == Serving::Configured
+}
+
 impl<'a> Backend<'a> {
     /// The backend that serves `model`.
     ///
@@ -947,6 +1000,54 @@ mod tests {
                 subscription: None,
                 a_service_is_configured: true,
             }
+        );
+    }
+
+    /// BACKEND-47: a pick is set aside only where it would be refused and the default would be
+    /// served. A pick that is served, or a default refused as well, leaves the pick in force.
+    #[test]
+    fn a_pick_is_set_aside_only_for_a_default_that_is_served() {
+        let gone = || Some("an-arn-nothing-offers".to_string());
+        let mut served_default = braves_endpoint_with_a_gateway();
+        served_default.default_model = "z-ai/glm-4.6".to_string();
+
+        assert_eq!(
+            pick(&served_default, gone()),
+            Pick::SetAside("an-arn-nothing-offers".to_string())
+        );
+        assert_eq!(
+            pick(&served_default, Some("z-ai/glm-4.6".to_string())),
+            Pick::InForce("z-ai/glm-4.6".to_string())
+        );
+        assert_eq!(
+            pick(&braves_endpoint_with_a_gateway(), gone()),
+            Pick::InForce("an-arn-nothing-offers".to_string()),
+            "set aside for a default that is refused too"
+        );
+        assert_eq!(pick(&served_default, None), Pick::Absent);
+    }
+
+    /// BACKEND-47: a pick refused because a stored Leo Premium batch could not be used stays in
+    /// force, so the start is refused with what was wrong with the batch.
+    #[test]
+    fn a_pick_refused_for_a_stored_batch_is_not_set_aside() {
+        let refused = |subscription: Option<&str>| Serving::NothingConfigured {
+            subscription: subscription.map(str::to_string),
+            a_service_is_configured: true,
+        };
+        assert!(sets_aside(refused(None), || Serving::Configured));
+        assert!(!sets_aside(
+            refused(Some("the store was written by another channel")),
+            || Serving::Configured
+        ));
+    }
+
+    /// BACKEND-47: a recorded tier word names the model that tier's variable names.
+    #[test]
+    fn a_recorded_tier_word_names_the_model_its_variable_names() {
+        assert_eq!(
+            pick(&both_backends(), Some("opus".to_string())),
+            Pick::InForce("opus-arn".to_string())
         );
     }
 

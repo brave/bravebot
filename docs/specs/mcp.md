@@ -26,15 +26,24 @@ that needs its parts labelled separately stays native rather than moving behind 
 ## Clauses
 
 <a id="MCP-1"></a>
-### MCP-1: what a server returns is untrusted
+### MCP-1: what a server returns is untrusted and private
 
 A tool result is content from outside, so it is labelled untrusted and quarantined like anything
-else nobody vouched for. Nothing a server says about itself changes that, a result it marks as its
-own failure included.
+else nobody vouched for. It is labelled private too, so a line fed one is put to the person as a
+line fed a file is ([PERM-9](permissions.md#PERM-9)). Nothing a server says about itself changes
+either label, a result it marks as its own failure included. The words a server describes its tools
+with stay public ([SERVERS-8](mcp-servers.md#SERVERS-8)).
 
-`verified-by: bravebot_mcp::stdio::a_tool_result_is_labelled_untrusted`
+**Why private.** A server may hold the person's own data, a mailbox or a calendar, and this client
+cannot tell what a given call read. Labelling a search server's answer private costs one question
+when it is fed to a program. Labelling a mailbox's answer public would hand the person's mail to
+that program unasked.
+
+`verified-by: bravebot_mcp::stdio::a_tool_result_is_labelled_untrusted_and_private`
+`verified-by: bravebot_mcp::http::a_tool_result_is_labelled_untrusted_and_private`
 `verified-by: bravebot_mcp::stdio::a_tool_level_error_is_reported_as_a_failure`
 `verified-by: bravebot_mcp::http::a_tool_level_error_is_reported_as_a_failure`
+`verified-by: bravebot_agent::mcp::a_servers_answer_fed_to_a_vouched_line_is_still_put_to_a_person`
 
 <a id="MCP-2"></a>
 ### MCP-2: a call needs the capability, like any other effect

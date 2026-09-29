@@ -1474,6 +1474,14 @@ pub struct Session {
     /// with no mode to leave (ADDRESS-10). Private, because only [`Session::address`] may set it:
     /// that is what keeps a loop's tick, a goal or a watch from ever carrying one (ADDRESS-3).
     addressing: Option<Addressed>,
+    /// The definition `--agent` named, which every turn this session starts addresses unless a
+    /// `/agent` line addressed another for one turn.
+    ///
+    /// Separate from `addressing` because that one is taken by the turn it was set for, and this
+    /// one is never taken. Set once, before the first turn, by the caller holding the command line
+    /// (ADDRESS-3). A turn nobody typed carries it because the person started the session under
+    /// it, and nothing a turn produced can set it.
+    standing: Option<Addressed>,
     /// The standing watches this session holds, where a turn armed any.
     ///
     /// Private for the reason the loop and the goal are: a watch is looked at, fires, and has the
@@ -1713,6 +1721,7 @@ impl Session {
             watches: watch::Watches::new(),
             goal: None,
             addressing: None,
+            standing: None,
             rewind_points: Vec::new(),
             turn_start: TurnStart::default(),
             pending: crate::remote_confirm::Interjections::new(),
@@ -1818,11 +1827,12 @@ impl Session {
     /// Record the model the user picked, keeping it for later sessions.
     ///
     /// Written through to disk only for a session that persists, which is the same rule history
-    /// follows and for the same reason: a test must not rewrite the developer's own choice.
-    pub fn choose_model(&mut self, model: impl Into<String>) {
+    /// follows and for the same reason: a test must not rewrite the developer's own choice. A tier's
+    /// model is written as the tier word (BACKEND-47).
+    pub fn choose_model(&mut self, model: impl Into<String>, config: &bravebot_config::Config) {
         let model = model.into();
         if self.persist {
-            bravebot_session::store::save_model(&model);
+            bravebot_session::store::save_model(config.name_to_record(&model));
         }
         self.model = Some(model);
     }
@@ -3102,13 +3112,25 @@ impl Session {
     /// the model the configuration already resolved to (BACKEND-11). The rule is in the store for
     /// the reason [`Session::adopt_effort`]'s is.
     ///
-    /// The pick is read only for a session that persists, for the reason given there.
-    pub fn adopt_model(&mut self, settings: &bravebot_config::Settings) {
+    /// The pick is read only for a session that persists, for the reason given there. A pick
+    /// [`bravebot_agent::backend::pick`] sets aside is named in the transcript (BACKEND-47).
+    pub fn adopt_model(
+        &mut self,
+        settings: &bravebot_config::Settings,
+        config: &bravebot_config::Config,
+    ) {
         let recorded = self
             .persist
             .then(bravebot_session::store::load_model)
             .flatten();
-        self.model = bravebot_session::store::model(recorded, settings);
+        let pick = bravebot_agent::backend::pick(
+            config,
+            bravebot_session::store::model(recorded, settings),
+        );
+        if let bravebot_agent::backend::Pick::SetAside(model) = &pick {
+            self.note(t!(session_model_pick_set_aside, model = model.as_str()));
+        }
+        self.model = pick.into_model();
     }
 
     /// Settle how hard this session asks the model to think, given the settings in force.
@@ -5425,12 +5447,14 @@ impl Session {
         self.completion = 0;
     }
 
-    /// Hold the skills a slash word could become while one is being typed, and let them go once
-    /// nothing is.
+    /// Hold the skills a slash word could become while the line holds a slash word, and let them go
+    /// once it holds none.
+    ///
+    /// Held for the whole line rather than for the word being typed, because the names are also
+    /// what says a finished word is a skill, drawn in its own colour with what it takes after it.
     pub fn settle_skills(&mut self, resolve: impl FnOnce() -> Vec<crate::skills::Skill>) {
-        let typing = !self.shell
-            && self.status != Status::Working
-            && crate::skills::typed(&self.input).is_some();
+        let typing =
+            !self.shell && self.status != Status::Working && crate::skills::mentioned(&self.input);
         match (typing, self.skills.is_some()) {
             (true, false) => self.skills = Some(resolve()),
             (false, true) => self.skills = None,
@@ -6966,8 +6990,32 @@ impl Session {
     }
 
     /// The definition the turn starting now was addressed to, taken so no later turn inherits it.
+    ///
+    /// Falls back to the session's standing definition where no `/agent` line named one. That one
+    /// is not taken, because every turn of a session started under `--agent` addresses it (CLI-17).
     pub fn take_addressing(&mut self) -> Option<Addressed> {
-        self.addressing.take()
+        self.addressing.take().or_else(|| self.standing.clone())
+    }
+
+    /// Work every turn of this session under `definition`, from the first one on.
+    ///
+    /// Only for the caller that read it off the command line, before the first turn (ADDRESS-3).
+    /// Nothing clears it. A session started under a definition keeps it until the session ends, and
+    /// a person who wants the planner back starts a new session.
+    ///
+    /// A model the definition names becomes the session's model, because every turn asks for it,
+    /// so the window, the effort level and `/status` have to be that model's. It is not recorded
+    /// as a pick, so a later session without `--agent` opens on the model it would have.
+    pub fn work_under(&mut self, definition: Addressed) {
+        if let Some(model) = &definition.model {
+            self.model = Some(model.clone());
+        }
+        self.standing = Some(definition);
+    }
+
+    /// The definition every turn of this session addresses, where it was started under one.
+    pub fn standing_definition(&self) -> Option<&Addressed> {
+        self.standing.as_ref()
     }
 
     /// Start looking again because the turn that just ended asked to, repeating the person's line.
@@ -9805,7 +9853,7 @@ mod tests {
     #[test]
     fn a_model_answered_by_a_different_one_is_reported_as_substituted() {
         let mut session = Session::new("none");
-        session.choose_model("claude-opus".to_string());
+        session.choose_model("claude-opus".to_string(), &a_config());
         session.served("claude-opus", "qwen-14b", false, true);
         assert_eq!(session.substituted_model(), Some("claude-opus"));
     }
@@ -9818,6 +9866,7 @@ mod tests {
         let mut session = Session::new("none");
         session.choose_model(
             "arn:aws:bedrock:us-west-2:1:application-inference-profile/x".to_string(),
+            &a_config(),
         );
         session.served(
             "arn:aws:bedrock:us-west-2:1:application-inference-profile/x",
@@ -9835,7 +9884,7 @@ mod tests {
     #[test]
     fn picking_automatic_and_being_answered_by_a_model_is_not_a_substitution() {
         let mut session = Session::new("none");
-        session.choose_model(bravebot_config::DEFAULT_MODEL.to_string());
+        session.choose_model(bravebot_config::DEFAULT_MODEL.to_string(), &a_config());
         session.served(
             bravebot_config::DEFAULT_MODEL,
             "claude-3-haiku",
@@ -9849,7 +9898,7 @@ mod tests {
     #[test]
     fn a_model_answered_by_itself_is_not_a_substitution() {
         let mut session = Session::new("none");
-        session.choose_model("claude-opus".to_string());
+        session.choose_model("claude-opus".to_string(), &a_config());
         session.served("claude-opus", "claude-opus", false, true);
         assert_eq!(session.substituted_model(), None);
     }
@@ -10174,6 +10223,16 @@ mod tests {
 
     fn session() -> Session {
         Session::new("kernel-enforced")
+    }
+
+    fn a_config() -> bravebot_config::Config {
+        bravebot_config::Config::from_lookup(|key| match key {
+            "SERVICES_KEY_AICHAT" => Some("a-signing-key".into()),
+            "BRAVE_SERVICES_KEY_ID" => Some("a-key-id".into()),
+            "BRAVE_AI_CHAT_ENDPOINT" => Some("https://example.invalid".into()),
+            _ => None,
+        })
+        .expect("config")
     }
 
     /// Skills and standing instructions are looked for afresh every turn, so the reason one was
@@ -12537,7 +12596,7 @@ mod tests {
     #[test]
     fn clearing_keeps_what_the_user_chose() {
         let mut s = session();
-        s.choose_model("claude-3-sonnet");
+        s.choose_model("claude-3-sonnet", &a_config());
         s.type_char('a');
         s.submit();
         s.complete("an answer", Vec::new(), 10);
@@ -12802,7 +12861,7 @@ mod tests {
     #[test]
     fn choosing_a_model_is_observable() {
         let mut s = session();
-        s.choose_model("claude-3-sonnet");
+        s.choose_model("claude-3-sonnet", &a_config());
         assert_eq!(s.model(), Some("claude-3-sonnet"));
     }
 

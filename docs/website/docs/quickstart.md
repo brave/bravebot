@@ -148,7 +148,9 @@ carries on and can try something else. Ctrl-C refuses and stops.
 ```
 
 A `run` prompt shows the compiled plan: every step, the binary each resolved to, the directory, and
-every file the line would write. It also says that the command is not sandboxed:
+every file the line would write. A step whose name reached its binary through a link, such as a
+virtualenv's `python`, shows the link and then the binary, as `link -> binary`. The prompt also says
+that the command is not sandboxed:
 
 ```
   y run it    a always    n don't    ctrl-c stop the turn

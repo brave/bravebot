@@ -1229,6 +1229,7 @@ function Card({
               <li key={index}>
                 <code className="argv">{stage.display}</code>
                 <span className="resolved">
+                  {stage.startedAs && stage.startedAs !== stage.resolved && `${stage.startedAs} -> `}
                   {stage.resolved ?? 'not found on PATH'}
                 </span>
               </li>

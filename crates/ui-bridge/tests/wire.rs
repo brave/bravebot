@@ -635,6 +635,24 @@ fn the_prompts_are_sent_as_the_kernel_shaped_them() {
     );
 }
 
+/// The path a stage is started by goes to the desktop app beside the file, so its prompt can show
+/// the link a name reached the file through.
+#[test]
+fn a_stage_started_through_a_link_sends_the_link() {
+    use bravebot_agent::confirm::RunRequest;
+    let pipeline = bravebot_core::command::Pipeline::new(vec![bravebot_core::command::Stage::new(
+        "python",
+        vec!["-V".into()],
+    )]);
+    let mut request = RunRequest::from_pipeline(&pipeline, &["/usr/bin/python3.12".into()], "/w");
+    if let bravebot_core::command::Steps::Pipeline(steps) = &mut request.plan.steps {
+        steps[0].started_as = "/w/.venv/bin/python".into();
+    }
+    let value = wire::run_request(1, &request);
+    assert_eq!(value["stages"][0]["resolved"], "/usr/bin/python3.12");
+    assert_eq!(value["stages"][0]["startedAs"], "/w/.venv/bin/python");
+}
+
 #[test]
 fn command_approval_preserves_plan_shape_environment_and_redirections() {
     use bravebot_agent::confirm::RunRequest;
@@ -642,6 +660,7 @@ fn command_approval_preserves_plan_shape_environment_and_redirections() {
     let step = Step {
         program: "printf".into(),
         resolved: "/usr/bin/printf".into(),
+        started_as: "/usr/bin/printf".into(),
         args: vec!["hello world".into()],
         environment: vec![("MODE".into(), "preview".into())],
         routes: vec![Route::Stdout {
@@ -707,6 +726,7 @@ fn a_run_prompt_carries_the_line_the_planner_wrote_beside_the_plan_it_compiled_t
             steps: Steps::Pipeline(vec![Step {
                 program: "wc".into(),
                 resolved: "/usr/bin/wc".into(),
+                started_as: "/usr/bin/wc".into(),
                 args: vec!["-l".into(), "notes.txt".into(), "report.txt".into()],
                 environment: vec![],
                 routes: vec![],
@@ -744,6 +764,7 @@ fn a_call_that_was_never_spelled_as_a_line_says_so_rather_than_leaving_the_field
             steps: Steps::Pipeline(vec![Step {
                 program: "ls".into(),
                 resolved: "/bin/ls".into(),
+                started_as: "/bin/ls".into(),
                 args: vec!["-1".into()],
                 environment: vec![],
                 routes: vec![],

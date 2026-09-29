@@ -101,10 +101,13 @@ side-effect-free or that its output is free of influence, and nothing tries. `gi
 messages whoever contributed wrote. It is trusted for exactly the reason a directory in the trust map
 is trusted: you said so.
 
-An entry is keyed by **resolved path, exact arguments, and the directory it was given in**. `git log`
-says nothing about `git push`, and nothing about `git log --all`. `$PATH` and aliases decide what a name
-means, so an assertion never follows a name onto a different binary. In a line of several steps, *every*
-step must be vouched for or the whole output is untrusted.
+An entry is keyed by **resolved path, the path that starts it, exact arguments, and the directory it
+was given in**. `git log` says nothing about `git push`, and nothing about `git log --all`. `$PATH` and
+aliases decide what a name means, so an assertion never follows a name onto a different binary. A
+program named through a link, such as a virtualenv's `python`, is started by the link so it can find
+its virtualenv. An entry for it does not cover the interpreter the link points to when that
+interpreter is run directly. In a line of several steps, *every* step must be vouched for or the
+whole output is untrusted.
 
 **The directory is part of the key, and it is one directory rather than the tree beneath it.**
 `sh check.sh` names a different file in every tree it is read in, so an answer given in `sub/` is not an

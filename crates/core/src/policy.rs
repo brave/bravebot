@@ -3244,10 +3244,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     pub fn adopt_from_delegate(&mut self, since: &Vouched, ended: &Vouched) {
         let mut vouched = 0;
         for command in ended.programs.iter() {
-            if since
-                .programs
-                .contains(&command.program, &command.args, &command.directory)
-            {
+            if since.programs.contains(
+                &command.program,
+                &command.started_as,
+                &command.args,
+                &command.directory,
+            ) {
                 continue;
             }
             self.programs.trust(command.clone());
@@ -5038,20 +5040,22 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.root.is_some()
             && plan.steps().iter().all(|step| {
                 // Destructured so that a field added to `Step` stops the build here. This key holds
-                // three of the five deliberately, and the two it leaves out are only safe because
+                // four of the six deliberately, and the two it leaves out are only safe because
                 // something else refuses them first: an assignment is refused by
                 // `Plan::carries_an_assignment`, which every gate consulting this one has to ask
-                // separately, and a route by the write question. A sixth field would have no such
-                // refusal behind it, and left out of this key silently it would be a line differing
-                // from the one that was answered for.
+                // separately, and a route by the write question. A seventh field would have no
+                // such refusal behind it, and left out of this key silently it would be a line
+                // differing from the one that was answered for.
                 let crate::command::Step {
                     program: _,
                     resolved,
+                    started_as,
                     args,
                     environment: _,
                     routes: _,
                 } = step;
-                self.programs.contains(resolved, args, &plan.directory)
+                self.programs
+                    .contains(resolved, started_as, args, &plan.directory)
             })
     }
 
@@ -5099,15 +5103,18 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// The paths every step of the plan reads, or `None` where any step proves nothing.
     ///
     /// A step is read-proven when the line named a program rather than a path, the file that name
-    /// resolved to lies outside the workspace, the audited table answers for that file's name and
-    /// for the exact argv, the step carries no environment assignment, and it opens no file for a
-    /// stream. `2>&1` renames a descriptor and opens nothing, so it is not one.
+    /// resolved to lies outside the workspace and is started by a path outside it under its own
+    /// file name, the audited table answers for that file's name and for the exact argv, the step
+    /// carries no environment assignment, and it opens no file for a stream. `2>&1` renames a
+    /// descriptor and opens nothing, so it is not one.
     ///
     /// The table's entries are claims about the programs a system provides under those names, and it
     /// matches on the file name a program resolved to, which names no particular file: so a `wc` in
     /// the tree being inspected would answer as the audited one, and it reaches that answer whether
     /// the line pointed at it or a name in the user's own `$PATH` did
-    /// ([`Policy::resolves_inside_the_project`]). An assignment in front of a program decides what
+    /// ([`Policy::resolves_inside_the_project`]). A program started by another name can be another
+    /// tool, as `xzcat` is `xz` decompressing, so the table's answer for the file's name is not an
+    /// answer for it. An assignment in front of a program decides what
     /// that program loads and reads before its own arguments are looked at, and a redirection opens a
     /// file the argv does not name, so neither is covered by an audit of an option surface.
     ///
@@ -5136,8 +5143,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 .routes
                 .iter()
                 .any(|route| !matches!(route, crate::command::Route::StderrToStdout));
+            let renamed = step.started_as.file_name() != step.resolved.file_name();
             if names_a_path(&step.program)
                 || self.resolves_inside_the_project(&step.resolved)
+                || self.resolves_inside_the_project(&step.started_as)
+                || renamed
                 || !step.environment.is_empty()
                 || opens_a_file
             {
@@ -7208,7 +7218,7 @@ five
                 // Whichever server: what a call to one produces is a property of the
                 // protocol, and the alias decides who may make the call rather than what
                 // the answer is labelled.
-                Capability::McpCall(_) => Some(Label::untrusted_public()),
+                Capability::McpCall(_) => Some(Label::untrusted_private()),
                 Capability::FileWrite => None,
                 Capability::GitWrite => None,
             };
@@ -7553,6 +7563,7 @@ five
         crate::command::Step {
             program: program.to_string(),
             resolved: std::path::PathBuf::from(format!("/usr/bin/{program}")),
+            started_as: std::path::PathBuf::from(format!("/usr/bin/{program}")),
             args: args.iter().map(|arg| (*arg).to_string()).collect(),
             environment: Vec::new(),
             routes: Vec::new(),
@@ -7765,6 +7776,35 @@ five
             !label_of(&mut policy, &shadowed).is_trusted(),
             "a project file's output came back as the audited program's"
         );
+    }
+
+    /// A step started by a name other than its file's, or from inside the project, is refused by
+    /// [`Policy::read_proven`]. Each fixture trips one of the two conditions, against the control
+    /// the test above uses.
+    #[test]
+    fn a_program_started_by_another_name_or_from_the_project_is_not_proven() {
+        let mut sink = RecordingSink::new();
+        let mut policy = in_a_project(&mut sink, &[]);
+
+        let system = plan_of(vec![step_named("pwd", &[])]);
+        assert!(
+            !policy.plan_needs_approval(&system),
+            "the proof road is shut for the line this test contrasts with"
+        );
+
+        for started_as in ["/usr/local/bin/cwd", "/work/bin/pwd"] {
+            let mut step = step_named("pwd", &[]);
+            step.started_as = std::path::PathBuf::from(started_as);
+            let started = plan_of(vec![step]);
+            assert!(
+                policy.plan_needs_approval(&started),
+                "pwd started as {started_as} ran unasked"
+            );
+            assert!(
+                !label_of(&mut policy, &started).is_trusted(),
+                "pwd started as {started_as} came back as the audited program's output"
+            );
+        }
     }
 
     /// An assignment in front of a program decides what that program loads and reads before its own
@@ -8920,6 +8960,7 @@ five
     fn running_the_binary(last: u8) -> crate::command::Plan {
         plan_of(vec![crate::command::Step {
             resolved: unrenderable_binary(last),
+            started_as: unrenderable_binary(last),
             ..step_named("prog", &[])
         }])
     }
@@ -9288,6 +9329,25 @@ five
         assert!(
             policy.plan_needs_approval(&plan_of(vec![elsewhere])),
             "an assertion followed the name rather than the program"
+        );
+    }
+
+    /// Nor onto another path that starts the same binary (RUN-8).
+    #[test]
+    fn vouching_does_not_follow_a_binary_onto_another_path_it_is_started_by() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.remember_command(vouched("/usr/bin/git", &["log"]));
+        assert!(
+            !policy.plan_needs_approval(&a_plan()),
+            "the entry does not answer for the line this test contrasts with"
+        );
+
+        let mut through_a_link = step_named("git", &["log"]);
+        through_a_link.started_as = std::path::PathBuf::from("/opt/tools/git");
+        assert!(
+            policy.plan_needs_approval(&plan_of(vec![through_a_link])),
+            "an assertion about a binary covered it started by another path"
         );
     }
 
@@ -9865,6 +9925,7 @@ five
             &["-la"],
         )]));
         assert!(policy.programs().contains(
+            std::path::Path::new("/bin/ls"),
             std::path::Path::new("/bin/ls"),
             &["-la".to_string()],
             std::path::Path::new("/work")
@@ -13887,11 +13948,12 @@ five
             let mut policy = open_policy(&mut sink);
             let build =
                 crate::programs::Command::new("/usr/bin/make", vec!["build".to_string()], "/work");
-            assert!(
-                !policy
-                    .programs()
-                    .contains(&build.program, &build.args, &build.directory)
-            );
+            assert!(!policy.programs().contains(
+                &build.program,
+                &build.started_as,
+                &build.args,
+                &build.directory
+            ));
 
             let seeded = policy.vouched();
             // What the delegate came back with: the same list, plus the command a person let it
@@ -13901,9 +13963,12 @@ five
             policy.adopt_from_delegate(&seeded, &ended);
 
             assert!(
-                policy
-                    .programs()
-                    .contains(&build.program, &build.args, &build.directory),
+                policy.programs().contains(
+                    &build.program,
+                    &build.started_as,
+                    &build.args,
+                    &build.directory
+                ),
                 "a command a person let a delegate run was thrown away with it"
             );
         }

@@ -27,8 +27,9 @@ Which files are looked for, where, and in what order is a separate question, and
 Both keys are required, and a file missing either is skipped with a note saying so. A key nothing
 here reads stops nothing, so a skill written for another agent works here, and
 [SKILL-16](#SKILL-16) says where such a key is reported rather than left a silent no-op.
-[SKILL-15](#SKILL-15) is the two keys beyond these that are read. A file with no frontmatter is not
-a skill.
+[SKILL-15](#SKILL-15) is the two keys read for how the skill runs. `argument-hint` is read too: an
+interface draws it after the skill's name to say what the skill takes ([commands.md](commands.md)),
+and it is never given to the planner. A file with no frontmatter is not a skill.
 
 ```markdown
 ---
@@ -43,6 +44,8 @@ Write the subject in the imperative. Explain why in the body, never what.
 `verified-by: bravebot_agent::skills::a_file_with_no_frontmatter_is_not_a_skill`
 `verified-by: bravebot_agent::skills::an_unterminated_frontmatter_block_is_skipped_rather_than_swallowing_the_body`
 `verified-by: bravebot_agent::skills::a_key_nothing_here_reads_does_not_stop_a_skill_and_is_carried_out`
+`verified-by: bravebot_agent::skills::an_argument_hint_is_read_when_the_file_has_one`
+`verified-by: bravebot_agent::skills::an_argument_hint_reaches_the_interface_and_not_the_planner`
 `verified-by: bravebot_agent::skills::the_body_is_everything_after_the_closing_marker`
 `verified-by: bravebot_agent::skills::a_marker_inside_the_body_is_left_alone`
 

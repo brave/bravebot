@@ -105,6 +105,22 @@ fn main() -> ExitCode {
             return stopped_before_the_turn(as_json, Ending::Argument, complaint);
         }
     }
+
+    // Taken out here, like the settings file, because a session, a session in lines and a one-shot
+    // run all use the name the same way. It is matched later, by whichever of them starts, because
+    // the set it is matched against depends on the directory's trust (CLI-17).
+    let agent = match take_agent(&mut args) {
+        Ok(agent) => agent,
+        Err(complaint) => {
+            return stopped_before_the_turn(as_json, Ending::Argument, complaint);
+        }
+    };
+    if let Some(refused) = agent
+        .as_ref()
+        .and_then(|_| without_a_definition(args.first().map(String::as_str)))
+    {
+        return stopped_before_the_turn(as_json, Ending::Argument, refused);
+    }
     args.extend(foreign);
 
     match args.first().map(String::as_str) {
@@ -119,7 +135,13 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         // With no arguments the interactive session is the natural default.
-        None => interactive(bravebot_tui::app::Start::Fresh, skip_permissions),
+        None => interactive(
+            agent.map_or(
+                bravebot_tui::app::Start::Fresh,
+                bravebot_tui::app::Start::Under,
+            ),
+            skip_permissions,
+        ),
         // Picking up where a session left off, chosen from a list or named outright.
         Some("--resume" | "-r") => match args.get(1) {
             Some(id) => resume_named(id, skip_permissions),
@@ -139,10 +161,10 @@ fn main() -> ExitCode {
         },
         // A session in lines, which takes nothing from the terminal (CLI-14). On its own, because
         // it starts a session rather than describing one: the flags that compose with every way of
-        // starting are the three taken out above, and everything else on this list is another way of
+        // starting are the ones taken out above, and everything else on this list is another way of
         // starting.
         Some("--plain") => match args.len() {
-            1 => plain::session(skip_permissions),
+            1 => plain::session(skip_permissions, agent),
             _ => refused_with_the_usage(as_json, t!(cli_plain_takes_nothing_else)),
         },
         // The task flags may lead: `bravebot -p "task"` and `bravebot --mode manifest "task"`
@@ -150,7 +172,7 @@ fn main() -> ExitCode {
         Some(
             "-p" | "--print" | "--mode" | "--model" | "--effort" | "--file" | "--add-dir"
             | "--trace" | "--json",
-        ) => run_task(&args, skip_permissions),
+        ) => run_task(&args, skip_permissions, agent),
         Some("doctor") => doctor(),
         Some("mcp") => mcp::command(&args[1..]),
         Some("import-leo-creds") => import_leo_creds(&args[1..]),
@@ -159,7 +181,57 @@ fn main() -> ExitCode {
             refused_with_the_usage(as_json, t!(cli_unknown_option, flag = flag))
         }
         // Anything else is treated as the task prompt.
-        Some(_) => run_task(&args, skip_permissions),
+        Some(_) => run_task(&args, skip_permissions, agent),
+    }
+}
+
+/// Take `--agent <name>` out of the arguments, answering with the definition it named.
+///
+/// Removed before dispatch, like `--settings`. If it is given twice the last name is used, as with
+/// `--settings`, because every turn can work under only one definition. A blank name is refused, as
+/// `--model` refuses one, because a script whose variable expanded to nothing asked for a
+/// definition and would otherwise run under the planner. A name opening with `-` is refused too. It
+/// is the next flag, taken as a name, and no definition's name may open with one.
+///
+/// Only the name is read here. The way of starting that follows matches it, because the set depends
+/// on the directory's trust, which has not been asked about yet.
+fn take_agent(args: &mut Vec<String>) -> Result<Option<String>, String> {
+    let mut named = None;
+    let mut kept = Vec::with_capacity(args.len());
+    let mut index = 0;
+    while index < args.len() {
+        if args[index] != "--agent" {
+            kept.push(args[index].clone());
+            index += 1;
+            continue;
+        }
+        match args.get(index + 1).map(|name| name.trim()) {
+            Some(name) if !name.is_empty() && !name.starts_with('-') => {
+                named = Some(name.to_string());
+                index += 2;
+            }
+            _ => return Err(t!(cli_agent_needs_a_name).to_string()),
+        }
+    }
+    *args = kept;
+    Ok(named)
+}
+
+/// Why `--agent` cannot go with the command line's first argument, or `None` where it can.
+///
+/// A resumed or forked session is refused because its record does not store which definition the
+/// session used, and its earlier turns were the planner's (CLI-17). The other commands start
+/// neither a session nor a task. A name nothing would use is refused instead of ignored, for the
+/// reason CLI-13 gives about a settings file.
+fn without_a_definition(first: Option<&str>) -> Option<String> {
+    match first? {
+        flag @ ("--resume" | "-r" | "--continue" | "-c" | "--fork" | "-f") => {
+            Some(t!(cli_agent_not_with_a_recorded_session, flag = flag).to_string())
+        }
+        command @ ("doctor" | "mcp" | "import-leo-creds" | "import-providers") => {
+            Some(t!(cli_agent_not_for_a_command, command = command).to_string())
+        }
+        _ => None,
     }
 }
 
@@ -285,6 +357,7 @@ fn print_help() {
         ("--file <path>", t!(cli_option_file)),
         ("--add-dir <path>", t!(cli_option_add_dir)),
         ("--settings <path>", t!(cli_option_settings)),
+        ("--agent <name>", t!(cli_option_agent)),
         ("--mode <mode>", t!(cli_option_mode)),
         ("--model <name>", t!(cli_option_model)),
         ("--effort <level>", t!(cli_option_effort)),
@@ -532,7 +605,7 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
     })
 }
 
-fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
+fn run_task(args: &[String], skip_permissions: bool, agent: Option<String>) -> ExitCode {
     let invocation = match parse_invocation(args) {
         Ok(invocation) => invocation,
         // Whether a result object was asked for is read off the raw arguments here, because the
@@ -569,6 +642,17 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
         return stopped_before_the_turn(as_json, Ending::Argument, t!(cli_task_required));
     }
 
+    // A manifest run's plan is written by the planner before any step runs, and an addressed
+    // definition is matched a turn at a time by the turn's own kernel, so the name would be taken
+    // and nothing would be addressed to it.
+    if agent.is_some() && mode == Mode::Manifest {
+        return stopped_before_the_turn(
+            as_json,
+            Ending::Argument,
+            t!(cli_agent_not_with_a_manifest),
+        );
+    }
+
     let mut config = match Config::from_env() {
         Ok(c) => c,
         Err(err) => {
@@ -588,23 +672,14 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
     // goes. The flag it may have been named by is resolved below; what is read here is the same
     // answer without it, since a `--model` naming a configured service's model is exactly the case
     // this must not refuse.
-    if let bravebot_agent::backend::Serving::NothingConfigured {
-        subscription,
-        a_service_is_configured,
-    } = bravebot_agent::backend::serving(
-        &config,
-        &bravebot_net::Egress::new(),
-        &model_for_this_run(model.as_deref(), &config),
-    ) {
-        return stopped_before_the_turn(
-            as_json,
-            Ending::Configuration,
-            how_to_configure_a_model(
-                subscription.as_deref(),
-                a_service_is_configured,
-                &import::looked(a_service_is_configured),
-            ),
-        );
+    //
+    // A run under a definition and no `--model` is asked below instead, once the definition is
+    // matched, because the model it asks for is the definition's where the definition names one.
+    let asked_below = agent.is_some() && model.is_none();
+    if !asked_below
+        && let Some(how) = nothing_serves(&config, &model_for_this_run(model.as_deref(), &config))
+    {
+        return stopped_before_the_turn(as_json, Ending::Configuration, how);
     }
 
     let settings = bravebot_config::Settings::load();
@@ -625,6 +700,28 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
     // in, over a file it was told it could open.
     if let Err(problem) = open_directories(&mut workspace, &directories) {
         return stopped_before_the_turn(as_json, Ending::Argument, problem);
+    }
+
+    // Matched here, before any server is reached, so a name matching nothing sends nothing and the
+    // refusal lists the names that exist (ADDRESS-5). The turn's kernel matches it again and makes
+    // the decision. This match is what makes a miss exit with the argument status.
+    let under = match agent
+        .as_deref()
+        .map(|name| definition_for_a_run(&config, &workspace, name, model.is_some()))
+        .transpose()
+    {
+        Ok(under) => under.flatten(),
+        Err(refused) => return stopped_before_the_turn(as_json, Ending::Argument, refused),
+    };
+    if asked_below
+        && let Some(how) = nothing_serves(
+            &config,
+            &under
+                .clone()
+                .unwrap_or_else(|| model_for_this_run(None, &config)),
+        )
+    {
+        return stopped_before_the_turn(as_json, Ending::Configuration, how);
     }
 
     // A run is a session for this: it is given somewhere of its own to write what is not part of
@@ -668,14 +765,24 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
     // the run over: below the flag the model is whatever was recorded or configured, and a script
     // that never named one did not ask for what it did not get.
     let named_on_the_command_line = named.is_some();
+    let pick = match named_on_the_command_line {
+        true => bravebot_agent::backend::Pick::Absent,
+        false => bravebot_agent::backend::pick(
+            &config,
+            bravebot_session::store::model(bravebot_session::store::load_model(), &settings),
+        ),
+    };
+    if let bravebot_agent::backend::Pick::SetAside(model) = &pick {
+        eprintln!(
+            "{}",
+            t!(session_model_pick_set_aside, model = model.as_str())
+        );
+    }
     let mut task = Task::new(prompt)
         .with_home(bravebot_agent::home::directory())
         .with_profile(bravebot_agent::home::profile())
         .with_cache(bravebot_agent::home::cache())
-        .with_model(model_asked_for(
-            named,
-            bravebot_session::store::model(bravebot_session::store::load_model(), &settings),
-        ))
+        .with_model(model_asked_for(named, pick.into_model()))
         // The flag, then the settings layers and the saved pick ranked as BACKEND-43 ranks them.
         // The layers are the only route a machine where nobody ever opens the interface has to a
         // level that outlives one run.
@@ -703,7 +810,9 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
             bravebot_core::vetting::asked_for(),
             bravebot_session::store::load_vetting(),
             settings.auto_vetting(),
-        ));
+        ))
+        .addressing(agent)
+        .model_outranks_a_definition(named_on_the_command_line);
     for file in files {
         task = task.with_file(file);
     }
@@ -764,11 +873,13 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
     //
     // Not fatal: the turn goes ahead and fails with the backend's own account of what is wrong,
     // which says more than this could guess.
-    let model = task
-        .model
-        .as_deref()
-        .unwrap_or(&config.default_model)
-        .to_string();
+    //
+    // The definition's model where it names one the command line did not outrank, since that is
+    // the one the turn will ask for, and every question below is about what is asked for.
+    let model = under
+        .clone()
+        .or_else(|| task.model.clone())
+        .unwrap_or_else(|| config.default_model.clone());
 
     // The window the endpoint advertises for that model, which is what compaction measures a
     // conversation against. A run opens no picker and holds no session, so this is the only place
@@ -877,10 +988,11 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
             let comparable = bravebot_agent::backend::Backend::reports_the_model_it_was_asked_for(
                 &config, &model,
             );
-            // Not for a turn a skill moved onto its own model, which the turn compared itself
-            // (SKILL-15). The command line did not name that model, so it does not fail the run.
-            let not_served = outcome
-                .ran_on_the_sessions_model()
+            // Skipped where the definition's model was asked for, because the turn compared that
+            // model itself and reported the substitution in the definition's words. The same for a
+            // turn a skill moved onto its own model (SKILL-15): the command line did not name that
+            // model, so it does not fail the run.
+            let not_served = (under.is_none() && outcome.ran_on_the_sessions_model())
                 .then(|| model_not_served(&asked, comparable, &outcome.model))
                 .flatten();
 
@@ -898,6 +1010,7 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
                     message: failure_of_a_turn(ending, not_served.as_deref()),
                     reply: outcome.reply_for_display(),
                     model: &outcome.model,
+                    agent: outcome.addressed.as_ref().map(|addressed| addressed.name()),
                     steps: outcome.steps,
                     tokens: json::Tokens {
                         total: outcome.tokens,
@@ -1083,6 +1196,7 @@ fn what_ran(
         message: Some(message),
         reply: "",
         model: "",
+        agent: None,
         steps: 0,
         tokens: json::Tokens::default(),
         calls,
@@ -1138,6 +1252,64 @@ fn open_directories(workspace: &mut Workspace, directories: &[String]) -> Result
     Ok(())
 }
 
+/// The model the definition `--agent` named will ask for, where it names one the command line did
+/// not outrank, matched as the run's first turn will match it.
+///
+/// Resolved with the trust a run hands its turn, which vouches for no directory, so a checkout's
+/// definitions are counted but not read. The count goes into the refusal because a name missing
+/// from an untrusted project and a name missing everywhere need different fixes.
+fn definition_for_a_run(
+    config: &Config,
+    workspace: &Workspace,
+    name: &str,
+    model_named: bool,
+) -> Result<Option<String>, String> {
+    let trust = TrustStore::new(bravebot_agent::workspace::key_of(workspace.root()));
+    let definitions = bravebot_agent::agents::resolved(
+        workspace,
+        bravebot_agent::home::directory().as_deref(),
+        trust.clone(),
+        &mut RecordingSink::new(),
+    );
+    if definitions.get(name).is_none() {
+        let names = definitions.names().join(", ");
+        return Err(
+            match bravebot_agent::agents::not_vouched_for(workspace, &trust) {
+                0 => t!(cli_agent_no_such_definition, name = name, names = names),
+                count => t!(
+                    cli_agent_no_such_definition_unread,
+                    name = name,
+                    names = names,
+                    count = count
+                ),
+            }
+            .to_string(),
+        );
+    }
+    // Nothing asks for the definition's model when the command line named one, so its sign-in
+    // does not matter.
+    if model_named {
+        return Ok(None);
+    }
+    bravebot_tui::app::definition_named(config, &definitions, name).map(|addressed| addressed.model)
+}
+
+/// How to configure a service, where nothing configured serves `model`, or `None` where something
+/// does.
+fn nothing_serves(config: &Config, model: &str) -> Option<String> {
+    match bravebot_agent::backend::serving(config, &bravebot_net::Egress::new(), model) {
+        bravebot_agent::backend::Serving::NothingConfigured {
+            subscription,
+            a_service_is_configured,
+        } => Some(how_to_configure_a_model(
+            subscription.as_deref(),
+            a_service_is_configured,
+            &import::looked(a_service_is_configured),
+        )),
+        _ => None,
+    }
+}
+
 /// The model a run asks for: the one the command line named, else the one a session would read.
 ///
 /// A run started from a script resolves a model the way a session opening in the same directory
@@ -1154,20 +1326,24 @@ fn model_asked_for(named: Option<String>, stored: Option<String>) -> Option<Stri
 /// The model this run or session will ask a service for.
 ///
 /// The same three sources the task below is built from, in the same order: a name given on the
-/// command line, the one a session recorded where no checkout's settings outrank it, and the
-/// configured default. `named` is the raw
-/// argument, resolved against the configuration here for the reason the task resolves it, since a
-/// tier word names a model only the configuration knows.
+/// command line, the one a session recorded where no checkout's settings outrank it and nothing
+/// sets it aside, and the configured default. `named` is the raw argument, resolved against the
+/// configuration here for the reason the task resolves it, since a tier word names a model only
+/// the configuration knows.
 ///
 /// A function because the question is asked before the task exists, and because an answer that
 /// differed from the task's would refuse a run over a model it was never going to request.
 fn model_for_this_run(named: Option<&str>, config: &Config) -> String {
     model_asked_for(
         named.map(|name| config.model_named(name)),
-        bravebot_session::store::model(
-            bravebot_session::store::load_model(),
-            &bravebot_config::Settings::load(),
-        ),
+        bravebot_agent::backend::pick(
+            config,
+            bravebot_session::store::model(
+                bravebot_session::store::load_model(),
+                &bravebot_config::Settings::load(),
+            ),
+        )
+        .into_model(),
     )
     .unwrap_or_else(|| config.default_model.clone())
 }
@@ -1643,11 +1819,15 @@ fn interactive(start: bravebot_tui::app::Start, skip_permissions: bool) -> ExitC
         // left looking at rather than going onto the alternate screen with everything else. A
         // session is worth resuming far more often than anybody thinks to write its name down
         // beforehand, and the picker is no help to someone who has already closed the window.
-        Ok(Some(left)) => {
+        Ok(bravebot_tui::app::Ended::Left(Some(left))) => {
             println!("{}", resume_hint(&left, workspace.root()));
             ExitCode::SUCCESS
         }
-        Ok(None) => ExitCode::SUCCESS,
+        Ok(bravebot_tui::app::Ended::Left(None)) => ExitCode::SUCCESS,
+        // Printed after the terminal is handed back, like the hint above, with the argument status:
+        // the session never took a turn, and a one-shot run exits with the same status for the
+        // same name (CLI-17).
+        Ok(bravebot_tui::app::Ended::Refused(refused)) => fail(Ending::Argument, refused),
         Err(err) => fail(Ending::Failed, t!(cli_interface_problem, problem = err)),
     }
 }
@@ -2161,9 +2341,22 @@ fn doctor() -> ExitCode {
             // configured default and reporting only the default would explain the wrong thing. Not
             // where a checkout's settings outrank the choice, since naming it then would explain
             // the wrong thing the other way round.
-            match bravebot_session::store::model(bravebot_session::store::load_model(), &settings) {
-                Some(chosen) => fact(t!(doctor_model), t!(doctor_model_chosen, model = chosen)),
-                None => fact(
+            match bravebot_agent::backend::pick(
+                &config,
+                bravebot_session::store::model(bravebot_session::store::load_model(), &settings),
+            ) {
+                bravebot_agent::backend::Pick::InForce(chosen) => {
+                    fact(t!(doctor_model), t!(doctor_model_chosen, model = chosen))
+                }
+                bravebot_agent::backend::Pick::SetAside(pick) => fact(
+                    t!(doctor_model),
+                    t!(
+                        doctor_model_set_aside,
+                        model = &config.default_model,
+                        pick = pick
+                    ),
+                ),
+                bravebot_agent::backend::Pick::Absent => fact(
                     t!(doctor_model),
                     t!(doctor_model_default, model = &config.default_model),
                 ),
@@ -4620,6 +4813,112 @@ mod tests {
                 "{typed:?}"
             );
             assert_eq!(arguments, args(left), "left over: {typed:?}");
+        }
+    }
+
+    /// The name is taken out wherever it was typed, with the argument that belongs to it, and
+    /// beside every other flag taken out before dispatch. Left in, `--plain` would refuse it as
+    /// another argument and `-p` would read the name as the start of its prompt.
+    #[test]
+    fn the_agent_flag_is_taken_out_with_the_name_it_gave() {
+        for (typed, left) in [
+            (
+                &["--agent", "reviewer", "-p", "do a thing"][..],
+                &["-p", "do a thing"][..],
+            ),
+            (
+                &["-p", "do a thing", "--agent", "reviewer"][..],
+                &["-p", "do a thing"][..],
+            ),
+            (&["--plain", "--agent", "reviewer"][..], &["--plain"][..]),
+            (&["--agent", "reviewer"][..], &[][..]),
+            (
+                &[
+                    "--incognito",
+                    "--agent",
+                    "reviewer",
+                    "--settings",
+                    "/etc/ci.json",
+                    "--plain",
+                ][..],
+                &["--plain"][..],
+            ),
+        ] {
+            let mut arguments = args(typed);
+            take_incognito(&mut arguments);
+            take_settings(&mut arguments).expect("names a file or none");
+            assert_eq!(
+                take_agent(&mut arguments).expect("names a definition"),
+                Some("reviewer".to_string()),
+                "{typed:?} named no definition"
+            );
+            assert_eq!(arguments, args(left), "left over: {typed:?}");
+        }
+    }
+
+    /// The last name is used, as with `--settings`, because every turn can work under only one
+    /// definition. A second flag left in the arguments would reach a parser that does not know it.
+    #[test]
+    fn the_last_definition_named_is_the_one_worked_under() {
+        let mut arguments = args(&["--agent", "first", "--agent", "second", "-p", "x"]);
+        assert_eq!(
+            take_agent(&mut arguments).expect("names a definition"),
+            Some("second".to_string())
+        );
+        assert_eq!(arguments, args(&["-p", "x"]));
+    }
+
+    /// A missing name and a name that expanded to nothing are refused. Treating either as no flag
+    /// would run the planner without telling anyone. So is a flag where the name should be: taken
+    /// as the name, `--json` would be removed and the run would answer in the other format. The
+    /// arguments are left as typed.
+    #[test]
+    fn an_agent_flag_with_no_name_is_refused() {
+        for typed in [
+            &["-p", "do a thing", "--agent"][..],
+            &["--agent", "  ", "-p", "do a thing"][..],
+            &["--agent", "--json", "-p", "do a thing"][..],
+            &["--agent", "-p", "do a thing"][..],
+        ] {
+            let mut arguments = args(typed);
+            assert!(
+                take_agent(&mut arguments).is_err(),
+                "{typed:?} was accepted"
+            );
+            assert_eq!(arguments, args(typed), "the arguments changed: {typed:?}");
+        }
+    }
+
+    /// A recorded session stores no definition, so resuming it under a name would continue the
+    /// planner's conversation as a definition's. A command that starts no session has nothing to
+    /// address. Both are refused, so the name is never silently dropped.
+    #[test]
+    fn a_definition_is_refused_where_nothing_would_work_under_it() {
+        for first in [
+            "--resume",
+            "-r",
+            "--continue",
+            "-c",
+            "--fork",
+            "-f",
+            "doctor",
+            "mcp",
+            "import-leo-creds",
+            "import-providers",
+        ] {
+            assert!(
+                without_a_definition(Some(first)).is_some(),
+                "{first} took a definition"
+            );
+        }
+        for first in [
+            None,
+            Some("-p"),
+            Some("--plain"),
+            Some("--model"),
+            Some("a task"),
+        ] {
+            assert_eq!(without_a_definition(first), None, "{first:?} was refused");
         }
     }
 

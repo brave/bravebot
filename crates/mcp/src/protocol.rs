@@ -195,7 +195,7 @@ impl ToolList {
         let (text, offered, refused) = self.drawn(alias);
         Listing {
             alias: alias.to_string(),
-            list: Labelled::new(text, crate::result_label()),
+            list: Labelled::new(text, crate::list_label()),
             offered,
             refused,
         }

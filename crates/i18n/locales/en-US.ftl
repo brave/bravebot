@@ -61,8 +61,8 @@ cli-plain-needs-a-terminal =
 # describing one, so there is nothing for it to combine with.
 cli-plain-takes-nothing-else =
     --plain starts a session and takes no other arguments. --incognito,
-    --dangerously-skip-permissions and --settings go with it; everything else is another way of
-    starting.
+    --dangerously-skip-permissions, --settings and --agent go with it; everything else is another
+    way of starting.
 # Said where the startup question was not put because an earlier session here was told to remember
 # the answer (TRUST-23). A session in lines has no slash commands, so the ways to be asked again are
 # the ones it can name: the command in the interface that draws, or the lines in the file. The
@@ -84,6 +84,7 @@ cli-options-heading = Options:
 cli-option-file = Include a workspace file as context (repeatable)
 cli-option-add-dir = Reach into a directory outside the working one (repeatable)
 cli-option-settings = Read this settings file for this run, above the ones found on disk
+cli-option-agent = Address every turn to this definition, as /agent does for one
 cli-option-mode = turn (default) decides step by step; manifest plans the whole run first
 cli-option-model = The model this run asks for, in place of the remembered or configured one
 cli-option-effort = How hard this run asks the model to think, in place of the remembered or configured level
@@ -107,6 +108,30 @@ cli-file-needs-a-path = --file requires a path
 cli-add-dir-needs-a-path = --add-dir requires an absolute path to a directory
 cli-settings-needs-a-path = --settings requires a path to a settings file
 cli-settings-not-a-file = --settings names no file: { $path }
+cli-agent-needs-a-name = --agent requires the name of a definition
+# The flag is one of --resume, --continue and --fork, as typed.
+cli-agent-not-with-a-recorded-session =
+    --agent starts a new session, and { $flag } picks up a recorded one, which does not keep the
+    definition it worked under
+# The command is the first argument, one of this program's own subcommands.
+cli-agent-not-for-a-command =
+    --agent names the definition a session or a task works under, and { $command } starts neither
+cli-agent-not-with-a-manifest =
+    --agent does not go with --mode manifest: a manifest run plans every step before any runs,
+    and a definition is addressed a turn at a time
+# Said where a run with -p is given a --agent name it did not resolve, with the names it did.
+cli-agent-no-such-definition = there is no definition called { $name }; this run resolved { $names }
+# The same, where the project holds definitions the run did not read. It gives a count and never a
+# name, because a file name in an untrusted directory is untrusted content.
+cli-agent-no-such-definition-unread =
+    { $count ->
+        [one] there is no definition called { $name }; this run resolved { $names }. 1 definition in .bravebot/agents was not read: -p asks no trust question, so it reads only ~/.bravebot/agents
+       *[other] there is no definition called { $name }; this run resolved { $names }. { $count } definitions in .bravebot/agents were not read: -p asks no trust question, so it reads only ~/.bravebot/agents
+    }
+# Said when a session in lines started with --agent opens (CLI-17). It has no slash commands, so it
+# names no way to address another definition. The model is the one the definition names.
+cli-plain-working-under = every prompt is addressed to { $definition }
+cli-plain-working-under-model = every prompt is addressed to { $definition }, which asks for { $model }
 cli-mode-needs-a-name = --mode requires one of { $names }
 cli-model-needs-a-name = --model requires the name of a model
 cli-effort-needs-a-level = --effort requires one of { $levels }
@@ -187,6 +212,7 @@ doctor-key-id = key id
 doctor-model = model
 doctor-model-chosen = { $model } (chosen with /model)
 doctor-model-default = { $model } (default)
+doctor-model-set-aside = { $model } (default, since { $pick }, chosen with /model, is not served by any configured service)
 doctor-key-name = key
 doctor-key = { $key } (never transmitted)
 # What would end each credential this build holds for itself: who issued it, the surface that
@@ -1303,6 +1329,9 @@ status-scratch-note = this session's own to write in, removed when it ends
 status-model = Model
 status-model-chosen = chosen with /model
 status-model-default = the configured default
+status-model-definitions = the one { $definition } asks for
+status-agent = Agent
+status-agent-every-turn = every turn is addressed to it, named with --agent
 status-effort = Effort
 status-effort-chosen = chosen with /effort
 status-effort-default = whatever the service does on its own
@@ -1661,6 +1690,7 @@ session-directory-changed = now working in { $directory }, and trusting it for t
 session-directory-closed = closed { $directory }; open it again with /add-dir { $directory }
 session-directory-not-changed = could not move to { $directory }: { $problem }
 session-permission-rule-ignored = ignoring a permission rule in settings.json: { $problem }
+session-model-pick-set-aside = ignoring { $model }, picked with /model, because no configured service serves it
 # An allow rule written in a checkout's settings file. It answers an approval prompt, which is a
 # capability rather than a narrowing, so it is read from the person's own file only. Named rather
 # than counted: whoever wrote it is looking for their own line.
@@ -2001,6 +2031,18 @@ agent-no-such-definition = there is no definition called { $name }; this session
 # Drawn above a reply from an addressed turn. The name is the one the driver matched, never
 # anything the reply says about itself.
 agent-answered = { $name } answered
+# Said when a session started with --agent opens, after the directory's trust is settled (CLI-17).
+session-working-under =
+    every turn is addressed to { $definition }; /agent <name> <task> addresses another for one turn
+# Said for /model in a session started with --agent under a definition that names a model.
+session-model-is-the-definitions =
+    every turn is addressed to { $definition }, which asks for { $model }, so /model has nothing to
+    change; start bravebot without --agent to pick a model
+# Said where --model and a definition that names a model are both in force. The definition's name
+# and its model are the words of a vouched-for file.
+agent-model-outranked =
+    { $definition } asked for { $model }, and --model outranks it, so this run asked for the model
+    the command line named
 
 
 ## The opening screen

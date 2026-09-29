@@ -22,10 +22,11 @@ Write the subject in the imperative. Explain why in the body, never what.
 ## The file
 
 One `SKILL.md`, with `name` and `description` in front matter. Both keys are required, and a file
-missing either is skipped with a note saying so. A key nothing here reads stops nothing, so a skill
-written for another agent works here; `bravebot doctor` lists such keys, so a line you expected to
-do something and that does nothing is somewhere you can find it. A file with no front matter is not
-a skill.
+missing either is skipped with a note saying so. `argument-hint` is drawn after the skill's name
+in the box to say what it takes, as in `argument-hint: '[low|high] <pr#>'`, and is never shown to
+the planner. A key nothing here reads stops nothing, so a skill written for another agent works
+here; `bravebot doctor` lists such keys, so a line you expected to do something and that does
+nothing is somewhere you can find it. A file with no front matter is not a skill.
 
 A value may wrap over the lines indented beneath it, however the file spells the wrap: folded or
 literal with `>` or `|`, quoted and carried over, or plain text continued. A folded value is
@@ -83,6 +84,10 @@ Type `/` and the skills this session has are listed beneath the commands, each w
 and where it was found: `(project)`, `(user)` or `(built-in)`. After other words, as in
 `this is /release-no`, the list holds skills alone. Tab takes the highlighted one and writes
 `/release-notes ` into the line.
+
+A name typed in full is drawn in the prompt's colour, so you can see it was recognised. With a space
+after it, the skill's `argument-hint` appears dimly where the argument goes, and goes as soon as you
+type.
 
 The line is still a prompt, sent as you typed it. The planner is told that a prompt naming a skill as
 `/name` is you asking for it, and it loads the skill with `load_skill` the way it loads any other, so

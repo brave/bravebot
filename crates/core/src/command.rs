@@ -163,14 +163,30 @@ impl Stage {
     }
 }
 
+/// A path a program starts by and the file it leads to, drawn as `ls -l` draws a link.
+///
+/// The file alone where the two are one path.
+pub(crate) fn started_through(started_as: &Path, file: &Path) -> String {
+    if started_as == file {
+        file.to_string_lossy().into_owned()
+    } else {
+        format!(
+            "{} -> {}",
+            started_as.to_string_lossy(),
+            file.to_string_lossy()
+        )
+    }
+}
+
 /// One argument, quoted so that no two arguments can render alike.
 ///
 /// A bare token is one with nothing in it that quoting is for. Anything else is wrapped, with a
 /// backslash and a quote escaped inside the wrapping, which is what makes the rendering reversible
-/// and therefore safe to bind an approval to.
+/// and therefore safe to bind an approval to. An argument holding `>` is wrapped too, so an
+/// argument list cannot draw as the arrow [`started_through`] puts between a link and its file.
 fn quoted(arg: &str) -> String {
-    let plain =
-        !arg.is_empty() && !arg.contains(|c: char| c.is_whitespace() || c == '\'' || c == '\\');
+    let plain = !arg.is_empty()
+        && !arg.contains(|c: char| c.is_whitespace() || c == '\'' || c == '\\' || c == '>');
     if plain {
         return arg.to_string();
     }
@@ -320,6 +336,17 @@ pub struct Step {
     /// bare name means, so an approval recorded against the string would follow the name onto
     /// whatever it later pointed at.
     pub resolved: PathBuf,
+    /// The path the program is started by. It is the name the line used, made absolute, with no
+    /// link in it followed.
+    ///
+    /// Some programs read the path they were started by. A Python in a virtual environment finds
+    /// the environment from the link it was started through, and a multi-call binary picks which
+    /// tool to be from its name. This path is in every key [`Step::resolved`] is in, and it must
+    /// still lead to that file when the step starts ([RUN-2], [RUN-8]).
+    ///
+    /// [RUN-2]: ../../../docs/specs/tools/run.md
+    /// [RUN-8]: ../../../docs/specs/tools/run.md
+    pub started_as: PathBuf,
     /// The argument vector, literal and final.
     pub args: Vec<String>,
     /// `NAME=value` written in front of this step's own program.
@@ -335,6 +362,14 @@ impl Step {
     /// quoted so that no two argument lists can render alike.
     pub fn display(&self) -> String {
         self.render(&self.resolved.to_string_lossy())
+    }
+
+    /// The file this step runs, after the path that starts it where that is another path.
+    ///
+    /// What a prompt shows under [`Step::as_written`], so the person answering sees both paths an
+    /// entry for the step is keyed on.
+    pub fn binary(&self) -> String {
+        started_through(&self.started_as, &self.resolved)
     }
 
     /// The step as the line wrote it.
@@ -383,7 +418,18 @@ impl Step {
     /// directory and that is the one the prompt showed. An entry covers that tree and no other, so
     /// passing a tree the person was not shown would record a grant nobody gave.
     pub fn command(&self, directory: &Path) -> crate::programs::Command {
-        crate::programs::Command::new(self.resolved.clone(), self.args.clone(), directory)
+        // Left out for the reasons `Policy::every_step_vouched` gives: an assignment is refused
+        // before an entry is offered, and a route is the write question's.
+        let Step {
+            program: _,
+            resolved,
+            started_as,
+            args,
+            environment: _,
+            routes: _,
+        } = self;
+        crate::programs::Command::new(resolved.clone(), args.clone(), directory)
+            .started_as(started_as.clone())
     }
 }
 
@@ -557,10 +603,10 @@ impl Plan {
     /// single-use grant needs: a grant left unconsumed by a failed run must not be satisfiable by
     /// a second plan the planner shapes to collide with the first.
     ///
-    /// Keyed on each step's resolved file rather than on the name the line used, for the reason a
-    /// vouched-for command is: `$PATH` decides what a bare name means, and an endorsement must not
-    /// follow a name onto a different binary. The line itself is not part of this, because two
-    /// spellings of one plan are one plan.
+    /// Keyed on each step's resolved file and the path it is started by rather than on the name the
+    /// line used, for the reason a vouched-for command is: `$PATH` decides what a bare name means,
+    /// and an endorsement must not follow a name onto a different binary. The line itself is not
+    /// part of this, because two spellings that reach one binary by one path are one plan.
     ///
     /// Every path in it is spelled by [`Spelling`], because a rendering of a path is not injective:
     /// two files whose names differ only in bytes that are not valid UTF-8 render alike, and a
@@ -650,14 +696,17 @@ fn encode(out: &mut String, steps: &Steps) {
 fn encode_step(out: &mut String, step: &Step) {
     let Step {
         // The name the line used is for the screen. The file it resolved to is the identity, and
-        // keying on the name as well would give one binary two keys.
+        // the path it is started by is what else decides what runs, so between them they hold
+        // everything the name did.
         program: _,
         resolved,
+        started_as,
         args,
         environment,
         routes,
     } = step;
     length_prefixed_path(out, resolved);
+    length_prefixed_path(out, started_as);
     out.push_str(&format!("a{}|", args.len()));
     for arg in args {
         length_prefixed(out, arg);
@@ -693,6 +742,7 @@ mod tests {
         Step {
             program: program.to_string(),
             resolved: PathBuf::from(format!("/usr/bin/{program}")),
+            started_as: PathBuf::from(format!("/usr/bin/{program}")),
             args: args.iter().map(|arg| (*arg).to_string()).collect(),
             environment: Vec::new(),
             routes: Vec::new(),
@@ -807,6 +857,20 @@ mod tests {
         );
     }
 
+    /// And on the path the file is started by, so a grant given for a venv's `python` is not
+    /// redeemable by the interpreter it links to (RUN-8).
+    #[test]
+    fn two_spellings_of_one_binary_encode_apart() {
+        let direct = step("python3.12", &["-V"]);
+        let mut through_a_link = step("python3.12", &["-V"]);
+        through_a_link.program = "venv/bin/python".to_string();
+        through_a_link.started_as = PathBuf::from("/work/venv/bin/python");
+        assert_ne!(
+            plan(Steps::Pipeline(vec![direct])).canonical(),
+            plan(Steps::Pipeline(vec![through_a_link])).canonical()
+        );
+    }
+
     /// A path whose last byte is not valid UTF-8, so no rendering of it can show that byte.
     #[cfg(unix)]
     fn unshowable(last: u8) -> PathBuf {
@@ -829,6 +893,7 @@ mod tests {
         let resolving_to = |last: u8| {
             let mut only = step("prog", &[]);
             only.resolved = unshowable(last);
+            only.started_as = unshowable(last);
             plan(Steps::Pipeline(vec![only]))
         };
         assert_ne!(
@@ -838,8 +903,9 @@ mod tests {
         );
         assert_eq!(
             resolving_to(0xff).canonical(),
-            // `0:` is the empty standard input, which every plan encodes whether it has one.
-            format!("t5:/work0:P1|{UNSHOWABLE_FF}a0|e0|r0|"),
+            // `0:` is the empty standard input, which every plan encodes whether it has one. The
+            // path twice, as the file and as the path that starts it.
+            format!("t5:/work0:P1|{UNSHOWABLE_FF}{UNSHOWABLE_FF}a0|e0|r0|"),
             "the endorsement is bound to the path's own bytes"
         );
     }
@@ -1097,6 +1163,14 @@ mod tests {
         assert_eq!(stage.display(), r"prog 'it\'s'");
     }
 
+    /// An argument holding `>` is quoted, so it cannot draw as the arrow between a link and the file
+    /// it leads to.
+    #[test]
+    fn an_argument_holding_an_arrow_is_quoted() {
+        let stage = Stage::new("prog", vec!["->".into(), "/usr/bin/b".into()]);
+        assert_eq!(stage.display(), "prog '->' /usr/bin/b");
+    }
+
     /// A backslash is what does the escaping, so an argument containing one has to escape it too
     /// or a trailing backslash would escape the closing quote.
     #[test]
@@ -1212,6 +1286,7 @@ mod tests {
             let mut out = plan(Steps::Pipeline(vec![Step {
                 program: "sed".to_string(),
                 resolved: PathBuf::from("/usr/bin/sed"),
+                started_as: PathBuf::from("/usr/bin/sed"),
                 args: vec!["-n".into(), "2p".into()],
                 environment: Vec::new(),
                 routes: Vec::new(),

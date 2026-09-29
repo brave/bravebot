@@ -1360,6 +1360,19 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
         return Action::Quit;
     }
     if line.trim() == MODEL_COMMAND {
+        // Every turn asks for the definition's model, so a pick would change what `/status` says
+        // and not what any turn asks for (CLI-17).
+        if let Some(refused) = session.standing_definition().and_then(|standing| {
+            let model = standing.model.as_ref()?;
+            Some(t!(
+                session_model_is_the_definitions,
+                definition = &standing.name,
+                model = model
+            ))
+        }) {
+            session.note(refused);
+            return Action::Redraw;
+        }
         return Action::ChooseModel;
     }
     if let Some(name) = argument_to(line, THEME_COMMAND) {
@@ -1538,31 +1551,82 @@ fn address(
         session.note(t!(agent_resolved, names = names));
         return Action::Redraw;
     }
-    let Some(definition) = definitions.get(name) else {
-        session.note(t!(agent_no_such_definition, name = name, names = names));
-        return Action::Redraw;
+    let addressed = match definition_named(config, definitions, name) {
+        Ok(addressed) => addressed,
+        Err(refused) => {
+            session.note(refused);
+            return Action::Redraw;
+        }
     };
     if task.is_empty() {
         session.note(t!(agent_needs_a_task, name = name));
         return Action::Redraw;
     }
+    Action::Submit(session.address(addressed, task, pasted, attached))
+}
+
+/// Work every turn of `session` under the definition `name` selects, or say why it selects none.
+///
+/// Matched against the set a turn starting now would resolve under `trust`, as a `/agent` line is
+/// (ADDRESS-5). The note is shown once at the start, and `/status` shows the definition for the
+/// rest of the session, because the note scrolls away.
+///
+/// A definition naming a model makes that the session's model, so its window is asked for here, as
+/// the session's own model's was when the session opened.
+fn work_under(
+    session: &mut Session,
+    config: &mut Config,
+    workspace: &Workspace,
+    home: Option<&std::path::Path>,
+    trust: &TrustStore,
+    name: &str,
+) -> Result<(), String> {
+    let definitions =
+        bravebot_agent::agents::resolved(workspace, home, trust.clone(), &mut Trail::new());
+    let definition = definition_named(config, &definitions, name)?;
+    let names_a_model = definition.model.is_some();
+    session.note(t!(session_working_under, definition = name));
+    session.work_under(definition);
+    if names_a_model {
+        adopt_budget_for_current_model(session, config);
+    }
+    Ok(())
+}
+
+/// The definition `name` selects from `definitions`, or the sentence saying why it selects none.
+///
+/// Applies the two refusals a `/agent` line with a task can meet, in the same words, so a name
+/// given on the command line is refused as the same name typed into the box would be (ADDRESS-5,
+/// ADDRESS-11).
+pub fn definition_named(
+    config: &Config,
+    definitions: &bravebot_core::delegate::Definitions,
+    name: &str,
+) -> Result<crate::state::Addressed, String> {
+    let Some(definition) = definitions.get(name) else {
+        return Err(t!(
+            agent_no_such_definition,
+            name = name,
+            names = definitions.names().join(", ")
+        )
+        .to_string());
+    };
     if let Some(written) = definition.model()
         && bravebot_agent::backend::Backend::needs_sign_in(config, &config.model_named(written))
     {
-        session.note(t!(
+        return Err(t!(
             delegate_model_needs_sign_in,
             definition = name,
             model = written
-        ));
-        return Action::Redraw;
+        )
+        .to_string());
     }
-    let addressed = crate::state::Addressed {
+    Ok(crate::state::Addressed {
         name: name.to_string(),
         model: definition
             .model()
             .map(|written| config.model_named(written)),
-    };
-    Action::Submit(session.address(addressed, task, pasted, attached))
+    })
 }
 
 /// The keys that mean the same thing whether or not a turn is running.
@@ -2152,10 +2216,24 @@ pub enum Start {
     Choose,
     /// A session read back off disk, continuing where it left off.
     Resuming(Box<bravebot_session::sessions::Record>),
+    /// A new session whose every turn addresses the definition `--agent` named (CLI-17).
+    ///
+    /// Always a new session, because a record does not store the name, and a resumed conversation
+    /// would mix the planner's earlier turns with the definition's later ones.
+    Under(String),
+}
+
+/// How a session ended.
+#[derive(Debug)]
+pub enum Ended {
+    /// The person left, with the session left behind where there is one to pick up again.
+    Left(Option<bravebot_session::sessions::Resumable>),
+    /// The session never began, because the definition it was started under was refused for this
+    /// reason. The caller prints it after the terminal is handed back, so it stays on the screen.
+    Refused(String),
 }
 
 /// Run the interface until the user leaves.
-/// Returns the session left behind, where there is one to pick up again.
 pub fn run(
     config: &mut Config,
     workspace: &Workspace,
@@ -2163,7 +2241,7 @@ pub fn run(
     servers: crate::state::Servers,
     start: Start,
     skip_permissions: bool,
-) -> io::Result<Option<bravebot_session::sessions::Resumable>> {
+) -> io::Result<Ended> {
     // Before the terminal is taken, because the request for no colour decides whether it is asked
     // about its background on the way in, and that question happens inside the takeover.
     crate::theme::sense_no_color();
@@ -2199,7 +2277,7 @@ pub fn run(
         // The picker refuses Enter on one of these, and `--resume` refuses it too. If a record
         // still arrives here, loading its empty conversation as a turn would continue a run
         // that cannot be continued.
-        Some(Start::Resuming(record)) if record.manifest.is_some() => Ok(None),
+        Some(Start::Resuming(record)) if record.manifest.is_some() => Ok(Ended::Left(None)),
         Some(start) => event_loop(
             &mut terminal,
             config,
@@ -2211,7 +2289,7 @@ pub fn run(
         ),
         // Leaving at the picker resumed nothing and started nothing, so there is nothing to say
         // about picking anything up.
-        None => Ok(None),
+        None => Ok(Ended::Left(None)),
     };
 
     // Restore the terminal even if the loop failed: leaving a user in raw mode on an
@@ -2437,10 +2515,8 @@ fn show_transcript(
 ///
 /// Where it is, and not only what it is called: `/cd` moves the record, and the shell this is
 /// eventually printed into did not move with it.
-fn left_behind(
-    stored: &bravebot_session::sessions::Handle,
-) -> Option<bravebot_session::sessions::Resumable> {
-    stored.to_resume()
+fn left_behind(stored: &bravebot_session::sessions::Handle) -> Ended {
+    Ended::Left(stored.to_resume())
 }
 
 /// The directory this session writes what is not part of the project into, made and reachable.
@@ -2679,7 +2755,7 @@ fn event_loop(
     mut mcp_servers: crate::state::Servers,
     start: Start,
     skip_permissions: bool,
-) -> io::Result<Option<bravebot_session::sessions::Resumable>> {
+) -> io::Result<Ended> {
     // Owned rather than borrowed, because `/add-dir` opens another directory partway through and
     // the turns after it must see one. The primary root never changes, so nothing keyed on it
     // (the session record, where AGENTS.md is looked for) moves underneath.
@@ -2699,7 +2775,7 @@ fn event_loop(
         .on_tier(config);
     // The saved pick where a checkout's settings do not outrank it (BACKEND-11), before the window
     // below is asked for, which is the window of whichever model this settles on.
-    session.adopt_model(&settings);
+    session.adopt_model(&settings, config);
     let absent = std::mem::take(&mut mcp_servers.notes);
     session.servers = mcp_servers;
     // Windows reports modifiers on every key without being asked, and crossterm says it cannot be
@@ -2717,13 +2793,19 @@ fn event_loop(
     // What the session begins holding, which is what decides whether the startup question is put
     // to its user at all. Read off `start` before the match below consumes it.
     let beginning = beginning_of(&start, workspace.root());
+    // Read off `start` for the same reason, and matched only after the question below is answered,
+    // because the set includes the checkout's definitions only when the person vouched for them.
+    let under = match &start {
+        Start::Under(name) => Some(name.clone()),
+        _ => None,
+    };
 
     // Outlives every turn, which is the point: a turn begins with the exchange so far rather
     // than with nothing, so the user can say "try that again" and be understood. A resumed
     // session begins with an exchange that outlived the process it happened in.
     let (mut conversation, mut stored, programs) = match start {
         // Already answered before the loop was entered: the picker runs once, in `run`.
-        Start::Fresh | Start::Choose => (
+        Start::Fresh | Start::Choose | Start::Under(_) => (
             Conversation::new(),
             bravebot_session::sessions::Handle::begin(
                 workspace.root(),
@@ -2897,6 +2979,22 @@ fn event_loop(
             permissions,
         },
     );
+
+    // Matched after every startup question, because the set holds the checkout's definitions only
+    // when the answer vouched for them. A name matching nothing starts no session, because a
+    // planner's session in its place would look the same on screen and have more tools (CLI-17).
+    if let Some(name) = &under
+        && let Err(refused) = work_under(
+            &mut session,
+            config,
+            &workspace,
+            bravebot_agent::home::directory().as_deref(),
+            &answers.trust,
+            name,
+        )
+    {
+        return Ok(Ended::Refused(refused));
+    }
 
     // Drawn when something has changed rather than on every pass. A drag arrives as a stream of
     // positions, and a frame for each costs more than the whole gesture is worth: with a long
@@ -3164,6 +3262,7 @@ fn event_loop(
                     added_directories: workspace.added_directories(),
                     scratch: scratch.as_ref().map(SessionScratch::path),
                     model: session.model(),
+                    agent: session.standing_definition(),
                     effort: session.effort(),
                     model_reads_effort: session.model_reads_effort(),
                     served_model: session.served_model(),
@@ -4214,7 +4313,7 @@ fn choose_model(
                 if !chosen.reads_effort && session.effort().is_some() {
                     session.note(t!(session_effort_not_read));
                 }
-                session.choose_model(chosen.key);
+                session.choose_model(chosen.key, config);
             }
         }
         Err(detail) => session.note(t!(session_models_unavailable, problem = detail)),
@@ -4723,7 +4822,7 @@ enum Beginning {
 fn beginning_of(start: &Start, root: &std::path::Path) -> Beginning {
     match start {
         // Choosing has already resolved into one of the other two by the time this runs.
-        Start::Fresh | Start::Choose => Beginning::New,
+        Start::Fresh | Start::Choose | Start::Under(_) => Beginning::New,
         // Read under the directory being resumed into rather than the one recorded, so a project
         // that was moved or renamed since resumes with its rules about the same files.
         Start::Resuming(record) => Beginning::Resumed(record.trust_map(root)),
@@ -6094,8 +6193,9 @@ fn run_turn_animated(
     // until this the line somebody typed is nowhere on their screen.
     redraw(terminal, session)?;
 
-    // Taken, so only the turn a person's `/agent` line started carries a name. Kept past the turn
-    // as well, because a stop puts the line back as it was typed, name and all.
+    // Taken, so only the turn a person's `/agent` line started carries that line's name. Every
+    // other turn carries the definition the session was started under, if any (CLI-17). Kept past
+    // the turn as well, because a stop puts the line back as it was typed, name and all.
     let addressed = session.take_addressing();
 
     // Before the worker starts, because a sign-in needs the terminal and this is the thread that
@@ -6103,7 +6203,7 @@ fn run_turn_animated(
     // loop redraws over.
     //
     // Not for a turn whose definition named its own model: nothing in it asks the session's, and
-    // `/agent` has already refused a definition whose model needs a sign-in.
+    // `/agent` and `--agent` have already refused a definition whose model needs a sign-in.
     if addressed
         .as_ref()
         .is_none_or(|addressed| addressed.model.is_none())
@@ -6620,7 +6720,8 @@ fn finish_turn(
     note_a_refused_level(session, refused);
 
     let carried = if let Err(turn::TurnError::Cancelled { attempts }) = &outcome {
-        finish_cancelled_turn(session, &line.as_typed(), *attempts);
+        let typed = line.as_typed(session.standing_definition());
+        finish_cancelled_turn(session, &typed, *attempts);
         carried
     } else {
         // The backend decides how to compare the requested and reported model names.
@@ -6907,10 +7008,15 @@ struct Line<'a> {
 impl Line<'_> {
     /// The line as the person typed it. Only the task went to the planner, but a stopped turn
     /// returning only the task would have Enter send it to the session's planner instead.
-    fn as_typed(&self) -> String {
+    ///
+    /// Only the task where the name is the session's standing definition, because Enter on the task
+    /// already addresses it, and a line naming it again would look like a second definition.
+    fn as_typed(&self, standing: Option<&crate::state::Addressed>) -> String {
         match self.addressed {
-            Some(addressed) => format!("{AGENT_COMMAND} {} {}", addressed.name, self.text),
-            None => self.text.to_string(),
+            Some(addressed) if standing.is_none_or(|standing| standing.name != addressed.name) => {
+                format!("{AGENT_COMMAND} {} {}", addressed.name, self.text)
+            }
+            _ => self.text.to_string(),
         }
     }
 
@@ -13100,7 +13206,7 @@ mod tests {
     fn an_addressed_turn_is_held_against_the_model_its_definition_named() {
         let config = a_config_needing_no_sign_in();
         let mut session = Session::new("none");
-        session.choose_model("the-sessions-model");
+        session.choose_model("the-sessions-model", &config);
         let named = crate::state::Addressed {
             name: "rule-reviewer".to_string(),
             model: Some("the-definitions-model".to_string()),
@@ -13254,6 +13360,234 @@ mod tests {
             Some("rule-reviewer asked for haiku, which needs a sign-in first, so it did not run")
         );
         assert!(session.take_addressing().is_none(), "a turn started anyway");
+    }
+
+    /// The definition a session started under `--agent` works under, as the command line leaves
+    /// it on the session.
+    fn standing() -> crate::state::Addressed {
+        crate::state::Addressed {
+            name: "rule-reviewer".to_string(),
+            model: None,
+        }
+    }
+
+    /// CLI-17. A session started under a definition addresses every turn to it, including a `/loop`
+    /// tick. An unaddressed tick would have every tool the session has (ADDRESS-7). The name on the
+    /// turn is also what makes the kernel withhold the later look and the watch (ADDRESS-8).
+    #[test]
+    fn a_session_started_under_a_definition_addresses_every_turn_a_loop_tick_included() {
+        let mut session = Session::new("none");
+        session.work_under(standing());
+
+        for turn in ["review the diff", "and the tests"] {
+            type_line(&mut session, turn);
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Submit(turn.to_string())
+            );
+            assert_eq!(
+                session.take_addressing().map(|addressed| addressed.name),
+                Some("rule-reviewer".to_string()),
+                "the typed turn {turn:?} went to the session's planner"
+            );
+            session.complete("reviewed", Vec::new(), 0);
+        }
+
+        assert!(
+            session
+                .start_loop(
+                    crate::loops::request("5m check the build"),
+                    Vec::new(),
+                    Vec::new()
+                )
+                .is_some(),
+            "the loop sent no first tick"
+        );
+        assert!(
+            session
+                .looping()
+                .and_then(|running| running.tick())
+                .is_some(),
+            "the turn started is not a tick, so this says nothing about one"
+        );
+        assert_eq!(
+            session.take_addressing().map(|addressed| addressed.name),
+            Some("rule-reviewer".to_string()),
+            "the loop's tick went to the session's planner"
+        );
+    }
+
+    /// CLI-17's `/agent` inside such a session. The line addresses another definition for one turn,
+    /// and the next turn goes to the session's definition again.
+    #[test]
+    fn a_definition_named_on_the_line_lasts_one_turn_under_the_one_the_session_works_under() {
+        let mut session = Session::new("none");
+        session.work_under(standing());
+        let mut definitions = a_resolved_set(None);
+        definitions.insert(bravebot_core::delegate::Definition::from_file(
+            "diff-checker",
+            "Checks a diff.",
+            bravebot_core::delegate::Kind::Reader,
+            None,
+            "CHECK",
+            "~/.bravebot/agents",
+        ));
+
+        assert_eq!(
+            address(
+                &mut session,
+                &a_config_needing_no_sign_in(),
+                &definitions,
+                "diff-checker check the diff",
+                Vec::new(),
+                Vec::new()
+            ),
+            Action::Submit("check the diff".to_string())
+        );
+        assert_eq!(
+            session.take_addressing().map(|addressed| addressed.name),
+            Some("diff-checker".to_string()),
+            "the line's definition was not the one its turn addressed"
+        );
+        assert_eq!(
+            session.take_addressing().map(|addressed| addressed.name),
+            Some("rule-reviewer".to_string()),
+            "the next turn did not go back to the session's definition"
+        );
+    }
+
+    /// CLI-17. A definition that names a model makes it the session's model, since every turn asks
+    /// for it, and `/model` says so instead of opening a picker whose pick no turn would ask for.
+    /// A definition naming no model leaves both alone.
+    #[test]
+    fn a_session_under_a_definition_naming_a_model_works_on_it_and_refuses_the_picker() {
+        let open_the_picker = |session: &mut Session| {
+            type_line(session, MODEL_COMMAND);
+            handle_key(session, key(KeyCode::Enter))
+        };
+
+        let config = a_config_needing_no_sign_in();
+        let mut session = Session::new("none");
+        session.choose_model("the-sessions-model", &config);
+        session.work_under(standing());
+        assert_eq!(session.model(), Some("the-sessions-model"));
+        assert_eq!(open_the_picker(&mut session), Action::ChooseModel);
+
+        let config = a_config_needing_no_sign_in();
+        let mut session = Session::new("none");
+        session.choose_model("the-sessions-model", &config);
+        session.work_under(crate::state::Addressed {
+            model: Some("the-definitions-model".to_string()),
+            ..standing()
+        });
+        assert_eq!(
+            session.model(),
+            Some("the-definitions-model"),
+            "the window and the effort would be the model no turn asks for"
+        );
+        assert_eq!(
+            open_the_picker(&mut session),
+            Action::Redraw,
+            "the picker opened although no turn would ask for its pick"
+        );
+        assert_eq!(
+            said_in_the_transcript(&session).last().map(String::as_str),
+            Some(
+                "every turn is addressed to rule-reviewer, which asks for the-definitions-model, \
+                 so /model has nothing to change; start bravebot without --agent to pick a model"
+            )
+        );
+    }
+
+    /// A stop puts the line back to be sent again, and Enter on a bare task in this session already
+    /// addresses its definition. So a turn addressed to that definition comes back as the task
+    /// alone, and only a line that named another definition comes back with the name.
+    #[test]
+    fn a_stopped_turn_comes_back_naming_a_definition_only_where_the_session_would_not() {
+        let standing = standing();
+        let other = crate::state::Addressed {
+            name: "diff-checker".to_string(),
+            model: None,
+        };
+        let line = |addressed| Line {
+            text: "review the diff",
+            wrote: Wrote::ThePerson,
+            addressed,
+        };
+
+        assert_eq!(
+            line(Some(&standing)).as_typed(Some(&standing)),
+            "review the diff"
+        );
+        assert_eq!(
+            line(Some(&other)).as_typed(Some(&standing)),
+            "/agent diff-checker review the diff"
+        );
+        assert_eq!(
+            line(Some(&standing)).as_typed(None),
+            "/agent rule-reviewer review the diff",
+            "a session under no definition lost the name its line typed"
+        );
+    }
+
+    /// CLI-17. A name on the command line is matched against the set a turn starting now would
+    /// resolve, as a `/agent` line is (ADDRESS-5). A name nobody wrote is refused with the names
+    /// that exist and sets no definition, and a name that exists is announced once.
+    #[test]
+    fn a_name_from_the_command_line_is_worked_under_where_it_was_written_and_refused_where_not() {
+        let home = crate::testutil::scratch_dir("bravebot-work-under-home");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join("agents")).expect("scratch");
+        std::fs::write(
+            home.join("agents").join("rule-reviewer.md"),
+            "---\nname: rule-reviewer\ndescription: Checks a diff.\nkind: reader\n---\n\nREVIEW\n",
+        )
+        .expect("write the definition");
+        let workspace = workspace_for_test();
+        let trust = TrustStore::new(workspace.root());
+        let mut config = a_config_needing_no_sign_in();
+
+        let mut session = Session::new("none");
+        assert_eq!(
+            work_under(
+                &mut session,
+                &mut config,
+                &workspace,
+                Some(&home),
+                &trust,
+                "nobody"
+            ),
+            Err(
+                "there is no definition called nobody; this session resolved reader, checker, \
+                 worker, rule-reviewer"
+                    .to_string()
+            )
+        );
+        assert!(
+            session.standing_definition().is_none(),
+            "a refused name was worked under anyway"
+        );
+
+        assert_eq!(
+            work_under(
+                &mut session,
+                &mut config,
+                &workspace,
+                Some(&home),
+                &trust,
+                "rule-reviewer"
+            ),
+            Ok(())
+        );
+        assert_eq!(session.standing_definition(), Some(&standing()));
+        assert_eq!(
+            said_in_the_transcript(&session).last().map(String::as_str),
+            Some(
+                "every turn is addressed to rule-reviewer; /agent <name> <task> addresses another \
+                 for one turn"
+            )
+        );
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     /// MANIFEST-11. Escape at the plan prompt is answered as a decline, so a run stopped there
@@ -13735,6 +14069,7 @@ mod tests {
         .map(|(name, source)| crate::skills::Skill {
             name: name.to_string(),
             description: format!("what {name} is for"),
+            argument_hint: None,
             source,
         })
         .collect()
@@ -13836,10 +14171,10 @@ mod tests {
         assert_eq!(session.input(), "/mode ");
     }
 
-    /// Read once as a slash word begins rather than once a key, and let go once it ends, so a
-    /// skill written since is offered the next time.
+    /// Read once as the line first holds a slash word rather than once a key, and let go once it
+    /// holds none, so a skill written since is offered the next time.
     #[test]
-    fn the_skills_are_resolved_once_a_word_and_let_go_after_it() {
+    fn the_skills_are_resolved_once_a_line_and_let_go_after_it() {
         let mut session = Session::new("none");
         let mut resolved = 0;
         for c in "/re x /c".chars() {
@@ -13848,11 +14183,28 @@ mod tests {
                 resolved += 1;
                 skills()
             });
-            if c == ' ' {
-                assert!(session.held_skills().is_empty(), "held past the word");
-            }
+            assert!(
+                !session.held_skills().is_empty(),
+                "let go with a slash word still in the line"
+            );
         }
-        assert_eq!(resolved, 2, "one read for each of the two slash words");
+        assert_eq!(resolved, 1, "one read for the line, not one for each word");
+
+        for _ in 0.."/re x /c".len() {
+            handle_key(&mut session, key(KeyCode::Backspace));
+            session.settle_skills(|| {
+                resolved += 1;
+                skills()
+            });
+        }
+        assert_eq!(session.input(), "");
+        assert!(session.held_skills().is_empty(), "held past the line");
+        handle_key(&mut session, key(KeyCode::Char('/')));
+        session.settle_skills(|| {
+            resolved += 1;
+            skills()
+        });
+        assert_eq!(resolved, 2, "a slash on a line that had none reads again");
     }
 
     /// With the `!` mode armed a slash begins a path, so no skill is read or offered, and inside a
@@ -17996,9 +18348,12 @@ mod tests {
             "moving forgot a run prompt already drawn"
         );
         assert!(
-            !answers
-                .programs
-                .contains(&make.program, &make.args, workspace.root()),
+            !answers.programs.contains(
+                &make.program,
+                &make.started_as,
+                &make.args,
+                workspace.root()
+            ),
             "a program vouched for in one tree covered the tree moved to"
         );
 

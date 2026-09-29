@@ -8084,7 +8084,6 @@ fn a_command_the_planner_read_is_glimpsed_from_its_end() {
     std::fs::write(scratch.path.join("build.log"), log).unwrap();
     std::fs::write(scratch.path.join("other.log"), "SENTINEL-XYZZY\n").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
-    let cat = bravebot_agent::programs::resolve("cat", &scratch.path).expect("cat is installed");
 
     let (endpoint, _received) = serve_sequence(vec![
         tool_request("run", r#"{"command":"cat build.log"}"#),
@@ -8106,7 +8105,7 @@ fn a_command_the_planner_read_is_glimpsed_from_its_end() {
         &mut RecordingSink::new(),
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::from_iter([vouched_in(
-            &cat,
+            "cat",
             &["build.log"],
             &scratch.path,
         )]),
@@ -12493,19 +12492,24 @@ fn a_line_discarding_its_output_runs_and_names_no_file_to_write() {
 
 /// A vouched entry for `program` under `args`, given in `tree`.
 ///
+/// Looked up as a run looks it up, so the entry holds the path the plan starts it by. Where
+/// `$PATH` reaches the program through a link, an entry for the file alone matches no plan.
+///
 /// `tree`'s canonical spelling, because that is the one a run's directory comes back in: an entry
 /// spelled any other way names a tree no run is ever in, so it would cover nothing and a test
 /// resting on it would pass for the wrong reason.
 fn vouched_in(
-    program: &std::path::Path,
+    program: &str,
     args: &[&str],
     tree: &std::path::Path,
 ) -> bravebot_core::programs::Command {
+    let found = bravebot_agent::programs::find(program, tree).expect("the program exists");
     bravebot_core::programs::Command::new(
-        program.display().to_string(),
+        found.resolved,
         args.iter().map(|a| a.to_string()).collect(),
         tree.canonicalize().expect("the tree exists"),
     )
+    .started_as(found.started_as)
 }
 
 /// The point of the list: a session that already vouched for the program is not asked again, and
@@ -12513,8 +12517,6 @@ fn vouched_in(
 #[test]
 fn a_vouched_program_runs_without_asking() {
     let scratch = Scratch::new("run-vouched");
-    let touch =
-        bravebot_agent::programs::resolve("touch", &scratch.path).expect("touch is installed");
     let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::reject());
     let seen = confirmer.seen.clone();
 
@@ -12523,7 +12525,7 @@ fn a_vouched_program_runs_without_asking() {
         r#"{"command":"touch quiet.txt"}"#,
         &mut confirmer,
         bravebot_core::programs::TrustedPrograms::from_iter([vouched_in(
-            &touch,
+            "touch",
             &["quiet.txt"],
             &scratch.path,
         )]),
@@ -12735,7 +12737,6 @@ fn a_quarantined_reference_is_fed_to_a_program_the_planner_may_not_read() {
 fn a_private_reference_fed_to_a_vouched_line_is_still_put_to_a_person() {
     let scratch = Scratch::new("run-fed-private");
     std::fs::write(scratch.path.join("page.txt"), "alpha\nbeta\ngamma\n").unwrap();
-    let sed = bravebot_agent::programs::resolve("sed", &scratch.path).expect("sed is installed");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, _received) = serve_sequence(vec![
         tool_request("run", r#"{"command":"cat page.txt"}"#),
@@ -12759,7 +12760,7 @@ fn a_private_reference_fed_to_a_vouched_line_is_still_put_to_a_person() {
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::from_iter([vouched_in(
-            &sed,
+            "sed",
             &["-n", "2p"],
             &scratch.path,
         )]),
@@ -13181,7 +13182,6 @@ fn a_vouched_commands_output_reaches_the_planner() {
     let scratch = Scratch::new("run-vouched-output");
     std::fs::write(scratch.path.join("secret.txt"), "SENTINEL-XYZZY\n").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
-    let cat = bravebot_agent::programs::resolve("cat", &scratch.path).expect("cat is installed");
 
     let (endpoint, received) = serve_sequence(vec![
         tool_request("run", r#"{"command":"cat secret.txt"}"#),
@@ -13203,7 +13203,7 @@ fn a_vouched_commands_output_reaches_the_planner() {
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::from_iter([vouched_in(
-            &cat,
+            "cat",
             &["secret.txt"],
             &scratch.path,
         )]),
@@ -13231,7 +13231,6 @@ fn the_planner_is_told_how_a_run_it_may_read_ended() {
     // Vouched, so what it printed is trusted and the planner is shown the output rather than a
     // reference to it. `false` prints nothing, which leaves the exit status as the whole of what
     // there is to report.
-    let program = bravebot_agent::programs::resolve("false", &scratch.path).expect("false exists");
 
     let (endpoint, received) = serve_sequence(vec![
         tool_request("run", r#"{"command":"false"}"#),
@@ -13252,7 +13251,7 @@ fn the_planner_is_told_how_a_run_it_may_read_ended() {
         &mut sink,
         trusting_the_workspace(),
         bravebot_core::programs::TrustedPrograms::from_iter([vouched_in(
-            &program,
+            "false",
             &[],
             &scratch.path,
         )]),
@@ -13448,7 +13447,6 @@ fn vouching_for_one_command_does_not_trust_another_of_the_same_program() {
     let scratch = Scratch::new("run-vouched-other");
     std::fs::write(scratch.path.join("other.txt"), "SENTINEL-XYZZY\n").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
-    let cat = bravebot_agent::programs::resolve("cat", &scratch.path).expect("cat is installed");
 
     let (endpoint, received) = serve_sequence(vec![
         tool_request("run", r#"{"command":"cat other.txt"}"#),
@@ -13471,7 +13469,7 @@ fn vouching_for_one_command_does_not_trust_another_of_the_same_program() {
         trusting_the_workspace(),
         // A different argument list, so this entry does not cover the call above.
         bravebot_core::programs::TrustedPrograms::from_iter([vouched_in(
-            &cat,
+            "cat",
             &["secret.txt"],
             &scratch.path,
         )]),
@@ -19590,6 +19588,64 @@ fn an_addressed_turn_runs_under_its_definitions_prompt_model_and_kind() {
     for tool in ["write_file", "edit_file", "run"] {
         assert!(!offered(tool), "a reader was offered {tool}: {request}");
     }
+}
+
+/// `--model` is a person choosing the model for this run (CLI-9), so it outranks the model a
+/// definition names. The definition's prompt and tools still apply, and the turn says which model
+/// it did not ask for, so nobody takes the reply for the definition model's.
+#[test]
+fn a_model_the_command_line_named_outranks_the_definitions_and_the_turn_says_so() {
+    let scratch = Scratch::new("address-outranked");
+    let home = Scratch::new("address-outranked-home");
+    define(
+        &home,
+        "rule-reviewer",
+        "kind: reader\nmodel: haiku\n",
+        "REVIEW-BY-THE-RULES",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) =
+        serve_by_marker(vec![("ADDRESSED-TASK", vec![reply_with("reviewed")])]);
+    let config = config_for(&endpoint);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let outcome = turn::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &addressed("ADDRESSED-TASK", &home, "rule-reviewer").model_outranks_a_definition(true),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let [request] = requests.as_slice() else {
+        panic!("one request, for one round: {requests:?}");
+    };
+    assert!(
+        request.contains(r#""model":"custom-parent-model""#),
+        "the definition's model outranked the one the command line named: {request}"
+    );
+    assert!(
+        request.contains("REVIEW-BY-THE-RULES") && !request.contains(r#""name":"write_file""#),
+        "outranking the model dropped the rest of the definition: {request}"
+    );
+    let said = "rule-reviewer asked for haiku, and --model outranks it, so this run asked for the \
+                model the command line named";
+    assert!(
+        reporter.notices.iter().any(|notice| notice == said),
+        "nobody watching was told the definition's model was not asked for: {:?}",
+        reporter.notices
+    );
+    assert!(
+        outcome.notices.iter().any(|notice| notice == said),
+        "the turn's account did not say the definition's model was not asked for: {:?}",
+        outcome.notices
+    );
 }
 
 /// ADDRESS-8's exception. A later look and a watch each start a turn of the session's planner,
@@ -29601,8 +29657,7 @@ fn vouching_for(
     args: &[&str],
     tree: &std::path::Path,
 ) -> bravebot_core::programs::TrustedPrograms {
-    let resolved = bravebot_agent::programs::resolve(program, tree).expect("the program exists");
-    bravebot_core::programs::TrustedPrograms::from_iter([vouched_in(&resolved, args, tree)])
+    bravebot_core::programs::TrustedPrograms::from_iter([vouched_in(program, args, tree)])
 }
 
 /// The clause's own reproduction. A turn asked to change `.env` backs it up with a `run` line
@@ -29682,13 +29737,10 @@ fn a_refused_line_is_not_put_back_through_a_directory_it_linked_out_of_the_works
     std::fs::create_dir(scratch.path.join("d")).unwrap();
     std::fs::write(elsewhere.path.join("credentials"), &env).unwrap();
     let away = elsewhere.path.to_str().expect("a UTF-8 scratch path");
-    let program = |name: &str| {
-        bravebot_agent::programs::resolve(name, &scratch.path).expect("the program exists")
-    };
     let programs = bravebot_core::programs::TrustedPrograms::from_iter([
-        vouched_in(&program("cat"), &[".env"], &scratch.path),
-        vouched_in(&program("rm"), &["-r", "d"], &scratch.path),
-        vouched_in(&program("ln"), &["-s", away, "d"], &scratch.path),
+        vouched_in("cat", &[".env"], &scratch.path),
+        vouched_in("rm", &["-r", "d"], &scratch.path),
+        vouched_in("ln", &["-s", away, "d"], &scratch.path),
     ]);
 
     let (_home, _reporter, answered) = a_run_turn_scanning(
@@ -31799,14 +31851,13 @@ fn a_redirection_into_a_memory_is_recorded_before_it_opens_it() {
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let memory = scratch.path.join(".bravebot/memory/notes-keeper.md");
 
-    let echo = bravebot_agent::programs::resolve("echo", &scratch.path).expect("echo is installed");
     let vouched = a_run_writing_a_memory(
         &workspace,
         Some(&home),
         "echo OUR-OWN-WORDS > .bravebot/memory/notes-keeper.md",
         bravebot_agent::RunDecision::approve(),
         bravebot_core::programs::TrustedPrograms::from_iter([vouched_in(
-            &echo,
+            "echo",
             &["OUR-OWN-WORDS"],
             &scratch.path,
         )]),

@@ -46,6 +46,9 @@ pub struct Frontmatter {
     pub name: String,
     /// When to use it. This is what the planner decides from, so it says when rather than what.
     pub description: String,
+    /// What follows the name when the skill is invoked, for an interface to show. `argument-hint`
+    /// in the file, and absent when the file has none. Never advertised to the planner.
+    pub argument_hint: Option<String>,
     /// The model its rounds are asked of, as the file wrote it, or nothing where it named none.
     ///
     /// Left as written rather than resolved here, the way a delegate definition's is: resolving an
@@ -64,7 +67,7 @@ pub struct Frontmatter {
 }
 
 /// Every key [`parse_frontmatter`] reads. Anything else is carried out on [`Frontmatter::unread`].
-const READ: [&str; 4] = ["name", "description", "model", "effort"];
+const READ: [&str; 5] = ["name", "description", "argument-hint", "model", "effort"];
 
 /// How a skill asks the rounds that follow it to run.
 ///
@@ -110,6 +113,10 @@ pub fn parse_frontmatter(text: &str) -> Option<Frontmatter> {
     Some(Frontmatter {
         name: name.clone(),
         description: description.clone(),
+        argument_hint: declared
+            .get("argument-hint")
+            .filter(|hint| !hint.is_empty())
+            .cloned(),
         // `inherit` is how other agents' definitions name no model, so one ported from them keeps
         // meaning that rather than sending the word as a model name. The same rule a delegate
         // definition reads a model by, for the same reason.
@@ -316,6 +323,9 @@ pub struct Skill {
     pub name: String,
     /// When to use it, which is what the planner decides from.
     pub description: String,
+    /// What follows the name when it is invoked, for an interface to draw after the name. Not
+    /// part of what the planner is advertised.
+    pub argument_hint: Option<String>,
     /// Where it came from, for the audit trail and for what the user is told.
     pub origin: String,
     /// Which of the three places it came from, for an interface saying so beside its name.
@@ -539,6 +549,7 @@ pub fn discover<S: Sink>(
         catalogue.insert(Skill {
             name: built_in.name.to_string(),
             description: built_in.description.to_string(),
+            argument_hint: None,
             // A string literal in this file, derived from nothing that arrived from anywhere. It
             // is trusted for being this program's own words, which is what the label says.
             body: Labelled::trusted(built_in.body.to_string()),
@@ -624,6 +635,7 @@ fn discover_home<S: Sink>(
                 catalogue.insert(Skill {
                     name: front.name,
                     description: front.description,
+                    argument_hint: front.argument_hint,
                     body,
                     origin,
                     source: Source::Home,
@@ -694,6 +706,7 @@ fn discover_workspace<S: Sink>(
                 catalogue.insert(Skill {
                     name: front.name,
                     description: front.description,
+                    argument_hint: front.argument_hint,
                     body,
                     origin: relative,
                     source: Source::Workspace,
@@ -781,9 +794,10 @@ mod tests {
             Some(Frontmatter {
                 name: "shared".to_string(),
                 description: "works anyway".to_string(),
+                argument_hint: Some("[x]".to_string()),
                 model: None,
                 effort: None,
-                unread: vec!["argument-hint".to_string(), "license".to_string()],
+                unread: vec!["license".to_string()],
             })
         );
     }
@@ -874,6 +888,21 @@ mod tests {
         );
     }
 
+    /// The hint is for the person typing the skill's name. A file without one has none, and an
+    /// empty one is none rather than a blank drawn after the name.
+    #[test]
+    fn an_argument_hint_is_read_when_the_file_has_one() {
+        let with =
+            parse_frontmatter("---\nname: n\ndescription: d\nargument-hint: '[a] <b>'\n---\n")
+                .expect("parses");
+        assert_eq!(with.argument_hint.as_deref(), Some("[a] <b>"));
+        let without = parse_frontmatter("---\nname: n\ndescription: d\n---\n").expect("parses");
+        assert_eq!(without.argument_hint, None);
+        let empty = parse_frontmatter("---\nname: n\ndescription: d\nargument-hint:\n---\n")
+            .expect("parses");
+        assert_eq!(empty.argument_hint, None);
+    }
+
     /// A wrapped sentence contains colons, and a continuation line is not a declaration. Reading
     /// one as a key ends the value early and puts half a sentence in the prompt.
     #[test]
@@ -936,6 +965,7 @@ mod tests {
         catalogue.insert(Skill {
             name: "commit-style".to_string(),
             description: "how commit messages are written here".to_string(),
+            argument_hint: None,
             origin: "SKILL.md".to_string(),
             source: Source::Home,
             runs_as: RunsAs::default(),

@@ -39,6 +39,9 @@ of them drops the last ones, skills first: everything is still typeable in full,
 narrows the list back onto the screen, but a short terminal costs you the discovery the list is there
 for.
 
+A command typed in full is drawn in the prompt's colour, and once a space follows it, the argument
+it takes appears dimly after the cursor until you start typing one.
+
 ## `/status`
 
 Reports everything the session knows about itself:
@@ -95,6 +98,9 @@ session and applies in every directory, except one whose own settings name a
 
 Typing narrows the list rather than walking it, and rows are grouped under the service that answers
 them. See [Configuration](../customize/configuration.md#choosing-a-model).
+
+In a session started with [`--agent`](cli.md#--agent-name) under a definition that names a model,
+every turn uses that model, so `/model` opens no picker and says so.
 
 ## `/theme [name]`
 
@@ -434,7 +440,8 @@ else changes. The run can still ask you a question, keep a task list and ask bef
 what it reads and answers stays in the conversation, exactly as any turn of yours does. The line
 after it goes to the session's own planner again. There is no mode to leave. Stopping the turn
 before it did anything puts the whole `/agent` line back in the box, so Enter addresses the same
-definition again.
+definition again. To address one definition on every line instead, start the session with
+[`--agent <name>`](cli.md#--agent-name).
 
 **It can only take away.** The turn holds what the session holds, cut down to the definition's kind
 and its `tools` line. A `reader` addressed from a session that may write is a turn that may not. A

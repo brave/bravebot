@@ -333,8 +333,9 @@ fn session(url: &str, scratch: &Scratch, writable: bool) -> Session {
     )
 }
 
-/// Answers the MCP prompts as it was told and records them; refuses everything else. With a
-/// `stop`, it stops the turn at the list, as Ctrl-C there does.
+/// Answers the MCP prompts as it was told and records them; records the runs it is asked about and
+/// refuses them, and refuses everything else. With a `stop`, it stops the turn at the list, as
+/// Ctrl-C there does.
 struct Answering {
     list: Decision,
     call: CallDecision,
@@ -342,6 +343,7 @@ struct Answering {
     lists: Vec<ToolListRequest>,
     calls: Vec<McpCallRequest>,
     moves: Vec<MoveRequest>,
+    runs: Vec<bravebot_agent::RunRequest>,
     stop: Option<Cancel>,
 }
 
@@ -354,6 +356,7 @@ impl Answering {
             lists: Vec::new(),
             calls: Vec::new(),
             moves: Vec::new(),
+            runs: Vec::new(),
             stop: None,
         }
     }
@@ -368,6 +371,7 @@ impl Confirmer for Answering {
     }
 
     fn confirm_run(&mut self, request: &bravebot_agent::RunRequest) -> bravebot_agent::RunDecision {
+        self.runs.push(request.clone());
         Unattended.confirm_run(request)
     }
 
@@ -570,6 +574,69 @@ fn a_vouched_list_offers_its_tool_and_a_call_answers_quarantined() {
     assert_eq!(
         session.offering(),
         [("weather".to_string(), Offering::Tools(1))]
+    );
+}
+
+/// What a server answers is private, so a line fed it is put to the person. The line here is
+/// vouched for, writes nothing and runs at the root, which leaves the answer's label as the one
+/// thing that could ask: a result labelled public would reach the program with nobody asked, and
+/// a result can be a person's mail. MCP-1.
+#[test]
+fn a_servers_answer_fed_to_a_vouched_line_is_still_put_to_a_person() {
+    let scratch = Scratch::new("fed-private");
+    let (url, _server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let sed =
+        bravebot_agent::programs::resolve("sed", &scratch.project()).expect("sed is installed");
+    let workspace = Workspace::new(scratch.project()).expect("workspace");
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        tool_request("run", r#"{"command":"sed -n 1p","stdin_ref":"ref:1"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+
+    turn::resume(
+        &config_for(&endpoint),
+        &Egress::new(),
+        &workspace,
+        &Task::new("what is the forecast for Paris").with_mcp(Some(session)),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        TrustStore::new(bravebot_agent::workspace::key_of(workspace.root())),
+        bravebot_core::programs::TrustedPrograms::from_iter([
+            bravebot_core::programs::Command::new(
+                sed.display().to_string(),
+                vec!["-n".to_string(), "1p".to_string()],
+                scratch
+                    .project()
+                    .canonicalize()
+                    .expect("the project exists"),
+            ),
+        ]),
+        None,
+        &Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    assert_eq!(confirmer.calls.len(), 1, "the server's tool was not called");
+    let [run] = confirmer.runs.as_slice() else {
+        panic!(
+            "the server's answer was handed to a vouched-for program with nobody asked: {:?}",
+            confirmer.runs
+        );
+    };
+    assert_eq!(
+        run.stdin.as_deref(),
+        Some("ref:1"),
+        "the line was not fed the answer"
+    );
+    assert!(
+        run.releases_private(),
+        "the prompt did not say the line releases private data"
     );
 }
 

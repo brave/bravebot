@@ -55,6 +55,7 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--model <name>` | the model this run asks for; outranks every other way one is named ([below](#--model-name)) |
 | `--effort <level>` | how hard this run asks the model to think; outranks every other way one is named ([below](#--effort-level)) |
 | `--settings <path>` | read one more settings file, above every layer found ([below](#--settings-path)) |
+| `--agent <name>` | address every turn to one of your definitions, as `/agent` does for one ([below](#--agent-name)) |
 | `--json` | put one result object on stdout in the reply's place ([below](#--json)) |
 | `--trace` | print the audit trail to stderr |
 | `--vet` | let a check answer about a quarantined slot, for this run: it releases what it finds nothing in, and where nobody can be asked it keeps back everything else ([below](#--vet)) |
@@ -67,7 +68,9 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 
 Four flags are taken out of the line before anything dispatches on it, so each may go anywhere and
 each combines with every way of starting, one another included: `--incognito`,
-`--dangerously-skip-permissions`, `--settings` and `--vet`.
+`--dangerously-skip-permissions`, `--settings` and `--vet`. `--agent` is taken out there too, and
+combines with a session, `--plain` and a one-shot run, but not with `--resume`, `--continue`,
+`--fork` or `--mode manifest`.
 
 `--incognito` writes nothing under `~/.bravebot`. See
 [an incognito session](../using/sessions.md#a-session-that-leaves-nothing-behind).
@@ -188,6 +191,40 @@ What is checked is that the file is there. What is in it is read by the rule eve
 a file that is oversized or unparseable leaves the others in force, and `bravebot doctor` lists the
 layers it read, so a named file that did not parse shows up by its absence from that list.
 
+## `--agent <name>`
+
+```sh
+bravebot --agent rule-reviewer
+bravebot --agent rule-reviewer -p "review the diff on this branch"
+```
+
+Addresses every turn of a session, a session in lines or a one-shot run to one of your
+[definitions](../customize/agents.md), from the first turn on. [`/agent`](commands.md#agent-name-task)
+does the same for a single line. Typed lines, `/loop` ticks and `/goal` rounds are all addressed to
+it. A `/agent` line naming another definition addresses that one for one turn, and the next line
+goes back to the one you started with. Replies are drawn under its name, and `/status` shows it.
+
+The name is checked before anything is sent. In a session, that happens after you answer the
+question about the directory, because the set of definitions depends on the answer. **A one-shot run
+reads only your own definitions**, in `~/.bravebot/agents`. It does not ask whether to trust the
+checkout, so it counts the definitions in the checkout's `.bravebot/agents` without reading them,
+and a name that only the checkout defines is refused with a message saying so. A name no definition
+has is refused with the list of names that exist. A definition whose model needs a sign-in this
+machine has not made is also refused. Each refusal exits with status 2.
+
+If `--agent` is given twice, the last name is used. A blank name, or one opening with `-`, is
+refused. A session record does not store the name, so `--agent` is refused with `--resume`,
+`--continue` and `--fork`.
+
+A model the definition names is the one every turn uses. In a session, `/status` shows it as the
+definition's, and `/model` is refused. On a one-shot run, `--model` outranks the definition's model,
+and the run says so on stderr.
+
+:::note
+Under `--agent`, a `/loop` with no interval stops after one tick, because an addressed turn cannot
+schedule the next one. Give the loop an interval to keep it running.
+:::
+
 ## `--json`
 
 ```sh
@@ -199,9 +236,9 @@ finished, failed before the turn began, or was refused something along the way, 
 to tell an empty stdout from a result.
 
 It holds how the run ended, the [status and identifier](#exit-codes), the message where there is one,
-the reply, the model that answered, how many rounds it took, what it cost in tokens, every tool it
-called with what it acted on and whether that call was refused, and every refusal with the principle
-it upholds. A tool is named as the driver matched it rather than by the word you are shown on screen,
+the reply, the model that answered, the definition it was addressed to under `agent` (`null` where
+none was), how many rounds it took, what it cost in tokens, every tool it called with what it acted
+on and whether that call was refused, and every refusal with the principle it upholds. A tool is named as the driver matched it rather than by the word you are shown on screen,
 and what a call acted on is the name it was given rather than a resolved path.
 
 Progress, the message and the audit trail stay on stderr, exactly as they do without the flag.
@@ -233,8 +270,8 @@ for that reason and names the file that holds the answer: delete the lines about
 it to be asked again.
 
 stdin must be a terminal, and `--plain` is refused where it is not, naming `-p` as the invocation
-that reads a pipe. It composes with `--incognito`, `--dangerously-skip-permissions` and `--settings`,
-and with nothing else: it starts a session rather than describing one.
+that reads a pipe. It composes with `--incognito`, `--dangerously-skip-permissions`, `--settings` and
+`--agent`, and with nothing else: it starts a session rather than describing one.
 
 **What it does not have**, each being a thing the interface draws or a thing that needs what it
 draws: the scroller and its search, the key list, the slash commands, `@` naming a file, a picture on

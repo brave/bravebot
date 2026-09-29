@@ -2,8 +2,9 @@
 name: check-spec
 description:
   'Check that the implementation matches docs/specs, clause by clause. Runs the
-  mechanical pass (clause numbering, verified-by resolution, governs, guards, the
-  README table) and then a conformance review of the governed code, then drafts one
+  mechanical pass (clause numbering, renumbering against main, verified-by
+  resolution, governs, guards, the README table) and then a conformance review of
+  the governed code, then drafts one
   issue per finding for a person to confirm before any of them is posted. Triggers
   on: check spec, /check-spec, make check-spec, does the code match the spec, spec
   conformance, spec drift, file issues for spec gaps.'
@@ -207,7 +208,9 @@ first, and how many drafts are waiting. Nothing else. The report is the delivera
 
 | Check | Pass | Fails on |
 |---|---|---|
-| Clause ids in order, never renumbered, never duplicated | mechanical | error |
+| Clause ids never duplicated, with no gap, in any order down the file | mechanical | error |
+| A clause id still names the clause it named on main, unless `agents/renumbered-clauses.txt` says otherwise | mechanical | error |
+| Every line of `agents/renumbered-clauses.txt` names a clause this tree has | mechanical | error |
 | Every clause carries an anchor so it can be linked to | mechanical | error |
 | A withdrawn clause says what replaced it | mechanical | error |
 | Every clause carries a `verified-by` line | mechanical | error |

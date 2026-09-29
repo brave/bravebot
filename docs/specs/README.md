@@ -31,10 +31,10 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [shell-mode.md](shell-mode.md) | `SHELL` | 5 | the `!` prompt: a line the user typed, and why the planner can never reach it |
 | [skills.md](skills.md) | `SKILL` | 14 | `AGENTS.md` and skills: what a skill file is and what each source is trusted for |
 | [instructions.md](instructions.md) | `INSTR` | 9 | which instruction files are looked for, where, in what order, and where what they say ends up |
-| [cli.md](cli.md) | `CLI` | 16 | running without the interactive interface: one-shot tasks, piped input, and `doctor` |
+| [cli.md](cli.md) | `CLI` | 17 | running without the interactive interface: one-shot tasks, piped input, and `doctor` |
 | [manifest.md](manifest.md) | `MANIFEST` | 11 | plan the whole run first, then execute it with no model in the control path |
 | [terminal-input.md](terminal-input.md) | `INPUT` | 37 | what the user types into: the box, the keys, and where a terminal's own limits show through |
-| [commands.md](commands.md) | `CMD` | 9 | a line beginning with `/`: where one may come from, when a line is one, what it does to the line, and what a slash word is offered |
+| [commands.md](commands.md) | `CMD` | 10 | a line beginning with `/`: where one may come from, when a line is one, what it does to the line, and what a slash word is offered |
 | [terminal-transcript.md](terminal-transcript.md) | `VIEW` | 26 | what is drawn back: the transcript, a resumed session, and how content reaches the screen |
 | [watching.md](watching.md) | `WATCH` | 21 | work done outside the transcript: a delegate's own lines, what a command printed, a question asked beside it, and the mode Ctrl-L opens over them |
 | [scroller.md](scroller.md) | `SCROLL` | 9 | reading back through what happened: the mode Ctrl-O opens over the transcript, and the keys inside it |
@@ -45,7 +45,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [mcp-servers.md](mcp-servers.md) | `SERVERS` | 14 | how a person declares one of those servers, what that declaration is trusted for, and what is asked before a tool from one runs |
 | [hooks.md](hooks.md) | `HOOK` | 8 | a command a person asked to have run when something happens |
 | [network-egress.md](network-egress.md) | `NET` | 10 | every request that leaves this process, and what comes back |
-| [backends.md](backends.md) | `BACKEND` | 46 | which service answers a request, and what a person may choose between |
+| [backends.md](backends.md) | `BACKEND` | 47 | which service answers a request, and what a person may choose between |
 | [import.md](import.md) | `IMPORT` | 10 | a first start with nothing configured: what Claude Code and opencode set up, or a running Ollama serves, and what of it may be copied here |
 | [compaction.md](compaction.md) | `COMPACT` | 12 | shortening a long conversation into a summary of itself, in the request only |
 | [loop.md](loop.md) | `LOOP` | 15 | sending one prompt again and again until somebody stops it |
@@ -96,7 +96,14 @@ Front matter, then numbered clauses. Everything outside a clause is commentary a
 
 - **`id`** is a short prefix. Clause ids are `PREFIX-N`, allocated in order and never reused and
   never renumbered, because a commit message, an issue, and a test name all point at one. A
-  withdrawn clause stays, marked withdrawn, and says what replaced it.
+  clause added mid-spec takes the next free id where it stands, so ids need not read in order
+  down the file. A withdrawn clause stays, marked withdrawn, and says what replaced it.
+  `make check-spec` holds a file to this against main, and fails a clause whose heading
+  has moved to another id, since a renumbered id goes on resolving while naming a clause nobody
+  cited. Improving a heading's wording is not that and costs nothing. A spec withdrawn and rewritten
+  wholesale does renumber on purpose, and says so in
+  [../../agents/renumbered-clauses.txt](../../agents/renumbered-clauses.txt), which is also where
+  somebody following a citation of the old id is told where the clause went.
 - **Every clause carries an anchor**, `<a id="PREFIX-N"></a>` on the line directly above its
   heading, so `labels.md#LABEL-3` is a link that keeps working. The anchor GitHub generates from
   a heading contains the title, so it breaks the moment somebody improves the wording, which is

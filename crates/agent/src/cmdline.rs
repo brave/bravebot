@@ -1883,16 +1883,18 @@ impl Compiler<'_, '_> {
 
         // Which refusal is decided by the planner's own word, which is trusted: a path is looked
         // for where it points, so what `$PATH` holds says nothing about it.
-        let resolved =
-            crate::programs::resolve(program, self.directory).ok_or_else(|| Refused {
-                span: word.span,
-                text: program.clone(),
-                reason: if crate::programs::has_separator(program) {
-                    Reason::NotAtPath
-                } else {
-                    Reason::NotFound
-                },
-            })?;
+        let crate::programs::Found {
+            started_as,
+            resolved,
+        } = crate::programs::find(program, self.directory).ok_or_else(|| Refused {
+            span: word.span,
+            text: program.clone(),
+            reason: if crate::programs::has_separator(program) {
+                Reason::NotAtPath
+            } else {
+                Reason::NotFound
+            },
+        })?;
 
         let mut routes = Vec::new();
         for redirection in &command.redirections {
@@ -1902,6 +1904,7 @@ impl Compiler<'_, '_> {
         Ok(Step {
             program: program.clone(),
             resolved,
+            started_as,
             args,
             environment: command
                 .assignments

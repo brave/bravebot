@@ -140,9 +140,35 @@ def build_fixture(root):
     )
     (root / "crates" / "demo" / "src" / "lib.rs").write_text(CLEAN_SOURCE, encoding="utf-8")
     # A tracked tree, because a body may quote only what the tree publishes and the drafter asks
-    # git which files those are. An index is enough; nothing here needs a commit.
-    subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
-    subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
+    # git which files those are.
+    git(root, "init", "-q")
+    git(root, "add", "-A")
+    # And a commit, because what a clause id named is read from history.
+    git(root, "commit", "-q", "-m", "the fixture before the case breaks it")
+
+
+def git(root, *arguments):
+    """One git command in the fixture, printing only what it prints on stdout.
+
+    Identity and signing are given on the command rather than taken from the machine, so a case
+    says the same thing wherever it runs and a throwaway fixture never asks anybody for a key."""
+    return subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "-c",
+            "user.name=check-spec selftest",
+            "-c",
+            "user.email=selftest@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            *arguments,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
 
 
 def run_checks():
@@ -151,10 +177,11 @@ def run_checks():
     crates = crate_directories()
     index = TestIndex()
     prefixes = {s.id for s in specs if s.id}
-    findings = []
+    declared, findings = check.declared_renumbers()
     for one in specs:
         findings.extend(check.check_front_matter(one))
         findings.extend(check.check_clause_numbering(one))
+        findings.extend(check.check_clause_history(one, declared))
         findings.extend(check.check_coverage(one, index, crates))
         findings.extend(check.check_anchors(one))
         findings.extend(check.check_governs(one))
@@ -164,6 +191,7 @@ def run_checks():
         findings.extend(check.check_documentation(one))
     findings.extend(check.check_readme(specs))
     findings.extend(check.check_unverified_file(specs, index, crates))
+    findings.extend(check.check_renumbered_file(specs, declared))
     return findings
 
 
@@ -364,6 +392,164 @@ def mention_the_gate_in_comments(root):
     )
 
 
+def readme_lists(root, clauses):
+    """The README table's count for the fixture spec, which several cases below change."""
+    (root / "docs" / "specs" / "README.md").write_text(
+        CLEAN_README.replace("| 2 |", f"| {clauses} |"), encoding="utf-8"
+    )
+
+
+A_THIRD_CLAUSE = "### DEMO-3: the gate records who opened it"
+ITS_COVERAGE = "`verified-by: by-construction (the caller is on the entry)`"
+
+
+def insert_a_clause_and_renumber(root):
+    """A clause inserted in the middle, with every clause after it renumbered to close the gap.
+
+    The shape a per-file counter cannot see: the ids still read 1..N, with no gap, no duplicate and
+    no wrong prefix, so nothing about the file alone is amiss. What is amiss is that DEMO-2 is a
+    different clause from the DEMO-2 an issue cited, and the link in that issue still resolves."""
+    edit_spec(
+        root,
+        '<a id="DEMO-2"></a>\n### DEMO-2: nothing else can open it',
+        f'<a id="DEMO-2"></a>\n{A_THIRD_CLAUSE.replace("DEMO-3", "DEMO-2")}\n\n{ITS_COVERAGE}\n\n'
+        '<a id="DEMO-3"></a>\n### DEMO-3: nothing else can open it',
+    )
+    readme_lists(root, 3)
+
+
+def insert_a_clause_under_the_next_id(root):
+    """A clause inserted mid-spec under the next free id, so the file reads DEMO-1, DEMO-3,
+    DEMO-2. Nothing moved and no id is missing."""
+    edit_spec(
+        root,
+        '<a id="DEMO-2"></a>\n',
+        f'<a id="DEMO-3"></a>\n{A_THIRD_CLAUSE}\n\n{ITS_COVERAGE}\n\n<a id="DEMO-2"></a>\n',
+    )
+    readme_lists(root, 3)
+
+
+def append_a_clause(root):
+    """A clause at the end under the next free id. Nothing moved, so nothing is wrong, and a
+    check firing on any new id would stop anybody writing one."""
+    path = root / "docs" / "specs" / "demo.md"
+    path.write_text(
+        f'{path.read_text(encoding="utf-8")}\n<a id="DEMO-3"></a>\n{A_THIRD_CLAUSE}\n\n'
+        f"{ITS_COVERAGE}\n",
+        encoding="utf-8",
+    )
+    readme_lists(root, 3)
+
+
+def append_a_reworded_heading(root):
+    """A new clause whose heading is a rewording of one already in the file.
+
+    Nothing moved: the old heading is still under its own id, and the new id is new. A comparison
+    that asked only whether a heading is in the file twice over would report this."""
+    path = root / "docs" / "specs" / "demo.md"
+    path.write_text(
+        f'{path.read_text(encoding="utf-8")}\n<a id="DEMO-3"></a>\n'
+        "### DEMO-3: nothing else may open it\n\n"
+        "`verified-by: by-construction (the field is private)`\n",
+        encoding="utf-8",
+    )
+    readme_lists(root, 3)
+
+
+def withdraw_in_place(root):
+    """A clause withdrawn where it stands, keeping its old wording behind the word.
+
+    Its heading changed and no id took the old one, which is the commonest changed heading in this
+    tree's history: 73 commits reworded one, against 4 clauses that moved. Faulting a changed
+    heading rather than a moved clause fails every one of them."""
+    edit_spec(
+        root,
+        "### DEMO-2: nothing else can open it",
+        "### DEMO-2: withdrawn, nothing else can open it",
+    )
+    edit_spec(root, "`verified-by: by-construction (the field is private)`", "Replaced by DEMO-1.")
+    readme_lists(root, 1)
+
+
+def add_a_spec_this_branch_wrote(root):
+    """A spec file with no committed form at all, which is every spec on its first commit.
+
+    Its headings are the other spec's word for word, so a comparison pooling the tree rather than
+    reading each file against its own committed form would report every clause in it as one whose
+    id was taken from something."""
+    (root / "docs" / "specs" / "fresh.md").write_text(
+        CLEAN_SPEC.replace("DEMO", "FRESH"), encoding="utf-8"
+    )
+    (root / "docs" / "specs" / "README.md").write_text(
+        f"{CLEAN_README}| [fresh.md](fresh.md) | `FRESH` | 2 | another demonstration |\n",
+        encoding="utf-8",
+    )
+
+
+def unpack_the_tree_outside_git(root):
+    """A spec tree with no checkout around it, which is what a release tarball is and what a fresh
+    `git init` with nothing committed amounts to. There is no record of what an id named, so this
+    one check says nothing and every other still runs."""
+    shutil.rmtree(root / ".git")
+
+
+def declare_the_renumber(root):
+    """The renumber a person meant: a spec withdrawn and rewritten wholesale.
+
+    The line names the id the clause carries now and the heading it carries now, so it stays a fact
+    about the tree, and it is a line in a diff rather than a variable somebody exported."""
+    insert_a_clause_and_renumber(root)
+    (root / check.RENUMBERED_FILE).write_text(
+        "# demo.md was withdrawn and rewritten.\n"
+        "docs/specs/demo.md:DEMO-3: nothing else can open it\n",
+        encoding="utf-8",
+    )
+
+
+def renumber_again_past_the_declaration(root):
+    """A second move of an id the declarations file already names.
+
+    The entry pins the heading, so it answers for the renumber it was written for and no other. A
+    declaration naming the id alone would exempt that id from then on, which is how one line comes
+    to stand for every renumber anybody makes afterwards."""
+    insert_a_clause_and_renumber(root)
+    (root / check.RENUMBERED_FILE).write_text(
+        f'docs/specs/demo.md:DEMO-3: {A_THIRD_CLAUSE.split(": ", 1)[1]}\n', encoding="utf-8"
+    )
+
+
+def commit_a_renumber_on_a_branch(root):
+    """The renumber committed on a branch cut from origin/main, which is how it reaches CI."""
+    git(root, "update-ref", "refs/remotes/origin/main", "HEAD")
+    insert_a_clause_and_renumber(root)
+    git(root, "commit", "-qam", "renumber")
+
+
+def branch_and_main_move_on(root):
+    """A renumber committed on a branch, then an empty commit on main, returning both heads."""
+    before = git(root, "rev-parse", "HEAD")
+    insert_a_clause_and_renumber(root)
+    git(root, "commit", "-qam", "renumber")
+    branch = git(root, "rev-parse", "HEAD")
+    git(root, "checkout", "-q", "--detach", before)
+    git(root, "commit", "-q", "--allow-empty", "-m", "main moves on")
+    return branch, git(root, "rev-parse", "HEAD")
+
+
+def merge_a_renumber_as_a_pull_request(root):
+    """The checkout CI makes of a pull request: main merging the branch, main the first parent."""
+    branch, _ = branch_and_main_move_on(root)
+    git(root, "merge", "-q", "--no-ff", "-m", "merge the pull request", branch)
+
+
+def merge_main_into_a_renumbered_branch(root):
+    """Main merged into the branch locally, so the first parent is the branch and not main."""
+    branch, main = branch_and_main_move_on(root)
+    git(root, "update-ref", "refs/remotes/origin/main", main)
+    git(root, "checkout", "-q", "--detach", branch)
+    git(root, "merge", "-q", "--no-ff", "-m", "merge main", main)
+
+
 def list_says(root, lines):
     (root / check.UNVERIFIED_FILE).write_text(check.render_unverified(lines), encoding="utf-8")
 
@@ -417,10 +603,11 @@ CASES = [
         None,
     ),
     (
-        "a clause numbered out of order",
+        "a gap in a spec's ids",
         lambda root: edit_spec(root, "### DEMO-2:", "### DEMO-4:"),
         "clause-numbering",
     ),
+    ("a clause inserted mid-spec under the next free id", insert_a_clause_under_the_next_id, None),
     (
         "the same clause id twice",
         lambda root: edit_spec(root, "### DEMO-2:", "### DEMO-1:"),
@@ -430,6 +617,45 @@ CASES = [
         "a clause id from another spec's series",
         lambda root: edit_spec(root, "### DEMO-1:", "### OTHER-1:"),
         "clause-prefix-mismatch",
+    ),
+    (
+        # The one the counter above cannot see, and the reason this check reads history at all.
+        # Exact, because a renumber is the only thing wrong with that file.
+        "a clause inserted mid-spec with every clause after it renumbered",
+        insert_a_clause_and_renumber,
+        {"clause-renumbered"},
+    ),
+    ("a clause appended at the end", append_a_clause, None),
+    ("a new clause whose heading rewords one already there", append_a_reworded_heading, None),
+    (
+        "a heading reworded under the id it belongs to",
+        lambda root: edit_spec(
+            root, "### DEMO-1: the gate opens only once", "### DEMO-1: the gate opens exactly once"
+        ),
+        None,
+    ),
+    ("a clause withdrawn where it stands", withdraw_in_place, None),
+    ("a spec file this branch wrote, with no committed form", add_a_spec_this_branch_wrote, None),
+    ("a spec tree with no checkout around it", unpack_the_tree_outside_git, None),
+    ("a renumber a person declared", declare_the_renumber, None),
+    (
+        "an id moved again past the declaration that named it",
+        renumber_again_past_the_declaration,
+        {"clause-renumbered", "renumber-declaration-stale"},
+    ),
+    (
+        "a declaration naming a clause the tree has not got",
+        lambda root: (root / check.RENUMBERED_FILE).write_text(
+            "docs/specs/demo.md:DEMO-9: a clause that was never there\n", encoding="utf-8"
+        ),
+        {"renumber-declaration-stale"},
+    ),
+    (
+        "a declaration that is not a path, an id and a heading",
+        lambda root: (root / check.RENUMBERED_FILE).write_text(
+            "docs/specs/demo.md DEMO-3 nothing else can open it\n", encoding="utf-8"
+        ),
+        {"renumber-declaration-malformed"},
     ),
     (
         "a clause with no anchor to link to",
@@ -630,6 +856,46 @@ def withdraw_the_second_clause(root):
         root, "### DEMO-2: nothing else can open it", "### DEMO-2: withdrawn, replaced by DEMO-1"
     )
     edit_spec(root, "`verified-by: by-construction (the field is private)`\n", "")
+
+
+# The contrast the committed comparison exists for, held as a case of its own so that folding it
+# back into the counter fails here rather than going quiet. Both halves: the counter cannot see a
+# renumber, and it is still the only thing that sees a gap.
+COUNTER_ALONE = [
+    ("the counter alone passes a renumber", insert_a_clause_and_renumber, []),
+    (
+        "the counter alone still catches a gap",
+        lambda root: edit_spec(root, "### DEMO-2:", "### DEMO-4:"),
+        ["clause-numbering"],
+    ),
+]
+
+
+def numbering_alone():
+    """What the per-file numbering check reports with nothing else running."""
+    return sorted({f["kind"] for one in load_specs() for f in check.check_clause_numbering(one)})
+
+
+# A renumber that is already committed, which is the only form CI sees. Each case names the
+# GITHUB_EVENT_NAME it runs under, because that decides whether a merge's first parent is main.
+COMMITTED = [
+    ("a renumber committed on a branch", commit_a_renumber_on_a_branch, None),
+    ("a renumber in a pull request's merge", merge_a_renumber_as_a_pull_request, "pull_request"),
+    ("a renumber on a branch that merged main", merge_main_into_a_renumbered_branch, None),
+]
+
+
+def under_event(event):
+    """What `run_checks` reports with GITHUB_EVENT_NAME set to `event`, or unset for `None`."""
+    saved = os.environ.pop("GITHUB_EVENT_NAME", None)
+    if event is not None:
+        os.environ["GITHUB_EVENT_NAME"] = event
+    try:
+        return sorted({f["kind"] for f in run_checks()})
+    finally:
+        os.environ.pop("GITHUB_EVENT_NAME", None)
+        if saved is not None:
+            os.environ["GITHUB_EVENT_NAME"] = saved
 
 
 UNVERIFIED_CASES = [
@@ -916,6 +1182,8 @@ def in_fixture(break_it, ask):
     """`ask` run against a fresh fixture repository, broken as the case says."""
     original = Path.cwd()
     root = Path(tempfile.mkdtemp(prefix="check-spec-selftest-"))
+    check._TOPLEVEL.clear()  # A different checkout from the last case's.
+    check._BASE.clear()
     try:
         build_fixture(root)
         os.chdir(root)
@@ -949,6 +1217,14 @@ def main():
         else:
             note(name, expected in kinds, f"reported {kinds}, wanted {expected}")
 
+    for name, break_it, expected in COUNTER_ALONE:
+        kinds = in_fixture(break_it, numbering_alone)
+        note(name, kinds == expected, f"reported {kinds}, wanted {expected}")
+
+    for name, break_it, event in COMMITTED:
+        kinds = in_fixture(break_it, lambda: under_event(event))
+        note(name, kinds == ["clause-renumbered"], f"reported {kinds}")
+
     for name, break_it, expected in UNVERIFIED_CASES:
         lines = in_fixture(break_it, generated_list)
         note(name, lines == expected, f"generated {lines}, wanted {expected}")
@@ -971,6 +1247,8 @@ def main():
 
     total = (
         len(CASES)
+        + len(COUNTER_ALONE)
+        + len(COMMITTED)
         + len(UNVERIFIED_CASES)
         + len(SELECTIONS)
         + len(drafted)

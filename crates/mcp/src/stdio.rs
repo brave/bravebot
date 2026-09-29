@@ -210,9 +210,9 @@ impl StdioServer {
 
     /// Call a tool.
     ///
-    /// The result is labelled untrusted-public: it is third-party output, and this
-    /// client does not know what the server read to produce it. A server handling the
-    /// user's private data should be given a higher label by its configuration.
+    /// The result is labelled untrusted-private: it is third-party output, and this
+    /// client does not know what the server read to produce it, which may be the
+    /// person's own mail or files. MCP-1.
     ///
     /// What a server says about a failure of its own is third-party output too, so the
     /// failure carries its detail on exactly that footing.

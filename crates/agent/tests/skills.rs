@@ -554,6 +554,45 @@ fn what_the_prompt_advertises_holds_no_bodies() {
     );
 }
 
+/// The hint is for the person typing the skill's name, so discovery carries it to the interface and
+/// the planner is never advertised it, in the project's skills as in the user's own.
+#[test]
+fn an_argument_hint_reaches_the_interface_and_not_the_planner() {
+    let scratch = Scratch::new("argument-hint");
+    let home = scratch.home();
+    let at = home.join("skills").join("hinted");
+    std::fs::create_dir_all(&at).expect("create skill directory");
+    std::fs::write(
+        at.join("SKILL.md"),
+        "---\nname: hinted\ndescription: when to use it\nargument-hint: '<zebra-marker>'\n---\nbody",
+    )
+    .expect("write skill");
+    write_skill(&home, "plain", "plain", "when to use the other", "body");
+    let workspace = Workspace::new(scratch.workspace()).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, _) = {
+        let mut policy = policy(&mut sink, &[]);
+        skills::discover(&mut policy, &workspace, Some(&home))
+    };
+
+    assert_eq!(
+        catalogue
+            .get("hinted")
+            .expect("offered")
+            .argument_hint
+            .as_deref(),
+        Some("<zebra-marker>")
+    );
+    assert_eq!(catalogue.get("plain").expect("offered").argument_hint, None);
+    let advertised = catalogue.describe_for_prompt();
+    assert!(advertised.contains("hinted"), "{advertised}");
+    assert!(
+        !advertised.contains("zebra-marker"),
+        "the hint was advertised: {advertised}"
+    );
+}
+
 /// A description is the whole of what the planner decides a skill from, and the loop instructions
 /// only make sense where something else supplies the repetition. Advertised for a request to watch
 /// something, they reach a session that is no such thing, and their account of a tick reads there

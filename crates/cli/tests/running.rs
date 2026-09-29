@@ -385,6 +385,94 @@ fn a_model_named_on_the_command_line_is_not_refused() {
     );
 }
 
+/// A `/model` pick of an inference profile that has since been replaced, which no configured
+/// service offers any more.
+const A_GONE_PICK: &str = "arn:aws:bedrock:us-west-2:1:application-inference-profile/gone";
+
+/// A gateway in the person's own settings file with a `model` key naming one of its models, which
+/// a recorded pick outranks.
+const A_GATEWAY_AND_ITS_MODEL: &str = r#"{
+    "provider": {
+        "openrouter": {
+            "env": ["OPENROUTER_API_KEY"],
+            "options": {"baseURL": "http://127.0.0.1:1/api/v1"},
+            "models": {"z-ai/glm-4.6": {}}
+        }
+    },
+    "model": "openrouter/z-ai/glm-4.6"
+}"#;
+
+/// Brave's own hosts, with a token for the gateway above.
+const BRAVES_HOSTS_AND_A_GATEWAY_TOKEN: &[(&str, &str)] = &[
+    ("SERVICES_KEY_AICHAT", "a-services-key"),
+    ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+    ("BRAVE_AI_CHAT_ENDPOINT", "https://ai-chat.bsg.brave.com"),
+    (
+        "BRAVE_AI_CHAT_PREMIUM_ENDPOINT",
+        "https://ai-chat-premium.bsg.brave.com",
+    ),
+    ("OPENROUTER_API_KEY", "a-token"),
+];
+
+/// BACKEND-47. A recorded pick nothing configured serves is set aside for the model the settings
+/// file names, so the run goes to the gateway rather than being refused, says which pick it set
+/// aside, and leaves the record as it was.
+#[test]
+fn a_recorded_pick_nothing_serves_is_set_aside_for_the_configured_model() {
+    let scratch = Scratch::new("cli-running-pick-set-aside")
+        .with_settings(A_GATEWAY_AND_ITS_MODEL)
+        .with_state("model", &format!("{A_GONE_PICK}\n"));
+
+    let output = bravebot(
+        &scratch.path,
+        BRAVES_HOSTS_AND_A_GATEWAY_TOKEN,
+        &["-p", "say something"],
+    );
+
+    let (_, stderr) = said(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(5),
+        "a pick nothing serves refused the run: {stderr}"
+    );
+    assert!(
+        stderr.contains("127.0.0.1:1"),
+        "the run went somewhere other than the gateway the settings named: {stderr}"
+    );
+    assert!(
+        stderr.contains(A_GONE_PICK),
+        "the run did not say which pick it set aside: {stderr}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".bravebot").join("model")).ok(),
+        Some(format!("{A_GONE_PICK}\n")),
+        "the record was rewritten"
+    );
+}
+
+/// BACKEND-47 in the report: the model a run would request is the configured one, and the pick it
+/// sets aside is named beside it. A report naming the pick as the model in force would explain a
+/// start that does not happen.
+#[test]
+fn doctor_names_a_pick_it_sets_aside() {
+    let scratch = Scratch::new("cli-running-doctor-pick-set-aside")
+        .with_settings(A_GATEWAY_AND_ITS_MODEL)
+        .with_state("model", &format!("{A_GONE_PICK}\n"));
+
+    let output = bravebot(&scratch.path, BRAVES_HOSTS_AND_A_GATEWAY_TOKEN, &["doctor"]);
+
+    let (stdout, stderr) = said(&output);
+    assert_ne!(output.status.code(), Some(3), "{stdout}{stderr}");
+    let model = stdout
+        .lines()
+        .find(|line| line.contains(A_GONE_PICK))
+        .unwrap_or_else(|| panic!("the report did not name the pick: {stdout}"));
+    assert!(
+        model.contains("openrouter/z-ai/glm-4.6 (default"),
+        "the report did not name the configured model as the one in force: {model}"
+    );
+}
+
 /// A machine with nowhere to keep credentials has none imported, rather than a batch that could
 /// not be read.
 ///
@@ -1639,6 +1727,33 @@ fn a_session_in_lines_with_a_configured_gateway_opens() {
     );
 }
 
+/// BACKEND-47 in a session in lines: a recorded pick nothing configured serves is set aside, the
+/// session opens on the model the settings file names, and it says which pick it set aside.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_session_in_lines_sets_aside_a_pick_nothing_serves() {
+    let scratch = Scratch::new("cli-running-plain-pick-set-aside")
+        .with_settings(A_GATEWAY_AND_ITS_MODEL)
+        .with_state("model", &format!("{A_GONE_PICK}\n"));
+
+    let output = in_a_terminal(
+        &scratch.path,
+        BRAVES_HOSTS_AND_A_GATEWAY_TOKEN,
+        &["--plain"],
+    );
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{transcript}");
+    assert!(
+        transcript.contains("openrouter/z-ai/glm-4.6"),
+        "the session did not open on the model the settings named: {transcript}"
+    );
+    assert!(
+        transcript.contains(A_GONE_PICK),
+        "the session did not say which pick it set aside: {transcript}"
+    );
+}
+
 /// PERM-14 on the third surface that reads the file: a session in lines names the `allow` entry a
 /// checkout wrote and the file it was written in, and names an entry that is not a rule under
 /// PERM-11 instead.
@@ -1880,7 +1995,6 @@ fn a_gateway(parameters: &str, answer: impl Fn(&str) -> String + Send + 'static)
 ///
 /// Every chunk names the model, which is what stops the run reporting the reply as served by
 /// something other than the model in force.
-#[cfg(target_os = "linux")]
 fn streamed(reply: &str) -> String {
     let chunk = |delta: &str| {
         format!(
@@ -3548,5 +3662,233 @@ fn doctor_names_a_skill_key_nothing_reads() {
     assert!(
         !stdout.contains("model, ") && !stdout.contains(", model"),
         "doctor called a key it reads unread: {stdout}"
+    );
+}
+
+/// A definition as a person keeps one under this home's own directory, which a run reads without
+/// asking anybody, since nobody but the person writes there (DELEGATE-20).
+fn a_definition(name: &str, fields: &str) -> String {
+    format!("---\nname: {name}\ndescription: Checks a diff.\n{fields}---\n\nREVIEW-BY-THE-RULES\n")
+}
+
+/// Every chat request answered with one completed reply, streamed where the request asked for a
+/// stream, so a run ends normally and reports a finished turn.
+fn answered(reply: &'static str) -> impl Fn(&str) -> String + Send + 'static {
+    move |body| match body.contains(r#""stream":true"#) {
+        true => streamed(reply),
+        false => http(
+            200,
+            &format!(
+                r#"{{"id": "one", "object": "chat.completion", "model": "reasons-only", "choices": [{{"index": 0, "message": {{"role": "assistant", "content": "{reply}"}}, "finish_reason": "stop"}}]}}"#
+            ),
+        ),
+    }
+}
+
+/// CLI-17 and ADDRESS-5 in a script. A name matching nothing runs nothing, exits with the argument
+/// status, and the result object lists the names that exist, so the name can be corrected without
+/// opening the interface.
+#[test]
+fn a_run_under_a_definition_nobody_wrote_is_refused_with_the_names_that_exist() {
+    let gateway = a_gateway_listing(r#"["tools"]"#);
+    let scratch = Scratch::new("cli-running-agent-unknown")
+        .with_settings(&settings_for(&gateway))
+        .with_state(
+            "agents/rule-reviewer.md",
+            &a_definition("rule-reviewer", "kind: reader\n"),
+        );
+
+    let output = bravebot(
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--agent", "nobody", "--json", "-p", "say something"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    for field in [
+        r#""status":2"#,
+        r#""reason":"argument""#,
+        "there is no definition called nobody",
+        "rule-reviewer",
+    ] {
+        assert!(stdout.contains(field), "{field} is missing from {stdout}");
+    }
+    assert!(
+        gateway
+            .asked
+            .recv_timeout(Duration::from_millis(200))
+            .is_err(),
+        "a name matching nothing sent a request"
+    );
+}
+
+/// A run does not ask whether to trust the checkout, so it counts the definitions there without
+/// reading them (DELEGATE-20), and a name only the checkout defines matches nothing. The refusal
+/// says a file was counted, so a person can tell an unread directory from a typo. It gives a count
+/// and never a file's name, because a file name in an untrusted directory is untrusted content.
+#[test]
+fn a_run_refuses_a_definition_only_an_untrusted_checkout_holds_and_says_it_counted_one() {
+    let gateway = a_gateway_listing(r#"["tools"]"#);
+    let scratch =
+        Scratch::new("cli-running-agent-unvouched").with_settings(&settings_for(&gateway));
+    let cwd = scratch.path.join("checkout");
+    let agents = cwd.join(".bravebot").join("agents");
+    std::fs::create_dir_all(&agents).expect("create the checkout's definitions");
+    std::fs::write(
+        agents.join("checkout-file.md"),
+        a_definition("project-reviewer", "kind: reader\n"),
+    )
+    .expect("write the checkout's definition");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        AT_A_GATEWAY,
+        &["--agent", "project-reviewer", "-p", "say something"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains("there is no definition called project-reviewer")
+            && stderr.contains("1 definition in .bravebot/agents was not read"),
+        "the refusal did not say the checkout's definition was counted: {stderr}"
+    );
+    assert!(
+        !stderr.contains("checkout-file"),
+        "a file name from an untrusted directory was printed: {stderr}"
+    );
+    assert!(
+        gateway
+            .asked
+            .recv_timeout(Duration::from_millis(200))
+            .is_err(),
+        "a name matching nothing sent a request"
+    );
+}
+
+/// CLI-17 and ADDRESS-7 in the request sent. A run under a reader is offered only the reader's
+/// tools and is told which definition it is. The same run without the flag is the control, and it
+/// is offered the write tools.
+#[test]
+fn a_run_under_a_definition_is_offered_only_the_definitions_tools() {
+    let gateway = a_gateway_listing(r#"["tools"]"#);
+    let scratch = Scratch::new("cli-running-agent-tools")
+        .with_settings(&settings_for(&gateway))
+        .with_state(
+            "agents/rule-reviewer.md",
+            &a_definition("rule-reviewer", "kind: reader\n"),
+        );
+
+    let first = |arguments: &[&str]| {
+        bravebot(&scratch.path, AT_A_GATEWAY, arguments);
+        let asked: Vec<String> = gateway.asked.try_iter().collect();
+        asked
+            .into_iter()
+            .next()
+            .expect("the run reached the gateway")
+    };
+    let open = first(&["-p", "say something"]);
+    let confined = first(&["--agent", "rule-reviewer", "-p", "say something"]);
+
+    let offered = |body: &str, tool: &str| body.contains(&format!(r#""name":"{tool}""#));
+    for tool in ["write_file", "edit_file", "run"] {
+        assert!(
+            offered(&open, tool),
+            "the planner was not offered {tool}, so this says nothing: {open}"
+        );
+        assert!(
+            !offered(&confined, tool),
+            "a run under a reader was offered {tool}: {confined}"
+        );
+    }
+    assert!(
+        offered(&confined, "read_file"),
+        "a run under a reader lost read_file: {confined}"
+    );
+    assert!(
+        confined.contains("REVIEW-BY-THE-RULES")
+            && confined.contains("addressed this turn to rule-reviewer"),
+        "the run was not told what its definition is for: {confined}"
+    );
+}
+
+/// The result object names the definition the turn ran under (CLI-12), so a script that ran
+/// several can tell their results apart, and the reply is still the reply alone.
+#[test]
+fn a_run_under_a_definition_names_it_in_the_result_object() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("reviewed"));
+    let scratch = Scratch::new("cli-running-agent-json")
+        .with_settings(&settings_for(&gateway))
+        .with_state(
+            "agents/rule-reviewer.md",
+            &a_definition("rule-reviewer", "kind: reader\n"),
+        );
+
+    let output = bravebot(
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--agent", "rule-reviewer", "--json", "-p", "say something"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}\n{stderr}");
+    assert!(
+        stdout.contains(r#""reply":"reviewed""#) && stdout.contains(r#""agent":"rule-reviewer""#),
+        "{stdout}"
+    );
+}
+
+/// CLI-17 with the check for a configured service. A run under a definition asks for the
+/// definition's model, so that is the model the check is made for. Brave's own endpoint with
+/// nothing imported serves nothing, and the definition names a gateway's model, so the run goes to
+/// the gateway instead of being refused as a machine with no service.
+#[test]
+fn a_run_under_a_definition_is_checked_for_a_service_that_serves_the_definitions_model() {
+    let scratch = Scratch::new("cli-running-agent-served")
+        // Port 1, so the connection is refused at once, as in
+        // `a_configured_gateway_is_not_refused`. No `model` key, so the session's model stays Brave's and nothing serves it.
+        .with_settings(
+            r#"{
+                "provider": {
+                    "openrouter": {
+                        "env": ["OPENROUTER_API_KEY"],
+                        "options": {"baseURL": "http://127.0.0.1:1/api/v1"},
+                        "models": {"z-ai/glm-4.6": {}}
+                    }
+                }
+            }"#,
+        )
+        .with_state(
+            "agents/fast.md",
+            &a_definition("fast", "kind: reader\nmodel: openrouter/z-ai/glm-4.6\n"),
+        );
+
+    let output = bravebot(
+        &scratch.path,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "https://ai-chat.bsg.brave.com"),
+            (
+                "BRAVE_AI_CHAT_PREMIUM_ENDPOINT",
+                "https://ai-chat-premium.bsg.brave.com",
+            ),
+            ("OPENROUTER_API_KEY", "a-token"),
+        ],
+        &["--agent", "fast", "-p", "say something"],
+    );
+
+    let (_, stderr) = said(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(5),
+        "a run whose definition's model is served was refused as having no service: {stderr}"
+    );
+    assert!(
+        stderr.contains("127.0.0.1:1"),
+        "the run went somewhere other than the gateway its definition names: {stderr}"
     );
 }
