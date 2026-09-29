@@ -158,7 +158,7 @@ if (count === 0) {
   await page.waitForTimeout(200)
   check(await page.locator('[role="menu"]').count() === 0, 'Escape closes the menu')
   check(
-    await button.evaluate((el) => el === document.activeElement),
+    await button.evaluate((el) => el === document.activeElement || el.getRootNode().host === document.activeElement),
     'and focus goes back to the button that opened it',
   )
 

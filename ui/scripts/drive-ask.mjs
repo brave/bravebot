@@ -26,12 +26,12 @@ const check = (ok, what) => {
 // it was left that way.
 async function showSessions(page) {
   await page
-    .locator('.sidebar-tab')
+    .locator('.sidebar-tabs [role="option"]')
     .first()
     .waitFor({ state: 'visible', timeout: 15000 })
     .catch(() => undefined)
   await page
-    .locator('.sidebar-tab')
+    .locator('.sidebar-tabs [role="option"]')
     .first()
     .click({ timeout: 3000 })
     .catch(() => undefined)
@@ -55,7 +55,7 @@ if ((await page.locator('.session').count()) === 0) {
 await page.locator('.session').first().click()
 await page.waitForTimeout(1500)
 if (await page.locator('.trust').isVisible().catch(() => false)) {
-  await page.locator('.trust-actions .approve').click()
+  await page.locator('[data-test="trust-approve"]').click()
   await page.waitForTimeout(600)
 }
 
@@ -101,8 +101,8 @@ check(
 
 // The composer is closed to sending while the series stands.
 check(
-  await page.locator('.composer .send').isDisabled(),
-  'nothing can be sent while the questions stand',
+  await page.getByRole('button', { name: 'Stop', exact: true }).isEnabled(),
+  'the send control is Stop while the questions stand',
 )
 const placeholder = await page.locator('.composer textarea').getAttribute('placeholder')
 check(

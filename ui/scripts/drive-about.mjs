@@ -28,7 +28,7 @@ for (const fallback of [false, true]) {
       await page.reload()
     }
     await page.emulateMedia({ reducedMotion: 'reduce' })
-    await page.locator('.sidebar-tab').first().waitFor()
+    await page.locator('.sidebar-tabs [role="option"]').first().waitFor()
     await app.evaluate(({ Menu }) => {
       Menu.getApplicationMenu().getMenuItemById('app.about').click()
     })

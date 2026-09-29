@@ -64,7 +64,7 @@ try {
   await page.getByRole('button', {name: 'Send', exact: true}).click()
   await emit('ask.request', {request: 1, prompts: [{header: 'Color', question: 'Which color?', rows: [{index: 0, label: 'Blue', detail: 'Cool'}], multiple: false, key: 'color'}]})
   await composer.fill('Queued follow-up')
-  await page.getByRole('button', {name: 'Queue message', exact: true}).click()
+  await composer.press('Enter')
   await second().click()
   await page.getByRole('button', {name: /Answer needed · Review/}).waitFor()
   assert.equal(await composer.inputValue(), 'Draft two')

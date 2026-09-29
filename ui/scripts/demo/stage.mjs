@@ -423,7 +423,7 @@ export async function launch(opts) {
     // The left column has two lists now, and a scene that left it on the bots would hand the next
     // one a session list that is present and invisible. Put back with the columns, for the same
     // reason they are: a scene begins where a first-time viewer would find the window.
-    const sessionsTab = page.locator('.sidebar-tab').first()
+    const sessionsTab = page.locator('.sidebar-tabs [role="option"]').first()
     if ((await sessionsTab.count()) && (await sessionsTab.getAttribute('aria-pressed')) !== 'true') {
       await sessionsTab.click()
       await page.waitForTimeout(250)

@@ -241,7 +241,7 @@ async function ensureResidents(world) {
         console.log('  the agent has no credentials built in, so the residents stay unspoken to')
         return
       }
-      await page.locator('.sidebar-tab').nth(1).click()
+      await page.locator('.sidebar-tabs [role="option"]').nth(1).click()
       await page.waitForTimeout(600)
       for (const bot of unspoken) {
         const row = page
@@ -254,7 +254,7 @@ async function ensureResidents(world) {
         await row.locator('.bot-open-button').click()
         await page.waitForTimeout(1600)
         if (await page.locator('.trust').isVisible().catch(() => false)) {
-          await page.locator('.trust-actions .approve').click()
+          await page.locator('[data-test="trust-approve"]').click()
           await page.waitForTimeout(800)
         }
         for (const prompt of bot.prompts) {
@@ -268,7 +268,7 @@ async function ensureResidents(world) {
         }
         // The bots tab again, for the next one — opening a bot shows its transcript and leaves
         // the sessions list in the column.
-        await page.locator('.sidebar-tab').nth(1).click()
+        await page.locator('.sidebar-tabs [role="option"]').nth(1).click()
         await page.waitForTimeout(400)
       }
     }
@@ -360,7 +360,7 @@ async function build(world) {
       await page.locator('.new').first().click()
       await page.waitForTimeout(1500)
       if (await page.locator('.trust').isVisible().catch(() => false)) {
-        await page.locator('.trust-actions .approve').click()
+        await page.locator('[data-test="trust-approve"]').click()
         await page.waitForTimeout(800)
       }
 

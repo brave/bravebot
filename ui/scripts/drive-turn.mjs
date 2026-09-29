@@ -14,12 +14,12 @@ mkdirSync('/tmp/bravebot-ui', { recursive: true })
 // it was left that way.
 async function showSessions(page) {
   await page
-    .locator('.sidebar-tab')
+    .locator('.sidebar-tabs [role="option"]')
     .first()
     .waitFor({ state: 'visible', timeout: 15000 })
     .catch(() => undefined)
   await page
-    .locator('.sidebar-tab')
+    .locator('.sidebar-tabs [role="option"]')
     .first()
     .click({ timeout: 3000 })
     .catch(() => undefined)

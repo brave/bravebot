@@ -1,6 +1,6 @@
 // That the folds fold rather than snap — the context panels, and the runs of tool calls
-// in the transcript, which share one implementation. Then the row of buttons that decides which
-// panels are in the column at all, including that its answer survives a relaunch.
+// in the transcript, which share one implementation. Then the Overview / Files tabs that decide
+// which panels the column shows, including that a panel keeps its fold while it is tabbed away.
 //
 // The assertion worth making is the one a screenshot cannot make: that the thing passes
 // through heights between full and nothing. A collapse that jumps looks identical in
@@ -26,12 +26,12 @@ const launch = () => electron.launch({ args: ['.'], cwd: process.cwd(), timeout:
 // it was left that way.
 async function showSessions(page) {
   await page
-    .locator('.sidebar-tab')
+    .locator('.sidebar-tabs [role="option"]')
     .first()
     .waitFor({ state: 'visible', timeout: 15000 })
     .catch(() => undefined)
   await page
-    .locator('.sidebar-tab')
+    .locator('.sidebar-tabs [role="option"]')
     .first()
     .click({ timeout: 3000 })
     .catch(() => undefined)
@@ -68,21 +68,11 @@ for (let i = 0; i < sessions; i++) {
 await page.locator('.session').nth(withRun).click()
 await page.waitForTimeout(1800)
 
-// Which panels are in the column is a choice somebody makes from the bar, and it is remembered
-// between launches and shared with every other driver. So the run starts by putting them all back
-// — without this, a panel left off by a previous run has no box to measure and the assertions
-// below fail on a window that is behaving perfectly. The same courtesy `drive-columns.mjs` pays
-// the columns.
-for (let index = 0; index < (await page.locator('.panel-pick').count()); index++) {
-  const pick = page.locator('.panel-pick').nth(index)
-  if ((await pick.getAttribute('aria-pressed')) === 'false') {
-    await pick.click()
-    await page.waitForTimeout(200)
-  }
-}
-
-const fold = page.locator('.panel .fold').first()
-const head = page.locator('.panel-head').first()
+// Leo's Collapse is a <details> in a shadow root, so its state is read off the element it draws
+// and its movement is the height of the whole disclosure: heading plus whatever is open under it.
+const isOpen = (collapse) => collapse.evaluate((el) => el.shadowRoot.querySelector('details').open)
+const fold = page.locator('.panel-collapse').first()
+const head = fold.locator('summary')
 const height = async () => (await fold.boundingBox()).height
 
 const open = await height()
@@ -101,15 +91,16 @@ async function sample() {
 
 await head.click()
 const closing = await sample()
-const middles = closing.filter((h) => h > 1 && h < open - 1)
+const shut = closing[closing.length - 1]
+const middles = closing.filter((h) => h > shut + 1 && h < open - 1)
 check(middles.length > 0, `collapse passes through part-heights (${middles.length} frames)`)
-check(closing[closing.length - 1] < 1, 'collapse ends at nothing')
+check(shut < open - 20, `collapse ends at just the heading (${Math.round(shut)}px of ${Math.round(open)}px)`)
 await page.screenshot({ path: '/tmp/bravebot-ui/07-panels-closed.png' })
 
 await head.click()
 const opening = await sample()
 check(
-  opening.filter((h) => h > 1 && h < open - 1).length > 0,
+  opening.filter((h) => h > shut + 1 && h < open - 1).length > 0,
   'expand passes through part-heights',
 )
 check(Math.abs(opening[opening.length - 1] - open) < 1, 'expand ends back at full height')
@@ -120,15 +111,15 @@ if ((await page.locator('.tool-run').count()) === 0) {
   console.log('  --   no session has two calls in a row; the tool run is untested')
 } else {
   const run = page.locator('.tool-run').first()
-  const runFold = run.locator('.fold')
-  const runHead = run.locator('.tool-run-head')
+  const runFold = run.locator('.tool-run-collapse')
+  const runHead = runFold.locator('summary')
   const runHeight = async () => (await runFold.boundingBox()).height
 
   const rows = await run.locator('.tool').count()
   check(rows >= 2, `a run gathers more than one call (${rows})`)
-  const label = (await runHead.textContent())?.trim() ?? ''
+  const label = (await runHead.innerText())?.trim() ?? ''
   check(label.endsWith(`${rows} steps`), `the header counts what it is hiding (${label})`)
-  check((await runHead.getAttribute('aria-expanded')) === 'true', 'a run starts open')
+  check(await isOpen(runFold), 'a run starts open')
 
   const runOpen = await runHeight()
   await runHead.click()
@@ -138,15 +129,15 @@ if ((await page.locator('.tool-run').count()) === 0) {
     runClosing.push(await runHeight())
     await page.waitForTimeout(16)
   }
+  const runShut = runClosing[runClosing.length - 1]
   check(
-    runClosing.filter((h) => h > 1 && h < runOpen - 1).length > 0,
+    runClosing.filter((h) => h > runShut + 1 && h < runOpen - 1).length > 0,
     'the run collapses through part-heights',
   )
-  check(runClosing[runClosing.length - 1] < 1, 'the run collapses to nothing')
-  check((await runHead.getAttribute('aria-expanded')) === 'false', 'and the header says so')
+  check(runShut < runOpen - 20, 'the run collapses to just its heading')
+  check(!(await isOpen(runFold)), 'and the header says so')
   check(
-    (await run.locator('.tool').first().evaluate((el) => getComputedStyle(el).visibility)) ===
-      'hidden',
+    !(await run.locator('.tool').first().isVisible()),
     'a closed run leaves the tab order and the accessibility tree',
   )
   check(await runHead.isVisible(), 'the header stays, so the run can be brought back')
@@ -158,85 +149,54 @@ if ((await page.locator('.tool-run').count()) === 0) {
   await page.screenshot({ path: '/tmp/bravebot-ui/12-run-open.png' })
 }
 
-// --- the row of buttons that turns panels off ------------------------------------------
-// Folding and turning off are different things and the second one is newer: the bar at the top
-// of the column decides which panels are in it at all. The assertion that matters is the last
-// one — a panel that comes back has to come back as it was, which is the whole reason it is
-// hidden rather than unmounted. A panel that forgot its fold, or a tree that forgot which
-// folders were open, would be the bar quietly undoing somebody's work.
-const picks = page.locator('.panel-pick')
-check((await picks.count()) === 5, `the bar has one button per panel (${await picks.count()})`)
+// --- the tabs that decide which panels the column shows -------------------------------
+// Overview holds the four panels derived from the transcript; Files holds the tree. Switching is
+// not a fold: the tab hides the other group with `display: none` rather than unmounting it. The
+// assertion that matters is the last one — a panel that comes back has to come back as it was,
+// which is the whole reason it is hidden rather than unmounted. A panel that forgot its fold, or
+// a tree that forgot which folders were open, would be the tabs quietly undoing somebody's work.
+const tabs = page.locator('[data-test="inspector-tabs"] [role="tab"]')
+check((await tabs.count()) === 2, `the column offers two tabs (${await tabs.count()})`)
 
 const standing = () => page.locator('.panel:not(.off)').count()
-const before = await standing()
-check(before === 5, `every panel starts in the column (${before})`)
+check((await standing()) === 4, `Overview shows its four panels (${await standing()})`)
+check(
+  (await page.locator('#panel-files').getAttribute('class'))?.includes('off') === true,
+  'and keeps the file tree out of the column',
+)
 
 // Folded first, so there is a state to lose.
 const plan = page.locator('#panel-plan')
-await plan.locator('.panel-head').click()
+await plan.locator('summary').click()
 await page.waitForTimeout(400)
-check((await plan.locator('.panel-head').getAttribute('aria-expanded')) === 'false', 'a panel folds')
+check(!(await isOpen(plan.locator('.panel-collapse'))), 'a panel folds')
 
-await picks.first().click()
+await page.getByRole('tab', { name: 'Files', exact: true }).click()
 await page.waitForTimeout(300)
-check((await standing()) === before - 1, 'its button takes it out of the column')
-check((await picks.first().getAttribute('aria-pressed')) === 'false', 'and the button says so')
+check((await standing()) === 0, 'the Files tab takes the overview panels out of the column')
 check(
-  !(await plan.locator('.panel-head').isVisible()),
-  'a panel that is off leaves the tab order and the accessibility tree',
+  (await page.locator('#panel-files').getAttribute('class'))?.includes('off') === false,
+  'and brings the file tree in',
 )
-
-await picks.first().click()
-await page.waitForTimeout(300)
-check((await standing()) === before, 'pressing it again brings the panel back')
 check(
-  (await plan.locator('.panel-head').getAttribute('aria-expanded')) === 'false',
+  !(await plan.locator('summary').isVisible()),
+  'a panel that is tabbed away leaves the tab order and the accessibility tree',
+)
+await page.screenshot({ path: '/tmp/bravebot-ui/13-panel-tabs.png' })
+
+await page.getByRole('tab', { name: 'Overview', exact: true }).click()
+await page.waitForTimeout(300)
+check((await standing()) === 4, 'going back to Overview brings the panels back')
+check(
+  !(await isOpen(plan.locator('.panel-collapse'))),
   'and it comes back folded the way it was left, rather than reset',
 )
 
 // Put it back open, because the panels are shared ground with the assertions at the top of this
 // file and the next run starts by measuring them.
-await plan.locator('.panel-head').click()
+await plan.locator('summary').click()
 await page.waitForTimeout(400)
-check((await plan.locator('.panel-head').getAttribute('aria-expanded')) === 'true', 'and unfolds again')
-await page.screenshot({ path: '/tmp/bravebot-ui/13-panel-bar.png' })
-
-// --- and that the choice outlives the window -------------------------------------------
-// The panel is turned off, the app is restarted, and the column has to come back without it.
-// Worth a relaunch rather than a unit assertion because the failure this catches is the one a
-// single window cannot see: a preference written to the file and then read back through a
-// validator that does not recognise its own output.
-await picks.last().click()
-await page.waitForTimeout(300)
-const hidden = await page.locator('.panel.off').count()
-check(hidden === 1, `one panel is off when the window closes (${hidden})`)
+check(await isOpen(plan.locator('.panel-collapse')), 'and unfolds again')
 await app.close()
-
-const second = await launch()
-const relaunched = await second.firstWindow()
-await relaunched.waitForLoadState('domcontentloaded')
-await relaunched.waitForTimeout(2000)
-if (await relaunched.locator('.session').first().isVisible().catch(() => false)) {
-  await relaunched.locator('.session').first().click()
-  await relaunched.waitForTimeout(1200)
-}
-check(
-  (await relaunched.locator('.panel-pick').last().getAttribute('aria-pressed')) === 'false',
-  'the panel that was turned off is still off after a relaunch',
-)
-check(
-  (await relaunched.locator('#panel-files').getAttribute('class'))?.includes('off') === true,
-  'and the column came back without it',
-)
-
-// Put it back on: every panel on is what the other drivers expect to find, and `drive-tree.mjs`
-// has nothing to test at all if this one leaves the file tree turned off.
-await relaunched.locator('.panel-pick').last().click()
-await relaunched.waitForTimeout(400)
-check(
-  (await relaunched.locator('.panel:not(.off)').count()) === 5,
-  'and it goes back on for whatever runs next',
-)
-await second.close()
 console.log(problems.length ? `\nRESULT: ${problems.length} problem(s)` : '\nRESULT: ok')
 process.exit(problems.length ? 1 : 0)

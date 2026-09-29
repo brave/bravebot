@@ -15,11 +15,8 @@ export default {
     const { page } = s
     await openNewest(s, { hold: 1.2 })
 
-    // The tree is the last of the five panels and may be switched off from a previous run.
-    const pick = page.locator('.panel-pick[aria-controls="panel-files"]')
-    if ((await pick.count()) && (await pick.getAttribute('aria-pressed')) === 'false') {
-      await s.click(pick)
-    }
+    // The tree sits on the Files tab of the context column, which opens on Overview.
+    await s.click(page.getByRole('tab', { name: 'Files', exact: true }))
     const tree = page.locator('.tree')
     if (!(await tree.count())) s.skip('this session has no folder to list')
 

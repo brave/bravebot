@@ -36,7 +36,7 @@ export default {
 
     // The run of tool calls. A run of one is drawn as a plain line with no header, so this
     // looks for the header rather than for a tool row.
-    const run = page.locator('.tool-run-head').first()
+    const run = page.locator('.tool-run-collapse summary').first()
     if (await run.count()) {
       await s.glideTo(run)
       await s.say('Steps, gathered', "A turn's tool calls come as one run, not as a wall of lines.", 1.6)

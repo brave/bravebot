@@ -82,7 +82,7 @@ export default {
       if (await page.locator('.trust').isVisible().catch(() => false)) {
         await s.say('Trust the directory', 'It asks before it works anywhere — once, per checkout.', 2.2)
         await s.shot('01-trust')
-        await s.click('.trust-actions .decline')
+        await s.click('[data-test="trust-decline"]')
       }
     }
 

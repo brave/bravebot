@@ -227,7 +227,7 @@ if (sessions > 0) {
   // Declined rather than trusted: this is not a session anybody meant to keep, and saying
   // yes here would be answering a question about somebody's real checkout on their behalf.
   if (await page.locator('.trust').isVisible().catch(() => false)) {
-    await page.locator('.trust-actions .decline').click()
+    await page.locator('[data-test="trust-decline"]').click()
     await page.waitForTimeout(400)
   }
 
@@ -270,9 +270,9 @@ if (sessions > 0) {
   await named('group toggle', '.session-group')
   await named('session title', '.session-title')
   await named('header path', '.transcript-head .where')
-  await named('context section', '.panel-head')
+  await named('context section', '.panel-collapse summary')
   await named('a file read', '.files code')
-  await named('a run of steps', '.tool-run-head')
+  await named('a run of steps', '.tool-run-collapse summary')
   await named('a link the model wrote', '.bubble a[href]')
   await named('a confined origin', '.quarantine-head .origin')
 }

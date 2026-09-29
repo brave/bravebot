@@ -58,7 +58,7 @@ try {
   await snap('00-sidebar-search');
   await filter.press('Escape');
   assert.equal(await filter.count(),0);
-  assert.equal(await page.getByRole('button',{name:'Filter sessions',exact:true}).evaluate(el=>el===document.activeElement),true);
+  assert.equal(await page.getByRole('button',{name:'Filter sessions',exact:true}).evaluate(el => el === document.activeElement || el.getRootNode().host === document.activeElement),true);
   await page.getByRole('button',{name:'Bots',exact:true}).click();
   await page.getByRole('button',{name:'Search bots',exact:true}).click();
   await page.getByRole('searchbox',{name:'Search bots',exact:true}).fill('no-such-bot');
@@ -82,7 +82,7 @@ try {
     await page.getByRole('button',{name:'Context panel',exact:true}).click();
   }
   await page.getByRole('tab',{name:'Files',exact:true}).click();
-  assert.equal(await page.locator('#panel-files .panel-head').count(),0);
+  assert.equal(await page.locator('#panel-files summary').count(),0);
   assert.equal(await page.getByRole('searchbox',{name:'Search project files by name'}).count(),0);
   const panel=await page.locator('.context').boundingBox();
   const tree=await page.locator('.tree-body').boundingBox();
@@ -95,7 +95,7 @@ try {
   await snap('03-files-search');
   await fileSearch.press('Escape');
   assert.equal(await fileSearch.count(),0);
-  assert.equal(await page.getByRole('button',{name:'Search files',exact:true}).evaluate(el=>el===document.activeElement),true);
+  assert.equal(await page.getByRole('button',{name:'Search files',exact:true}).evaluate(el => el === document.activeElement || el.getRootNode().host === document.activeElement),true);
 
   await overview();await page.getByRole('button',{name:'New conversation',exact:true}).click();
   await page.getByRole('button',{name:"Don't trust",exact:true}).click();await page.getByRole('dialog').waitFor({state:'hidden'});

@@ -97,7 +97,7 @@ try {
     return root instanceof ShadowRoot && root.host === document.activeElement && root.activeElement === el
   })
   const fillField = async (scope, name, value) => {
-    const field = scope.getByLabel(name, { exact: true })
+    const field = scope.getByRole('textbox', { name, exact: true })
     // One call: a gap after fill lets the controlled field render the old value
     // before `input` commits it.
     await field.evaluate((el, next) => {

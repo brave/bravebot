@@ -73,7 +73,7 @@ try {
   await page.locator('.model-trigger').click();await page.getByRole('option',{name:/Deep model/}).waitFor();await snap('11-models');await page.getByRole('option',{name:/Deep model/}).click();await page.locator('.model-trigger').click();await snap('12-recent-model');await page.keyboard.press('Escape')
   await composer.fill('Start review');await page.getByRole('button',{name:'Send',exact:true}).click()
   await emit('ask.request',{request:1,prompts:[{header:'Color',question:'Which color should the sample use?',rows:[{index:0,label:'Blue',detail:'A cool accent'},{index:1,label:'Green',detail:'A natural accent'}],multiple:false,key:'color'}]})
-  await composer.fill('Follow up after this review');await page.getByRole('button',{name:'Queue message',exact:true}).click();await snap('13-question-queue')
+  await composer.fill('Follow up after this review');await composer.press('Enter');await snap('13-question-queue')
   await page.locator('.session').filter({hasText:'Plan the next iteration'}).click();await snap('14-background')
   await page.locator('.session').filter({hasText:'Review the sample project'}).click();await page.getByRole('button',{name:'Stop',exact:true}).click();await page.getByText('Task stopped',{exact:true}).waitFor();await snap('15-stopped-queue')
   assert.equal((await app.evaluate(()=>globalThis.ux.sent)).length,1)
@@ -113,7 +113,7 @@ try {
   await emit('narration',{text:'New work arrived while reading older content.'});await page.getByRole('button',{name:'New activity ↓',exact:true}).waitFor();assert.equal(await page.locator('.entries').evaluate(e=>e.scrollTop),reading);await snap('33-new-activity')
   await page.locator('.session').filter({hasText:'Plan the next iteration'}).click();await page.locator('.session').filter({hasText:'Review the sample project'}).click();assert.equal(await page.locator('.entries').evaluate(e=>e.scrollTop),reading)
   await emit('narration',{text:'Another observation arrived.'});await page.emulateMedia({reducedMotion:'reduce'});await page.getByRole('button',{name:'New activity ↓',exact:true}).click();await snap('34-follow-latest')
-  await composer.fill('Finish a long bot turn');await page.getByRole('button',{name:'Send',exact:true}).click();await composer.fill('Wait for memory maintenance');await page.getByRole('button',{name:'Queue message',exact:true}).click()
+  await composer.fill('Finish a long bot turn');await page.getByRole('button',{name:'Send',exact:true}).click();await composer.fill('Wait for memory maintenance');await composer.press('Enter')
   const beforeMaintenance=(await app.evaluate(()=>globalThis.ux.sent)).length
   await emit('turn.done',{id:idA,turn:4,reply:'Conversation compacted; updating memory.',model:'sample/deep',steps:1,clean:true,tokens:10,outputTokens:10,notices:[],trust:{rules:[]},archived:1,consolidating:true})
   await page.waitForTimeout(250);assert.equal((await app.evaluate(()=>globalThis.ux.sent)).length,beforeMaintenance)

@@ -203,7 +203,7 @@ if (hasSessions) {
   await page.locator('.session').first().click()
   await page.waitForTimeout(1200)
   if (await page.locator('.trust').isVisible().catch(() => false)) {
-    await page.locator('.trust-actions .approve').click()
+    await page.locator('[data-test="trust-approve"]').click()
     await page.waitForTimeout(500)
   }
   let open = await readMenu()
@@ -292,14 +292,14 @@ writeFileSync(
 const chevron = page.locator('.new-recent')
 check(await chevron.isVisible(), 'the New session button has a recents chevron')
 check(
-  (await chevron.getAttribute('aria-expanded')) === 'false',
+  (await chevron.locator('leo-button').getAttribute('aria-expanded')) === 'false',
   'and it says it is closed before it is opened',
 )
 await chevron.click()
 await page.waitForTimeout(350)
 check(await page.locator('[role="menu"]').isVisible(), 'clicking it opens a menu')
 check(
-  (await chevron.getAttribute('aria-expanded')) === 'true',
+  (await chevron.locator('leo-button').getAttribute('aria-expanded')) === 'true',
   'and the trigger now says it is open',
 )
 const rows = await page.locator('[role="menuitem"]').count()
@@ -338,7 +338,7 @@ await page.keyboard.press('Escape')
 await page.waitForTimeout(300)
 check(!(await page.locator('[role="menu"]').isVisible()), 'Escape closes it')
 check(
-  await page.evaluate(() => document.activeElement?.classList.contains('new-recent')),
+  await page.evaluate(() => !!document.activeElement?.closest('.new-recent')),
   'and focus went back to the button that opened it',
 )
 

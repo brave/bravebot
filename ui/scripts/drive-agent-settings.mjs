@@ -58,7 +58,8 @@ try {
   await dialog.getByRole('tab', { name: 'Run settings', exact: true }).click()
   await dialog.getByRole('button', { name: 'Choose settings file…' }).click()
   await dialog.getByRole('button', { name: 'Clear override' }).waitFor({ state: 'visible' })
-  await page.waitForFunction(() => [...document.querySelectorAll('button')].some(b => b.textContent === 'Clear override' && !b.disabled))
+  // Leo draws the button inside a shadow root, so wait on the role query, which pierces it.
+  for (let tries = 0; tries < 100 && !(await dialog.getByRole('button', { name: 'Clear override' }).isEnabled()); tries++) await page.waitForTimeout(100)
   await dialog.getByRole('button', { name: 'Clear override' }).click()
   await dialog.getByText('No override selected', { exact: true }).waitFor()
   await dialog.getByRole('tab', { name: 'Hooks', exact: true }).click()
@@ -68,15 +69,15 @@ try {
   // the agent cannot read whole is a file this panel then refuses to edit.
   await dialog.getByRole('button', { name: 'Save hooks', exact: true }).click()
   await dialog.getByRole('alert').filter({ hasText: 'Enter a program for every hook' }).waitFor()
-  await dialog.getByLabel('Program', { exact: true }).fill('/usr/bin/notify-send')
+  await dialog.getByRole('textbox', { name: 'Program', exact: true }).fill('/usr/bin/notify-send')
   await dialog.getByRole('button', { name: 'Add argument', exact: true }).click()
-  await dialog.getByLabel('Argument 1', { exact: true }).fill('Done; $(never execute)')
+  await dialog.getByRole('textbox', { name: 'Argument 1', exact: true }).fill('Done; $(never execute)')
   await dialog.getByRole('button', { name: 'Save hooks', exact: true }).click()
   await dialog.getByText('Hooks saved. They apply when the next turn starts.').waitFor()
   assert.deepEqual(await app.evaluate(() => globalThis.agentSettingsFixture.state.hooks.hooks[0].run), ['/usr/bin/notify-send', 'Done; $(never execute)'])
   await snap('02-hooks')
   await app.evaluate(() => { globalThis.agentSettingsFixture.state.conflict = true })
-  await dialog.getByLabel('Program', { exact: true }).fill('/usr/bin/echo')
+  await dialog.getByRole('textbox', { name: 'Program', exact: true }).fill('/usr/bin/echo')
   await dialog.getByRole('button', { name: 'Save hooks', exact: true }).click()
   await dialog.getByRole('alert').filter({ hasText: 'changed since this editor opened' }).waitFor()
   await app.evaluate(() => { globalThis.agentSettingsFixture.state.conflict = false })
@@ -85,7 +86,7 @@ try {
   // A write that landed and a reading that did not is not a stale editor: what the next save
   // expects to find is the text this one wrote.
   await app.evaluate(() => { globalThis.agentSettingsFixture.state.unreadable = true })
-  await dialog.getByLabel('Program', { exact: true }).fill('/usr/bin/true')
+  await dialog.getByRole('textbox', { name: 'Program', exact: true }).fill('/usr/bin/true')
   await dialog.getByRole('button', { name: 'Save hooks', exact: true }).click()
   await dialog.getByRole('alert').filter({ hasText: 'could not be read back' }).waitFor()
   await app.evaluate(() => { globalThis.agentSettingsFixture.state.unreadable = false })
@@ -97,8 +98,9 @@ try {
   await dialog.getByRole('alert').filter({ hasText: 'This hook fires for nothing' }).waitFor()
   // Taking the advice keeps the filter the notice was about. The notice is the agent's answer about
   // the file on disk, so an edit clears it until the file has been read again.
-  await dialog.locator('.hook-editor select').selectOption('tool-finished')
-  assert.equal(await dialog.getByLabel('Tool filter (optional)', { exact: true }).inputValue(), 'write_file', 'choosing the moment the filter works at keeps the filter')
+  await dialog.locator('[data-test="hook-when-0"]').click()
+  await page.getByRole('option', { name: 'Tool finishes', exact: true }).click()
+  assert.equal(await dialog.getByRole('textbox', { name: 'Tool filter (optional)', exact: true }).inputValue(), 'write_file', 'choosing the moment the filter works at keeps the filter')
   await dialog.getByRole('alert').filter({ hasText: 'This hook fires for nothing' }).waitFor({ state: 'detached' })
   await dialog.getByRole('button', { name: 'Save hooks', exact: true }).click()
   await dialog.getByText('Hooks saved. They apply when the next turn starts.').waitFor()
@@ -108,19 +110,20 @@ try {
   await app.evaluate(() => { globalThis.agentSettingsFixture.state.hooks = { path: '/test/.bravebot/hooks.json', text: '{"hooks":[{"on":"turn-started","run":["x"]}],"later":true}', entire: false, hooks: [{ on: 'turn-started', tool: null, run: ['x'], firesForNothing: false }] } })
   await dialog.getByRole('button', { name: 'Reload hooks', exact: true }).click()
   await dialog.getByRole('alert').filter({ hasText: 'did not read all of this file' }).waitFor()
-  assert.equal(await dialog.getByLabel('Program', { exact: true }).isDisabled(), true, 'the entries of a file the agent did not wholly read cannot be edited')
+  assert.equal(await dialog.getByRole('textbox', { name: 'Program', exact: true }).isDisabled(), true, 'the entries of a file the agent did not wholly read cannot be edited')
   for (const name of ['Add hook', 'Save hooks']) {
     assert.equal(await dialog.getByRole('button', { name, exact: true }).isDisabled(), true, `${name} is refused for a file the agent did not wholly read`)
   }
   await snap('02b-hooks-unread')
   await page.keyboard.press('Escape')
   await dialog.waitFor({ state: 'hidden' })
-  assert.equal(await page.getByRole('button', { name: 'Agent settings', exact: true }).evaluate(el => el === document.activeElement), true)
+  // Focus is on the button Leo draws inside the host, which the page reports as the host itself.
+  assert.equal(await page.locator('.agent-settings-open').evaluate(el => el === document.activeElement || el.getRootNode().host === document.activeElement), true)
   await page.locator('.session').filter({ hasText: 'Agent settings a' }).click()
   await page.getByText('Context not yet measured', { exact: true }).waitFor()
   await page.getByRole('button', { name: 'Watches', exact: true }).click()
   const watches = page.getByRole('dialog', { name: 'File watches', exact: true })
-  await watches.getByLabel('Project file', { exact: true }).fill('src/example.ts')
+  await watches.getByRole('textbox', { name: 'Project file', exact: true }).fill('src/example.ts')
   await watches.getByRole('button', { name: 'Watch file', exact: true }).click()
   await watches.getByRole('button', { name: 'Stop watching src/example.ts', exact: true }).waitFor()
   await snap('03-watches')
