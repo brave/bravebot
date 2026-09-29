@@ -1,0 +1,19 @@
+[package]
+name = "bravebot-browser"
+description = "Relays tool calls between a stdio MCP server and a Brave extension's native messaging host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "bravebot-browser"
+path = "src/main.rs"
+
+[dependencies]
+rand = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
