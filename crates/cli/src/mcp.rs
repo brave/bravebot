@@ -20,6 +20,8 @@ use bravebot_config::mcp::{
     Unreadable,
 };
 use bravebot_i18n::t;
+use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -135,7 +137,7 @@ fn refused_with_the_forms(message: String) -> Stopped {
     said.push('\n');
     said.push_str(t!(mcp_forms_heading));
     for form in [
-        "bravebot mcp add <alias> [-s <scope>] [--env <name>]... [--dir <path>] [--stdio] -- <program> [args...]",
+        "bravebot mcp add <alias> [-s <scope>] [-e|--env <name>[=<value>]...]... [--dir <path>] [--stdio] -- <program> [args...]",
         "bravebot mcp add <alias> [-s <scope>] --http <url>",
         "bravebot mcp enable <alias> [-s <scope>]",
         "bravebot mcp disable <alias> [-s <scope>]",
@@ -201,22 +203,32 @@ fn add<R: BufRead, W: Write>(
             t!(mcp_needs_an_alias, command = "add").to_string(),
         ));
     };
-    if !mcp::is_alias(alias) {
-        return Err((
-            Ending::Argument,
-            t!(mcp_not_an_alias, alias = shown(alias)).to_string(),
-        ));
+    // Refused as Claude Code refuses it, and without repeating the word, which may hold a value.
+    if alias.starts_with("-e") || alias.starts_with("--env") {
+        return Err(argument(t!(mcp_env_after_the_alias)));
     }
-    let declaration = declared(flags, start + 1, &mut scope).map_err(|refusal| match refusal {
-        Refusal::Said(stopped) => stopped,
-        Refusal::Problem(found) => (
+    if !mcp::is_alias(alias) {
+        let said = match may_be_a_value(alias) {
+            true => t!(mcp_not_an_alias_unshown, position = (start + 1) as i64).to_string(),
+            false => t!(mcp_not_an_alias, alias = shown(alias)).to_string(),
+        };
+        return Err((Ending::Argument, said));
+    }
+    let not_added = |found: Problem| {
+        (
             Ending::Argument,
             t!(mcp_not_added, alias = alias, problem = problem(&found)).to_string(),
-        ),
+        )
+    };
+    let declaration = declared(flags, start + 1, &mut scope).map_err(|refusal| match refusal {
+        Refusal::Said(stopped) => stopped,
+        Refusal::Problem(found) => not_added(found),
     })?;
     let scope = scope.unwrap_or(Scope::Local);
 
     let directory = writable(home, "add")?;
+    let declaration =
+        with_reads(declaration, directory, &|name| std::env::var_os(name)).map_err(not_added)?;
     let mut declarations = read(directory)?;
     // Read before anything is written, so a settings file the request cannot go in stops the
     // declaration too rather than leaving half of what was typed done.
@@ -302,22 +314,48 @@ impl From<Stopped> for Refusal {
 /// and never as a line, so a flag of this command written after it is an argument of the server's.
 /// A `-s` before it is read into `scope`. `before` is how many words after `add` precede `flags`,
 /// so a stray word is named by its place in what was typed.
+///
+/// `-e` and `--env` take every word up to the next flag, as Claude Code's do, and `--env=` or `-e`
+/// joined to its word takes that word alone.
 fn declared(
     flags: &[String],
     before: usize,
     scope: &mut Option<Scope>,
 ) -> Result<Declaration, Refusal> {
     let mut variables = Vec::new();
+    let mut env = BTreeMap::new();
     let mut directory = None;
     let mut transport = None;
     let mut index = 0;
     while index < flags.len() {
         let flag = flags[index].as_str();
         let value = flags.get(index + 1);
+        let position = |at: usize| (before + at + 1) as i64;
+        let mut taken = 2;
         match flag {
-            "--env" => {
-                let name = value.ok_or_else(|| argument(t!(mcp_env_needs_a_name)))?;
-                variables.push(name.clone());
+            "-e" | "--env" => {
+                let run = flags[index + 1..]
+                    .iter()
+                    .take_while(|word| !word.starts_with('-'))
+                    .count();
+                if run == 0 {
+                    return Err(argument(t!(mcp_env_needs_a_name)).into());
+                }
+                for (at, word) in flags.iter().enumerate().skip(index + 1).take(run) {
+                    given(word, run == 1, position(at), &mut variables, &mut env)?;
+                }
+                taken = 1 + run;
+            }
+            joined if joined.starts_with("--env=") || joined.starts_with("-e") => {
+                let word = joined
+                    .strip_prefix("--env=")
+                    .or_else(|| joined.strip_prefix("-e"))
+                    .unwrap_or_default();
+                if word.is_empty() {
+                    return Err(argument(t!(mcp_env_needs_a_name)).into());
+                }
+                given(word, true, position(index), &mut variables, &mut env)?;
+                taken = 1;
             }
             "--dir" => {
                 let path = value.ok_or_else(|| argument(t!(mcp_dir_needs_a_path)))?;
@@ -348,33 +386,103 @@ fn declared(
             }
             "-s" | "--scope" => take_scope(value, scope)?,
             other if other.starts_with('-') => return Err(unknown_option(other).into()),
-            // Named by its place and not by its text: a stray word here is most often a value,
-            // as in `--env TOKEN sk-live` or `--env PATH TOKEN=sk-live`.
+            // Named by its place and not by its text: a stray word here may be a value typed
+            // where a flag was meant, as in `--dir /srv sk-live`.
             _ => {
-                let position = (before + index + 1) as i64;
-                return Err(argument(t!(mcp_add_stray_argument, position = position)).into());
+                return Err(
+                    argument(t!(mcp_add_stray_argument, position = position(index))).into(),
+                );
             }
         }
-        index += 2;
+        index += taken;
     }
     match transport {
         None => Err(argument(t!(mcp_needs_a_transport)).into()),
         Some(Transport::Stdio(argv)) => {
-            // A bare name is looked for only in the PATH a declaration names (SERVERS-10), so
-            // one typed without it would be a server that can never start.
-            if is_a_bare_name(&argv[0]) {
+            // A bare name is looked for only in the PATH a declaration gives it (SERVERS-10), so
+            // one typed with neither would be a server that can never start.
+            if is_a_bare_name(&argv[0]) && !env.contains_key("PATH") {
                 variables.push("PATH".to_string());
             }
-            Declaration::stdio(argv, variables, directory).map_err(Refusal::Problem)
+            Declaration::stdio(argv, variables, directory)
+                .and_then(|declaration| declaration.storing(env))
+                .map_err(Refusal::Problem)
         }
         Some(Transport::Http(_)) if !variables.is_empty() => {
             Err(Refusal::Problem(Problem::Remote("variables")))
+        }
+        Some(Transport::Http(_)) if !env.is_empty() => {
+            Err(Refusal::Problem(Problem::Remote("env")))
         }
         Some(Transport::Http(_)) if directory.is_some() => {
             Err(Refusal::Problem(Problem::Remote("directory")))
         }
         Some(Transport::Http(url)) => Declaration::http(url).map_err(Refusal::Problem),
     }
+}
+
+/// One word an `-e` took. `NAME=value` is stored, split at its first `=`. A name alone is a
+/// variable read from the environment at launch, but only as the one word its `-e` took: in a run
+/// of several, `-e TOKEN sk-live` would read as a variable and a stray value.
+///
+/// Anything else is named by its place and never repeated, since it may be a value.
+fn given(
+    word: &str,
+    alone: bool,
+    position: i64,
+    variables: &mut Vec<String>,
+    env: &mut BTreeMap<String, String>,
+) -> Result<(), Refusal> {
+    match word.split_once('=') {
+        Some((name, value)) if mcp::is_variable_name(name) => {
+            match env.insert(name.to_string(), value.to_string()) {
+                None => Ok(()),
+                Some(_) => Err(Refusal::Problem(Problem::Twice(name.to_string()))),
+            }
+        }
+        None if alone && mcp::is_variable_name(word) => {
+            variables.push(word.to_string());
+            Ok(())
+        }
+        _ => Err(argument(t!(mcp_env_word_refused, position = position)).into()),
+    }
+}
+
+/// `declaration` with a read granted for each file one of its stored values or arguments names,
+/// where its confinement would otherwise refuse it (SERVERS-10).
+///
+/// A word is taken as a file only where it is an absolute path to one that exists now, and it is
+/// recorded as it resolves, so the grant is to the file that was there when the person was shown
+/// it. A directory is never granted this way: a word naming one is too broad a read to infer. Nor
+/// is a file in the state directory, so a line copied from somewhere else cannot hand a server the
+/// person's declarations, approvals or credentials.
+fn with_reads(
+    declaration: Declaration,
+    state: &Path,
+    environment: &dyn Fn(&str) -> Option<OsString>,
+) -> Result<Declaration, Problem> {
+    let Declaration::Stdio { argv, env, .. } = &declaration else {
+        return Ok(declaration);
+    };
+    let state = std::fs::canonicalize(state).unwrap_or_else(|_| state.to_path_buf());
+    let mut files: Vec<PathBuf> = Vec::new();
+    for word in env.values().chain(argv) {
+        let path = Path::new(word);
+        if !path.is_absolute() {
+            continue;
+        }
+        let Ok(file) = std::fs::canonicalize(path) else {
+            continue;
+        };
+        if file.is_file() && !file.starts_with(&state) && !files.contains(&file) {
+            files.push(file);
+        }
+    }
+    let reads = crate::servers::unreached(&declaration, files, environment)
+        .into_iter()
+        .filter_map(|file| file.into_os_string().into_string().ok())
+        .collect();
+    declaration.reading(reads)
 }
 
 fn is_a_bare_name(program: &str) -> bool {
@@ -449,9 +557,16 @@ fn take_scope(value: Option<&String>, scope: &mut Option<Scope>) -> Result<(), S
         "local" => Scope::Local,
         "project" => Scope::Project,
         "user" => Scope::User,
+        other if may_be_a_value(other) => return Err(argument(t!(mcp_not_a_scope_unshown))),
         other => return Err(argument(t!(mcp_not_a_scope, scope = shown(other)))),
     });
     Ok(())
+}
+
+/// Whether a word a refusal would repeat may hold a value, as `NAME=value` and `-eNAME=value` do,
+/// so that it is not repeated.
+fn may_be_a_value(word: &str) -> bool {
+    word.contains('=')
 }
 
 fn checkout(cwd: Cwd<'_>) -> Result<&Path, Stopped> {
@@ -471,7 +586,10 @@ fn place(typed: &str) -> Result<String, Stopped> {
     let resolved = std::fs::canonicalize(typed)
         .ok()
         .filter(|path| path.is_dir())
-        .ok_or_else(|| argument(t!(mcp_dir_not_a_directory, path = shown(typed))))?;
+        .ok_or_else(|| match may_be_a_value(typed) {
+            true => argument(t!(mcp_dir_not_a_directory_unshown)),
+            false => argument(t!(mcp_dir_not_a_directory, path = shown(typed))),
+        })?;
     resolved
         .into_os_string()
         .into_string()
@@ -1208,7 +1326,13 @@ fn ask<R: BufRead, W: Write>(
         say(person, line);
     }
     if !changed.is_empty() {
-        let fields: Vec<&str> = changed.iter().map(|field| field.key()).collect();
+        let fields: Vec<String> = changed
+            .iter()
+            .map(|field| match field {
+                Field::Env(names) => format!("{} ({})", field.key(), names.join(", ")),
+                other => other.key().to_string(),
+            })
+            .collect();
         say(
             person,
             format!(
@@ -1247,10 +1371,12 @@ pub(crate) fn record(
 }
 
 /// A declaration as a person reads it: the alias, the transport and what it runs or reaches on the
-/// first line, and under it the names it receives, where it runs, and the digest.
+/// first line, and under it the names it receives, the files it may read, where it runs, and the
+/// digest.
 ///
 /// Every argument is shown as the word it is, quoted where it holds a space or anything a terminal
 /// would not draw as itself, so `a b` and `"a b"` are told apart on the screen as they are in argv.
+/// A stored value is not shown: its name is, marked stored, and a file it names is shown as a read.
 pub(crate) fn drawn(alias: &str, declaration: &Declaration, digest: &str) -> Vec<String> {
     let what = match declaration {
         Declaration::Stdio { argv, .. } => argv
@@ -1266,11 +1392,19 @@ pub(crate) fn drawn(alias: &str, declaration: &Declaration, digest: &str) -> Vec
         shown(alias),
         declaration.transport()
     )];
-    if !declaration.variables().is_empty() {
+    let names: Vec<String> = declaration
+        .stored()
+        .map(|name| t!(mcp_variable_stored, name = name).to_string())
+        .chain(declaration.variables().iter().cloned())
+        .collect();
+    if !names.is_empty() {
         lines.push(format!(
             "{indent}{}",
-            t!(mcp_variables, names = declaration.variables().join(", "))
+            t!(mcp_variables, names = names.join(", "))
         ));
+    }
+    for file in declaration.reads() {
+        lines.push(format!("{indent}{}", t!(mcp_may_read, path = shown(file))));
     }
     if let Declaration::Stdio {
         directory: Some(directory),
@@ -1416,10 +1550,12 @@ pub(crate) fn problem(found: &Problem) -> String {
         Problem::NotAnObject => t!(mcp_problem_not_an_object).to_string(),
         Problem::Transport => t!(mcp_problem_transport).to_string(),
         Problem::Key(key) => t!(mcp_problem_key, key = shown(key)).to_string(),
-        Problem::Values => t!(mcp_problem_values).to_string(),
         Problem::Program => t!(mcp_problem_program).to_string(),
         Problem::Name => t!(mcp_problem_name).to_string(),
-        Problem::Assignment(name) => t!(mcp_problem_assignment, name = name).to_string(),
+        Problem::Env => t!(mcp_problem_env).to_string(),
+        Problem::Value(name) => t!(mcp_problem_value, name = name).to_string(),
+        Problem::Twice(name) => t!(mcp_problem_twice, name = name).to_string(),
+        Problem::Reads => t!(mcp_problem_reads).to_string(),
         Problem::Directory => t!(mcp_problem_directory).to_string(),
         Problem::Url => t!(mcp_problem_url).to_string(),
         Problem::Credentials => t!(mcp_problem_credentials).to_string(),
@@ -1750,7 +1886,8 @@ mod tests {
             r#"{"servers": {
                 "local": {"transport": "stdio", "argv": ["local-mcp"]},
                 "maps": {"transport": "http", "url": "https://maps.example/mcp"},
-                "leaky": {"transport": "stdio", "argv": ["x"], "env": {"TOKEN": "hunter2"}}
+                "leaky": {"transport": "stdio", "argv": ["x"], "variables": ["TOKEN"],
+                    "env": {"TOKEN": "hunter2"}}
             }}"#,
         )
         .expect("mcp.json");
@@ -1998,6 +2135,275 @@ mod tests {
             };
             assert_eq!(variables, words(expected), "{flags:?}");
         }
+    }
+
+    /// SERVERS-10: `-e` and `--env` take a value as `claude mcp add` does: a run of words up to the
+    /// next flag, repeated, or joined to the flag, each `NAME=value` split at its first `=`. A name
+    /// given alone is still a variable read from the environment, and a stored `PATH` is the one a
+    /// bare name is looked for in, so no other is named.
+    #[test]
+    fn every_way_claude_code_takes_a_value_stores_it() {
+        let stored = |variables: &[&str], env: &[(&str, &str)]| {
+            let env = env
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect();
+            Declaration::stdio(words(&["/opt/srv"]), words(variables), None)
+                .and_then(|declaration| declaration.storing(env))
+                .unwrap()
+        };
+        let declared_by = |flags: &[&str]| {
+            let typed = [flags, &["--", "/opt/srv"]].concat();
+            declared(&words(&typed), 1, &mut None).ok()
+        };
+        let both = stored(&[], &[("A", "1"), ("B", "2")]);
+        for flags in [
+            &["-e", "A=1", "B=2"][..],
+            &["-e", "A=1", "-e", "B=2"],
+            &["--env", "A=1", "--env=B=2"],
+            &["-eA=1", "-eB=2"],
+            &["-e", "B=2", "--env", "A=1"],
+        ] {
+            assert_eq!(declared_by(flags), Some(both.clone()), "{flags:?}");
+        }
+        for (flags, expected) in [
+            (&["-e", "A=x=y"][..], stored(&[], &[("A", "x=y")])),
+            (&["-e", "A="], stored(&[], &[("A", "")])),
+            (&["-e", "A=1", "-e", "B"], stored(&["B"], &[("A", "1")])),
+        ] {
+            assert_eq!(declared_by(flags), Some(expected), "{flags:?}");
+        }
+
+        let path = Declaration::stdio(words(&["npx", "weather-mcp"]), Vec::new(), None)
+            .and_then(|declaration| {
+                declaration.storing([("PATH".into(), "/opt/bin".into())].into())
+            })
+            .unwrap();
+        let typed = words(&["-e", "PATH=/opt/bin", "--", "npx", "weather-mcp"]);
+        assert_eq!(declared(&typed, 1, &mut None).ok(), Some(path));
+    }
+
+    /// SERVERS-10: a word `-e` cannot read as `NAME=value`, or as a name given alone, is named by
+    /// its place in what was typed and never repeated, since it may be a value. A variable given
+    /// twice, stored or read, and a value for a remote server are refused by name.
+    #[test]
+    fn a_word_an_env_flag_cannot_read_is_named_by_its_place_and_never_repeated() {
+        let refused = |flags: &[&str]| match declared(&words(flags), 1, &mut None) {
+            Err(Refusal::Said((Ending::Argument, said))) => said,
+            _ => panic!("{flags:?} was not refused as an argument"),
+        };
+        for (flags, position) in [
+            (&["-e", "A=1", "sk_live_x", "--", "/opt/srv"][..], 4),
+            (&["-e", "STRIPE_KEY", "sk_live_x", "--", "/opt/srv"], 3),
+            (&["-e", "1A=sk_live_x", "--", "/opt/srv"], 3),
+            (&["--env=sk-live-x", "--", "/opt/srv"], 2),
+            (&["-esk-live-x", "--", "/opt/srv"], 2),
+        ] {
+            let said = refused(flags);
+            let expected = t!(mcp_env_word_refused, position = position).to_string();
+            assert_eq!(said, expected, "{flags:?}");
+            assert!(
+                !said.contains("live"),
+                "{flags:?} repeated the value: {said}"
+            );
+        }
+        for flags in [
+            &["-e", "--", "/opt/srv"][..],
+            &["--env=", "--", "/opt/srv"],
+            &["-e"],
+            &["--http", "https://mcp.example.com/mcp", "-e"],
+        ] {
+            assert_eq!(
+                refused(flags),
+                t!(mcp_env_needs_a_name).to_string(),
+                "{flags:?}"
+            );
+        }
+
+        let found = |flags: &[&str]| match declared(&words(flags), 1, &mut None) {
+            Err(Refusal::Problem(found)) => found,
+            _ => panic!("{flags:?} spelled no problem"),
+        };
+        for flags in [
+            &["-e", "A=1", "A=2", "--", "/opt/srv"][..],
+            &["-e", "A", "-e", "A=2", "--", "/opt/srv"],
+            &["-e", "A=2", "-e", "A", "--", "/opt/srv"],
+        ] {
+            assert_eq!(found(flags), Problem::Twice("A".into()), "{flags:?}");
+        }
+        let remote = ["--http", "https://mcp.example.com/mcp", "-e", "A=1"];
+        assert_eq!(found(&remote), Problem::Remote("env"));
+    }
+
+    /// SERVERS-10: `-e` before the alias is refused as `claude mcp add` refuses it, where its run
+    /// would take the alias as a value, and the refusal repeats nothing that was typed.
+    #[test]
+    fn a_value_before_the_alias_is_refused_and_nothing_is_written() {
+        let directory = scratch("cli-mcp-env-first");
+        for args in [
+            &["add", "-e", "TOKEN=hunter2", "weather", "--", "npx"][..],
+            &["add", "-eTOKEN=hunter2", "weather", "--", "npx"],
+            &["add", "--env=TOKEN=hunter2", "weather", "--", "npx"],
+            &[
+                "add",
+                "-s",
+                "user",
+                "--env",
+                "TOKEN=hunter2",
+                "weather",
+                "--",
+                "npx",
+            ],
+        ] {
+            let (outcome, screen) = typing(&directory, args, "y\n");
+            let (_, said) = outcome.expect_err("a value before the alias was taken");
+            assert_eq!(said, t!(mcp_env_after_the_alias).to_string(), "{args:?}");
+            assert!(!screen.contains("hunter2"), "{args:?}: {screen}");
+        }
+        assert!(!mcp::declarations_file(&directory).exists());
+    }
+
+    /// SERVERS-10: a value typed where the alias, a scope or a directory goes, with its name or its
+    /// `-e` forgotten, is refused without being repeated, and a word holding no `=` is still named.
+    #[test]
+    fn a_value_where_an_alias_a_scope_or_a_directory_goes_is_refused_and_never_repeated() {
+        let directory = scratch("cli-mcp-value-in-place");
+        let refused = [
+            (
+                &["add", "TOKEN=hunter2", "--", "npx"][..],
+                t!(mcp_not_an_alias_unshown, position = 1).to_string(),
+            ),
+            (
+                &["add", "-s", "user", "TOKEN=hunter2", "--", "npx"],
+                t!(mcp_not_an_alias_unshown, position = 3).to_string(),
+            ),
+            (
+                &["add", "-s", "-eTOKEN=hunter2", "weather", "--", "npx"],
+                t!(mcp_not_a_scope_unshown).to_string(),
+            ),
+            (
+                &[
+                    "add",
+                    "weather",
+                    "--scope",
+                    "--env=TOKEN=hunter2",
+                    "--",
+                    "npx",
+                ],
+                t!(mcp_not_a_scope_unshown).to_string(),
+            ),
+            (
+                &["add", "weather", "--dir", "-eTOKEN=hunter2", "--", "npx"],
+                t!(mcp_dir_not_a_directory_unshown).to_string(),
+            ),
+        ];
+        for (args, expected) in refused {
+            let (outcome, screen) = typing(&directory, args, "y\n");
+            let (_, said) = outcome.expect_err("a value was taken as a word of add's own");
+            assert_eq!(said, expected, "{args:?}");
+            assert!(!said.contains("hunter2"), "{args:?}: {said}");
+            assert!(!screen.contains("hunter2"), "{args:?}: {screen}");
+        }
+        let (outcome, _) = typing(&directory, &["add", "-s", "usr", "weather"], "y\n");
+        let (_, said) = outcome.expect_err("usr is not a scope");
+        assert_eq!(said, t!(mcp_not_a_scope, scope = "usr").to_string());
+        assert!(!mcp::declarations_file(&directory).exists());
+    }
+
+    /// SERVERS-4: a value stored at `add` is shown at the question as stored, by its name, and the
+    /// value itself is shown nowhere: not there, by `get`, by `list`, or where a change to it is
+    /// named, which is by the variable's name.
+    #[test]
+    fn a_stored_value_is_shown_by_its_name_and_never_as_itself() {
+        let directory = scratch("cli-mcp-stored");
+        let token = |value: &str| {
+            [
+                "add",
+                "weather",
+                "-e",
+                &format!("WEATHER_TOKEN={value}"),
+                "--",
+                "npx",
+                "-y",
+                "weather-mcp",
+            ]
+            .map(String::from)
+        };
+        let typed = token("hunter2-token");
+        let typed: Vec<&str> = typed.iter().map(String::as_str).collect();
+        let (outcome, asked) = typing(&directory, &typed, "y\n");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let names = format!("{}, PATH", t!(mcp_variable_stored, name = "WEATHER_TOKEN"));
+        let shown = t!(mcp_variables, names = names).to_string();
+        assert!(asked.lines().any(|line| line.trim() == shown), "{asked}");
+        let stored = weather()
+            .storing([("WEATHER_TOKEN".into(), "hunter2-token".into())].into())
+            .unwrap();
+        assert!(approved(&directory, &stored));
+
+        let (_, got) = typing(&directory, &["get", "weather"], "");
+        assert!(got.lines().any(|line| line.trim() == shown), "{got}");
+        let (_, listed) = typing(&directory, &["list"], "");
+        for screen in [&asked, &got, &listed] {
+            assert!(!screen.contains("hunter2"), "{screen}");
+        }
+
+        let typed = token("other-token");
+        let typed: Vec<&str> = typed.iter().map(String::as_str).collect();
+        let (outcome, asked) = typing(&directory, &typed, "n\n");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let named = t!(mcp_changed, fields = "env (WEATHER_TOKEN)").to_string();
+        assert!(asked.lines().any(|line| line.trim() == named), "{asked}");
+        assert!(
+            !asked.contains("hunter2") && !asked.contains("other-token"),
+            "{asked}"
+        );
+        assert!(
+            !approved(&directory, &stored),
+            "the old digest outlived its value"
+        );
+    }
+
+    /// SERVERS-10: a read is declared for each file a stored value or an argument names that the
+    /// server's confinement would not reach, as the file it resolves to now and once. A directory,
+    /// a file in the state directory, one the confinement reaches already, a missing path and a
+    /// relative word are declared as no read.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_a_value_or_an_argument_names_is_declared_as_a_read_and_nothing_broader_is() {
+        let root = std::fs::canonicalize(scratch("cli-mcp-reads")).unwrap();
+        let (state, work, keys) = (root.join("state"), root.join("work"), root.join("keys"));
+        for directory in [&state, &work, &keys, &root.join("scripts")] {
+            std::fs::create_dir_all(directory).unwrap();
+        }
+        let key = keys.join("key");
+        let script = root.join("scripts").join("serve.js");
+        for file in [&key, &script, &state.join("mcp.json"), &work.join("notes")] {
+            std::fs::write(file, "x").unwrap();
+        }
+        let linked = keys.join("linked");
+        std::os::unix::fs::symlink(&key, &linked).unwrap();
+        let text = |path: &Path| path.to_str().unwrap().to_string();
+
+        let argv = vec![
+            "/bin/sh".to_string(),
+            text(&script),
+            "keys/key".to_string(),
+            text(&root.join("missing")),
+            text(&work.join("notes")),
+            text(&linked),
+        ];
+        let env = [
+            ("DIR".to_string(), text(&keys)),
+            ("KEY_FILE".to_string(), text(&key)),
+            ("STATE".to_string(), text(&state.join("mcp.json"))),
+        ]
+        .into();
+        let declaration = Declaration::stdio(argv, Vec::new(), Some(text(&work)))
+            .and_then(|declaration| declaration.storing(env))
+            .unwrap();
+        let declaration = with_reads(declaration, &state, &|_| None).expect("a declaration");
+        assert_eq!(declaration.reads(), [text(&key), text(&script)]);
     }
 
     /// The `PATH` `add` names is shown at the question like one typed, since the approval is of
@@ -2622,10 +3028,15 @@ mod tests {
         assert!(requested_in(&directory).is_empty());
         assert!(!bravebot_config::user_settings_file(&directory).exists());
 
-        let stray = ["add", "-s", "user", "weather", "--env", "TOKEN", "sk-live"];
+        let url = "https://weather.example/mcp";
+        let stray = ["add", "-s", "user", "weather", "--http", url, "sk-live"];
         let (outcome, _) = typing(&directory, &stray, "y\n");
         let (_, said) = outcome.expect_err("a stray word was taken");
         assert_eq!(said, t!(mcp_add_stray_argument, position = 6).to_string());
+        let stray = ["add", "-s", "user", "weather", "--env", "TOKEN", "sk-live"];
+        let (outcome, _) = typing(&directory, &stray, "y\n");
+        let (_, said) = outcome.expect_err("a stray word was taken");
+        assert_eq!(said, t!(mcp_env_word_refused, position = 5).to_string());
     }
 
     /// An incognito session writes nothing, so `enable` and `disable` are refused there as every

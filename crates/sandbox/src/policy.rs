@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 /// forgotten subtraction silently grants access.
 #[derive(Debug, Clone)]
 pub struct SandboxPolicy {
-    /// Directories the process may read. Empty means no filesystem reads.
+    /// Paths the process may read: a directory with everything under it, or one file.
+    /// Empty means no filesystem reads.
     pub readable: Vec<PathBuf>,
     /// Paths the process may write, each saying what it is where the caller means the
     /// program to create it. Empty means no filesystem writes.

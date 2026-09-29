@@ -384,6 +384,8 @@ enum Plan {
         variables: Variables,
         /// The directories the named `PATH` searches, which the program may need to read.
         searched: Vec<PathBuf>,
+        /// The files the declaration says it may read.
+        reads: Vec<PathBuf>,
         directory: Option<PathBuf>,
         /// The digest of the declaration, which a vouch for the server's list is recorded beside.
         declared: Digest,
@@ -651,16 +653,17 @@ pub(crate) fn named(file: &Path, project: &Path) -> String {
         .to_string()
 }
 
-/// What a declaration starts, read against this process's environment for the variables it names.
+/// What a declaration starts, read against this process's environment for the variables it names
+/// and with the value it stores for each of the others.
 ///
-/// A program named rather than given as a path is looked for in the `PATH` the declaration names,
-/// and in no other: the server runs with that one, so a program found in this process's own
+/// A program named rather than given as a path is looked for in the `PATH` the declaration gives
+/// it, and in no other: the server runs with that one, so a program found in this process's own
 /// would be a program the server's environment does not lead to.
 fn planned(
     declaration: &Declaration,
     environment: &dyn Fn(&str) -> Option<OsString>,
 ) -> Result<Plan, String> {
-    let (argv, names, directory) = match declaration {
+    let (argv, names, env, reads, directory) = match declaration {
         Declaration::Http { url } => {
             return Ok(Plan::Http {
                 url: url.clone(),
@@ -670,15 +673,21 @@ fn planned(
         Declaration::Stdio {
             argv,
             variables,
+            env,
+            reads,
             directory,
-        } => (argv, variables, directory),
+        } => (argv, variables, env, reads, directory),
     };
+    // A stored name is never in `variables`, so the environment is not read for it.
     let variables = names
         .iter()
         .filter_map(|name| environment(name).map(|value| (name, value)))
         .fold(Variables::new(), |variables, (name, value)| {
             variables.with(name.as_str(), value)
         });
+    let variables = env.iter().fold(variables, |variables, (name, value)| {
+        variables.with(name.as_str(), value.as_str())
+    });
     let path = variables
         .iter()
         .find(|(name, _)| name == "PATH")
@@ -700,9 +709,46 @@ fn planned(
         arguments: arguments.to_vec(),
         variables,
         searched,
+        reads: reads.iter().map(PathBuf::from).collect(),
         directory: directory.as_ref().map(PathBuf::from),
         declared: declaration.digest(),
     })
+}
+
+/// Of `files`, the ones the confinement `declaration` would start under does not let it read, which
+/// are the ones a read has to be granted for.
+///
+/// Read against that confinement with no file granted and the temporary directory as its own, since
+/// its own directory is made only when it starts. A program that is not found yet is taken as
+/// named, which grants less and so keeps more files. Where this platform has no base, every file is
+/// one, since nothing is known to reach it.
+pub(crate) fn unreached(
+    declaration: &Declaration,
+    files: Vec<PathBuf>,
+    environment: &dyn Fn(&str) -> Option<OsString>,
+) -> Vec<PathBuf> {
+    let Declaration::Stdio {
+        argv, directory, ..
+    } = declaration
+    else {
+        return files;
+    };
+    let (program, searched) = match planned(declaration, environment) {
+        Ok(Plan::Stdio {
+            program, searched, ..
+        }) => (program, searched),
+        _ => (PathBuf::from(&argv[0]), Vec::new()),
+    };
+    let directory = directory.as_deref().map(Path::new);
+    let Some(policy) =
+        confinement_here(&program, &searched, &[], directory, &temporary_directory())
+    else {
+        return files;
+    };
+    files
+        .into_iter()
+        .filter(|file| !policy.readable.iter().any(|row| file.starts_with(row)))
+        .collect()
 }
 
 /// Why the machine's managed layer keeps `plan` from starting, where it does (SERVERS-12).
@@ -1093,6 +1139,11 @@ fn start(
         .iter()
         .any(|(_, plan)| matches!(plan, Plan::Stdio { .. }))
         .then(bravebot_sandbox::for_current_platform);
+    // A declaration's file can be edited by hand, so `add` keeping reads out of here is not enough.
+    let state = home
+        .directory
+        .as_deref()
+        .map(|state| state.canonicalize().unwrap_or_else(|_| state.to_path_buf()));
 
     for (alias, plan) in plans {
         let sender = sender.clone();
@@ -1102,9 +1153,11 @@ fn start(
                 arguments,
                 variables,
                 searched,
+                mut reads,
                 directory,
                 declared,
             } => {
+                reads.retain(|file| state.as_ref().is_none_or(|state| !file.starts_with(state)));
                 let sandbox = match &sandbox {
                     Some(Ok(sandbox)) => sandbox,
                     Some(Err(error)) => {
@@ -1136,7 +1189,7 @@ fn start(
                     }
                 };
                 let Some(policy) =
-                    confinement_here(&program, &searched, directory.as_deref(), &own)
+                    confinement_here(&program, &searched, &reads, directory.as_deref(), &own)
                 else {
                     notes.push(t!(servers_no_confinement_here, alias = alias).to_string());
                     continue;
@@ -1313,6 +1366,7 @@ fn temporary_directory() -> PathBuf {
 fn confinement_here(
     program: &Path,
     searched: &[PathBuf],
+    reads: &[PathBuf],
     directory: Option<&Path>,
     own: &Path,
 ) -> Option<SandboxPolicy> {
@@ -1320,6 +1374,7 @@ fn confinement_here(
         Prelude::current(),
         program,
         searched,
+        reads,
         directory,
         own,
         &temporary_directory(),
@@ -1371,13 +1426,17 @@ fn at_home(variables: Variables, own: &Path) -> Variables {
 /// it, since `~/.cargo` holds a registry token beside `~/.cargo/bin`. The program's own `bin`
 /// directory is the exception where it sits deeper in the home than that, as `nvm` installs one,
 /// since that parent is the installation the program came from. `own` is the server's own
-/// directory, which it may read and write. The declared directory may be written too, and is where
-/// it starts; without one it starts in the temporary directory, and reads nothing of the workspace.
+/// directory, which it may read and write. `reads` are the files the declaration says it may read,
+/// each granted as the one file it is while it is one at the path recorded, and never the directory
+/// it is in. The
+/// declared directory may be written too, and is where it starts; without one it starts in the
+/// temporary directory, and reads nothing of the workspace.
 #[allow(clippy::too_many_arguments)]
 fn confinement(
     prelude: Option<Prelude>,
     program: &Path,
     searched: &[PathBuf],
+    reads: &[PathBuf],
     directory: Option<&Path>,
     own: &Path,
     temporary: &Path,
@@ -1424,6 +1483,14 @@ fn confinement(
             policy = policy.allow_read(parent);
         }
         policy = policy.allow_read(directory);
+    }
+    // A recorded read is resolved already, so one that resolves elsewhere now is a file replaced by
+    // a link since it was shown, or reached through a directory that was, and not the file shown.
+    for file in reads {
+        let resolved = file.canonicalize().is_ok_and(|resolved| &resolved == file);
+        if resolved && file.is_file() {
+            policy = policy.allow_read(file);
+        }
     }
     Some(match directory {
         Some(directory) => {
@@ -2263,6 +2330,7 @@ mod tests {
                 home.clone(),
                 root.clone(),
             ],
+            &[],
             Some(&work),
             &kept,
             &temporary,
@@ -2300,6 +2368,7 @@ mod tests {
             Some(Prelude::MacOs),
             &program,
             &[],
+            &[],
             None,
             &kept,
             &temporary,
@@ -2307,7 +2376,19 @@ mod tests {
         )
         .expect("a policy");
         assert_eq!(undirected.starting_in.as_deref(), Some(temporary.as_path()));
-        assert!(confinement(None, &program, &[], None, &kept, &temporary, Some(&home)).is_none());
+        assert!(
+            confinement(
+                None,
+                &program,
+                &[],
+                &[],
+                None,
+                &kept,
+                &temporary,
+                Some(&home)
+            )
+            .is_none()
+        );
     }
 
     /// `/tmp` is a link to `/private/tmp` on macOS, and a home under it was named as given while
@@ -2326,6 +2407,7 @@ mod tests {
             Some(Prelude::MacOs),
             &program,
             &[linked.join(".cargo/bin"), linked.clone()],
+            &[],
             None,
             &root.join("kept"),
             &root.join("tmp"),
@@ -2350,8 +2432,14 @@ mod tests {
         let own = profile.join(".cargo").join("bin");
 
         let kept = scratch("cli-servers-kept-here");
-        let policy = confinement_here(&own.join("server"), std::slice::from_ref(&own), None, &kept)
-            .expect("a policy");
+        let policy = confinement_here(
+            &own.join("server"),
+            std::slice::from_ref(&own),
+            &[],
+            None,
+            &kept,
+        )
+        .expect("a policy");
 
         let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         assert!(
@@ -2378,6 +2466,7 @@ mod tests {
             Some(Prelude::MacOs),
             &program,
             &[node.join("bin")],
+            &[],
             None,
             &root.join("kept"),
             &root.join("tmp"),
@@ -2396,6 +2485,99 @@ mod tests {
         );
         assert!(!reads(&policy, &home.join(".nvm")));
         assert!(!reads(&policy, &home));
+    }
+
+    /// SERVERS-10: a file the declaration says it may read is granted as that one file while it is
+    /// one, and read-only: never the directory it is in, and nothing where the path is a directory,
+    /// is missing, is a link, or is reached through one, which is not the file that was shown.
+    #[cfg(unix)]
+    #[test]
+    fn a_declared_read_grants_the_one_file_and_nothing_beside_it() {
+        // Resolved, as `add` records a read.
+        let root = scratch("cli-servers-reads")
+            .canonicalize()
+            .expect("the scratch directory resolves");
+        let home = root.join("home");
+        let keys = home.join("keys");
+        std::fs::create_dir_all(&keys).expect("keys");
+        let key = keys.join("brave-api-key");
+        std::fs::write(&key, "k").expect("the key");
+        let linked = keys.join("linked");
+        std::os::unix::fs::symlink(&key, &linked).expect("link the key");
+        let through = home.join("linked-keys");
+        std::os::unix::fs::symlink(&keys, &through).expect("link the keys directory");
+        let program = installed(&root.join("opt/bin"), "npx");
+
+        let policy = confinement(
+            Some(Prelude::MacOs),
+            &program,
+            &[],
+            &[
+                key.clone(),
+                keys.clone(),
+                keys.join("missing"),
+                linked.clone(),
+                through.join("brave-api-key"),
+            ],
+            None,
+            &root.join("kept"),
+            &root.join("tmp"),
+            Some(&home),
+        )
+        .expect("a policy");
+
+        assert!(reads(&policy, &key));
+        assert!(!writes(&policy, &key));
+        let in_home: Vec<&PathBuf> = policy
+            .readable
+            .iter()
+            .filter(|row| row.starts_with(&home))
+            .collect();
+        assert_eq!(in_home, [&key], "more of the home directory was granted");
+    }
+
+    /// SERVERS-10: a stored value reaches the server as the declaration holds it, and this
+    /// process's environment is read only for the names it declares. A stored `PATH` is the one a
+    /// bare name is looked for in.
+    #[test]
+    fn a_stored_value_is_handed_to_the_server_and_the_environment_is_not_read_for_it() {
+        let root = scratch("cli-servers-stored");
+        let bin = root.join("bin");
+        let program = installed(&bin, "weather-mcp");
+        let env = [
+            ("PATH".to_string(), bin.to_str().unwrap().to_string()),
+            ("WEATHER_TOKEN".to_string(), "stored".to_string()),
+        ]
+        .into();
+        let declaration = Declaration::stdio(words(&["weather-mcp"]), words(&["REGION"]), None)
+            .and_then(|declaration| declaration.storing(env))
+            .expect("a declaration");
+        let asked = std::cell::RefCell::new(Vec::new());
+        let environment = |name: &str| {
+            asked.borrow_mut().push(name.to_string());
+            Some(OsString::from(format!("from {name}")))
+        };
+
+        let Ok(Plan::Stdio {
+            program: found,
+            variables,
+            searched,
+            ..
+        }) = planned(&declaration, &environment)
+        else {
+            panic!("no local plan");
+        };
+
+        assert_eq!(found, program);
+        assert_eq!(searched, std::slice::from_ref(&bin));
+        assert_eq!(
+            variables,
+            Variables::new()
+                .with("REGION", "from REGION")
+                .with("PATH", &bin)
+                .with("WEATHER_TOKEN", "stored")
+        );
+        assert_eq!(asked.into_inner(), ["REGION"]);
     }
 
     fn digested(argv: &[&str]) -> Digest {
@@ -2515,6 +2697,7 @@ done
             arguments: Vec::new(),
             variables: Variables::new(),
             searched: Vec::new(),
+            reads: Vec::new(),
             directory: Some(work.to_path_buf()),
             declared: digested(&["weather-mcp"]),
         };
@@ -2873,5 +3056,89 @@ done
             vec![t!(mcp_move_moved, alias = "weather").to_string()]
         );
         assert_eq!(declared_in(&redirected.home), redirected.declared);
+    }
+
+    /// SERVERS-10: a started server reads the files its declaration says it may, a key file a
+    /// stored value names and one an argument names, and nothing beside them. It exits before it
+    /// answers where it cannot read either. A read in the state directory, which only a hand edit
+    /// of the file can declare, is not granted.
+    #[cfg(unix)]
+    #[test]
+    fn a_started_server_reads_the_files_it_was_declared_to_and_nothing_beside_them() {
+        let root = scratch("cli-servers-started-reads")
+            .canonicalize()
+            .expect("the scratch directory resolves");
+        if Prelude::current().is_none() || bravebot_sandbox::for_current_platform().is_err() {
+            eprintln!("SKIPPED (no confinement here)");
+            return;
+        }
+        let keys = root.join("keys");
+        std::fs::create_dir_all(&keys).expect("keys");
+        let key = keys.join("brave-api-key");
+        std::fs::write(&key, "the key").expect("the key");
+        std::fs::write(keys.join("beside"), "not granted").expect("a file beside it");
+        let argument = root.join("argument");
+        std::fs::write(&argument, "the argument").expect("the argument");
+        // Not in a `bin` directory, which would bring its parent and every file above.
+        let program = installed(&root.join("server"), "weather-mcp");
+        let (_, answering) = HOME_WRITING_SERVER
+            .split_once("while ")
+            .expect("the server answers in a loop");
+        let reading = [
+            "#!/bin/sh",
+            r#"cat "$KEY_FILE" > key-was || exit 1"#,
+            r#"cat "$1" > argument-was || exit 1"#,
+            r#"if cat "${KEY_FILE%/*}/beside" > /dev/null 2>&1; then touch beside-read; fi"#,
+            r#"if cat "$STATE_FILE" > /dev/null 2>&1; then touch state-read; fi"#,
+        ];
+        std::fs::write(
+            &program,
+            format!("{}\nwhile {answering}", reading.join("\n")),
+        )
+        .expect("write the server");
+        let work = root.join("work");
+        std::fs::create_dir_all(&work).expect("work");
+        let state = root.join("state");
+        std::fs::create_dir_all(&state).expect("state");
+        let approvals = state.join("mcp-approvals.json");
+        std::fs::write(&approvals, "{}").expect("a file in the state directory");
+        let home = Home {
+            directory: Some(state),
+            writable: true,
+        };
+        let plan = Plan::Stdio {
+            program,
+            arguments: vec![argument.to_str().unwrap().to_string()],
+            variables: Variables::new()
+                .with("KEY_FILE", &key)
+                .with("STATE_FILE", &approvals),
+            searched: Vec::new(),
+            reads: vec![key.clone(), argument.clone(), approvals.clone()],
+            directory: Some(work.clone()),
+            declared: digested(&["weather-mcp"]),
+        };
+        let mut notes = Vec::new();
+
+        let started = start(
+            vec![("weather".to_string(), plan)],
+            &home,
+            Stream::Null,
+            &mut notes,
+            &mut Vec::new(),
+        );
+
+        assert_eq!(notes, Vec::<String>::new());
+        assert_eq!(started.len(), 1);
+        let read = |name: &str| std::fs::read_to_string(work.join(name)).expect("what it read");
+        assert_eq!(read("key-was"), "the key");
+        assert_eq!(read("argument-was"), "the argument");
+        assert!(
+            !work.join("beside-read").exists(),
+            "the server read a file beside the one it was granted"
+        );
+        assert!(
+            !work.join("state-read").exists(),
+            "the server read a file in the state directory"
+        );
     }
 }
