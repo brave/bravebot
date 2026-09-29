@@ -208,7 +208,7 @@ first, and how many drafts are waiting. Nothing else. The report is the delivera
 
 | Check | Pass | Fails on |
 |---|---|---|
-| Clause ids in order, never duplicated, with no gap | mechanical | error |
+| Clause ids never duplicated, with no gap, in any order down the file | mechanical | error |
 | A clause id still names the clause it named on main, unless `agents/renumbered-clauses.txt` says otherwise | mechanical | error |
 | Every line of `agents/renumbered-clauses.txt` names a clause this tree has | mechanical | error |
 | Every clause carries an anchor so it can be linked to | mechanical | error |

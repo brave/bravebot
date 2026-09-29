@@ -418,9 +418,20 @@ def insert_a_clause_and_renumber(root):
     readme_lists(root, 3)
 
 
+def insert_a_clause_under_the_next_id(root):
+    """A clause inserted mid-spec under the next free id, so the file reads DEMO-1, DEMO-3,
+    DEMO-2. Nothing moved and no id is missing."""
+    edit_spec(
+        root,
+        '<a id="DEMO-2"></a>\n',
+        f'<a id="DEMO-3"></a>\n{A_THIRD_CLAUSE}\n\n{ITS_COVERAGE}\n\n<a id="DEMO-2"></a>\n',
+    )
+    readme_lists(root, 3)
+
+
 def append_a_clause(root):
-    """A clause at the end, which is how an id is allocated. Nothing moved, so nothing is wrong,
-    and a check firing on any new id would stop anybody writing one."""
+    """A clause at the end under the next free id. Nothing moved, so nothing is wrong, and a
+    check firing on any new id would stop anybody writing one."""
     path = root / "docs" / "specs" / "demo.md"
     path.write_text(
         f'{path.read_text(encoding="utf-8")}\n<a id="DEMO-3"></a>\n{A_THIRD_CLAUSE}\n\n'
@@ -592,10 +603,11 @@ CASES = [
         None,
     ),
     (
-        "a clause numbered out of order",
+        "a gap in a spec's ids",
         lambda root: edit_spec(root, "### DEMO-2:", "### DEMO-4:"),
         "clause-numbering",
     ),
+    ("a clause inserted mid-spec under the next free id", insert_a_clause_under_the_next_id, None),
     (
         "the same clause id twice",
         lambda root: edit_spec(root, "### DEMO-2:", "### DEMO-1:"),
@@ -860,7 +872,7 @@ COUNTER_ALONE = [
 
 
 def numbering_alone():
-    """What the per-file counter reports with nothing else running."""
+    """What the per-file numbering check reports with nothing else running."""
     return sorted({f["kind"] for one in load_specs() for f in check.check_clause_numbering(one)})
 
 

@@ -119,14 +119,13 @@ def check_front_matter(spec):
 
 
 def check_clause_numbering(spec):
-    """One file's ids against a counter: the prefix they carry, a duplicate, and a gap.
+    """One file's ids: the prefix they carry, a duplicate, and a gap.
 
-    All three are facts about the file alone, which is the whole of what this can decide. Whether
-    an id still names the clause it named is a question about what the id meant before, and this
-    counter cannot reach it: a file renumbered to close a gap reads `1..N` and passes here.
-    `check_clause_history` is that half."""
+    The ids are checked as a set, not in file order. A clause added mid-spec takes the next free
+    id where it stands, so nothing after it has to be renumbered. Whether an id still names the
+    clause it named is `check_clause_history`'s question: a file renumbered to close a gap reads
+    `1..N` and passes here."""
     seen = {}
-    expected = 1
     for clause in spec.clauses:
         if clause.prefix != spec.id:
             yield finding(
@@ -147,17 +146,6 @@ def check_clause_numbering(spec):
                 evidence=f"{spec.rel}:{clause.line} and {spec.rel}:{seen[clause.number]}",
             )
         seen[clause.number] = clause.line
-        if clause.number != expected:
-            yield finding(
-                spec.rel,
-                ERROR,
-                "clause-numbering",
-                f"`{clause.id}` follows {expected - 1}: ids are allocated in order, with no gap",
-                clause=clause.id,
-                evidence=f"{spec.rel}:{clause.line}",
-                fix="a withdrawn clause stays in place, marked withdrawn, rather than leaving a gap",
-            )
-        expected = max(expected, clause.number) + 1
         if clause.withdrawn and "replaced" not in clause.text.lower():
             yield finding(
                 spec.rel,
@@ -167,6 +155,17 @@ def check_clause_numbering(spec):
                 clause=clause.id,
                 evidence=f"{spec.rel}:{clause.line}",
             )
+    for missing in sorted(set(range(1, max(seen, default=0) + 1)) - set(seen)):
+        after = min(number for number in seen if number > missing)
+        yield finding(
+            spec.rel,
+            ERROR,
+            "clause-numbering",
+            f"`{spec.id}-{missing}` is missing: ids are allocated in order, with no gap",
+            clause=f"{spec.id}-{missing}",
+            evidence=f"{spec.rel}:{seen[after]}",
+            fix="a withdrawn clause stays in place, marked withdrawn, rather than leaving a gap",
+        )
 
 
 _TOPLEVEL = {}
