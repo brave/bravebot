@@ -404,7 +404,7 @@ pub(crate) fn covers(prefix: &str, path: &str) -> bool {
     if path == prefix {
         return true;
     }
-    path.strip_prefix(prefix.as_str())
+    path.strip_prefix(&*prefix)
         .is_some_and(|rest| rest.starts_with('/'))
 }
 
