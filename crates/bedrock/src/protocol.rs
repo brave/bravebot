@@ -266,10 +266,18 @@ pub enum ReplyBlock {
     Other(Value),
 }
 
+/// The key a block or delta of the model's reasoning arrives under.
+pub const REASONING: &str = "reasoningContent";
+
 impl ReplyBlock {
     /// Whether this block names a tool call whose shape this could not read.
     pub fn is_unreadable_call(&self) -> bool {
         matches!(self, Self::UnreadableToolUse { .. })
+    }
+
+    /// Whether this block is the model's reasoning, known from its key and nothing in it.
+    pub fn is_reasoning(&self) -> bool {
+        matches!(self, Self::Other(value) if value.get(REASONING).is_some())
     }
 }
 

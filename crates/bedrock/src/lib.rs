@@ -20,7 +20,7 @@ pub mod eventstream;
 pub mod protocol;
 
 use bravebot_aichat::protocol::{ChatRequest, Usage};
-use bravebot_aichat::{Completion, Progress};
+use bravebot_aichat::{Completion, CutOff, OpenCall, Progress};
 use bravebot_config::bedrock::Bedrock;
 use bravebot_core::cancel::Cancel;
 use bravebot_core::event::Sink;
@@ -75,8 +75,10 @@ pub enum BedrockError {
     /// one outcome nobody asked for.
     ///
     /// Carries the ceiling that stopped it, since a person told only that a limit was reached is
-    /// told nothing they can act on: the figure is what names the setting to raise.
-    TooLong { ceiling: u64 },
+    /// told nothing they can act on: the figure is what names the setting to raise. And what the
+    /// reply was doing, because a reply that spent the ceiling on one call's argument and one that
+    /// spent it thinking are different failures, and nothing else that survives it says which.
+    TooLong(CutOff),
     /// No model is configured, so there is nothing to send to.
     NoModel,
     /// The caller asked for the reply to stop arriving.
@@ -109,12 +111,22 @@ impl fmt::Display for BedrockError {
             Self::Reported { kind } => {
                 write!(f, "AWS stopped the reply part way through and reported {kind}")
             }
-            Self::TooLong { ceiling } => write!(
-                f,
-                "the model reached its output limit of {ceiling} tokens before finishing, and \
-                 wrote nothing on the way. Raise it with BRAVEBOT_OUTPUT_BUDGET, or ask for less \
-                 in one turn"
-            ),
+            Self::TooLong(cut_off) => {
+                let ceiling = cut_off.ceiling;
+                write!(f, "the model reached its output limit of {ceiling} tokens ")?;
+                match (&cut_off.call, cut_off.thought) {
+                    (Some(OpenCall { tool: Some(tool) }), _) => write!(
+                        f,
+                        "while writing a call to {tool}, so the call was not made"
+                    )?,
+                    (Some(OpenCall { tool: None }), _) => {
+                        f.write_str("while writing a tool call, so the call was not made")?
+                    }
+                    (None, true) => f.write_str("while thinking, and wrote nothing")?,
+                    (None, false) => f.write_str("before writing anything")?,
+                }
+                f.write_str(". Raise it with BRAVEBOT_OUTPUT_BUDGET, or ask for less in one turn")
+            }
             Self::NoModel => f.write_str(
                 "no Bedrock model is configured. Set ANTHROPIC_DEFAULT_OPUS_MODEL (or the sonnet or \
                  haiku equivalent) in ~/.bravebot/settings.json",
@@ -609,7 +621,15 @@ impl<'a> BedrockClient<'a> {
         let (content, calls) = protocol::parts_of(&blocks);
         let usage = parsed.usage.map(Usage::from).unwrap_or_default();
         if cut_off {
-            return self.what_was_written(content, label, model, usage);
+            // A call is open where the reply's last block is one: whatever came before it, the
+            // model was writing that call when it ran out.
+            let open = match blocks.last() {
+                Some(protocol::ReplyBlock::ToolUse { tool_use }) => Some(tool_use.name.as_str()),
+                _ => None,
+            };
+            let thought = blocks.iter().any(protocol::ReplyBlock::is_reasoning);
+            let cut_off = self.cut_off(request, &model, open, thought);
+            return self.what_was_written(content, label, model, usage, cut_off);
         }
         if content.is_empty() && calls.is_empty() {
             return Err(BedrockError::NoContent);
@@ -623,8 +643,29 @@ impl<'a> BedrockClient<'a> {
             calls,
             context_tokens: usage.prompt_tokens,
             usage,
-            cut_off: false,
+            cut_off: None,
         })
+    }
+
+    /// What a reply the ceiling stopped was doing, from its structure.
+    ///
+    /// `open` is the name of the call it was writing, where one was open. The
+    /// name is looked up in the request's own list and the request's copy kept, so what travels
+    /// on is a name this program offered and never one the reply spelt.
+    fn cut_off(
+        &self,
+        request: &ChatRequest,
+        model: &str,
+        open: Option<&str>,
+        thought: bool,
+    ) -> CutOff {
+        CutOff {
+            ceiling: self.ceiling_for(model),
+            call: open.map(|name| OpenCall {
+                tool: request.offered(name),
+            }),
+            thought,
+        }
     }
 
     /// What a reply the ceiling stopped is worth keeping.
@@ -632,23 +673,21 @@ impl<'a> BedrockClient<'a> {
     /// The text, and never the calls. A reply cut off at the ceiling was cut off wherever the
     /// model happened to be, so the last thing in it may be half a tool call: an argument stopped
     /// mid-string is not an argument, and a call the model had not finished choosing is not one it
-    /// asked for. Dropping them also ends the turn, which is the right end: the planner did not
-    /// finish, and another round on a truncated thought is a round spent on a sentence nobody
-    /// wrote.
+    /// asked for. What it was doing goes with it, so the turn can tell the planner why its call
+    /// was not made (TURN-7).
     ///
-    /// Nothing written at all is the one case left as a failure. There is no reply to keep, so the
-    /// person gets the ceiling that stopped it instead, which is the thing they can change.
+    /// Nothing written at all is returned as a failure. There is no reply to keep, so what is left
+    /// is the ceiling that stopped it and what the reply was doing.
     fn what_was_written(
         &self,
         content: String,
         label: Label,
         model: String,
         usage: Usage,
+        cut_off: CutOff,
     ) -> Result<Completion, BedrockError> {
         if content.is_empty() {
-            return Err(BedrockError::TooLong {
-                ceiling: self.ceiling_for(&model),
-            });
+            return Err(BedrockError::TooLong(cut_off));
         }
         Ok(Completion {
             content: Labelled::new(content, label),
@@ -656,7 +695,7 @@ impl<'a> BedrockClient<'a> {
             calls: Vec::new(),
             context_tokens: usage.prompt_tokens,
             usage,
-            cut_off: true,
+            cut_off: Some(cut_off),
         })
     }
 
@@ -865,7 +904,9 @@ impl<'a> BedrockClient<'a> {
         }
 
         if reply.stop_reason.as_deref() == Some(protocol::STOP_REASON_MAX_TOKENS) {
-            return self.what_was_written(reply.text, label, model, reply.usage);
+            let open = reply.open_call().map(|(_, _, name, _)| name.as_str());
+            let cut_off = self.cut_off(request, &model, open, reply.thought);
+            return self.what_was_written(reply.text, label, model, reply.usage, cut_off);
         }
 
         let calls = reply.calls();
@@ -881,7 +922,7 @@ impl<'a> BedrockClient<'a> {
             calls,
             context_tokens: reply.usage.prompt_tokens,
             usage: reply.usage,
-            cut_off: false,
+            cut_off: None,
         })
     }
 
@@ -1047,6 +1088,11 @@ struct Reply {
     argument_pieces: u64,
     ended: bool,
     stop_reason: Option<String>,
+    /// The index of the last block anything arrived for, which is the one being written when the
+    /// reply stopped.
+    last_block: Option<usize>,
+    /// Whether any reasoning arrived. Known from the key its delta arrives under.
+    thought: bool,
     /// Whether a known content frame or block could not be decoded.
     ///
     /// Kept rather than failed on the spot so the stream is still drained: the reply is refused
@@ -1063,6 +1109,13 @@ impl Reply {
         self.calls.last().map(|(_, _, name, _)| name.as_str())
     }
 
+    /// The call still being written, which is the one whose block was the last to receive
+    /// anything. A call with text after it was finished, and the text was being written instead.
+    fn open_call(&self) -> Option<&(usize, String, String, String)> {
+        let last = self.last_block?;
+        self.calls.iter().find(|(at, ..)| *at == last)
+    }
+
     /// Output as best it can be known while the reply arrives: the service's figure once it has
     /// given one, and until then the pieces of text and of argument that have arrived.
     fn output_so_far(&self) -> u64 {
@@ -1076,6 +1129,7 @@ impl Reply {
     fn absorb(&mut self, event: StreamEvent) {
         match event {
             StreamEvent::ContentBlockStart { index, start } => {
+                self.last_block = Some(index);
                 match start {
                     // The opening event names the call and nothing else; every byte of its
                     // arguments arrives in the deltas that follow.
@@ -1093,35 +1147,41 @@ impl Reply {
                     protocol::BlockStart::Other(_) => {}
                 }
             }
-            StreamEvent::ContentBlockDelta { index, delta } => match delta {
-                protocol::Delta::Text { text } => {
-                    self.text.push_str(&text);
-                    // A tally until the service reports its own, so a reply in flight can show
-                    // something rather than zero.
-                    if !self.counted {
-                        self.usage.completion_tokens += 1;
+            StreamEvent::ContentBlockDelta { index, delta } => {
+                self.last_block = Some(index);
+                match delta {
+                    protocol::Delta::Text { text } => {
+                        self.text.push_str(&text);
+                        // A tally until the service reports its own, so a reply in flight can show
+                        // something rather than zero.
+                        if !self.counted {
+                            self.usage.completion_tokens += 1;
+                        }
                     }
-                }
-                protocol::Delta::ToolUse { tool_use } => {
-                    if let Some(call) = self.calls.iter_mut().find(|(at, ..)| *at == index) {
-                        call.3.push_str(&tool_use.input);
-                        // Tallied for the live figure: an argument is output the model wrote, and
-                        // a long file is written as one, so a tally of text alone stands still for
-                        // all of it.
-                        if !self.counted && !tool_use.input.is_empty() {
-                            self.argument_pieces += 1;
+                    protocol::Delta::ToolUse { tool_use } => {
+                        if let Some(call) = self.calls.iter_mut().find(|(at, ..)| *at == index) {
+                            call.3.push_str(&tool_use.input);
+                            // Tallied for the live figure: an argument is output the model wrote, and
+                            // a long file is written as one, so a tally of text alone stands still for
+                            // all of it.
+                            if !self.counted && !tool_use.input.is_empty() {
+                                self.argument_pieces += 1;
+                            }
+                        }
+                    }
+                    protocol::Delta::Other(value) => {
+                        if !value.is_object()
+                            || value.get("text").is_some()
+                            || value.get("toolUse").is_some()
+                        {
+                            self.unreadable_content = true;
+                        }
+                        if value.get(protocol::REASONING).is_some() {
+                            self.thought = true;
                         }
                     }
                 }
-                protocol::Delta::Other(value) => {
-                    if !value.is_object()
-                        || value.get("text").is_some()
-                        || value.get("toolUse").is_some()
-                    {
-                        self.unreadable_content = true;
-                    }
-                }
-            },
+            }
             StreamEvent::MessageStop { stop_reason } => {
                 self.ended = true;
                 if stop_reason.is_some() {
@@ -1685,7 +1745,11 @@ mod tests {
     /// the whole difference between a report and an instruction.
     #[test]
     fn reaching_the_token_ceiling_is_not_retried() {
-        let error = BedrockError::TooLong { ceiling: 8_192 };
+        let error = BedrockError::TooLong(CutOff {
+            ceiling: 8_192,
+            call: None,
+            thought: false,
+        });
         assert!(!worth_another_attempt(1, &error));
         let said = error.to_string();
         assert!(said.contains("output limit"), "{said}");
@@ -1812,7 +1876,13 @@ mod tests {
         }
 
         assert!(!client.worth_dropping_breakpoints(&BedrockError::Incomplete));
-        assert!(!client.worth_dropping_breakpoints(&BedrockError::TooLong { ceiling: 8_192 }));
+        assert!(
+            !client.worth_dropping_breakpoints(&BedrockError::TooLong(CutOff {
+                ceiling: 8_192,
+                call: None,
+                thought: false,
+            }))
+        );
     }
 
     /// A reply the service abandoned says why in the frame that ends it. Reported as a truncation,
@@ -2575,7 +2645,7 @@ mod tests {
             ])],
         );
         assert!(
-            matches!(result, Err(BedrockError::TooLong { ceiling }) if ceiling == OUTPUT_LIMIT_FALLBACK),
+            matches!(&result, Err(BedrockError::TooLong(cut_off)) if cut_off.ceiling == OUTPUT_LIMIT_FALLBACK),
             "{result:?}"
         );
     }
@@ -3184,6 +3254,10 @@ mod tests {
                     br#"{"contentBlockIndex":1,"start":{"toolUse":{"toolUseId":"a","name":"write_file"}}}"#,
                 ));
                 body.extend(eventstream::tests::frame(
+                    "contentBlockDelta",
+                    br#"{"contentBlockIndex":1,"delta":{"toolUse":{"input":"{\"path\":\""}}}"#,
+                ));
+                body.extend(eventstream::tests::frame(
                     "messageStop",
                     br#"{"stopReason":"max_tokens"}"#,
                 ));
@@ -3220,7 +3294,7 @@ mod tests {
                 &mut sink,
             )
             .unwrap();
-            let request = ChatRequest::new("opus-arn", vec![]);
+            let request = writing_a_file("opus-arn");
             let completion = if streaming {
                 client.complete_streaming(&mut policy, &request, |_| {})
             } else {
@@ -3234,9 +3308,16 @@ mod tests {
                 "import pygame",
                 "streaming={streaming}: the partial reply was discarded"
             );
-            assert!(
+            assert_eq!(
                 completion.cut_off,
-                "streaming={streaming}: a reply that stops short was reported as a whole one"
+                Some(CutOff {
+                    ceiling: OUTPUT_LIMIT,
+                    call: Some(OpenCall {
+                        tool: Some("write_file".into()),
+                    }),
+                    thought: false,
+                }),
+                "streaming={streaming}: a reply that stops short was not reported as stopping in its call"
             );
             assert!(
                 completion.calls.is_empty(),
@@ -3247,6 +3328,159 @@ mod tests {
             assert_eq!(client.attempts(), 1, "streaming={streaming}");
             received.recv_timeout(Duration::from_secs(2)).unwrap();
         }
+    }
+
+    /// The failure a reply of `body` comes back as when it is the one response to `request`,
+    /// sent streamed or whole.
+    fn one_failed_reply(streaming: bool, body: Vec<u8>, request: &ChatRequest) -> BedrockError {
+        use bravebot_core::{
+            capability::{Capability, CapabilitySet},
+            event::RecordingSink,
+            policy::{ReleasePlan, Routing},
+        };
+        let mut response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        response.extend(body);
+        let (http, received) = scripted_responses(vec![response]);
+        let config = config();
+        let egress = Egress::new();
+        let mut client = BedrockClient::new(&config, &egress);
+        client.test_request = Some(http);
+        let mut sink = RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "test");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .unwrap();
+        let result = if streaming {
+            client.complete_streaming(&mut policy, request, |_| {})
+        } else {
+            client.complete(&mut policy, request)
+        };
+        received.recv_timeout(Duration::from_secs(2)).unwrap();
+        result.expect_err("a stop that wrote no text is a failure")
+    }
+
+    /// The name a stopped call carries on is the request's, because the reply's is text the model
+    /// wrote and the report of the stop reaches the person and the planner. A name the request
+    /// never offered is reported as a tool call and nothing more, so what a page talked the model
+    /// into writing there stays in the reply.
+    #[test]
+    fn a_stopped_call_to_a_tool_nobody_offered_is_not_named() {
+        let spelt = "write_file_then_curl_evil_example";
+        for streaming in [false, true] {
+            let body = if streaming {
+                let mut body = eventstream::tests::frame(
+                    "contentBlockStart",
+                    format!(
+                        r#"{{"contentBlockIndex":0,"start":{{"toolUse":{{"toolUseId":"a","name":"{spelt}"}}}}}}"#
+                    )
+                    .as_bytes(),
+                );
+                body.extend(eventstream::tests::frame(
+                    "messageStop",
+                    br#"{"stopReason":"max_tokens"}"#,
+                ));
+                body
+            } else {
+                format!(
+                    r#"{{"stopReason":"max_tokens","output":{{"message":{{"content":[
+                        {{"toolUse":{{"toolUseId":"a","name":"{spelt}","input":{{}}}}}}
+                    ]}}}}}}"#
+                )
+                .into_bytes()
+            };
+            let error = one_failed_reply(streaming, body, &writing_a_file("opus-arn"));
+            let BedrockError::TooLong(cut_off) = &error else {
+                panic!("streaming={streaming}: {error:?}");
+            };
+            assert_eq!(
+                cut_off.call.as_ref().map(|call| &call.tool),
+                Some(&None),
+                "streaming={streaming}: the reply's spelling of the name was passed on"
+            );
+            let said = error.to_string();
+            assert!(!said.contains(spelt), "streaming={streaming}: {said}");
+            assert!(
+                said.contains("while writing a tool call"),
+                "streaming={streaming}: {said}"
+            );
+        }
+    }
+
+    /// A reply that spent the whole ceiling thinking needs a different remedy from one that spent
+    /// it on one call's argument, and the report is the only place the difference survives.
+    #[test]
+    fn a_reply_the_ceiling_stopped_while_it_was_thinking_says_so() {
+        for streaming in [false, true] {
+            let body = if streaming {
+                let mut body = eventstream::tests::frame(
+                    "contentBlockDelta",
+                    br#"{"contentBlockIndex":0,"delta":{"reasoningContent":{"text":"The user wants"}}}"#,
+                );
+                body.extend(eventstream::tests::frame(
+                    "messageStop",
+                    br#"{"stopReason":"max_tokens"}"#,
+                ));
+                body
+            } else {
+                br#"{"stopReason":"max_tokens","output":{"message":{"content":[
+                    {"reasoningContent":{"reasoningText":{"text":"The user wants"}}}
+                ]}}}"#
+                    .to_vec()
+            };
+            let error = one_failed_reply(streaming, body, &writing_a_file("opus-arn"));
+            assert!(
+                matches!(
+                    &error,
+                    BedrockError::TooLong(CutOff {
+                        call: None,
+                        thought: true,
+                        ..
+                    })
+                ),
+                "streaming={streaming}: {error:?}"
+            );
+            let said = error.to_string();
+            assert!(
+                said.contains("while thinking"),
+                "streaming={streaming}: {said}"
+            );
+        }
+    }
+
+    /// A call the reply went on to write text after is one it finished, and the ceiling stopped
+    /// the text. Reporting it as the call that ran out would ask the model to split a call that
+    /// fitted.
+    #[test]
+    fn a_call_followed_by_text_is_not_the_one_the_ceiling_stopped() {
+        let mut reply = Reply::default();
+        reply.absorb(StreamEvent::ContentBlockStart {
+            index: 0,
+            start: opening("call-1", "write_file"),
+        });
+        reply.absorb(StreamEvent::ContentBlockDelta {
+            index: 0,
+            delta: arguments(r#"{"path":"a.py"}"#),
+        });
+        assert_eq!(
+            reply.open_call().map(|(_, _, name, _)| name.as_str()),
+            Some("write_file")
+        );
+        reply.absorb(StreamEvent::ContentBlockDelta {
+            index: 1,
+            delta: protocol::Delta::Text {
+                text: "Now the tests".into(),
+            },
+        });
+        assert_eq!(reply.open_call(), None);
     }
 
     /// Completed output-limit replies keep their bill for both transport modes.
@@ -3298,7 +3532,17 @@ mod tests {
                 client.complete(&mut policy, &request)
             }
             .unwrap_err();
-            assert!(matches!(error, BedrockError::TooLong { ceiling } if ceiling == OUTPUT_LIMIT));
+            assert!(
+                matches!(
+                    &error,
+                    BedrockError::TooLong(cut_off) if *cut_off == CutOff {
+                        ceiling: OUTPUT_LIMIT,
+                        call: None,
+                        thought: false,
+                    }
+                ),
+                "streaming={streaming}: {error:?}"
+            );
             assert_eq!(client.completed_usage().unwrap().total(), 107);
             assert_eq!(client.attempts(), 1);
             received.recv_timeout(Duration::from_secs(2)).unwrap();

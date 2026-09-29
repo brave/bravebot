@@ -418,6 +418,18 @@ impl TurnError {
             }
         }
     }
+
+    /// What the reply the output ceiling stopped was doing, where that is what ended the turn.
+    ///
+    /// Beside [`Self::ending`] rather than in it, since an ending is copied into places a tool's
+    /// name has no business going and this carries one.
+    pub fn cut_off(&self) -> Option<&bravebot_aichat::CutOff> {
+        match self {
+            Self::Chat(error) => error.cut_off(),
+            Self::Manifest { cause, .. } => cause.cut_off(),
+            _ => None,
+        }
+    }
 }
 
 impl From<WorkspaceError> for TurnError {
@@ -3257,7 +3269,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     // told that it stops short: the text arrives looking like an answer, and an answer
                     // that ends mid-sentence is worth nothing if it is read as a whole one. The
                     // backend carried no calls out of such a reply, so this round is the last.
-                    if completion.cut_off {
+                    if completion.cut_off.is_some() {
                         reporter.narration(
                         "the model reached its output limit, so this answer stops where it did. \
                          What it wrote is kept; raise BRAVEBOT_OUTPUT_BUDGET or ask for less in \

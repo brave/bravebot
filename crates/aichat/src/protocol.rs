@@ -340,6 +340,19 @@ impl ChatRequest {
         self
     }
 
+    /// The name of the tool this request offered as `name`, as the request spelt it.
+    ///
+    /// The copy returned is the request's rather than the argument, so a caller holding a name a
+    /// reply wrote can pass on a name without passing on anything the reply spelt.
+    pub fn offered(&self, name: &str) -> Option<String> {
+        self.tools
+            .iter()
+            .flatten()
+            .map(|tool| &tool.function.name)
+            .find(|offered| offered.as_str() == name)
+            .cloned()
+    }
+
     /// Ask for a particular amount of thinking, or leave the service to its own default.
     pub fn with_effort(mut self, effort: Option<Effort>) -> Self {
         self.effort = effort;

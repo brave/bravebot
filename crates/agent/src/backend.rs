@@ -11,7 +11,7 @@
 
 use crate::outcome::{Category, Diagnosis};
 use bravebot_aichat::protocol::{ChatRequest, Usage};
-use bravebot_aichat::{AichatClient, ChatError, Completion, Progress, Subscription};
+use bravebot_aichat::{AichatClient, ChatError, Completion, CutOff, Progress, Subscription};
 use bravebot_bedrock::{BedrockClient, BedrockError};
 use bravebot_config::Config;
 use bravebot_config::provider::Credential;
@@ -155,8 +155,8 @@ impl BackendError {
                     // Unknown protocol names must not enter the diagnosis.
                     _ => Category::Incomplete,
                 },
-                BedrockError::TooLong { ceiling } => {
-                    return Diagnosis::of(Category::TooLong).at_ceiling(*ceiling);
+                BedrockError::TooLong(cut_off) => {
+                    return Diagnosis::of(Category::TooLong).at_ceiling(cut_off.ceiling);
                 }
                 BedrockError::NoModel => Category::Unconfigured,
                 BedrockError::Egress(egress) => return of_egress(egress),
@@ -182,6 +182,18 @@ impl BackendError {
             })) => true,
             Self::Attempted { cause, .. } => cause.is_unreachable(),
             _ => false,
+        }
+    }
+
+    /// What the reply the output ceiling stopped was doing, where that is why this failed.
+    ///
+    /// Apart from the diagnosis because it carries a tool's name, and a diagnosis is kept to what
+    /// can be copied anywhere. The name is the request's own spelling of a tool it offered.
+    pub fn cut_off(&self) -> Option<&CutOff> {
+        match self {
+            Self::Bedrock(BedrockError::TooLong(cut_off)) => Some(cut_off),
+            Self::Attempted { cause, .. } => cause.cut_off(),
+            _ => None,
         }
     }
 
@@ -1311,7 +1323,14 @@ mod tests {
     fn other_failures_are_not_mistaken_for_a_stop() {
         assert!(!BackendError::from(ChatError::NoContent).is_cancelled());
         assert!(!BackendError::from(BedrockError::NoContent).is_cancelled());
-        assert!(!BackendError::from(BedrockError::TooLong { ceiling: 8_192 }).is_cancelled());
+        assert!(
+            !BackendError::from(BedrockError::TooLong(CutOff {
+                ceiling: 8_192,
+                call: None,
+                thought: false,
+            }))
+            .is_cancelled()
+        );
     }
 
     /// The remedies differ, so the messages have to. An expired AWS session is fixed by signing in
@@ -1417,17 +1436,32 @@ mod tests {
 
     /// The one number a failure repeats. It is this program's own configured ceiling rather than
     /// anything the service reported, and without it the interface can only say that a limit was
-    /// reached, which names no remedy. The count of requests survives beside it.
+    /// reached, which names no remedy. The count of requests survives beside it, and so does what
+    /// the reply was writing when it stopped, which the turn needs to ask for the work in parts.
     #[test]
     fn a_reply_stopped_at_the_ceiling_reports_which_ceiling() {
         for ceiling in [8_192_u64, 64_000] {
-            let diagnosis = BackendError::from(BedrockError::TooLong { ceiling })
-                .counted(1, None, None)
-                .diagnosis();
+            let cut_off = CutOff {
+                ceiling,
+                call: Some(bravebot_aichat::OpenCall {
+                    tool: Some("write_file".into()),
+                }),
+                thought: false,
+            };
+            let failure =
+                BackendError::from(BedrockError::TooLong(cut_off.clone())).counted(1, None, None);
+            let diagnosis = failure.diagnosis();
             assert_eq!(diagnosis.category, Category::TooLong);
             assert_eq!(diagnosis.ceiling, Some(ceiling));
             assert_eq!(diagnosis.attempts, Some(1));
+            assert_eq!(failure.cut_off(), Some(&cut_off));
         }
+        assert_eq!(
+            BackendError::from(BedrockError::NoContent)
+                .counted(1, None, None)
+                .cut_off(),
+            None
+        );
         assert_eq!(
             BackendError::from(BedrockError::Incomplete)
                 .diagnosis()

@@ -1692,6 +1692,12 @@ stopped short, with its reported usage. Its tool calls are not returned: a reply
 none, whatever the service sent, so the round it ends is the last one. A reply that reaches the
 ceiling having written nothing is a failure, and the failure names the ceiling.
 
+Either way what the reply was doing when it stopped travels with it: the call it was part way
+through, where its last block was one, and whether any of its reasoning arrived. The call's tool
+is named as the request offered it, and a name the request never offered is reported as a tool
+call and nothing more. A failure says which of the three it was: part way through a call,
+thinking, or neither.
+
 **Why.** Everything the model wrote before the cutoff is the turn's work, and reporting only that
 it was too long destroys it to say so. The same argument settled the same question for a capped
 `run`, whose output is collected after the kill rather than thrown away with the error. The usage
@@ -1703,9 +1709,23 @@ arrives as a call with none at all: `write_file` with an empty object, which is 
 asked for being handed to a turn loop that would run it. Nothing distinguishes that from a
 finished call except the stop reason, and the stop reason says not to trust any of them.
 
+What the reply was doing is kept because the remedies differ and nothing else that survives the stop
+says which applies. A reply that spent the ceiling on one file's worth of argument is asked for in
+smaller parts, and one that spent it thinking is not helped by that. All of it is read from which
+events arrived, never from what they said, and the one name is copied from the request, since the
+report reaches the person and the planner and the reply's spelling of a name is text a page could
+have written. The cost is a call to a tool the request did not offer being
+reported without its name. A call with text after it is not the one reported: the model finished
+it and was writing the text when the ceiling fell.
+
 `verified-by: bravebot_bedrock::lib::a_reply_the_ceiling_stopped_keeps_its_text_and_asks_for_no_tools`
 `verified-by: bravebot_bedrock::lib::output_limit_keeps_completed_usage`
 `verified-by: bravebot_bedrock::lib::reaching_the_token_ceiling_is_not_retried`
+`verified-by: bravebot_bedrock::lib::a_stopped_call_to_a_tool_nobody_offered_is_not_named`
+`verified-by: bravebot_bedrock::lib::a_reply_the_ceiling_stopped_while_it_was_thinking_says_so`
+`verified-by: bravebot_bedrock::lib::a_call_followed_by_text_is_not_the_one_the_ceiling_stopped`
+`verified-by: bravebot_agent::backend::a_reply_stopped_at_the_ceiling_reports_which_ceiling`
+`verified-by: bravebot_tui::state::a_reply_stopped_at_the_ceiling_says_what_it_was_writing`
 
 <a id="BACKEND-43"></a>
 ### BACKEND-43: a settings file names the effort level, and a checkout's outranks a pick
