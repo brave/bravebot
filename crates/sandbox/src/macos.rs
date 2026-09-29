@@ -20,6 +20,9 @@ use std::process::Command;
 
 const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 
+/// The socket every host name lookup on macOS goes through.
+const RESOLVER: &str = "/private/var/run/mDNSResponder";
+
 /// The program a confined process is reached through where the environment would not
 /// survive the journey otherwise.
 ///
@@ -116,8 +119,23 @@ impl SeatbeltSandbox {
         // Landlock restricts no look at all, so this is the reach Linux already gives.
         out.push_str("(allow file-read-metadata)\n");
 
+        // Seatbelt counts a connect to a unix socket as network-outbound and no file rule covers
+        // it, so an unfiltered rule reaches every socket the account can, a Docker daemon's
+        // included. Egress is IP, and a socket is reached where a write row reaches it, as
+        // Landlock's ResolveUnix is granted. Host names resolve through the platform resolver's
+        // socket, where Linux resolves over IP.
         if policy.allow_network {
-            out.push_str("(allow network-outbound)\n");
+            out.push_str("(allow network-outbound (remote ip))\n");
+            out.push_str(&format!(
+                "(allow network-outbound (literal {}))\n",
+                quote(RESOLVER)
+            ));
+            for row in &policy.writable {
+                out.push_str(&format!(
+                    "(allow network-outbound (subpath {}))\n",
+                    quote(&row.path.to_string_lossy())
+                ));
+            }
         }
 
         if policy.allow_subprocesses {
@@ -422,6 +440,7 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::os::unix::fs::MetadataExt;
+    use std::os::unix::net::UnixListener;
     use std::path::PathBuf;
 
     /// `CURLE_COULDNT_CONNECT`: curl reached the connection and was refused it. Any other code
@@ -589,13 +608,22 @@ int main(void) {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A write row reaches a socket only while egress is granted, since Seatbelt counts the
+    /// connect as egress. Unfiltered egress would reach every socket on the machine.
     #[test]
     fn network_is_only_allowed_when_requested() {
-        let denied = SeatbeltSandbox::profile(&SandboxPolicy::strict());
-        assert!(!denied.contains("network-outbound"));
+        let denied = SeatbeltSandbox::profile(&SandboxPolicy::strict().allow_write("/w"));
+        assert!(!denied.contains("network-outbound"), "{denied}");
 
         let allowed = SeatbeltSandbox::profile(&SandboxPolicy::strict().allow_network_egress());
-        assert!(allowed.contains("(allow network-outbound)"));
+        assert!(
+            allowed.contains("(allow network-outbound (remote ip))\n"),
+            "{allowed}"
+        );
+        assert!(
+            !allowed.contains("(allow network-outbound)\n"),
+            "egress reaches every unix socket: {allowed}"
+        );
     }
 
     /// A path containing a quote must not close the string literal and let its
@@ -868,6 +896,125 @@ int main(void) {
             refused.wait().expect("should wait").code(),
             Some(CURL_COULDNT_CONNECT),
             "the connection was not what failed, so this says nothing about network denial"
+        );
+    }
+
+    /// `nc`, confined by `policy`, connecting to the unix socket at `path` and giving up after a
+    /// second, and what it exited with.
+    fn nc_to_socket(sandbox: &SeatbeltSandbox, policy: &SandboxPolicy, path: &Path) -> Option<i32> {
+        let args = ["-U", "-w", "1"]
+            .iter()
+            .map(|s| s.to_string())
+            .chain([path.display().to_string()])
+            .collect::<Vec<_>>();
+        sandbox
+            .spawn(
+                "/usr/bin/nc",
+                &args,
+                policy,
+                nothing_attached(),
+                Environment::Inherited,
+            )
+            .expect("should spawn")
+            .wait()
+            .expect("should wait")
+            .code()
+    }
+
+    /// A connect to a unix socket is egress to Seatbelt and no file rule covers it, so egress
+    /// left unfiltered reaches every socket the account can, and a Docker daemon's mounts the
+    /// home into a container on request. A socket is reached where the policy names a path for
+    /// writing, as on Linux, and a grant for reading carries no connect.
+    ///
+    /// The assertions are on whether a connection arrived at the listener. nc exits 1 against a
+    /// socket nobody listens on as readily as against one it was refused, so its exit code says
+    /// nothing. The socket under the write grant being reached is also what makes the refusals
+    /// mean anything.
+    #[test]
+    fn a_confined_process_granted_egress_cannot_reach_a_socket_outside_its_grants() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+        // A socket path must fit in sun_path's 104 bytes, which a checkout's scratch directory
+        // need not leave room for. The policy names no part of the temporary directory.
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.subsec_nanos())
+            .unwrap_or_default();
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir
+        let scratch = std::env::temp_dir().join(format!("bb{}-{stamp}", std::process::id()));
+        std::fs::create_dir(&scratch).expect("the scratch directory is creatable");
+        for dir in ["none", "read", "write"] {
+            std::fs::create_dir(scratch.join(dir)).expect("the scratch directory is creatable");
+        }
+        let scratch = scratch
+            .canonicalize()
+            .expect("the scratch directory is there");
+        let listening = |dir: &str| {
+            let path = scratch.join(dir).join("s");
+            let listener = UnixListener::bind(&path).expect("a socket to connect to");
+            listener
+                .set_nonblocking(true)
+                .expect("the listener can be polled");
+            (path, listener)
+        };
+        let (outside, outside_listener) = listening("none");
+        let (readable, readable_listener) = listening("read");
+        let (writable, writable_listener) = listening("write");
+        // Seatbelt matches the path a connect resolves to, as Landlock does, so a link under the
+        // write grant reaches no further than its target.
+        let linked = scratch.join("write").join("l");
+        std::os::unix::fs::symlink(&outside, &linked).expect("the scratch link is creatable");
+
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin")
+            .allow_read(scratch.join("read"))
+            .allow_write(scratch.join("write"))
+            .allow_network_egress();
+        let arrived = |listener: &UnixListener| match listener.accept() {
+            Ok(_) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => false,
+            Err(error) => panic!("the listener failed: {error}"),
+        };
+
+        nc_to_socket(&sandbox, &policy, &writable);
+        assert!(
+            arrived(&writable_listener),
+            "a socket under a write grant was refused"
+        );
+        nc_to_socket(&sandbox, &policy, &outside);
+        assert!(
+            !arrived(&outside_listener),
+            "a socket outside every grant was reached"
+        );
+        nc_to_socket(&sandbox, &policy, &linked);
+        assert!(
+            !arrived(&outside_listener),
+            "a socket outside every grant was reached through a link under a write grant"
+        );
+        nc_to_socket(&sandbox, &policy, &readable);
+        assert!(
+            !arrived(&readable_listener),
+            "a socket under a read grant was reached"
+        );
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// A host name lookup on macOS is a message to the resolver's unix socket, so egress to IP
+    /// addresses alone reaches no host by name: curl stops at "could not resolve" before it
+    /// opens a connection. A lookup needs the network, so reaching the socket is what is
+    /// asserted.
+    #[test]
+    fn a_confined_process_granted_egress_can_reach_the_resolver() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+        let policy = SandboxPolicy::strict()
+            .allow_read("/usr")
+            .allow_read("/bin")
+            .allow_network_egress();
+        assert_eq!(
+            nc_to_socket(&sandbox, &policy, Path::new(RESOLVER)),
+            Some(0),
+            "the resolver's socket was refused, so no host name resolves"
         );
     }
 

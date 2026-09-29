@@ -95,12 +95,25 @@ rejected rather than applied. Granting everything is not a confinement decision.
 <a id="SANDBOX-3"></a>
 ### SANDBOX-3: the network is denied unless it was asked for
 
-A confined process reaches neither the network nor the filesystem outside its grants. A backend
-that cannot enforce the network denial refuses the policy instead, so the guarantee never degrades
-into one that is not in force.
+A confined process reaches neither the network nor the filesystem outside its grants. Egress,
+where a policy asks for it, is to IP addresses. A unix socket that has a path is reached only under
+a path the policy names for writing, and not under one it names for reading. On macOS a connect to
+a socket counts as egress, so there a write row reaches a socket only while egress is granted, and
+egress also reaches the resolver's socket, which every host name lookup goes through. On Linux the
+socket rule holds on a kernel carrying Landlock ABI version 9, and a socket in the abstract
+namespace, which has no path, is reachable whatever the policy names. A backend that cannot
+enforce the network denial refuses the policy instead, so the guarantee never degrades into one
+that is not in force.
+
+**Why.** A connect to a socket reaches whatever serves it, with that server's authority. A program
+that reaches a Docker daemon's socket can start a container with the home directory mounted, which
+is every file the profile withheld. Landlock counts the connect as a write, so both backends apply
+one rule to a connect.
 
 `verified-by: bravebot_sandbox::macos::network_is_only_allowed_when_requested`
 `verified-by: bravebot_sandbox::macos::a_confined_process_cannot_reach_the_network`
+`verified-by: bravebot_sandbox::macos::a_confined_process_granted_egress_cannot_reach_a_socket_outside_its_grants`
+`verified-by: bravebot_sandbox::macos::a_confined_process_granted_egress_can_reach_the_resolver`
 `verified-by: bravebot_sandbox::macos::a_confined_process_cannot_write_outside_its_grants`
 `verified-by: bravebot_sandbox::macos::a_confined_process_runs`
 `verified-by: bravebot_sandbox::linux::a_policy_requiring_network_denial_is_refused`
@@ -471,7 +484,8 @@ fails outright, and that directory is one every process on the machine already r
 names it. What it costs is that this session's own scratch directory sits inside it
 ([trust-map.md](trust-map.md)): an intermediate file a turn left there is readable by a program whose
 plan never named it, and the mode that directory is created with does not separate two processes
-running as the same account.
+running as the same account. The row is a write row, so it also reaches a unix socket another
+program keeps in that directory ([SANDBOX-3](#SANDBOX-3)).
 
 **A toolchain and its caches are the list a program brings.** The paths a build resolves through
 belong to that build rather than to every program that runs, so they are keyed on the resolved
@@ -637,12 +651,10 @@ reported as what it is.
   file's contents trusted content. The command-line form already separates them, and the two session
   forms do not. A scope the compiler adds needs none of this, since it grants reach inside a profile
   and writes nothing to the record of what a person vouched for.
-- A policy names paths, in a list to read and a list to write, and a socket is neither. On macOS a
-  connect to a unix socket is a network operation, so the agent socket is reachable exactly while a
-  `run` profile leaves egress open, and the first profile narrowing egress has to be able to name
-  the socket instead. On Linux the right that governs connecting to a pathname socket arrives many
-  ABI versions after the one this backend targets, so a connect there is neither granted nor
-  deniable, and a profile meaning to bound one needs that ABI and a kernel carrying it.
+- A policy names paths, in a list to read and a list to write, and a socket is reached only through
+  the second ([SANDBOX-3](#SANDBOX-3)). The remote scope lists the agent socket to read, so a `run`
+  profile has to name it as a write row, or a policy needs a row that carries a connect and no
+  write. On macOS that row reaches the socket only while the profile grants egress.
 - What a program needs in order to start on Windows is not written down, so there is no base
   there and nothing to assemble a profile from. The rows above are the Unix ones, and what a
   Windows base has to settle first is whether a container reaches the system directories through
