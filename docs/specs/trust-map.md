@@ -973,7 +973,10 @@ working directory is resolved past), the filesystem says when the directory was 
 session is not incognito. One check decides that for every front end, so none keeps or honours an
 answer another would refuse. The question says what remembering does, that the directory has to be
 this one exactly, how to take it back, and the file it writes, since nobody can endorse a record they
-were not shown. An answer to remember that the question did not offer, or given with a no, is
+were not shown. Where the box is too short for those lines they scroll below the keys, and `r` in the
+terminal interface is taken only once they have all been on the screen in one draw; until then the
+row above the keys says why it does nothing, or that they do not fit where they are taller than the
+box, and `y` still answers. An answer to remember that the question did not offer, or given with a no, is
 refused and writes nothing; the question once answered offers nothing more.
 
 **Kept.** Choosing it writes the rule a yes writes, for this session, and appends one line to
@@ -1049,6 +1052,9 @@ yes writes rather than everything the session went on to record.
 `verified-by: bravebot_cli::plain::an_answer_in_lines_is_asked_for_and_never_kept`
 `verified-by: bravebot_cli::plain::the_mode_that_asks_about_nothing_is_not_asked_about_the_directory`
 `verified-by: bravebot_tui::trust_prompt::the_prompt_offering_to_remember_names_the_record_it_writes`
+`verified-by: bravebot_tui::trust_prompt::r_remembers_nothing_until_the_record_it_writes_has_been_on_the_screen`
+`verified-by: bravebot_tui::trust_prompt::a_question_not_offering_to_remember_never_takes_r`
+`verified-by: bravebot_tui::trust_prompt::the_hint_says_when_no_scroll_can_show_what_a_key_waits_for`
 `verified-by: bravebot_tui::trust_prompt::the_keys_stay_on_screen_when_the_offer_lengthens_the_question`
 `verified-by: bravebot_tui::trust_prompt::a_tiny_terminal_offering_to_remember_still_renders`
 

@@ -1043,7 +1043,7 @@ fn verdict_rows(
 }
 
 /// How much further the body goes, or that there is nothing below.
-fn scroll_hint(below: u16) -> String {
+pub(crate) fn scroll_hint(below: u16) -> String {
     if below > 0 {
         format!("   {}", t!(scroll_more, count = below))
     } else {
