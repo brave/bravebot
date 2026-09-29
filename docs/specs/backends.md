@@ -252,18 +252,20 @@ rather than a way to get stuck.
 `verified-by: bravebot_bedrock::credentials::forgetting_one_profile_leaves_the_others_alone`
 
 <a id="BACKEND-11"></a>
-### BACKEND-11: a settings file names the model above the build, and a checkout's above a pick
+### BACKEND-11: a settings file names the model above the build, and a pick above a checkout's
 
 Where a settings file names a model, that name is what a request uses, in preference to the model
 compiled into the binary and to one exported as `BRAVE_AI_CHAT_DEFAULT_MODEL`. The exported variable
 answers where no file names one, above the build.
 
 A choice recorded with `/model` ranks as the person's own file, `~/.bravebot/settings.json`, does.
-It outranks the `model` key in that file, and is outranked by one in a checkout's
-`.bravebot/settings.json` or `.bravebot/settings.local.json`, or in the file `--settings` named. A
-key spelled blank, or as something other than a string, names nothing and does not outrank a pick.
-It still displaces the key a lower file named, so with nothing recorded the exported variable or the
-build answers. Above all of it are `--model` and a model picked in the session that is running.
+It outranks the `model` key in that file, is outranked by one in the file `--settings` named
+([BACKEND-24](#BACKEND-24) reads that file after all three, and naming it is the person's own act),
+and a checkout's `.bravebot/settings.json` or `.bravebot/settings.local.json` cannot name a model at
+all. A key spelled blank, or as something other than a string, names nothing and does not outrank a
+pick. It still displaces the key a lower file named, so with nothing recorded the exported variable
+or the build answers. Above all of it are `--model` and a model picked in the session that is
+running.
 
 **Why.** Every release bakes a default model in, so this value ranked like the rest of the file would
 lose on every binary anybody was given: the key would parse, `doctor` would report it, and nothing
@@ -271,27 +273,28 @@ would change outside a source build.
 
 The variable is named as a default, and a default is how it is used: a `.envrc` that exports it for
 every checkout of a project is saying what answers when nothing else does. Ranked above the file it
-would outrank every `model` key on any machine that sources one, the key a checkout wrote to state
-its model included. Claude Code ranks its counterpart, `ANTHROPIC_DEFAULT_MODEL`, last.
+would outrank every `model` key on any machine that sources one. Claude Code ranks its counterpart,
+`ANTHROPIC_DEFAULT_MODEL`, last.
 
 A pick is recorded once per person and read back in every checkout. Ranked above a checkout's file,
 it is the one thing a checkout cannot override: two checkouts in one account cannot want different
 models, and a project that states its model is undone by whatever its reader last picked anywhere.
-Claude Code's `/model` writes the person's own settings file, which every other settings file
-outranks, and this is that rung. The pick outranks that file's own key because both are the same
-person speaking at the same rung, and the pick is the later of the two.
+Claude Code's `/model` writes the person's own settings file, and the pick ranks as that file does.
+The pick outranks that file's own key because both are the same person speaking at the same rung,
+and the pick is the later of the two.
 
 `verified-by: bravebot_config::lib::a_model_in_the_settings_file_outranks_the_baked_in_one`
 `verified-by: bravebot_config::lib::a_model_in_the_settings_file_outranks_an_exported_one`
 `verified-by: bravebot_config::lib::the_env_block_spelling_stays_below_the_baked_in_value`
-`verified-by: bravebot_config::settings::a_layer_above_the_home_one_outranks_a_saved_pick`
+`verified-by: bravebot_config::settings::a_layer_above_the_home_one_does_not_pick_a_model`
 `verified-by: bravebot_config::settings::the_home_layer_does_not_outrank_a_saved_pick`
 `verified-by: bravebot_config::settings::a_layer_above_that_names_nothing_does_not_outrank_a_saved_pick`
-`verified-by: bravebot_session::store::a_checkouts_model_outranks_the_saved_pick_and_the_home_file_does_not`
-`verified-by: bravebot_tui::persist::a_recorded_model_answers_between_a_checkouts_file_and_the_persons_own`
-`verified-by: bravebot_cli::running::a_run_asks_for_a_checkouts_model_over_the_recorded_one`
+`verified-by: bravebot_cli::running::doctor_says_a_checkouts_provider_block_is_not_obeyed`
+`verified-by: bravebot_session::store::a_checkouts_model_cannot_displace_the_saved_pick_and_the_home_file_does_not`
+`verified-by: bravebot_tui::persist::a_recorded_model_answers_over_a_checkouts_file_and_the_persons_own`
+`verified-by: bravebot_cli::running::a_run_asks_for_the_recorded_model_ignoring_a_checkouts`
 `verified-by: bravebot_cli::running::a_run_asks_for_the_settings_model_over_an_exported_default`
-`verified-by: bravebot_cli::running::doctor_names_a_checkouts_model_rather_than_the_pick_it_outranks`
+`verified-by: bravebot_cli::running::doctor_names_the_pick_a_checkouts_model_cannot_displace`
 
 <a id="BACKEND-12"></a>
 ### BACKEND-12: a tier word names a model some reachable service serves
@@ -771,9 +774,10 @@ every file that was found. The flag that names one, and the path it refuses, are
 
 | What | How layers combine |
 |---|---|
-| `env`, `provider`, `attribution`, `keybindings`, `search` | per name, one level down; the value under a name is replaced whole |
+| `env`, `attribution`, `keybindings`, `search` | per name, one level down; the value under a name is replaced whole |
 | `run.scrubEnv`, every list under `permissions`, `mcp.request` | every layer's entries are kept |
-| `model`, anything else | the closest layer that set it wins |
+| `provider`, `model` | home layer, and the file `--settings` names; a project or local layer naming either is ignored, and the file is reported as one whose naming was dropped |
+| anything else | the closest layer that set it wins |
 
 The project layers are read from the directory the process started in and no ancestor of it. Each
 layer fails independently: one that is missing, larger than 64 KB, or unparseable leaves the others
@@ -786,6 +790,13 @@ Overriding per name is what makes putting one value in a checkout worth doing, s
 is restating an entire configuration to change a host. Going deeper than a name would make one
 request's destination the product of two files with no single place to read that says where it goes,
 which is why a gateway entry is replaced whole and a project file naming one must name its host too.
+
+`provider` and `model` are the exception on the other side: which host every request goes to and
+which credential signs it is exactly what a file nobody opened must not decide, and the credential
+value comes from the person's own environment under names the layer would choose. A project or
+local layer naming either is dropped whole and reported, so the destination of every request stays
+something the person's own files or command line named. The file `--settings` names is the person's
+own act and is read.
 
 The two names under `attribution` combine per name for the same reason `env` does: they are
 unrelated destinations that happen to share a block, and a file answering for one must not answer
@@ -829,12 +840,18 @@ with it.
 `verified-by: bravebot_config::settings::every_layer_adds_to_the_permission_rules`
 `verified-by: bravebot_config::settings::every_layer_adds_to_the_directories_a_file_makes_reachable`
 `verified-by: bravebot_config::settings::every_layers_request_is_read_and_each_alias_is_kept_once`
-`verified-by: bravebot_config::settings::the_closest_layer_that_named_a_model_wins`
+`verified-by: bravebot_config::settings::a_project_layer_cannot_pick_a_backend`
+`verified-by: bravebot_config::settings::a_project_provider_block_leaves_the_home_ones_alone`
+`verified-by: bravebot_config::settings::a_named_layer_picks_a_backend`
+`verified-by: bravebot_config::settings::a_project_layer_cannot_smuggle_a_provider_env_name`
+`verified-by: bravebot_config::settings::a_project_layer_cannot_pick_a_model`
+`verified-by: bravebot_config::settings::a_project_model_leaves_the_default_in_force`
+`verified-by: bravebot_config::settings::a_layer_above_the_home_one_does_not_pick_a_model`
+`verified-by: bravebot_config::settings::a_layer_above_that_names_nothing_does_not_outrank_a_saved_pick`
+`verified-by: bravebot_cli::running::doctor_says_a_checkouts_provider_block_is_not_obeyed`
 `verified-by: bravebot_config::settings::a_layer_answering_for_one_attribution_name_leaves_the_other`
 `verified-by: bravebot_config::settings::a_layer_capping_one_side_of_a_search_leaves_the_other`
 `verified-by: bravebot_config::settings::a_layer_naming_no_model_leaves_the_one_below_it`
-`verified-by: bravebot_config::settings::a_project_layer_replaces_one_gateway_and_leaves_the_others`
-`verified-by: bravebot_config::settings::a_project_gateway_naming_no_host_replaces_one_that_did`
 `verified-by: bravebot_config::settings::an_unparseable_project_layer_leaves_the_global_one_in_force`
 `verified-by: bravebot_config::settings::an_oversized_project_layer_leaves_the_global_one_in_force`
 `verified-by: bravebot_config::settings::a_directory_with_no_project_layer_reads_the_global_one_alone`
@@ -1777,9 +1794,10 @@ what drifting costs is a word no service defines in a request field.
 `verified-by: bravebot_config::settings::an_effort_word_is_read_as_the_file_spelled_it`
 `verified-by: bravebot_config::settings::an_effort_that_is_blank_or_not_a_string_names_nothing`
 `verified-by: bravebot_config::settings::the_closest_layer_that_named_an_effort_wins`
-`verified-by: bravebot_config::settings::a_layer_above_the_home_one_outranks_a_saved_pick`
+`verified-by: bravebot_config::settings::a_layer_above_the_home_one_does_not_pick_a_model`
 `verified-by: bravebot_config::settings::the_home_layer_does_not_outrank_a_saved_pick`
 `verified-by: bravebot_config::settings::a_layer_above_that_names_nothing_does_not_outrank_a_saved_pick`
+`verified-by: bravebot_cli::running::doctor_says_a_checkouts_provider_block_is_not_obeyed`
 `verified-by: bravebot_session::store::a_checkouts_level_outranks_the_saved_pick_and_the_home_file_does_not`
 `verified-by: bravebot_session::store::a_settings_file_naming_no_level_asks_for_none`
 `verified-by: bravebot_tui::persist::a_recorded_level_answers_between_a_checkouts_file_and_the_persons_own`
@@ -2014,15 +2032,14 @@ BACKEND-39 because importing it again is what serves the pick, and the refusal s
   in, which BACKEND-12 already declines for the tier words and for the same reason: the service owns
   the names, and a copy here is a copy that goes stale.
 
-- **A layer a checkout carries is trusted as far as the person's own file is.** A `.bravebot`
-  directory arrives with whatever produced the checkout, so a `settings.json` in one can name the host
-  every request goes to and the credential that signs it, and somebody who has not read it would not
-  know. Nothing here distinguishes the layers, because the resolution being copied does not. For every
-  field but one, what limits the damage is the same rule that limits it anywhere: a file names a
-  destination and grants no capability, so the worst it does is send a request somewhere useless or
-  somewhere watching. Refusing the fields that name a destination in the project layers is the fix if
-  that trade stops being worth it, and it would cost the main reason to put a value in a checkout at
-  all.
+- **A layer a checkout carries is trusted as far as the person's own file is, except where it is
+  not.** A `.bravebot` directory arrives with whatever produced the checkout, so a `settings.json` in
+  one arrives unasked. The fields that name a destination and the credential that signs it
+  (`provider` and `model`, [BACKEND-24](#BACKEND-24)) are refused from the project layers outright,
+  because the credential value comes from the person's own environment under names the layer would
+  choose, and a file nobody read must not pick either. For the remaining fields, what limits the
+  damage is the same rule that limits it anywhere: a file names a destination and grants no
+  capability, so the worst it does is send a request somewhere useless or somewhere watching.
 
   The one field that is not a destination is `attribution`, whose value [BACKEND-30](#BACKEND-30)
   states to the planner. A checkout can therefore put a string of its own choosing in front of every

@@ -196,9 +196,11 @@ mod tests {
         let settings = Settings::layered(Some(home.clone()), Some(&project), Some(&selected));
         assert_eq!(settings.model(), Some("selected/model"));
         assert_eq!(settings.layers().count(), 4);
+        // The checkout's files cannot pick a model (BACKEND-24): both of their words are dropped
+        // whole, and the home layer's own answers.
         assert_eq!(
             Settings::layered(Some(home), Some(&project), None).model(),
-            Some("local/model")
+            Some("home/model")
         );
     }
 }

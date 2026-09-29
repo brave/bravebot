@@ -292,6 +292,12 @@ doctor-settings-ignored = ignoré
 doctor-settings-vetting-ignored =
     vetting.auto dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json
+doctor-settings-provider-ignored =
+    provider dans { $path } n'est pas appliqué : il n'est lu que depuis
+    ~/.bravebot/settings.json et depuis le fichier nommé par --settings
+doctor-settings-model-ignored =
+    model dans { $path } n'est pas appliqué : il n'est lu que depuis
+    ~/.bravebot/settings.json et depuis le fichier nommé par --settings
 doctor-settings-allow-ignored =
     la règle allow { $rule } dans { $path } n'est pas accordée : une règle allow répond à une
     invite, le fichier d'un projet la propose donc et vous l'accordez au démarrage d'une session
