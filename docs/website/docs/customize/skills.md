@@ -46,15 +46,17 @@ effort: low
 `effort` is one of `low`, `medium`, `high`, `xhigh` and `max`. Leave either out and the session's own
 choice stands.
 
-Both take effect from the moment the skill is loaded, for the rest of that turn, and **they win over
-a model you chose for the session**, the same way one of your delegate definitions does. The session
-says so when it happens, so a skill that moves a turn onto a dearer model is on your screen rather
-than only on your bill.
+Both take effect from the moment the skill is loaded, for the rest of that turn, and **they replace
+a model you chose for the session**, including one picked with `/model`. The session says so when
+it happens, so you see when a skill moves a turn onto a dearer model.
+
+A skill does not replace a model that a definition named. When you address a definition that names
+a model, or a delegate's definition names one, a skill loaded in that turn keeps the definition's
+model and the session says so. The skill's `effort` still applies.
 
 A value that cannot be used is reported and the skill still loads, on whatever the session was
 already running: a level spelled some other way, or a model needing a sign-in this machine has not
-made. Losing a whole set of instructions over an adjustment to how they run would be the worse
-trade.
+made.
 
 ## Only the name and description reach the prompt
 

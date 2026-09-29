@@ -32036,3 +32036,145 @@ fn a_skill_whose_model_needs_a_sign_in_keeps_the_sessions_model_and_says_so() {
         "nobody was told the skill's model could not be reached: {said}"
     );
 }
+
+/// A skill loaded in a turn addressed to a definition that names a model keeps that model, and the
+/// person is told. The definition's model is a cost boundary (ADDRESS-11), so a skill the planner
+/// loads cannot move the turn onto a dearer one. The skill's effort still applies.
+#[test]
+fn a_skill_loaded_by_an_addressed_definition_keeps_the_definitions_model() {
+    let scratch = Scratch::new("skill-under-addressed");
+    let home = Scratch::new("skill-under-addressed-home");
+    define(
+        &home,
+        "cheap-reviewer",
+        "kind: reader\nmodel: haiku\n",
+        "REVIEW",
+    );
+    write_project_skill_declaring(&scratch.path, "dear", "model: opus\neffort: low\n");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("load_skill", r#"{"name":"dear"}"#),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let haiku = config.model_named("haiku");
+    assert_ne!(
+        haiku,
+        config.model_named("opus"),
+        "the two tiers resolve alike, so this cannot tell them apart"
+    );
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let outcome = turn::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &addressed("ADDRESSED-TASK", &home, "cheap-reviewer"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains(&format!(r#""model":"{haiku}""#)),
+        "the skill moved the addressed turn off its definition's model: {second}"
+    );
+    assert!(
+        second.contains(r#""reasoning_effort":"low""#),
+        "the skill's effort did not reach the round after it was loaded: {second}"
+    );
+    assert!(
+        outcome.notices.iter().any(|said| said
+            == "dear asks for opus, but this turn stays on the model cheap-reviewer named"),
+        "the person was not told the skill's model was not used: {:?}",
+        outcome.notices
+    );
+    assert!(
+        !outcome
+            .notices
+            .iter()
+            .any(|said| said.contains("asks the rest of this turn of")),
+        "a switch that did not happen was reported: {:?}",
+        outcome.notices
+    );
+}
+
+/// A skill loaded by a delegate whose definition names a model keeps the definition's model
+/// (DELEGATE-22), and the person watching is told.
+#[test]
+fn a_skill_loaded_by_a_delegate_keeps_its_definitions_model() {
+    let scratch = Scratch::new("skill-under-delegate");
+    let home = Scratch::new("skill-under-delegate-home");
+    define(
+        &home,
+        "cheap-reader",
+        "kind: reader\nmodel: haiku\n",
+        "READ",
+    );
+    write_project_skill_declaring(&scratch.path, "dear", "model: opus\n");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "DELEGATE-TO-CHEAP-READER",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"cheap-reader","task":"CHECK-WITH-A-SKILL"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("delegate finished"),
+            ],
+        ),
+        (
+            "CHECK-WITH-A-SKILL",
+            vec![
+                tool_request("load_skill", r#"{"name":"dear"}"#),
+                reply_with("clear"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let haiku = config.model_named("haiku");
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("DELEGATE-TO-CHEAP-READER")
+            .with_home(Some(home.path.clone()))
+            .with_model(Some("custom-parent-model".to_string())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let delegate: Vec<String> = received
+        .try_iter()
+        .filter(|body| {
+            body.contains("CHECK-WITH-A-SKILL") && !body.contains("DELEGATE-TO-CHEAP-READER")
+        })
+        .collect();
+    assert_eq!(delegate.len(), 2, "the delegate did not make two rounds");
+    assert!(
+        delegate[1].contains(&format!(r#""model":"{haiku}""#)),
+        "the skill moved the delegate off its definition's model: {}",
+        delegate[1]
+    );
+    assert!(
+        reporter.notices.iter().any(|said| said
+            == "dear asks for opus, but this turn stays on the model cheap-reader named"),
+        "the person was not told the skill's model was not used: {:?}",
+        reporter.notices
+    );
+}

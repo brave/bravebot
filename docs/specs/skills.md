@@ -235,23 +235,29 @@ finish names nothing.
 Both take effect from the round after `load_skill` answers, and for the rest of the turn. The rounds
 before the call are asked at the session's, the skill not having been in force yet.
 
-**The skill's word wins, over a session where the person chose a model explicitly, and the switch is
-said.** A delegate definition's model already outranks the turn that spawned it
-([ADDRESS-11](addressing-a-definition.md#ADDRESS-11)), so one rule covers both mechanisms rather than two that have to be
-remembered apart. The cost is real: a skill may ask for a dearer model than the person picked. It is
-answered by saying so, per [SKILL-11](#SKILL-11), rather than by ignoring the file, because a skill
-asking for a cheaper model than the session is set to is the case these keys exist for, and a
-precedence the session won would leave both lines doing nothing on exactly the turn they were
-written for.
+**The skill's model replaces the session's, including a model the person picked with `/model`, and
+the switch is announced** per [SKILL-11](#SKILL-11). A skill asking for a cheaper model than the
+session's is the main use of the key, and it would do nothing if the session's choice won. The cost
+is that a skill may ask for a dearer model than the person picked, and the notice is how they learn
+of it.
 
-A skill spawning a delegate lends it the model in force when the delegate started, which is the one
-its parent was asking at the time.
+**A definition's model is not replaced.** Where the turn runs on a model that an addressed
+definition ([ADDRESS-11](addressing-a-definition.md#ADDRESS-11)) or the delegate's own definition
+([DELEGATE-22](delegation.md#DELEGATE-22)) named, a skill loaded in that turn leaves it in force, and
+the notice names the skill, the model it asked for, and the definition. Both specs treat that model
+as a cost boundary the definition's file drew, and a skill the planner loads during the turn is not
+a choice the person made. The skill's `effort` still applies, since a definition names none.
+
+A delegate spawned after a skill switched the model is lent the model in force when it started,
+unless its own definition names one.
 
 `verified-by: bravebot_agent::skills::a_skill_reads_the_model_and_the_effort_it_names`
 `verified-by: bravebot_agent::skills::a_model_that_names_nothing_leaves_the_session_its_own`
 `verified-by: bravebot_agent::skills::a_skill_carries_the_model_and_the_effort_its_file_named`
 `verified-by: bravebot_agent::turn::a_loaded_skill_asks_the_rounds_after_it_of_its_own_model_and_effort`
 `verified-by: bravebot_agent::turn::a_skill_naming_neither_key_leaves_the_session_its_own_choice`
+`verified-by: bravebot_agent::turn::a_skill_loaded_by_an_addressed_definition_keeps_the_definitions_model`
+`verified-by: bravebot_agent::turn::a_skill_loaded_by_a_delegate_keeps_its_definitions_model`
 
 <a id="SKILL-16"></a>
 ### SKILL-16: a value that cannot be used is reported and the skill still loads

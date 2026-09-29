@@ -1862,30 +1862,40 @@ pub fn discover_subscription<R: Reporter>(
 
 /// Take what a loaded skill's file asks its rounds to run as, and say what changed.
 ///
-/// The skill's word wins over the session's, including over a model a person picked explicitly. A
-/// delegate definition's model already outranks the session that spawned it, so one rule covers both
-/// mechanisms rather than two; what answers the money a switch spends is that it is said out loud,
-/// where ignoring the file would leave a skill whose author believes the line is in force.
+/// The skill's model replaces the session's, including a model the person picked with /model, and
+/// the switch is announced. It does not replace a model an addressed definition or the delegate's
+/// definition named: that model is a cost limit its file set (ADDRESS-11, DELEGATE-22), and a
+/// skill loaded inside the turn does not get to raise it. `pinned_by` is that definition's name.
 ///
-/// Neither half is a reason to stop. A skill is not the thing the person asked for, so a line naming
-/// a model this machine cannot reach is a line that does nothing, where an addressed definition
-/// naming one refuses the turn rather than spending past a boundary its file drew (ADDRESS-11).
-/// What comes back is what to say about it, in the driver's own words, and a skill that changed
-/// nothing says nothing: a line about a switch that did not happen is a line a person learns to skip.
+/// A skill's model that needs a sign-in this machine has not made is reported and ignored, and the
+/// turn goes on. The returned lines are the notices to show. A skill that changed nothing returns
+/// none.
 fn adopt(
     turn_model: &mut Option<String>,
     effort: &mut Option<Effort>,
     config: &Config,
     skill: &str,
     runs_as: &crate::skills::RunsAs,
+    pinned_by: Option<&str>,
 ) -> Vec<String> {
     let mut said = Vec::new();
 
-    // The name as the file wrote it, in every line below: that is what whoever has to change it
-    // typed, and the resolved spelling of an alias is a name they never saw.
+    // The name as the file wrote it, in every line below, since that is what its author typed.
     if let Some(written) = runs_as.model.as_deref() {
         let resolved = config.model_named(written);
-        if crate::backend::Backend::needs_sign_in(config, &resolved) {
+        if let Some(definition) = pinned_by {
+            if turn_model.as_deref() != Some(resolved.as_str()) {
+                said.push(
+                    t!(
+                        skill_model_kept_for_definition,
+                        skill = skill,
+                        model = written,
+                        definition = definition
+                    )
+                    .to_string(),
+                );
+            }
+        } else if crate::backend::Backend::needs_sign_in(config, &resolved) {
             said.push(t!(skill_model_needs_sign_in, skill = skill, model = written).to_string());
         } else if turn_model.as_deref().unwrap_or(&config.default_model) != resolved {
             said.push(t!(skill_asks_a_model, skill = skill, model = written).to_string());
@@ -2820,9 +2830,14 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                 "the addressed definition's model needs a sign-in first".to_string(),
             ));
         }
-        // Mutable because a skill may name a model of its own, and a skill is chosen mid-turn: what
-        // a turn starts on is the session's or an addressed definition's, and what the rounds after
-        // a `load_skill` are asked of is the loaded skill's where its file named one (SKILL-15).
+        // The definition whose model this turn runs on, where one named a model: the addressed
+        // definition, or the delegate's. A skill loaded in the turn keeps that model (SKILL-15).
+        let pinned_by = match (&addressed, &task.delegate) {
+            (Some(addressed), _) => addressed.model().map(|_| addressed.name().to_string()),
+            (None, Some(spec)) => spec.model().map(|_| spec.definition().to_string()),
+            (None, None) => None,
+        };
+        // Mutable because a skill loaded mid-turn may name a model of its own (SKILL-15).
         let mut turn_model = definition_model
             .as_ref()
             .map(|(_, resolved)| resolved.clone())
@@ -3823,20 +3838,18 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         if let Some(path) = output.watch.clone() {
                             watches.push(path);
                         }
-                        // What a loaded skill's file asks the rounds after it to run as. Taken over
-                        // the session's own choice, explicit or not, which is what a delegate
-                        // definition's model already does: one rule covers both mechanisms, and the
-                        // money the switch spends is answered by saying so rather than by ignoring
-                        // the file (SKILL-15).
-                        //
-                        // Said as it is learned and kept in the turn's account, the way every other
-                        // notice about what a turn is working with is (SKILL-11): the switch decides
-                        // what the next round costs, so it belongs on the screen before that round
-                        // rather than after the answer it paid for.
+                        // What a loaded skill's file asks the rounds after it to run as (SKILL-15).
+                        // Shown before the next round and kept in the turn's notices (SKILL-11),
+                        // because the switch decides what that round costs.
                         if let Some((skill, runs_as)) = output.loaded.take() {
-                            for said in
-                                adopt(&mut turn_model, &mut effort, config, &skill, &runs_as)
-                            {
+                            for said in adopt(
+                                &mut turn_model,
+                                &mut effort,
+                                config,
+                                &skill,
+                                &runs_as,
+                                pinned_by.as_deref(),
+                            ) {
                                 reporter.notice(said.clone());
                                 notices.push(crate::skills::Notice::from_message(said));
                             }

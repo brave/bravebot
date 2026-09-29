@@ -20,5 +20,6 @@ fr:session-rewind-uncovered
 fr:skill-asks-a-model
 fr:skill-asks-an-effort
 fr:skill-effort-not-a-level
+fr:skill-model-kept-for-definition
 fr:skill-model-needs-sign-in
 fr:status-undecided
