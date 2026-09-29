@@ -133,7 +133,15 @@ nothing under `src`, `Read(.env)` covers nothing called `.env` below the top, an
 the host's own separator is one segment while the path it names is several, so every path rule a
 person wrote is inert in both directions.
 
+Where the host's filesystem folds case (macOS, Windows), both the pattern and the path are lowercased
+segment by segment before they are matched, so `Read(.env)` covers `.ENV`, which opens the same file.
+A rule in any list is read this way, allow included: on such a host the two spellings name one file, so
+an allow rule covers the same file the deny rule would. Where the filesystem is case-sensitive the
+match is byte-exact.
+
 `verified-by: bravebot_core::permissions::a_path_rule_covers_the_file_it_names_wherever_a_backslash_separates`
+`verified-by: bravebot_core::permissions::a_deny_rule_covers_the_case_spelling_the_filesystem_would_open`
+`verified-by: bravebot_core::permissions::a_tree_rule_covers_the_folded_spelling_of_its_path`
 `verified-by: bravebot_core::permissions::a_name_holding_a_backslash_is_one_segment_where_a_slash_is_the_only_separator`
 `verified-by: bravebot_core::permissions::a_pattern_written_with_the_hosts_own_separator_is_the_same_rule`
 `verified-by: bravebot_core::permissions::a_command_rule_keeps_a_backslash_where_a_path_rule_would_not`

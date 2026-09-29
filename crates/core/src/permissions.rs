@@ -262,8 +262,8 @@ impl Rule {
     ///
     /// On hosts whose filesystem folds case (macOS APFS, Windows NTFS), both the pattern and the
     /// path are folded to lowercase before matching, segment-wise, so a deny rule `Read(.env)`
-    /// also covers `.ENV` — which on such a host opens the very file the rule names. Over-folding
-    /// errs toward more denial, which is the safe direction; on hosts where the filesystem is
+    /// also covers `.ENV`, which on such a host opens the very file the rule names. An allow rule
+    /// is folded the same way and covers the same file. On hosts where the filesystem is
     /// case-sensitive the match stays byte-exact.
     fn covers_path(&self, path: &str, restricting: bool) -> bool {
         match &self.pattern {
@@ -677,9 +677,9 @@ fn segments_of(path: &str) -> Vec<&str> {
 /// On a host whose filesystem folds case (macOS APFS, Windows NTFS) a planner's `.ENV` opens the
 /// same file as the `.env` a deny rule names, so both sides of a match are lowered before they
 /// are compared. Lowering segment-wise leaves the separators, and with them the anchor and
-/// relative/absolute logic and the `*` and `**` semantics, exactly as they were. Over-folding
-/// errs toward more denial, which is the safe direction, so the folding happens only where the
-/// filesystem is known to fold.
+/// relative/absolute logic and the `*` and `**` semantics, exactly as they were. Folding happens
+/// only where the filesystem is known to fold, since elsewhere it would make one rule cover
+/// another file.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn fold(path: &str) -> String {
     path.split('/')
