@@ -473,9 +473,6 @@ impl Permissions {
         // label, and a rule about `example.com` is about the same host either way.
         let host = host.to_ascii_lowercase();
         let host = host.strip_suffix('.').unwrap_or(&host);
-        if host.is_empty() {
-            return Decision::Unmatched;
-        }
         self.decide(|rule, _| rule.subject == Subject::WebFetch && rule.covers_host(host))
     }
 
@@ -1506,6 +1503,18 @@ mod tests {
         assert_eq!(
             permissions.for_host("EVIL.example."),
             Decision::Ruled(Ruling::Allow)
+        );
+    }
+
+    /// A host that is only the dot is still a host: a rule for every host covers it, as it did
+    /// before the dot was stripped.
+    #[test]
+    fn a_bare_web_fetch_deny_still_covers_a_host_of_only_a_dot() {
+        let permissions = rules(&["WebFetch"], &[], &[]);
+        assert_eq!(
+            permissions.for_host("."),
+            Decision::Ruled(Ruling::Deny),
+            "a bare deny stopped covering a host that reduces to nothing"
         );
     }
 }

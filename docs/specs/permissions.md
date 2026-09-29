@@ -61,7 +61,8 @@ call's arguments, never anything else a turn observed.
 
 `WebFetch` takes `domain:` and nothing else, so `WebFetch(domain:example.com)` covers that host and
 its subdomains. A URL prefix would read as covering a path, and the boundary is a label boundary: a
-rule about `example.com` never covers `notexample.com`. What a matching rule decides for a fetch,
+rule about `example.com` never covers `notexample.com`. A host written with a trailing dot, as in
+`example.com.`, is the same host, so the dot is dropped before a rule is compared. What a matching rule decides for a fetch,
 and what it does not decide, is [fetch-url.md](tools/fetch-url.md).
 
 `Mcp(weather)` and `Mcp(weather:*)` cover every tool of the server declared as `weather`, and
@@ -78,6 +79,9 @@ would be the driver branching on untrusted content, whatever the rule said.
 `verified-by: bravebot_core::permissions::a_domain_rule_covers_the_host_and_its_subdomains`
 `verified-by: bravebot_core::permissions::a_domain_rule_stops_at_a_label_boundary`
 `verified-by: bravebot_core::permissions::a_domain_rule_ignores_case`
+`verified-by: bravebot_core::permissions::a_domain_rule_matches_the_trailing_dot_spelling`
+`verified-by: bravebot_core::permissions::for_host_strips_the_trailing_dot_and_ignores_case`
+`verified-by: bravebot_core::permissions::a_bare_web_fetch_deny_still_covers_a_host_of_only_a_dot`
 `verified-by: bravebot_core::permissions::a_bare_web_fetch_rule_covers_every_host`
 `verified-by: bravebot_core::permissions::a_web_fetch_rule_decides_nothing_about_other_families`
 `verified-by: bravebot_core::permissions::an_mcp_rule_is_its_own_family`
