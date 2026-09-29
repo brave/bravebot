@@ -4950,19 +4950,19 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         vouched
     }
 
-    /// Each step of a plan as one line, for a rule to match against.
+    /// Each step of a plan as the words a rule is matched against.
     ///
-    /// The name the line used and its argv, joined by single spaces, which is the shape a rule is
-    /// written in: somebody writes `Bash(git diff *)` having in mind what they would type.
-    /// Deliberately not the rendering a person approves, whose quoting exists to make that
-    /// rendering reversible; matching against it would mean a rule had to anticipate the quoting.
+    /// The name the line used and its argv, each kept whole. Deliberately not the rendering a
+    /// person approves, whose quoting exists to make that rendering reversible; matching against
+    /// it would mean a rule had to anticipate the quoting.
     ///
-    /// The compiler did the splitting, once, and nothing re-splits afterwards, so a denied program
-    /// cannot be smuggled inside an argument.
-    fn plan_lines(&self, plan: &crate::command::Plan) -> Vec<String> {
+    /// The compiler did the splitting, once, and nothing re-splits or joins them before a rule
+    /// reads them, so a denied program cannot be smuggled inside an argument and a program word
+    /// holding a space cannot pass for a shorter one given an argument (PERM-5).
+    fn plan_words(plan: &crate::command::Plan) -> Vec<Vec<&str>> {
         plan.steps()
             .iter()
-            .map(|step| rule_line(&step.program, &step.args))
+            .map(|step| rule_words(&step.program, &step.args))
             .collect()
     }
 
@@ -4975,13 +4975,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// `$PATH` matches, which is an answer about this machine's software in place of the one the
     /// person wrote down, and one carrying none of the "do not retry" the clause owes the planner.
     ///
-    /// The name and the argv rather than a line, so that the rendering a rule is matched against
-    /// is built in one place and a caller cannot arrive with a different spelling of the same
-    /// step.
+    /// The name and the argv rather than a line, so that the words a rule is matched against are
+    /// built in one place and a caller cannot arrive with a different spelling of the same step.
     pub fn before_command_rules(&mut self, program: &str, args: &[String]) -> Gated<()> {
-        let line = rule_line(program, args);
-        let decision = self.permissions.for_command(&line);
-        self.refuse_if_denied("run", decision, &line)
+        let words = rule_words(program, args);
+        let decision = self.permissions.for_command(&words);
+        self.refuse_if_denied("run", decision, &words.join(" "))
     }
 
     /// Refuse a plan a `deny` rule covers, before anything is started.
@@ -4999,9 +4998,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// be ruled on too, and the second answer is the same one: the rules are a function of the
     /// line and nothing between the two calls can change it.
     pub fn before_plan_rules(&mut self, plan: &crate::command::Plan) -> Gated<()> {
-        for line in &self.plan_lines(plan) {
-            let decision = self.permissions.for_command(line);
-            self.refuse_if_denied("run", decision, line)?;
+        for words in Self::plan_words(plan) {
+            let decision = self.permissions.for_command(&words);
+            self.refuse_if_denied("run", decision, &words.join(" "))?;
         }
         for path in &plan.writes {
             self.before_write(&path.to_string_lossy())?;
@@ -5297,7 +5296,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             return true;
         }
 
-        match self.permissions.for_pipeline(&self.plan_lines(plan)) {
+        match self.permissions.for_pipeline(&Self::plan_words(plan)) {
             crate::permissions::Decision::Ruled(ruling) => {
                 let needed = ruling != crate::permissions::Ruling::Allow;
                 self.allow(
@@ -5414,7 +5413,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             && self.runs_at_the_root(plan)
             && !plan.carries_an_assignment()
             && matches!(
-                self.permissions.for_pipeline(&self.plan_lines(plan)),
+                self.permissions.for_pipeline(&Self::plan_words(plan)),
                 crate::permissions::Decision::Unmatched
             )
     }
@@ -6026,16 +6025,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     }
 }
 
-/// One step as the line a rule is matched against.
+/// One step as the words a rule is matched against: the program word, then its arguments.
 ///
-/// The one place that rendering is built, so the answer cannot depend on which gate asked:
+/// The one place those words are built, so the answer cannot depend on which gate asked:
 /// [`Policy::before_command_rules`] has the name and the argv before a step exists, and
-/// `plan_lines` has a compiled plan, and a rule means the same thing at both.
-fn rule_line(program: &str, args: &[String]) -> String {
+/// `plan_words` has a compiled plan, and a rule means the same thing at both.
+fn rule_words<'a>(program: &'a str, args: &'a [String]) -> Vec<&'a str> {
     std::iter::once(program)
         .chain(args.iter().map(String::as_str))
-        .collect::<Vec<_>>()
-        .join(" ")
+        .collect()
 }
 
 /// Whether a program was written as a path rather than as a name to look up.
@@ -8565,8 +8563,8 @@ five
         assert!(!text.contains("expects"), "{text}");
     }
 
-    /// A rule is matched against the program and its arguments run together, which is a rendering
-    /// an assignment is not in: `Bash(git log)` covers `LD_PRELOAD=./evil.so git log` and there is
+    /// A rule is matched against the program and its arguments, and an assignment is in neither:
+    /// `Bash(git log)` covers `LD_PRELOAD=./evil.so git log` and there is
     /// no rule anybody could have written to say otherwise. So the question comes before the rules,
     /// and the allowed bare line is asserted first because it is what makes that ordering the thing
     /// under test rather than a rule that never matched.
@@ -9360,6 +9358,41 @@ five
             .with_root(std::path::Path::new("/work"))
             .with_permissions(permissions(&[], &[], &["Bash(git log *)"]));
         assert!(!policy.plan_needs_approval(&a_plan()));
+    }
+
+    /// A program word holding a space is one word. Run together with its arguments into a line,
+    /// `"ls /x"`, a script at `ls /x` in the working directory, read as `ls` given `/x`, so
+    /// `Bash(ls *)` stopped the prompt and a script nobody had seen ran unasked.
+    #[test]
+    fn an_allow_rule_does_not_cover_a_program_whose_name_holds_a_space() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_root(std::path::Path::new("/work"))
+            .with_permissions(permissions(&[], &[], &["Bash(ls *)"]));
+        let mut script = step_named("ls /x", &[]);
+        script.resolved = std::path::PathBuf::from("/work/ls /x");
+        script.started_as = std::path::PathBuf::from("/work/ls /x");
+        assert!(
+            policy.plan_needs_approval(&plan_of(vec![script])),
+            "an allow rule for ls stopped the prompt for a program called `ls /x`"
+        );
+        assert!(
+            !policy.plan_needs_approval(&plan_of(vec![step_named("ls", &["/x"])])),
+            "the rule did not cover the program it names"
+        );
+    }
+
+    /// The other half: a deny rule still covers that program word, so the line is refused before
+    /// its program is looked for, as it was when the words were run together.
+    #[test]
+    fn a_deny_rule_still_covers_a_program_whose_name_holds_a_space() {
+        let mut sink = RecordingSink::new();
+        let mut policy =
+            open_policy(&mut sink).with_permissions(permissions(&["Bash(ls *)"], &[], &[]));
+        assert!(
+            policy.before_command_rules("ls /x", &[]).is_err(),
+            "a deny rule for ls let a program called `ls /x` through"
+        );
     }
 
     /// The line an allow rule must not cross. A pattern covers commands nobody has read, so it

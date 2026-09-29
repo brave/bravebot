@@ -17,7 +17,7 @@ guards:
   - symbol: Policy::remember_command
   - symbol: TrustedPrograms::trust
 reads_a_step_without_keying:
-  - crates/core/src/policy.rs::plan_lines
+  - crates/core/src/policy.rs::plan_words
   - crates/core/src/policy.rs::read_proven
 documented-by:
   - docs/website/docs/reference/tools.md
@@ -338,9 +338,8 @@ assignment, so the list would end up holding something nobody was shown. The dir
 precedent for widening the key here: a tree has no other spelling, and an assignment has one
 already, which is the paragraph below. The
 question is put before a rule in a settings file is consulted, as
-[permissions.md](../permissions.md) requires: a rule is matched against the program and its arguments
-run together, a rendering an assignment is not in, so no rule anybody could write tells the two lines
-apart.
+[permissions.md](../permissions.md) requires: a rule is matched against the program and its arguments,
+and an assignment is in neither, so no rule anybody could write tells the two lines apart.
 
 **A key is built by destructuring the step, never by reading its fields.** The paragraphs above
 name the fields of a step that decide what runs, and a key that leaves one out lets one answer cover
@@ -356,9 +355,9 @@ written to read one field at a time, which is the half a compiler cannot see. Ne
 somebody has to hold, and the second fails the same pull request that introduces the function.
 
 A function may read a step field by field for something that is not a key, and the two that do are
-named under `reads_a_step_without_keying` above rather than left to be recognised. `plan_lines` builds
-the rendering a `deny` rule is matched against, which is the program and its arguments run together
-and deliberately not the whole step. `read_proven` first refuses a step that carries an assignment or
+named under `reads_a_step_without_keying` above rather than left to be recognised. `plan_words` builds
+the words a rule is matched against, which are the program and its arguments and deliberately not the
+whole step. `read_proven` first refuses a step that carries an assignment or
 a route, is started from inside the project, or is started by a name other than its file's. The
 fields it reads after that are the only ones such a step has that can change what it does. A
 third one is an edit to this list, which is the point: admitting one is something somebody reviews.
@@ -886,9 +885,8 @@ with no spelling as text is written as bytes, and so is one that genuinely holds
 rendering uses. The tree matters here for a second reason: the file's own name is lossy, so two trees
 can share a record, and the path written into each entry is the only thing that tells them apart.
 
-**Why a record rather than a rule in a settings file.** A rule is matched against a rendering of the
-line: one string, the program's name and its arguments run together, in a language where a character
-means "any text". Two different argument lists render to one string, and an argument containing that
+**Why a record rather than a rule in a settings file.** A rule is matched against the program's name
+and its arguments in a language where a character means "any text", so an argument containing that
 character would grant the family this clause exists to refuse. A field per argument has neither
 problem, and it can hold the binary the name resolved to, which a rule has no way to say.
 

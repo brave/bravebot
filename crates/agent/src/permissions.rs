@@ -246,11 +246,11 @@ mod tests {
         let (permissions, rejected) = from_settings(&settings, Some(&PathBuf::from("/home/x")));
         assert!(rejected.is_empty());
         assert_eq!(
-            permissions.for_command("git diff --stat"),
+            permissions.for_command(&["git", "diff", "--stat"]),
             Decision::Ruled(Ruling::Allow)
         );
         assert_eq!(
-            permissions.for_command("git push origin main"),
+            permissions.for_command(&["git", "push", "origin", "main"]),
             Decision::Ruled(Ruling::Ask)
         );
         assert_eq!(
@@ -296,11 +296,11 @@ mod tests {
             for_an_unattended_run(&settings, Some(&PathBuf::from("/home/x")));
         assert!(rejected.is_empty());
         assert_eq!(
-            permissions.for_command("git diff --stat"),
+            permissions.for_command(&["git", "diff", "--stat"]),
             Decision::Unmatched
         );
         assert_eq!(
-            permissions.for_command("git push origin main"),
+            permissions.for_command(&["git", "push", "origin", "main"]),
             Decision::Ruled(Ruling::Ask)
         );
         assert_eq!(
@@ -415,7 +415,7 @@ mod tests {
         let (permissions, rejected) = from_settings(&checkout, Some(&PathBuf::from("/home/x")));
         assert!(rejected.is_empty(), "{rejected:?}");
         assert_eq!(
-            permissions.for_command("bash scripts/check.sh"),
+            permissions.for_command(&["bash", "scripts/check.sh"]),
             Decision::Unmatched,
             "a checkout's allow rule answered the run prompt"
         );
@@ -424,7 +424,7 @@ mod tests {
         let (permissions, rejected) = from_settings(&own, Some(&PathBuf::from("/home/x")));
         assert!(rejected.is_empty(), "{rejected:?}");
         assert_eq!(
-            permissions.for_command("bash scripts/check.sh"),
+            permissions.for_command(&["bash", "scripts/check.sh"]),
             Decision::Ruled(Ruling::Allow),
             "the person's own allow rule stopped deciding"
         );
@@ -447,7 +447,7 @@ mod tests {
         );
         assert!(rejected.is_empty(), "{rejected:?}");
         assert_eq!(
-            permissions.for_command("bash scripts/check.sh"),
+            permissions.for_command(&["bash", "scripts/check.sh"]),
             Decision::Ruled(Ruling::Allow),
             "a rule the person granted did not answer the run prompt"
         );
@@ -455,7 +455,7 @@ mod tests {
         let (ungranted, rejected) = with_granted(&checkout, &[], Some(&profile));
         assert!(rejected.is_empty(), "{rejected:?}");
         assert_eq!(
-            ungranted.for_command("bash scripts/check.sh"),
+            ungranted.for_command(&["bash", "scripts/check.sh"]),
             Decision::Unmatched,
             "a rule nobody granted answered the run prompt"
         );
@@ -475,7 +475,7 @@ mod tests {
             Some(&PathBuf::from("/home/x")),
         );
         assert_eq!(
-            permissions.for_command("bash scripts/check.sh"),
+            permissions.for_command(&["bash", "scripts/check.sh"]),
             Decision::Ruled(Ruling::Deny),
             "a granted rule overrode a deny rule"
         );

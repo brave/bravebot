@@ -342,9 +342,11 @@ is trusted.
 <a id="CMDLINE-7"></a>
 ### CMDLINE-7: permission rules match compiled stages, one at a time
 
-A rule's command specifier is matched against each stage of the compiled plan, rendered as its
-program name and argv joined by single spaces. Restricting any one stage restricts the whole line.
-Granting the line needs every stage granted.
+A rule's command specifier is matched against each stage of the compiled plan, as its program word
+and argv with each word kept whole ([PERM-5](../permissions.md#PERM-5)). A quoted program word is one
+word however many spaces it holds, so an `allow` rule's space never falls inside it: `Bash(ls *)`
+does not cover `"ls /x"`. Restricting any one stage restricts the whole line. Granting the line
+needs every stage granted.
 
 This is the rule that already governs pipelines, applied to a longer plan. What changes is that the
 splitting is now done by the compiler rather than being impossible; what does not change is that an
@@ -359,6 +361,8 @@ A rule may also name a write destination, and a redirection target is matched as
 `verified-by: bravebot_core::policy::a_denied_program_cannot_be_smuggled_inside_an_argument`
 `verified-by: bravebot_core::permissions::a_pipeline_is_allowed_only_when_every_stage_is`
 `verified-by: bravebot_core::permissions::restricting_one_stage_restricts_the_whole_pipeline`
+`verified-by: bravebot_core::policy::an_allow_rule_does_not_cover_a_program_whose_name_holds_a_space`
+`verified-by: bravebot_agent::turn::an_allow_rule_does_not_run_a_program_whose_name_holds_a_space_unasked`
 
 <a id="CMDLINE-8"></a>
 ### CMDLINE-8: a plan may prove its output's label from what it read

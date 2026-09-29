@@ -17696,7 +17696,7 @@ mod tests {
             answers
                 .rules
                 .permissions
-                .for_command("bash scripts/check.sh"),
+                .for_command(&["bash", "scripts/check.sh"]),
             Decision::Ruled(Ruling::Allow),
             "the rule was not granted where it was proposed"
         );
@@ -17721,7 +17721,7 @@ mod tests {
             answers
                 .rules
                 .permissions
-                .for_command("bash scripts/check.sh"),
+                .for_command(&["bash", "scripts/check.sh"]),
             Decision::Unmatched,
             "the grant for the checkout left behind still answers the run prompt"
         );
@@ -17750,7 +17750,10 @@ mod tests {
         let rules = starting_rules(&mut session, &root.join("state"), workspace.root());
         let mut answers = Answers::opening(trust, TrustedPrograms::new(), rules);
         assert_eq!(
-            answers.rules.permissions.for_command("rm -rf build"),
+            answers
+                .rules
+                .permissions
+                .for_command(&["rm", "-rf", "build"]),
             Decision::Unmatched
         );
 
@@ -17767,7 +17770,10 @@ mod tests {
         );
 
         assert_eq!(
-            answers.rules.permissions.for_command("rm -rf build"),
+            answers
+                .rules
+                .permissions
+                .for_command(&["rm", "-rf", "build"]),
             Decision::Ruled(Ruling::Deny),
             "the deny rule of the checkout moved to is not in force"
         );
@@ -17822,7 +17828,7 @@ mod tests {
             answers
                 .rules
                 .permissions
-                .for_command("bash scripts/check.sh"),
+                .for_command(&["bash", "scripts/check.sh"]),
             Decision::Ruled(Ruling::Allow),
             "the rule accepted after the move is not in force"
         );
@@ -17901,7 +17907,7 @@ mod tests {
             answers
                 .rules
                 .permissions
-                .for_command("bash scripts/check.sh"),
+                .for_command(&["bash", "scripts/check.sh"]),
             Decision::Ruled(Ruling::Allow),
             "the mode did not grant what the checkout moved to proposed"
         );
@@ -17964,7 +17970,7 @@ mod tests {
             answers
                 .rules
                 .permissions
-                .for_command("bash scripts/check.sh"),
+                .for_command(&["bash", "scripts/check.sh"]),
             Decision::Unmatched,
             "moving out of the checkout made its file the person's"
         );
@@ -18006,12 +18012,12 @@ mod tests {
             never_asked,
         ));
         assert_eq!(
-            rules.permissions.for_command("bash scripts/check.sh"),
+            rules.permissions.for_command(&["bash", "scripts/check.sh"]),
             Decision::Ruled(Ruling::Allow),
             "the rule granted here is no longer in force"
         );
         assert_eq!(
-            rules.permissions.for_command("rm -rf build"),
+            rules.permissions.for_command(&["rm", "-rf", "build"]),
             Decision::Ruled(Ruling::Deny),
             "the file was not read again"
         );

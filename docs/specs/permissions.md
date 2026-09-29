@@ -176,7 +176,7 @@ place in every list.
 `verified-by: bravebot_core::permissions::a_single_segment_directory_floats_when_it_restricts_and_not_when_it_grants`
 
 <a id="PERM-5"></a>
-### PERM-5: a command specifier matches the whole line, with `*` standing in for any text
+### PERM-5: a command specifier matches a stage's words, with `*` standing in for any text
 
 A rule with no `*` matches one exact command. A trailing ` *` also matches the bare command, but
 only when it is the rule's only wildcard, so `Bash(ls *)` covers `ls` and `Bash(* --help *)` does
@@ -184,8 +184,29 @@ not cover `npm --help`. The space before a trailing `*` is part of the rule: `Ba
 match `lsof` and `Bash(ls*)` does. A trailing `:*` is the same rule as a trailing ` *`, and a colon
 anywhere else is an ordinary character.
 
+A rule is written as a line and matched against a stage's program word and arguments, each one word
+as the compiler split them. A space in an `allow` rule covers only the gap between two words, so
+`Bash(ls *)` does not cover `"ls /x"`, one program word naming a script at `ls /x`, and
+`Bash(python3 script.py *)` does not cover `python3 "script.py x"`. A space in a `deny` or `ask` rule
+covers a space inside a word as well, so the same two rules in either of those lists cover both
+lines. A `*` covers any text in every list, spaces and gaps included, so `Bash(ls*)` covers
+`"ls /x"`. An `allow` rule therefore cannot spell out a word holding a space:
+`Bash(python3 my script.py)` names three words, and only a `*` in the space's place covers
+`python3 "my script.py"`.
+
+**Why.** Matched against the words run together into one line, `"ls /x"` read as `ls` given `/x`,
+so `Bash(ls *)` stopped the prompt and a script nobody had seen ran unasked. The asymmetry is
+[PERM-4](#PERM-4)'s: a rule that restricts covers everything it covered when the words were run
+together, and a rule that grants covers what it names.
+
 `verified-by: bravebot_core::permissions::a_command_pattern_matches_where_the_documented_table_says`
 `verified-by: bravebot_core::permissions::a_trailing_colon_star_is_a_trailing_wildcard_and_a_colon_elsewhere_is_not`
+`verified-by: bravebot_core::permissions::a_space_in_an_allow_rule_covers_only_the_gap_between_two_words`
+`verified-by: bravebot_core::permissions::a_space_in_a_deny_or_ask_rule_covers_a_space_inside_a_word_too`
+`verified-by: bravebot_core::permissions::a_star_in_an_allow_rule_covers_any_text_and_a_space_after_it_only_a_gap`
+`verified-by: bravebot_core::policy::an_allow_rule_does_not_cover_a_program_whose_name_holds_a_space`
+`verified-by: bravebot_core::policy::a_deny_rule_still_covers_a_program_whose_name_holds_a_space`
+`verified-by: bravebot_agent::turn::an_allow_rule_does_not_run_a_program_whose_name_holds_a_space_unasked`
 
 <a id="PERM-6"></a>
 ### PERM-6: every stage of a pipeline is judged on its own
@@ -298,8 +319,7 @@ to hand one the user's data, exactly as vouching for a command is not, and a ser
 the person than a local program is. The second is structural: that prompt is the only moment such a path is shown to
 anybody, and the endorsement is minted for the path the person saw, so nothing a pattern says can
 stand in for having looked. The third is about what a rule can say at all: a rule is matched against
-one string, the program's name and its arguments run together ([PERM-5](#PERM-5)), and an assignment is in
-neither, so `Bash(git log)` matches `LD_PRELOAD=./evil.so git log` and no rule anybody could write
+the program's name and its arguments ([PERM-5](#PERM-5)), and an assignment is in neither, so `Bash(git log)` matches `LD_PRELOAD=./evil.so git log` and no rule anybody could write
 distinguishes them. An assignment decides what a program loads before its arguments are read
 ([tools/run.md](tools/run.md)), so allowing the one is not allowing the other.
 
