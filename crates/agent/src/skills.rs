@@ -16,6 +16,10 @@
 //! planner asks for it by name, which keeps a directory of long skills from filling a context
 //! that has room for the task instead.
 //!
+//! A file may also name the model its rounds are asked of and the effort they carry. Neither is
+//! required, and neither is a reason to drop a skill: a value that cannot be used is reported and
+//! the skill loads on whatever the session was already running.
+//!
 //! # What this module may and may not read
 //!
 //! Everything here parses **trusted** text. A caller reaches this only after
@@ -27,10 +31,12 @@
 //! planner's context.
 
 use crate::workspace::Workspace;
+use bravebot_aichat::protocol::Effort;
 use bravebot_core::capability::Capability;
 use bravebot_core::event::Sink;
 use bravebot_core::policy::Policy;
 use bravebot_core::value::Labelled;
+use bravebot_i18n::t;
 use std::path::Path;
 
 /// What a `SKILL.md` declares about itself.
@@ -43,6 +49,45 @@ pub struct Frontmatter {
     /// What follows the name when the skill is invoked, for an interface to show. `argument-hint`
     /// in the file, and absent when the file has none. Never advertised to the planner.
     pub argument_hint: Option<String>,
+    /// The model its rounds are asked of, as the file wrote it, or nothing where it named none.
+    ///
+    /// Left as written rather than resolved here, the way a delegate definition's is: resolving an
+    /// alias is configuration's business, and this module is given no configuration.
+    pub model: Option<String>,
+    /// The effort word its rounds carry, as the file wrote it, or nothing where it named none.
+    ///
+    /// The word rather than the level, so a word naming no level can be said back to whoever wrote
+    /// it. [`runs_as`] is what turns one into a level.
+    pub effort: Option<String>,
+    /// Every key this does not read, in the order a sorted block declares them.
+    ///
+    /// Carried out rather than dropped: a key nothing reads is a line whose author believes it is
+    /// in force, and the report `doctor` makes of these is the whole of what tells them otherwise.
+    pub unread: Vec<String>,
+}
+
+/// Every key [`parse_frontmatter`] reads. Anything else is carried out on [`Frontmatter::unread`].
+const READ: [&str; 5] = ["name", "description", "argument-hint", "model", "effort"];
+
+/// How a skill asks the rounds that follow it to run.
+///
+/// Both halves optional, and absence in either leaves the session's own choice in force. Kept
+/// together because a skill naming one usually names the other, and because what they have in
+/// common is that neither is a reason to drop a skill: an unusable value is reported and the skill
+/// still loads, where a missing name or description makes it unchoosable.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RunsAs {
+    /// The model its rounds are asked of, as the file wrote it. Resolved where it is used.
+    pub model: Option<String>,
+    /// The effort level its rounds carry.
+    pub effort: Option<Effort>,
+}
+
+impl RunsAs {
+    /// Whether this asks for anything at all, which is what decides whether there is a switch.
+    pub fn names_anything(&self) -> bool {
+        self.model.is_some() || self.effort.is_some()
+    }
 }
 
 /// The line that opens and closes a frontmatter block.
@@ -52,13 +97,15 @@ const MARKER: &str = "---";
 ///
 /// Hand-written rather than a YAML dependency, per the conventions: this recognises `key: value`
 /// on a line, and a value continued on the lines indented beneath it, and nothing else. There is
-/// no parser to surprise us and nothing to backtrack. Keys other than `name` and `description`
-/// are ignored rather than refused, which leaves room for a file written for another agent to
-/// work here too.
+/// no parser to surprise us and nothing to backtrack. A key this does not read stops nothing: the
+/// skill loads, which leaves room for a file written for another agent to work here too, and the
+/// key is carried out on `unread` so a report can name it rather than leaving it a silent no-op.
 ///
 /// `None` means "not a skill", and every caller drops the file on that answer. A half-declared
 /// skill is included in that: a name with no description is one the planner cannot choose
-/// between, and advertising it would be worse than leaving it out.
+/// between, and advertising it would be worse than leaving it out. Neither `model` nor `effort`
+/// is in that: a skill with neither is choosable, so a value that cannot be used is reported and
+/// the skill still loads.
 pub fn parse_frontmatter(text: &str) -> Option<Frontmatter> {
     let declared = declarations(text)?;
     let name = declared.get("name").filter(|n| !n.is_empty())?;
@@ -70,7 +117,64 @@ pub fn parse_frontmatter(text: &str) -> Option<Frontmatter> {
             .get("argument-hint")
             .filter(|hint| !hint.is_empty())
             .cloned(),
+        // `inherit` is how other agents' definitions name no model, so one ported from them keeps
+        // meaning that rather than sending the word as a model name. The same rule a delegate
+        // definition reads a model by, for the same reason.
+        model: declared_word(&declared, "model")
+            .filter(|model| !model.eq_ignore_ascii_case("inherit")),
+        effort: declared_word(&declared, "effort"),
+        unread: declared
+            .keys()
+            .filter(|key| !READ.contains(&key.as_str()))
+            .cloned()
+            .collect(),
     })
+}
+
+/// One declared value with the whitespace off, or nothing where the key named nothing.
+///
+/// A blank value is absence rather than a choice of the empty string: `model:` with nothing after
+/// it is a line somebody started and did not finish, and sending the empty string as a model name
+/// would be answered by whatever the service substitutes.
+fn declared_word(
+    declared: &std::collections::BTreeMap<String, String>,
+    key: &str,
+) -> Option<String> {
+    declared
+        .get(key)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+/// What a skill asks its rounds to run as, and a notice for anything it asked for that cannot be.
+///
+/// The effort word is settled here because a level is one of five this program enumerates, and a
+/// word naming none of them is a fact about the file that nothing downstream could recover: an
+/// unrecognised word must not become a request field. The model is left as written, because whether
+/// a name resolves is a question about this machine's configuration and this module has none.
+///
+/// A skill still loads either way. The notice names the file and the word it wrote, both of which
+/// are safe to print: this is reached only for a source somebody vouched for.
+fn runs_as(front: &Frontmatter, origin: &str, notices: &mut Vec<Notice>) -> RunsAs {
+    let effort = match front.effort.as_deref() {
+        None => None,
+        Some(word) => match Effort::named(word) {
+            Some(level) => Some(level),
+            None => {
+                notices.push(Notice::new(t!(
+                    skill_effort_not_a_level,
+                    skill = origin,
+                    effort = word,
+                    levels = Effort::ALL.map(Effort::as_str).join(", ")
+                )));
+                None
+            }
+        },
+    };
+    RunsAs {
+        model: front.model.clone(),
+        effort,
+    }
 }
 
 /// Every `key: value` a frontmatter block declares, wrapped values joined.
@@ -226,6 +330,10 @@ pub struct Skill {
     pub origin: String,
     /// Which of the three places it came from, for an interface saying so beside its name.
     pub source: Source,
+    /// The model and the effort its rounds run at, where its file named either.
+    pub runs_as: RunsAs,
+    /// The keys its file declared that nothing here reads, for a report a person asks for.
+    pub unread: Vec<String>,
     /// The instructions themselves, still carrying the label they were read with.
     ///
     /// Kept labelled rather than as bare text so the planner is shown them through
@@ -447,6 +555,10 @@ pub fn discover<S: Sink>(
             body: Labelled::trusted(built_in.body.to_string()),
             origin: "built-in".to_string(),
             source: Source::BuiltIn,
+            // A built-in is this program's own text, so there is no file to have named a model or
+            // an effort and no key nothing reads: it runs as the session does.
+            runs_as: RunsAs::default(),
+            unread: Vec::new(),
         });
     }
 
@@ -519,6 +631,7 @@ fn discover_home<S: Sink>(
                 let body = policy.render_in_place("skills", &labelled, |whole| {
                     body_after_frontmatter(&whole).to_string()
                 });
+                let runs_as = runs_as(&front, &origin, notices);
                 catalogue.insert(Skill {
                     name: front.name,
                     description: front.description,
@@ -526,6 +639,8 @@ fn discover_home<S: Sink>(
                     body,
                     origin,
                     source: Source::Home,
+                    runs_as,
+                    unread: front.unread,
                 });
             }
             None => notices.push(Notice::new(format!(
@@ -587,6 +702,7 @@ fn discover_workspace<S: Sink>(
                 let body = policy.render_in_place("skills", &contents, |whole| {
                     body_after_frontmatter(&whole).to_string()
                 });
+                let runs_as = runs_as(&front, &relative, notices);
                 catalogue.insert(Skill {
                     name: front.name,
                     description: front.description,
@@ -594,6 +710,8 @@ fn discover_workspace<S: Sink>(
                     body,
                     origin: relative,
                     source: Source::Workspace,
+                    runs_as,
+                    unread: front.unread,
                 });
             }
             None => notices.push(Notice::new(format!(
@@ -664,19 +782,86 @@ mod tests {
         assert_eq!(parse_frontmatter(text), None);
     }
 
-    /// A file written for another agent may carry keys this does not know. Ignoring them is what
-    /// lets one skill directory serve more than one tool.
+    /// A file written for another agent may carry keys this does not know. Loading it anyway is
+    /// what lets one skill directory serve more than one tool, and carrying the key out is what
+    /// keeps it from being a line whose author is never told it did nothing.
     #[test]
-    fn keys_other_than_name_and_description_are_ignored() {
-        let text = "---\nname: shared\nlicense: MPL-2.0\ndescription: works anyway\n---\nbody\n";
+    fn a_key_nothing_here_reads_does_not_stop_a_skill_and_is_carried_out() {
+        let text = "---\nname: shared\nlicense: MPL-2.0\ndescription: works \
+                    anyway\nargument-hint: '[x]'\n---\nbody\n";
         assert_eq!(
             parse_frontmatter(text),
             Some(Frontmatter {
                 name: "shared".to_string(),
                 description: "works anyway".to_string(),
-                argument_hint: None,
+                argument_hint: Some("[x]".to_string()),
+                model: None,
+                effort: None,
+                unread: vec!["license".to_string()],
             })
         );
+    }
+
+    /// The two keys beyond the name and the description, and neither of them counted as unread.
+    /// A key read into a field and reported as unread at the same time would have `doctor` telling
+    /// somebody their line does nothing while the turn was running on it.
+    #[test]
+    fn a_skill_reads_the_model_and_the_effort_it_names() {
+        let parsed = parse_frontmatter(
+            "---\nname: n\ndescription: d\nmodel: haiku\neffort: HIGH\n---\nbody\n",
+        )
+        .expect("parses");
+
+        assert_eq!(parsed.model.as_deref(), Some("haiku"));
+        assert_eq!(parsed.effort.as_deref(), Some("HIGH"));
+        assert!(parsed.unread.is_empty(), "got: {:?}", parsed.unread);
+    }
+
+    /// A line somebody started and did not finish names nothing, and `inherit` is how another
+    /// agent's file spells naming no model. Sending either as a model name would have the service
+    /// answer with whatever it substitutes for a name it has never heard of.
+    #[test]
+    fn a_model_that_names_nothing_leaves_the_session_its_own() {
+        for line in [
+            "model:\n",
+            "model: '   '\n",
+            "model: inherit\n",
+            "model: Inherit\n",
+        ] {
+            let parsed = parse_frontmatter(&format!("---\nname: n\ndescription: d\n{line}---\n"))
+                .expect("parses");
+            assert_eq!(parsed.model, None, "model line: {line:?}");
+        }
+    }
+
+    /// The five words this program enumerates, in either case, and a word naming none of them.
+    /// An unrecognised word must not become a request field, and the skill is still loaded, so the
+    /// level has to come back as absence rather than as a guess.
+    #[test]
+    fn an_effort_word_that_names_no_level_leaves_the_session_its_own() {
+        let level = |word: &str| {
+            let front = parse_frontmatter(&format!(
+                "---\nname: n\ndescription: d\neffort: {word}\n---\n"
+            ))
+            .expect("parses");
+            let mut notices = Vec::new();
+            let chosen = runs_as(&front, "SKILL.md", &mut notices);
+            (chosen.effort, notices)
+        };
+
+        assert_eq!(level("max").0, Some(Effort::Max));
+        assert_eq!(level("Low").0, Some(Effort::Low));
+        for word in ["highest", "0.5", "none", "very high"] {
+            let (chosen, notices) = level(word);
+            assert_eq!(chosen, None, "'{word}' was read as a level");
+            assert_eq!(notices.len(), 1, "'{word}' said nothing: {notices:?}");
+            assert!(
+                notices[0].message.contains(word) && notices[0].message.contains("SKILL.md"),
+                "the notice names neither the word nor the file: {}",
+                notices[0].message
+            );
+        }
+        assert!(level("max").1.is_empty(), "a level said something");
     }
 
     /// A description is a sentence, and sentences contain colons. Splitting on the last one, or
@@ -783,6 +968,8 @@ mod tests {
             argument_hint: None,
             origin: "SKILL.md".to_string(),
             source: Source::Home,
+            runs_as: RunsAs::default(),
+            unread: Vec::new(),
             body: Labelled::trusted("sign them".to_string()),
         });
 

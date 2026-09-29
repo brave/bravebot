@@ -1419,6 +1419,9 @@ pub struct Outcome {
     /// The kernel's match rather than anything the reply says about itself, so an interface
     /// drawing the reply under a name is drawing the driver's word for it (ADDRESS-12).
     pub addressed: Option<bravebot_core::delegate::Addressed>,
+    /// Whether the turn compared the model that answered with one it asked for itself: an
+    /// addressed definition's (ADDRESS-11) or a loaded skill's (SKILL-15).
+    pub(crate) compared_the_model_itself: bool,
 }
 
 impl Outcome {
@@ -1428,6 +1431,18 @@ impl Outcome {
     /// recorded in the audit trail rather than happening implicitly after the fact.
     pub fn reply_for_display(&self) -> &str {
         &self.display
+    }
+
+    /// Whether the turn's last round was asked of the session's own model, so that a front end
+    /// may compare [`Outcome::model`] with it.
+    ///
+    /// False where an addressed definition's model was asked for or a loaded skill named the
+    /// model. The turn has already compared that model with the one that answered (ADDRESS-11,
+    /// SKILL-15), and a comparison with the session's would report a substitution that did not
+    /// happen. True for a definition whose model the command line's outranked, since the
+    /// command line's is what was asked for.
+    pub fn ran_on_the_sessions_model(&self) -> bool {
+        !self.compared_the_model_itself
     }
 }
 
@@ -1871,6 +1886,59 @@ pub fn discover_subscription<R: Reporter>(
         reporter.notice(t!(subscription_unusable, problem = problem));
     }
     discovery.found()
+}
+
+/// Take what a loaded skill's file asks its rounds to run as, and say what changed.
+///
+/// The skill's model replaces the session's, including a model the person picked with /model, and
+/// the switch is announced. It does not replace a model an addressed definition or the delegate's
+/// definition named: that model is a cost limit its file set (ADDRESS-11, DELEGATE-22), and a
+/// skill loaded inside the turn does not get to raise it. `pinned_by` is that definition's name.
+///
+/// A skill's model that needs a sign-in this machine has not made is reported and ignored, and the
+/// turn goes on. The returned lines are the notices to show. A skill that changed nothing returns
+/// none.
+fn adopt(
+    turn_model: &mut Option<String>,
+    effort: &mut Option<Effort>,
+    config: &Config,
+    skill: &str,
+    runs_as: &crate::skills::RunsAs,
+    pinned_by: Option<&str>,
+) -> Vec<String> {
+    let mut said = Vec::new();
+
+    // The name as the file wrote it, in every line below, since that is what its author typed.
+    if let Some(written) = runs_as.model.as_deref() {
+        let resolved = config.model_named(written);
+        if let Some(definition) = pinned_by {
+            if turn_model.as_deref() != Some(resolved.as_str()) {
+                said.push(
+                    t!(
+                        skill_model_kept_for_definition,
+                        skill = skill,
+                        model = written,
+                        definition = definition
+                    )
+                    .to_string(),
+                );
+            }
+        } else if crate::backend::Backend::needs_sign_in(config, &resolved) {
+            said.push(t!(skill_model_needs_sign_in, skill = skill, model = written).to_string());
+        } else if turn_model.as_deref().unwrap_or(&config.default_model) != resolved {
+            said.push(t!(skill_asks_a_model, skill = skill, model = written).to_string());
+            *turn_model = Some(resolved);
+        }
+    }
+
+    if let Some(level) = runs_as.effort
+        && *effort != Some(level)
+    {
+        said.push(t!(skill_asks_an_effort, skill = skill, effort = level.as_str()).to_string());
+        *effort = Some(level);
+    }
+
+    said
 }
 
 /// The path a precommitted routing entry holds, which is trusted by construction.
@@ -2805,10 +2873,27 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                 "the addressed definition's model needs a sign-in first".to_string(),
             ));
         }
-        let turn_model = definition_model
+        // The definition whose model this turn runs on, where one named a model: the addressed
+        // definition, or the delegate's. A skill loaded in the turn keeps that model (SKILL-15).
+        // Not a definition the command line outranked, whose model this turn does not run on.
+        let pinned_by = match (&addressed, &task.delegate) {
+            (Some(addressed), _) => definition_model
+                .as_ref()
+                .map(|_| addressed.name().to_string()),
+            (None, Some(spec)) => spec.model().map(|_| spec.definition().to_string()),
+            (None, None) => None,
+        };
+        // Mutable because a skill loaded mid-turn may name a model of its own (SKILL-15).
+        let mut turn_model = definition_model
             .as_ref()
             .map(|(_, resolved)| resolved.clone())
             .or_else(|| task.model.clone());
+        // Beside the model and mutable for the same reason. The session's own until a skill names
+        // one, and absence is every service keeping its own default.
+        let mut effort = task.effort;
+        // The skill that last moved the turn onto its own model, and that model as its file wrote
+        // it, so the answer can be compared with it at the end of the turn (SKILL-15).
+        let mut switched_by: Option<(String, String)> = None;
 
         // A delegate's is its kind's, and the planner cannot write a word of it: what it chose was a
         // name out of an enumerated set, and the set is the driver's. What both prompts share is the
@@ -3295,7 +3380,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
 
                     let model = turn_model.as_deref().unwrap_or(&config.default_model);
                     let request = ChatRequest::new(model, conversation.with_system(&system))
-                        .with_effort(task.effort);
+                        .with_effort(effort);
                     let request = if may_call_tools {
                         request.with_tools(offered.clone())
                     } else {
@@ -3715,10 +3800,17 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         // for one: that call has already answered, and what is still here when the work
                         // finishes is the turn.
                         // The turn's, not the session's: an addressed turn runs on its definition's.
-                        let spawning_model = turn_model.as_deref();
+                        //
+                        // Copied rather than borrowed. A delegate outlives the round that started it,
+                        // so a `&str` into the turn's model would hold that variable borrowed for as
+                        // long as the delegate lives, and a skill loaded later in the turn could then
+                        // never change it. What each delegate carries is the model in force when it
+                        // started, which is the one its parent was asking at the time.
+                        let spawning_model = turn_model.clone();
                         for (id, seeded) in std::mem::take(&mut output.delegate) {
                             let vouched = seeded.vouched.clone();
                             let shared = servers.as_deref().map(crate::lsp::LanguageServers::share);
+                            let spawning_model = spawning_model.clone();
                             let handle = scope.spawn(move || {
                                 let mut confirmer = confirming.delegate(id);
                                 let mut reporter = reporting.delegate(id);
@@ -3730,7 +3822,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                     workspace,
                                     task.home.as_deref(),
                                     task.profile.as_deref(),
-                                    spawning_model,
+                                    spawning_model.as_deref(),
                                     task.permission_mode,
                                     task.auto_vetting,
                                     &task.attribution,
@@ -3794,6 +3886,26 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         // the planner about one that does not exist.
                         if let Some(path) = output.watch.clone() {
                             watches.push(path);
+                        }
+                        // What a loaded skill's file asks the rounds after it to run as (SKILL-15).
+                        // Shown before the next round and kept in the turn's notices (SKILL-11),
+                        // because the switch decides what that round costs.
+                        if let Some((skill, runs_as)) = output.loaded.take() {
+                            let before = turn_model.clone();
+                            for said in adopt(
+                                &mut turn_model,
+                                &mut effort,
+                                config,
+                                &skill,
+                                &runs_as,
+                                pinned_by.as_deref(),
+                            ) {
+                                reporter.notice(said.clone());
+                                notices.push(crate::skills::Notice::from_message(said));
+                            }
+                            if turn_model != before {
+                                switched_by = runs_as.model.map(|written| (skill, written));
+                            }
                         }
                         // As with a context file: what the turn has seen belongs to the conversation the
                         // moment it sees it, not once the turn happens to end well.
@@ -4518,6 +4630,20 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                 notices.push(crate::skills::Notice::from_message(said));
             }
         }
+        // The same comparison for a model a loaded skill moved the turn onto, naming the skill and
+        // the model as its file wrote it (SKILL-15). A delegate's turn is covered here too.
+        if let Some((skill, written)) = &switched_by {
+            let resolved = turn_model.as_deref().unwrap_or(&config.default_model);
+            let asked = crate::backend::Backend::name_as_asked(config, resolved);
+            if crate::backend::Backend::reports_the_model_it_was_asked_for(config, resolved)
+                && asked != bravebot_config::DEFAULT_MODEL
+                && asked != completion.model
+            {
+                let said = t!(skill_model_substituted, skill = skill, model = written);
+                reporter.notice(said.clone());
+                notices.push(crate::skills::Notice::from_message(said));
+            }
+        }
 
         // Released while the policy is open, so the audit trail records that the reply was
         // shown rather than leaving the release invisible.
@@ -4588,6 +4714,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             notices: notices.into_iter().map(|n| n.message).collect(),
             attempt: None,
             addressed,
+            compared_the_model_itself: definition_model.is_some() || switched_by.is_some(),
         })
     })();
     let decisions = Decisions {

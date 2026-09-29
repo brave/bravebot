@@ -1402,6 +1402,13 @@ pub struct Output {
     /// seeded on its own, so what the turn starts is the same thing whether the planner asked
     /// for them one call at a time or all at once.
     pub delegate: Vec<(crate::report::DelegateId, crate::delegate::Seeded)>,
+    /// The skill the planner loaded and how its file asks the rounds after it to run.
+    ///
+    /// Travels back for the reason a wakeup does: what it changes is the next request rather than
+    /// this result, and the model and the effort a round is asked at are the turn's to hold.
+    ///
+    /// Absent where nothing was loaded and where what was loaded named neither.
+    pub loaded: Option<(String, crate::skills::RunsAs)>,
 }
 
 /// Everything a tool works with that is not the policy.
@@ -1862,6 +1869,14 @@ struct Produced {
     ///
     /// A list because one call may fan a task out over several.
     delegate: Vec<(crate::report::DelegateId, crate::delegate::Seeded)>,
+    /// The skill the planner loaded and how its file asks the rounds after it to run.
+    ///
+    /// Settled by the turn rather than here, because what it changes is the next request rather
+    /// than this result: the model and the effort are the turn's to hold, and whether a name this
+    /// machine cannot reach is worth a line is a question about configuration.
+    ///
+    /// Absent where nothing was loaded and where what was loaded asked for neither.
+    loaded: Option<(String, crate::skills::RunsAs)>,
 }
 
 impl Produced {
@@ -1897,6 +1912,7 @@ impl Produced {
             wakeup: None,
             watch: None,
             delegate: Vec::new(),
+            loaded: None,
         }
     }
 
@@ -1936,6 +1952,7 @@ impl Produced {
             picture: None,
             attached: None,
             delegate: Vec::new(),
+            loaded: None,
         }
     }
 
@@ -2463,6 +2480,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
                 wakeup: produced.wakeup,
                 watch: produced.watch,
                 delegate: produced.delegate,
+                loaded: produced.loaded,
             };
         }
     };
@@ -2624,6 +2642,7 @@ pub fn dispatch<S: Sink, C: Confirmer, R: Reporter>(
         wakeup: produced.wakeup,
         watch: produced.watch,
         delegate: produced.delegate,
+        loaded: produced.loaded,
     }
 }
 
@@ -6848,7 +6867,14 @@ fn load_skill<S: Sink>(
     let note = note_for(policy, "load_skill", skill.body(), |text: String| {
         tally(text.lines().count(), "line", "lines")
     });
-    Produced::new(skill.body().clone(), skill.origin.clone(), note)
+    let mut produced = Produced::new(skill.body().clone(), skill.origin.clone(), note);
+    // Carried out rather than acted on here. The rounds after this one are the turn's to ask, and a
+    // skill that named neither carries nothing, so a turn holding no answer is a turn with nothing
+    // to change.
+    if skill.runs_as.names_anything() {
+        produced.loaded = Some((skill.name.clone(), skill.runs_as.clone()));
+    }
+    produced
 }
 
 /// Read one option the model offered.

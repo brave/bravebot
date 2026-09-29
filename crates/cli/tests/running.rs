@@ -3657,6 +3657,47 @@ fn a_one_shot_first_run_with_ollama_running_names_the_import_command() {
     );
 }
 
+/// SKILL-16's report, from the process that reads the file: a skill declaring a key nothing here
+/// reads loads anyway, and `doctor` names the file and the key.
+///
+/// Running the binary rather than calling the crate, because the report crosses three of them: the
+/// key is carried out by `bravebot-agent`, the words are `bravebot-i18n`'s, and the line is printed
+/// by `bravebot-cli`. A key dropped and reported nowhere reads to whoever wrote it as one in force,
+/// which is the failure this rejects, and an in-process test cannot tell a missing line from a line
+/// nobody prints.
+#[test]
+fn doctor_names_a_skill_key_nothing_reads() {
+    let scratch = Scratch::new("cli-running-skill-unread-key").with_file(
+        ".bravebot/skills/ported/SKILL.md",
+        "---\nname: ported\ndescription: written for another agent\nallowed-tools: \
+         Read\nmodel: haiku\n---\n\nthe body\n",
+    );
+
+    let output = bravebot(
+        &scratch.path,
+        // A configuration with nothing else wrong with it, for the reason the layers test above
+        // states: a build with no credentials baked in would otherwise stop at that instead.
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(
+        stdout.contains("allowed-tools") && stdout.contains("skills/ported/SKILL.md"),
+        "doctor did not name the key it ignored: {stdout}{stderr}"
+    );
+    // The two keys it does read are not in that line. A report naming one of them would send
+    // somebody to delete a line the turn is running on.
+    assert!(
+        !stdout.contains("model, ") && !stdout.contains(", model"),
+        "doctor called a key it reads unread: {stdout}"
+    );
+}
+
 /// A definition as a person keeps one under this home's own directory, which a run reads without
 /// asking anybody, since nobody but the person writes there (DELEGATE-20).
 fn a_definition(name: &str, fields: &str) -> String {

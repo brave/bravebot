@@ -554,10 +554,14 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
                 notices: outcome.notices.clone(),
                 clean: outcome.clean,
                 // Skipped for a definition's model, because the turn compared that model itself
-                // and reported it in the definition's words (ADDRESS-11).
+                // and reported it in the definition's words (ADDRESS-11). The same for a model a
+                // skill moved the turn onto (SKILL-15).
                 not_served: match self.agent.as_ref().and_then(|agent| agent.model.as_ref()) {
                     Some(_) => None,
-                    None => self.substituted(&outcome.model),
+                    None => outcome
+                        .ran_on_the_sessions_model()
+                        .then(|| self.substituted(&outcome.model))
+                        .flatten(),
                 },
             },
             // From the reporter rather than the outcome, there being no outcome: a turn that could

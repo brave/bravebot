@@ -731,3 +731,104 @@ fn each_skill_records_which_of_the_three_places_it_came_from() {
         "the project's copy"
     );
 }
+
+/// Write a skill whose frontmatter is exactly the lines given, so a test can say what a file
+/// declares beyond its name and description.
+fn write_declaring(root: &Path, dir: &str, lines: &str) {
+    let at = root.join("skills").join(dir);
+    std::fs::create_dir_all(&at).expect("create skill directory");
+    std::fs::write(
+        at.join("SKILL.md"),
+        format!("---\nname: {dir}\ndescription: when to use it\n{lines}---\n\nthe body\n"),
+    )
+    .expect("write skill");
+}
+
+/// Both keys reach the catalogue, and a skill that named neither leaves the session's own choice in
+/// force. A value read and then dropped is the failure this rejects: the file loads either way, so
+/// nothing about the catalogue would otherwise show whether the lines were read at all.
+#[test]
+fn a_skill_carries_the_model_and_the_effort_its_file_named() {
+    let scratch = Scratch::new("runs-as");
+    let home = scratch.home();
+    write_declaring(&home, "cheap", "model: haiku\neffort: low\n");
+    write_declaring(&home, "plain", "");
+    let workspace = Workspace::new(scratch.workspace()).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, notices) = {
+        let mut policy = policy(&mut sink, &[]);
+        skills::discover(&mut policy, &workspace, Some(&home))
+    };
+
+    let runs_as = |name: &str| catalogue.get(name).expect("offered").runs_as.clone();
+    assert_eq!(
+        runs_as("cheap"),
+        skills::RunsAs {
+            model: Some("haiku".to_string()),
+            effort: Some(bravebot_aichat::protocol::Effort::Low),
+        }
+    );
+    assert_eq!(runs_as("plain"), skills::RunsAs::default());
+    assert!(notices.is_empty(), "silence was expected: {notices:?}");
+}
+
+/// A word naming none of the five levels is reported and the skill is still offered. Dropping the
+/// skill is what a missing name or description does, and doing it here would take a whole set of
+/// instructions away over a line that was only ever an adjustment to how they run.
+#[test]
+fn an_effort_word_naming_no_level_is_reported_and_the_skill_still_loads() {
+    let scratch = Scratch::new("effort-unreadable");
+    let home = scratch.home();
+    write_declaring(&home, "eager", "effort: highest\n");
+    let workspace = Workspace::new(scratch.workspace()).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, notices) = {
+        let mut policy = policy(&mut sink, &[]);
+        skills::discover(&mut policy, &workspace, Some(&home))
+    };
+
+    assert_eq!(from_disk(&catalogue), ["eager"], "the skill was dropped");
+    assert_eq!(
+        catalogue.get("eager").expect("offered").runs_as.effort,
+        None,
+        "a word naming no level became a level"
+    );
+    assert_eq!(notices.len(), 1, "expected one notice: {notices:?}");
+    assert!(
+        notices[0].message.contains("highest") && notices[0].message.contains("eager"),
+        "the notice names neither the word nor the file: {}",
+        notices[0].message
+    );
+}
+
+/// A key nothing here reads loads the skill and is carried out under its origin, which is what a
+/// report has to name. Dropping it in the parser is the failure this rejects: the line would do
+/// nothing and nothing anywhere could say so.
+#[test]
+fn a_key_nothing_reads_is_carried_out_beside_the_skill_that_declared_it() {
+    let scratch = Scratch::new("unread-keys");
+    let home = scratch.home();
+    write_declaring(&home, "ported", "allowed-tools: Read\nlicense: MPL-2.0\n");
+    write_declaring(&home, "native", "model: haiku\neffort: max\n");
+    let workspace = Workspace::new(scratch.workspace()).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, notices) = {
+        let mut policy = policy(&mut sink, &[]);
+        skills::discover(&mut policy, &workspace, Some(&home))
+    };
+
+    assert_eq!(
+        catalogue.get("ported").expect("offered").unread,
+        ["allowed-tools", "license"]
+    );
+    assert!(
+        catalogue.get("native").expect("offered").unread.is_empty(),
+        "a key that is read was reported as unread"
+    );
+    // Not a notice. Almost every skill written for another agent carries one of these, and a line
+    // repeated every turn about something that is working is how a notice stops being read.
+    assert!(notices.is_empty(), "silence was expected: {notices:?}");
+}

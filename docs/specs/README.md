@@ -29,7 +29,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [pasting.md](pasting.md) | `PASTE` | 9 | what Ctrl-V puts into a turn, text or picture, and on what footing |
 | [dropping.md](dropping.md) | `DROP` | 10 | what dragging a file onto a window puts into a turn, and on what footing |
 | [shell-mode.md](shell-mode.md) | `SHELL` | 5 | the `!` prompt: a line the user typed, and why the planner can never reach it |
-| [skills.md](skills.md) | `SKILL` | 12 | `AGENTS.md` and skills: what a skill file is and what each source is trusted for |
+| [skills.md](skills.md) | `SKILL` | 14 | `AGENTS.md` and skills: what a skill file is and what each source is trusted for |
 | [instructions.md](instructions.md) | `INSTR` | 9 | which instruction files are looked for, where, in what order, and where what they say ends up |
 | [cli.md](cli.md) | `CLI` | 17 | running without the interactive interface: one-shot tasks, piped input, and `doctor` |
 | [manifest.md](manifest.md) | `MANIFEST` | 11 | plan the whole run first, then execute it with no model in the control path |

@@ -22,14 +22,47 @@ Write the subject in the imperative. Explain why in the body, never what.
 ## The file
 
 One `SKILL.md`, with `name` and `description` in front matter. Both keys are required, and a file
-missing either is skipped with a note saying so. Other keys are ignored, so a skill written for
-another agent works here, except `argument-hint`, which is drawn after the skill's name in the box to
-say what it takes, as in `argument-hint: '[low|high] <pr#>'`. It is never shown to the planner. A file
-with no front matter is not a skill.
+missing either is skipped with a note saying so. `argument-hint` is drawn after the skill's name
+in the box to say what it takes, as in `argument-hint: '[low|high] <pr#>'`, and is never shown to
+the planner. A key nothing here reads stops nothing, so a skill written for another agent works
+here; `bravebot doctor` lists such keys, so a line you expected to do something and that does
+nothing is somewhere you can find it. A file with no front matter is not a skill.
 
 A value may wrap over the lines indented beneath it, however the file spells the wrap: folded or
 literal with `>` or `|`, quoted and carried over, or plain text continued. A folded value is
 joined with spaces; a literal one keeps the newlines it asked for.
+
+## Running a skill on its own model
+
+Two more keys, both optional:
+
+```yaml
+name: release-notes
+description: Turn a range of commits into release notes. Use when cutting a release.
+model: haiku
+effort: low
+```
+
+`model` is resolved the way the `model` settings key is, `opus`, `sonnet` and `haiku` included.
+`effort` is one of `low`, `medium`, `high`, `xhigh` and `max`. Leave either out and the session's own
+choice stands.
+
+Both take effect from the moment the skill is loaded, for the rest of that turn, and **they replace
+a model you chose for the session**, including one picked with `/model`. The session says so when
+it happens, so you see when a skill moves a turn onto a dearer model.
+
+A skill does not replace a model that a definition named. When you address a definition that names
+a model, or a delegate's definition names one, a skill loaded in that turn keeps the definition's
+model and the session says so. The skill's `effort` still applies. Where `--model` on the command
+line took the place of the definition's model, a skill's model replaces the command line's, as it
+would with no definition addressed.
+
+If the service answers a skill's rounds with a different model than the one the skill named, which
+it does for a misspelt name or a premium model with no subscription in hand, the session says so.
+
+A value that cannot be used is reported and the skill still loads, on whatever the session was
+already running: a level spelled some other way, or a model needing a sign-in this machine has not
+made.
 
 ## Only the name and description reach the prompt
 
