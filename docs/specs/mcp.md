@@ -31,13 +31,13 @@ that needs its parts labelled separately stays native rather than moving behind 
 A tool result is content from outside, so it is labelled untrusted and quarantined like anything
 else nobody vouched for. It is labelled private too, so a line fed one is put to the person as a
 line fed a file is ([PERM-9](permissions.md#PERM-9)). Nothing a server says about itself changes
-either, a result it marks as its own failure included. The words a server describes its tools with
-stay public ([SERVERS-8](mcp-servers.md#SERVERS-8)).
+either label, a result it marks as its own failure included. The words a server describes its tools
+with stay public ([SERVERS-8](mcp-servers.md#SERVERS-8)).
 
 **Why private.** A server may hold the person's own data, a mailbox or a calendar, and this client
-cannot tell what a given call read. A search server's answer being labelled private costs a prompt
-where one is fed to a program; a mailbox's being labelled public would hand the person's mail to
-that program with nobody asked.
+cannot tell what a given call read. Labelling a search server's answer private costs one question
+when it is fed to a program. Labelling a mailbox's answer public would hand the person's mail to
+that program unasked.
 
 `verified-by: bravebot_mcp::stdio::a_tool_result_is_labelled_untrusted_and_private`
 `verified-by: bravebot_mcp::http::a_tool_result_is_labelled_untrusted_and_private`
