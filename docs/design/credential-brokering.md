@@ -847,16 +847,6 @@ credential, or there is nowhere to perform or intercept the action.
 | tokens held by a connected protocol server | hold | that server holds its own downstream credentials. Nothing here sees or bounds them |
 | pushes, biometrics, hardware-key touches | hold | not bytes, so nothing can hold them |
 
-**A mailbox reached through a person's own protocol server is the protocol-server row above, not
-phase 6 early.** A mail server declared with `bravebot mcp add` keeps its own OAuth token on disk,
-which is the Held tier, and that token reads and sends across the whole mailbox. None of this
-design's bounds reach it: no grant names a recipient, no byte cap counts what is sent, and no
-provider-side filter keeps a reset link out of what is read. bravebot bounds such a server only as
-it bounds any server: each call is put to the person with its arguments, a `deny` rule refuses a
-tool in every mode, and what it returns is private and quarantined ([MCP-1](../specs/mcp.md#MCP-1)).
-It is a server the person chose and runs, documented as a recipe and not offered as a capability,
-so **send before read** still holds for everything the broker offers.
-
 **The honest summary: this makes new capabilities safe and retrofits nothing.** Email and GitHub
 work because the broker obtains those tokens itself. A developer's existing AWS profile and SSH
 keys do not, and those are what an agent on a laptop reaches for first. Bounding those is the
