@@ -167,7 +167,8 @@ impl<W: Write> Reporter for Progress<W> {
         if why.is_empty() {
             self.say(&format!("{CALL_MARKER} {}", activity.line()));
         } else {
-            self.say(&format!("{CALL_MARKER} {}  {why}", activity.line()));
+            self.say(&format!("{CALL_MARKER} {why}"));
+            self.say(&format!("  {DETAIL_MARKER} {}", activity.line()));
         }
     }
 
@@ -261,9 +262,11 @@ mod tests {
                     .saying_why("find where the bound is set\nand a second line"),
             )
         });
+        let headline = written.find("find where the bound is set");
+        let call = written.find("Search(MAX_STEPS)");
         assert!(
-            written.contains("Search(MAX_STEPS)  find where the bound is set"),
-            "got: {written}"
+            headline.is_some() && call.is_some() && headline < call,
+            "the reason should head the call: {written}"
         );
         assert!(!written.contains("a second line"), "got: {written}");
     }

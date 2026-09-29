@@ -626,20 +626,23 @@ what the planner was about to rely on without opening the file or the command's 
 <a id="VIEW-25"></a>
 ### VIEW-25: a call is drawn with the reason the planner gave for it
 
-A call's row carries the planner's own line on what the call is for
-([TOOL-5](tools/tool-surface.md#TOOL-5)), after the call and dimmer than it, while the call runs and
-once it is over. A reason of several lines is drawn to its first, since the row is one line of a
-transcript and not a paragraph. A call given no reason is drawn with nothing after it.
+A call carries the planner's own line on what the call is for
+([TOOL-5](tools/tool-surface.md#TOOL-5)). In the interactive terminal and a headless run's progress
+it is the call's headline, and the call is drawn under it as a detail row ahead of what came of it,
+while the call runs and once it is over. A reason of several lines is drawn to its first, since the
+headline is one row of a transcript and not a paragraph. A call given no reason is headed by the
+call itself.
 
-The interactive terminal, a headless run's progress and the desktop window all draw it, and a
-resumed session draws each recorded call with the reason it was made with, as it draws the calls
-themselves under [VIEW-2](#VIEW-2).
+The desktop window draws the reason after the call on the call's own row. A resumed session draws
+each recorded call with the reason it was made with, as it draws the calls themselves under
+[VIEW-2](#VIEW-2).
 
 **Why.** The line before a round says what the step is for, and a round of calls made for
 different reasons was explained only as far as that one line went. The call's own reason is the
 one place left to say what each of them was for.
 
-`verified-by: bravebot_tui::render::a_call_is_drawn_with_the_reason_it_was_made`
+`verified-by: bravebot_tui::render::a_call_is_headed_by_the_reason_it_was_made`
+`verified-by: bravebot_tui::render::the_call_comes_before_its_result`
 `verified-by: bravebot_tui::render::a_call_with_no_reason_draws_nothing_beside_it`
 `verified-by: bravebot_tui::render::a_recalled_call_is_shown_with_its_reason`
 `verified-by: bravebot_cli::progress::a_call_is_printed_with_the_reason_it_was_made`
