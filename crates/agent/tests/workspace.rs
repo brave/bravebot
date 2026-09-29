@@ -153,6 +153,47 @@ fn a_second_spelling_of_a_distrusted_file_is_read_as_untrusted() {
     assert!(policy.finish());
 }
 
+/// On a filesystem that answers to either spelling of a name — macOS volumes are
+/// case-insensitive by default — a file read as `SRC/fetched.json` is the very file the
+/// distrust rule was written about, so the rule has to reach that spelling too, or a fetched
+/// page laundered into trusted content by nothing more than typing it in capitals.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_case_variant_spelling_of_a_distrusted_file_is_read_as_untrusted() {
+    let scratch = Scratch::new("case-spelled-past-a-rule");
+    std::fs::create_dir_all(scratch.path.join("src")).unwrap();
+    std::fs::write(scratch.path.join("src/fetched.json"), "a fetched page").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    // The state a turn leaves behind after writing a fetched page into a vouched-for tree: the
+    // workspace is trusted, and the file that page landed in is not.
+    let mut trust = TrustStore::new(workspace.root());
+    trust.trust(".");
+    trust.distrust("src/fetched.json");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust);
+
+    let case_variant = Labelled::trusted("SRC/fetched.json".to_string());
+    let contents = workspace
+        .read(&mut policy, &case_variant)
+        .expect("the same file is opened under either spelling on a case-insensitive filesystem");
+
+    assert_eq!(
+        contents.label().integrity,
+        Integrity::Untrusted,
+        "a case-variant spelling of the path laundered the fetched page into trusted content"
+    );
+    assert!(policy.finish());
+}
+
 /// The other half of that rule, at the spelling the reduction exists for. `/add-dir` will accept a
 /// directory the project sits inside, so from then on a project file has an absolute name that
 /// resolves through a directory other than the project. Asked under that name as written, a file

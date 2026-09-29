@@ -194,23 +194,49 @@ impl TrustStore {
         // Each lookup costs O(log rules), independent of unrelated paths.
         let mut prefix = path;
         while !prefix.is_empty() && prefix != "/" {
-            if let Some(decision) = self.rules.get(prefix) {
+            if let Some(decision) = self.rule_at(prefix) {
                 return Some(*decision);
             }
             prefix = prefix.rsplit_once('/').map_or("", |(parent, _)| parent);
         }
         // As in covers(), "/" covers even relative keys in a store with no root.
         // It wins the equal-specificity tie with the empty key.
-        self.rules
-            .get("/")
+        self.rule_at("/")
             .or_else(|| {
                 if is_absolute_key(path) {
                     None
                 } else {
-                    self.rules.get("")
+                    self.rule_at("")
                 }
             })
             .copied()
+    }
+
+    /// The decision recorded under `key`, reached however the key was spelled.
+    ///
+    /// A direct hit by the map's own keying first. On a host whose filesystem answers to either
+    /// spelling of a name (macOS and Windows, where case-insensitivity is the default), a
+    /// spelling that missed directly is then looked up case-insensitively: a rule written about
+    /// `src/fetched.json` decides the very same bytes read as `SRC/fetched.json`, and a probe
+    /// that could not see it would answer from the trusted rule above the file instead, the
+    /// laundering spelled-past-a-rule closes elsewhere. Folding can only ever reach a rule
+    /// already written — it never grants one — so on a deliberately case-sensitive volume it
+    /// errs toward more distrust, never less. Other hosts keep the map byte-exact, and the scan
+    /// this costs is bounded by the number of rules a person's decisions have actually written.
+    fn rule_at(&self, key: &str) -> Option<&Option<Integrity>> {
+        if let Some(decision) = self.rules.get(key) {
+            return Some(decision);
+        }
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        {
+            let folded = key.to_lowercase();
+            self.rules
+                .iter()
+                .find(|(rule, _)| rule.to_lowercase() == folded)
+                .map(|(_, decision)| decision)
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        None
     }
 
     /// The integrity of everything at or beneath `path`, by the meet of every rule that bears on
@@ -354,7 +380,18 @@ pub(crate) fn normalise(path: &str) -> String {
 ///
 /// Segment-wise so `src` does not cover `srcfoo`, which a plain string prefix test would
 /// wrongly accept, and that mistake would hand trust to a path the user never named.
+///
+/// On hosts whose filesystem treats path spellings differing only in case as one file (macOS
+/// and Windows, where case-insensitivity is the default), the comparison folds both spellings
+/// to lowercase: a distrust rule written about `src/fetched.json` must also reach the file
+/// opened as `SRC/fetched.json`, which names the same bytes there and would otherwise launder
+/// untrusted content past the rule, the same class of spelling bypass as git CVE-2014-9390.
+/// Folding may also equate two spellings that a deliberately case-sensitive volume (a
+/// case-sensitive APFS volume, say) would hold apart; that over-folds toward *more* distrust,
+/// never less, which is the safe direction. On other hosts the comparison stays byte-exact.
 pub(crate) fn covers(prefix: &str, path: &str) -> bool {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    let (prefix, path) = (prefix.to_lowercase(), path.to_lowercase());
     // The filesystem root covers everything, and is the one key with no segment of its own.
     if prefix == "/" {
         return true;
@@ -362,12 +399,12 @@ pub(crate) fn covers(prefix: &str, path: &str) -> bool {
     // The empty key is not a second one of those. It is what a map made against something that is
     // not a path keys its own root under, and a full path is never under such a root.
     if prefix.is_empty() {
-        return !is_absolute_key(path);
+        return !is_absolute_key(&path);
     }
     if path == prefix {
         return true;
     }
-    path.strip_prefix(prefix)
+    path.strip_prefix(prefix.as_str())
         .is_some_and(|rest| rest.starts_with('/'))
 }
 
@@ -636,6 +673,22 @@ mod tests {
                 "{spelling} missed the rule, so the workspace root rule decided instead"
             );
         }
+    }
+
+    /// On a host whose filesystem answers to either spelling of a name, two spellings differing
+    /// only in case name one file, so a rule written about one spelling has to reach the other:
+    /// the same bytes read under another spelling must not slip past the rule written about
+    /// them. Names that differ beyond case stay distinct.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[test]
+    fn a_rule_covers_a_case_variant_spelling_of_the_same_file() {
+        assert!(covers("src/fetched.json", "SRC/fetched.json"));
+        assert!(covers("src/fetched.json", "src/FETCHED.JSON"));
+        assert!(covers("SRC/fetched.json", "src/fetched.json"));
+
+        assert!(!covers("src/fetched.json", "SRC/other.json"));
+        assert!(!covers("src/fetched.json", "src/FETCHED.json.bak"));
+        assert!(!covers("src", "SRCFOO"));
     }
 
     /// Re-deciding must replace the earlier decision rather than accumulating rules whose
