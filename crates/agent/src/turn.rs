@@ -1406,6 +1406,8 @@ pub struct Outcome {
     /// The kernel's match rather than anything the reply says about itself, so an interface
     /// drawing the reply under a name is drawing the driver's word for it (ADDRESS-12).
     pub addressed: Option<bravebot_core::delegate::Addressed>,
+    /// Whether a loaded skill moved the turn's last rounds onto a model of its own (SKILL-15).
+    pub(crate) skill_chose_the_model: bool,
 }
 
 impl Outcome {
@@ -1415,6 +1417,20 @@ impl Outcome {
     /// recorded in the audit trail rather than happening implicitly after the fact.
     pub fn reply_for_display(&self) -> &str {
         &self.display
+    }
+
+    /// Whether the turn's last round was asked of the session's own model, so that a front end
+    /// may compare [`Outcome::model`] with it.
+    ///
+    /// False where an addressed definition or a loaded skill named the model. The turn has
+    /// already compared that model with the one that answered (ADDRESS-11, SKILL-15), and a
+    /// comparison with the session's would report a substitution that did not happen.
+    pub fn ran_on_the_sessions_model(&self) -> bool {
+        !self.skill_chose_the_model
+            && self
+                .addressed
+                .as_ref()
+                .is_none_or(|addressed| addressed.model().is_none())
     }
 }
 
@@ -2845,6 +2861,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // Beside the model and mutable for the same reason. The session's own until a skill names
         // one, and absence is every service keeping its own default.
         let mut effort = task.effort;
+        // The skill that last moved the turn onto its own model, and that model as its file wrote
+        // it, so the answer can be compared with it at the end of the turn (SKILL-15).
+        let mut switched_by: Option<(String, String)> = None;
 
         // A delegate's is its kind's, and the planner cannot write a word of it: what it chose was a
         // name out of an enumerated set, and the set is the driver's. What both prompts share is the
@@ -3842,6 +3861,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         // Shown before the next round and kept in the turn's notices (SKILL-11),
                         // because the switch decides what that round costs.
                         if let Some((skill, runs_as)) = output.loaded.take() {
+                            let before = turn_model.clone();
                             for said in adopt(
                                 &mut turn_model,
                                 &mut effort,
@@ -3852,6 +3872,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                             ) {
                                 reporter.notice(said.clone());
                                 notices.push(crate::skills::Notice::from_message(said));
+                            }
+                            if turn_model != before {
+                                switched_by = runs_as.model.map(|written| (skill, written));
                             }
                         }
                         // As with a context file: what the turn has seen belongs to the conversation the
@@ -4577,6 +4600,20 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                 notices.push(crate::skills::Notice::from_message(said));
             }
         }
+        // The same comparison for a model a loaded skill moved the turn onto, naming the skill and
+        // the model as its file wrote it (SKILL-15). A delegate's turn is covered here too.
+        if let Some((skill, written)) = &switched_by {
+            let resolved = turn_model.as_deref().unwrap_or(&config.default_model);
+            let asked = crate::backend::Backend::name_as_asked(config, resolved);
+            if crate::backend::Backend::reports_the_model_it_was_asked_for(config, resolved)
+                && asked != bravebot_config::DEFAULT_MODEL
+                && asked != completion.model
+            {
+                let said = t!(skill_model_substituted, skill = skill, model = written);
+                reporter.notice(said.clone());
+                notices.push(crate::skills::Notice::from_message(said));
+            }
+        }
 
         // Released while the policy is open, so the audit trail records that the reply was
         // shown rather than leaving the release invisible.
@@ -4647,6 +4684,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             notices: notices.into_iter().map(|n| n.message).collect(),
             attempt: None,
             addressed,
+            skill_chose_the_model: switched_by.is_some(),
         })
     })();
     let decisions = Decisions {

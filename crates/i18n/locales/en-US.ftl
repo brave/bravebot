@@ -2118,6 +2118,9 @@ skill-model-needs-sign-in = { $skill } asks for { $model }, which needs a sign-i
 # The turn runs on a model an addressed or delegate definition named, which a skill does not
 # replace. The definition is its name as the person or the planner wrote it.
 skill-model-kept-for-definition = { $skill } asks for { $model }, but this turn stays on the model { $definition } named
+# The endpoint answered the rounds after a skill's switch with another model, which it does rather
+# than refuse a name it will not serve. The model is the skill file's own word for it.
+skill-model-substituted = { $skill } asked for { $model } and was answered by a different model
 
 # Advisory checks shown only in a Bravebot source checkout.
 doctor-development = development environment { $path }

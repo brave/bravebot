@@ -22,4 +22,5 @@ fr:skill-asks-an-effort
 fr:skill-effort-not-a-level
 fr:skill-model-kept-for-definition
 fr:skill-model-needs-sign-in
+fr:skill-model-substituted
 fr:status-undecided

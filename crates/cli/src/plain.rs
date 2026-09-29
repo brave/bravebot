@@ -499,7 +499,12 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
                 failure: None,
                 notices: outcome.notices.clone(),
                 clean: outcome.clean,
-                not_served: self.substituted(&outcome.model),
+                // Not for a turn a skill moved onto its own model, which the turn compared
+                // itself (SKILL-15).
+                not_served: outcome
+                    .ran_on_the_sessions_model()
+                    .then(|| self.substituted(&outcome.model))
+                    .flatten(),
             },
             // From the reporter rather than the outcome, there being no outcome: a turn that could
             // not run still said what its hooks did, and those sentences are the person's own to

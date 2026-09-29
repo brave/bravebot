@@ -6989,15 +6989,10 @@ fn fold_outcome(
             // full the context is now.
             session.measured(outcome.context_tokens, occupied.budget, occupied.guessed);
 
-            // Not for a turn that ran on a model its definition named: the session did not ask
-            // for that one, so comparing it to the session's would report a substitution nobody
-            // made, and the turn has already said whether the definition got the model it asked
-            // for (ADDRESS-11).
-            if outcome
-                .addressed
-                .as_ref()
-                .is_none_or(|addressed| addressed.model().is_none())
-            {
+            // Not for a turn whose last rounds ran on a model a definition or a skill named: the
+            // turn has already compared that one with the model that answered (ADDRESS-11,
+            // SKILL-15).
+            if outcome.ran_on_the_sessions_model() {
                 record_the_model_that_answered(session, asked, &outcome.model, outcome.premium);
             }
             // Where the turn was a tick, this is what arms the next one: an interval from the

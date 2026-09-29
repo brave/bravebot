@@ -54,6 +54,9 @@ A skill does not replace a model that a definition named. When you address a def
 a model, or a delegate's definition names one, a skill loaded in that turn keeps the definition's
 model and the session says so. The skill's `effort` still applies.
 
+If the service answers a skill's rounds with a different model than the one the skill named, which
+it does for a misspelt name or a premium model with no subscription in hand, the session says so.
+
 A value that cannot be used is reported and the skill still loads, on whatever the session was
 already running: a level spelled some other way, or a model needing a sign-in this machine has not
 made.

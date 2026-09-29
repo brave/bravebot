@@ -31973,6 +31973,10 @@ fn a_skill_naming_neither_key_leaves_the_session_its_own_choice() {
         "a skill that asked for nothing was reported as a switch: {:?}",
         outcome.notices
     );
+    assert!(
+        outcome.ran_on_the_sessions_model(),
+        "a turn on the session's own model was kept from the session's comparison"
+    );
 }
 
 /// A skill naming a model this machine has not signed in to is said and the skill still loads, on
@@ -32175,6 +32179,150 @@ fn a_skill_loaded_by_a_delegate_keeps_its_definitions_model() {
         reporter.notices.iter().any(|said| said
             == "dear asks for opus, but this turn stays on the model cheap-reader named"),
         "the person was not told the skill's model was not used: {:?}",
+        reporter.notices
+    );
+}
+
+/// A turn a skill moved onto its own model and answered by that model reports no substitution,
+/// and the front ends are told not to compare the answer with the session's model, which was not
+/// what the last rounds asked for.
+#[test]
+fn a_skill_answered_by_its_own_model_is_not_reported_as_a_substitution() {
+    let scratch = Scratch::new("skill-model-served");
+    write_project_skill_declaring(&scratch.path, "cheap", "model: haiku\n");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let haiku = config_for("http://unused.invalid").model_named("haiku");
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("load_skill", r#"{"name":"cheap"}"#),
+        reply_with("understood").replace("test-model", &haiku),
+    ]);
+    let config = config_for(&endpoint);
+
+    let outcome = turn::run_with_trust(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("do the work").with_model(Some("claude-3-sonnet".to_string())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        outcome.model, haiku,
+        "the reply did not come from the skill's model"
+    );
+    assert!(
+        !outcome.ran_on_the_sessions_model(),
+        "a front end would compare the skill's model with the session's"
+    );
+    assert!(
+        !outcome
+            .notices
+            .iter()
+            .any(|said| said.contains("answered by a different model")),
+        "a model that answered as asked was reported as substituted: {:?}",
+        outcome.notices
+    );
+}
+
+/// The endpoint substitutes a model it will not serve rather than refusing it, so a skill naming
+/// one is told so, with the model as its file wrote it.
+#[test]
+fn a_skill_answered_by_a_model_other_than_its_own_says_so() {
+    let scratch = Scratch::new("skill-model-substituted");
+    write_project_skill_declaring(
+        &scratch.path,
+        "typo",
+        "model: a-model-the-service-does-not-hold\n",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("load_skill", r#"{"name":"typo"}"#),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+
+    let outcome = turn::run_with_trust(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("do the work").with_model(Some("claude-3-sonnet".to_string())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert!(
+        outcome.notices.iter().any(|said| said
+            == "typo asked for a-model-the-service-does-not-hold and was answered by a \
+                different model"),
+        "the substitution was not reported: {:?}",
+        outcome.notices
+    );
+}
+
+/// The same for a delegate whose definition names no model: the skill it loads is the only thing
+/// that named the model its last rounds ran on.
+#[test]
+fn a_skill_loaded_by_a_delegate_and_answered_by_another_model_says_so() {
+    let scratch = Scratch::new("skill-under-delegate-substituted");
+    let home = Scratch::new("skill-under-delegate-substituted-home");
+    define(&home, "plain-reader", "kind: reader\n", "READ");
+    write_project_skill_declaring(
+        &scratch.path,
+        "typo",
+        "model: a-model-the-service-does-not-hold\n",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "DELEGATE-TO-PLAIN-READER",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"plain-reader","task":"CHECK-WITH-A-SKILL"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("delegate finished"),
+            ],
+        ),
+        (
+            "CHECK-WITH-A-SKILL",
+            vec![
+                tool_request("load_skill", r#"{"name":"typo"}"#),
+                reply_with("clear"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("DELEGATE-TO-PLAIN-READER")
+            .with_home(Some(home.path.clone()))
+            .with_model(Some("custom-parent-model".to_string())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert!(
+        reporter.notices.iter().any(|said| said
+            == "typo asked for a-model-the-service-does-not-hold and was answered by a \
+                different model"),
+        "the delegate's substitution was not reported: {:?}",
         reporter.notices
     );
 }

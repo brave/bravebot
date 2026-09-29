@@ -248,6 +248,13 @@ the notice names the skill, the model it asked for, and the definition. Both spe
 as a cost boundary the definition's file drew, and a skill the planner loads during the turn is not
 a choice the person made. The skill's `effort` still applies, since a definition names none.
 
+**A skill's model is compared with the model that answered.** The endpoint substitutes a model it
+will not serve rather than refusing it, so where the rounds after a switch are answered by another
+model, the turn says so, naming the skill and the model as its file wrote it. This holds in a
+delegate's turn too. The front end does not compare that answer with the session's own model, which
+those rounds did not ask for, and a one-shot run whose command line named a model does not fail
+over it.
+
 A delegate spawned after a skill switched the model is lent the model in force when it started,
 unless its own definition names one.
 
@@ -258,6 +265,9 @@ unless its own definition names one.
 `verified-by: bravebot_agent::turn::a_skill_naming_neither_key_leaves_the_session_its_own_choice`
 `verified-by: bravebot_agent::turn::a_skill_loaded_by_an_addressed_definition_keeps_the_definitions_model`
 `verified-by: bravebot_agent::turn::a_skill_loaded_by_a_delegate_keeps_its_definitions_model`
+`verified-by: bravebot_agent::turn::a_skill_answered_by_its_own_model_is_not_reported_as_a_substitution`
+`verified-by: bravebot_agent::turn::a_skill_answered_by_a_model_other_than_its_own_says_so`
+`verified-by: bravebot_agent::turn::a_skill_loaded_by_a_delegate_and_answered_by_another_model_says_so`
 
 <a id="SKILL-16"></a>
 ### SKILL-16: a value that cannot be used is reported and the skill still loads
@@ -295,9 +305,9 @@ is read.
   user vouched for. Read one before installing it.
 
 - **A subscription is looked for once per turn, from the model the turn starts on, so a skill that
-  moves the rounds onto a model needing one finds none in hand.** The endpoint substitutes a model it
-  will not serve rather than refusing, so such a round is answered by a weaker model than the file
-  asked for and nothing says so. It bites only where the model the turn started on spends no
-  subscription and the one a skill names does. Looking for one up front because some skill in the
-  directory names a premium model would read the credential store, and report an unreadable batch, on
-  every turn in that project including the ones that never load it.
+  moves the rounds onto a model needing one finds none in hand.** Such a round is answered by a
+  weaker model than the file asked for, and the turn reports the substitution per
+  [SKILL-15](#SKILL-15). It happens only where the model the turn started on needs no subscription
+  and the one a skill names does. Looking for one up front because some skill in the directory names
+  a premium model would read the credential store, and report an unreadable batch, on every turn in
+  that project, including the ones that never load it.

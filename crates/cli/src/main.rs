@@ -877,7 +877,12 @@ fn run_task(args: &[String], skip_permissions: bool) -> ExitCode {
             let comparable = bravebot_agent::backend::Backend::reports_the_model_it_was_asked_for(
                 &config, &model,
             );
-            let not_served = model_not_served(&asked, comparable, &outcome.model);
+            // Not for a turn a skill moved onto its own model, which the turn compared itself
+            // (SKILL-15). The command line did not name that model, so it does not fail the run.
+            let not_served = outcome
+                .ran_on_the_sessions_model()
+                .then(|| model_not_served(&asked, comparable, &outcome.model))
+                .flatten();
 
             let ending = ending_of_a_turn(
                 outcome.clean,
