@@ -72,3 +72,16 @@ against, the security scan, configuration, releasing, and how an issue is titled
 [docs/best_practices.md](docs/best_practices.md) is what a pull request is reviewed against,
 and holds only rules a person has to read a diff to decide. A rule a tool enforces or could enforce
 is a check, not an entry there.
+
+## Writing
+
+Write docs, specs, comments, commit messages, pull requests and issues as plain statements: what
+is true, what changed, what to do. Use the words you would use explaining it to another engineer.
+
+- Be succinct unless told otherwise. Say it once, in as few words as keep it clear.
+- No aphorisms, metaphors or personified abstractions. "Each advisory is a question about
+  bravebot, and nothing in the tree asks it" should be "bravebot may have the same defects, so
+  each advisory should be checked against it. Nothing checks them today."
+- No rhetorical setups: no "not X but Y" contrast, no short punchline sentence after a long one,
+  no colon placed to hold back the point for effect.
+- If a reader has to reread a sentence to find its claim, rewrite it as the claim.
