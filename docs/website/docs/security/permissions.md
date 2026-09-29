@@ -122,7 +122,7 @@ Four things can answer the run prompt, and nothing else:
 2. **you pressed `r`** for that exact line, in this directory, in this or an earlier session;
 3. **a rule you wrote in advance** covers the line, which stops the asking and raises no label;
 4. **a proof about a program's options**, which covers a short list of audited reading commands and is
-   [`run`](../reference/tools.md#a-line-that-only-reads-what-you-vouched-for-does-not-ask): where every
+   [`run`](../reference/run-tool.md#a-line-that-only-reads-what-you-vouched-for-does-not-ask): where every
    step of a line is one of those, writes nothing, and reads only paths you vouched for, the line runs
    unasked and its output comes back as text.
 
@@ -165,7 +165,7 @@ contains is not consenting to send it somewhere.
 A line reaches that gate two ways: the planner names a quarantined reference and bravebot supplies the
 bytes, or the line redirects a file in with `<`. A file's bytes are your own data whatever the trust
 map says about the path, so `run cat < ~/.ssh/id_rsa` asks even where you have vouched for `cat` and
-even where a rule allows the line. See [`run`](../reference/tools.md#a-redirection-is-a-write).
+even where a rule allows the line. See [`run`](../reference/run-tool.md#a-redirection-is-a-write).
 
 :::note
 The vouched-for list is **not an allowlist** and must never become one. It never decides what may run:
@@ -178,7 +178,7 @@ Programs are not confined. They run with the access your own shell would give th
 needs `~/.ssh` and the set of programs someone might ask for cannot be listed in advance. The one
 exception is bravebot's **own** credentials, which are withheld from every program it runs: you
 approve an argv, never an environment, so a credential travelling alongside one would be handed over
-without your having seen it. See [`run`](../reference/tools.md#what-a-program-is-handed).
+without your having seen it. See [`run`](../reference/run-tool.md#what-a-program-is-handed).
 
 ## Remembering a line past the session
 
@@ -356,7 +356,7 @@ word that objects refuses. The vouch offer reads no word in this mode either way
 
 **Command output can come back in the result that ran it.** What a run prints is still quarantined in
 this mode, but with no check asked for, `read_output` releases it without showing it to anybody. So a
-run that sets [`read: true`](../reference/tools.md#reading-the-output-in-the-same-result) gets the
+run that sets [`read: true`](../reference/run-tool.md#reading-the-output-in-the-same-result) gets the
 output at once, unless it is longer than one result may hold, and the audit trail records the release
 as the mode's, as it would for `read_output`.
 With `--vet` the check still reads it first, through `read_output`, and `read` changes nothing.

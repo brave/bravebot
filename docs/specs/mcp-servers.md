@@ -22,7 +22,9 @@ governs:
   - crates/cli/src/plain.rs
   - crates/tui/src/confirm.rs
   - crates/tui/src/status.rs
-documented-by: docs/website/docs/customize/mcp-servers.md
+documented-by:
+  - docs/website/docs/customize/mcp-servers.md
+  - docs/website/docs/customize/mcp/gmail.md
 ---
 
 ## Scope

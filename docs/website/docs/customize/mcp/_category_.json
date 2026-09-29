@@ -1,0 +1,8 @@
+{
+  "label": "Connecting an MCP server",
+  "position": 8,
+  "link": {
+    "type": "generated-index",
+    "description": "Step-by-step setups for particular servers."
+  }
+}

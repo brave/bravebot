@@ -13,7 +13,9 @@ governs:
   - crates/tui/src/config_prompt.rs
   - crates/tui/src/keybindings.rs
   - crates/config/src/settings.rs
-documented-by: docs/website/docs/using/interactive-mode.md
+documented-by:
+  - docs/website/docs/using/interactive-mode.md
+  - docs/website/docs/using/vi-mode.md
 ---
 
 ## Scope

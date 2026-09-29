@@ -400,7 +400,7 @@ All of these are deliberate.
   watching the filesystem: by the time anything noticed, the question would be whether to distrust a
   file you may have created yourself, and asking that on every change would make the map useless.
 
-  A [redirection](../reference/tools.md#a-redirection-is-a-write) is the one exception, because
+  A [redirection](../reference/run-tool.md#a-redirection-is-a-write) is the one exception, because
   bravebot opens that file itself: what a line writes through `>` or `>>` is recorded, so a program's
   output redirected into a vouched-for tree marks the path it landed on untrusted. A file the program
   opens on its own, which is `cmd -o notes.txt` or anything a build writes, is not.
