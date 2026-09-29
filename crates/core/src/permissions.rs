@@ -469,8 +469,14 @@ impl Permissions {
     /// The host alone, never the path or the query: those are where a URL carries what somebody
     /// asked for, and a rule matching on them would be answering a different question each time.
     pub fn for_host(&self, host: &str) -> Decision {
+        // A URL may spell a fully-qualified name with a trailing dot; that dot is spelling, not a
+        // label, and a rule about `example.com` is about the same host either way.
         let host = host.to_ascii_lowercase();
-        self.decide(|rule, _| rule.subject == Subject::WebFetch && rule.covers_host(&host))
+        let host = host.strip_suffix('.').unwrap_or(&host);
+        if host.is_empty() {
+            return Decision::Unmatched;
+        }
+        self.decide(|rule, _| rule.subject == Subject::WebFetch && rule.covers_host(host))
     }
 
     /// What the rules say about calling `tool` of the server declared as `alias`.
@@ -1467,6 +1473,39 @@ mod tests {
             permissions.for_command("type C:/secrets.txt"),
             Decision::Unmatched,
             "a command rule matched a line it does not name"
+        );
+    }
+
+    /// A fully-qualified spelling of a host carries a trailing dot, and a rule about the domain
+    /// decides the same host either way; the dot is spelling, not a label.
+    #[test]
+    fn a_domain_rule_matches_the_trailing_dot_spelling() {
+        let permissions = rules(&["WebFetch(domain:example.com)"], &[], &[]);
+        assert_eq!(
+            permissions.for_host("example.com."),
+            Decision::Ruled(Ruling::Deny),
+            "the FQDN spelling was not covered"
+        );
+        for host in ["notexample.com", "example.com.evil.test"] {
+            assert_eq!(
+                permissions.for_host(&format!("{host}.")),
+                Decision::Unmatched,
+                "{host} was matched by a rule about example.com"
+            );
+        }
+        assert_eq!(
+            permissions.for_host("docs.example.com."),
+            Decision::Ruled(Ruling::Deny)
+        );
+    }
+
+    /// The dot is stripped from the host before it reaches the rules, spelled in any case.
+    #[test]
+    fn for_host_strips_the_trailing_dot_and_ignores_case() {
+        let permissions = rules(&[], &[], &["WebFetch(domain:EVIL.example)"]);
+        assert_eq!(
+            permissions.for_host("EVIL.example."),
+            Decision::Ruled(Ruling::Allow)
         );
     }
 }
