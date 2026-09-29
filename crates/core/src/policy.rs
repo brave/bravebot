@@ -4864,6 +4864,21 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
     }
 
+    /// Record that `path` is untrusted because a write in an earlier session left it so.
+    ///
+    /// The path comes from a record kept in the person's own directory rather than in the
+    /// checkout it names, so nothing in the checkout decides it, and it can only lower the map.
+    /// Every run starting reads the record again, so a path already distrusted by a rule of its
+    /// own is left as it is, and said once.
+    pub fn distrust_remembered(&mut self, path: &str) {
+        if self.trust.distrust_unless_distrusted(path) {
+            self.allow(
+                "trust",
+                format!("{path} untrusted: a write in an earlier session left it so"),
+            );
+        }
+    }
+
     /// Vouch for `path` only if nothing has decided about it since `shown_at`.
     ///
     /// A preview is what the answer was about. If that path, or a tree above it, was decided about
@@ -11930,6 +11945,54 @@ five
             Integrity::Untrusted,
             "a second spelling of the path laundered the write into trusted content"
         );
+    }
+
+    /// MEMORY-5: every run that starts distrusts the recorded memories again, a delegate's
+    /// included. A path a rule of its own already distrusts is left alone: the revision stays
+    /// where it was, so a command started earlier is not quarantined by a decision that changed
+    /// nothing, and the trail says it once. A path with no rule of its own, or one trusting it,
+    /// is distrusted.
+    #[test]
+    fn a_remembered_path_already_distrusted_is_left_as_it_is_and_said_once() {
+        let mut sink = RecordingSink::new();
+        let mut policy = policy_trusting(&mut sink, &[]);
+        let authority = policy.file_authority();
+
+        let before = authority.revision();
+        policy.distrust_remembered(".bravebot/memory/notes.md");
+        let once = authority.revision();
+        assert_ne!(
+            once, before,
+            "a path nothing ruled on was left without a rule"
+        );
+        policy.distrust_remembered("/work/.bravebot/memory/notes.md");
+        assert_eq!(
+            authority.revision(),
+            once,
+            "a decision already in force moved the revision"
+        );
+        authority.publish("/work", Integrity::Trusted);
+        assert!(
+            policy.read_is_quarantined(".bravebot/memory/notes.md"),
+            "trusting the directory later trusted a recorded memory"
+        );
+
+        authority.publish(".bravebot/memory/notes.md", Integrity::Trusted);
+        policy.distrust_remembered(".bravebot/memory/notes.md");
+        assert!(
+            policy.read_is_quarantined(".bravebot/memory/notes.md"),
+            "a rule trusting the path was taken for one distrusting it"
+        );
+        drop(policy);
+
+        let said = sink
+            .events()
+            .iter()
+            .filter(|e| {
+                matches!(e, Event::GatePassed { gate: "trust", detail } if detail.contains("left it so"))
+            })
+            .count();
+        assert_eq!(said, 2, "{:?}", sink.events());
     }
 
     /// Model output is labelled at its context's integrity. With a clean context that is

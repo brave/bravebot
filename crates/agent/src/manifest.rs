@@ -535,6 +535,13 @@ pub fn run<S: Sink, C: Confirmer, R: Reporter>(
     // this sees both. `execute` fills in the parts and cannot know when the run began.
     let began = std::time::Instant::now();
 
+    // As a turn's are, and for the same reason (MEMORY-5): a step can write a definition's
+    // memory, and one an earlier session left untrusted is read back untrusted here too.
+    let workspace = &workspace.clone().keeping_memories(task.home.clone());
+    for path in crate::memory::recorded(workspace, task.home.as_deref()) {
+        trust.distrust(&path);
+    }
+
     let mut subscription =
         crate::turn::discover_subscription(config, egress, task.model.as_deref(), reporter);
 

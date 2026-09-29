@@ -57,6 +57,7 @@ enum Read {
     Definition {
         definition: Box<Definition>,
         declares_servers: bool,
+        no_memory: Option<NoMemory>,
     },
     /// Not a definition at all: no `name`, so nothing claimed to be one.
     ///
@@ -70,6 +71,14 @@ enum Read {
     /// Apart from [`Read::Skipped`] because it is said as a message of the catalogue's, whole,
     /// rather than as an English reason placed into one.
     NotACount,
+}
+
+/// Why a definition that asked to keep a memory keeps none, which its author is told.
+enum NoMemory {
+    /// Its `memory:` value is neither `project` nor `local`, as the file wrote it.
+    Value(String),
+    /// Its name is not one a file can be named after.
+    Name,
 }
 
 /// Read one definition out of the text of a file.
@@ -148,9 +157,29 @@ fn read_definition(text: &str, origin: &str) -> Read {
         definition = definition.with_rounds(rounds);
     }
 
+    // `project` and `local` are one file here, since whether it is committed is the person's to
+    // decide. Any other value, `user` included, loads the definition keeping nothing, because a
+    // definition written for another agent would otherwise be lost over where its notes go, and
+    // is said, because its author believes a memory is kept.
+    let mut no_memory = None;
+    if let Some(value) = declared
+        .get("memory")
+        .map(String::as_str)
+        .filter(|m| !m.is_empty())
+    {
+        match value {
+            "project" | "local" if crate::memory::is_a_slug(name) => {
+                definition = definition.with_memory();
+            }
+            "project" | "local" => no_memory = Some(NoMemory::Name),
+            other => no_memory = Some(NoMemory::Value(other.to_string())),
+        }
+    }
+
     Read::Definition {
         definition: Box::new(definition),
         declares_servers,
+        no_memory,
     }
 }
 
@@ -261,6 +290,18 @@ pub fn discover<S: Sink>(
     }
     discover_workspace(policy, workspace, &mut definitions, &mut notices);
     notices.extend(rounds_held_to_their_kind(&definitions));
+    // Asked once every file is in, since a later definition of a name takes its key over. A
+    // memory inside the person's own directory is one the map does not govern, so no write and no
+    // record could leave it untrusted.
+    if crate::memory::kept_in_home(workspace.root(), home) {
+        for definition in definitions.iter().filter(|d| d.keeps_memory()) {
+            notices.push(Notice::from_message(t!(
+                delegate_memory_in_home,
+                definition = definition.origin()
+            )));
+        }
+        definitions.keep_no_memory();
+    }
 
     (definitions, notices)
 }
@@ -392,12 +433,25 @@ fn admit(read: Read, origin: &str, definitions: &mut Definitions, notices: &mut 
         Read::Definition {
             definition,
             declares_servers,
+            no_memory,
         } => {
             if declares_servers {
                 notices.push(Notice::from_message(t!(
                     delegate_servers_declared,
                     definition = origin
                 )));
+            }
+            match no_memory {
+                Some(NoMemory::Value(value)) => notices.push(Notice::from_message(t!(
+                    delegate_memory_not_kept,
+                    definition = origin,
+                    value = value
+                ))),
+                Some(NoMemory::Name) => notices.push(Notice::from_message(t!(
+                    delegate_memory_not_a_slug,
+                    definition = origin
+                ))),
+                None => {}
             }
             match definitions.insert(*definition) {
                 Admitted::AsWritten => return,
@@ -1039,6 +1093,134 @@ mod tests {
                 "test asks for 500 rounds, more than the 120 a reader may make, so its delegate is \
               given 120"
             ]
+        );
+    }
+
+    /// What a file with one `memory:` line is admitted as, and what its author is told of it.
+    fn admitted_with_memory(name: &str, line: &str) -> (Option<bool>, Vec<String>) {
+        let origin = format!(".bravebot/agents/{name}.md");
+        let mut definitions = Definitions::default();
+        let mut notices = Vec::new();
+        admit(
+            read_definition(
+                &format!("---\nname: {name}\ndescription: d\nkind: worker\n{line}---\n\nbody\n"),
+                &origin,
+            ),
+            &origin,
+            &mut definitions,
+            &mut notices,
+        );
+        (
+            definitions.get(name).map(Definition::keeps_memory),
+            notices.into_iter().map(|notice| notice.message).collect(),
+        )
+    }
+
+    /// MEMORY-2: `project` and `local` both keep a memory, since whether the file is committed is
+    /// the person's to decide, and an empty or absent line keeps none and says nothing.
+    #[test]
+    fn a_definition_keeping_its_memory_in_the_project_or_locally_keeps_one() {
+        for line in [
+            "memory: project\n",
+            "memory: local\n",
+            "memory:   local  \n",
+        ] {
+            assert_eq!(
+                admitted_with_memory("notes-keeper", line),
+                (Some(true), vec![]),
+                "{line}"
+            );
+        }
+        for line in ["memory:\n", ""] {
+            assert_eq!(
+                admitted_with_memory("notes-keeper", line),
+                (Some(false), vec![]),
+                "{line:?}"
+            );
+        }
+    }
+
+    /// MEMORY-2: any other value, `user` included, loads the definition keeping nothing, so one
+    /// written for another agent still runs, and says so, since its author believes a memory is
+    /// kept. The value is said as written, so a case slip is visible.
+    #[test]
+    fn a_memory_value_nothing_here_keeps_loads_the_definition_and_says_it_keeps_none() {
+        for value in ["user", "Project", "yes", "true", "project local"] {
+            assert_eq!(
+                admitted_with_memory("notes-keeper", &format!("memory: {value}\n")),
+                (
+                    Some(false),
+                    vec![format!(
+                        ".bravebot/agents/notes-keeper.md keeps no memory: its memory line says \
+                         {value}, and only project and local keep one"
+                    )]
+                ),
+                "{value}"
+            );
+        }
+    }
+
+    /// MEMORY-3: the name becomes the memory's file name, so a definition whose name is no slug
+    /// loads keeping none rather than naming a file somewhere else, and says why.
+    #[test]
+    fn a_definition_whose_name_is_no_slug_keeps_no_memory_and_says_why() {
+        for name in ["Notes", "notes_keeper", "notes--keeper", "n\u{f6}tes"] {
+            assert_eq!(
+                admitted_with_memory(name, "memory: project\n"),
+                (
+                    Some(false),
+                    vec![format!(
+                        ".bravebot/agents/{name}.md keeps no memory: a definition keeping one \
+                         needs a name of lowercase letters and digits in runs joined by single \
+                         hyphens, 64 characters at most"
+                    )]
+                ),
+                "{name}"
+            );
+        }
+    }
+
+    /// MEMORY-2: a session whose working directory puts the memory inside `~/.bravebot` keeps
+    /// none, since the map does not govern that directory and no record could leave it
+    /// untrusted. One beside it keeps its memory where it is.
+    #[test]
+    fn a_memory_that_would_sit_in_the_state_directory_is_kept_in_home() {
+        let root = crate::testutil::scratch_dir("memory-kept-in-home");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        let home = root.join(".bravebot");
+        std::fs::create_dir_all(&home).unwrap();
+
+        let kept = crate::memory::kept_in_home(&root, Some(&home));
+        let beside = crate::memory::kept_in_home(&root.join("sub"), Some(&home));
+        let nowhere = crate::memory::kept_in_home(&root, None);
+        #[cfg(unix)]
+        let linked = {
+            use std::os::unix::fs::symlink;
+            let through = root.join("through");
+            symlink(&root, &through).unwrap();
+            std::fs::create_dir_all(root.join("project")).unwrap();
+            symlink(&home, root.join("project/.bravebot")).unwrap();
+            std::fs::create_dir_all(root.join("checkout/.bravebot")).unwrap();
+            std::fs::create_dir_all(home.join("kept")).unwrap();
+            symlink(home.join("kept"), root.join("checkout/.bravebot/memory")).unwrap();
+            [
+                crate::memory::kept_in_home(&through, Some(&home)),
+                crate::memory::kept_in_home(&root, Some(&through.join(".bravebot"))),
+                crate::memory::kept_in_home(&root.join("project"), Some(&home)),
+                crate::memory::kept_in_home(&root.join("checkout"), Some(&home)),
+            ]
+        };
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert!(kept, "the home directory's memory is inside ~/.bravebot");
+        assert!(!beside, "a subdirectory's memory is its own");
+        assert!(!nowhere, "with no state directory nothing is inside one");
+        #[cfg(unix)]
+        assert_eq!(
+            linked, [true; 4],
+            "a memory reaching ~/.bravebot through a link was not seen as inside it: the \
+             directory, the state directory, .bravebot and .bravebot/memory each through one"
         );
     }
 }

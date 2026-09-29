@@ -305,6 +305,12 @@ pub struct Definition {
     /// `None` is the kind's own bound. Held to the kind's ceiling where it is read rather than
     /// where it is set, so a replacement loaded as a narrower kind is held to that kind's.
     rounds: Option<usize>,
+    /// Whether a run under it keeps a memory, a file in the working directory named after it.
+    ///
+    /// Set only for a name a path segment can be made of, which is decided where the file is read.
+    /// Taken over with the body by a later definition of the same name, since a memory changes
+    /// what a run knows and never what it may do.
+    memory: bool,
     /// The standing part of what a delegate of this name is told about itself.
     ///
     /// Empty where the file had no body. Carried rather than read: the kernel never branches on
@@ -327,6 +333,7 @@ impl Definition {
             skills: None,
             servers: None,
             rounds: None,
+            memory: false,
             prompt: String::new(),
             origin: "built-in".to_string(),
         }
@@ -350,6 +357,7 @@ impl Definition {
             skills: None,
             servers: None,
             rounds: None,
+            memory: false,
             prompt: prompt.into(),
             origin: origin.into(),
         }
@@ -426,6 +434,17 @@ impl Definition {
     /// Ask for this many rounds, which its kind's ceiling still holds.
     pub fn with_rounds(mut self, rounds: usize) -> Self {
         self.rounds = Some(rounds);
+        self
+    }
+
+    /// Whether a run under it keeps a memory.
+    pub fn keeps_memory(&self) -> bool {
+        self.memory
+    }
+
+    /// Keep a memory for runs under it. The caller has held the name to a slug.
+    pub fn with_memory(mut self) -> Self {
+        self.memory = true;
         self
     }
 
@@ -622,10 +641,10 @@ impl Definitions {
     /// [INSTR-4]: https://github.com/brave/bravebot/blob/main/docs/specs/instructions.md
     ///
     /// **Last word about what a name is for, and never about what it may do.** A replacement
-    /// takes over the description, the body, the model, the skills and the rounds, and is cut
-    /// down on the three fields that decide what it may do: it is loaded as the narrower of the
-    /// two kinds, its `tools:` line is met with the one it replaced, and so are the servers it
-    /// selects. So a project cannot turn a `reader` a person wrote into a `worker`, and cannot
+    /// takes over the description, the body, the model, the skills, the rounds and the memory,
+    /// and is cut down on the three fields that decide what it may do: it is loaded as the
+    /// narrower of the two kinds, its `tools:` line is met with the one it replaced, and so are
+    /// the servers it selects. So a project cannot turn a `reader` a person wrote into a `worker`, and cannot
     /// hand back a tool or a server that person's own definition had taken away. Widening it
     /// would make the checked-in file the author of authority rather than the person who
     /// vouched for the checkout, which is the sentence [`Definition`] is built around, and the
@@ -635,6 +654,9 @@ impl Definitions {
     /// The skills are taken over rather than met because a skill is guidance, as the body is: a
     /// list of them chooses which of the turn's own skills a delegate is told about, and the turn
     /// found every one of those whichever file named them.
+    ///
+    /// The memory is taken over for the same reason as the body: it changes what a run knows and
+    /// never what it may do, since keeping one adds no tool.
     ///
     /// The rounds are taken over because a bound is not authority: a gate refuses on the last
     /// round what it refuses on the first. They are still held to the ceiling of the kind the
@@ -725,6 +747,14 @@ impl Definitions {
 
     pub fn iter(&self) -> impl Iterator<Item = &Definition> {
         self.entries.iter()
+    }
+
+    /// Keep no memory for any of them, where the directory a memory would be kept in is one no
+    /// write could leave untrusted.
+    pub fn keep_no_memory(&mut self) {
+        for entry in &mut self.entries {
+            entry.memory = false;
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -879,6 +909,8 @@ pub struct DelegateSpec {
     skills: Option<Vec<String>>,
     /// The standing part of what it is told about itself, from the definition that selected it.
     prompt: String,
+    /// Whether the definition that selected it keeps a memory.
+    memory: bool,
     task: String,
     capabilities: CapabilitySet,
     rounds: usize,
@@ -913,6 +945,7 @@ impl DelegateSpec {
             tools,
             skills: definition.skills().map(<[String]>::to_vec),
             prompt: definition.prompt().to_string(),
+            memory: definition.keeps_memory(),
             task: task.into(),
             capabilities,
             rounds,
@@ -974,6 +1007,11 @@ impl DelegateSpec {
     /// is said by its kind, and a file cannot tell one it may do what its kind cannot.
     pub fn prompt(&self) -> &str {
         &self.prompt
+    }
+
+    /// Whether its definition keeps a memory, which the file of [`Self::definition`]'s name is.
+    pub fn keeps_memory(&self) -> bool {
+        self.memory
     }
 
     /// The delegate's name in the audit trail. Driver-minted, never derived from content.
@@ -1049,6 +1087,7 @@ pub struct Addressed {
     kind: Kind,
     model: Option<String>,
     prompt: String,
+    memory: bool,
     held: CapabilitySet,
     tools: Vec<String>,
 }
@@ -1060,6 +1099,7 @@ impl Addressed {
             kind: definition.kind(),
             model: definition.model().map(str::to_string),
             prompt: definition.prompt().to_string(),
+            memory: definition.keeps_memory(),
             held,
             tools,
         }
@@ -1087,6 +1127,11 @@ impl Addressed {
     /// The definition's standing instruction, empty where its file had no body.
     pub fn prompt(&self) -> &str {
         &self.prompt
+    }
+
+    /// Whether the definition keeps a memory, which the file of [`Self::name`]'s name is.
+    pub fn keeps_memory(&self) -> bool {
+        self.memory
     }
 
     /// Every tool this turn is offered, already narrowed by what it holds and by what the
@@ -2254,6 +2299,67 @@ mod tests {
             definitions.get("reviewer").expect("selectable").skills(),
             None
         );
+    }
+
+    /// MEMORY-2: whether a memory is kept is the latest definition's, in both directions, because
+    /// keeping one changes what a run knows and adds nothing it may do. A project keeping none
+    /// stops a person's own habit from writing into its checkout, and one keeping a memory its
+    /// replaced definition did not starts one.
+    #[test]
+    fn a_later_definition_takes_over_whether_a_memory_is_kept() {
+        let mut definitions = Definitions::default();
+        definitions.insert(
+            Definition::from_file("reviewer", "global", Kind::Reader, None, "", "home")
+                .with_memory(),
+        );
+        let admitted = definitions.insert(Definition::from_file(
+            "reviewer",
+            "project",
+            Kind::Reader,
+            None,
+            "",
+            "project",
+        ));
+        assert_eq!(admitted, Admitted::AsWritten);
+        assert!(
+            !definitions
+                .get("reviewer")
+                .expect("selectable")
+                .keeps_memory()
+        );
+
+        let admitted = definitions.insert(
+            Definition::from_file("reviewer", "again", Kind::Reader, None, "", "again")
+                .with_memory(),
+        );
+        assert_eq!(admitted, Admitted::AsWritten, "keeping one widens nothing");
+        assert!(
+            definitions
+                .get("reviewer")
+                .expect("selectable")
+                .keeps_memory()
+        );
+    }
+
+    /// MEMORY-2: a working directory whose memory would sit in the person's own directory keeps
+    /// none for any definition, and every other field of each stays as it was.
+    #[test]
+    fn keeping_no_memory_clears_it_from_every_definition_and_nothing_else() {
+        let mut definitions = Definitions::default();
+        definitions.insert(
+            Definition::from_file("reviewer", "d", Kind::Reader, None, "", "home").with_memory(),
+        );
+        definitions.insert(
+            Definition::from_file("migrator", "d", Kind::Worker, None, "body", "home")
+                .with_memory(),
+        );
+
+        definitions.keep_no_memory();
+
+        assert!(definitions.iter().all(|d| !d.keeps_memory()));
+        let migrator = definitions.get("migrator").expect("still selectable");
+        assert_eq!(migrator.kind(), Kind::Worker);
+        assert_eq!(migrator.prompt(), "body");
     }
 
     /// A number says where its delegate sits, so a trail and a screen can name a grandchild

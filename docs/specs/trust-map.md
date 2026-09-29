@@ -225,10 +225,10 @@ from the rule a yes writes and from no other: a path an earlier session's writes
 directory it opened, a file it vouched for, and a no given inside the tree are all left behind with
 that session, as they are when the person presses `y` again.
 
-[MEMORY-5](definition-memory.md#MEMORY-5) specifies one path that is not left behind, and nothing
-yet builds it: a definition's memory a write left untrusted is recorded outside the session, and
-before every turn in that directory the path is untrusted whatever the person answered, until a
-write leaves it trusted or a person vouches for it.
+[MEMORY-5](definition-memory.md#MEMORY-5) specifies one path that is not left behind: a
+definition's memory a write left untrusted is recorded outside the session, and before every turn in
+that directory the path is untrusted whatever the person answered, until a write leaves it trusted
+or a person vouches for it.
 
 **What the record keeps is the name, not the key.** A rule inside the project is written down
 relative to it and a rule outside is written down in full, and a resume reads the relative ones
@@ -952,8 +952,8 @@ The one record under `~/.bravebot` that decides what is trusted rather than whet
 asked. Every other one ([tools/run.md](tools/run.md#RUN-19), [permissions.md](permissions.md#PERM-15))
 stops a prompt appearing and leaves the labels alone. This one sets the label of every file in a
 tree, which is why it is narrower than the answer it keeps.
-[MEMORY-5](definition-memory.md#MEMORY-5) proposes a second, which nothing yet builds and which can
-only take trust away: the paths of definitions' memories a write left untrusted.
+[MEMORY-5](definition-memory.md#MEMORY-5) keeps a second, which can only take trust away: the paths
+of definitions' memories a write left untrusted.
 
 <a id="TRUST-23"></a>
 ### TRUST-23: a remembered yes answers for later sessions started in exactly that directory
@@ -989,8 +989,8 @@ leaves the answer as a yes for this session, and the session says so and names t
 **Honoured.** A later session started in that directory, fresh, by `/clear`, by a new session in the
 desktop interface, by a session in lines, or by a resume or reopening whose record keeps no map, is
 not asked. It starts from the rule a yes writes and from nothing else
-([TRUST-6](#TRUST-6)), less the memories [MEMORY-5](definition-memory.md#MEMORY-5) would keep
-untrusted, which nothing yet builds, and says as it opens that it is trusting the directory because the person
+([TRUST-6](#TRUST-6)), less the memories [MEMORY-5](definition-memory.md#MEMORY-5) keeps
+untrusted, and says as it opens that it is trusting the directory because the person
 said to remember it, when, and how to be asked again. A session in lines has no `/forget-trust`, so
 it names that command in the interface that draws, and the file holding the answer with the lines
 naming the directory as what to delete, since a directory whose path is spelled alike shares the
@@ -1154,8 +1154,8 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   for the directory. The alternative is a per-directory map, which is a directory that trusts
   itself. If a file holds content you do not trust, the answer is to say no to the directory, or
   to not leave it there. A definition's memory is the exception
-  [MEMORY-5](definition-memory.md#MEMORY-5) proposes and nothing yet builds, since every later run
-  under the definition is told to read it without anybody asking for it.
+  [MEMORY-5](definition-memory.md#MEMORY-5) makes, since every later run under the definition is
+  told to read it without anybody asking for it.
 - **A file another process drops into a trusted directory is trusted.** TRUST-2 makes the rule
   about the path, so `npm install`, `git pull`, an editor, a background daemon, or a program the
   agent was allowed to run can all put a file inside a vouched-for tree and it will be read as
@@ -1189,7 +1189,7 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   has just pulled a branch or added a dependency might have answered `n`. The line the session opens
   with, `/status` and `/forget-trust` are what is left of it. Keeping the paths earlier sessions
   marked untrusted beside the answer would close the second half, and is not built.
-  [MEMORY-5](definition-memory.md#MEMORY-5) proposes it for definitions' memories alone.
+  [MEMORY-5](definition-memory.md#MEMORY-5) keeps it for definitions' memories alone.
 - **A directory is told from the one before it at the same path by what the filesystem keeps.**
   Where the filesystem does not say when a directory was made, `r` is not offered and every session
   there is asked, as before. Linux gives a freed number to the next directory made, so there the
