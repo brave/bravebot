@@ -259,6 +259,12 @@ impl Rule {
     ///
     /// `path` is workspace-relative or absolute, as the gates hold it. `restricting` selects the
     /// depth a single-segment pattern is matched at, which differs between the lists.
+    ///
+    /// On hosts whose filesystem folds case (macOS APFS, Windows NTFS), both the pattern and the
+    /// path are folded to lowercase before matching, segment-wise, so a deny rule `Read(.env)`
+    /// also covers `.ENV` — which on such a host opens the very file the rule names. Over-folding
+    /// errs toward more denial, which is the safe direction; on hosts where the filesystem is
+    /// case-sensitive the match stays byte-exact.
     fn covers_path(&self, path: &str, restricting: bool) -> bool {
         match &self.pattern {
             Pattern::Everything => true,
@@ -266,10 +272,10 @@ impl Rule {
                 false
             }
             Pattern::Relative(pattern) => {
-                !is_absolute_key(path) && pattern.matches(&segments_of(path), restricting)
+                !is_absolute_key(path) && pattern.matches(&segments_of(&fold(path)), restricting)
             }
             Pattern::Absolute(pattern) => {
-                is_absolute_key(path) && pattern.matches(&segments_of(path), restricting)
+                is_absolute_key(path) && pattern.matches(&segments_of(&fold(path)), restricting)
             }
         }
     }
@@ -569,21 +575,28 @@ fn tool_pattern(specifier: &str) -> Option<Pattern> {
 /// the path it names is several. The anchors are read after the respelling, so `~\x` anchors where
 /// `~/x` does. A path specifier alone: a command pattern is matched against argv, where a
 /// backslash is an argument's own byte on every host.
+///
+/// A pattern is stored folded where the filesystem folds case, since the path arrives folded at
+/// match time and both sides have to be in the one spelling.
 fn path_pattern(specifier: &str, anchors: &Anchors) -> Option<Pattern> {
     let specifier = &*crate::spelling::to_slash(specifier, anchors.backslash_separates);
     if let Some(rest) = specifier.strip_prefix("//") {
-        return Some(Pattern::Absolute(PathPattern::rooted(rest)));
+        return Some(Pattern::Absolute(PathPattern::rooted(&fold(rest))));
     }
     if let Some(rest) = specifier.strip_prefix("~/") {
         let home = anchors.home.as_deref()?;
-        return Some(Pattern::Absolute(PathPattern::rooted(&join(home, rest))));
+        return Some(Pattern::Absolute(PathPattern::rooted(&fold(&join(
+            home, rest,
+        )))));
     }
     if let Some(rest) = specifier.strip_prefix('/') {
         let base = anchors.settings_dir.as_deref()?;
-        return Some(Pattern::Absolute(PathPattern::rooted(&join(base, rest))));
+        return Some(Pattern::Absolute(PathPattern::rooted(&fold(&join(
+            base, rest,
+        )))));
     }
     let rest = specifier.strip_prefix("./").unwrap_or(specifier);
-    Some(Pattern::Relative(PathPattern::relative(rest)))
+    Some(Pattern::Relative(PathPattern::relative(&fold(rest))))
 }
 
 /// Join two path pieces with a single slash, whatever slashes they came with.
@@ -657,6 +670,28 @@ fn segments_of(path: &str) -> Vec<&str> {
     path.split('/')
         .filter(|segment| !segment.is_empty() && *segment != ".")
         .collect()
+}
+
+/// Fold a path or a pattern to lowercase, one segment at a time.
+///
+/// On a host whose filesystem folds case (macOS APFS, Windows NTFS) a planner's `.ENV` opens the
+/// same file as the `.env` a deny rule names, so both sides of a match are lowered before they
+/// are compared. Lowering segment-wise leaves the separators, and with them the anchor and
+/// relative/absolute logic and the `*` and `**` semantics, exactly as they were. Over-folding
+/// errs toward more denial, which is the safe direction, so the folding happens only where the
+/// filesystem is known to fold.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn fold(path: &str) -> String {
+    path.split('/')
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Where the filesystem is case-sensitive, nothing is folded and the match stays byte-exact.
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn fold(path: &str) -> String {
+    path.to_string()
 }
 
 /// Whether a pattern's segments cover a path's, with `**` crossing directories and `*` not.
@@ -973,6 +1008,42 @@ mod tests {
                 permissions.for_path(Subject::Read, "env"),
                 Decision::Unmatched,
                 "{text} should not cover a different name"
+            );
+        }
+    }
+
+    /// A host whose filesystem folds case opens `.ENV` when it is asked for `.env`, so a deny
+    /// rule written in one spelling covers the other, whichever the planner writes. These run
+    /// only on the hosts that fold: folding there and matching byte-exactly here would fail them
+    /// by design.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[test]
+    fn a_deny_rule_covers_the_case_spelling_the_filesystem_would_open() {
+        let permissions = rules(&["Read(.env)"], &[], &[]);
+        for path in [".ENV", ".Env"] {
+            assert_eq!(
+                permissions.for_path(Subject::Read, path),
+                Decision::Ruled(Ruling::Deny),
+                "{path} opens .env on this host and was not covered"
+            );
+        }
+        assert_eq!(
+            permissions.for_path(Subject::Read, ".en v"),
+            Decision::Unmatched
+        );
+    }
+
+    /// The same folding across a tree: an anchored rule about `src` also covers `SRC`, whose
+    /// segments reach the matcher lowered on both sides.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[test]
+    fn a_tree_rule_covers_the_folded_spelling_of_its_path() {
+        let permissions = rules(&["Read(src/**)"], &[], &[]);
+        for path in ["src/x/y", "SRC/x/y", "Src/x/y"] {
+            assert_eq!(
+                permissions.for_path(Subject::Read, path),
+                Decision::Ruled(Ruling::Deny),
+                "{path} was not covered"
             );
         }
     }
