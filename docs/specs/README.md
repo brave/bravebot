@@ -22,7 +22,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [delegation.md](delegation.md) | `DELEGATE` | 24 | a second planner, narrower than the first, and what crosses back from one |
 | [addressing-a-definition.md](addressing-a-definition.md) | `ADDRESS` | 12 | running one of those definitions yourself, in place of describing the work and hoping the planner picks it |
 | [definition-memory.md](definition-memory.md) | `MEMORY` | 11 | what a definition keeps between conversations, which checkout it works in, and the desktop's bots as definitions (the desktop's bots proposed, not built) |
-| [turns.md](turns.md) | `TURN` | 6 | how long a turn may go on, what happens when it does not stop, and what is said when it produces nothing or checks nothing |
+| [turns.md](turns.md) | `TURN` | 7 | how long a turn may go on, what happens when it does not stop, and what is said when it produces nothing, checks nothing or runs into its output ceiling |
 | [prompting.md](prompting.md) | `PROMPT` | 10 | every moment the system stops and puts something to a human, and what an answer grants |
 | [permission-modes.md](permission-modes.md) | `MODE` | 10 | a standing answer to those prompts: accepting edits, planning, or asking about nothing at all |
 | [naming-files.md](naming-files.md) | `NAME` | 7 | writing `@path` in a prompt: what it puts into the turn and what it vouches for |

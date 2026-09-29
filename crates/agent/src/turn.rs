@@ -363,6 +363,94 @@ pub const ROUNDS_AFTER_WRITING_BEFORE_RUNNING: usize = 6;
 /// mind about the task.
 const TOOL_BUDGET_SPENT: &str = "(from the system, not the user)";
 
+/// What the person is told when a reply reached the output ceiling and the planner is asked again
+/// (TURN-7). A turn with no tools left is asked for a shorter answer rather than for the work.
+fn ceiling_stop_narration(cut_off: &bravebot_aichat::CutOff, may_call_tools: bool) -> String {
+    use bravebot_aichat::OpenCall;
+    let tokens = cut_off.ceiling;
+    if !may_call_tools {
+        return t!(ceiling_stop_answer_now, tokens = tokens);
+    }
+    match (&cut_off.call, cut_off.thought) {
+        (Some(OpenCall { tool: Some(tool) }), _) => {
+            t!(ceiling_stop_in_call, tokens = tokens, tool = tool.as_str())
+        }
+        (Some(OpenCall { tool: None }), _) => t!(ceiling_stop_in_a_call, tokens = tokens),
+        (None, true) => t!(ceiling_stop_thinking, tokens = tokens),
+        (None, false) => t!(ceiling_stop_silent, tokens = tokens),
+    }
+}
+
+/// What the person is told when a reply the output ceiling stopped is the turn's answer. A call it
+/// was writing is named, since the text reads as though the work it announces was done.
+fn answer_stopped_narration(cut_off: &bravebot_aichat::CutOff) -> String {
+    use bravebot_aichat::OpenCall;
+    let tokens = cut_off.ceiling;
+    match &cut_off.call {
+        Some(OpenCall { tool: Some(tool) }) => t!(
+            ceiling_stop_ends_in_call,
+            tokens = tokens,
+            tool = tool.as_str()
+        ),
+        Some(OpenCall { tool: None }) => t!(ceiling_stop_ends_in_a_call, tokens = tokens),
+        None => "the model reached its output limit, so this answer stops where it did. \
+                 What it wrote is kept; raise BRAVEBOT_OUTPUT_BUDGET or ask for less in one turn"
+            .to_string(),
+    }
+}
+
+/// What the planner is told after a reply of its own reached the output ceiling (TURN-7).
+///
+/// Made from the stop's structure and the request's own spelling of a tool it offered, so nothing
+/// the reply wrote reaches the line. The remedy follows from what the reply was writing: a file
+/// too big for one reply is written in parts, with the write tools `request` offered, and a reply
+/// that spent the ceiling thinking is asked to act sooner.
+fn after_a_ceiling_stop(
+    cut_off: &bravebot_aichat::CutOff,
+    request: &ChatRequest,
+    may_call_tools: bool,
+) -> String {
+    use bravebot_aichat::OpenCall;
+    let ceiling = cut_off.ceiling;
+    let stopped = match (&cut_off.call, cut_off.thought) {
+        (Some(OpenCall { tool: Some(tool) }), _) => {
+            format!("while writing a call to {tool}, so the call was not made")
+        }
+        (Some(OpenCall { tool: None }), _) => {
+            "while writing a tool call, so the call was not made".to_string()
+        }
+        (None, true) => "while thinking, before it said or did anything".to_string(),
+        (None, false) => "before it said or did anything".to_string(),
+    };
+    let next = match &cut_off.call {
+        _ if !may_call_tools => "Answer now, in fewer words.",
+        Some(OpenCall { tool: Some(tool) }) if tools::writes_a_file(tool) => match (
+            request.offered("write_file").is_some(),
+            request.offered("edit_file").is_some(),
+        ) {
+            (true, true) => {
+                "Nothing was written. Make the same change in smaller calls, each well under the \
+                 limit: split it across several files, or write the first part and add the rest \
+                 with edit_file."
+            }
+            (true, false) => {
+                "Nothing was written. Make the same change in smaller calls, each well under the \
+                 limit: split it across several files."
+            }
+            _ => {
+                "Nothing was written. Make the same change in smaller calls, each well under the limit."
+            }
+        },
+        Some(_) => "Make it again with less in it, in smaller calls each well under the limit.",
+        None if cut_off.thought => "Think less before you act: make the next call now.",
+        None => "Make the next call now, or give a shorter answer.",
+    };
+    format!(
+        "{TOOL_BUDGET_SPENT} Your last reply reached the output limit of {ceiling} tokens \
+         {stopped}. {next}"
+    )
+}
+
 #[derive(Debug)]
 pub enum TurnError {
     /// The user asked for the turn to stop.
@@ -421,8 +509,8 @@ impl TurnError {
 
     /// What the reply the output ceiling stopped was doing, where that is what ended the turn.
     ///
-    /// Beside [`Self::ending`] rather than in it, since an ending is copied into places a tool's
-    /// name has no business going and this carries one.
+    /// Beside [`Self::ending`] rather than in it, since a diagnosis is `Copy` and this carries a
+    /// tool's name.
     pub fn cut_off(&self) -> Option<&bravebot_aichat::CutOff> {
         match self {
             Self::Chat(error) => error.cut_off(),
@@ -1848,6 +1936,20 @@ struct Working<'scope> {
     >,
 }
 
+/// Show the person what the planner said on the way to its calls: released to a screen and nowhere
+/// else, exactly as the final reply is.
+///
+/// Sent whether or not it is empty: whether there is anything to draw is a question about the text,
+/// and the driver does not get to ask questions about untrusted text.
+fn narrate_between_calls<S: Sink, R: Reporter + ?Sized>(
+    policy: &mut Policy<'_, S>,
+    reporter: &mut R,
+    said: &Labelled<String>,
+) {
+    let proof = policy.authorise_display_release("what the model said between calls");
+    reporter.narration(said.clone().declassify(&proof));
+}
+
 /// Put what the planner said into the conversation, through the gate every model output passes.
 ///
 /// The answer is labelled from the context that produced it and presented like anything else, so
@@ -2998,6 +3100,8 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         let mut may_compact = true;
         // Whether the last request went out because the one before it came back empty (TURN-6).
         let mut asked_after_an_empty_reply = false;
+        // Whether it went out because the one before it reached the output ceiling (TURN-7).
+        let mut asked_after_a_ceiling_stop = false;
         // When the planner asked for the next tick, where this turn is one and it asked at all.
         let mut wakeup = None;
         // Every watch the turn armed, in the order it asked for them, for whoever holds the session
@@ -3252,7 +3356,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     // reads nothing untrusted. The same request sent again tends to stay empty, so the
                     // turn adds a line and asks once. Two in a row is a model with nothing to say here,
                     // and asking a third time would only spend another request finding that out.
-                    let completion = match completion {
+                    let mut completion = match completion {
                         Err(error) if error.is_empty_reply() && !asked_after_an_empty_reply => {
                             asked_after_an_empty_reply = true;
                             conversation.push(Message::user(format!(
@@ -3262,20 +3366,31 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         )));
                             continue;
                         }
+                        // A reply that reached the ceiling having written nothing: part way through
+                        // a call, thinking, or neither. Decided from the stop's structure, which says
+                        // nothing the reply wrote, and asked once for the same reason TURN-6 asks
+                        // once.
+                        Err(error) if error.cut_off().is_some() && !asked_after_a_ceiling_stop => {
+                            asked_after_a_ceiling_stop = true;
+                            // A reply that ran out wrote something, so it was not empty.
+                            asked_after_an_empty_reply = false;
+                            if let Some(cut_off) = error.cut_off() {
+                                reporter.narration(ceiling_stop_narration(cut_off, may_call_tools));
+                                conversation.push(Message::user(after_a_ceiling_stop(
+                                    cut_off,
+                                    &request,
+                                    may_call_tools,
+                                )));
+                            }
+                            continue;
+                        }
                         other => other?,
                     };
                     asked_after_an_empty_reply = false;
-                    // A reply the ceiling stopped is kept for what it says, so the person has to be
-                    // told that it stops short: the text arrives looking like an answer, and an answer
-                    // that ends mid-sentence is worth nothing if it is read as a whole one. The
-                    // backend carried no calls out of such a reply, so this round is the last.
+                    // The backend carries no call out of a reply the ceiling stopped (BACKEND-42),
+                    // and one that did would be a call nobody finished writing.
                     if completion.cut_off.is_some() {
-                        reporter.narration(
-                        "the model reached its output limit, so this answer stops where it did. \
-                         What it wrote is kept; raise BRAVEBOT_OUTPUT_BUDGET or ask for less in \
-                         one turn"
-                            .to_string(),
-                    );
+                        completion.calls.clear();
                     }
                     tokens += completion.usage.total();
                     output_tokens += completion.usage.completion_tokens;
@@ -3289,6 +3404,38 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         cached,
                         timing: spent.finish(),
                     });
+
+                    // A reply the ceiling stopped part way through a call, after text. The text is
+                    // the planner's and goes into the conversation as any answer does; the call was
+                    // never made, and the planner is told so and asked for the work in parts.
+                    if let Some(cut_off) = completion
+                        .cut_off
+                        .as_ref()
+                        .filter(|cut_off| cut_off.call.is_some())
+                        && may_call_tools
+                        && !asked_after_a_ceiling_stop
+                    {
+                        asked_after_a_ceiling_stop = true;
+                        record_answer(&mut policy, conversation, &completion.content)?;
+                        narrate_between_calls(&mut policy, &mut reporter, &completion.content);
+                        reporter.narration(ceiling_stop_narration(cut_off, may_call_tools));
+                        conversation.push(Message::user(after_a_ceiling_stop(
+                            cut_off,
+                            &request,
+                            may_call_tools,
+                        )));
+                        continue;
+                    }
+                    if completion.cut_off.is_none() {
+                        asked_after_a_ceiling_stop = false;
+                    }
+                    // A reply the ceiling stopped is kept for what it says, so the person has to be
+                    // told that it stops short: the text arrives looking like an answer, and an answer
+                    // that ends mid-sentence is worth nothing if it is read as a whole one. It carries
+                    // no calls, so this round is the last.
+                    if let Some(cut_off) = &completion.cut_off {
+                        reporter.narration(answer_stopped_narration(cut_off));
+                    }
 
                     // The budget is spent, so this round is the answer whatever it holds. A planner that
                     // asked for a tool anyway does not get one: a request that offered none is not one a
@@ -3391,14 +3538,8 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     }
 
                     // What the model said on the way to these calls. It used to be dropped on the floor,
-                    // which is why a turn that narrated every step showed none of it. Released to a screen
-                    // and nowhere else, exactly as the final reply is.
-                    //
-                    // Sent whether or not it is empty: whether there is anything to draw is a question
-                    // about the text, and the driver does not get to ask questions about untrusted text.
-                    let proof =
-                        policy.authorise_display_release("what the model said between calls");
-                    reporter.narration(completion.content.clone().declassify(&proof));
+                    // which is why a turn that narrated every step showed none of it.
+                    narrate_between_calls(&mut policy, &mut reporter, &completion.content);
 
                     // The planner's own turn goes back into the conversation: what it said, and the calls
                     // it made with the arguments it chose. Replaying the tool names alone left a round
@@ -4607,5 +4748,409 @@ mod tests {
             };
             assert_eq!(servers, expected, "a {kind}'s server grants");
         }
+    }
+
+    /// Replies for a turn, by what arrived: text, the calls it asked for, and what it was doing
+    /// where the output ceiling stopped it.
+    mod ceiling {
+        use super::*;
+        use crate::backend::{BackendError, scripted};
+        use bravebot_aichat::protocol::{ToolCallFunction, Usage};
+        use bravebot_aichat::{Completion, CutOff, OpenCall};
+        use bravebot_bedrock::BedrockError;
+        use bravebot_core::label::Label;
+
+        pub(super) const CEILING: u64 = 32_000;
+        pub(super) const TOLD: &str = "(from the system, not the user) Your last reply reached the output limit of 32000 tokens";
+
+        pub(super) fn said(
+            text: &str,
+            calls: &[(&str, &str)],
+            cut_off: Option<CutOff>,
+        ) -> Result<Completion, BackendError> {
+            Ok(Completion {
+                content: Labelled::new(text.to_string(), Label::untrusted_public()),
+                model: "test-model".into(),
+                calls: calls
+                    .iter()
+                    .enumerate()
+                    .map(|(at, (name, arguments))| ToolCall {
+                        id: Some(format!("c{at}")),
+                        function: ToolCallFunction {
+                            name: (*name).into(),
+                            arguments: Some((*arguments).into()),
+                        },
+                    })
+                    .collect(),
+                context_tokens: 100,
+                usage: Usage {
+                    prompt_tokens: 100,
+                    completion_tokens: 10,
+                    ..Usage::default()
+                },
+                cut_off,
+            })
+        }
+
+        /// Stopped part way through a call to `tool`.
+        pub(super) fn in_a_call_to(tool: &str) -> CutOff {
+            CutOff {
+                ceiling: CEILING,
+                call: Some(OpenCall {
+                    tool: Some(tool.into()),
+                }),
+                thought: false,
+            }
+        }
+
+        /// A reply that reached the ceiling having written no text, as the backend reports it.
+        pub(super) fn failed(cut_off: CutOff) -> Result<Completion, BackendError> {
+            Err(BackendError::from(BedrockError::TooLong(cut_off)).counted(
+                1,
+                Some(Usage {
+                    prompt_tokens: 100,
+                    completion_tokens: CEILING,
+                    ..Usage::default()
+                }),
+                Some(100),
+            ))
+        }
+
+        /// Take one turn answered by `replies`, in a fresh workspace called `name`.
+        pub(super) fn turn(
+            name: &str,
+            replies: Vec<Result<Completion, BackendError>>,
+        ) -> (
+            Result<Outcome, TurnError>,
+            crate::report::RecordingReporter,
+            Vec<String>,
+            PathBuf,
+        ) {
+            let scratch = crate::testutil::scratch_dir(name);
+            let _ = std::fs::remove_dir_all(&scratch);
+            std::fs::create_dir_all(&scratch).unwrap();
+            let workspace = Workspace::new(&scratch).unwrap();
+            let config = Config::from_lookup(|key| match key {
+                "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+                "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+                "BRAVE_AI_CHAT_ENDPOINT" => Some("http://127.0.0.1:9/never-asked".into()),
+                _ => None,
+            })
+            .unwrap();
+            let mut trust = TrustStore::new("/work");
+            trust.trust(".");
+            let mut reporter = crate::report::RecordingReporter::default();
+            scripted::script(replies);
+            let outcome = resume(
+                &config,
+                &Egress::new(),
+                &workspace,
+                &Task::new("write the game in one file"),
+                &mut Conversation::new(),
+                &mut crate::confirm::ApproveWrites,
+                &mut reporter,
+                &mut bravebot_core::event::RecordingSink::new(),
+                trust,
+                TrustedPrograms::new(),
+                None,
+                &Cancel::new(),
+            )
+            .outcome;
+            scripted::clear();
+            (outcome, reporter, scripted::asked(), scratch)
+        }
+
+        pub(super) fn told(bodies: &[String]) -> Vec<usize> {
+            bodies
+                .iter()
+                .map(|body| body.matches(TOLD).count())
+                .collect()
+        }
+    }
+
+    /// The failure in #973: a model asked for one long script spends the whole ceiling on one
+    /// write_file argument, and the turn ended there with nothing written. The planner is told
+    /// what happened and how to do the work instead, the person is told why the turn went on, and
+    /// the call it makes next runs.
+    #[test]
+    fn a_reply_cut_off_while_writing_a_call_is_told_so_and_the_turn_carries_on() {
+        use ceiling::*;
+        let (outcome, reporter, bodies, scratch) = turn(
+            "ceiling-stop-carries-on",
+            vec![
+                failed(in_a_call_to("write_file")),
+                said(
+                    "",
+                    &[(
+                        "write_file",
+                        r#"{"path":"game.py","contents":"print(1)\n"}"#,
+                    )],
+                    None,
+                ),
+                said("done", &[], None),
+            ],
+        );
+        let outcome = outcome.expect("the turn carries on past a reply the ceiling stopped");
+        assert_eq!(outcome.reply_for_display(), "done");
+        assert_eq!(told(&bodies), [0, 1, 1], "{bodies:#?}");
+        assert!(
+            bodies[1].contains(
+                "while writing a call to write_file, so the call was not made. Nothing was \
+                 written. Make the same change in smaller calls"
+            ),
+            "{}",
+            bodies[1]
+        );
+        assert!(
+            reporter
+                .narration
+                .iter()
+                .any(|line| line.contains("asking it to do the work in smaller parts")),
+            "{:?}",
+            reporter.narration
+        );
+        assert_eq!(
+            std::fs::read_to_string(scratch.join("game.py")).unwrap(),
+            "print(1)\n"
+        );
+    }
+
+    /// Text the model wrote before the call it ran out in is its own answer so far, so it goes
+    /// into the conversation and onto the screen as any answer does, and the turn goes on.
+    #[test]
+    fn a_reply_cut_off_after_text_keeps_the_text_and_the_turn_carries_on() {
+        use ceiling::*;
+        let (outcome, reporter, bodies, _) = turn(
+            "ceiling-stop-after-text",
+            vec![
+                said(
+                    "I will write the game now.",
+                    &[],
+                    Some(in_a_call_to("write_file")),
+                ),
+                said("done", &[], None),
+            ],
+        );
+        assert_eq!(outcome.unwrap().reply_for_display(), "done");
+        assert_eq!(told(&bodies), [0, 1], "{bodies:#?}");
+        assert!(
+            bodies[1].contains("I will write the game now."),
+            "{}",
+            bodies[1]
+        );
+        assert!(
+            reporter
+                .narration
+                .iter()
+                .any(|line| line == "I will write the game now."),
+            "{:?}",
+            reporter.narration
+        );
+    }
+
+    /// Asked once and no more, for the reason an empty reply is (TURN-6): a model that runs out
+    /// again after being told how to do the work in parts cannot, and the stop is the failure.
+    #[test]
+    fn two_ceiling_stops_in_a_row_end_the_turn() {
+        use ceiling::*;
+        let (outcome, _, bodies, _) = turn(
+            "ceiling-stop-twice",
+            vec![
+                failed(in_a_call_to("write_file")),
+                failed(in_a_call_to("write_file")),
+                said("never asked for", &[], None),
+            ],
+        );
+        let error = outcome.unwrap_err();
+        assert!(
+            matches!(
+                error.ending(),
+                crate::outcome::Ending::Failed(diagnosis)
+                    if diagnosis.category == crate::outcome::Category::TooLong
+            ),
+            "{error:?}"
+        );
+        assert_eq!(told(&bodies), [0, 1], "{bodies:#?}");
+        assert_eq!(error.cut_off(), Some(&in_a_call_to("write_file")));
+    }
+
+    /// A round answered in between starts the count again, so a long turn that writes several big
+    /// files can come back from a stop at each of them.
+    #[test]
+    fn a_round_between_two_ceiling_stops_starts_the_count_again() {
+        use ceiling::*;
+        let (outcome, _, bodies, _) = turn(
+            "ceiling-stop-count-restarts",
+            vec![
+                failed(in_a_call_to("write_file")),
+                said("", &[("list_files", r#"{"directory":"."}"#)], None),
+                failed(in_a_call_to("write_file")),
+                said("done", &[], None),
+            ],
+        );
+        assert_eq!(outcome.unwrap().reply_for_display(), "done");
+        assert_eq!(told(&bodies), [0, 1, 1, 2], "{bodies:#?}");
+    }
+
+    /// A reply that reached the ceiling wrote something, so an empty reply either side of it is
+    /// not the second of two in a row (TURN-6), and each is asked again.
+    #[test]
+    fn a_ceiling_stop_between_two_empty_replies_is_not_two_empty_replies_in_a_row() {
+        use ceiling::*;
+        let empty = || {
+            Err(crate::backend::BackendError::from(
+                bravebot_bedrock::BedrockError::NoContent,
+            ))
+        };
+        let (outcome, _, bodies, _) = turn(
+            "ceiling-stop-between-empties",
+            vec![
+                empty(),
+                failed(in_a_call_to("write_file")),
+                empty(),
+                said("done", &[], None),
+            ],
+        );
+        assert_eq!(outcome.unwrap().reply_for_display(), "done");
+        assert_eq!(bodies.len(), 4, "{bodies:#?}");
+    }
+
+    /// A call out of a reply the ceiling stopped is one nobody finished writing, and running it
+    /// writes whatever half of the file had arrived. The backend carries none out (BACKEND-42),
+    /// and the driver drops any that reach it: here on the second stop in a row, where the turn
+    /// ends on the text rather than asking again, and the person is told the call was not made.
+    #[test]
+    fn a_call_cut_off_at_the_ceiling_is_never_run() {
+        use ceiling::*;
+        let (outcome, reporter, bodies, scratch) = turn(
+            "ceiling-stop-call-not-run",
+            vec![
+                failed(in_a_call_to("write_file")),
+                said(
+                    "Writing it.",
+                    &[(
+                        "write_file",
+                        r#"{"path":"half.py","contents":"import pyg"}"#,
+                    )],
+                    Some(in_a_call_to("write_file")),
+                ),
+                said("done", &[], None),
+            ],
+        );
+        assert!(
+            !scratch.join("half.py").exists(),
+            "a call the ceiling stopped was run"
+        );
+        assert_eq!(outcome.unwrap().reply_for_display(), "Writing it.");
+        assert_eq!(bodies.len(), 2, "{bodies:#?}");
+        assert!(
+            reporter.narration.iter().any(|line| line.contains(
+                "again while writing a call to write_file, so the call was not made and this \
+                 answer stops where it did"
+            )),
+            "{:?}",
+            reporter.narration
+        );
+    }
+
+    /// The remedy the planner is given follows what the reply was writing, and names no tool the
+    /// request did not offer: a file too big for one reply is written in parts, any other call is
+    /// made smaller, a reply that thought until the ceiling is asked to act, and a turn with no
+    /// tools left is asked for a shorter answer.
+    #[test]
+    fn the_line_after_a_ceiling_stop_says_what_to_do_about_it() {
+        use bravebot_aichat::protocol::Tool;
+        use bravebot_aichat::{CutOff, OpenCall};
+        let stop = |tool: Option<Option<&str>>, thought: bool| CutOff {
+            ceiling: 32_000,
+            call: tool.map(|tool| OpenCall {
+                tool: tool.map(str::to_owned),
+            }),
+            thought,
+        };
+        let offering = |names: &[&str]| {
+            ChatRequest::new("m", Vec::new()).with_tools(
+                names
+                    .iter()
+                    .map(|name| Tool::function(*name, "", serde_json::json!({})))
+                    .collect(),
+            )
+        };
+        let both = offering(&["write_file", "edit_file", "run"]);
+        let line = after_a_ceiling_stop(&stop(Some(Some("edit_file")), false), &both, true);
+        assert!(line.starts_with(TOOL_BUDGET_SPENT), "{line}");
+        assert!(
+            line.contains("call to edit_file, so the call was not made"),
+            "{line}"
+        );
+        assert!(
+            line.contains("write the first part and add the rest"),
+            "{line}"
+        );
+
+        let line = after_a_ceiling_stop(&stop(Some(Some("run")), false), &both, true);
+        assert!(line.contains("call to run"), "{line}");
+        assert!(
+            line.contains("smaller calls") && !line.contains("Nothing was written"),
+            "{line}"
+        );
+
+        let line = after_a_ceiling_stop(&stop(Some(None), false), &both, true);
+        assert!(line.contains("while writing a tool call"), "{line}");
+
+        let line = after_a_ceiling_stop(&stop(None, true), &both, true);
+        assert!(
+            line.contains("while thinking") && line.contains("make the next call now"),
+            "{line}"
+        );
+
+        let line = after_a_ceiling_stop(&stop(Some(None), false), &both, false);
+        assert!(line.ends_with("Answer now, in fewer words."), "{line}");
+
+        // A delegate may hold one write tool and not the other, and is told only of the one it has.
+        let line = after_a_ceiling_stop(
+            &stop(Some(Some("write_file")), false),
+            &offering(&["write_file"]),
+            true,
+        );
+        assert!(
+            line.contains("split it across several files") && !line.contains("edit_file"),
+            "{line}"
+        );
+        let line = after_a_ceiling_stop(
+            &stop(Some(Some("edit_file")), false),
+            &offering(&["edit_file"]),
+            true,
+        );
+        assert!(
+            line.contains("Nothing was written")
+                && !line.contains("several files")
+                && !line.contains("add the rest"),
+            "{line}"
+        );
+    }
+
+    /// The person is told what the turn asked for, which is the work in parts while tools are
+    /// offered and a shorter answer once they are gone, matching the line the planner was given.
+    #[test]
+    fn the_person_is_told_what_a_ceiling_stop_asked_for() {
+        use bravebot_aichat::{CutOff, OpenCall};
+        let stop = CutOff {
+            ceiling: 32_000,
+            call: Some(OpenCall {
+                tool: Some("write_file".into()),
+            }),
+            thought: false,
+        };
+        let said = ceiling_stop_narration(&stop, true);
+        assert!(
+            said.contains("write_file") && said.contains("smaller parts"),
+            "{said}"
+        );
+        let said = ceiling_stop_narration(&stop, false);
+        assert!(
+            said.contains("a shorter answer") && !said.contains("smaller parts"),
+            "{said}"
+        );
     }
 }

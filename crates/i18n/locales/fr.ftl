@@ -370,6 +370,14 @@ subscription-unusable =
 
 background-job-finished = `{ $command }` s'est terminé en arrière-plan : { $outcome }
 
+ceiling-stop-in-call = le modèle a atteint sa limite de sortie de { $tokens } jetons en écrivant un appel à { $tool }, qui n'a donc pas été fait ; il lui est demandé de faire le travail en plus petites parties
+ceiling-stop-in-a-call = le modèle a atteint sa limite de sortie de { $tokens } jetons en écrivant un appel d'outil, qui n'a donc pas été fait ; il lui est demandé de faire le travail en plus petites parties
+ceiling-stop-thinking = le modèle a atteint sa limite de sortie de { $tokens } jetons en réfléchissant, avant d'avoir rien écrit ; il lui est redemandé
+ceiling-stop-silent = le modèle a atteint sa limite de sortie de { $tokens } jetons avant d'avoir rien écrit ; il lui est redemandé
+ceiling-stop-answer-now = le modèle a atteint sa limite de sortie de { $tokens } jetons ; il lui est demandé une réponse plus courte
+ceiling-stop-ends-in-call = le modèle a de nouveau atteint sa limite de sortie de { $tokens } jetons en écrivant un appel à { $tool }, qui n'a donc pas été fait, et cette réponse s'arrête là où elle s'est arrêtée ; relevez BRAVEBOT_OUTPUT_BUDGET ou demandez moins en un seul tour
+ceiling-stop-ends-in-a-call = le modèle a de nouveau atteint sa limite de sortie de { $tokens } jetons en écrivant un appel d'outil, qui n'a donc pas été fait, et cette réponse s'arrête là où elle s'est arrêtée ; relevez BRAVEBOT_OUTPUT_BUDGET ou demandez moins en un seul tour
+
 hook-not-started = le hook { $moment } `{ $program }` n'a pas pu être démarré ({ $detail })
 hook-failed = le hook { $moment } `{ $program }` s'est mal terminé ({ $status })
 hook-stopped =

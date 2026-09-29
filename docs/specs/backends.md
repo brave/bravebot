@@ -1689,8 +1689,9 @@ the ones a `provider` block already named.
 
 A reply that reaches its ceiling having written something is returned as a reply, marked as having
 stopped short, with its reported usage. Its tool calls are not returned: a reply cut off carries
-none, whatever the service sent, so the round it ends is the last one. A reply that reaches the
-ceiling having written nothing is a failure, and the failure names the ceiling.
+none, whatever the service sent, so no call from it is made; the turn tells the planner why and
+asks once for less ([TURN-7](turns.md#TURN-7)). A reply that reaches the ceiling having written
+nothing is a failure, and the failure names the ceiling.
 
 Either way what the reply was doing when it stopped travels with it: the call it was part way
 through, where its last block was one, and whether any of its reasoning arrived. The call's tool

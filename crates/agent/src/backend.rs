@@ -211,6 +211,60 @@ impl BackendError {
     }
 }
 
+/// Replies a unit test scripted for whatever asks on its thread, answered in order before any
+/// backend is reached.
+///
+/// For the replies no service here can be made to send: a Bedrock reply the output ceiling
+/// stopped reaches the turn loop only through a Bedrock client, which signs for and addresses AWS.
+#[cfg(test)]
+pub(crate) mod scripted {
+    use super::{BackendError, ChatRequest, Completion};
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+
+    thread_local! {
+        static REPLIES: RefCell<Option<VecDeque<Result<Completion, BackendError>>>> =
+            const { RefCell::new(None) };
+        static ASKED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// Answer the next requests on this thread with `replies`, and forget what was asked before.
+    pub(crate) fn script(replies: Vec<Result<Completion, BackendError>>) {
+        REPLIES.with(|scripted| *scripted.borrow_mut() = Some(replies.into()));
+        ASKED.with(|asked| asked.borrow_mut().clear());
+    }
+
+    /// The body of each request a scripted reply answered, in order.
+    pub(crate) fn asked() -> Vec<String> {
+        ASKED.with(|asked| asked.borrow().clone())
+    }
+
+    /// Stop answering from a script, so a test that fails part way leaves nothing for the next
+    /// test on this thread.
+    pub(crate) fn clear() {
+        REPLIES.with(|scripted| *scripted.borrow_mut() = None);
+    }
+
+    /// The scripted reply to `request`, where this thread has a script. A script that has run out
+    /// is a turn asking more than the test expected, which is a failure rather than a request to
+    /// go and send.
+    pub(super) fn next(request: &ChatRequest) -> Option<Result<Completion, BackendError>> {
+        REPLIES.with(|scripted| {
+            let mut scripted = scripted.borrow_mut();
+            let replies = scripted.as_mut()?;
+            let reply = replies
+                .pop_front()
+                .unwrap_or_else(|| panic!("asked once more than the script answers"));
+            ASKED.with(|asked| {
+                asked
+                    .borrow_mut()
+                    .push(serde_json::to_string(request).expect("a request serialises"))
+            });
+            Some(reply)
+        })
+    }
+}
+
 /// Keep the HTTP status but omit URLs, which may contain credentials.
 fn of_egress(error: &bravebot_net::EgressError) -> Diagnosis {
     use bravebot_net::EgressError;
@@ -607,6 +661,10 @@ impl<'a> Backend<'a> {
         request: &ChatRequest,
         progress: impl FnMut(Progress),
     ) -> Result<Completion, BackendError> {
+        #[cfg(test)]
+        if let Some(reply) = scripted::next(request) {
+            return reply;
+        }
         match self {
             Self::Aichat {
                 config,
