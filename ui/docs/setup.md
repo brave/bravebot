@@ -9,7 +9,7 @@
   inset traffic lights and sidebar vibrancy are enabled only on macOS.
 - **Current stable Rust**, preferably installed with rustup. `rust-toolchain.toml`
   selects stable and Clippy; `rustup update stable` updates an existing installation.
-  The workspace declares Rust 1.88 as its minimum.
+  The workspace declares Rust 1.90 as its minimum.
 - **Node 22.12+ and npm**. CI uses Node 24. The app uses Electron 44 and React 19.
 - **Git**.
 - **Optional: direnv**, for loading backend credentials. It is unnecessary for

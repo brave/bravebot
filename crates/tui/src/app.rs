@@ -2249,6 +2249,9 @@ pub fn run(
 
     let mut stdout = io::stdout();
     take_over_terminal(&mut stdout)?;
+    // After the takeover, which has finished asking about the background, and before the first
+    // event is read, so the reply to this question cannot be taken for a keystroke.
+    crate::preview::sense();
 
     // Handed back on the way out, because the terminal is already taken by the line above and a
     // failure here would otherwise return from a session that never started, leaving the person in
@@ -3007,6 +3010,8 @@ fn event_loop(
         // Before the frame and before the next key, so what a slash offers is on the screen as the
         // slash is, and Tab never reaches a list the frame did not show.
         session.settle_skills(|| crate::skills::resolved(&workspace, answers.trust.clone()));
+        // A picture decoded since the last pass is drawn on this one rather than at the next key.
+        needs_draw |= session.settle_previews();
 
         // Waiting for the burst to end, but not indefinitely: a drag that never pauses would
         // otherwise show nothing until it stopped.

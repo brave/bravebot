@@ -752,6 +752,25 @@ pub enum Spelled {
     SearchPrompts,
 }
 
+/// A thumbnail of a dropped picture, read for the screen and for nothing else.
+///
+/// The file is one the person just dragged onto the window, so the path is their gesture's and
+/// not a model's. A PDF, a text file, a file too big to be an attachment, or one that will not
+/// decode has no thumbnail. The turn reads the file again under its own policy, exactly as
+/// before; this read decides nothing and sends nothing, and happens off the interface's thread.
+fn preview_of_dropped(found: &crate::dropped::Dropped) -> Option<crate::preview::Preview> {
+    let crate::dropped::Kind::Attachment(media) = found.kind else {
+        return None;
+    };
+    if !media.starts_with("image/") {
+        return None;
+    }
+    Some(crate::preview::Preview::start(
+        crate::preview::Source::File(std::path::PathBuf::from(&found.path)),
+        crate::preview::Fit::Thumbnail,
+    ))
+}
+
 /// A file dropped on the box, and the marker standing for it in the line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Attached {
@@ -1539,6 +1558,12 @@ pub struct Session {
     /// and recalling an older prompt leaves none of them behind. Nothing here is pruned as the line
     /// is edited: the line is the record, and this is read against it whenever the answer matters.
     pasted: Vec<AttachedImage>,
+    /// A drawn thumbnail for each staged picture that could be drawn, by the marker in the line.
+    ///
+    /// Display only: nothing here is sent anywhere. Held apart from [`AttachedImage`] because a
+    /// drawable picture is neither comparable nor cloneable the way the bytes it came from are.
+    /// Emptied when the line is sent, so a picture recalled with its line has no thumbnail.
+    previews: Vec<(String, crate::preview::Preview)>,
     /// The pictures the line carried when it was sent.
     ///
     /// Settled by [`Session::submit`] alongside `sent`, and for the same reason: that is the
@@ -1730,6 +1755,7 @@ impl Session {
             attributed_to: None,
             answers: Vec::new(),
             pasted: Vec::new(),
+            previews: Vec::new(),
             sent_pasted: Vec::new(),
             pasted_text: Vec::new(),
             persist: false,
@@ -6034,6 +6060,9 @@ impl Session {
                 Some((found, name)) => {
                     self.attachments_made += 1;
                     let marker = format!("[{} #{}]", found.noun(), self.attachments_made);
+                    if let Some(preview) = preview_of_dropped(found) {
+                        self.previews.push((marker.clone(), preview));
+                    }
                     self.attached.push(Attached {
                         marker: marker.clone(),
                         name,
@@ -6107,6 +6136,15 @@ impl Session {
         // what the model is given, which is the one thing a change of language must not do.
         let marker = format!("[Image #{}]", self.attachments_made);
         self.paste(&marker);
+        // The bytes are the user's own paste, taken from their clipboard a moment ago. A picture
+        // that will not decode, or a terminal that draws none, just has no thumbnail.
+        self.previews.push((
+            marker.clone(),
+            crate::preview::Preview::start(
+                crate::preview::Source::Bytes(image.bytes.clone()),
+                crate::preview::Fit::Thumbnail,
+            ),
+        ));
         self.pasted.push(AttachedImage {
             marker,
             media_type: image.media_type,
@@ -6124,6 +6162,37 @@ impl Session {
             .filter(|pasted| line.contains(&pasted.marker))
             .cloned()
             .collect()
+    }
+
+    /// The thumbnails of the pictures the line still names, in the order the line names them.
+    pub fn previews_on_the_line(&self) -> Vec<&crate::preview::Thumb> {
+        let mut named: Vec<(usize, &crate::preview::Thumb)> = self
+            .previews
+            .iter()
+            .filter_map(|(marker, preview)| {
+                let at = self.input.find(marker.as_str())?;
+                Some((at, preview.thumb()?))
+            })
+            .collect();
+        named.sort_by_key(|(at, _)| *at);
+        named.into_iter().map(|(_, thumb)| thumb).collect()
+    }
+
+    /// Take the thumbnails that finished since the last look. True when one did, so the screen is
+    /// drawn again: nobody presses a key for a decode to end.
+    pub fn settle_previews(&mut self) -> bool {
+        let mut changed = false;
+        for (_, preview) in &mut self.previews {
+            changed |= preview.settle();
+        }
+        changed
+    }
+
+    /// Stage a thumbnail directly, for a test that has no terminal to ask.
+    #[cfg(test)]
+    pub(crate) fn stage_preview(&mut self, marker: &str, thumb: crate::preview::Thumb) {
+        self.previews
+            .push((marker.to_string(), crate::preview::Preview::ready(thumb)));
     }
 
     /// How many pictures the line being typed still refers to, for the line beneath the box.
@@ -6564,6 +6633,7 @@ impl Session {
         let attached = self.attachments_named(&typed);
         let line = self.unfolded(&typed);
         self.pasted.clear();
+        self.previews.clear();
         self.attached.clear();
         self.clear_input();
         Commanded {
@@ -7523,6 +7593,7 @@ impl Session {
         self.attached.clear();
         let pasted = self.pasted_named(prompt);
         self.pasted.clear();
+        self.previews.clear();
         self.set_input(String::new());
         (attached, pasted)
     }
@@ -10273,6 +10344,58 @@ mod tests {
             media_type: "image/png",
             bytes: bytes.to_vec(),
         }
+    }
+
+    /// A thumbnail is made off the interface's thread, so the session has to notice when it lands:
+    /// nobody presses a key for a decode to end, and one noticed only at the next press is a
+    /// picture that appears late. It is drawn only while the line still names it.
+    #[test]
+    fn a_thumbnail_that_finishes_after_the_paste_is_picked_up_and_drawn_while_named() {
+        let mut s = session();
+        s.attach(picture(b"bytes the paste carried"));
+        let marker = s.input.clone();
+        assert!(marker.contains("[Image #1]"));
+        s.previews.push((
+            "[Image #1]".to_string(),
+            crate::preview::Preview::start_with(
+                ratatui_image::picker::Picker::halfblocks(),
+                crate::preview::Source::Bytes(crate::preview::tests::png(200, 100)),
+                crate::preview::Fit::Thumbnail,
+            ),
+        ));
+        assert!(
+            s.previews_on_the_line().is_empty(),
+            "drawn before it was made"
+        );
+
+        let mut picked_up = false;
+        for _ in 0..500 {
+            if s.settle_previews() {
+                picked_up = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(picked_up, "the finished decode was never reported");
+        assert_eq!(s.previews_on_the_line().len(), 1);
+        assert!(!s.settle_previews(), "reported the same decode twice");
+
+        s.set_input(String::new());
+        assert!(s.previews_on_the_line().is_empty());
+    }
+
+    /// Only a dropped picture is drawn: a PDF is pages, and a text file is not a picture at all.
+    #[test]
+    fn only_a_dropped_picture_is_given_a_thumbnail() {
+        use crate::dropped::{Dropped, Kind};
+        let named = |kind| Dropped {
+            path: "/tmp/dropped".into(),
+            kind,
+        };
+        assert!(preview_of_dropped(&named(Kind::Attachment("image/png"))).is_some());
+        assert!(preview_of_dropped(&named(Kind::Attachment("image/jpeg"))).is_some());
+        assert!(preview_of_dropped(&named(Kind::Attachment("application/pdf"))).is_none());
+        assert!(preview_of_dropped(&named(Kind::Text)).is_none());
     }
 
     /// A picture has to leave a mark on the line, or the prompt says nothing about what is going

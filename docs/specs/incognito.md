@@ -209,7 +209,7 @@ more than what it leaves behind:
   one, which [INCOG-7](#INCOG-7) refuses outright, and the file itself is governed by
   [premium-credentials.md](premium-credentials.md).
 - **The copy of a picture a person is asked to open.** A vetting prompt about a picture hands them a
-  file to open in their own viewer, since neither front end draws one. It goes to `bravebot/vetting`
+  file to open in their own viewer, whether or not a terminal also draws the picture on the prompt. It goes to `bravebot/vetting`
   under their cache directory rather than `~/.bravebot` or the system temporary directory, is
   created `0600` and refuses to reuse an existing name, and is removed when the prompt closes. A
   process killed with the prompt open leaves it behind. [VET-4](tools/vet-content.md#VET-4) governs

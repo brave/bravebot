@@ -160,10 +160,24 @@ the prompt, by the planner's own write or by anything else on the machine. Openi
 show what is there now, and a yes releases what the slot holds, which is what was there at the read.
 The copy is the slot's bytes, so what the person opens is what the planner is given.
 
-**Why a file, and not the picture on the prompt.** Neither front end, the terminal client or the
-desktop window, draws a picture. A file opens in the person's own viewer, where they can zoom in,
-which is how faint or tiny text is found. The copy is still the bytes, one step away, rather than a
-description of them, which is why [PROMPT-1](../prompting.md#PROMPT-1) makes room for it.
+**Why a file first, and a drawing only where the terminal can show one.** The desktop window draws
+no picture, and a terminal draws one only if it speaks a graphics protocol. A file opens in the
+person's own viewer, where they can zoom in, which is how faint or tiny text is found, so the path
+is on every prompt about a picture and is never replaced by a drawing. The copy is still the bytes,
+one step away, rather than a description of them, which is why
+[PROMPT-1](../prompting.md#PROMPT-1) makes room for it.
+
+**The drawing.** The terminal client asks the terminal once, at start-up, which graphics protocol
+it draws. Where the answer is Kitty, iTerm2 or Sixel, the prompt for a PNG or JPEG also draws the
+picture, above the path and inside the margin bar every other line of the prompt sits behind, sized
+to the space the terminal has. The drawing is left out, and the prompt is what it was without it,
+when any of these holds: the protocol is halfblocks or unknown, because a picture made of coloured
+blocks cannot show small writing and a person who saw one would take it for having looked; the
+`NO_COLOR` setting asks for a plain terminal; the file is a PDF, a GIF or a WebP, none of which is
+decoded; the picture is over 8192 pixels a side or would need over 256 MiB to decode; it does not
+decode; or the prompt is scrolled or sized so that the whole drawing does not fit in the visible
+body. Under it a line says that small or faint writing may not show at that size and to open the
+copy.
 
 **What a promotion does.** The result tells the planner the picture is attached. Its next request
 carries the picture in a message of its own after that round's results, beside the driver's words
@@ -190,6 +204,19 @@ refusal is VET-3's, word for word.
   each be shown something the other is not. Stripping it would mean decoding attacker-owned bytes in
   the process that holds the keys, for five formats, one of them PDF, which is a larger exposure
   than the one it removes.
+- **Drawing a PNG or JPEG decodes attacker-owned bytes in the process that holds the keys.** That is
+  the exposure the bullet above declined for stripping, taken for these two formats to put the
+  picture on the prompt. It is not isolated: there is no confined child for it, and the decoders
+  are memory-safe Rust and not a sandbox. What limits it is that only PNG and JPEG are compiled in,
+  that the size is read from the header and refused over 8192 pixels a side or 256 MiB before any
+  pixel is allocated, that the file is capped at the attachment size, and that the decode runs on a
+  thread of its own with at most four at once, so a slow one does not stop the prompt and a panic
+  is a missing picture. A decoder fault that is not a panic runs with the process's keys. A person
+  who wants none of this runs without a graphics terminal, where nothing is decoded, or sets
+  `NO_COLOR`.
+- **A drawing is not a look at the whole picture.** It is scaled to a few dozen columns, so writing
+  that a viewer at full size shows is often not legible in it. It is drawn to help a person notice
+  what the picture is, not to stand in for opening the copy, and the line under it says so.
 - **Bypassing with no screening lets through a picture nothing looked at.** Neither a person nor a
   model has seen it, as neither has seen text the mode promotes. That is the mode as asked for
   ([MODE-4](../permission-modes.md#MODE-4)), and what bounds it is what bounds text: one slot, once,
@@ -234,6 +261,14 @@ refusal is VET-3's, word for word.
 `verified-by: bravebot_agent::turn::a_picture_with_nowhere_to_copy_it_is_kept_back`
 `verified-by: bravebot_agent::turn::a_pdf_a_person_lets_through_is_attached_as_a_file`
 `verified-by: bravebot_agent::vet::a_copy_of_a_picture_is_private_and_removed_with_its_prompt`
+`verified-by: bravebot_tui::confirm::a_picture_is_drawn_on_the_prompt_beside_the_path_to_its_copy`
+`verified-by: bravebot_tui::confirm::a_drawn_picture_sits_inside_the_margin_bar`
+`verified-by: bravebot_tui::confirm::a_picture_is_not_drawn_without_a_real_graphics_protocol`
+`verified-by: bravebot_tui::confirm::only_a_real_protocol_and_a_raster_picture_are_given_a_drawing`
+`verified-by: bravebot_tui::confirm::the_drawing_is_sized_to_the_terminal_and_dropped_when_it_would_not_fit`
+`verified-by: bravebot_tui::confirm::a_picture_that_does_not_fit_the_visible_prompt_is_not_drawn`
+`verified-by: bravebot_tui::preview::a_picture_declaring_a_huge_canvas_is_refused_before_it_is_allocated`
+`verified-by: bravebot_tui::preview::a_decode_that_panics_is_a_missing_picture_and_not_a_crash`
 `verified-by: bravebot_core::policy::a_picture_the_model_is_listed_as_not_taking_is_refused_before_a_check`
 `verified-by: bravebot_core::policy::a_picture_is_promoted_once_by_any_endorsement_and_attached_as_itself`
 `verified-by: bravebot_core::policy::a_copy_of_a_picture_is_a_recorded_release`
