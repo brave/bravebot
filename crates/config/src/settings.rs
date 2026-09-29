@@ -452,8 +452,11 @@ impl Settings {
         let mut mcp_requested: Vec<(PathBuf, String)> = Vec::new();
         // Which kind of layer spelled `effort` last, which is the layer the merge lets answer for
         // it. The merged root cannot say, and it decides whether a saved pick outranks the answer.
-        // `model` no longer takes part: a layer above the home one never names it now, so nothing
-        // above can outrank a pick.
+        // The named file is read after all three and is the one layer above the home one that may
+        // still name `model` and `provider`: the flag naming it is the person's own act
+        // (BACKEND-24), where the project and local layers arrive with the clone.
+        let named_path = named.map(Path::to_path_buf);
+        let mut model_above_home = false;
         let mut effort_above_home = false;
         for path in paths.into_iter().flatten() {
             // A file already read as a layer above is not read again. Naming one of the three
@@ -467,7 +470,8 @@ impl Settings {
                 continue;
             };
             let own = Some(&path) == home_layer.as_ref();
-            if !own {
+            let named_here = Some(&path) == named_path.as_ref();
+            if !own && !named_here {
                 // The keys that pick a backend are the person's to pick, not a checkout's: removed
                 // here rather than read and dropped later, because the merge unions every name a
                 // layer set and a removed key cannot reach [`Settings::from_map`] at all.
@@ -483,6 +487,9 @@ impl Settings {
                     true => vetting = auto_vetting(&root),
                     false => vetting_ignored.push(path.clone()),
                 }
+            }
+            if root.contains_key("model") {
+                model_above_home = !own;
             }
             if root.contains_key("effort") {
                 effort_above_home = !own;
@@ -535,9 +542,10 @@ impl Settings {
         settings.mcp_declared = mcp_declared;
         settings.mcp_requested = mcp_requested;
         // Overwritten rather than merged in, for the reason `provider_ignored` is kept: what every
-        // layer stated has been dropped above, so what stands here is the home layer's own, and a
-        // saved pick cannot be outranked by a file it was never told about.
-        settings.model_outranks_a_pick = false;
+        // layer but the named one stated has been dropped above, so what stands here is the home
+        // layer's own or the file the person named, and a saved pick cannot be outranked by a file
+        // it was never told about.
+        settings.model_outranks_a_pick = model_above_home && settings.model.is_some();
         settings.effort_outranks_a_pick = effort_above_home && settings.effort.is_some();
         settings.provider_ignored = provider_ignored;
         settings.model_ignored = model_ignored;
@@ -2660,15 +2668,15 @@ mod tests {
         assert_eq!(settings.providers_ignored().count(), 1);
     }
 
-    /// A file the command line named is a property of one invocation rather than of the person, so
-    /// it is not the home layer, on the same footing as `vetting.auto`.
+    /// A file the command line named beats every file that was found (BACKEND-24), and naming it
+    /// is the person's own act, so it picks a backend the way the home layer's own file does.
     #[test]
-    fn a_named_layer_cannot_pick_a_backend() {
+    fn a_named_layer_picks_a_backend() {
         let settings = Layers::new("provider-named")
             .named(r#"{"provider": {"gw": {"options": {"baseURL": "https://flag.invalid/v1"}}}}"#)
             .read();
-        assert!(settings.providers().is_empty());
-        assert_eq!(settings.providers_ignored().count(), 1);
+        assert!(!settings.providers().is_empty());
+        assert_eq!(settings.providers_ignored().count(), 0);
     }
 
     /// The whole of the mechanism: a checkout naming a provider block also names which environment
@@ -3364,10 +3372,11 @@ mod tests {
         assert_eq!(only_global.effort(), Some("low"));
     }
 
-    /// A saved `/model` pick ranks as the person's own file does, so a file above the home one
-    /// cannot take the answer away from it: a checkout that names a model is a file whoever wrote
-    /// the checkout wrote, and picking where a person's traffic goes is not a claim a checkout is
-    /// allowed to make. The level (`effort`) is not a backend pick and keeps BACKEND-43's rule.
+    /// A saved `/model` pick ranks as the person's own file does, so a checkout's file cannot take
+    /// the answer away from it: a checkout that names a model is a file whoever wrote the checkout
+    /// wrote, and picking where a person's traffic goes is not a claim a checkout is allowed to
+    /// make. The file `--settings` named is the person's own act (BACKEND-24) and still can. The
+    /// level (`effort`) is not a backend pick and keeps BACKEND-43's rule.
     #[test]
     fn a_layer_above_the_home_one_does_not_pick_a_model() {
         let above = [
@@ -3377,6 +3386,7 @@ mod tests {
                     .project(r#"{"model": "this-checkout", "effort": "max"}"#),
                 Some("personal"),
                 1,
+                false,
                 true,
             ),
             (
@@ -3385,12 +3395,14 @@ mod tests {
                     .local(r#"{"model": "mine-here", "effort": "high"}"#),
                 Some("personal"),
                 1,
+                false,
                 true,
             ),
             (
                 Layers::new("pick-named").named(r#"{"model": "from-the-flag", "effort": "high"}"#),
-                None,
-                1,
+                Some("from-the-flag"),
+                0,
+                true,
                 true,
             ),
             // With nothing in the home layer either, the answer is absence rather than a
@@ -3401,13 +3413,18 @@ mod tests {
                 None,
                 1,
                 false,
+                false,
             ),
         ];
-        for (layers, model, dropped, level_outranks) in &above {
+        for (layers, model, dropped, model_outranks, level_outranks) in &above {
             let settings = layers.read();
             let seen = settings.layers().collect::<Vec<_>>();
             assert_eq!(settings.model(), *model, "{seen:?}");
-            assert!(!settings.model_outranks_a_pick(), "{seen:?}");
+            assert_eq!(
+                settings.model_outranks_a_pick(),
+                *model_outranks,
+                "{seen:?}"
+            );
             assert_eq!(settings.model_ignored().count(), *dropped, "{seen:?}");
             assert_eq!(
                 settings.effort_outranks_a_pick(),

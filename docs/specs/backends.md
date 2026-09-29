@@ -259,13 +259,13 @@ compiled into the binary and to one exported as `BRAVE_AI_CHAT_DEFAULT_MODEL`. T
 answers where no file names one, above the build.
 
 A choice recorded with `/model` ranks as the person's own file, `~/.bravebot/settings.json`, does.
-It outranks the `model` key in that file, and no file above the person's own may name a model at
-all ([BACKEND-24](#BACKEND-24)), so a checkout's `.bravebot/settings.json`,
-`.bravebot/settings.local.json`, or the file `--settings` named cannot rank one above the pick. A
-key spelled blank, or as something other than a string, names nothing and does not outrank a pick.
-It still displaces the key the person's own file named, so with nothing recorded the exported
-variable or the build answers. Above all of it are `--model` and a model picked in the session that
-is running.
+It outranks the `model` key in that file, is outranked by one in the file `--settings` named
+([BACKEND-24](#BACKEND-24) reads that file after all three, and naming it is the person's own act),
+and a checkout's `.bravebot/settings.json` or `.bravebot/settings.local.json` cannot name a model at
+all. A key spelled blank, or as something other than a string, names nothing and does not outrank a
+pick. It still displaces the key a lower file named, so with nothing recorded the exported variable
+or the build answers. Above all of it are `--model` and a model picked in the session that is
+running.
 
 **Why.** Every release bakes a default model in, so this value ranked like the rest of the file would
 lose on every binary anybody was given: the key would parse, `doctor` would report it, and nothing
@@ -840,7 +840,7 @@ with it.
 `verified-by: bravebot_config::settings::every_layers_request_is_read_and_each_alias_is_kept_once`
 `verified-by: bravebot_config::settings::a_project_layer_cannot_pick_a_backend`
 `verified-by: bravebot_config::settings::a_project_provider_block_leaves_the_home_ones_alone`
-`verified-by: bravebot_config::settings::a_named_layer_cannot_pick_a_backend`
+`verified-by: bravebot_config::settings::a_named_layer_picks_a_backend`
 `verified-by: bravebot_config::settings::a_project_layer_cannot_smuggle_a_provider_env_name`
 `verified-by: bravebot_config::settings::a_project_layer_cannot_pick_a_model`
 `verified-by: bravebot_config::settings::a_project_model_leaves_the_default_in_force`
