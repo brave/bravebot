@@ -82,6 +82,13 @@ A rule is about a **path**, not about the files that were in it when the rule wa
 consulted when a file is read rather than when the rule is written. A file that appears in a
 trusted directory afterwards is therefore read as trusted, whoever put it there.
 
+**Case.** On macOS and Windows, where a filesystem answers to either case of a name by default,
+two spellings that differ only in case are one path: a rule about `src/fetched.json` decides
+`SRC/fetched.json` too, in both polarities. Linux compares bytes. On a case-sensitive volume the
+fold can make a rule reach a path it was not written about, so a trust rule can cover a sibling
+that differs only in case there. Where two rules differ only in case, the one that sorts first
+decides, and the map does not replace one with the other.
+
 **Why.** Per-file exceptions in both directions are the only way `@vendor/lib.js` can be trusted
 inside a `vendor` a person marked untrusted, without that answer leaking to its siblings.
 
@@ -102,6 +109,8 @@ kind then has one rule instead of two that could disagree.
 `verified-by: bravebot_core::trust::equivalent_path_spellings_are_the_same_rule`
 `verified-by: bravebot_core::trust::every_equivalent_spelling_of_a_path_reaches_the_same_rule`
 `verified-by: bravebot_agent::workspace::a_second_spelling_of_a_distrusted_file_is_read_as_untrusted`
+`verified-by: bravebot_core::trust::a_rule_covers_a_case_variant_spelling_of_the_same_file`
+`verified-by: bravebot_agent::workspace::a_case_variant_spelling_of_a_distrusted_file_is_read_as_untrusted`
 `verified-by: bravebot_core::trust::a_later_decision_replaces_an_earlier_one`
 `verified-by: bravebot_core::trust::a_path_named_in_full_reaches_the_rule_its_relative_name_wrote`
 `verified-by: bravebot_core::trust::a_rule_outside_the_working_directory_decides_nothing_inside_it`

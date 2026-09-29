@@ -191,7 +191,8 @@ impl TrustStore {
 
     fn decision_at_key(&self, path: &str) -> Option<Option<Integrity>> {
         // Probe only whole-segment ancestors, from the most specific to the least.
-        // Each lookup costs O(log rules), independent of unrelated paths.
+        // Each lookup costs O(log rules) on Linux. On macOS and Windows a probe with no exact hit
+        // also scans every rule.
         let mut prefix = path;
         while !prefix.is_empty() && prefix != "/" {
             if let Some(decision) = self.rule_at(prefix) {
@@ -219,10 +220,10 @@ impl TrustStore {
     /// spelling that missed directly is then looked up case-insensitively: a rule written about
     /// `src/fetched.json` decides the very same bytes read as `SRC/fetched.json`, and a probe
     /// that could not see it would answer from the trusted rule above the file instead, the
-    /// laundering spelled-past-a-rule closes elsewhere. Folding can only ever reach a rule
-    /// already written — it never grants one — so on a deliberately case-sensitive volume it
-    /// errs toward more distrust, never less. Other hosts keep the map byte-exact, and the scan
-    /// this costs is bounded by the number of rules a person's decisions have actually written.
+    /// laundering spelled-past-a-rule closes elsewhere. Folding only reaches a rule already
+    /// written, but that rule may be a trust rule, so on a case-sensitive volume it can also
+    /// cover a path that differs from the rule only in case. Other hosts keep the map byte-exact.
+    /// The scan costs one pass over the rules a person's decisions have written.
     fn rule_at(&self, key: &str) -> Option<&Option<Integrity>> {
         if let Some(decision) = self.rules.get(key) {
             return Some(decision);
@@ -386,9 +387,9 @@ pub(crate) fn normalise(path: &str) -> String {
 /// to lowercase: a distrust rule written about `src/fetched.json` must also reach the file
 /// opened as `SRC/fetched.json`, which names the same bytes there and would otherwise launder
 /// untrusted content past the rule, the same class of spelling bypass as git CVE-2014-9390.
-/// Folding may also equate two spellings that a deliberately case-sensitive volume (a
-/// case-sensitive APFS volume, say) would hold apart; that over-folds toward *more* distrust,
-/// never less, which is the safe direction. On other hosts the comparison stays byte-exact.
+/// Folding may also equate two spellings that a case-sensitive volume (a case-sensitive
+/// APFS volume, say) holds apart, which extends a trust rule as well as a distrust rule to the
+/// other spelling. On other hosts the comparison stays byte-exact.
 pub(crate) fn covers(prefix: &str, path: &str) -> bool {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     let (prefix, path) = (prefix.to_lowercase(), path.to_lowercase());
