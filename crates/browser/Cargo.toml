@@ -16,4 +16,8 @@ rand = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+# What derives an extension's id from the key in its manifest, for the test holding the id install
+# records to the one the extension in this repository has.
+base64 = { workspace = true }
+sha2 = { workspace = true }
 tempfile = { workspace = true }

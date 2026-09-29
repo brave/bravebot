@@ -2,7 +2,8 @@
 //!
 //! Brave starts it with the extension's origin as its first argument, and it serves as the native
 //! messaging host. BraveBot starts it as `bravebot-browser mcp`, and it serves as a stdio MCP
-//! server. A person runs `bravebot-browser install <extension id>` once.
+//! server. A person runs `bravebot-browser install` once, naming an extension id only where it is
+//! not the one in `extension/`.
 //!
 //! **This is the only file in the crate that ends the process.** The native host's stdout is
 //! native messaging's stream and the MCP server's is the protocol, so nothing else prints to it.
@@ -34,11 +35,13 @@ fn main() {
             &mut std::io::stdout(),
         ),
         ["install", rest @ ..] => {
-            let (manifests, extension) = match rest {
-                ["--manifest-dir", manifests, extension] => {
-                    (Some(PathBuf::from(manifests)), *extension)
-                }
-                [extension] => (install::manifest_directory(), *extension),
+            let (manifests, rest) = match rest {
+                ["--manifest-dir", manifests, rest @ ..] => (Some(PathBuf::from(manifests)), rest),
+                rest => (install::manifest_directory(), rest),
+            };
+            let extension = match rest {
+                [] => install::EXTENSION_ID,
+                [extension] => *extension,
                 _ => usage(),
             };
             let installed = match (manifests, paths::host_directory()) {
@@ -72,7 +75,7 @@ fn main() {
 
 #[cfg(unix)]
 fn usage() -> ! {
-    eprintln!("usage: bravebot-browser install [--manifest-dir <dir>] <extension id>");
+    eprintln!("usage: bravebot-browser install [--manifest-dir <dir>] [<extension id>]");
     eprintln!("       bravebot-browser mcp");
     std::process::exit(2);
 }
