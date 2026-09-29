@@ -1509,8 +1509,8 @@ says the same and fails, which is [CLI-7](cli.md#CLI-7).
 
 The model decides, as it does everywhere here: a model a configured service serves is not this
 case, whatever the aichat fields hold. The model asked about is the one the run will actually
-request, which is a name given on the command line, then the one a session recorded, then the
-configured default.
+request, which is a name given on the command line, then the one a session recorded unless
+[BACKEND-47](#BACKEND-47) sets it aside, then the configured default.
 
 An endpoint that is not one of Brave's own deployments is not this case either, development channel
 and production alike. That is somebody's own host, a local model server or a private deployment or
@@ -1888,6 +1888,42 @@ was thought.
 `verified-by: bravebot_bedrock::lib::a_refused_ask_for_arguments_as_written_is_given_up_and_remembered`
 `verified-by: bravebot_bedrock::lib::a_probe_that_settled_nothing_leaves_what_was_known`
 
+<a id="BACKEND-47"></a>
+### BACKEND-47: a pick is recorded as the tier it was, and a pick nothing serves is set aside
+
+A model picked with `/model` that an AWS account named for a tier is recorded as that tier's word,
+`opus`, `sonnet` or `haiku`. Any other pick is recorded as it is. A recorded name is read back as
+[BACKEND-12](#BACKEND-12) reads a tier word, so a recorded tier names whatever model that tier names
+at the next start.
+
+Where the recorded pick is in force under [BACKEND-11](#BACKEND-11) and [BACKEND-39](#BACKEND-39)
+would refuse it, while the configured model beneath it would be served, the pick is set aside for
+that start. The interface, a session in lines and a one-shot run given no `--model` open on the
+configured model and say which pick they set aside. `doctor` reports the configured model with the
+pick beside it. The record is left as it is. Where the configured model would be refused as well,
+or the pick is refused because a stored Leo Premium batch could not be used, nothing is set aside
+and the refusal is BACKEND-39's.
+
+**Why.** An inference-profile ARN changes when the profile is recreated, and the tier variable is
+what a person edits when that happens, which leaves a recorded ARN naming the old profile. That
+record outranks the `model` key in the person's own file, reaches Brave's endpoint, and is refused
+with advice to set the key it already outranks. Recording the tier word removes that case for picks
+made from now on. A record written before this, or one naming a model of a gateway block that was
+removed, still names nothing a configured service offers, and refusing it leaves somebody stuck on a
+file no message names. The record is kept because the configuration that served it can return, such
+as an `.envrc` that exports the tier variables in one checkout only. A refused batch is left to
+BACKEND-39 because importing it again is what serves the pick, and the refusal says how.
+
+`verified-by: bravebot_config::lib::a_tier_model_is_recorded_as_its_word_and_read_back_through_the_variable`
+`verified-by: bravebot_agent::backend::a_recorded_tier_word_names_the_model_its_variable_names`
+`verified-by: bravebot_agent::backend::a_pick_is_set_aside_only_for_a_default_that_is_served`
+`verified-by: bravebot_agent::backend::a_pick_refused_for_a_stored_batch_is_not_set_aside`
+`verified-by: bravebot_tui::persist::a_picked_tier_is_recorded_as_its_word_and_follows_the_variable`
+`verified-by: bravebot_tui::persist::a_pick_nothing_serves_is_set_aside_and_named`
+`verified-by: bravebot_cli::running::a_recorded_pick_nothing_serves_is_set_aside_for_the_configured_model`
+`verified-by: bravebot_cli::running::doctor_names_a_pick_it_sets_aside`
+`verified-by: bravebot_cli::running::a_session_in_lines_sets_aside_a_pick_nothing_serves`
+
 ## Known costs
 
 - **The refusal is made at startup, and a model chosen mid-session is not checked again.**
@@ -1897,6 +1933,16 @@ was thought.
   there is a person naming a model from a list that says which service answers it (BACKEND-6),
   which is the opposite of the case the clause exists for: nobody arrives at it without knowing
   what they picked.
+
+- **A recorded tier word follows the configuration of the checkout it is read in.** A `sonnet`
+  recorded where the tier variables were exported names Brave's Sonnet, or the account's first
+  model, where they are not. Two tier variables naming the same ARN record the first tier in
+  Opus, Sonnet, Haiku order, whichever row was picked. A pick recorded before the tier word was
+  written is an ARN, and is set aside once nothing serves it.
+
+- **A pick that is set aside is named at every start.** The record is kept (BACKEND-47), so each
+  start says it set the pick aside until another model is picked with `/model`. Somebody who only
+  makes one-shot runs has no `/model`, and sees the line until they remove `~/.bravebot/model`.
 
 - **Which model answers is the individual's, and a managed layer cannot pin it.** A pinned default
   model would lose to a `/model` choice wherever one is in force, so it would pin nothing, and

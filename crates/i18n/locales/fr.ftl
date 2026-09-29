@@ -182,6 +182,7 @@ doctor-key-id = id de clé
 doctor-model = modèle
 doctor-model-chosen = { $model } (choisi avec /model)
 doctor-model-default = { $model } (par défaut)
+doctor-model-set-aside = { $model } (par défaut, car { $pick }, choisi avec /model, n'est servi par aucun service configuré)
 doctor-key-name = clé
 doctor-key = { $key } (jamais transmise)
 doctor-ends = fin
@@ -1452,6 +1453,7 @@ session-directory-changed = travail désormais dans { $directory }, et approuvé
 session-directory-closed = { $directory } fermé ; rouvrez-le avec /add-dir { $directory }
 session-directory-not-changed = impossible de passer à { $directory } : { $problem }
 session-permission-rule-ignored = règle de permission ignorée dans settings.json : { $problem }
+session-model-pick-set-aside = { $model }, choisi avec /model, est ignoré car aucun service configuré ne le sert
 session-permission-allow-ignored =
     la règle allow { $rule } de { $path } n'est pas accordée : une règle allow répond à une invite,
     le fichier d'un projet la propose donc et c'est vous qui l'accordez

@@ -2699,7 +2699,7 @@ fn event_loop(
         .on_tier(config);
     // The saved pick where a checkout's settings do not outrank it (BACKEND-11), before the window
     // below is asked for, which is the window of whichever model this settles on.
-    session.adopt_model(&settings);
+    session.adopt_model(&settings, config);
     let absent = std::mem::take(&mut mcp_servers.notes);
     session.servers = mcp_servers;
     // Windows reports modifiers on every key without being asked, and crossterm says it cannot be
@@ -4214,7 +4214,7 @@ fn choose_model(
                 if !chosen.reads_effort && session.effort().is_some() {
                     session.note(t!(session_effort_not_read));
                 }
-                session.choose_model(chosen.key);
+                session.choose_model(chosen.key, config);
             }
         }
         Err(detail) => session.note(t!(session_models_unavailable, problem = detail)),
@@ -13105,7 +13105,7 @@ mod tests {
     fn an_addressed_turn_is_held_against_the_model_its_definition_named() {
         let config = a_config_needing_no_sign_in();
         let mut session = Session::new("none");
-        session.choose_model("the-sessions-model");
+        session.choose_model("the-sessions-model", &config);
         let named = crate::state::Addressed {
             name: "rule-reviewer".to_string(),
             model: Some("the-definitions-model".to_string()),

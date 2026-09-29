@@ -53,11 +53,18 @@ impl Tier {
     /// Anything else is `None` and is used as written, which is what carries a model id, an
     /// inference-profile ARN, and a name from the Brave roster.
     pub fn from_alias(name: &str) -> Option<Self> {
-        match name.trim().to_ascii_lowercase().as_str() {
-            "opus" => Some(Tier::Opus),
-            "sonnet" => Some(Tier::Sonnet),
-            "haiku" => Some(Tier::Haiku),
-            _ => None,
+        let name = name.trim();
+        Tier::ALL
+            .into_iter()
+            .find(|tier| tier.alias().eq_ignore_ascii_case(name))
+    }
+
+    /// The word [`Tier::from_alias`] reads as this tier.
+    pub fn alias(self) -> &'static str {
+        match self {
+            Tier::Opus => "opus",
+            Tier::Sonnet => "sonnet",
+            Tier::Haiku => "haiku",
         }
     }
 

@@ -187,6 +187,7 @@ doctor-key-id = key id
 doctor-model = model
 doctor-model-chosen = { $model } (chosen with /model)
 doctor-model-default = { $model } (default)
+doctor-model-set-aside = { $model } (default, since { $pick }, chosen with /model, is not served by any configured service)
 doctor-key-name = key
 doctor-key = { $key } (never transmitted)
 # What would end each credential this build holds for itself: who issued it, the surface that
@@ -1652,6 +1653,7 @@ session-directory-changed = now working in { $directory }, and trusting it for t
 session-directory-closed = closed { $directory }; open it again with /add-dir { $directory }
 session-directory-not-changed = could not move to { $directory }: { $problem }
 session-permission-rule-ignored = ignoring a permission rule in settings.json: { $problem }
+session-model-pick-set-aside = ignoring { $model }, picked with /model, because no configured service serves it
 # An allow rule written in a checkout's settings file. It answers an approval prompt, which is a
 # capability rather than a narrowing, so it is read from the person's own file only. Named rather
 # than counted: whoever wrote it is looking for their own line.

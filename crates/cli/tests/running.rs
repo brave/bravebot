@@ -385,6 +385,94 @@ fn a_model_named_on_the_command_line_is_not_refused() {
     );
 }
 
+/// A `/model` pick of an inference profile that has since been replaced, which no configured
+/// service offers any more.
+const A_GONE_PICK: &str = "arn:aws:bedrock:us-west-2:1:application-inference-profile/gone";
+
+/// A gateway in the person's own settings file with a `model` key naming one of its models, which
+/// a recorded pick outranks.
+const A_GATEWAY_AND_ITS_MODEL: &str = r#"{
+    "provider": {
+        "openrouter": {
+            "env": ["OPENROUTER_API_KEY"],
+            "options": {"baseURL": "http://127.0.0.1:1/api/v1"},
+            "models": {"z-ai/glm-4.6": {}}
+        }
+    },
+    "model": "openrouter/z-ai/glm-4.6"
+}"#;
+
+/// Brave's own hosts, with a token for the gateway above.
+const BRAVES_HOSTS_AND_A_GATEWAY_TOKEN: &[(&str, &str)] = &[
+    ("SERVICES_KEY_AICHAT", "a-services-key"),
+    ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+    ("BRAVE_AI_CHAT_ENDPOINT", "https://ai-chat.bsg.brave.com"),
+    (
+        "BRAVE_AI_CHAT_PREMIUM_ENDPOINT",
+        "https://ai-chat-premium.bsg.brave.com",
+    ),
+    ("OPENROUTER_API_KEY", "a-token"),
+];
+
+/// BACKEND-47. A recorded pick nothing configured serves is set aside for the model the settings
+/// file names, so the run goes to the gateway rather than being refused, says which pick it set
+/// aside, and leaves the record as it was.
+#[test]
+fn a_recorded_pick_nothing_serves_is_set_aside_for_the_configured_model() {
+    let scratch = Scratch::new("cli-running-pick-set-aside")
+        .with_settings(A_GATEWAY_AND_ITS_MODEL)
+        .with_state("model", &format!("{A_GONE_PICK}\n"));
+
+    let output = bravebot(
+        &scratch.path,
+        BRAVES_HOSTS_AND_A_GATEWAY_TOKEN,
+        &["-p", "say something"],
+    );
+
+    let (_, stderr) = said(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(5),
+        "a pick nothing serves refused the run: {stderr}"
+    );
+    assert!(
+        stderr.contains("127.0.0.1:1"),
+        "the run went somewhere other than the gateway the settings named: {stderr}"
+    );
+    assert!(
+        stderr.contains(A_GONE_PICK),
+        "the run did not say which pick it set aside: {stderr}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".bravebot").join("model")).ok(),
+        Some(format!("{A_GONE_PICK}\n")),
+        "the record was rewritten"
+    );
+}
+
+/// BACKEND-47 in the report: the model a run would request is the configured one, and the pick it
+/// sets aside is named beside it. A report naming the pick as the model in force would explain a
+/// start that does not happen.
+#[test]
+fn doctor_names_a_pick_it_sets_aside() {
+    let scratch = Scratch::new("cli-running-doctor-pick-set-aside")
+        .with_settings(A_GATEWAY_AND_ITS_MODEL)
+        .with_state("model", &format!("{A_GONE_PICK}\n"));
+
+    let output = bravebot(&scratch.path, BRAVES_HOSTS_AND_A_GATEWAY_TOKEN, &["doctor"]);
+
+    let (stdout, stderr) = said(&output);
+    assert_ne!(output.status.code(), Some(3), "{stdout}{stderr}");
+    let model = stdout
+        .lines()
+        .find(|line| line.contains(A_GONE_PICK))
+        .unwrap_or_else(|| panic!("the report did not name the pick: {stdout}"));
+    assert!(
+        model.contains("openrouter/z-ai/glm-4.6 (default"),
+        "the report did not name the configured model as the one in force: {model}"
+    );
+}
+
 /// A machine with nowhere to keep credentials has none imported, rather than a batch that could
 /// not be read.
 ///
@@ -1636,6 +1724,33 @@ fn a_session_in_lines_with_a_configured_gateway_opens() {
     assert!(
         !transcript.contains('\x1b'),
         "something was asked of the terminal: {transcript:?}"
+    );
+}
+
+/// BACKEND-47 in a session in lines: a recorded pick nothing configured serves is set aside, the
+/// session opens on the model the settings file names, and it says which pick it set aside.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_session_in_lines_sets_aside_a_pick_nothing_serves() {
+    let scratch = Scratch::new("cli-running-plain-pick-set-aside")
+        .with_settings(A_GATEWAY_AND_ITS_MODEL)
+        .with_state("model", &format!("{A_GONE_PICK}\n"));
+
+    let output = in_a_terminal(
+        &scratch.path,
+        BRAVES_HOSTS_AND_A_GATEWAY_TOKEN,
+        &["--plain"],
+    );
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{transcript}");
+    assert!(
+        transcript.contains("openrouter/z-ai/glm-4.6"),
+        "the session did not open on the model the settings named: {transcript}"
+    );
+    assert!(
+        transcript.contains(A_GONE_PICK),
+        "the session did not say which pick it set aside: {transcript}"
     );
 }
 

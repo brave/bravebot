@@ -762,7 +762,7 @@ mod tests {
     fn after_a_turn(config: &Config, chosen: Option<&str>, served: &str) -> crate::state::Session {
         let mut session = crate::state::Session::new("kernel-enforced");
         if let Some(model) = chosen {
-            session.choose_model(model.to_string());
+            session.choose_model(model.to_string(), config);
         }
         let in_force = chosen.unwrap_or(&config.default_model);
         session.served(
@@ -1469,7 +1469,7 @@ mod tests {
 
         // Asked for claude-opus and got it, then picked something else for the next turn.
         let mut honoured = after_a_turn(&config, Some("claude-opus"), "claude-opus");
-        honoured.choose_model("claude-sonnet".to_string());
+        honoured.choose_model("claude-sonnet".to_string(), &config);
         let mut shown = facts(&config, &trust);
         as_of(&mut shown, &honoured);
         let shown = rendered(&report(&shown));
@@ -1478,7 +1478,7 @@ mod tests {
         // The other direction: the turn really was substituted, and picking the model that
         // answered it does not make the substitution stop having happened.
         let mut substituted = after_a_turn(&config, Some("claude-opus"), "qwen-14b-instruct");
-        substituted.choose_model("qwen-14b-instruct".to_string());
+        substituted.choose_model("qwen-14b-instruct".to_string(), &config);
         let mut shown = facts(&config, &trust);
         as_of(&mut shown, &substituted);
         let shown = rendered(&report(&shown));
