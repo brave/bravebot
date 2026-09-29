@@ -8,9 +8,8 @@
 //! for the duration of the turn and hands it back by releasing the lock; the dispatch
 //! thread holds only what it needs to answer a question or stop the work.
 
-use crate::turn::{Kind, Reply};
+use crate::turn::Reply;
 use bravebot_agent::Conversation;
-use bravebot_agent::confirm::{Decision, RunDecision};
 use bravebot_agent::conversation::Snapshot;
 use bravebot_core::cancel::Cancel;
 use bravebot_core::programs::TrustedPrograms;
@@ -267,15 +266,7 @@ impl Running {
             // Refused in the shape of the question that was asked, so the worker's own
             // match arm accepts it. A `Write` sent at a waiting run would be discarded as
             // a mismatch and the turn would block until the channel dropped instead.
-            let _ = self.answers.send(match question.kind {
-                Kind::Write => Reply::Write(Decision::Reject),
-                Kind::Run => Reply::Run(RunDecision::reject()),
-                Kind::Output => Reply::Output(Decision::Reject),
-                Kind::Vouch => Reply::Vouch(Decision::Reject),
-                Kind::Vet => Reply::Vet(Decision::Reject),
-                // No answers at all, which is how this question says nobody was asked.
-                Kind::Ask => Reply::Ask(Vec::new()),
-            });
+            let _ = self.answers.send(question.kind.refusal());
         }
     }
 }

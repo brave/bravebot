@@ -916,3 +916,50 @@ fn approval_evidence_is_kept_beside_the_decision() {
     assert_eq!(write["remark"]["lines"], 9);
     assert_eq!(write["remark"]["preview"], json!(["Fixed a typo"]));
 }
+
+/// The host crosses beside the URL, as the agent's parser read it, and is not a front end's to work
+/// out: the string below reads as one site and reaches another, and what a yes agrees to is the
+/// one it reaches (FETCH-2). Nothing about what would come back is sent, because nothing has been
+/// fetched, and the question carries no answer of its own.
+#[test]
+fn a_fetch_prompt_carries_the_host_beside_the_url_and_nothing_of_a_body() {
+    use bravebot_agent::confirm::FetchRequest;
+    let value = wire::fetch_request(
+        3,
+        &FetchRequest {
+            url: "https://example.com@evil.test/docs".into(),
+            host: "evil.test".into(),
+        },
+    );
+
+    assert_eq!(
+        value,
+        json!({
+            "request": 3,
+            "url": "https://example.com@evil.test/docs",
+            "host": "evil.test",
+            "ambient": [],
+            "summary": "fetch from evil.test",
+        })
+    );
+}
+
+/// A metadata service is an ordinary host to everything between here and it, so the address alone
+/// does not say that reaching it is being handed the role this machine runs as. The kind and the
+/// word that named it cross in the shape a run's do, so one drawing serves both.
+#[test]
+fn a_fetch_from_a_metadata_service_says_so_across_the_bridge() {
+    use bravebot_agent::confirm::FetchRequest;
+    let value = wire::fetch_request(
+        4,
+        &FetchRequest {
+            url: "http://169.254.169.254/latest/meta-data/".into(),
+            host: "169.254.169.254".into(),
+        },
+    );
+
+    assert_eq!(
+        value["ambient"],
+        json!([{ "authority": "metadata-service", "named": "169.254.169.254" }])
+    );
+}

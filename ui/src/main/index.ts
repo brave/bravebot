@@ -409,6 +409,7 @@ const ALLOWED = new Set([
   'output.reply',
   'vouch.reply',
   'vet.reply',
+  'fetch.reply',
   'ask.reply',
   'trust.reply',
   'permissions.list',

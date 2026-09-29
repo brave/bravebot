@@ -148,9 +148,9 @@ Honest limits. Two things could eventually want an upstream change, and neither 
 - **Structured `doctor` output.** The checks live in `crates/cli/src/main.rs`, a binary,
   so they cannot be called as a library. v1 shells out to `bravebot doctor` and shows its text
   (§7.3). A small upstream extraction would be nicer and is optional.
-- **New approval types.** Command approval is implemented. The v0.9.0 fetch-host,
-  language-server and manifest-plan requests are currently refused; adding UI support
-  requires adapting the bridge, not editing upstream.
+- **New approval types.** Command and fetch approval are implemented. The language-server
+  and manifest-plan requests are currently refused; adding UI support requires adapting
+  the bridge, not editing upstream.
 
 If anything else appears to need an upstream edit, that is a signal the bridge is
 reaching for something it should not, and it should be raised rather than patched.
@@ -616,10 +616,11 @@ See §8. Returns `{}`. An unknown or already-answered `request` errors
 
 #### Other decision replies
 
-`run.reply`, `output.reply`, `vouch.reply` and `ask.reply` all require `session` and
-`request`, and must match the pending question's kind as well as its ID.
+`run.reply`, `output.reply`, `vouch.reply`, `fetch.reply` and `ask.reply` all require
+`session` and `request`, and must match the pending question's kind as well as its ID.
 `run.reply` accepts `decision` and `remember`; only an approval with literal
-`remember: true` records a command grant. Output and vouch replies accept `decision`.
+`remember: true` records a command grant. Output, vouch and fetch replies accept `decision`.
+A fetch reply has no `remember`: an approval covers the one URL it was given for.
 `ask.reply` accepts an `answers` array, whose entries contain `typed` text or `chosen`
 indices; unreadable entries decline. Choices are fitted to the question before use.
 
@@ -725,6 +726,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `run.request` | `{ request, stages, directory, line, plan, writes, releasesPrivate, vouches, summary }` | command approval |
 | `output.request` | `{ request, command, reference, lines, output, summary }` | admit command output |
 | `vouch.request` | preview and label fields from `wire::vouch_request` | trust a quarantined path |
+| `fetch.request` | `{ request, url, host, ambient, summary }` | fetch one URL; `host` is the agent's reading of `url` and is drawn as sent |
 | `ask.request` | `{ request, prompts }` | user questions |
 | `trust.request` | `{ directory, keeping }` | initial project trust; `keeping` as §9 |
 | `turn.done` | see §8.2 | `Ok(Outcome)` |
@@ -972,8 +974,8 @@ the directory was made.
 
 ## 11. Current limits
 
-- Fetch-host, language-server and manifest-plan approval requests are refused until
-  their UI is implemented. Command, output, vouch and question approvals are implemented.
+- Language-server and manifest-plan approval requests are refused until their UI is
+  implemented. Command, output, vouch, fetch and question approvals are implemented.
 - Replies arrive whole in `turn.done`; output-token events report counts, not text.
 - MCP configuration, subscription import and skills authoring have no dedicated UI.
 - File browsing, previews and attachments are Electron IPC features, not RPC methods.
@@ -1139,3 +1141,15 @@ Still open:
   edited JSON and the text `hooks.inspect` last reported (null for an absent file), and writes
   through a descriptor-pinned atomic replace that refuses a symlink and stale text. There is no
   read endpoint: a renderer reads the file through `hooks.inspect`.
+- `fetch.request` carries `request`, `url`, `host`, `ambient` and `summary`. `host` is taken
+  from the URL by the agent's parser and a front end draws it as sent, on a line of its own,
+  because a URL can be written to read as another host. `ambient` has the shape a run's has
+  and is empty for every host but a machine's metadata service. Nothing of a reply is sent:
+  the question is put before the request goes out. `fetch.reply` carries the session, request
+  and explicit decision, and its kind is distinct from every other reply's. An approval is
+  consent to that one request, trusts nothing that comes back, and is not remembered.
+- A question answered with a yes or a no is added in four places and no others: a `Kind` and
+  a `Reply` in `turn.rs`, whose `Kind::refusal` does not build until the new kind has one; a
+  projection in `wire.rs`; a row in `Bridge::dispatch`; and, in the window, a row in `REPLY`
+  in `src/renderer/transcript.ts` with its entry, its card and its line in the main process's
+  allow-list, which `scripts/fetch-card.test.mjs` holds to each other.

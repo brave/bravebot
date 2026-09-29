@@ -927,6 +927,14 @@ button { font: inherit; color: inherit; cursor: pointer; }
 /* Output the planner has not read is confined content, and is drawn as confined content
    rather than as a quotation: it is the one card whose whole body is untrusted bytes. */
 .confirm.output { border-color: var(--confine); }
+/* A fetch that reaches a machine's metadata service is bordered as a command releasing private
+   data is: both are a grant the request itself does not show. */
+.confirm.fetch.spends { border-color: var(--warn); border-width: 2px; }
+/* An address has no spaces to break at, so it breaks anywhere rather than run under the edge
+   of the card, where the end of it would be the part nobody read. */
+.confirm.fetch .confirm-head .path { overflow-wrap: anywhere; }
+.confirm.fetch .fetch-host { border-top: 0; color: var(--ink); }
+.confirm.fetch .fetch-host code { font-family: var(--mono); font-weight: 600; }
 .confirm.output .confirm-head .intent,
 .confirm.vouch .confirm-head .intent { color: var(--confine); }
 

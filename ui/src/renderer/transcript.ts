@@ -17,6 +17,7 @@ import type {
   Change,
   ConfirmRequest,
   CutOff,
+  FetchRequest,
   Landing,
   OutputRequest,
   RunRequest,
@@ -104,6 +105,13 @@ export type Entry = (
    * everything.
    */
   | { kind: 'vet'; id: string; request: VetRequest; decision: 'approve' | 'reject' | null }
+  /**
+   * A URL awaiting a decision about whether to fetch it, or the record of one already made.
+   *
+   * No `remember`, because there is nothing to remember: an approval covers the one URL it was
+   * given for and the next fetch asks again.
+   */
+  | { kind: 'fetch'; id: string; request: FetchRequest; decision: 'approve' | 'reject' | null }
   | { kind: 'ask'; id: string; request: AskRequest; answers: AskAnswer[] | null }
   | { kind: 'error'; id: string; text: string; category?: string | null; attempts?: number | null; status?: number | null; cutOff?: CutOff | null }
   | { kind: 'watch'; id: string; text: string }
@@ -194,6 +202,7 @@ export const askedOutput = (request: OutputRequest): Entry => ({
   decision: null,
 })
 export const askedVet = (request: VetRequest): Entry => ({ kind: 'vet', id: nextId(), request, decision: null })
+export const askedFetch = (request: FetchRequest): Entry => ({ kind: 'fetch', id: nextId(), request, decision: null })
 export const askedVouch = (request: VouchRequest): Entry => ({
   kind: 'vouch',
   id: nextId(),
@@ -269,20 +278,39 @@ export function land(entries: Entry[], landing: Landing): Entry[] {
 }
 
 /** Record what the user decided about a write. */
+/**
+ * Every question answered with a yes or a no, and the method that carries the answer.
+ *
+ * Written down once. The kinds a card may answer, the entries that count as waiting, and the
+ * method an answer is sent through all read this table, so a question added to it cannot be one
+ * the transcript draws and the composer does not wait for, or one answered through a method
+ * meant for another.
+ *
+ * A method per kind rather than one taking a kind, so an answer cannot be delivered to the wrong
+ * question by getting a field wrong: the agent derives the kind from the method it was called on
+ * and checks it against what is actually waiting.
+ *
+ * A series of questions is not here. Its reply is an answer per question and not a decision, so
+ * it has a method and a callback of its own.
+ */
+export const REPLY = {
+  confirm: 'confirm.reply',
+  run: 'run.reply',
+  output: 'output.reply',
+  vouch: 'vouch.reply',
+  vet: 'vet.reply',
+  fetch: 'fetch.reply',
+} as const
+
+/** Which kinds of question a person can answer with a yes or a no. */
+export type Asked = keyof typeof REPLY
+
 /** Every entry kind that puts something to the person. */
-export type Asking = Extract<
-  Entry,
-  { kind: 'confirm' | 'run' | 'output' | 'vouch' | 'vet' | 'ask' }
->
+export type Asking = Extract<Entry, { kind: Asked | 'ask' }>
 
 /** Whether an entry awaits a decision or an answer. */
 const isAsking = (entry: Entry): entry is Asking =>
-  entry.kind === 'confirm' ||
-  entry.kind === 'run' ||
-  entry.kind === 'output' ||
-  entry.kind === 'vouch' ||
-  entry.kind === 'vet' ||
-  entry.kind === 'ask'
+  entry.kind === 'ask' || Object.hasOwn(REPLY, entry.kind)
 
 /**
  * Whether it is still waiting.
@@ -449,6 +477,7 @@ export function searchableText(entry: Entry): string {
     case 'run': return [entry.request.summary, entry.request.directory, entry.request.line ?? '', ...entry.request.stages.map((stage) => stage.display)].join(' ')
     case 'output': return [entry.request.command, entry.request.summary, entry.request.output].join(' ')
     case 'vet': return [entry.request.origin, entry.request.expects, entry.request.content].join(' ')
+    case 'fetch': return [entry.request.url, entry.request.host].join(' ')
     case 'vouch': return [entry.request.path, entry.request.preview].join(' ')
     case 'ask': return entry.request.prompts.map((prompt) => [prompt.header, prompt.question, ...prompt.rows.map((row) => `${row.label} ${row.detail ?? ''}`)].join(' ')).join(' ')
   }
