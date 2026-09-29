@@ -253,6 +253,8 @@ pub enum Reason {
     TooManySteps { cap: usize },
     /// Groups nested deeper than the grammar goes.
     TooNested { cap: usize },
+    /// A line carrying more text than any prompt a person could be shown.
+    TooLong { cap: usize },
     /// Anything the shape of the line gets wrong.
     Syntax(&'static str),
 }
@@ -331,6 +333,10 @@ impl fmt::Display for Reason {
             Self::TooNested { cap } => {
                 write!(f, "groups may be nested at most {cap} deep")
             }
+            Self::TooLong { cap } => write!(
+                f,
+                "a line may hold at most {cap} bytes, and there is no reading the rest of this one"
+            ),
             Self::Syntax(detail) => f.write_str(detail),
         }
     }
@@ -357,6 +363,15 @@ pub const MAX_STEPS: usize = 64;
 
 /// How deeply `( … )` may nest.
 pub const MAX_NESTING: usize = 16;
+
+/// How many bytes one line may hold.
+///
+/// The bounds below are counted against a line that has already been read, and reading is the one
+/// cost with no ceiling of its own: a line of a million braces is not a command, and every bound
+/// that makes a long line answerable is cheaper to apply to one that never gets read. Twice what
+/// the widest line a run writes today carries leaves room for a payload that is meant as output
+/// while a line past it is refused before any of the other bounds are paid for.
+pub const MAX_LINE: usize = 8192;
 
 /// Words that would put an interpreter back in the plan.
 const INTERPRETERS: [&str; 5] = ["eval", "source", ".", "exec", "trap"];
@@ -389,6 +404,13 @@ pub fn parse(line: &str) -> Result<Node, Refused> {
             line,
             Span::new(0, 0),
             Reason::Syntax("there is nothing to run"),
+        ));
+    }
+    if line.len() > MAX_LINE {
+        return Err(refuse(
+            line,
+            Span::new(MAX_LINE, MAX_LINE),
+            Reason::TooLong { cap: MAX_LINE },
         ));
     }
     let tokens = Scan::new(line).tokens()?;
@@ -541,14 +563,23 @@ struct Scan<'a> {
     line: &'a str,
     chars: Vec<(usize, char)>,
     at: usize,
+    /// How deep inside `{ … }` the scan is, which is what stops one brace from costing more than
+    /// the line it is in.
+    brace_depth: usize,
+    /// Braces already read as far as they go, one bit per depth per position. An outer brace that
+    /// gives up on its own reading meets the same `{` again as text, and reading it again there is
+    /// what let a line that offered nothing cost the product of its braces.
+    failed_braces: Vec<u64>,
 }
 
 impl<'a> Scan<'a> {
     fn new(line: &'a str) -> Self {
         Self {
-            line,
             chars: line.char_indices().collect(),
+            failed_braces: vec![0; line.char_indices().count()],
+            brace_depth: 0,
             at: 0,
+            line,
         }
     }
 
@@ -995,9 +1026,32 @@ impl<'a> Scan<'a> {
 
     /// A `{a,b}` or `{1..9}`, or nothing where the brace opens neither.
     ///
+    /// A brace is read at most once at a depth, and a brace deeper than `(` may nest stands for
+    /// itself the way an unclosed one does: the literal reading is the only one that can be paid
+    /// for, and it is what a shell makes of the line too.
+    fn braces(&mut self) -> Result<Option<Piece>, Refused> {
+        let save = self.at;
+        self.brace_depth += 1;
+        let found = if self.brace_depth > MAX_NESTING
+            || self.failed_braces[save] & (1 << self.brace_depth) != 0
+        {
+            Ok(None)
+        } else {
+            let found = self.brace_group();
+            if matches!(found, Ok(None)) {
+                self.failed_braces[save] |= 1 << self.brace_depth;
+            }
+            found
+        };
+        self.brace_depth -= 1;
+        found
+    }
+
+    /// A `{a,b}` or `{1..9}`, or nothing where the brace opens neither.
+    ///
     /// A refusal from inside the braces stands rather than becoming a fallback, because the
     /// literal reading would reach the same construct and refuse it there.
-    fn braces(&mut self) -> Result<Option<Piece>, Refused> {
+    fn brace_group(&mut self) -> Result<Option<Piece>, Refused> {
         let save = self.at;
         self.bump();
         let mut alternatives = Vec::new();
@@ -2510,6 +2564,91 @@ mod tests {
         assert_eq!(
             refused(&deep).reason,
             Reason::TooNested { cap: MAX_NESTING }
+        );
+    }
+
+    /// Every other bound is counted against a line that has already been read, and reading is the
+    /// one cost with no ceiling of its own. A line longer than any prompt is refused before it is
+    /// read, not answered slowly.
+    #[test]
+    fn a_line_longer_than_any_prompt_is_refused_unread() {
+        let long = format!("echo {}", "a".repeat(MAX_LINE + 1));
+        assert_eq!(refused(&long).reason, Reason::TooLong { cap: MAX_LINE });
+        let allowed = format!("echo {}", "a".repeat(MAX_LINE - 6));
+        assert!(parse(&allowed).is_ok());
+        // The widest line a run writes today is an echo of a payload 4096 bytes long, and it has
+        // to keep parsing: the cap bounds the cost of reading, not what output is worth showing.
+        assert!(parse(&format!("echo {}", "x".repeat(4096))).is_ok());
+    }
+
+    /// A `{` that opens nothing is literal text, and answering for it has to cost a read of the
+    /// line, not the product of every brace in it. The test would hang rather than fail slowly if
+    /// a brace could be read twice at the same depth, or deeper than the grammar goes.
+    #[test]
+    fn a_line_of_unclosed_braces_is_answered_at_once() {
+        let started = std::time::Instant::now();
+        for braces in [25, 100, 1000] {
+            assert!(parse(&format!("echo {}", "{".repeat(braces))).is_ok());
+            assert!(parse(&format!("echo {}", "{a,".repeat(braces))).is_ok());
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "answering for unclosed braces took {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// An outer brace that gives up on its own reading meets the same `{` again as text. The
+    /// reading is the reading of the line, which does not change underneath the scan, so a brace
+    /// that offered no expansion at a depth never offers one there.
+    #[test]
+    fn a_brace_reached_twice_is_answered_twice_not_read_twice() {
+        let started = std::time::Instant::now();
+        let line = format!("echo {}", "{a,{a|".repeat(600));
+        assert!(parse(&line).is_err());
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "answering for a brace met twice took {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// Braces deeper than `(` may nest stand for themselves, like an unclosed brace, rather than
+    /// being refused or read as syntax no line may have.
+    #[test]
+    fn braces_nested_past_the_bound_stand_for_themselves() {
+        let deep = format!(
+            "echo {}x{}",
+            "{".repeat(MAX_NESTING + 1),
+            "}".repeat(MAX_NESTING + 1)
+        );
+        assert_eq!(
+            argv(&deep)[1],
+            format!(
+                "{}x{}",
+                "{".repeat(MAX_NESTING + 1),
+                "}".repeat(MAX_NESTING + 1)
+            )
+        );
+    }
+
+    /// The bounds are on cost, not on expression: a choice the line makes is still the choice the
+    /// plan shows, nested however a person would write it.
+    #[test]
+    fn a_nested_brace_expansion_still_expands() {
+        let command = command("echo {a,b{c,d}}");
+        assert_eq!(
+            command.words[1].pieces,
+            vec![Piece::Alternatives(vec![
+                vec![Piece::Text("a".into())],
+                vec![
+                    Piece::Text("b".into()),
+                    Piece::Alternatives(vec![
+                        vec![Piece::Text("c".into())],
+                        vec![Piece::Text("d".into())]
+                    ])
+                ]
+            ])]
         );
     }
 
