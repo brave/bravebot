@@ -360,7 +360,10 @@ impl Answering {
 }
 
 impl Confirmer for Answering {
-    fn confirm_write(&mut self, request: &bravebot_agent::WriteRequest) -> Decision {
+    fn confirm_write(
+        &mut self,
+        request: &bravebot_agent::WriteRequest,
+    ) -> bravebot_agent::WriteDecision {
         Unattended.confirm_write(request)
     }
 

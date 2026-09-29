@@ -24,7 +24,7 @@ impl Confirmer for Answers {
         self.exposures += 1;
         Decision::Approve
     }
-    fn confirm_write(&mut self, request: &WriteRequest) -> Decision {
+    fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
         ApproveWrites.confirm_write(request)
     }
     fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision {

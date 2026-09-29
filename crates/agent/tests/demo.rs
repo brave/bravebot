@@ -353,8 +353,11 @@ impl bravebot_agent::Confirmer for ApprovesRuns {
         bravebot_agent::Decision::Reject
     }
 
-    fn confirm_write(&mut self, _r: &bravebot_agent::WriteRequest) -> bravebot_agent::Decision {
-        bravebot_agent::Decision::Reject
+    fn confirm_write(
+        &mut self,
+        _r: &bravebot_agent::WriteRequest,
+    ) -> bravebot_agent::WriteDecision {
+        bravebot_agent::WriteDecision::reject()
     }
     fn confirm_run(&mut self, _r: &bravebot_agent::RunRequest) -> bravebot_agent::RunDecision {
         bravebot_agent::RunDecision::approve()

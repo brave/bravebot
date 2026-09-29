@@ -267,7 +267,7 @@ box. A mode is a standing answer to the questions above, given once instead of o
 | Mode | What it answers |
 |---|---|
 | **asking** | nothing: every write, run, command output and unvouched file is put to you |
-| **accepting edits** | the write prompt, and no other |
+| **accepting edits** | the write prompt, except for a write that would create a credential |
 | **plan mode** | it refuses a write rather than asking about one |
 | **bypassing** | every permission question, including the two that decide trust |
 
@@ -282,6 +282,25 @@ and what it prints is what the next round reads. A mode named for edits that als
 about programs would be granting the larger thing quietly. It does accept a write to any path the
 workspace reaches, since the prompt was the only thing that would have shown you the path. A rule in
 the settings file is what narrows that.
+
+**A write that would create a credential is still put to you.** A file that is one rare value and
+nothing else is how a generated key reaches a tree, so a write the credential scan finds such a value
+in is shown to you with what it found, under accepting edits as under asking. A rule or a vouched path
+does not answer it. A value that announces itself as a credential is refused in every mode, before
+any prompt. The prompt offers two answers that last longer than yes:
+
+```
+  y write it    a always this session    r remember it    n leave it alone    ctrl-c stop the turn
+```
+
+`a` stops the asking about that file for the rest of the session. `r` stops it for every session
+begun in this directory, and is written where [remembered lines](#remembering-a-line-past-the-session)
+are, on the same terms. Both are about the file the write lands in, not the name the planner used, so
+the same name after `/cd`, in another checkout or behind a link is asked about again. `a` ends at
+`/cd`, `/clear` and `--resume`, and a delegate and a manifest run start without it. `r` is not offered
+in an incognito session or for a file outside the directory. Both settle the secret only: a write a
+rule asks about is still asked about. With nobody to ask, the write is refused unless the run is
+bypassing, even where a rule allows it. The desktop application and `--plain` offer yes and no only.
 
 **Plan mode refuses a write rather than asking**, whatever you would have answered, and the planner
 is told so and why, so a run of refusals reads as a constraint to work inside rather than as a series
@@ -338,6 +357,10 @@ What stays is the structural guarantee, that untrusted content cannot *decide* w
 goes is the narrower protection of not showing the planner bytes nobody vouched for. **This is a mode
 for a container with no network and nothing in it worth losing**, which is what its spelling is
 for.
+
+**A write that would create a credential is written.** Accepting edits puts it to you; here the flag
+is your answer, as it is to every other question, and nothing is recorded for a later session. A
+value that announces itself as a credential is still refused.
 
 A run approved this way vouches for no program. The list of commands you said to stop asking about is
 written into the session record and outlives the mode, so a record claiming you approved programs you
@@ -449,10 +472,10 @@ the person resuming is the person who gave them:
 - the [trust map](trust.md);
 - the list of commands you said to stop asking about, which is empty at the start of every session.
 
-The third is not restored by a resume, because it is not in the session record at all: the lines you
-pressed `r` for are kept per directory and read by **every** session begun there, resumed or fresh. It
-reaches a fresh session because the key that wrote it said how long its answer lasts, and because what
-it carries is the asking rather than any trust.
+The third is not restored by a resume, because it is not in the session record at all: the lines and
+credential files you pressed `r` for are kept per directory and read by **every** session begun there,
+resumed or fresh. It reaches a fresh session because the key that wrote it said how long its answer
+lasts, and because what it carries is the asking rather than any trust.
 
 A fresh session in the same directory restores neither of the first two and asks again.
 

@@ -22,7 +22,7 @@
 use bravebot_agent::confirm::{
     CallDecision, Confirmer, Decision, ExposureRequest, FetchRequest, ManifestRequest,
     McpCallRequest, MoveRequest, OutputRequest, RunDecision, RunRequest, ServerRequest,
-    ToolListRequest, VetRequest, VouchRequest, WriteRequest,
+    ToolListRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
 };
 use bravebot_agent::report::{
     Activity, DelegateId, Delegation, Landing, Phase, Printed, Reported, Reporter, Returned, Shown,
@@ -168,7 +168,7 @@ pub enum ToMain {
 /// What the main thread sends back, tagged with what it answers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reply {
-    Write(Decision),
+    Write(WriteDecision),
     Run(RunDecision),
     ReadOutput(Decision),
     Vet(Decision),
@@ -213,11 +213,11 @@ impl RemoteConfirmer {
 }
 
 impl Confirmer for RemoteConfirmer {
-    fn confirm_write(&mut self, request: &WriteRequest) -> Decision {
+    fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
         match self.exchange(ToMain::Write(request.clone())) {
             Some(Reply::Write(decision)) => decision,
             // No reply, or a reply to something else. Neither is consent.
-            _ => Decision::Reject,
+            _ => WriteDecision::reject(),
         }
     }
 
@@ -461,6 +461,8 @@ mod tests {
             untrusted: false,
             remark: None,
             credentials: Vec::new(),
+            may_always: false,
+            record: None,
         }
     }
 
@@ -476,12 +478,15 @@ mod tests {
                 other => panic!("expected a write question, got {other:?}"),
             }
             answer_tx
-                .send(Reply::Write(Decision::Approve))
+                .send(Reply::Write(WriteDecision::approve()))
                 .expect("answered");
         });
 
         let mut confirmer = RemoteConfirmer::new(outbound, answer_rx, Interjections::new());
-        assert_eq!(confirmer.confirm_write(&request()), Decision::Approve);
+        assert_eq!(
+            confirmer.confirm_write(&request()),
+            WriteDecision::approve()
+        );
         responder.join().expect("responder finished");
     }
 
@@ -542,7 +547,7 @@ mod tests {
         let responder = thread::spawn(move || {
             inbound.recv().expect("a message arrived");
             answer_tx
-                .send(Reply::Write(Decision::Approve))
+                .send(Reply::Write(WriteDecision::approve()))
                 .expect("answered");
         });
 
@@ -668,7 +673,7 @@ mod tests {
         let responder = thread::spawn(move || {
             inbound.recv().expect("a message arrived");
             answer_tx
-                .send(Reply::Write(Decision::Approve))
+                .send(Reply::Write(WriteDecision::approve()))
                 .expect("answered");
         });
 
@@ -817,7 +822,7 @@ mod tests {
         thread::spawn(move || {
             inbound.recv().expect("a message arrived");
             answer_tx
-                .send(Reply::Write(Decision::Approve))
+                .send(Reply::Write(WriteDecision::approve()))
                 .expect("answered");
         });
 
@@ -838,7 +843,7 @@ mod tests {
         });
 
         let mut confirmer = RemoteConfirmer::new(outbound, answer_rx, Interjections::new());
-        assert_eq!(confirmer.confirm_write(&request()), Decision::Reject);
+        assert_eq!(confirmer.confirm_write(&request()), WriteDecision::reject());
     }
 
     #[test]
@@ -849,12 +854,12 @@ mod tests {
         thread::spawn(move || {
             inbound.recv().expect("a message arrived");
             answer_tx
-                .send(Reply::Write(Decision::Reject))
+                .send(Reply::Write(WriteDecision::reject()))
                 .expect("answered");
         });
 
         let mut confirmer = RemoteConfirmer::new(outbound, answer_rx, Interjections::new());
-        assert_eq!(confirmer.confirm_write(&request()), Decision::Reject);
+        assert_eq!(confirmer.confirm_write(&request()), WriteDecision::reject());
     }
 
     /// An interface that has gone away cannot consent, so the write is refused rather than
@@ -866,7 +871,7 @@ mod tests {
         drop(inbound);
 
         let mut confirmer = RemoteConfirmer::new(outbound, answer_rx, Interjections::new());
-        assert_eq!(confirmer.confirm_write(&request()), Decision::Reject);
+        assert_eq!(confirmer.confirm_write(&request()), WriteDecision::reject());
     }
 
     /// And an answer channel that closes without replying is a refusal, not a hang.
@@ -882,7 +887,7 @@ mod tests {
         });
 
         let mut confirmer = RemoteConfirmer::new(outbound, answer_rx, Interjections::new());
-        assert_eq!(confirmer.confirm_write(&request()), Decision::Reject);
+        assert_eq!(confirmer.confirm_write(&request()), WriteDecision::reject());
     }
 
     /// Several writes in one turn are answered independently and in order.
@@ -892,16 +897,26 @@ mod tests {
         let (answer_tx, answer_rx) = channel();
 
         thread::spawn(move || {
-            for decision in [Decision::Approve, Decision::Reject, Decision::Approve] {
+            for decision in [
+                WriteDecision::approve(),
+                WriteDecision::reject(),
+                WriteDecision::approve(),
+            ] {
                 inbound.recv().expect("a message arrived");
                 answer_tx.send(Reply::Write(decision)).expect("answered");
             }
         });
 
         let mut confirmer = RemoteConfirmer::new(outbound, answer_rx, Interjections::new());
-        assert_eq!(confirmer.confirm_write(&request()), Decision::Approve);
-        assert_eq!(confirmer.confirm_write(&request()), Decision::Reject);
-        assert_eq!(confirmer.confirm_write(&request()), Decision::Approve);
+        assert_eq!(
+            confirmer.confirm_write(&request()),
+            WriteDecision::approve()
+        );
+        assert_eq!(confirmer.confirm_write(&request()), WriteDecision::reject());
+        assert_eq!(
+            confirmer.confirm_write(&request()),
+            WriteDecision::approve()
+        );
     }
 
     #[test]
@@ -986,7 +1001,7 @@ mod tests {
                     ToMain::Write(_) => {
                         seen.push("write");
                         answer_tx
-                            .send(Reply::Write(Decision::Approve))
+                            .send(Reply::Write(WriteDecision::approve()))
                             .expect("answered");
                         return seen;
                     }
@@ -1004,7 +1019,10 @@ mod tests {
         reporter.composing(Some("Write"));
         reporter.tool_started(Activity::running("Write", "notes.md"));
         reporter.tool_finished(Activity::running("Write", "notes.md").done("1 line"));
-        assert_eq!(confirmer.confirm_write(&request()), Decision::Approve);
+        assert_eq!(
+            confirmer.confirm_write(&request()),
+            WriteDecision::approve()
+        );
         assert_eq!(
             responder.join().expect("finished"),
             vec![

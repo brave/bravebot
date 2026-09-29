@@ -488,7 +488,73 @@ and that the person is the one who creates the value. Telling the two apart is a
 body rather than about the finding: a value inside a document was copied from wherever it already
 sat, and a value that is the whole file had no prior location.
 
+**Who may answer it.** A person shown the bytes, or the flag somebody passed so as not to be asked.
+Where the scan found a value a person decides about, asking and accepting edits put the write to
+the person ([MODE-2](permission-modes.md#MODE-2)), and bypassing answers it as it answers every
+other question ([MODE-4](permission-modes.md#MODE-4)). Plan mode refuses it as it refuses any
+write. A value that declared itself is refused before any of this, in every mode. Nothing else
+standing answers it: a rule allowing the path, a vouch in the trust map, an approved manifest plan,
+or an earlier plain yes to the same path. Those decide whether a write needs approval, and a finding
+makes it need one whatever they said. Where nobody can be asked and the run is not bypassing, the
+write is refused. All three writes that reach a person are covered: a whole-file write, an edit that
+leaves the file holding only the value, and a manifest step. What decides this is the finding, never
+the body.
+
+**How long an answer lasts.** A plain yes covers that write and nothing after it: not the next value
+in the same file, and not the same value in another. The question offers two longer answers, and
+only a question about a credential offers them:
+
+```
+  y write it    a always this session    r remember it    n leave it alone    ctrl-c stop the turn
+```
+
+- `a` settles whether this file may hold a secret for the rest of the session.
+- `r` settles it for every session begun in this directory, by adding the file to the record of
+  remembered command lines ([RUN-19](tools/run.md#RUN-19)), on that record's terms: it is read
+  immediately before the question, a turn nobody could put a prompt to reads none, and the prompt names the file the entry
+  goes to. It is offered only where the session may add to that record, which an incognito one may
+  not ([INCOG-5](incognito.md#INCOG-5)), and only for a file inside the directory it is kept for.
+
+Both are about the file the write lands in as the workspace resolves it, never the name the planner
+gave. The same name in another checkout, the same name after `/cd`, and a name a link sends
+elsewhere are other files, and are asked about. Both settle the secret and nothing else: a write the
+person would be asked about for its own sake still is, and that question offers neither key. `a`
+ends with the session, so `/cd`, `/clear` and `--resume` start without it, a delegate starts
+without it, and so does a manifest run. A key the prompt did not draw grants nothing, whatever a
+front end sends back. The terminal draws both; the desktop front end and `--plain`
+([CLI-14](cli.md#CLI-14)) offer yes and no.
+
 `verified-by: bravebot_agent::turn::a_credential_created_as_a_whole_file_is_not_created_and_the_planner_is_told_so`
+`verified-by: bravebot_agent::permission_mode::accepting_edits_puts_a_credential_write_to_the_person_and_bypassing_answers_it`
+`verified-by: bravebot_agent::turn::only_bypassing_answers_a_credential_write`
+`verified-by: bravebot_agent::turn::only_bypassing_answers_an_edit_that_leaves_a_file_holding_a_credential`
+`verified-by: bravebot_agent::turn::a_yes_to_a_credential_write_covers_no_write_after_it`
+`verified-by: bravebot_agent::turn::always_for_a_credential_write_covers_that_file_and_no_other`
+`verified-by: bravebot_agent::turn::always_for_a_credential_write_settles_the_secret_and_not_the_write`
+`verified-by: bravebot_agent::turn::always_for_an_edit_that_leaves_a_credential_covers_the_next_edit_to_that_file`
+`verified-by: bravebot_agent::turn::a_standing_answer_the_prompt_did_not_offer_grants_nothing`
+`verified-by: bravebot_agent::turn::remembering_a_credential_write_covers_later_sessions_in_that_directory_only`
+`verified-by: bravebot_agent::turn::remembering_is_offered_only_for_a_file_inside_the_directory`
+`verified-by: bravebot_agent::turn::a_delegate_inherits_no_always_for_a_credential_write`
+`verified-by: bravebot_agent::manifest::approving_a_plan_is_not_approving_a_credential_it_writes`
+`verified-by: bravebot_agent::manifest::bypassing_answers_a_credential_a_plan_writes`
+`verified-by: bravebot_agent::manifest::always_for_a_planned_credential_covers_a_later_step_to_the_same_file`
+`verified-by: bravebot_agent::incognito::no_file_a_credential_may_be_created_in_is_written_down`
+`verified-by: bravebot_agent::remembered::a_file_written_by_one_session_is_read_back_by_another_in_that_directory_only`
+`verified-by: bravebot_agent::remembered::a_file_outside_the_directory_is_neither_written_nor_read`
+`verified-by: bravebot_agent::remembered::a_directory_sharing_a_key_with_another_is_not_answered_by_its_files`
+`verified-by: bravebot_agent::remembered::a_file_no_rendering_can_show_is_read_back_as_itself`
+`verified-by: bravebot_agent::remembered::a_file_entry_this_build_does_not_fully_understand_covers_nothing`
+`verified-by: bravebot_core::remembered::a_file_entry_covers_that_file_only`
+`verified-by: bravebot_tui::confirm::the_write_keys_bind_only_the_standing_answers_the_prompt_offers`
+`verified-by: bravebot_tui::confirm::the_write_keys_separate_this_session_from_every_session`
+`verified-by: bravebot_tui::confirm::a_write_prompt_draws_the_standing_answers_it_offers_and_no_other`
+`verified-by: bravebot_tui::confirm::a_write_prompt_offering_both_standing_answers_draws_every_key_whole`
+`verified-by: bravebot_ui_bridge::refusal::an_answered_write_gets_the_answer_that_was_sent`
+`verified-by: bravebot_tui::credential_mode_tests::bypassing_writes_a_credential_without_asking`
+`verified-by: bravebot_tui::credential_mode_tests::always_for_a_credential_covers_a_later_write_to_the_same_file`
+`verified-by: bravebot_tui::credential_mode_tests::always_for_a_credential_does_not_follow_the_session_through_cd`
+`verified-by: bravebot_tui::credential_mode_tests::always_for_a_credential_does_not_outlive_clear`
 `verified-by: bravebot_core::credentials::a_generated_key_standing_as_a_whole_file_is_recognised`
 `verified-by: bravebot_core::credentials::a_file_that_is_the_value_is_told_from_one_that_mentions_it`
 `verified-by: bravebot_core::credentials::blank_lines_around_the_value_are_not_contents`
@@ -611,7 +677,13 @@ that sounds like a secret beside one that looks rare is raised on the approval t
 needs, and the person decides. That inference catches a generated framework key, and it also
 catches an inline Kubernetes `Secret`, a local development password and a test fixture; refusing on
 all four with no override would stop ordinary work over a guess, and a scan people have to fight is
-a scan they turn off. The prompt names the finding, so the question can be answered.
+a scan they turn off. The prompt names the finding, so the question can be answered. Asking and
+accepting edits both raise it, bypassing answers it, and no rule, vouch or plan clears it
+([CRED-13](#CRED-13) says who may answer and for how long).
+
+A body that arrived as quarantined content is not scanned, so it raises no finding, and a mode that
+answers writes answers that one as it would any other. The driver reading those bytes to decide
+whether to ask would be a decision taken from untrusted content, and the Known costs record it.
 
 The name is the word the value is assigned to, not the rest of the line before it. A link whose
 words mention a password ends at the colon of its URL's scheme, and reading the whole link as a name
@@ -631,6 +703,8 @@ requires of a finding however it is answered.
 `verified-by: bravebot_agent::turn::what_the_scan_found_is_told_to_the_person_and_not_to_the_planner`
 `verified-by: bravebot_agent::turn::a_value_that_only_looks_like_a_secret_is_put_to_the_person`
 `verified-by: bravebot_agent::turn::the_prompt_says_which_value_it_is_asking_about`
+`verified-by: bravebot_agent::turn::only_bypassing_answers_a_credential_write`
+`verified-by: bravebot_agent::turn::a_body_nobody_vouched_for_is_not_scanned_and_the_mode_decides`
 `verified-by: bravebot_core::credentials::a_generated_key_is_recognised_from_its_name_and_its_rarity`
 `verified-by: bravebot_core::credentials::a_name_is_the_word_before_its_separator_however_the_line_opens`
 `verified-by: bravebot_core::credentials::a_link_whose_words_sound_like_a_secret_is_not_an_assignment`
@@ -1022,6 +1096,19 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   refused with nobody asked, as any declared value is. What would close the gap is an authority to
   create into, which is the entry above.
 
+  Only a person or bypassing can override it. A run with nobody to ask that is not bypassing, such
+  as `-p` without `--dangerously-skip-permissions` under a rule allowing the write, refuses a file
+  that is only a commit id, a UUID or a digest, and nothing in that run can say otherwise. Neither
+  the rule nor accepting edits was made to answer it, because either would be approving a value
+  nobody was shown in a session that never said it would not look.
+
+- **`a` and `r` answer for a file, not for a value.** The person is shown one value and the answer
+  covers every later one the planner writes to that file: for the rest of the session with `a`, and
+  with `r` for every session in the directory until the line is deleted from the record. That is
+  what the keys say they do, and it is why they are keyed by the resolved file and offered only on a
+  question about a credential. Keying on the value instead would ask again at every rotation, which
+  is the question the person pressed the key to stop.
+
 - **A value a command generates gets less than one a write tool creates.** CRED-16 reads what a
   turn wrote in its own words, and a redirection is a file a program the turn started opened for
   itself: `openssl rand -hex 32 > config/master.key` puts the value in the tree without a byte of
@@ -1041,8 +1128,9 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   its own words. A body that arrived as quarantined content is carried to the file without the
   driver reading a byte of it, and examining one to decide whether to refuse would be a decision
   taken from untrusted content, which [labels.md](labels.md) admits nowhere. So a value copied out
-  of a file nobody vouched for reaches the tree through a reference. What would close it is a scan
-  whose finding nothing here has to branch on.
+  of a file nobody vouched for reaches the tree through a reference, and under a mode that answers
+  writes nobody is asked about it at all. What would close it is a scan whose finding nothing here
+  has to branch on.
 
 - **What a line left is scanned only where somebody vouched for the line.** The same cost as the
   entry above, reached by the other route. A program may print anything, so what a line prints is

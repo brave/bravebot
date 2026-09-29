@@ -183,6 +183,8 @@ fn released_content_crosses_the_transport_with_the_label_it_was_released_under()
                     label: label.into(),
                 }),
                 credentials: Vec::new(),
+                may_always: false,
+                record: None,
             },
         )["remark"]["label"]
             .clone()
@@ -375,6 +377,8 @@ fn a_write_request_sends_the_diff_and_never_the_body() {
         untrusted: false,
         remark: None,
         credentials: Vec::new(),
+        may_always: false,
+        record: None,
     };
 
     let value = wire::write_request(3, &request);
@@ -409,6 +413,8 @@ fn a_created_file_says_nothing_would_be_lost() {
             untrusted: true,
             remark: None,
             credentials: Vec::new(),
+            may_always: false,
+            record: None,
         },
     );
     assert_eq!(value["existing"], json!(false));
@@ -446,6 +452,8 @@ fn what_the_scan_inferred_reaches_the_front_end_that_draws_the_question() {
             untrusted: false,
             remark: None,
             credentials: vec![found.to_string()],
+            may_always: false,
+            record: None,
         },
     );
     assert_eq!(
@@ -465,6 +473,8 @@ fn what_the_scan_inferred_reaches_the_front_end_that_draws_the_question() {
             untrusted: false,
             remark: None,
             credentials: Vec::new(),
+            may_always: false,
+            record: None,
         },
     );
     assert_eq!(quiet["credentials"], json!([]), "an empty list, not absent");
@@ -831,6 +841,8 @@ fn approval_evidence_is_kept_beside_the_decision() {
                 label: "untrusted".into(),
             }),
             credentials: Vec::new(),
+            may_always: false,
+            record: None,
         },
     );
     assert_eq!(write["remark"]["lines"], 9);

@@ -29,6 +29,12 @@
 //! field rather than something the line says, so an entry cannot account for it and the gate asks
 //! about private input before it consults this at all.
 //!
+//! # Files
+//!
+//! The same record holds the files a person agreed, at a write prompt, that a write may create a
+//! credential in ([`FileEntry`]). A separate list with a separate key, so no line can cover a file
+//! and no file can cover a line.
+//!
 //! This crate performs no I/O, so where the entries are kept and how they are spelled on disk is
 //! `bravebot_agent::remembered`'s.
 
@@ -248,7 +254,22 @@ pub struct Entry {
     pub answered_in: String,
 }
 
-/// Every line remembered for one directory.
+/// One file a person agreed, past the session, that a write may create a credential in
+/// ([CRED-13]), and the session whose answer put it there.
+///
+/// The file is where a write lands, absolute, and is the whole key. Nothing about the value is in
+/// it: the fingerprint that would name one is salted per process, and a value to compare against
+/// is the credential itself.
+///
+/// [CRED-13]: ../../../docs/specs/credential-protection.md
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileEntry {
+    pub file: PathBuf,
+    /// The session the key was pressed in. Decides nothing, as [`Entry::answered_in`] does not.
+    pub answered_in: String,
+}
+
+/// Every line remembered for one directory, and every file.
 ///
 /// Read afresh wherever a run prompt would be drawn rather than once at the start, so a line
 /// recorded a minute ago in another session is covered by this one. Empty is the ordinary state and
@@ -256,6 +277,7 @@ pub struct Entry {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Remembered {
     entries: Vec<Entry>,
+    files: Vec<FileEntry>,
 }
 
 impl Remembered {
@@ -286,12 +308,35 @@ impl Remembered {
         self.entries.iter()
     }
 
+    /// The lines, which is what the run prompt's record is counted in.
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    /// Whether no line is remembered. Says nothing of the files.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// Add a file, as reading one more line of the record does.
+    pub fn record_file(&mut self, file: impl Into<PathBuf>, answered_in: impl Into<String>) {
+        self.files.push(FileEntry {
+            file: file.into(),
+            answered_in: answered_in.into(),
+        });
+    }
+
+    /// Whether some entry is this exact file.
+    ///
+    /// Equality of the whole path and nothing looser: not a parent directory, not the same name
+    /// under another root, and not a rendering of it.
+    pub fn covers_file(&self, file: &std::path::Path) -> bool {
+        self.files.iter().any(|entry| entry.file == file)
+    }
+
+    /// Every file, in the order they were recorded.
+    pub fn files(&self) -> impl Iterator<Item = &FileEntry> {
+        self.files.iter()
     }
 }
 
@@ -299,6 +344,7 @@ impl FromIterator<Entry> for Remembered {
     fn from_iter<I: IntoIterator<Item = Entry>>(entries: I) -> Self {
         Self {
             entries: entries.into_iter().collect(),
+            files: Vec::new(),
         }
     }
 }
@@ -527,5 +573,30 @@ mod tests {
             .map(|entry| entry.answered_in.as_str())
             .collect();
         assert_eq!(sessions, ["yesterday", "today"]);
+    }
+
+    /// CRED-13: a file entry covers that file and nothing near it, and the two lists never answer
+    /// for each other.
+    #[test]
+    fn a_file_entry_covers_that_file_only() {
+        let mut record = Remembered::new();
+        record.record_file("/work/config/master.key", "today");
+        assert!(record.covers_file(std::path::Path::new("/work/config/master.key")));
+        for other in [
+            "/work/config",
+            "/work/config/master.key.bak",
+            "/other/config/master.key",
+            "config/master.key",
+        ] {
+            assert!(
+                !record.covers_file(std::path::Path::new(other)),
+                "{other} was covered"
+            );
+        }
+        assert!(record.is_empty(), "a file entry was counted as a line");
+        assert!(!record.covers(&one("cat", &["/work/config/master.key"])));
+
+        let lines = remembering(&one("make", &["check"]));
+        assert!(!lines.covers_file(std::path::Path::new("/usr/bin/make")));
     }
 }

@@ -17,7 +17,7 @@ use crate::protocol::Event;
 use crate::wire;
 use bravebot_agent::confirm::{
     Confirmer, Decision, ExposureRequest, FetchRequest, ManifestRequest, OutputRequest,
-    RunDecision, RunRequest, ServerRequest, VetRequest, VouchRequest, WriteRequest,
+    RunDecision, RunRequest, ServerRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
 };
 use bravebot_agent::report::{Activity, Landing, Phase, Reporter, Shown};
 use bravebot_core::ask::{Answer, Asking};
@@ -419,12 +419,12 @@ impl Confirmer for BridgeConfirmer {
         None
     }
 
-    fn confirm_write(&mut self, request: &WriteRequest) -> Decision {
+    fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
         match self.ask(Kind::Write, "confirm.request", |id| {
             wire::write_request(id, request)
         }) {
-            Some(Reply::Write(decision)) => decision,
-            _ => Decision::Reject,
+            Some(Reply::Write(decision)) => decision.into(),
+            _ => WriteDecision::reject(),
         }
     }
 

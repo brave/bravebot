@@ -97,7 +97,9 @@ the skills and the imported credentials, exactly as an ordinary one does. What i
 writing, apart from the two files [INCOG-8](#INCOG-8) names, and one read, named below. The record of
 command lines somebody asked to be remembered past a session, which [tools/run.md](tools/run.md)
 governs, is read here on the same terms: a line already in it stops the asking as it does anywhere,
-and the key that would add one is not offered. So is the record of answers to the startup question
+and the key that would add one is not offered. The files in that record a write may create a
+credential in ([CRED-13](credential-protection.md#CRED-13)) are read the same way, and the key that
+would add one is not offered either. So is the record of answers to the startup question
 somebody asked to be kept, which [trust-map.md](trust-map.md#TRUST-23) governs: a kept answer settles
 the question here as anywhere, the session says so as it opens, the key that would keep one is not
 offered, and `/forget-trust` writes nothing and names the file.
@@ -128,6 +130,7 @@ to remember.
 `verified-by: bravebot_tui::incognito::no_prompt_is_written_down`
 `verified-by: bravebot_tui::incognito::a_choice_applies_to_the_session_and_is_not_recorded`
 `verified-by: bravebot_agent::incognito::no_remembered_line_is_written_down`
+`verified-by: bravebot_agent::incognito::no_file_a_credential_may_be_created_in_is_written_down`
 `verified-by: bravebot_agent::incognito::a_line_an_earlier_session_recorded_is_still_honoured`
 
 <a id="INCOG-6"></a>

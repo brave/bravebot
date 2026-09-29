@@ -164,8 +164,8 @@ impl bravebot_agent::Confirmer for AskedAboutServers {
     fn confirm_write(
         &mut self,
         _request: &bravebot_agent::WriteRequest,
-    ) -> bravebot_agent::Decision {
-        bravebot_agent::Decision::Reject
+    ) -> bravebot_agent::WriteDecision {
+        bravebot_agent::WriteDecision::reject()
     }
 
     fn confirm_run(

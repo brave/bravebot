@@ -882,7 +882,20 @@ write-unchanged = { $count ->
     [one] … { $count } ligne inchangée
    *[other] … { $count } lignes inchangées
     }
+write-always-explained =
+    a : ne plus demander si ce fichier peut contenir un secret, pour le reste de cette session
+write-always-this-file =
+    ce fichier seulement : le même nom dans un autre répertoire est redemandé
+write-always-only-the-secret =
+    cela règle seulement le secret : une écriture qui serait soumise de toute façon l'est encore
+write-remember-explained =
+    r : ne plus demander si ce fichier peut contenir un secret, à partir de maintenant
+write-remember-every-session =
+    toute session ouverte dans ce répertoire le lit, pas seulement celle-ci
+write-remember-where = c'est écrit ici, et supprimer la ligne est le chemin du retour :
 write-yes = l'écrire
+write-always = toujours pour cette session
+write-remember = s'en souvenir
 write-no = ne rien changer
 
 
