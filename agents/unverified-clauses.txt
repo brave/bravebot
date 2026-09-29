@@ -7,6 +7,16 @@
 # where the lists themselves merge cleanly, and a count nothing reads is wrong quietly. Count the
 # lines, or read the warnings check-spec prints.
 
+docs/specs/browser.md:BROWSER-1: the native host listens and the MCP server connects
+docs/specs/browser.md:BROWSER-2: the socket is in the directory the server's declaration names
+docs/specs/browser.md:BROWSER-3: the native host serves only a peer holding the secret in that directory
+docs/specs/browser.md:BROWSER-4: the native host speaks only to our extension
+docs/specs/browser.md:BROWSER-5: the socket exists while the extension is connected
+docs/specs/browser.md:BROWSER-6: a call with no extension connected fails at once
+docs/specs/browser.md:BROWSER-7: each reply reaches the session that asked
+docs/specs/browser.md:BROWSER-8: no message to the extension exceeds the platform limit
+docs/specs/browser.md:BROWSER-9: installing writes one manifest in the locations Brave reads
+docs/specs/browser.md:BROWSER-10: what the extension returns is labelled like any server's result
 docs/specs/credential-protection.md:CRED-4: nothing climbs a tier without the arrangement changing
 docs/specs/credential-protection.md:CRED-6: a handle the agent can redeem alone is not a handle
 docs/specs/credential-protection.md:CRED-7: a bound is decided before issue and enforced beyond the agent's reach
