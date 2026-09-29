@@ -6,14 +6,17 @@
 //! a tool answers is quarantined like any other content from off this machine. Each is asserted on
 //! the bytes that went out, to the model or to the server, rather than on a label.
 
-use bravebot_agent::confirm::{CallDecision, McpCallRequest, ToolListRequest};
+use bravebot_agent::confirm::{CallDecision, McpCallRequest, MoveRequest, ToolListRequest};
 use bravebot_agent::mcp::{Connection, Offering, Reached, Session};
 use bravebot_agent::turn::{self, Task};
 use bravebot_agent::{
     Confirmer, Decision, IgnoreReports, PermissionMode, SessionScratch, Unattended, Workspace,
 };
-use bravebot_config::Config;
-use bravebot_config::mcp::{Approvals, Digest, Standing, approvals_file, tools_file};
+use bravebot_config::mcp::{
+    Approvals, Declaration, Declarations, Digest, Standing, approvals_file, declarations_file,
+    tools_file,
+};
+use bravebot_config::{Config, Managed};
 use bravebot_core::cancel::Cancel;
 use bravebot_core::capability::{Capability, CapabilitySet, ServerAlias};
 use bravebot_core::event::RecordingSink;
@@ -245,36 +248,39 @@ fn serve_tool(word: &'static str) -> (String, mpsc::Receiver<String>) {
         while let Ok((mut stream, _)) = listener.accept() {
             let body = body_of(&stream);
             let _ = sender.send(body.clone());
-            let request: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
-            let result = match request.get("method").and_then(Value::as_str) {
-                Some("initialize") => json!({
-                    "protocolVersion": "2025-06-18",
-                    "capabilities": {},
-                    "serverInfo": {"name": "weather", "version": "1"},
-                }),
-                Some("tools/list") => json!({"tools": [{
-                    "name": word,
-                    "description": DESCRIPTION,
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {"city": {"type": "string"}},
-                        "required": ["city"],
-                    },
-                }]}),
-                Some("tools/call") => json!({"content": [{"type": "text", "text": PAYLOAD}]}),
-                _ => json!({}),
-            };
-            let reply =
-                json!({"jsonrpc": "2.0", "id": request.get("id"), "result": result}).to_string();
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
-                reply.len()
-            );
-            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.write_all(answered(&body, word).as_bytes());
             let _ = stream.flush();
         }
     });
     (format!("http://127.0.0.1:{port}"), receiver)
+}
+
+/// The whole response the weather server gives `body`, listing its one tool under `word`.
+fn answered(body: &str, word: &str) -> String {
+    let request: Value = serde_json::from_str(body).unwrap_or(Value::Null);
+    let result = match request.get("method").and_then(Value::as_str) {
+        Some("initialize") => json!({
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "serverInfo": {"name": "weather", "version": "1"},
+        }),
+        Some("tools/list") => json!({"tools": [{
+            "name": word,
+            "description": DESCRIPTION,
+            "inputSchema": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+            },
+        }]}),
+        Some("tools/call") => json!({"content": [{"type": "text", "text": PAYLOAD}]}),
+        _ => json!({}),
+    };
+    let reply = json!({"jsonrpc": "2.0", "id": request.get("id"), "result": result}).to_string();
+    format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+        reply.len()
+    )
 }
 
 /// The digest of the declaration the weather server was started from.
@@ -290,6 +296,11 @@ fn reach(url: &str) -> Reached {
 
 /// A server reached under `alias`.
 fn reach_as(alias: &str, url: &str) -> Reached {
+    reach_under(alias, url, declaration())
+}
+
+/// A server reached under `alias`, started from the declaration `declared` is the digest of.
+fn reach_under(alias: &str, url: &str, declared: Digest) -> Reached {
     let egress = Egress::new();
     let mut sink = RecordingSink::new();
     let mut routing = Routing::new();
@@ -309,7 +320,7 @@ fn reach_as(alias: &str, url: &str) -> Reached {
         .initialize(&mut policy, &egress, "bravebot", "0.1.0")
         .expect("handshake");
     let listing = server.list_tools(&mut policy, &egress).expect("listed");
-    Reached::new(Connection::Http(server), listing, declaration())
+    Reached::new(Connection::Http(server), listing, declared)
 }
 
 fn session(url: &str, scratch: &Scratch, writable: bool) -> Session {
@@ -318,16 +329,19 @@ fn session(url: &str, scratch: &Scratch, writable: bool) -> Session {
         scratch.project(),
         Some(scratch.state()),
         writable,
+        Managed::default(),
     )
 }
 
-/// Answers the two MCP prompts as it was told and records both; refuses everything else. With a
+/// Answers the MCP prompts as it was told and records them; refuses everything else. With a
 /// `stop`, it stops the turn at the list, as Ctrl-C there does.
 struct Answering {
     list: Decision,
     call: CallDecision,
+    moved: Decision,
     lists: Vec<ToolListRequest>,
     calls: Vec<McpCallRequest>,
+    moves: Vec<MoveRequest>,
     stop: Option<Cancel>,
 }
 
@@ -336,8 +350,10 @@ impl Answering {
         Self {
             list,
             call,
+            moved: Decision::Reject,
             lists: Vec::new(),
             calls: Vec::new(),
+            moves: Vec::new(),
             stop: None,
         }
     }
@@ -397,6 +413,11 @@ impl Confirmer for Answering {
     fn confirm_mcp_call(&mut self, request: &McpCallRequest) -> CallDecision {
         self.calls.push(request.clone());
         self.call
+    }
+
+    fn confirm_move(&mut self, request: &MoveRequest) -> Decision {
+        self.moves.push(request.clone());
+        self.moved
     }
 
     fn ask_user(
@@ -614,6 +635,7 @@ fn two_servers_composing_one_name_offer_neither_under_it() {
         scratch.project(),
         Some(scratch.state()),
         false,
+        Managed::default(),
     );
 
     let (endpoint, chat) = serve_chat(vec![reply_with("done")]);
@@ -1310,6 +1332,121 @@ fn an_addressed_worker_is_put_the_list_and_calls_the_servers_tool() {
     assert_eq!(methods(&server), ["tools/call"]);
 }
 
+/// A turn addressed to a worker whose definition names one server keeps that server alone
+/// (ADDRESS-7), so it is put that server's list and not the other's, and offered that tool and not
+/// the other's. The same session with nobody addressed is then put the list the addressed turn
+/// left unasked, which is what shows it was left rather than declined.
+#[test]
+fn an_addressed_worker_naming_one_server_is_put_its_list_alone() {
+    let scratch = Scratch::new("addressed-names-a-server");
+    let home = Scratch::new("addressed-names-a-server-home");
+    a_fixer_naming_the_weather(&home);
+    let (session, _bodies) = two_servers(&scratch);
+    let (endpoint, chat) = serve_chat(vec![reply_with("looked"), reply_with("looked too")]);
+
+    let mut asked = Answering::new(Decision::Approve, CallDecision::approve());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is the forecast")
+            .with_home(Some(home.path.clone()))
+            .addressing(Some("fixer".to_string()))
+            .with_mcp(Some(session.clone())),
+        &mut asked,
+    );
+    let addressed = rounds(&chat);
+    let [addressed] = addressed.as_slice() else {
+        panic!("the addressed turn made {} rounds", addressed.len());
+    };
+    assert!(
+        addressed.contains("FIX-BY-DEFINITION"),
+        "the turn did not run under the definition, so this says nothing: {addressed}"
+    );
+    let put: Vec<&str> = asked.lists.iter().map(|list| list.alias.as_str()).collect();
+    assert_eq!(put, ["weather"], "the lists put for the addressed turn");
+    assert!(
+        addressed.contains(FORECAST),
+        "the turn was not offered the tool of the server its definition named: {addressed}"
+    );
+    assert!(
+        !addressed.contains(DOCS_TOOL),
+        "the turn was offered the tool of a server its definition left off: {addressed}"
+    );
+
+    let mut control = Answering::new(Decision::Approve, CallDecision::approve());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is the forecast")
+            .with_home(Some(home.path.clone()))
+            .with_mcp(Some(session)),
+        &mut control,
+    );
+    let put: Vec<&str> = control
+        .lists
+        .iter()
+        .map(|list| list.alias.as_str())
+        .collect();
+    assert_eq!(
+        put,
+        ["docs"],
+        "the list the addressed turn left was not put next"
+    );
+    let open = rounds(&chat);
+    let [open] = open.as_slice() else {
+        panic!("the control turn made {} rounds", open.len());
+    };
+    assert!(
+        open.contains(DOCS_TOOL),
+        "the control was not offered the other tool, so this says nothing: {open}"
+    );
+}
+
+/// A server a definition names and the session did not reach selects nothing, and the turn says so
+/// on its outcome beside the rest of what it found (DELEGATE-24), naming the definition and that
+/// name alone: the server it did reach is not said.
+#[test]
+fn a_server_a_definition_names_and_the_session_did_not_reach_is_said() {
+    let scratch = Scratch::new("definition-names-no-such-server");
+    let home = Scratch::new("definition-names-no-such-server-home");
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("forecaster.md"),
+        "---\nname: forecaster\ndescription: Forecasts.\nkind: worker\nmcpServers: weather, \
+         wether\n---\n\nbody\n",
+    )
+    .expect("write the definition");
+    let (url, _server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let (endpoint, _chat) = serve_chat(vec![reply_with("looked")]);
+
+    let outcome = run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is the forecast")
+            .with_home(Some(home.path.clone()))
+            .with_mcp(Some(session)),
+        &mut Answering::new(Decision::Approve, CallDecision::approve()),
+    );
+
+    let said: Vec<&String> = outcome
+        .notices
+        .iter()
+        .filter(|notice| notice.contains("did not reach"))
+        .collect();
+    assert_eq!(
+        said.len(),
+        1,
+        "not said exactly once: {:?}",
+        outcome.notices
+    );
+    assert!(
+        said[0].contains("forecaster.md") && said[0].ends_with(": wether"),
+        "the notice did not name the definition and the one server nothing reached: {}",
+        said[0]
+    );
+}
+
 /// The task a turn is given and the one its planner hands a delegate, each the marker its run's
 /// requests carry.
 const PARENT: &str = "ASK-A-DELEGATE-FOR-THE-FORECAST";
@@ -1410,22 +1547,36 @@ fn a_workers_call_to_a_servers_tool_is_put_to_the_person() {
     );
 }
 
-/// A worker holds the servers its parent holds and no other the session reached. The turn is
-/// handed two servers and a grant for one, so neither it nor the worker it spawns is offered the
-/// other's tool, though the session settled both lists.
-#[test]
-fn a_worker_is_offered_only_the_servers_its_parent_holds() {
-    let scratch = Scratch::new("delegate-worker-narrowed");
-    let (weather, _weather) = serve_weather();
-    let (docs, _docs) = serve_tool("lookup");
+/// What the turn settling both lists is sent, so the rules below can tell its requests apart.
+const SETTLE_BOTH: &str = "SETTLE-BOTH-LISTS-FIRST";
+
+/// The weather server and one serving [`DOCS_TOOL`], both reached by one session.
+fn two_servers(scratch: &Scratch) -> (Session, [mpsc::Receiver<String>; 2]) {
+    let (weather, weather_bodies) = serve_weather();
+    let (docs, docs_bodies) = serve_tool("lookup");
     let session = Session::new(
         vec![reach_as("weather", &weather), reach_as("docs", &docs)],
         scratch.project(),
         Some(scratch.state()),
         true,
+        Managed::default(),
     );
+    (session, [weather_bodies, docs_bodies])
+}
+
+/// The one tool of the second server [`two_servers`] reaches.
+const DOCS_TOOL: &str = "mcp__docs__lookup";
+
+/// A worker holds the servers its parent holds and no other the session reached. A first turn
+/// holding both settles both lists, and the next is handed a grant for one, so neither it nor the
+/// worker it spawns is offered the other's tool, though that list was vouched for.
+#[test]
+fn a_worker_is_offered_only_the_servers_its_parent_holds() {
+    let scratch = Scratch::new("delegate-worker-narrowed");
+    let (session, _bodies) = two_servers(&scratch);
     let spawn = format!(r#"{{"kind":"worker","task":"{DELEGATED}"}}"#);
     let (endpoint, chat) = serve_chat_by_marker(vec![
+        (SETTLE_BOTH, vec![reply_with("settled")]),
         (
             PARENT,
             vec![
@@ -1437,6 +1588,17 @@ fn a_worker_is_offered_only_the_servers_its_parent_holds() {
         (DELEGATED, vec![reply_with("nothing to look up")]),
     ]);
     let mut asked = Answering::new(Decision::Approve, CallDecision::approve());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new(SETTLE_BOTH).with_mcp(Some(session.clone())),
+        &mut asked,
+    );
+    assert_eq!(
+        asked.lists.len(),
+        2,
+        "the first turn did not settle both lists, so this says nothing"
+    );
     run_turn(
         &endpoint,
         &scratch.project(),
@@ -1460,10 +1622,78 @@ fn a_worker_is_offered_only_the_servers_its_parent_holds() {
             "{run} was not offered the tool of the server it holds, so this says nothing: {body}"
         );
         assert!(
-            !body.contains("mcp__docs__lookup"),
+            !body.contains(DOCS_TOOL),
             "{run} was offered the tool of a server it holds no grant for: {body}"
         );
     }
+}
+
+/// A definition that names `fixer` a worker calling only the weather server.
+fn a_fixer_naming_the_weather(home: &Scratch) {
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("fixer.md"),
+        "---\nname: fixer\ndescription: Fixes what the weather broke.\nkind: worker\nmcpServers: \
+         weather\n---\n\nFIX-BY-DEFINITION\n",
+    )
+    .expect("write the definition");
+}
+
+/// A delegate's definition narrows the servers its parent holds (`delegation.md` DELEGATE-24). The
+/// turn holds both servers and is offered both tools, and the worker it spawns under a definition
+/// naming the weather server is offered that one's tool and not the other's.
+#[test]
+fn a_worker_whose_definition_names_one_server_is_offered_only_its_tool() {
+    let scratch = Scratch::new("delegate-names-a-server");
+    let home = Scratch::new("delegate-names-a-server-home");
+    a_fixer_naming_the_weather(&home);
+    let (session, _bodies) = two_servers(&scratch);
+    let spawn = format!(r#"{{"kind":"fixer","task":"{DELEGATED}"}}"#);
+    let (endpoint, chat) = serve_chat_by_marker(vec![
+        (
+            PARENT,
+            vec![
+                tool_request("spawn_agent", &spawn),
+                reply_with("waiting"),
+                reply_with("the delegate reported"),
+            ],
+        ),
+        (DELEGATED, vec![reply_with("nothing to look up")]),
+    ]);
+    let mut asked = Answering::new(Decision::Approve, CallDecision::approve());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new(PARENT)
+            .with_home(Some(home.path.clone()))
+            .with_mcp(Some(session)),
+        &mut asked,
+    );
+    let sent = rounds(&chat);
+    let parent = sent
+        .iter()
+        .find(|body| body.contains(PARENT))
+        .expect("the turn asked");
+    let delegate = sent
+        .iter()
+        .find(|body| body.contains(DELEGATED) && !body.contains(PARENT))
+        .expect("the worker asked");
+    assert!(
+        delegate.contains("FIX-BY-DEFINITION"),
+        "the worker did not run under the definition, so this says nothing: {delegate}"
+    );
+    assert!(
+        parent.contains(FORECAST) && parent.contains(DOCS_TOOL),
+        "the turn was not offered both tools, so this says nothing: {parent}"
+    );
+    assert!(
+        delegate.contains(FORECAST),
+        "the worker was not offered the tool of the server its definition named: {delegate}"
+    );
+    assert!(
+        !delegate.contains(DOCS_TOOL),
+        "the worker was offered the tool of a server its definition left off: {delegate}"
+    );
 }
 
 /// A reader and a checker hold no server, so neither is offered a server's tool, and a call to one
@@ -1520,9 +1750,416 @@ fn a_servers_throwaway_home_lasts_as_long_as_the_session_holding_it() {
         scratch.project(),
         Some(scratch.state()),
         false,
+        Managed::default(),
     );
 
     assert!(path.is_dir(), "gone while its server was still there");
     drop(session);
     assert!(!path.exists(), "{} outlived the session", path.display());
+}
+
+/// The weather server, answering its handshake and its list as [`serve_weather`] does, and every
+/// call with a redirect to `to`: a server that has moved and a server sending the call somewhere
+/// else write the same header (SERVERS-11). Every body is reported.
+fn serve_moving(to: String) -> (String, mpsc::Receiver<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let body = body_of(&stream);
+            let _ = sender.send(body.clone());
+            let response = match body.contains(r#""tools/call""#) {
+                true => format!(
+                    "HTTP/1.1 307 Temporary Redirect\r\nLocation: {to}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                ),
+                false => answered(&body, "get_forecast"),
+            };
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    (format!("http://127.0.0.1:{port}"), receiver)
+}
+
+/// A weather server whose calls point to a second one, declared and approved at the first in the
+/// scratch's state directory, and a session holding it reached under that declaration.
+struct Moving {
+    declared: Declaration,
+    /// Where the first server's reply points, which is the second server.
+    moved_to: String,
+    first: mpsc::Receiver<String>,
+    second: mpsc::Receiver<String>,
+    session: Session,
+}
+
+fn moving(scratch: &Scratch, writable: bool, managed: Managed) -> Moving {
+    let (second_url, second) = serve_weather();
+    let moved_to = format!("{second_url}/mcp");
+    let (first_url, first) = serve_moving(moved_to.clone());
+    let declared = Declaration::http(first_url.clone()).expect("a declaration");
+    let mut declarations = Declarations::default();
+    declarations.insert("weather", &declared);
+    std::fs::write(declarations_file(&scratch.state()), declarations.to_text()).expect("mcp.json");
+    let mut approvals = Approvals::default();
+    approvals.approve("weather", declared.digest());
+    std::fs::write(approvals_file(&scratch.state()), approvals.to_text()).expect("mcp-approved");
+    let session = Session::new(
+        vec![reach_under("weather", &first_url, declared.digest())],
+        scratch.project(),
+        Some(scratch.state()),
+        writable,
+        managed,
+    );
+    assert_eq!(methods(&first), ["initialize", "tools/list"]);
+    Moving {
+        declared,
+        moved_to,
+        first,
+        second,
+        session,
+    }
+}
+
+/// Run one turn as [`run_turn`] does, and hand back what it said to the person as it went.
+fn noticed_turn<C: Confirmer + Send>(
+    endpoint: &str,
+    project: &Path,
+    task: Task,
+    confirmer: &mut C,
+) -> Vec<String> {
+    let workspace = Workspace::new(project).expect("workspace");
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    turn::run_cancellable(
+        &config_for(endpoint),
+        &Egress::new(),
+        &workspace,
+        &task,
+        confirmer,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        TrustStore::new(bravebot_agent::workspace::key_of(workspace.root())),
+        &Cancel::new(),
+    )
+    .expect("the turn runs");
+    reporter.notices
+}
+
+/// The declaration the state directory names for `weather`.
+fn declared_now(scratch: &Scratch) -> Declaration {
+    Declarations::read(&scratch.state())
+        .expect("mcp.json")
+        .get("weather")
+        .expect("weather is declared")
+        .declaration
+        .expect("a declaration")
+}
+
+/// The authority `url` names, as a refusal names one.
+fn authority(url: &str) -> String {
+    url.trim_start_matches("http://")
+        .split('/')
+        .next()
+        .expect("an authority")
+        .to_string()
+}
+
+/// SERVERS-11: a call whose reply points off the declaration is put to the person, who is shown
+/// where it points and what it reaches. A yes rewrites the declaration and approves it in the one
+/// write, the call is made where the server now is, and the call after it asks nothing about a
+/// move.
+#[test]
+fn a_hop_the_person_says_is_a_move_is_declared_and_the_call_reaches_it() {
+    let scratch = Scratch::new("move-yes");
+    let moving = moving(&scratch, true, Managed::default());
+
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+        tool_request(FORECAST, r#"{"city":"Lyon"}"#),
+        reply_with("done again"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    confirmer.moved = Decision::Approve;
+    let notices = noticed_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast for Paris").with_mcp(Some(moving.session.clone())),
+        &mut confirmer,
+    );
+
+    let [asked] = confirmer.moves.as_slice() else {
+        panic!(
+            "the move was not put to the person once: {:?}",
+            confirmer.moves
+        );
+    };
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice == "weather was moved where its reply pointed"),
+        "the person was not told it moved: {notices:?}"
+    );
+    let Declaration::Http { url: declared_url } = &moving.declared else {
+        panic!("declared as {:?}", moving.declared);
+    };
+    assert_eq!(asked.alias, "weather");
+    assert_eq!(&asked.declared, declared_url);
+    assert_eq!(asked.destination, moving.moved_to);
+    assert_eq!(asked.authority, authority(&moving.moved_to));
+    assert!(
+        asked.may_record,
+        "a session that writes said it records nothing"
+    );
+
+    let reached: Vec<String> = moving.second.try_iter().collect();
+    let called: Vec<&String> = reached
+        .iter()
+        .filter(|body| body.contains(r#""tools/call""#))
+        .collect();
+    assert!(
+        reached
+            .first()
+            .is_some_and(|body| body.contains(r#""initialize""#)),
+        "the moved server was not reached with a handshake first: {reached:?}"
+    );
+    let [call] = called.as_slice() else {
+        panic!("the call did not reach where the server moved once: {reached:?}");
+    };
+    assert!(call.contains("Paris"), "the call reached it as {call}");
+
+    let now = Declaration::http(moving.moved_to.clone()).expect("the moved declaration");
+    assert_eq!(
+        declared_now(&scratch),
+        now,
+        "the declaration was not rewritten"
+    );
+    let approvals = Approvals::read(&scratch.state());
+    assert!(
+        approvals.approves(&now.digest()),
+        "the move was not approved in the same write"
+    );
+    assert!(
+        !approvals.approves(&moving.declared.digest()),
+        "the declaration it replaced is still approved"
+    );
+
+    let _ = methods(&moving.first);
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast for Lyon").with_mcp(Some(moving.session.clone())),
+        &mut confirmer,
+    );
+    assert_eq!(
+        confirmer.moves.len(),
+        1,
+        "the call after the move asked about it again"
+    );
+    assert!(
+        methods(&moving.first).is_empty(),
+        "a call after the move went where the server was"
+    );
+    assert_eq!(methods(&moving.second), ["tools/call"]);
+}
+
+/// SERVERS-11: a no sends nothing where the reply pointed and leaves both files as they were, and
+/// what the planner is told names where the server is declared, never where its reply pointed.
+#[test]
+fn a_hop_the_person_refuses_sends_nothing_and_the_refusal_names_the_declaration() {
+    let scratch = Scratch::new("move-no");
+    let moving = moving(&scratch, true, Managed::default());
+
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    let notices = noticed_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast for Paris").with_mcp(Some(moving.session.clone())),
+        &mut confirmer,
+    );
+
+    assert_eq!(
+        confirmer.moves.len(),
+        1,
+        "the move was not put to the person"
+    );
+    assert!(
+        moving.second.try_iter().next().is_none(),
+        "something was sent where the reply pointed"
+    );
+    assert_eq!(declared_now(&scratch), moving.declared);
+    let approvals = Approvals::read(&scratch.state());
+    assert!(approvals.approves(&moving.declared.digest()));
+    let refused = Declaration::http(moving.moved_to.clone()).expect("where it pointed");
+    assert!(
+        !approvals.approves(&refused.digest()),
+        "a no approved where the reply pointed"
+    );
+    let Declaration::Http { url: declared_url } = &moving.declared else {
+        panic!("declared as {:?}", moving.declared);
+    };
+    let rounds = rounds(&chat);
+    let told = rounds.last().expect("a round after the call");
+    assert!(
+        told.contains(&format!("declared at {}", authority(declared_url))),
+        "the refusal did not name the declaration: {told}"
+    );
+    assert!(
+        !told.contains(&authority(&moving.moved_to)),
+        "the planner was told where the reply pointed: {told}"
+    );
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.contains("stays where it is declared")),
+        "the person was not told it stayed: {notices:?}"
+    );
+}
+
+/// SERVERS-13: bypassing every check answers no question about a move. Nobody is asked, nothing is
+/// sent where the reply pointed, and nothing is rewritten.
+#[test]
+fn bypassing_refuses_a_hop_and_asks_nobody() {
+    let scratch = Scratch::new("move-bypass");
+    let moving = moving(&scratch, true, Managed::default());
+
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+    ]);
+    let mut asked = Answering::new(Decision::Approve, CallDecision::approve());
+    asked.moved = Decision::Approve;
+    let mut confirmer = bravebot_agent::Confining::new(&mut asked, PermissionMode::Bypass, false);
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast for Paris")
+            .with_mcp(Some(moving.session.clone()))
+            .with_permission_mode(PermissionMode::Bypass),
+        &mut confirmer,
+    );
+
+    assert!(asked.moves.is_empty(), "bypassing asked about the move");
+    assert_eq!(
+        methods(&moving.first),
+        ["tools/call"],
+        "bypassing did not make the call"
+    );
+    assert!(
+        moving.second.try_iter().next().is_none(),
+        "bypassing sent something where the reply pointed"
+    );
+    assert_eq!(declared_now(&scratch), moving.declared);
+}
+
+/// SERVERS-12: a yes does not reach a destination the machine's administrator denies, and writes
+/// nothing.
+#[test]
+fn a_move_the_managed_layer_denies_is_refused_whatever_is_answered() {
+    let scratch = Scratch::new("move-managed");
+    let managed = scratch.path.join("managed.json");
+    std::fs::write(&managed, r#"{"mcp": {"deny": [{"host": "127.0.0.1"}]}}"#)
+        .expect("managed.json");
+    let moving = moving(&scratch, true, Managed::at(&managed));
+
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    confirmer.moved = Decision::Approve;
+    let notices = noticed_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast for Paris").with_mcp(Some(moving.session.clone())),
+        &mut confirmer,
+    );
+
+    assert_eq!(confirmer.moves.len(), 1);
+    assert!(
+        moving.second.try_iter().next().is_none(),
+        "a destination the managed layer denies was reached"
+    );
+    assert_eq!(declared_now(&scratch), moving.declared);
+    assert!(
+        notices.iter().any(|notice| notice.contains("mcp.deny")),
+        "the person was not told why: {notices:?}"
+    );
+}
+
+/// A session that writes nothing says so on the prompt, and a yes moves the server for the session
+/// and leaves the declaration as it is.
+#[test]
+fn a_move_in_a_session_that_writes_nothing_lasts_for_the_session() {
+    let scratch = Scratch::new("move-unwritable");
+    let moving = moving(&scratch, false, Managed::default());
+
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    confirmer.moved = Decision::Approve;
+    let notices = noticed_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast for Paris").with_mcp(Some(moving.session.clone())),
+        &mut confirmer,
+    );
+
+    let [asked] = confirmer.moves.as_slice() else {
+        panic!(
+            "the move was not put to the person once: {:?}",
+            confirmer.moves
+        );
+    };
+    assert!(
+        !asked.may_record,
+        "the prompt did not say the move is not recorded"
+    );
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice == "weather was moved where its reply pointed"),
+        "the person was not told it moved: {notices:?}"
+    );
+    assert!(
+        methods(&moving.second).contains(&"tools/call".to_string()),
+        "the call did not reach where the server moved"
+    );
+    assert_eq!(declared_now(&scratch), moving.declared);
+}
+
+/// A move is written only over the declaration the person was asked about, and approves where it
+/// moved to in the same write, in place of the declaration it replaces.
+#[test]
+fn a_move_is_recorded_over_the_declaration_asked_about_and_nothing_else() {
+    let scratch = Scratch::new("move-record");
+    let state = scratch.state();
+    let was = Declaration::http("http://127.0.0.1:1/mcp".to_string()).expect("was");
+    let now = Declaration::http("http://127.0.0.1:2/mcp".to_string()).expect("now");
+    let mut declarations = Declarations::default();
+    declarations.insert("weather", &was);
+    std::fs::write(declarations_file(&state), declarations.to_text()).expect("mcp.json");
+    let mut approved = Approvals::default();
+    approved.approve("weather", was.digest());
+    std::fs::write(approvals_file(&state), approved.to_text()).expect("mcp-approved");
+
+    bravebot_agent::mcp::record_a_move(&state, "weather", &was.digest(), &now).expect("recorded");
+    assert_eq!(declared_now(&scratch), now);
+    let approvals = Approvals::read(&state);
+    assert!(approvals.approves(&now.digest()));
+    assert!(!approvals.approves(&was.digest()));
+
+    let edited = bravebot_agent::mcp::record_a_move(&state, "weather", &was.digest(), &was);
+    assert_eq!(edited, Err(bravebot_agent::mcp::Unmoved::Edited));
+    assert_eq!(
+        declared_now(&scratch),
+        now,
+        "a declaration edited since was written over"
+    );
 }

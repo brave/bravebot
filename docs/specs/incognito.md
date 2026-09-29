@@ -21,8 +21,10 @@ ordinarily kept there is [sessions.md](sessions.md): the record of a session and
 person typed. This is the mode that declines to keep it. The audit trail's contents are
 [trace.md](trace.md); this governs only whether it is written down.
 
-One file in that directory is still written, and [INCOG-8](#INCOG-8) states it: the imported
-credentials, which a session spends and records as spent.
+Two files in that directory are still written, and [INCOG-8](#INCOG-8) states them: the imported
+credentials, which a session spends and records as spent, and the record
+[MEMORY-5](definition-memory.md#MEMORY-5) keeps of a definition's memory the session left
+untrusted.
 
 The boundary here is the directory this process owns. It is not confinement:
 [sandboxing.md](sandboxing.md) is the operating-system boundary, it applies to subprocesses running
@@ -67,6 +69,9 @@ An ordinary session from before may still be resumed and read. It stops being up
 as the incognito session runs, so what is on disk afterwards is what the last ordinary session left
 there.
 
+[MEMORY-5](definition-memory.md#MEMORY-5) leaves one trace: a definition's memory the session left untrusted is recorded by its path, which says the project was
+worked in.
+
 **Why.** An empty directory is a record. It says a session ran, in this project, at this time, which
 is most of what the record was for. The directory is therefore asked about before it is created
 rather than after.
@@ -89,7 +94,7 @@ hold gate names and paths, which is a record of a session having happened and wh
 
 An incognito session reads the settings, the recorded model and theme, the standing instructions,
 the skills and the imported credentials, exactly as an ordinary one does. What is refused is
-writing, apart from the one file [INCOG-8](#INCOG-8) names, and one read, named below. The record of
+writing, apart from the two files [INCOG-8](#INCOG-8) names, and one read, named below. The record of
 command lines somebody asked to be remembered past a session, which [tools/run.md](tools/run.md)
 governs, is read here on the same terms: a line already in it stops the asking as it does anywhere,
 and the key that would add one is not offered. So is the record of answers to the startup question
@@ -161,7 +166,7 @@ mode points.
 <a id="INCOG-8"></a>
 ### INCOG-8: what the mode does not cover, and says so
 
-Eight things still reach the filesystem in an incognito session, each because refusing it would cost
+Nine things still reach the filesystem in an incognito session, each because refusing it would cost
 more than what it leaves behind:
 
 - **The workspace.** `write_file` and `edit_file` go on editing the project. Those edits are the
@@ -206,6 +211,9 @@ more than what it leaves behind:
   created `0600` and refuses to reuse an existing name, and is removed when the prompt closes. A
   process killed with the prompt open leaves it behind. [VET-4](tools/vet-content.md#VET-4) governs
   it.
+- **The record of a memory left untrusted.** A write that leaves a definition's memory untrusted is
+  recorded under `~/.bravebot`, naming its path and nothing else, so that no later session reads
+  what this one left untrusted as trusted. [MEMORY-5](definition-memory.md#MEMORY-5) governs it.
 
 **Why.** A stated limit is worth more than an unstated one. Someone who knows the third of these
 can decide not to open an editor; someone who assumed the mode covered it has been misled by their
@@ -214,4 +222,5 @@ own tool.
 `verified-by: bravebot_tui::editor::the_scratch_file_does_not_outlive_the_edit`
 `verified-by: bravebot_lsp::server::an_index_a_session_keeps_nothing_of_goes_with_the_session`
 `verified-by: bravebot_agent::incognito_credentials::a_spent_credential_is_written_back_in_a_private_session`
+`verified-by: bravebot_agent::incognito::a_memory_left_untrusted_is_still_recorded`
 `verified-by: bravebot_cli::servers::a_started_server_in_a_session_that_keeps_nothing_has_a_home_that_goes_with_it`

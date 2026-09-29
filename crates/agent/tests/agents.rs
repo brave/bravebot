@@ -5,7 +5,7 @@
 
 use bravebot_agent::agents;
 use bravebot_agent::workspace::Workspace;
-use bravebot_core::capability::{Capability, CapabilitySet};
+use bravebot_core::capability::{Capability, CapabilitySet, ServerAlias};
 use bravebot_core::delegate::{Definitions, Kind};
 use bravebot_core::event::RecordingSink;
 use bravebot_core::policy::{Policy, ReleasePlan, Routing};
@@ -375,6 +375,64 @@ fn a_project_cannot_hand_back_a_tool_a_persons_own_definition_took_away() {
     );
 }
 
+/// An `mcpServers:` line is a narrowing the person wrote down as a `tools:` line is, so a project
+/// cannot hand back a server it left off, and whoever wrote the project's file is told which
+/// servers its delegate calls.
+#[test]
+fn a_project_cannot_hand_back_a_server_a_persons_own_definition_left_off() {
+    let scratch = Scratch::new("widening-servers");
+    let home = scratch.home();
+    let project = scratch.workspace();
+    write_definition(
+        &home,
+        "forecaster",
+        &format!(
+            "{}\nmcpServers: weather",
+            frontmatter("forecaster", "looks up the forecast", "worker")
+        ),
+        "look it up",
+    );
+    write_definition(
+        &project.join(".bravebot"),
+        "forecaster",
+        &format!(
+            "{}\nmcpServers:\n  - weather\n  - notes",
+            frontmatter("forecaster", "looks up the forecast", "worker")
+        ),
+        "whatever the checkout wants said here",
+    );
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (definitions, notices) = {
+        let mut policy = policy(&mut sink, &["."]);
+        agents::discover(&mut policy, &workspace, Some(&home))
+    };
+
+    let found = definitions.get("forecaster").expect("selectable");
+    assert_eq!(found.servers(), Some(["weather".to_string()].as_slice()));
+    let parent: CapabilitySet = ["weather", "notes"]
+        .map(|alias| Capability::McpCall(ServerAlias::new(alias)))
+        .into_iter()
+        .collect();
+    assert_eq!(
+        found.held_out_of(&parent),
+        CapabilitySet::from_iter([Capability::McpCall(ServerAlias::new("weather"))])
+    );
+
+    let said: Vec<&str> = notices
+        .iter()
+        .map(|notice| notice.message.as_str())
+        .collect();
+    assert_eq!(
+        said,
+        [
+            ".bravebot/agents/forecaster.md does not widen ~/.bravebot/agents/forecaster.md: it is \
+          loaded calling only the MCP server weather"
+        ]
+    );
+}
+
 /// A project's file takes over the rounds of the person's own of the same name, held to the
 /// ceiling of the kind it is loaded as. A worker's number under a reader's name is a reader's
 /// ceiling, and both cuts are said, so neither line reads to its author as the one in force.
@@ -548,4 +606,62 @@ fn the_set_an_interface_resolves_is_the_one_a_turn_would() {
         };
         assert_eq!(from_disk(&interface), expected, "trusting {trusted:?}");
     }
+}
+
+/// MEMORY-2: a session whose working directory is the one holding the state directory, as a
+/// session opened in the home directory is, would keep a memory inside `~/.bravebot`, which the
+/// map does not govern. The definition still loads, keeps no memory, and says so. The same file
+/// read from a state directory elsewhere is the control, keeping one and saying nothing.
+///
+/// Inside, the definitions directory is also the checkout's own, which nobody vouched for here,
+/// so that one is counted as it would be for any session there.
+#[test]
+fn a_memory_that_would_sit_inside_the_state_directory_is_not_kept_and_is_said() {
+    let scratch = Scratch::new("memory-in-home");
+    let project = scratch.workspace();
+    let elsewhere = scratch.home();
+    let inside = project.join(".bravebot");
+    for home in [&inside, &elsewhere] {
+        write_definition(
+            home,
+            "notes-keeper",
+            &format!(
+                "{}\nmemory: project",
+                frontmatter("notes-keeper", "keeps notes", "worker")
+            ),
+            "body",
+        );
+    }
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let discovered = |home: &Path, sink: &mut RecordingSink| {
+        let mut policy = policy(sink, &[]);
+        let (definitions, notices) = agents::discover(&mut policy, &workspace, Some(home));
+        let keeps = definitions
+            .get("notes-keeper")
+            .expect("loaded")
+            .keeps_memory();
+        let said: Vec<String> = notices.into_iter().map(|n| n.message).collect();
+        (keeps, said)
+    };
+
+    let counted =
+        "1 delegate definition in .bravebot/agents was not loaded: this directory is not trusted";
+    assert_eq!(
+        discovered(&elsewhere, &mut sink),
+        (true, vec![counted.to_string()])
+    );
+    assert_eq!(
+        discovered(&inside, &mut sink),
+        (
+            false,
+            vec![
+                counted.to_string(),
+                "~/.bravebot/agents/notes-keeper.md keeps no memory here: in this directory its \
+                 memory would be inside ~/.bravebot, which no write can leave untrusted"
+                    .to_string()
+            ]
+        )
+    );
 }

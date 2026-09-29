@@ -16,7 +16,8 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 /// A directory handed to a run as its own, removed when the test that made it ends.
@@ -122,6 +123,12 @@ fn bravebot_started_in(
     run(home, Some(cwd), environment, arguments)
 }
 
+/// Where every run looks for an Ollama unless a test names one: a loopback port nothing listens on.
+///
+/// A first start asks the Ollama on this machine what it serves (IMPORT-10), and the machine
+/// running the suite may have one, which would put its models into every refusal asserted on.
+const NO_OLLAMA: &str = "127.0.0.1:1";
+
 fn run(
     home: &Path,
     cwd: Option<&Path>,
@@ -133,6 +140,7 @@ fn run(
         .env_clear()
         .env("HOME", home)
         .env("BRAVEBOT_LOCALE", "en-US")
+        .env("OLLAMA_HOST", NO_OLLAMA)
         .envs(environment.iter().copied())
         .args(arguments)
         // Not a terminal, and carrying nothing: a run that reads a pipe reads the end of the
@@ -1509,6 +1517,7 @@ fn in_a_terminal_command(
         .env_clear()
         .env("HOME", home)
         .env("BRAVEBOT_LOCALE", "en-US")
+        .env("OLLAMA_HOST", NO_OLLAMA)
         .envs(environment.iter().copied())
         // `-q` leaves out the banner script would otherwise write into what is asserted on, `-e`
         // reports the status the binary exited with rather than script's own, and the transcript
@@ -2459,60 +2468,158 @@ fn declared_and_listed_unapproved(name: &str, flags: &[&str], enable: &str) {
     assert!(line.contains(&declaration.digest().short()), "{line}");
 }
 
-/// SERVERS-10: a declaration names a variable and never holds its value, so `--env NAME=value` is
-/// refused, the refusal names the variable, and the value is printed nowhere and written nowhere.
+/// SERVERS-10: a value given at `add`, typed as `claude mcp add` takes it, is stored in the
+/// person's own `mcp.json`, which only they can read, and is printed by nothing that reads the
+/// declaration back: not `add`, `get`, `list` or `doctor`.
 #[test]
-fn a_value_given_to_a_variable_is_refused_and_never_repeated() {
+fn a_value_given_at_add_is_stored_where_only_the_person_reads_it_and_printed_by_nothing() {
     let scratch = Scratch::new("cli-running-mcp-value");
-    let output = bravebot(
+    let added = bravebot(
         &scratch.path,
         &[],
         &[
             "mcp",
             "add",
             "weather",
-            "--env",
+            "-e",
             "WEATHER_TOKEN=hunter2-token",
-            "--stdio",
             "--",
             "npx",
             "weather-mcp",
         ],
     );
-    let (stdout, stderr) = said(&output);
-    assert_eq!(output.status.code(), Some(2), "{stderr}");
-    assert!(stderr.contains("WEATHER_TOKEN"), "{stderr}");
+    let (stdout, stderr) = said(&added);
+    assert!(added.status.success(), "{stderr}");
+
+    let file = scratch.path.join(".bravebot").join("mcp.json");
+    let written = std::fs::read_to_string(&file).expect("the declaration was written");
+    let read = bravebot_config::mcp::Declarations::parse(&written).expect("it reads back");
+    let declared = bravebot_config::mcp::Declaration::stdio(
+        vec!["npx".into(), "weather-mcp".into()],
+        vec!["PATH".into()],
+        None,
+    )
+    .and_then(|declaration| {
+        declaration.storing([("WEATHER_TOKEN".into(), "hunter2-token".into())].into())
+    })
+    .expect("a declaration");
+    assert_eq!(
+        read.get("weather").map(|entry| entry.declaration),
+        Some(Ok(declared))
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&file)
+            .expect("its metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "mode was {:o}", mode & 0o777);
+    }
+
+    let mut printed = format!("{stdout}{stderr}");
+    for command in [
+        &["mcp", "get", "weather"][..],
+        &["mcp", "list"],
+        &["doctor"],
+    ] {
+        let (stdout, stderr) = said(&bravebot(&scratch.path, &[], command));
+        printed.push_str(&stdout);
+        printed.push_str(&stderr);
+    }
     assert!(
-        !stdout.contains("hunter2") && !stderr.contains("hunter2"),
-        "the value was repeated: {stdout}{stderr}"
+        printed.contains("WEATHER_TOKEN (stored)"),
+        "the stored name was not shown: {printed}"
     );
     assert!(
-        !scratch.path.join(".bravebot").join("mcp.json").exists(),
-        "a refused declaration was written"
+        !printed.contains("hunter2"),
+        "the value was printed: {printed}"
     );
 }
 
-/// SERVERS-10: a value written where `add` expects none, as a stray word or joined to a flag, is
-/// refused without being repeated either.
+/// SERVERS-10: the line brave-search's own README gives, which names a key file, declares the
+/// server with that file as one it may read, and shows the file as that read.
+#[cfg(unix)]
 #[test]
-fn a_value_in_a_stray_word_or_a_joined_flag_is_never_repeated() {
+fn a_servers_own_install_line_naming_a_key_file_declares_a_read_of_that_file() {
+    let scratch = Scratch::new("cli-running-mcp-key-file").with_file("keys/brave-api-key", "k");
+    let key = scratch.path.join("keys/brave-api-key");
+    let assignment = format!("BRAVE_API_KEY_FILE={}", key.display());
+    let added = bravebot(
+        &scratch.path,
+        &[],
+        &[
+            "mcp",
+            "add",
+            "brave-search",
+            "-e",
+            &assignment,
+            "--",
+            "npx",
+            "-y",
+            "@brave/brave-search-mcp-server",
+        ],
+    );
+    let (_, stderr) = said(&added);
+    assert!(added.status.success(), "{stderr}");
+
+    let (stdout, stderr) = said(&bravebot(
+        &scratch.path,
+        &[],
+        &["mcp", "get", "brave-search"],
+    ));
+    let reads: Vec<&str> = stdout
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("may read: "))
+        .collect();
+    assert_eq!(reads, [key.display().to_string()], "{stdout}{stderr}");
+}
+
+/// SERVERS-10: a value `add` cannot take is refused without being repeated: a word after a name in
+/// an `-e` run, a word `-e` cannot read as `NAME=value`, a variable given twice, an `-e` before the
+/// alias, or a value joined to a flag `add` does not have.
+#[test]
+fn a_value_add_cannot_take_is_refused_and_never_repeated() {
     let scratch = Scratch::new("cli-running-mcp-stray");
     let program = ["--stdio", "--", "npx", "weather-mcp"];
-    for flags in [
-        vec!["--env=WEATHER_TOKEN=hunter2-token"],
+    let mut typed: Vec<Vec<&str>> = [
         vec!["--env", "PATH", "WEATHER_TOKEN=hunter2-token"],
         vec!["--env", "WEATHER_TOKEN", "hunter2-token"],
+        vec!["-e", "WEATHER_TOKEN", "hunter2-token"],
+        vec!["--env=hunter2-token"],
+        vec!["-e", "1WEATHER=hunter2-token"],
+        vec![
+            "-e",
+            "WEATHER_TOKEN=hunter2-token",
+            "-e",
+            "WEATHER_TOKEN=hunter2-token",
+        ],
         vec!["--http=https://user:hunter2-token@mcp.example.com/mcp"],
-    ] {
+    ]
+    .into_iter()
+    .map(|flags| {
         let mut args = vec!["mcp", "add", "weather"];
-        args.extend(&flags);
+        args.extend(flags);
         args.extend(program);
+        args
+    })
+    .collect();
+    for before in ["-e", "-eWEATHER_TOKEN=hunter2-token"] {
+        let mut args = vec!["mcp", "add", before];
+        if before == "-e" {
+            args.push("WEATHER_TOKEN=hunter2-token");
+        }
+        args.push("weather");
+        args.extend(program);
+        typed.push(args);
+    }
+    for args in typed {
         let output = bravebot(&scratch.path, &[], &args);
         let (stdout, stderr) = said(&output);
-        assert_eq!(output.status.code(), Some(2), "{flags:?}: {stderr}");
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {stderr}");
         assert!(
             !stdout.contains("hunter2") && !stderr.contains("hunter2"),
-            "{flags:?} repeated the value: {stdout}{stderr}"
+            "{args:?} repeated the value: {stdout}{stderr}"
         );
     }
     assert!(
@@ -2720,7 +2827,7 @@ fn a_declaration_that_cannot_be_used_is_listed_with_its_problem() {
     let scratch = Scratch::new("cli-running-mcp-broken").with_state(
         "mcp.json",
         &format!(
-            r#"{{"servers": {{"weather": {entry}, "leaky": {{"transport": "stdio", "argv": ["x"], "env": {{"TOKEN": "hunter2"}}}}}}}}"#
+            r#"{{"servers": {{"weather": {entry}, "leaky": {{"transport": "stdio", "argv": ["x"], "variables": ["TOKEN=hunter2"]}}}}}}"#
         ),
     );
 
@@ -2731,7 +2838,7 @@ fn a_declaration_that_cannot_be_used_is_listed_with_its_problem() {
         .lines()
         .find(|line| line.contains("leaky"))
         .unwrap_or_else(|| panic!("the broken entry was left out: {stdout}"));
-    assert!(line.contains("values"), "{line}");
+    assert!(line.contains("is not a name"), "{line}");
     assert!(
         stdout.lines().any(|line| line.contains("weather")),
         "the usable entry was dropped with it: {stdout}"
@@ -3255,5 +3362,150 @@ fn import_providers_is_refused_while_incognito() {
     assert!(
         !scratch.settings().exists(),
         "an incognito import wrote settings"
+    );
+}
+
+/// What `ollama list` shows on a machine with one model that can call tools and one that cannot,
+/// as `/api/tags` answers it.
+const OLLAMA_LISTING: &str = r#"{"models": [
+    {"name": "qwen3-coder:30b", "modified_at": "2026-09-16T14:07:58-04:00", "capabilities": ["completion", "tools"]},
+    {"name": "llama3:latest", "modified_at": "2026-09-17T09:46:42-04:00", "capabilities": ["completion"]}
+]}"#;
+
+/// An Ollama on loopback answering `/api/tags` with [`OLLAMA_LISTING`], as the `OLLAMA_HOST` that
+/// reaches it, and a count of the connections it has taken.
+fn an_ollama() -> (String, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let port = listener.local_addr().expect("addr").port();
+    let asked = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&asked);
+    std::thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            counted.fetch_add(1, Ordering::SeqCst);
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut request = String::new();
+            let _ = reader.read_line(&mut request);
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).unwrap_or(0) == 0 || header.trim().is_empty() {
+                    break;
+                }
+            }
+            let reply = match request.starts_with("GET /api/tags ") {
+                true => http(200, OLLAMA_LISTING),
+                false => http(404, r#"{"error": "not found"}"#),
+            };
+            let _ = stream.write_all(reply.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    (format!("127.0.0.1:{port}"), asked)
+}
+
+/// IMPORT-10: a first start on a machine where Ollama runs and nothing else is configured asks
+/// whether to import it, showing the server and the model that would be written, and a start
+/// nobody answers is declined and refused as before.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_first_run_with_ollama_running_offers_to_import_it() {
+    let scratch = Scratch::new("cli-running-import-ollama");
+    let (ollama, _) = an_ollama();
+    let environment = [NOTHING_CONFIGURED, &[("OLLAMA_HOST", ollama.as_str())]].concat();
+
+    let output = in_a_terminal(&scratch.path, &environment, &["--plain"]);
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{transcript}");
+    let question = transcript
+        .find("Import this from Ollama?")
+        .unwrap_or_else(|| panic!("no import was offered: {transcript}"));
+    let refusal = transcript
+        .find("no model service is configured yet")
+        .unwrap_or_else(|| panic!("the declined start was not refused: {transcript}"));
+    assert!(question < refusal, "{transcript}");
+    let before = &transcript[..question];
+    for shown in [
+        format!("Ollama is running at http://{ollama}, serving models bravebot can use."),
+        format!("provider.ollama, reached at http://{ollama}/v1"),
+        r#"model: "ollama/qwen3-coder:30b""#.to_string(),
+    ] {
+        assert!(
+            before.contains(&shown),
+            "{shown} was not shown before the question: {transcript}"
+        );
+    }
+    assert!(!before.contains("llama3"), "{transcript}");
+    assert!(
+        !scratch.settings().exists(),
+        "a declined import wrote the file"
+    );
+}
+
+/// IMPORT-10: where nothing answers at the address, nothing on the machine said an Ollama was
+/// meant to be there, so nothing is asked or said about one.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_first_run_with_nothing_listening_refuses_as_before() {
+    let scratch = Scratch::new("cli-running-import-ollama-silent");
+    let closed = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let host = format!("127.0.0.1:{}", closed.local_addr().expect("addr").port());
+    drop(closed);
+    let environment = [NOTHING_CONFIGURED, &[("OLLAMA_HOST", host.as_str())]].concat();
+
+    let output = in_a_terminal(&scratch.path, &environment, &["--plain"]);
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{transcript}");
+    assert!(!transcript.contains("Import this"), "{transcript}");
+    assert!(!transcript.contains("import-providers"), "{transcript}");
+    assert!(!transcript.contains("Ollama"), "{transcript}");
+    assert!(transcript.contains("amazon-bedrock"), "{transcript}");
+}
+
+/// IMPORT-10: a settings file the import cannot write into ends the start in the refusal naming
+/// it, and Ollama is asked once on the way there rather than again for the refusal's lines.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_first_run_whose_settings_file_cannot_be_imported_into_asks_ollama_once() {
+    let scratch = Scratch::new("cli-running-import-ollama-not-a-document");
+    std::fs::create_dir_all(scratch.path.join(".bravebot")).expect("settings directory");
+    std::fs::write(scratch.settings(), "{ not json").expect("settings file");
+    let (ollama, asked) = an_ollama();
+    let environment = [NOTHING_CONFIGURED, &[("OLLAMA_HOST", ollama.as_str())]].concat();
+
+    let output = in_a_terminal(&scratch.path, &environment, &["--plain"]);
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{transcript}");
+    assert!(!transcript.contains("Import this"), "{transcript}");
+    assert!(
+        transcript.contains("does not hold a settings document"),
+        "{transcript}"
+    );
+    assert_eq!(asked.load(Ordering::SeqCst), 1, "{transcript}");
+}
+
+/// IMPORT-8 and IMPORT-10: a one-shot run has nobody to ask, so a running Ollama puts the command
+/// that asks into the refusal, in the words for a server rather than a file.
+#[test]
+fn a_one_shot_first_run_with_ollama_running_names_the_import_command() {
+    let scratch = Scratch::new("cli-running-import-ollama-one-shot");
+    let (ollama, _) = an_ollama();
+    let environment = [NOTHING_CONFIGURED, &[("OLLAMA_HOST", ollama.as_str())]].concat();
+
+    let output = bravebot(&scratch.path, &environment, &["-p", "say something"]);
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains("Ollama is running here with models bravebot can use")
+            && stderr.contains("bravebot import-providers"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("Import this"), "{stderr}");
+    assert!(
+        !scratch.settings().exists(),
+        "a one-shot run wrote settings"
     );
 }

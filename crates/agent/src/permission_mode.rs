@@ -374,6 +374,21 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         }
     }
 
+    /// Refused where every check is being bypassed, the one prompt that mode answers no, and asked
+    /// in every other. SERVERS-13.
+    ///
+    /// Every other yes the mode gives is to one effect, or is recorded nowhere. This one would
+    /// rewrite a declaration to a url a server wrote, so the mode would be declaring a server at a
+    /// destination nobody read, and each later session would reach it with nothing asked.
+    fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
+        match self.mode {
+            PermissionMode::Bypass => Decision::Reject,
+            PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
+                self.inner.confirm_move(request)
+            }
+        }
+    }
+
     /// Always the inner confirmer's. A question the planner posed is not a permission, and an answer
     /// invented here would be reported to the model as the user's own words.
     fn ask_user(&mut self, asking: &bravebot_core::ask::Asking) -> Vec<bravebot_core::ask::Answer> {
@@ -533,6 +548,88 @@ mod tests {
             "a mode that draws no prompt recorded an answer past the session"
         );
         assert_eq!(confining.confirm_manifest(&a_plan()), Decision::Approve);
+    }
+
+    /// Says every server moved and counts the times it was asked; refuses everything else.
+    #[derive(Default)]
+    struct SaysItMoved(usize);
+
+    impl Confirmer for SaysItMoved {
+        fn confirm_write(&mut self, request: &WriteRequest) -> Decision {
+            Unattended.confirm_write(request)
+        }
+        fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
+            Unattended.confirm_run(request)
+        }
+        fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision {
+            Unattended.confirm_read_output(request)
+        }
+        fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision {
+            Unattended.confirm_vetted_read(request)
+        }
+        fn confirm_fetch(&mut self, request: &crate::confirm::FetchRequest) -> Decision {
+            Unattended.confirm_fetch(request)
+        }
+        fn confirm_server(&mut self, request: &crate::confirm::ServerRequest) -> Decision {
+            Unattended.confirm_server(request)
+        }
+        fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
+            Unattended.confirm_manifest(request)
+        }
+        fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision {
+            Unattended.confirm_vouch(request)
+        }
+        fn confirm_exposing_read(&mut self, request: &crate::confirm::ExposureRequest) -> Decision {
+            Unattended.confirm_exposing_read(request)
+        }
+        fn confirm_tool_list(&mut self, request: &crate::confirm::ToolListRequest) -> Decision {
+            Unattended.confirm_tool_list(request)
+        }
+        fn confirm_mcp_call(
+            &mut self,
+            request: &crate::confirm::McpCallRequest,
+        ) -> crate::confirm::CallDecision {
+            Unattended.confirm_mcp_call(request)
+        }
+        fn confirm_move(&mut self, _request: &crate::confirm::MoveRequest) -> Decision {
+            self.0 += 1;
+            Decision::Approve
+        }
+        fn ask_user(
+            &mut self,
+            asking: &bravebot_core::ask::Asking,
+        ) -> Vec<bravebot_core::ask::Answer> {
+            Unattended.ask_user(asking)
+        }
+        fn interjection(&mut self) -> Option<String> {
+            Unattended.interjection()
+        }
+    }
+
+    fn a_move() -> crate::confirm::MoveRequest {
+        crate::confirm::MoveRequest {
+            alias: "news".to_string(),
+            declared: "https://news.example/mcp".to_string(),
+            destination: "https://elsewhere.example/mcp".to_string(),
+            authority: "elsewhere.example:443".to_string(),
+            may_record: true,
+        }
+    }
+
+    /// The one permission question bypassing answers no, and without putting it to anyone: a yes
+    /// would declare a server at a url the server wrote, for every later session too. SERVERS-13.
+    /// The double says yes, so the no is the mode's own.
+    #[test]
+    fn bypassing_refuses_to_move_a_server() {
+        let mut moved = SaysItMoved::default();
+        let mut confining = Confining::new(&mut moved, PermissionMode::Bypass, false);
+        assert_eq!(confining.confirm_move(&a_move()), Decision::Reject);
+        assert_eq!(moved.0, 0, "bypassing put the move to the person");
+
+        let mut moved = SaysItMoved::default();
+        let mut confining = Confining::new(&mut moved, PermissionMode::Ask, false);
+        assert_eq!(confining.confirm_move(&a_move()), Decision::Approve);
+        assert_eq!(moved.0, 1, "asking did not put the move to the person");
     }
 
     /// A run told to ask nobody and told nothing about screening gets what it asked for, and the

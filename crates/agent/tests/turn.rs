@@ -1979,6 +1979,13 @@ fn time_spent_waiting_for_an_approval_is_not_charged_to_the_tool() {
             bravebot_agent::confirm::CallDecision::reject()
         }
 
+        fn confirm_move(
+            &mut self,
+            _request: &bravebot_agent::confirm::MoveRequest,
+        ) -> bravebot_agent::confirm::Decision {
+            bravebot_agent::confirm::Decision::Reject
+        }
+
         fn ask_user(
             &mut self,
             _asking: &bravebot_core::ask::Asking,
@@ -2364,6 +2371,13 @@ impl bravebot_agent::Confirmer for RecordingConfirmer {
         _request: &bravebot_agent::confirm::McpCallRequest,
     ) -> bravebot_agent::confirm::CallDecision {
         bravebot_agent::confirm::CallDecision::reject()
+    }
+
+    fn confirm_move(
+        &mut self,
+        _request: &bravebot_agent::confirm::MoveRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     /// These tests are about writes. A question they did not set up gets no answer.
@@ -3169,6 +3183,13 @@ impl bravebot_agent::Confirmer for SaysOnce {
         _request: &bravebot_agent::confirm::McpCallRequest,
     ) -> bravebot_agent::confirm::CallDecision {
         bravebot_agent::confirm::CallDecision::reject()
+    }
+
+    fn confirm_move(
+        &mut self,
+        _request: &bravebot_agent::confirm::MoveRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn ask_user(
@@ -4203,6 +4224,13 @@ fn a_stale_edit_is_refused() {
             _request: &bravebot_agent::confirm::McpCallRequest,
         ) -> bravebot_agent::confirm::CallDecision {
             bravebot_agent::confirm::CallDecision::reject()
+        }
+
+        fn confirm_move(
+            &mut self,
+            _request: &bravebot_agent::confirm::MoveRequest,
+        ) -> bravebot_agent::confirm::Decision {
+            bravebot_agent::confirm::Decision::Reject
         }
         fn ask_user(
             &mut self,
@@ -6192,6 +6220,13 @@ fn a_cancelled_turn_stops_before_running_a_tool() {
             _request: &bravebot_agent::confirm::McpCallRequest,
         ) -> bravebot_agent::confirm::CallDecision {
             bravebot_agent::confirm::CallDecision::reject()
+        }
+
+        fn confirm_move(
+            &mut self,
+            _request: &bravebot_agent::confirm::MoveRequest,
+        ) -> bravebot_agent::confirm::Decision {
+            bravebot_agent::confirm::Decision::Reject
         }
 
         fn ask_user(
@@ -11045,6 +11080,13 @@ impl bravebot_agent::Confirmer for AnswersWith {
         bravebot_agent::confirm::CallDecision::reject()
     }
 
+    fn confirm_move(
+        &mut self,
+        _request: &bravebot_agent::confirm::MoveRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     /// Refuses. A test double is not a person agreeing to start a process.
     fn confirm_server(
         &mut self,
@@ -11547,6 +11589,13 @@ impl bravebot_agent::Confirmer for AskedAboutRuns {
         _request: &bravebot_agent::confirm::McpCallRequest,
     ) -> bravebot_agent::confirm::CallDecision {
         bravebot_agent::confirm::CallDecision::reject()
+    }
+
+    fn confirm_move(
+        &mut self,
+        _request: &bravebot_agent::confirm::MoveRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn ask_user(
@@ -12381,6 +12430,67 @@ fn a_branch_that_does_not_run_leaves_its_destination_as_it_was() {
     );
 }
 
+/// Discarding output writes no file. `/dev/null` is outside every workspace, so holding it to the
+/// confinement a destination takes refused the commonest redirection there is, and the sandbox that
+/// allows it was never reached.
+///
+/// Nobody vouched for the line, so its output is quarantined and what comes back is its size: five
+/// bytes is the one `printf` that was not discarded, where a discard that leaked would be ten.
+#[test]
+fn a_line_discarding_its_output_runs_and_names_no_file_to_write() {
+    let scratch = Scratch::new("run-discard");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let seen = confirmer.seen.clone();
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request(
+            "run",
+            r#"{"command":"printf dropp > /dev/null && printf kept."}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("run it and discard the output"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn completes");
+
+    let asked = seen.lock().unwrap();
+    assert_eq!(asked.len(), 1, "the line was not put to the person");
+    assert!(
+        asked[0].plan.writes.is_empty(),
+        "the person was asked to let the line write {:?}",
+        asked[0].plan.writes
+    );
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        !second.contains("resolves outside the workspace"),
+        "the discard was refused: {second}"
+    );
+    assert!(
+        second.contains("printed (1 lines, 5 bytes"),
+        "the line did not run, or the discarded output came back: {second}"
+    );
+}
+
 /// A vouched entry for `program` under `args`, given in `tree`.
 ///
 /// `tree`'s canonical spelling, because that is the one a run's directory comes back in: an entry
@@ -13168,8 +13278,10 @@ fn the_planner_is_told_how_a_run_it_may_not_read_ended() {
     let scratch = Scratch::new("run-status-kept");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
+    // Something printed, to stderr, so there is output to be kept from the planner: one that prints
+    // nothing is told as exactly that (RUN-24).
     let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"false"}"#),
+        tool_request("run", r#"{"command":"cat missing.txt"}"#),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -13202,6 +13314,130 @@ fn the_planner_is_told_how_a_run_it_may_not_read_ended() {
     assert!(
         second.contains("exited 1"),
         "the planner was not told how a run it may not read ended: {second}"
+    );
+}
+
+/// A command that printed nothing has nothing to keep from anybody. Handed a reference to its
+/// empty output with the ways to process, vet and read it, a planner that had only made a
+/// directory went looking for something to do with the reference. It still hears how the run
+/// ended, and the output stays quarantined, so nothing about it was read into the planner's context.
+#[test]
+fn a_run_that_printed_nothing_says_so_and_hands_back_no_reference() {
+    let scratch = Scratch::new("run-printed-nothing");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"mkdir made"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("make it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    assert!(scratch.path.join("made").is_dir(), "the line did not run");
+    assert!(
+        reporter
+            .printed
+            .iter()
+            .all(|printed| !printed.read_by_the_planner),
+        "the output reached the planner's context, so this tests the wrong branch"
+    );
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    let told = message_from(&second, "Result of run");
+    assert!(
+        told.contains("It exited 0.") && told.contains("It printed nothing."),
+        "the planner was not told how the run ended and that it printed nothing: {told}"
+    );
+    for advice in ["ref:", "read_output", "spawn_processor", "vet_content"] {
+        assert!(
+            !told.contains(advice),
+            "the planner was handed {advice} for output that is not there: {told}"
+        );
+    }
+    assert!(
+        !reporter
+            .landed
+            .contains(&bravebot_agent::report::Landing::Quarantined)
+            && reporter.shown.is_empty(),
+        "the person was told something was kept from the planner when nothing was: {:?}",
+        reporter.landed
+    );
+}
+
+/// The same for a look at a job that has printed nothing since it was last looked at, which is
+/// every look at a quiet server.
+#[test]
+fn a_look_at_a_job_that_printed_nothing_new_says_so_and_hands_back_no_reference() {
+    let scratch = Scratch::new("job-printed-nothing");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"sleep 30","background":true}"#),
+        tool_request("job_output", r#"{"job":"job:1","kill":true}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    let told = message_from(
+        sent.last().expect("the round after job_output"),
+        "Result of job_output",
+    );
+    assert!(
+        told.contains("was stopped") && told.contains("It has printed nothing new."),
+        "the planner was not told how the job ended and that nothing new came of it: {told}"
+    );
+    for advice in ["ref:", "read_output", "spawn_processor", "vet_content"] {
+        assert!(
+            !told.contains(advice),
+            "the planner was handed {advice} for output that is not there: {told}"
+        );
+    }
+    assert!(
+        !reporter
+            .landed
+            .contains(&bravebot_agent::report::Landing::Quarantined)
+            && reporter.shown.is_empty(),
+        "the person was told something was kept from the planner when nothing was: {:?}",
+        reporter.landed
     );
 }
 
@@ -13363,6 +13599,13 @@ impl bravebot_agent::Confirmer for ShownAfterAVet {
         _request: &bravebot_agent::confirm::McpCallRequest,
     ) -> bravebot_agent::confirm::CallDecision {
         bravebot_agent::confirm::CallDecision::reject()
+    }
+
+    fn confirm_move(
+        &mut self,
+        _request: &bravebot_agent::confirm::MoveRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn ask_user(
@@ -16209,6 +16452,13 @@ impl bravebot_agent::Confirmer for ReadsWhatItRan {
         bravebot_agent::confirm::CallDecision::reject()
     }
 
+    fn confirm_move(
+        &mut self,
+        _request: &bravebot_agent::confirm::MoveRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn ask_user(
         &mut self,
         _asking: &bravebot_core::ask::Asking,
@@ -16671,6 +16921,13 @@ impl bravebot_agent::Confirmer for VouchesForFiles {
         _request: &bravebot_agent::confirm::McpCallRequest,
     ) -> bravebot_agent::confirm::CallDecision {
         bravebot_agent::confirm::CallDecision::reject()
+    }
+
+    fn confirm_move(
+        &mut self,
+        _request: &bravebot_agent::confirm::MoveRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn ask_user(
@@ -22481,6 +22738,13 @@ impl bravebot_agent::Confirmer for ApprovesFetchesAndWrites {
         bravebot_agent::confirm::CallDecision::reject()
     }
 
+    fn confirm_move(
+        &mut self,
+        _request: &bravebot_agent::confirm::MoveRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn ask_user(
         &mut self,
         _asking: &bravebot_core::ask::Asking,
@@ -27549,6 +27813,13 @@ impl bravebot_agent::confirm::Confirmer for RemembersWrites {
         bravebot_agent::confirm::CallDecision::reject()
     }
 
+    fn confirm_move(
+        &mut self,
+        _request: &bravebot_agent::confirm::MoveRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn ask_user(&mut self, asking: &bravebot_core::ask::Asking) -> Vec<bravebot_core::ask::Answer> {
         bravebot_agent::confirm::ApproveWrites.ask_user(asking)
     }
@@ -27814,6 +28085,13 @@ impl bravebot_agent::confirm::Confirmer for RemembersExposures {
         _request: &bravebot_agent::confirm::McpCallRequest,
     ) -> bravebot_agent::confirm::CallDecision {
         bravebot_agent::confirm::CallDecision::reject()
+    }
+
+    fn confirm_move(
+        &mut self,
+        _request: &bravebot_agent::confirm::MoveRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn confirm_write(
@@ -30143,3 +30421,615 @@ mod retention;
 
 #[path = "../test-support/answers.rs"]
 mod retention_answers;
+
+/// Every message's text in one request, decoded, so a path is compared as the run reads it.
+///
+/// A message's content is a string or a list of parts, each with its own text.
+fn said_in(request: &str) -> String {
+    let parsed: serde_json::Value = serde_json::from_str(request).expect("a request");
+    let mut said = Vec::new();
+    for message in parsed["messages"].as_array().expect("messages") {
+        match &message["content"] {
+            serde_json::Value::String(text) => said.push(text.clone()),
+            serde_json::Value::Array(parts) => said.extend(
+                parts
+                    .iter()
+                    .filter_map(|part| part["text"].as_str().map(str::to_string)),
+            ),
+            _ => {}
+        }
+    }
+    said.join("\n")
+}
+
+/// Where a run under the definition `name` in `workspace` is told its memory is.
+fn memory_of(workspace: &Workspace, name: &str) -> String {
+    workspace
+        .root()
+        .join(".bravebot/memory")
+        .join(format!("{name}.md"))
+        .display()
+        .to_string()
+}
+
+/// A session's own map for `workspace`, trusting all of it: rooted where the session is, so a
+/// memory's path is keyed as a session keys it.
+fn trusting_all_of(workspace: &Workspace) -> bravebot_core::trust::TrustStore {
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    trust
+}
+
+/// What the record in `home` names under `workspace`.
+fn memories_recorded(home: &Scratch, workspace: &Workspace) -> Vec<String> {
+    bravebot_agent::memory::Record::new(
+        &home.path,
+        &bravebot_agent::workspace::key_of(workspace.root()),
+    )
+    .paths()
+}
+
+/// The map key of the memory of `name` under `workspace`.
+fn memory_key(workspace: &Workspace, name: &str) -> String {
+    format!(
+        "{}/.bravebot/memory/{name}.md",
+        bravebot_agent::workspace::key_of(workspace.root())
+    )
+}
+
+/// One addressed turn in its own session, answering with the only request it made, decoded.
+fn addressed_once(
+    endpoint: &str,
+    received: &MockRequests,
+    workspace: &Workspace,
+    task: &Task,
+) -> String {
+    turn::run_cancellable(
+        &config_for(endpoint),
+        &bravebot_net::Egress::new(),
+        workspace,
+        task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_all_of(workspace),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+    let requests: Vec<String> = received.try_iter().collect();
+    let [request] = requests.as_slice() else {
+        panic!("one request, for one round: {requests:?}");
+    };
+    request.clone()
+}
+
+/// One write into `workspace` as a session with a state directory makes it, under a map trusting
+/// the whole directory.
+fn write_as_a_session(
+    workspace: &Workspace,
+    home: &Scratch,
+    relative: &str,
+    contents: bravebot_core::value::Labelled<String>,
+) {
+    let mut routing = bravebot_core::policy::Routing::new();
+    routing.insert_trusted("task", "remember");
+    let mut sink = RecordingSink::new();
+    let mut policy = bravebot_core::policy::Policy::begin(
+        routing,
+        bravebot_core::policy::ReleasePlan::new(),
+        bravebot_core::capability::CapabilitySet::from_iter([
+            bravebot_core::capability::Capability::FileWrite,
+        ]),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trusting_all_of(workspace))
+    .with_root(workspace.root());
+    workspace
+        .clone()
+        .keeping_memories(Some(home.path.clone()))
+        .write(
+            &mut policy,
+            &bravebot_core::value::Labelled::trusted(relative.to_string()),
+            &contents,
+        )
+        .expect("the write lands");
+}
+
+/// MEMORY-4: a run under a definition keeping a memory is told where it is and whether anything
+/// is kept there, and never what it holds. The notes reach it only through a read it makes, on the
+/// map's terms, so the bytes of a kept memory are nowhere in the request.
+#[test]
+fn an_addressed_run_is_told_where_its_memory_is_and_not_what_it_holds() {
+    let scratch = Scratch::new("memory-told");
+    let home = Scratch::new("memory-told-home");
+    define(
+        &home,
+        "notes-keeper",
+        "kind: worker\nmemory: project\n",
+        "KEEP-NOTES",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        ("EMPTY-TASK", vec![reply_with("nothing yet")]),
+        ("KEPT-TASK", vec![reply_with("read later")]),
+    ]);
+    let path = memory_of(&workspace, "notes-keeper");
+
+    let empty = said_in(&addressed_once(
+        &endpoint,
+        &received,
+        &workspace,
+        &addressed("EMPTY-TASK", &home, "notes-keeper"),
+    ));
+    assert!(
+        empty.contains(&format!(
+            "keeps its memory in {path}. Nothing is kept there yet"
+        )),
+        "a run with no memory yet was not told where to keep one: {empty}"
+    );
+
+    std::fs::create_dir_all(scratch.path.join(".bravebot/memory")).unwrap();
+    std::fs::write(
+        scratch.path.join(".bravebot/memory/notes-keeper.md"),
+        "REMEMBERED-FROM-LAST-TIME\n",
+    )
+    .unwrap();
+    let request = addressed_once(
+        &endpoint,
+        &received,
+        &workspace,
+        &addressed("KEPT-TASK", &home, "notes-keeper"),
+    );
+    let kept = said_in(&request);
+    assert!(
+        kept.contains(&format!(
+            "keeps its memory in {path}. Its notes are there for you to read"
+        )),
+        "a run was not told its memory holds notes: {kept}"
+    );
+    assert!(
+        !request.contains("REMEMBERED-FROM-LAST-TIME"),
+        "the memory's bytes were put in the request: {request}"
+    );
+}
+
+/// MEMORY-5 across four sessions. Model output written into a memory leaves it untrusted, which a
+/// fresh session's map does not know, so the next session is told it is withheld and its map holds
+/// the path untrusted. A later write of trusted bytes takes it out of the record, and the session
+/// after that is told the notes are there.
+#[test]
+fn a_memory_a_write_left_untrusted_is_withheld_from_the_next_session_until_trusted_again() {
+    let scratch = Scratch::new("memory-next-session");
+    let home = Scratch::new("memory-next-session-home");
+    define(
+        &home,
+        "notes-keeper",
+        "kind: worker\nmemory: project\n",
+        "KEEP-NOTES",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        ("WITHHELD-TASK", vec![reply_with("withheld")]),
+        ("TRUSTED-AGAIN-TASK", vec![reply_with("kept")]),
+    ]);
+    let path = memory_of(&workspace, "notes-keeper");
+
+    write_as_a_session(
+        &workspace,
+        &home,
+        ".bravebot/memory/notes-keeper.md",
+        bravebot_core::value::Labelled::new("FROM-A-PAGE\n".to_string(), Label::untrusted_public()),
+    );
+    assert_eq!(
+        memories_recorded(&home, &workspace),
+        vec![memory_key(&workspace, "notes-keeper")]
+    );
+
+    let trust;
+    let withheld = {
+        let task = addressed("WITHHELD-TASK", &home, "notes-keeper");
+        let outcome = turn::run_cancellable(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &task,
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut RecordingSink::new(),
+            trusting_all_of(&workspace),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("turn runs");
+        trust = Some(outcome.trust);
+        let requests: Vec<String> = received.try_iter().collect();
+        let [request] = requests.as_slice() else {
+            panic!("one request, for one round: {requests:?}");
+        };
+        request.clone()
+    };
+    assert!(
+        said_in(&withheld).contains(&format!(
+            "keeps its memory in {path}, which is not trusted, so it is withheld"
+        )),
+        "a fresh session was not told the memory an earlier one left untrusted is withheld: {}",
+        said_in(&withheld)
+    );
+    assert!(!withheld.contains("FROM-A-PAGE"));
+    assert!(
+        !trust
+            .expect("the turn's map")
+            .is_trusted(".bravebot/memory/notes-keeper.md"),
+        "a fresh session's map trusts a memory an earlier one left untrusted"
+    );
+
+    write_as_a_session(
+        &workspace,
+        &home,
+        ".bravebot/memory/notes-keeper.md",
+        bravebot_core::value::Labelled::trusted("OUR-OWN-WORDS\n".to_string()),
+    );
+    assert!(
+        memories_recorded(&home, &workspace).is_empty(),
+        "a memory written with trusted bytes is still recorded"
+    );
+    let kept = said_in(&addressed_once(
+        &endpoint,
+        &received,
+        &workspace,
+        &addressed("TRUSTED-AGAIN-TASK", &home, "notes-keeper"),
+    ));
+    assert!(
+        kept.contains(&format!(
+            "keeps its memory in {path}. Its notes are there for you to read"
+        )),
+        "a memory trusted again is still withheld: {kept}"
+    );
+}
+
+/// MEMORY-6: keeping a memory adds no tool. A reader keeping one is offered exactly the tools a
+/// reader keeping none is, nothing that writes among them, and differs only in being told where
+/// its memory is.
+#[test]
+fn keeping_a_memory_offers_no_tool_the_kind_does_not_hold() {
+    let scratch = Scratch::new("memory-no-tool");
+    let remembering = Scratch::new("memory-no-tool-remembering");
+    let forgetful = Scratch::new("memory-no-tool-forgetful");
+    define(
+        &remembering,
+        "notes-keeper",
+        "kind: reader\nmemory: project\n",
+        "READ-NOTES",
+    );
+    define(&forgetful, "notes-keeper", "kind: reader\n", "READ-NOTES");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        ("REMEMBERING-TASK", vec![reply_with("read")]),
+        ("FORGETFUL-TASK", vec![reply_with("read")]),
+    ]);
+    let tools = |request: &str| {
+        serde_json::from_str::<serde_json::Value>(request).expect("a request")["tools"].clone()
+    };
+
+    let keeping = addressed_once(
+        &endpoint,
+        &received,
+        &workspace,
+        &addressed("REMEMBERING-TASK", &remembering, "notes-keeper"),
+    );
+    let keeping_none = addressed_once(
+        &endpoint,
+        &received,
+        &workspace,
+        &addressed("FORGETFUL-TASK", &forgetful, "notes-keeper"),
+    );
+
+    assert_eq!(
+        tools(&keeping),
+        tools(&keeping_none),
+        "keeping a memory changed what the run was offered"
+    );
+    for tool in ["write_file", "edit_file", "run"] {
+        assert!(
+            !keeping.contains(&format!(r#""name":"{tool}""#)),
+            "a reader keeping a memory was offered {tool}"
+        );
+    }
+    assert!(said_in(&keeping).contains("keeps its memory in"));
+    assert!(
+        !said_in(&keeping_none).contains("keeps its memory in"),
+        "a definition keeping no memory was told of one"
+    );
+}
+
+/// MEMORY-4 for a delegate: a planner's spawn of a definition keeping a memory is a run under
+/// that definition too, so its own prompt says where the memory is.
+#[test]
+fn a_delegate_under_a_definition_keeping_a_memory_is_told_where_it_is() {
+    let scratch = Scratch::new("memory-delegate");
+    let home = Scratch::new("memory-delegate-home");
+    define(
+        &home,
+        "notes-keeper",
+        "kind: reader\nmemory: project\n",
+        "READ-NOTES",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "DELEGATE-SOMETHING",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"notes-keeper","task":"CHECK-THE-NOTES"}"#,
+                ),
+                reply_with("nothing to add while it works"),
+                reply_with("relayed"),
+            ],
+        ),
+        ("CHECK-THE-NOTES", vec![reply_with("nothing kept")]),
+    ]);
+
+    turn::run_cancellable(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("DELEGATE-SOMETHING").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_all_of(&workspace),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let delegate = requests
+        .iter()
+        .find(|body| body.contains("CHECK-THE-NOTES") && !body.contains("DELEGATE-SOMETHING"))
+        .expect("the delegate never ran");
+    let path = memory_of(&workspace, "notes-keeper");
+    assert!(
+        said_in(delegate).contains(&format!(
+            "keeps its memory in {path}. Nothing is kept there yet"
+        )),
+        "a delegate under a definition keeping a memory was not told where it is: {}",
+        said_in(delegate)
+    );
+}
+
+/// One turn reading the memory of `notes-keeper`, in a session with the state directory `home`.
+fn a_turn_reading_the_memory(
+    workspace: &Workspace,
+    home: &Scratch,
+    confirmer: &mut VouchesForFiles,
+) -> turn::Outcome {
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request(
+            "read_file",
+            r#"{"path":".bravebot/memory/notes-keeper.md"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        workspace,
+        &Task::new("read the notes").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::Conversation::new(),
+        confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_all_of(workspace),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs")
+}
+
+/// MEMORY-5 and TRUST-8: a person's yes to a quarantined read of a recorded memory takes it out of
+/// the record, since a record that outlived the yes would take it back on the next turn. A no
+/// leaves it recorded.
+#[test]
+fn a_persons_yes_to_a_recorded_memory_takes_it_out_of_the_record() {
+    let scratch = Scratch::new("memory-vouched");
+    let home = Scratch::new("memory-vouched-home");
+    std::fs::create_dir_all(scratch.path.join(".bravebot/memory")).unwrap();
+    std::fs::write(
+        scratch.path.join(".bravebot/memory/notes-keeper.md"),
+        "FROM-A-PAGE\n",
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let record = bravebot_agent::memory::Record::new(
+        &home.path,
+        &bravebot_agent::workspace::key_of(workspace.root()),
+    );
+    record
+        .keep(&memory_key(&workspace, "notes-keeper"))
+        .expect("seed the record");
+
+    let mut declining = VouchesForFiles::new(false);
+    let declined = a_turn_reading_the_memory(&workspace, &home, &mut declining);
+    assert_eq!(
+        declining.offered.lock().unwrap().len(),
+        1,
+        "the recorded memory was not quarantined, so nobody was asked"
+    );
+    assert!(
+        !declined
+            .trust
+            .is_trusted(".bravebot/memory/notes-keeper.md")
+    );
+    assert_eq!(
+        memories_recorded(&home, &workspace),
+        vec![memory_key(&workspace, "notes-keeper")],
+        "a no took the memory out of the record"
+    );
+
+    let mut vouching = VouchesForFiles::new(true);
+    let vouched = a_turn_reading_the_memory(&workspace, &home, &mut vouching);
+    assert!(vouched.trust.is_trusted(".bravebot/memory/notes-keeper.md"));
+    assert!(
+        memories_recorded(&home, &workspace).is_empty(),
+        "a yes left the memory recorded, so the next turn takes it back"
+    );
+}
+
+/// MEMORY-5 and TRUST-8: naming a recorded memory with `@`, dropping it or attaching it is a grant
+/// as a yes is, so it takes the memory out of the record: a line left there would take the grant
+/// back when the next run started, a delegate of the same turn's included.
+#[test]
+fn a_recorded_memory_named_dropped_or_attached_leaves_the_record() {
+    let scratch = Scratch::new("memory-named");
+    let home = Scratch::new("memory-named-home");
+    std::fs::create_dir_all(scratch.path.join(".bravebot/memory")).unwrap();
+    std::fs::write(
+        scratch.path.join(".bravebot/memory/notes-keeper.md"),
+        "FROM-A-PAGE\n",
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let record = bravebot_agent::memory::Record::new(
+        &home.path,
+        &bravebot_agent::workspace::key_of(workspace.root()),
+    );
+    let memory = ".bravebot/memory/notes-keeper.md";
+    let dropped = workspace.root().join(memory).display().to_string();
+
+    for (how, task) in [
+        ("named", Task::new("read @the notes").with_file(memory)),
+        (
+            "dropped",
+            Task::new("read the notes").with_dropped_text(dropped.clone()),
+        ),
+        (
+            "attached",
+            Task::new("read the notes").with_attachment(dropped.clone(), "text/markdown"),
+        ),
+    ] {
+        record
+            .keep(&memory_key(&workspace, "notes-keeper"))
+            .expect("seed the record");
+        let (endpoint, _received) = serve_sequence(vec![reply_with("read")]);
+        // Whether the file then reaches the model is another question: an attachment the model
+        // cannot take is refused after the grant is made.
+        let _ = turn::resume(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &task.with_home(Some(home.path.clone())),
+            &mut bravebot_agent::Conversation::new(),
+            &mut VouchesForFiles::new(false),
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut RecordingSink::new(),
+            trusting_all_of(&workspace),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        );
+        assert!(
+            memories_recorded(&home, &workspace).is_empty(),
+            "a memory the person {how} was left recorded, so the next run takes the grant back"
+        );
+    }
+}
+
+/// One run of `command` in `workspace`, answered with `answer`, in a session whose state directory
+/// is `home`.
+fn a_run_writing_a_memory(
+    workspace: &Workspace,
+    home: Option<&Scratch>,
+    command: &str,
+    answer: bravebot_agent::RunDecision,
+    programs: bravebot_core::programs::TrustedPrograms,
+) -> turn::Outcome {
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("run", &json!({ "command": command }).to_string()),
+        reply_with("done"),
+    ]);
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        workspace,
+        &Task::new("run it").with_home(home.map(|home| home.path.clone())),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(answer),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_all_of(workspace),
+        programs,
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs")
+}
+
+/// MEMORY-5 for a redirection, which the map sees as a write. A line the session already vouched
+/// for leaves the memory trusted, so it is recorded before it runs and taken out once it has. A
+/// line nobody vouched for leaves the memory untrusted, so it stays recorded, and a session with nowhere to
+/// record it does not let the line open the memory at all: recorded after the line, a session
+/// stopped while it ran would leave the bytes and no record.
+#[test]
+fn a_redirection_into_a_memory_is_recorded_before_it_opens_it() {
+    let scratch = Scratch::new("memory-redirect");
+    let home = Scratch::new("memory-redirect-home");
+    std::fs::create_dir_all(scratch.path.join(".bravebot/memory")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let memory = scratch.path.join(".bravebot/memory/notes-keeper.md");
+
+    let echo = bravebot_agent::programs::resolve("echo", &scratch.path).expect("echo is installed");
+    let vouched = a_run_writing_a_memory(
+        &workspace,
+        Some(&home),
+        "echo OUR-OWN-WORDS > .bravebot/memory/notes-keeper.md",
+        bravebot_agent::RunDecision::approve(),
+        bravebot_core::programs::TrustedPrograms::from_iter([vouched_in(
+            &echo,
+            &["OUR-OWN-WORDS"],
+            &scratch.path,
+        )]),
+    );
+    assert_eq!(std::fs::read_to_string(&memory).unwrap(), "OUR-OWN-WORDS\n");
+    assert!(vouched.trust.is_trusted(".bravebot/memory/notes-keeper.md"));
+    assert!(
+        memories_recorded(&home, &workspace).is_empty(),
+        "a memory a vouched line left trusted is still recorded"
+    );
+
+    let line = "echo FROM-A-PAGE > .bravebot/memory/notes-keeper.md";
+    a_run_writing_a_memory(
+        &workspace,
+        None,
+        line,
+        bravebot_agent::RunDecision::approve(),
+        bravebot_core::programs::TrustedPrograms::new(),
+    );
+    assert_eq!(
+        std::fs::read_to_string(&memory).unwrap(),
+        "OUR-OWN-WORDS\n",
+        "a line wrote a memory nothing could record"
+    );
+
+    let outcome = a_run_writing_a_memory(
+        &workspace,
+        Some(&home),
+        line,
+        bravebot_agent::RunDecision::approve(),
+        bravebot_core::programs::TrustedPrograms::new(),
+    );
+    assert_eq!(
+        std::fs::read_to_string(&memory).unwrap(),
+        "FROM-A-PAGE\n",
+        "the redirection did not write the memory"
+    );
+    assert!(!outcome.trust.is_trusted(".bravebot/memory/notes-keeper.md"));
+    assert_eq!(
+        memories_recorded(&home, &workspace),
+        vec![memory_key(&workspace, "notes-keeper")],
+        "a memory a line left untrusted was not recorded"
+    );
+}

@@ -44,7 +44,7 @@ lands.
 | | |
 |---|---|
 | Tools | its kind's, which are what its capabilities reach, and a way to delegate only above the bottom of the tree |
-| Memory | none of its parent's exchange: it begins with the task it was given |
+| Memory | none of its parent's exchange: it begins with the task it was given, and, where its definition keeps a memory, with where that memory is, which it reads itself ([MEMORY-4](definition-memory.md#MEMORY-4)) |
 | Conversation | a loop of its own, bounded |
 | Reads | whatever its capabilities and the paths a person vouched for allow |
 | Writes | files, each shown to a person first, and slots in a quarantine of its own |
@@ -127,8 +127,7 @@ A reader and a checker hold no MCP server's grant ([SERVERS-9](mcp-servers.md#SE
 server's tool does is the server's to say, so a call to one may write or run anything, and a worker
 is the one kind already let write and run. No kind names a server, since which servers a session
 reached is not known until it starts, so a worker holds a server's grant only where its parent
-does. A definition with a `tools:` line holds none: the line names this program's tools and no
-server's.
+does, and its definition may narrow which of those it keeps ([DELEGATE-24](#DELEGATE-24)).
 
 Every kind additionally reaches the network, because a planner is a model call and the request out
 is egress like any other. No tool of this program's that a delegate is offered reaches it, so what
@@ -149,7 +148,6 @@ tool list is written out a second time as a refusal.
 `verified-by: bravebot_agent::delegate::no_kind_is_told_it_may_reach_the_network`
 `verified-by: bravebot_core::delegate::only_a_worker_holds_the_servers_of_the_run_it_is_carved_from`
 `verified-by: bravebot_core::delegate::a_worker_holds_no_server_its_parent_does_not`
-`verified-by: bravebot_core::delegate::a_worker_naming_its_tools_holds_no_server`
 `verified-by: bravebot_core::policy::a_worker_delegate_holds_the_servers_its_parent_holds_and_no_other`
 `verified-by: bravebot_agent::mcp::a_reader_or_a_checker_delegate_holds_no_server_and_reaches_none`
 `verified-by: bravebot_agent::mcp::a_worker_is_offered_only_the_servers_its_parent_holds`
@@ -170,6 +168,10 @@ The driver's own words bracket the body and are never replaceable by it: the gui
 planner here gets comes before it, and what the delegate cannot do comes after. A body that could
 displace the second would be a checked-in file telling a delegate it may do what its kind cannot,
 which is [DELEGATE-4](#DELEGATE-4)'s sentence read backwards.
+
+[MEMORY-4](definition-memory.md#MEMORY-4) adds a sentence of the driver's after the body: where the
+definition's memory is and what the trust map says of it. No word of the memory itself goes in,
+since a planner can write one.
 
 **What it cannot do is chosen from what it holds, not from its kind.** The two stopped agreeing
 the moment either could be narrowed: a `worker` spawned by a run that cannot write, or one whose
@@ -631,7 +633,7 @@ machine.
 **A later definition of the same name replaces the one before it and never widens it.** It has the
 last word about what the name is *for*, taking over the description, the body, the model, the
 skills ([DELEGATE-23](#DELEGATE-23)) and the rounds ([DELEGATE-6](#DELEGATE-6)), and none at all
-about what it may do. Both fields that decide that are met with the one it replaced:
+about what it may do. The three fields that decide that are met with the one it replaced:
 
 - It is loaded as the **narrower of the two kinds**, so a project cannot turn a `reader` a person
   wrote in their own directory into a `worker`.
@@ -640,6 +642,9 @@ about what it may do. Both fields that decide that are met with the one it repla
   ([DELEGATE-19](#DELEGATE-19)), so the narrowing a person wrote cannot be handed back, and two
   lists with no name in common leave a delegate with none, exactly as a list naming another
   agent's vocabulary does.
+- The **servers it selects are met alias by alias** with the ones the definition it replaced
+  selected ([DELEGATE-24](#DELEGATE-24)), so a project cannot hand a worker a person confined to
+  one server the rest of them.
 
 Met on the fields rather than on the capability set they come to, because two tools one capability
 reaches are two different things a delegate may do, and a meet taken on capabilities alone would
@@ -649,6 +654,9 @@ The rounds are taken over rather than met, because a bound is not authority: a g
 the last round what it refuses on the first. They are held to the ceiling of the kind the
 replacement is loaded as, so a project writing a `worker`'s number under the name of a `reader` a
 person wrote gets a `reader`'s ceiling, and is told so ([DELEGATE-6](#DELEGATE-6)).
+
+The `memory:` key is taken over as the body is, because a memory changes what a run knows and
+never what it may do. [MEMORY-2](definition-memory.md#MEMORY-2) specifies that key.
 
 DELEGATE-19 says a checked-in file granting a capability would make the file the author of
 authority rather than the person who vouched for it, and a wider `kind:` for a name that person
@@ -663,10 +671,10 @@ each other, which is a configuration where one was already silently winning and 
 below now says so.
 
 **What the replacement asked for and did not get is named, with the file that cut it down.** The
-kind it wrote where it is loaded as a narrower one, and the tools it is confined to where its own
-line did not stand. That is [PERM-14](permissions.md#PERM-14)'s reason for naming a dropped `allow`
-rule, and it reads the same way in this direction: a narrowing nobody is told about leaves whoever
-wrote either file believing what they wrote is in force. Both files may be named, because by here
+kind it wrote where it is loaded as a narrower one, and the tools and the servers it is confined to
+where its own line did not stand. That is [PERM-14](permissions.md#PERM-14)'s reason for naming a
+dropped `allow` rule, and it reads the same way in this direction: a narrowing nobody is told about
+leaves whoever wrote either file believing what they wrote is in force. Both files may be named, because by here
 each came from a source somebody vouched for, which is what separates this from the count above.
 
 `verified-by: bravebot_agent::agents::a_definition_nobody_vouched_for_is_counted_and_never_named`
@@ -687,6 +695,9 @@ each came from a source somebody vouched for, which is what separates this from 
 `verified-by: bravebot_core::delegate::a_later_definition_takes_over_the_skills_the_one_it_replaces_named`
 `verified-by: bravebot_core::delegate::a_later_definition_takes_over_the_rounds_under_the_kind_it_is_loaded_as`
 `verified-by: bravebot_agent::agents::a_project_replacement_is_held_to_the_ceiling_of_the_kind_it_is_loaded_as`
+`verified-by: bravebot_core::delegate::a_later_definition_cannot_hand_back_a_server_the_one_it_replaces_left_off`
+`verified-by: bravebot_agent::agents::a_project_cannot_hand_back_a_server_a_persons_own_definition_left_off`
+`verified-by: bravebot_agent::agents::a_server_narrowing_is_said_in_the_number_it_leaves`
 
 <a id="DELEGATE-21"></a>
 ### DELEGATE-21: a definition's name may not open with `-` or carry a colon
@@ -703,8 +714,10 @@ definition and is not: by then the source it came from is one somebody vouched f
 named is its path rather than the name it asked for. A file from a directory nobody vouched for is
 never reached at all, and is counted with the rest.
 
-There is no length limit and no character class. A name is compared, never resolved against
-anything, so what it may hold is [SKILL-8](skills.md#SKILL-8)'s question and not this one.
+There is no length limit and no character class for a definition that keeps no memory. Its name is
+compared, never resolved against anything, so what it may hold is [SKILL-8](skills.md#SKILL-8)'s
+question and not this one. The name of a definition that keeps a memory also names a file, and
+[MEMORY-3](definition-memory.md#MEMORY-3) holds it to a slug.
 
 `verified-by: bravebot_agent::agents::a_name_that_is_or_folds_to_a_colon_is_refused`
 
@@ -775,6 +788,55 @@ has.
 `verified-by: bravebot_core::delegate::a_definition_may_name_skills_and_the_spec_carries_them`
 `verified-by: bravebot_agent::turn::a_definition_offers_its_delegate_only_the_skills_it_names`
 
+<a id="DELEGATE-24"></a>
+### DELEGATE-24: a definition may name the MCP servers its worker holds
+
+`mcpServers:` is optional and is read as `tools:` is, on one line or as a list, each name the alias
+a person gave a server. A worker whose definition names some holds the grant of each of those its
+parent holds and of no other server, so the rest are neither offered to it nor callable by it. An
+empty line names none, and its worker holds no server. A definition writing neither this line nor
+`tools:` holds every server its parent holds ([DELEGATE-4](#DELEGATE-4)). One writing `tools:` and
+not this line holds none, because a `tools:` line names this program's tools and no server's, so a
+definition confined to a few tools and one server names both.
+
+A name selects out of what the parent holds and adds nothing to it. A server this session did not
+reach, or one whose grant the run no longer holds, is one no definition can hand a delegate, and a
+reader or a checker naming a server still holds none. Where a spawned delegate named a server it
+does not get, the trail says which names it was and why. A name no server this session reached
+goes by is said with the rest of what the turn says about what it found, naming the definition and
+the name.
+
+A turn addressed to a worker naming its servers holds those of the session's grants and no other
+([ADDRESS-7](addressing-a-definition.md#ADDRESS-7)), and is put the lists of those servers alone. A
+list the run could not use is not put to the person for it, and waits for a turn that holds that
+server's grant.
+
+**Why a replacement meets the line.** A server's grant is authority, where a skill is guidance, so
+the line goes with the kind and the tools rather than with the body: a later definition of the same
+name holds only the servers both it and the one it replaced select, and is told what it named and
+did not get ([DELEGATE-20](#DELEGATE-20)).
+
+**Why the key is `mcpServers`.** It is the key other agents' definitions write, so one ported from
+them keeps the narrowing it was written with. Those files may also declare a server inline under
+it, and a server is declared in one file of the person's own and nowhere else
+([SERVERS-1](mcp-servers.md#SERVERS-1)). A line holding a colon, which no alias does, is taken
+for such a declaration: it selects no server, and the turn says the definition declared one and
+repeats nothing of the line, since the entry may hold an argv and a variable's value.
+
+`verified-by: bravebot_agent::agents::a_definition_reads_the_servers_it_names`
+`verified-by: bravebot_agent::agents::a_server_declared_inline_selects_none_and_repeats_nothing_of_the_line`
+`verified-by: bravebot_agent::agents::a_server_named_twice_and_reached_nowhere_is_said_once`
+`verified-by: bravebot_agent::mcp::a_server_a_definition_names_and_the_session_did_not_reach_is_said`
+`verified-by: bravebot_core::delegate::a_worker_naming_servers_holds_only_those_of_them_its_parent_holds`
+`verified-by: bravebot_core::delegate::a_reader_or_a_checker_naming_servers_holds_none`
+`verified-by: bravebot_core::delegate::a_worker_naming_its_tools_and_no_server_holds_none`
+`verified-by: bravebot_core::delegate::a_servers_line_selects_servers_whatever_the_tools_line_says`
+`verified-by: bravebot_core::policy::a_definition_naming_servers_is_delegated_with_only_those_its_parent_holds`
+`verified-by: bravebot_core::policy::an_addressed_worker_naming_its_servers_keeps_only_those`
+`verified-by: bravebot_core::policy::an_addressed_reader_naming_servers_holds_none_and_the_trail_says_why`
+`verified-by: bravebot_agent::mcp::a_worker_whose_definition_names_one_server_is_offered_only_its_tool`
+`verified-by: bravebot_agent::mcp::an_addressed_worker_naming_one_server_is_put_its_list_alone`
+
 ## Known costs
 
 - **A definition is trusted exactly as far as a configuration file somebody pasted is.** That is
@@ -789,13 +851,12 @@ has.
   character Unicode adds to that set later is one [DELEGATE-21](#DELEGATE-21) would not catch
   until the list is extended.
 
-- **A definition cannot choose which MCP servers its delegate holds.** A worker holds every server
-  its parent holds, and a reader, a checker and a definition with a `tools:` line hold none
-  ([DELEGATE-4](#DELEGATE-4)). An `mcpServers:` key is ignored like any other key this does not
-  read, so a definition written to talk to one server is either a worker offered every other
-  server's tools too or a delegate offered none. Each call still passes the gates the turn's own
-  would ([DELEGATE-10](#DELEGATE-10)), so the cost is tools offered that the definition never meant
-  to use, and not a call nobody decided.
+- **A definition selects a server by its alias, and an alias is a person's choice.** Two people
+  who named one server differently need two lines, and a checked-in definition naming `weather`
+  selects whatever server this machine's person called that. The name selects out of grants the
+  person already made and adds none ([DELEGATE-24](#DELEGATE-24)), so what a mismatch costs is a
+  delegate calling a server of that name the person reached, or none, and each call still passes
+  the gates the turn's own would ([DELEGATE-10](#DELEGATE-10)).
 
 - **A `skills:` line is split the way a `tools:` line is.** Commas and spaces separate names and a
   list's bullets are dropped, so a skill whose name holds a space cannot be named, and a YAML flow

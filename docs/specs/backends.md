@@ -671,17 +671,20 @@ that reads one. Where the request that answered had given up both, both are reme
 naming no field: a service that reads a breakpoint and refuses a level gives up the caching as well
 for the life of the process.
 
-**On Bedrock, the level goes before the ask.** A Bedrock request carries cache breakpoints too, and a
-streamed one offering a tool asks for its arguments as they are written
-([BACKEND-44](#BACKEND-44)). There the breakpoints are refused with a status of their own, the one an
-expired credential also gets, so they are given up on that status and never for a refusal of either
-field. The level, the assumed ceiling of [BACKEND-41](#BACKEND-41) and the ask share one status, so
-they are given up in that order, each only where the request is refused again without the one
-before. Each is given up only by a request that carried it, so a request that carried no level never
-records the model as refusing one, and a stated ceiling is never given up. The order keeps what a
-model does read: Claude Haiku 4.5 takes the ask and refuses the level, measured, and giving up the
-ask first would cost it the field that keeps a long argument from being cut off and still be
-refused. The ceiling goes before the ask because, given up wrongly, it costs a model its replies
+**On Bedrock, four fields are given up in order.** A Bedrock request carries cache breakpoints too, a
+streamed one asks for the model's thinking as it happens ([BACKEND-46](#BACKEND-46)), and a streamed
+one offering a tool asks for its arguments as they are written ([BACKEND-44](#BACKEND-44)). There
+the breakpoints are refused with a status of their own, the one an expired credential also gets, so
+they are given up on that status and never for a refusal of any field. The ask to show thinking,
+the level, the assumed ceiling of [BACKEND-41](#BACKEND-41) and the ask for arguments share one
+status, so they are given up in that order, each only where the request is refused again without the
+one before. Each is given up only by a request that carried it, so a request that carried no level
+never records the model as refusing one, and a stated ceiling is never given up. The order keeps
+what a model does read, measured: Claude Sonnet 5 refuses the ask to show thinking and reads the
+level, so the ask goes first, where the other order would cost Sonnet its level and still be
+refused; Claude Haiku 4.5 refuses both and takes the ask for arguments, and giving that up first
+would cost it the field that keeps a long argument from being cut off and still be refused. The
+ceiling goes before the ask for arguments because, given up wrongly, it costs a model its replies
 longer than the fallback, where the ask costs it every long argument, written into a silence the
 idle bound cuts. Where the request that answered had given up more than one, all of them are
 remembered, as on a gateway. A request refused with nothing left to give up settles nothing, and
@@ -698,6 +701,7 @@ it, and a settings file cannot state what its author does not know either.
 `verified-by: bravebot_bedrock::lib::a_probe_that_settled_nothing_is_not_remembered`
 `verified-by: bravebot_bedrock::lib::one_model_refusing_says_nothing_about_another`
 `verified-by: bravebot_bedrock::lib::the_level_is_given_up_before_the_ask_for_arguments_as_written`
+`verified-by: bravebot_bedrock::lib::the_ask_to_show_thinking_is_given_up_before_the_level`
 `verified-by: bravebot_bedrock::lib::a_refused_ask_for_arguments_as_written_is_given_up_and_remembered`
 `verified-by: bravebot_bedrock::lib::a_probe_that_settled_nothing_leaves_what_was_known`
 `verified-by: bravebot_aichat::client::a_level_a_gateway_refuses_costs_the_field_and_not_the_turn`
@@ -1355,6 +1359,16 @@ written ([BACKEND-44](#BACKEND-44)) or offered no tool, and not where it offered
 there the silence may be the service holding an argument back until the model has finished it, and a
 second request waits out the same silence and is billed for it.
 
+A streamed reply from an OpenAI-compatible service that stops arriving once any of its body has
+arrived is incomplete in the same way, and is sent again as any reply that ended early is. A read
+that fails before any of its body has arrived stays a transport failure. That client has no ask for
+arguments as they are written, so nothing tells it a service holding one back from a connection
+that died, and it sends the request again as it did before either was told apart.
+
+A reply cut at the time its request stated for it ([NET-5](network-egress.md#NET-5)) is incomplete
+too, streamed or asked for whole, and never a request that did not get through: the service had the
+request and was still writing. It is not asked for again, since the same reply takes as long again.
+
 A reply stopped at its output ceiling reports that ceiling alongside the category. It is this
 program's own configured figure rather than anything a service said, so it is not a detail taken
 from a reply, and without it the report names a limit and no way to change it.
@@ -1379,7 +1393,11 @@ from a reply, and without it the report names a limit and no way to change it.
 `verified-by: bravebot_bedrock::lib::a_reply_that_never_began_is_still_a_request_that_did_not_get_through`
 `verified-by: bravebot_bedrock::lib::a_reply_that_went_quiet_while_an_argument_was_held_back_is_not_asked_for_again`
 `verified-by: bravebot_bedrock::lib::only_a_request_whose_arguments_are_held_back_stalls_rather_than_stopping`
+`verified-by: bravebot_aichat::client::a_stream_that_breaks_after_it_began_is_a_reply_that_stopped`
+`verified-by: bravebot_aichat::client::a_stream_that_breaks_before_any_of_it_arrived_is_still_a_connection_failure`
 `verified-by: bravebot_agent::backend::a_reply_that_stopped_arriving_is_reported_as_unfinished_and_not_as_unreachable`
+`verified-by: bravebot_net::egress::a_reply_outlasting_the_time_its_request_stated_is_given_up_on`
+`verified-by: bravebot_net::egress::a_reply_written_before_any_of_it_is_sent_is_out_of_time_when_it_outlasts_its_stated_bound`
 `verified-by: bravebot_agent::failure_categories::service_exception_keeps_its_actionable_category`
 `verified-by: bravebot_agent::turn::compaction_failure_narration_keeps_credentials_out`
 `verified-by: bravebot_agent::turn::what_the_planner_is_told_about_a_failed_delegate_carries_nothing_of_the_endpoint`
@@ -1613,6 +1631,15 @@ carrying the assumed figure is asked again with 8,192, and no later request carr
 figure to that model, on the terms [BACKEND-22](#BACKEND-22) gives the level. A stated figure is
 never lowered. Nothing is asked over the network to find out, and nobody is required to supply it.
 
+The ceiling a request carries also says how long its reply is given
+([NET-5](network-egress.md#NET-5)): two minutes to read the prompt, then as long as the ceiling
+takes to write at 25 tokens a second, and never less than the bound the egress layer puts on a
+reply of unstated length. A ceiling of 32,000 tokens is given 23 minutes and 20 seconds, one of
+8,192 the egress layer's ten minutes. A streamed reply is given it from the moment it begins, and
+waits to begin as long as any other reply; one asked for whole is given it for that wait as well,
+since the model writes it before any of it is sent. The gap allowed between two pieces of the reply
+is the egress layer's whatever the ceiling.
+
 The aichat backend states no ceiling at all, so nothing here applies to it: its requests carry no
 such field and whatever bounds a reply there belongs to the service.
 
@@ -1629,9 +1656,16 @@ fallback has to hold for a model nothing here can identify, so it is low.
 The assumed figure is not the largest those models allow, because it is also a reservation. Bedrock
 deducts a request's input and its ceiling from the account's tokens-per-minute quota when the request
 starts, and refunds the difference when it ends, so on an inference profile a team shares a larger
-ceiling is fewer requests at once before any of them is throttled. At the rate measured on Claude
-Opus 5.5, about 69 tokens a second, a reply of 32,000 tokens also finishes inside the bound the egress
-layer puts on a whole reply.
+ceiling is fewer requests at once before any of them is throttled.
+
+The time a reply is given follows its ceiling because the ceiling is the one figure here that says
+how long the reply can run. At the slowest rate measured on Bedrock, about 69 tokens a second on
+Claude Opus 5.5, the egress layer's ten minutes end any reply past about 41,000 tokens while the
+model is still writing it, and a stated ceiling of 128,000 needs half an hour. The reply cut off is
+billed, and asked for again where [BACKEND-37](#BACKEND-37) sends a stopped reply again, to be cut
+off at the same point. The rate assumed is well under half the slowest measured so that a slow day
+still finishes, and the bound is never lowered below the egress layer's because a reply short
+enough for that bound was never the problem.
 
 A stated figure is somebody's statement about the model. Sending less in its place would cut short
 the replies they said could run, and a refusal of the figure they chose is theirs to see. The
@@ -1647,6 +1681,8 @@ the ones a `provider` block already named.
 `verified-by: bravebot_bedrock::lib::an_assumed_ceiling_a_model_refuses_is_stepped_down_and_remembered`
 `verified-by: bravebot_bedrock::lib::a_stated_ceiling_is_never_stepped_down`
 `verified-by: bravebot_bedrock::lib::the_level_is_given_up_before_the_ask_for_arguments_as_written`
+`verified-by: bravebot_bedrock::lib::the_time_a_reply_is_given_follows_the_ceiling_its_request_carries`
+`verified-by: bravebot_bedrock::lib::a_reply_still_being_written_is_not_cut_off_by_a_bound_its_ceiling_did_not_set`
 
 <a id="BACKEND-42"></a>
 ### BACKEND-42: a reply the ceiling stopped is kept for what it said and never for what it asked
@@ -1802,6 +1838,35 @@ figure costs a person, which is a question about the estimate and not about the 
 `verified-by: bravebot_aichat::protocol::a_call_being_written_is_named_and_counted`
 `verified-by: bravebot_agent::turn::the_call_being_written_reaches_the_interface_before_it_runs`
 
+<a id="BACKEND-46"></a>
+### BACKEND-46: a streamed Bedrock request asks for the model's thinking as it happens
+
+A streamed Bedrock request asks for the model's thinking to be sent as it thinks, in the field that
+service hands to the model without reading, saying how thinking is shown and never whether the model
+thinks, which stays the model's own default. A whole-reply request does not ask. The thinking that
+arrives is read past: none of it becomes the reply's words or its record in the conversation, and a
+reply that carried it is as readable as one that did not. A model that refuses a request carrying
+the ask is asked again without it, and no later request carries it to that model, on the terms
+[BACKEND-22](#BACKEND-22) gives the level, that clause stating the order the concessions go in.
+
+**Why.** A model that thinks before it writes sends nothing while it does unless asked, and the
+egress layer cuts a connection that has sent nothing for two minutes. Measured on Bedrock, Claude
+Opus 5.5 at the level `max` thought for 32,000 tokens and sent nothing for 379 seconds. With the ask
+the same model sent its thinking throughout: the longest gap was 6.0 seconds in 88 at the level
+`high`, and 7.6 seconds in 24 with no level. The ask does not make it think harder. With no level it
+wrote 2,016 tokens in 24.1 seconds with the ask and 1,949 in 25.0 without, and without it opened the
+reply only after 11.5 seconds of silence, with an empty block where the thinking would have been. A
+round that sends back a tool call without the thinking before it is answered, so the thinking read
+past costs the next round nothing. Streamed only, because a whole reply arrives at once however it
+was thought.
+
+`verified-by: bravebot_bedrock::protocol::the_level_and_the_ask_for_arguments_as_written_travel_together`
+`verified-by: bravebot_bedrock::lib::only_a_streamed_request_asks_to_show_thinking`
+`verified-by: bravebot_bedrock::lib::thinking_that_arrives_stays_out_of_the_reply`
+`verified-by: bravebot_bedrock::lib::the_ask_to_show_thinking_is_given_up_before_the_level`
+`verified-by: bravebot_bedrock::lib::a_refused_ask_for_arguments_as_written_is_given_up_and_remembered`
+`verified-by: bravebot_bedrock::lib::a_probe_that_settled_nothing_leaves_what_was_known`
+
 ## Known costs
 
 - **The refusal is made at startup, and a model chosen mid-session is not checked again.**
@@ -1850,15 +1915,30 @@ figure costs a person, which is a question about the estimate and not about the 
   that would say otherwise is the person's own to set, so a machine whose system drive is elsewhere
   has no managed layer at all rather than one that can be redirected.
 
-- **Two fields in a Bedrock request are ones a single provider defines.** The body Bedrock states
-  for every provider it hosts has no field for how hard to think or for tool arguments as they are
-  written, so the level and the ask (BACKEND-44) travel in the field that service hands to the model
-  without reading, spelled the way the Anthropic API spells them. A tier naming a model from another
-  provider is reachable and answers, and a request carrying either is refused by that model, costing
-  the first streamed request with a tool one refused request per field before the model's answer is
-  remembered. Nothing here can tell the two apart, an inference-profile ARN not saying which
-  provider serves it, and the alternative is withholding both from every Bedrock model including
-  the ones that read them.
+- **Three fields in a Bedrock request are ones a single provider defines.** The body Bedrock states
+  for every provider it hosts has no field for how hard to think, for how thinking is shown or for
+  tool arguments as they are written, so the level, the ask to show thinking (BACKEND-46) and the
+  ask for arguments (BACKEND-44) travel in the field that service hands to the model without
+  reading, spelled the way the Anthropic API spells them. A tier naming a model from another
+  provider is reachable and answers, and a request carrying any of them is refused by that model,
+  costing the first streamed request one refused request for each of them it carries before the
+  model's answer is remembered. Nothing here can tell the two apart, an inference-profile ARN not saying
+  which provider serves it, and the alternative is withholding all three from every Bedrock model
+  including the ones that read them.
+
+- **A model that refuses the ask to show thinking and thinks for more than two minutes before it
+  writes is cut off as a request that did not get through.** Claude Sonnet 5 and Claude Haiku 4.5
+  refuse the ask (BACKEND-46), measured on Bedrock, wanting to be told whether to think as well as
+  how, and asked nothing Sonnet at the level `high` sent nothing for 22 seconds before the start of
+  its message. The egress layer's gap bound ([NET-5](network-egress.md#NET-5)) ends such a silence
+  at two minutes, and a reply ended before any of its body arrived is not sent again
+  ([BACKEND-37](#BACKEND-37)). Telling those models whether to think would close it, and would
+  decide for them something that is now their own default; Haiku refuses being told to decide for
+  itself. A model that refuses only a later concession, the level, the ceiling or the ask for
+  arguments, gives up the ask to show thinking with it, since it goes first; none measured does.
+  And a model that does show its thinking holds its output count still while it thinks, the
+  thinking being read past rather than tallied, so the count BACKEND-45 moves stands still for as
+  long as a think lasts while the connection under it stays busy.
 
 - **Which models a product is served is the service's decision, and this holds no copy of it.** The
   roster is whatever the endpoint returns for `bravebot`, so a model becoming unsuitable for agentic

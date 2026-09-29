@@ -140,6 +140,9 @@ pub struct Refusals {
     pub arguments_as_written: bool,
     /// The assumed ceiling on the reply, which a model allowing less refuses along with the request.
     pub ceiling: bool,
+    /// The ask to show thinking as it happens, which a model wanting to be told whether to think
+    /// refuses, since the ask says only how.
+    pub thinking_shown: bool,
 }
 
 /// What each model has refused so far.
@@ -295,7 +298,12 @@ pub struct BedrockClient<'a> {
     /// behind an inference-profile ARN allows, and a refusal on the request's contents is the only
     /// answer to be had.
     ceiling: bool,
-    /// The model the four above were loaded for, so what is learned is written back under it.
+    /// Whether streamed requests still ask for the model's thinking as it happens.
+    ///
+    /// True until a model refuses the ask. Without it a model that thinks sends nothing while it
+    /// does, and a long enough think is a silence the connection is cut on.
+    thinking_shown: bool,
+    /// The model the five above were loaded for, so what is learned is written back under it.
     learned_for: String,
     /// What that model was known to refuse before this request, which a probe that settled nothing
     /// puts back.
@@ -339,6 +347,7 @@ impl<'a> BedrockClient<'a> {
             effort: true,
             arguments_as_written: true,
             ceiling: true,
+            thinking_shown: true,
             learned_for: String::new(),
             recalled: Refusals::default(),
         }
@@ -406,13 +415,25 @@ impl<'a> BedrockClient<'a> {
         self.breakpoints && error.may_refuse_caching()
     }
 
+    /// Whether this failure is worth sending the same streamed request again without the ask to
+    /// show thinking as it happens.
+    ///
+    /// The first thing a validation refusal of a stream is tried without, ahead of the level. Claude
+    /// Sonnet 5 and Claude Haiku 4.5 refuse the ask, and Sonnet reads the level, so the other order
+    /// costs Sonnet its level. A model that refused only something later loses the ask along with
+    /// it, and none measured does.
+    fn worth_dropping_thinking_shown(&self, error: &BedrockError) -> bool {
+        self.thinking_shown && error.is_refused_on_contents()
+    }
+
     /// Whether this failure is worth sending the same request again without its effort level.
     ///
     /// Only where the request carried one: a request without a level was not refused for it, and
     /// giving it up there would record a refusal nobody saw and tell the interface a level is not
-    /// in force that the model would have read. Tried before the ask for arguments as they are
-    /// written, which is refused with the same status: a model can take that ask and refuse the
-    /// level, and the order keeps the one that stops a long argument being cut off.
+    /// in force that the model would have read. Tried after the ask to show thinking and before the
+    /// ask for arguments as they are written, all refused with the same status: a model can take
+    /// the ask for arguments and refuse the level, and the order keeps the one that stops a long
+    /// argument being cut off.
     fn worth_dropping_effort(&self, error: &BedrockError, request: &ChatRequest) -> bool {
         self.effort && request.effort.is_some() && error.is_refused_on_contents()
     }
@@ -421,9 +442,10 @@ impl<'a> BedrockClient<'a> {
     ///
     /// Only where the ceiling sent was the assumed one: a figure somebody stated is their statement
     /// about the model, and quietly sending less would cut replies short that they said could run.
-    /// Tried after the level and before the ask, all three refused with one status. Given up
-    /// wrongly, the ceiling costs a model its replies longer than the fallback, and the ask costs it
-    /// every long argument, written into a silence the idle bound cuts. So the ceiling goes first.
+    /// Tried after the level and before the ask for arguments as they are written, all refused with
+    /// one status. Given up wrongly, the ceiling costs a model its replies longer than the fallback,
+    /// and that ask costs it every long argument, written into a silence the idle bound cuts. So the
+    /// ceiling goes before the ask.
     fn worth_lowering_ceiling(&self, error: &BedrockError) -> bool {
         self.ceiling
             && self.config.stated_output_limit(&self.learned_for).is_none()
@@ -503,6 +525,7 @@ impl<'a> BedrockClient<'a> {
             self.effort = !self.recalled.effort;
             self.arguments_as_written = !self.recalled.arguments_as_written;
             self.ceiling = !self.recalled.ceiling;
+            self.thinking_shown = !self.recalled.thinking_shown;
             return;
         }
         remember(
@@ -512,6 +535,7 @@ impl<'a> BedrockClient<'a> {
                 effort: !self.effort,
                 arguments_as_written: !self.arguments_as_written,
                 ceiling: !self.ceiling,
+                thinking_shown: !self.thinking_shown,
             },
         );
     }
@@ -526,6 +550,7 @@ impl<'a> BedrockClient<'a> {
         self.effort = !refusals.effort;
         self.arguments_as_written = !refusals.arguments_as_written;
         self.ceiling = !refusals.ceiling;
+        self.thinking_shown = !refusals.thinking_shown;
         self.learned_for = model.to_string();
         self.recalled = refusals;
     }
@@ -657,6 +682,10 @@ impl<'a> BedrockClient<'a> {
                     self.breakpoints = false;
                     probed = true;
                 }
+                Err(error) if self.worth_dropping_thinking_shown(&error) => {
+                    self.thinking_shown = false;
+                    probed = true;
+                }
                 Err(error) if self.worth_dropping_effort(&error, request) => {
                     self.effort = false;
                     probed = true;
@@ -760,6 +789,7 @@ impl<'a> BedrockClient<'a> {
                 Ok(Err(EgressError::Transport { .. })) if began => {
                     return Err(self.stopped_part_way(request));
                 }
+                // A reply cut at its deadline among them: asked for again, it runs as long.
                 Ok(Err(e)) => return Err(e.into()),
                 // Nothing has arrived yet, which is the only chance to look at anything while a
                 // reply is still being waited for.
@@ -874,6 +904,12 @@ impl<'a> BedrockClient<'a> {
         } else {
             converse
         };
+        // A whole reply is sent once written, so its thinking leaves no gap in it to fill.
+        let converse = if streaming && self.thinking_shown {
+            converse.with_thinking_shown()
+        } else {
+            converse
+        };
         let converse = if request.conversation_is_sent_again {
             converse
         } else {
@@ -887,9 +923,6 @@ impl<'a> BedrockClient<'a> {
     }
 
     /// The signed request for one attempt, and the model it names.
-    ///
-    /// Credentials are resolved here rather than held, because a session expires during a run and a
-    /// key read once at startup stops working part way through.
     fn build(
         &self,
         request: &ChatRequest,
@@ -898,19 +931,36 @@ impl<'a> BedrockClient<'a> {
         let model = self.model_for(request)?;
 
         let converse = self.converse_for(request, &model, streaming);
+        let bound = reply_bound(converse.inference_config.max_tokens);
         let body =
             serde_json::to_vec(&converse).map_err(|e| BedrockError::Encode(e.to_string()))?;
+        let http = self.signed(&model, streaming, body)?;
 
+        // A stream's headers come at once and the model writes after them; a reply asked for whole
+        // is written before any of it is sent.
+        let http = if streaming {
+            http.stream_within(bound)
+        } else {
+            http.reply_within(bound)
+        };
+        Ok((http, model))
+    }
+
+    /// `body` as a request to `model`, signed.
+    ///
+    /// Credentials are resolved here rather than held, because a session expires during a run and a
+    /// key read once at startup stops working part way through.
+    fn signed(&self, model: &str, streaming: bool, body: Vec<u8>) -> Result<Request, BedrockError> {
         #[cfg(test)]
         if let Some(http) = &self.test_request {
             let mut http = http.clone();
             http.body = Some(body);
-            return Ok((http, model));
+            return Ok(http);
         }
 
         let resolved = credentials::resolve(self.config.profile.as_deref())?;
 
-        let url = self.config.converse_url(&model, streaming);
+        let url = self.config.converse_url(model, streaming);
         let host = self.config.host();
         let path = path_of(&url);
 
@@ -939,7 +989,7 @@ impl<'a> BedrockClient<'a> {
             http = http.header("x-amz-security-token", token);
         }
 
-        Ok((http, model))
+        Ok(http)
     }
 
     /// Which model this request names.
@@ -1152,6 +1202,24 @@ const WAKE: Duration = Duration::from_millis(50);
 /// How many chunks may sit between the thread reading them and the one taking them apart.
 const CHUNKS_AHEAD: usize = 16;
 
+/// The slowest a reply is taken to be written, in tokens a second.
+///
+/// Well under half the slowest rate measured on Bedrock, 69 tokens a second on Claude Opus 5.5, so
+/// a reply running to its ceiling on a slow day still finishes inside the bound.
+const SLOWEST_WRITING: u64 = 25;
+
+/// How long a reply may take to begin, reading the prompt, before the first token of it.
+const BEFORE_WRITING: Duration = Duration::from_secs(120);
+
+/// How long a reply that may run to `ceiling` tokens is given.
+///
+/// Never less than the bound the egress layer puts on a reply of unstated length, which stays the
+/// figure for a short reply.
+fn reply_bound(ceiling: u64) -> Duration {
+    (BEFORE_WRITING + Duration::from_secs(ceiling.div_ceil(SLOWEST_WRITING)))
+        .max(bravebot_net::Timeouts::default().reply)
+}
+
 /// Whether a failed attempt should be repeated.
 ///
 /// Only transport failures qualify. A reply that arrived and would not decode is not a connection
@@ -1240,6 +1308,7 @@ mod tests {
                 effort: true,
                 arguments_as_written: false,
                 ceiling: false,
+                thinking_shown: false,
             }
         );
 
@@ -1399,6 +1468,27 @@ mod tests {
             });
         }
         assert_eq!(reply.text, "Hello world");
+    }
+
+    /// A stream asks for the model's thinking as it happens, and what arrives keeps the connection
+    /// from going quiet and does nothing else. Read as words, it is handed on as something the
+    /// model said; read as a block this cannot make sense of, every reply that thought fails.
+    #[test]
+    fn thinking_that_arrives_stays_out_of_the_reply() {
+        let mut reply = Reply::default();
+        for payload in [
+            br#"{"contentBlockIndex":0,"delta":{"reasoningContent":{"text":"The user wants"}}}"#
+                .as_slice(),
+            br#"{"contentBlockIndex":0,"delta":{"reasoningContent":{"signature":"c2ln"}}}"#,
+            br#"{"contentBlockIndex":1,"delta":{"text":"done"}}"#,
+        ] {
+            reply.absorb(protocol::stream_event("contentBlockDelta", payload).expect("decodes"));
+        }
+        assert_eq!(reply.text, "done");
+        assert!(
+            !reply.unreadable_content,
+            "a reply that thought was unreadable"
+        );
     }
 
     /// Tool arguments arrive as JSON in pieces. Parsed before they are whole they are a syntax error,
@@ -1823,27 +1913,14 @@ mod tests {
     fn scripted_with_silences(
         responses: Vec<(Vec<u8>, bool)>,
     ) -> (Request, std::sync::mpsc::Receiver<Vec<u8>>) {
-        use std::io::{BufRead, Read, Write};
+        use std::io::{Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let (sent, received) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             for (response, silent) in responses {
                 let (mut stream, _) = listener.accept().unwrap();
-                let mut reader = std::io::BufReader::new(&mut stream);
-                let mut length = 0;
-                loop {
-                    let mut line = String::new();
-                    reader.read_line(&mut line).unwrap();
-                    if line == "\r\n" {
-                        break;
-                    }
-                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-                        length = value.trim().parse().unwrap();
-                    }
-                }
-                let mut body = vec![0; length];
-                reader.read_exact(&mut body).unwrap();
+                let body = read_request(&mut stream);
                 stream.write_all(&response).unwrap();
                 sent.send(body).unwrap();
                 if silent {
@@ -1857,8 +1934,29 @@ mod tests {
         )
     }
 
+    /// Read one request off `stream`, head and body, and return the body.
+    fn read_request(stream: &mut std::net::TcpStream) -> Vec<u8> {
+        use std::io::{BufRead, Read};
+        let mut reader = std::io::BufReader::new(stream);
+        let mut length = 0;
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            if line == "\r\n" {
+                break;
+            }
+            if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                length = value.trim().parse().unwrap();
+            }
+        }
+        let mut body = vec![0; length];
+        reader.read_exact(&mut body).unwrap();
+        body
+    }
+
     /// Both entry points count every probe, none of which advances the retry ordinal. Only a
-    /// streamed request asks for arguments as they are written, so only it has a fourth to give up.
+    /// streamed request asks to show thinking and for arguments as they are written, so only it has
+    /// those two more to give up.
     #[test]
     fn request_counts_include_capability_probes() {
         use bravebot_core::{
@@ -1867,10 +1965,11 @@ mod tests {
             policy::{ReleasePlan, Routing},
         };
         for streaming in [false, true] {
-            let sent = if streaming { 5 } else { 4 };
+            let sent = if streaming { 6 } else { 4 };
             let config = config();
             let egress = Egress::new();
-            let (http, received) = refused_requests(vec![403, 400, 400, 400, 400][..sent].to_vec());
+            let (http, received) =
+                refused_requests(vec![403, 400, 400, 400, 400, 400][..sent].to_vec());
             let mut client = BedrockClient::new(&config, &egress);
             client.test_request = Some(http);
             let mut sink = RecordingSink::new();
@@ -2015,11 +2114,12 @@ mod tests {
             .expect("a ceiling")
     }
 
-    /// Whether a sent body carried the level, and whether it carried the ask for arguments as they
-    /// are written.
-    fn carried(body: &serde_json::Value) -> (bool, bool) {
+    /// Whether a sent body carried the ask to show thinking, the level, and the ask for arguments as
+    /// they are written, in the order a refusal gives them up.
+    fn carried(body: &serde_json::Value) -> (bool, bool, bool) {
         let fields = &body["additionalModelRequestFields"];
         (
+            !fields["thinking"].is_null(),
             !fields["output_config"].is_null(),
             !fields["anthropic_beta"].is_null(),
         )
@@ -2062,6 +2162,44 @@ mod tests {
         assert_eq!(
             asks(&client, &offering, true),
             None,
+            "an ask the model refused was sent again"
+        );
+    }
+
+    /// A model thinks whether or not a tool is offered, so every stream asks for the thinking to be
+    /// shown. A whole reply is sent once written, so it asks nothing and sends the body it always
+    /// did. A model that refused the ask is not asked again.
+    #[test]
+    fn only_a_streamed_request_asks_to_show_thinking() {
+        let config = config();
+        let egress = Egress::new();
+        let mut client = BedrockClient::new(&config, &egress);
+        let offering = writing_a_file("opus-arn");
+        let bare = ChatRequest::new("opus-arn", vec![Message::user("hello")]);
+        let body = |client: &BedrockClient, request: &ChatRequest, streaming: bool| {
+            serde_json::to_value(client.converse_for(request, "opus-arn", streaming))
+                .expect("a body")
+        };
+
+        for request in [&offering, &bare] {
+            assert_eq!(
+                body(&client, request, true).pointer("/additionalModelRequestFields/thinking"),
+                Some(&json!({ "display": "summarized" })),
+                "a stream went without the ask"
+            );
+            assert!(
+                body(&client, request, false)
+                    .get("additionalModelRequestFields")
+                    .is_none(),
+                "a whole reply asked for something"
+            );
+        }
+
+        client.thinking_shown = false;
+        assert!(
+            body(&client, &bare, true)
+                .get("additionalModelRequestFields")
+                .is_none(),
             "an ask the model refused was sent again"
         );
     }
@@ -2122,7 +2260,7 @@ mod tests {
         );
         assert_eq!(sent.len() as u32, ATTEMPTS, "each attempt the server read");
         assert!(
-            sent.iter().all(|body| carried(body).1),
+            sent.iter().all(|body| carried(body).2),
             "sent without the ask"
         );
     }
@@ -2177,7 +2315,7 @@ mod tests {
             "a reply that went quiet without the ask was reported as {result:?}"
         );
         assert_eq!(sent.len(), 1, "the held-back argument was asked for again");
-        assert!(!carried(&sent[0]).1, "the ask the model refused was sent");
+        assert!(!carried(&sent[0]).2, "the ask the model refused was sent");
     }
 
     /// Only a request offering a tool has an argument for the service to hold back, so only there
@@ -2211,10 +2349,10 @@ mod tests {
 
     /// A model that does not define the beta refuses the request on it, as a model from another
     /// provider refuses the level. It is given up, the request answers, and the next turn starts
-    /// without it. The assumed ceiling goes first, the status naming no field, so the request that
-    /// answered had given up both and both are remembered. The level is left alone: this request
-    /// carried none, so none was refused, and recording one would tell the interface that a level
-    /// it is later given is not in force.
+    /// without it. The ask to show thinking and the assumed ceiling go first, the status naming no
+    /// field, so the request that answered had given up all three and all three are remembered.
+    /// The level is left alone: this request carried none, so none was refused, and recording one
+    /// would tell the interface that a level it is later given is not in force.
     #[test]
     fn a_refused_ask_for_arguments_as_written_is_given_up_and_remembered() {
         let model = "a-model-that-refuses-the-beta";
@@ -2224,20 +2362,31 @@ mod tests {
         let (result, sent) = stream_against(
             &config,
             &request,
-            vec![refused_with(400), refused_with(400), answered()],
+            vec![
+                refused_with(400),
+                refused_with(400),
+                refused_with(400),
+                answered(),
+            ],
         );
 
         result.expect("the request without the ask answers");
         assert_eq!(
             sent.iter().map(carried).collect::<Vec<_>>(),
-            [(false, true), (false, true), (false, false)],
-            "(level, ask) of each attempt"
+            [
+                (true, false, true),
+                (false, false, true),
+                (false, false, true),
+                (false, false, false)
+            ],
+            "(shown, level, ask) of each attempt"
         );
         assert_eq!(
             refusals(model),
             Refusals {
                 arguments_as_written: true,
                 ceiling: true,
+                thinking_shown: true,
                 ..Refusals::default()
             },
             "the level was given up though no request carried one"
@@ -2257,27 +2406,32 @@ mod tests {
     /// decides which is kept. Measured on Bedrock: Claude Haiku 4.5 takes the ask and refuses the
     /// level, 400 "This model does not support the effort parameter." Giving up the ask first
     /// would cost that model the field that stops a long argument being cut off, and the request
-    /// would still be refused.
+    /// would still be refused. It refuses the ask to show thinking too, which goes first.
     #[test]
     fn the_level_is_given_up_before_the_ask_for_arguments_as_written() {
         let asked = |model: &str| writing_a_file(model).with_effort(Some(Effort::High));
 
-        let model = "a-model-that-refuses-the-level-only";
+        let model = "a-model-that-refuses-the-level-and-the-display";
         let (result, sent) = stream_against(
             &config_for(model),
             &asked(model),
-            vec![refused_with(400), answered()],
+            vec![refused_with(400), refused_with(400), answered()],
         );
         result.expect("the request without the level answers");
         assert_eq!(
             sent.iter().map(carried).collect::<Vec<_>>(),
-            [(true, true), (false, true)],
-            "(level, ask) of each attempt"
+            [
+                (true, true, true),
+                (false, true, true),
+                (false, false, true)
+            ],
+            "(shown, level, ask) of each attempt"
         );
         assert_eq!(
             refusals(model),
             Refusals {
                 effort: true,
+                thinking_shown: true,
                 ..Refusals::default()
             },
             "the ask was given up in place of the level"
@@ -2291,18 +2445,26 @@ mod tests {
                 refused_with(400),
                 refused_with(400),
                 refused_with(400),
+                refused_with(400),
                 answered(),
             ],
         );
         result.expect("the request without any of them answers");
         assert_eq!(
             sent.iter().map(carried).collect::<Vec<_>>(),
-            [(true, true), (false, true), (false, true), (false, false)],
-            "(level, ask) of each attempt"
+            [
+                (true, true, true),
+                (false, true, true),
+                (false, false, true),
+                (false, false, true),
+                (false, false, false)
+            ],
+            "(shown, level, ask) of each attempt"
         );
         assert_eq!(
             sent.iter().map(ceiling_of).collect::<Vec<_>>(),
             [
+                OUTPUT_LIMIT,
                 OUTPUT_LIMIT,
                 OUTPUT_LIMIT,
                 OUTPUT_LIMIT_FALLBACK,
@@ -2317,32 +2479,74 @@ mod tests {
                 effort: true,
                 arguments_as_written: true,
                 ceiling: true,
+                thinking_shown: true,
             }
+        );
+    }
+
+    /// Measured on Bedrock: Claude Sonnet 5 refuses the ask to show thinking, 400 "thinking.type:
+    /// Field required", and reads the level. The two are refused with one status, so giving the
+    /// level up first would cost it the level, and the request would still be refused.
+    #[test]
+    fn the_ask_to_show_thinking_is_given_up_before_the_level() {
+        let model = "a-model-that-refuses-the-display-only";
+        let config = config_for(model);
+        let request = writing_a_file(model).with_effort(Some(Effort::High));
+        let (result, sent) = stream_against(&config, &request, vec![refused_with(400), answered()]);
+        result.expect("the request without the ask to show thinking answers");
+        assert_eq!(
+            sent.iter().map(carried).collect::<Vec<_>>(),
+            [(true, true, true), (false, true, true)],
+            "(shown, level, ask) of each attempt"
+        );
+        assert_eq!(
+            refusals(model),
+            Refusals {
+                thinking_shown: true,
+                ..Refusals::default()
+            },
+            "the level was given up in place of the ask to show thinking"
+        );
+
+        let egress = Egress::new();
+        let mut next = BedrockClient::new(&config, &egress);
+        next.recall(model);
+        let body = serde_json::to_value(next.converse_for(&request, model, true)).expect("a body");
+        assert_eq!(
+            carried(&body),
+            (false, true, true),
+            "the next turn asked again"
         );
     }
 
     /// Nothing says what a model behind an inference-profile ARN allows, so a model allowing less
     /// than the assumed ceiling refuses every request carrying it, and without the step-down a tier
     /// naming one could never be answered. Remembered, so each later turn is not a refused request
-    /// first.
+    /// first. The ask to show thinking is tried without first and is lost with it, which is the
+    /// order's cost on a model that took the ask.
     #[test]
     fn an_assumed_ceiling_a_model_refuses_is_stepped_down_and_remembered() {
         let model = "a-model-that-allows-less-than-assumed";
         let config = config_for(model);
         let request = ChatRequest::new(model, vec![Message::user("hello")]);
 
-        let (result, sent) = stream_against(&config, &request, vec![refused_with(400), answered()]);
+        let (result, sent) = stream_against(
+            &config,
+            &request,
+            vec![refused_with(400), refused_with(400), answered()],
+        );
 
         result.expect("the request with the fallback ceiling answers");
         assert_eq!(
             sent.iter().map(ceiling_of).collect::<Vec<_>>(),
-            [OUTPUT_LIMIT, OUTPUT_LIMIT_FALLBACK],
+            [OUTPUT_LIMIT, OUTPUT_LIMIT, OUTPUT_LIMIT_FALLBACK],
             "the ceiling of each attempt"
         );
         assert_eq!(
             refusals(model),
             Refusals {
                 ceiling: true,
+                thinking_shown: true,
                 ..Refusals::default()
             }
         );
@@ -2409,8 +2613,11 @@ mod tests {
         ];
         for (config, model, ceiling) in cases {
             let request = ChatRequest::new(model, vec![Message::user("hello")]);
-            let (result, sent) =
-                stream_against(&config, &request, vec![refused_with(400), answered()]);
+            let (result, sent) = stream_against(
+                &config,
+                &request,
+                vec![refused_with(400), refused_with(400), answered()],
+            );
 
             assert!(
                 matches!(
@@ -2422,9 +2629,10 @@ mod tests {
                 ),
                 "{model}: {result:?}"
             );
+            // The second without the ask to show thinking, still with the stated ceiling.
             assert_eq!(
                 sent.iter().map(ceiling_of).collect::<Vec<_>>(),
-                [ceiling],
+                [ceiling, ceiling],
                 "{model}: the ceiling of each attempt"
             );
             assert_eq!(refusals(model), Refusals::default(), "{model}");
@@ -2448,18 +2656,33 @@ mod tests {
         let (result, sent) = stream_against(
             &config_for(model),
             &writing_a_file(model).with_effort(Some(Effort::High)),
-            vec![refused_with(400), refused_with(400), refused_with(400)],
+            vec![
+                refused_with(400),
+                refused_with(400),
+                refused_with(400),
+                refused_with(400),
+            ],
         );
 
         assert!(result.is_err(), "{result:?}");
         assert_eq!(
             sent.iter().map(carried).collect::<Vec<_>>(),
-            [(false, true), (false, true), (false, false)],
-            "(level, ask) of each attempt"
+            [
+                (true, false, true),
+                (false, false, true),
+                (false, false, true),
+                (false, false, false)
+            ],
+            "(shown, level, ask) of each attempt"
         );
         assert_eq!(
             sent.iter().map(ceiling_of).collect::<Vec<_>>(),
-            [OUTPUT_LIMIT, OUTPUT_LIMIT_FALLBACK, OUTPUT_LIMIT_FALLBACK],
+            [
+                OUTPUT_LIMIT,
+                OUTPUT_LIMIT,
+                OUTPUT_LIMIT_FALLBACK,
+                OUTPUT_LIMIT_FALLBACK
+            ],
             "the ceiling of each attempt"
         );
         assert_eq!(
@@ -2768,6 +2991,172 @@ mod tests {
                 "{model} did not take the exported ceiling"
             );
         }
+    }
+
+    /// A streamed reply of `frames` on each of `attempts` connections, its status sent at once and
+    /// each frame `gap` after the one before it.
+    fn trickled(frames: Vec<Vec<u8>>, gap: Duration, attempts: u32) -> Request {
+        use std::io::Write;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for _ in 0..attempts {
+                let (mut stream, _) = listener.accept().unwrap();
+                read_request(&mut stream);
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    frames.iter().map(Vec::len).sum::<usize>()
+                );
+                let _ = stream.write_all(head.as_bytes());
+                for frame in &frames {
+                    std::thread::sleep(gap);
+                    let _ = stream.write_all(frame);
+                    let _ = stream.flush();
+                }
+            }
+        });
+        Request::post(format!("http://{address}/converse"), b"{}".to_vec())
+    }
+
+    /// A reply is given as long as the ceiling its own request carries takes to write, rather than
+    /// the bound on a reply nothing states the length of. At the rate measured on Claude Opus 5.5,
+    /// that bound ends any reply longer than about 41,000 tokens while the model is still writing
+    /// it, and a request that asked for arguments as they are written is then sent again, and
+    /// billed again, to be cut off at the same point.
+    #[test]
+    fn a_reply_still_being_written_is_not_cut_off_by_a_bound_its_ceiling_did_not_set() {
+        use bravebot_core::{
+            capability::{Capability, CapabilitySet},
+            event::RecordingSink,
+            policy::{ReleasePlan, Routing},
+        };
+        let model = "a-model-writing-a-long-reply";
+        let config = config_for(model);
+        // Every frame arrives well inside the gap allowed, and all of them together take longer
+        // than the bound on a reply of unstated length, which falls halfway between two frames.
+        let egress = Egress::with_timeouts(bravebot_net::Timeouts {
+            reply: Duration::from_millis(375),
+            idle: Duration::from_secs(5),
+            ..Default::default()
+        });
+        let frames = vec![
+            eventstream::tests::frame(
+                "contentBlockDelta",
+                br#"{"contentBlockIndex":0,"delta":{"text":"still "}}"#,
+            ),
+            eventstream::tests::frame(
+                "contentBlockDelta",
+                br#"{"contentBlockIndex":0,"delta":{"text":"writing"}}"#,
+            ),
+            eventstream::tests::frame("messageStop", br#"{"stopReason":"end_turn"}"#),
+            eventstream::tests::frame(
+                "metadata",
+                br#"{"usage":{"inputTokens":100,"outputTokens":2}}"#,
+            ),
+        ];
+        let mut client = BedrockClient::new(&config, &egress);
+        client.test_request = Some(trickled(frames, Duration::from_millis(150), ATTEMPTS));
+        let mut sink = RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "test");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .unwrap();
+
+        let result = client.complete_streaming(
+            &mut policy,
+            &ChatRequest::new(model, vec![Message::user("write it all")]),
+            |_| {},
+        );
+
+        assert!(
+            result.is_ok(),
+            "a reply still arriving was reported as {result:?}"
+        );
+        assert_eq!(
+            client.attempts(),
+            1,
+            "a reply still arriving was sent again"
+        );
+    }
+
+    /// A reply is given at least twice as long as its ceiling takes to write at the rate measured
+    /// on Claude Opus 5.5, whichever ceiling that is, and a reply short enough for the egress
+    /// layer's own bound is given that bound and no less.
+    #[test]
+    fn the_time_a_reply_is_given_follows_the_ceiling_its_request_carries() {
+        use bravebot_config::bedrock::Entry;
+        use bravebot_net::ReplyBound;
+
+        let config = Bedrock::from_provider(
+            "us-west-2".to_string(),
+            None,
+            vec![
+                Entry {
+                    tier: None,
+                    id: "stated".to_string(),
+                    name: None,
+                    context_window: None,
+                    output_limit: Some(128_000),
+                },
+                Entry {
+                    tier: None,
+                    id: "unstated".to_string(),
+                    name: None,
+                    context_window: None,
+                    output_limit: None,
+                },
+            ],
+        );
+        let egress = Egress::new();
+        let mut client = BedrockClient::new(&config, &egress);
+        client.test_request = Some(Request::post("http://127.0.0.1:9/converse", Vec::new()));
+        // A stream is given the bound from the moment it begins, and a reply asked for whole the
+        // same bound on the wait for it as well, since it is written before any of it is sent.
+        let given = |client: &BedrockClient, model: &str| {
+            let stated = |streaming| {
+                client
+                    .build(&ChatRequest::new(model, vec![]), streaming)
+                    .unwrap()
+                    .0
+                    .reply
+            };
+            match (stated(true), stated(false)) {
+                (Some(ReplyBound::Begun(stream)), Some(ReplyBound::Whole(whole)))
+                    if stream == whole =>
+                {
+                    stream
+                }
+                other => panic!("requests to Bedrock stated {other:?} on their replies"),
+            }
+        };
+        let writing = |tokens: u64| Duration::from_secs(tokens.div_ceil(69));
+
+        let stated = given(&client, "stated");
+        let assumed = given(&client, "unstated");
+        assert!(
+            stated >= 2 * writing(128_000),
+            "a reply of 128,000 tokens was given {stated:?}"
+        );
+        assert!(
+            assumed >= 2 * writing(OUTPUT_LIMIT),
+            "a reply of the assumed ceiling was given {assumed:?}"
+        );
+        assert!(
+            stated > assumed,
+            "a higher ceiling was given no longer than a lower one"
+        );
+
+        client.ceiling = false;
+        assert_eq!(
+            given(&client, "unstated"),
+            bravebot_net::Timeouts::default().reply,
+            "a reply at the fallback ceiling was not given the egress layer's own bound"
+        );
     }
 
     /// The reply the ceiling stopped is the turn's work, and throwing it away to report that it

@@ -215,6 +215,8 @@ fn of_egress(error: &bravebot_net::EgressError) -> Diagnosis {
         // A withdrawn request is reported as a stop before it reaches here. Named so the match
         // stays exhaustive rather than because a caller sees it.
         | EgressError::Stopped { .. } => Diagnosis::of(Category::Transport),
+        // The service answered and was still writing: nothing about the connection to check.
+        EgressError::OutOfTime { .. } => Diagnosis::of(Category::Incomplete),
         EgressError::Status { status, .. } => Diagnosis::of(match status {
             401 | 403 => Category::Unauthorized,
             429 => Category::RateLimited,
@@ -271,6 +273,15 @@ pub enum Backend<'a> {
 /// Not content. What a service refused is the transport's own report, read from a status.
 pub fn bedrock_reads_effort(model: &str) -> bool {
     !bravebot_bedrock::refusals(model).effort
+}
+
+/// What the Ollama at `host` has pulled, for the import to offer: [`bravebot_aichat::ollama`]'s
+/// answer, reached from here because a front end does not talk to a backend crate itself.
+pub fn installed_on_ollama<S: Sink>(
+    host: &str,
+    sink: &mut S,
+) -> Option<Vec<bravebot_config::import::Installed>> {
+    bravebot_aichat::ollama::installed(host, sink)
 }
 
 /// Whether the service answering for `model` has refused a level for it.
@@ -1255,6 +1266,19 @@ mod tests {
     fn a_reply_that_stopped_arriving_is_reported_as_unfinished_and_not_as_unreachable() {
         for stopped in [BedrockError::Incomplete, BedrockError::Stalled] {
             let failure = BackendError::from(stopped).counted(1, None, None);
+            assert_eq!(failure.diagnosis().category, Category::Incomplete);
+            assert!(!failure.is_unreachable());
+        }
+
+        // A reply still being written when its time ran out, on either backend.
+        let out_of_time = || bravebot_net::EgressError::OutOfTime {
+            url: "https://bedrock.example/invoke".to_string(),
+        };
+        for failure in [
+            BackendError::from(BedrockError::Egress(out_of_time())),
+            BackendError::from(ChatError::Egress(out_of_time())),
+        ] {
+            let failure = failure.counted(1, None, None);
             assert_eq!(failure.diagnosis().category, Category::Incomplete);
             assert!(!failure.is_unreachable());
         }

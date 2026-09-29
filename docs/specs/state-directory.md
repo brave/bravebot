@@ -29,7 +29,10 @@ is written into it. The prompt history, the model, theme, effort and editing cho
 the update question, session records, a language server's index of a workspace, skills, standing
 instructions, an imported subscription, the command lines somebody asked to be remembered past a
 session, the permission rules somebody granted a checkout and the answers to the startup question
-somebody asked to be kept all live here.
+somebody asked to be kept all live here, and so does the record of the definitions' memories a
+session left untrusted, `untrusted/` ([MEMORY-5](definition-memory.md#MEMORY-5)).
+[definition-memory.md](definition-memory.md) proposes one more, which nothing yet builds: the
+definition a desktop bot is made as.
 
 What each of those files means belongs to the spec for that subject:
 [sessions.md](sessions.md) for a session record, [tools/run.md](tools/run.md) for the remembered

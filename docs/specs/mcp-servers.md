@@ -51,8 +51,9 @@ A session reads the aliases its checkout requests ([SERVERS-2](#SERVERS-2)), res
 those declarations, and puts the three-answer question to the person where no answer of theirs
 covers it, naming a runner and an unpinned package as it does ([SERVERS-4](#SERVERS-4),
 [SERVERS-6](#SERVERS-6)). An approved stdio server is started confined, holding the variables it
-names and no others, and an HTTP one is reached through the egress gate
-([SERVERS-10](#SERVERS-10), [SERVERS-11](#SERVERS-11)). Each server started completes its
+names and no others, and an HTTP one is reached through the egress gate, where a hop off its
+declaration is put to the person rather than followed ([SERVERS-10](#SERVERS-10),
+[SERVERS-11](#SERVERS-11)). Each server started completes its
 handshake and is held, with a grant naming it, for as long as the session runs
 ([SERVERS-9](#SERVERS-9)). The session's display names what it started, and how
 each one's tools stand ([SERVERS-14](#SERVERS-14)). `bravebot-cli` starts a server and
@@ -65,9 +66,6 @@ records a digest of the list, so the same list is offered unasked in a later ses
 one is asked about again. Each call is then put to them with three answers, after any permission
 rule naming the server or the tool ([SERVERS-7](#SERVERS-7)). Bypassing answers both questions and
 records neither ([SERVERS-13](#SERVERS-13)).
-
-What is not built: [SERVERS-11](#SERVERS-11)'s question about a hop, which is refused in its place,
-as that clause states.
 
 The desktop application starts no server, and says so as a session opens where one is requested
 ([SERVERS-2](#SERVERS-2)). That is a cost it pays on purpose, and the known costs at the end give the
@@ -100,7 +98,8 @@ is not, and [the divergence](#the-one-place-this-diverges-from-claude-code) says
 | *Where "stop asking" is recorded* | *`.claude/settings.local.json`, inside the checkout* | *the state directory, keyed by the project path* |
 | Adding one from the command line | `claude mcp add [-s <scope>]` | `bravebot mcp add [-s <scope>]`, and the typing is not the approval; the scope says where the request goes, and the declaration is in one place whatever it says |
 | Re-approval when the declaration changes | not on argv change | **yes**, an approval binds to a digest |
-| Environment reaching the server | the whole process environment, plus `env` | the named variables and nothing else |
+| Environment reaching the server | the whole process environment, plus `env` | the named variables and the values `env` stores, and nothing else |
+| A value given at `add` | `-e NAME=value`, stored in the declaration | the same, stored in `~/.bravebot/mcp.json`, and shown by its name and never as itself, or as the file it may read where it names one |
 | Unpinned command (`npx -y pkg@latest`) | run as written, silently | named at the prompt as code that differs per run |
 | Tool names | as the server reports them | namespaced by the local alias; a server's own words are never an identifier |
 | Tool descriptions | into the planner's context as trusted text | untrusted until a person vouches for the list they are on, and marked |
@@ -156,7 +155,7 @@ machine asks again, and a deliberate `rm -rf` of the workspace no longer forgets
 ## The command line
 
 ```
-bravebot mcp add <alias> [-s <scope>] [--env <name>]... [--dir <path>] [--stdio] -- <program> [args...]
+bravebot mcp add <alias> [-s <scope>] [-e|--env <name>[=<value>]...]... [--dir <path>] [--stdio] -- <program> [args...]
 bravebot mcp add <alias> [-s <scope>] --http <url>
 bravebot mcp get <alias>
 bravebot mcp list
@@ -185,10 +184,12 @@ A bare `--` takes the program and its arguments after it, as argv and never as a
 word after it is the server's, a flag of bravebot's included. `--stdio --` is the same and may be
 written instead. Nothing here compiles shell syntax: that is
 [tools/command-line.md](tools/command-line.md)'s road, for a line a planner wrote, and a server is a
-program a person named. `--env <name>` names one variable the server receives
-([SERVERS-10](#SERVERS-10)) and may be given more than once, and a program given by a bare name
-has `PATH` named for it; `--dir <path>` is the directory it runs in, written into the file as the
-absolute path it resolves to.
+program a person named. `-e` or `--env` gives the server a variable
+([SERVERS-10](#SERVERS-10)): `NAME=value` stores the value, and a name alone is read from the
+environment at launch. It takes the words up to the next flag, as Claude Code's does, and may be
+given more than once. A program given by a bare name has `PATH` named for it where none was stored;
+`--dir <path>` is the directory it runs in, written into the file as the absolute path it resolves
+to.
 
 `forget` takes one path at most, and the current directory without one. The path is read with its
 links followed, as answer 2 recorded it, and one that no longer resolves, a deleted checkout's, is
@@ -202,6 +203,8 @@ was recorded, and leaves every other project's as it was. An incognito session w
 | Claude Code | Here | Note |
 |---|---|---|
 | `claude mcp add weather -- npx -y @dangahagan/weather-mcp@latest` | `bravebot mcp add weather -- npx -y @dangahagan/weather-mcp@latest` | The same line. It declares `PATH` for `npx`, and the question shows it. |
+| `claude mcp add my-server -e API_KEY=xxx -- npx my-mcp-server` | the same line | The value is stored in `~/.bravebot/mcp.json` and shown as `API_KEY (stored)`, never as itself. |
+| `claude mcp add brave-search -e BRAVE_API_KEY_FILE=/path/to/key -- npx -y @brave/brave-search-mcp-server` | the same line | The value is stored in `~/.bravebot/mcp.json`. The key file it names is one the server may read, and the question shows it as `may read`. |
 | `claude mcp add weather -s user -- ...` | `bravebot mcp add weather -s user -- ...` | The declaration goes in `~/.bravebot/mcp.json` whatever the scope. The request goes in `~/.bravebot/settings.json`, so every session starts it. |
 | `claude mcp add weather -s project -- ...` | `bravebot mcp add weather -s project -- ...` | [SERVERS-1](#SERVERS-1). The checkout's `.bravebot/settings.json` gets the alias and not the argv. |
 | `claude mcp get weather` | `bravebot mcp get weather` | Also prints the digest, which is what an approval is against. |
@@ -212,7 +215,7 @@ was recorded, and leaves every other project's as it was. An incognito session w
 
 | What | Where | Scope | Lifetime |
 |---|---|---|---|
-| A declaration: alias, transport, argv or url, the variable names it needs, its directory | `~/.bravebot/mcp.json` | the person's own directory | until they change it |
+| A declaration: alias, transport, argv or url, the variable names it needs, the values it stores, the files it may read, its directory | `~/.bravebot/mcp.json` | the person's own directory | until they change it |
 | An approval of a server, one digest and the alias it was given about per line, and a `changed` line per alias whose approved declaration changed since | `~/.bravebot/mcp-approved` | the person's own directory | until the declaration changes |
 | The list of tools a person vouched for, a `tools` line holding the declaration's digest and the list's | `~/.bravebot/mcp-approved` | the person's own directory | until another list is vouched for under that declaration, or no declaration resolves to it |
 | "use all future servers in this project", one project path per line | `~/.bravebot/mcp-projects` | the person's own directory | until `mcp forget` |
@@ -221,7 +224,8 @@ was recorded, and leaves every other project's as it was. An incognito session w
 | A request for an alias, `"mcp": { "request": ["weather"] }` | `.bravebot/settings.json` or `.bravebot/settings.local.json` beside the work, or `~/.bravebot/settings.json` | that checkout, or every session | until `mcp disable` or an edit takes it out |
 | What may start, `"mcp": { "allow": [{ "host": "*.corp.example" }], "deny": [{ "command": ["/opt/weather-mcp"] }] }` | the managed layer | the machine | as long as it is pinned |
 | A declaration, an argv, a url, or a variable's value | `.bravebot/settings.json` or `.bravebot/settings.local.json` | **nothing.** [SERVERS-1](#SERVERS-1) | n/a |
-| A variable's value | nowhere. The declaration names variables; the values are the person's own environment at launch | n/a | n/a |
+| A variable's value given at `add` as `-e NAME=value` | `~/.bravebot/mcp.json`, under `env` | the person's own directory | until they change it |
+| A variable's value given by name | nowhere. The value is the person's own environment at launch | n/a | n/a |
 
 `~/.bravebot` is the state directory, which on Unix is readable only by the user
 ([STATE-1](state-directory.md#STATE-1)), and a machine naming no profile directory has no state
@@ -239,7 +243,8 @@ no other.
 ### SERVERS-1: a declaration lives in the person's own directory, and no file inside a checkout makes one
 
 The file that may carry an alias, a transport, an argv, a url, the names of the variables a server
-needs, and the directory it runs in is `~/.bravebot/mcp.json`. A settings layer carries none of
+needs, the values it stores for others, the files it may read, and the directory it runs in is
+`~/.bravebot/mcp.json`. A settings layer carries none of
 those, at any of the three levels, including the one the command line names.
 
 A project layer that names an argv is a parse error reported by `doctor`, not a declaration that is
@@ -382,8 +387,10 @@ declaration, so a refused request leaves no declaration behind it.
 
 Before any tool from a server is offered to the planner, the person is shown the alias, the
 transport, the resolved program and its argv with argument boundaries visible, or the url and its
-host, the variable names it will receive, the directory it will run in, the digest, and which
-checkout requested it where one did.
+host, the variable names it will receive, each one whose value the declaration stores marked as
+stored, the files it may read, the directory it will run in, the digest, and which checkout
+requested it where one did. A stored value is never shown, except that one naming a file is shown
+as the file it may read, with its links followed.
 
 ```
   weather   stdio   npx -y @dangahagan/weather-mcp@latest
@@ -436,7 +443,9 @@ own layout, with the lines this question adds beneath the first:
 ```
 
 `runs` is the path a program named through `PATH` resolved to, and is drawn only where that differs
-from what was declared. Anything typed but 1 or 2, and the end of the input, is 3. The project answer
+from what was declared. A variable whose value is stored is drawn among the others as
+`BRAVE_API_KEY_FILE (stored)`, and each file the declaration may read is a line of its own,
+`may read: /Users/me/keys/brave-api-key`. Anything typed but 1 or 2, and the end of the input, is 3. The project answer
 2 records is the workspace root with its links followed, and is matched as that path and no other.
 Answer 3 is a line saying the server is not used in this session.
 
@@ -461,13 +470,16 @@ that would not take the answer does not unsay it, and a line says which record w
 `verified-by: bravebot_config::mcp::forgetting_a_project_drops_it_and_no_other`
 `verified-by: bravebot_cli::mcp::forget_drops_a_projects_standing_answers_and_nobody_elses`
 `verified-by: bravebot_agent::turn::a_turn_holds_a_grant_per_server_it_was_handed_and_only_its_worker_holds_them_too`
+`verified-by: bravebot_cli::mcp::a_stored_value_is_shown_by_its_name_and_never_as_itself`
+`verified-by: bravebot_cli::running::a_servers_own_install_line_naming_a_key_file_declares_a_read_of_that_file`
 
 <a id="SERVERS-5"></a>
 ### SERVERS-5: an approval binds to a digest of the declaration
 
 The digest covers the transport, the program and every argument, the url and its host, the names of
-the variables passed in, and the directory. It does not cover a variable's value, which is not in
-the declaration.
+the variables passed in, each value the declaration stores, each file it may read, and the
+directory. It does not cover the value of a variable read from the environment, which is not in the
+declaration.
 
 Changing any of those produces a digest nothing approved, so the server is unapproved until
 [SERVERS-4](#SERVERS-4)'s question is answered again, and the question names what changed. A project
@@ -482,10 +494,13 @@ program. An alias is a label a person chose; it is not what the label points at.
 The digest is SHA-256 over the declaration written as one JSON array, with the alias left out. Each
 argument is its own quoted string there, so two arguments never digest as one holding the same
 characters, and the variable names are a sorted set, since their order changes nothing a server
-receives. `mcp-approved` holds one
+receives. The stored values and the files it may read follow as one object, and only where there
+is either, so a declaration storing neither digests as it did before a value could be stored and
+its approval still stands. `mcp-approved` holds one
 digest per line in hex, followed by the alias it was approved about. `add` replacing a declaration
-names the fields that changed, and a digest no declaration resolves to any longer is dropped
-whenever `add`, `approve` or `remove` rewrites the file.
+names the fields that changed, a changed value by its variable's name and never by either value,
+and a digest no declaration resolves to any longer is dropped whenever `add`, `approve` or `remove`
+rewrites the file.
 
 The alias beside a digest approves nothing: whether a declaration is approved is asked of its digest
 alone. It is kept so a session can tell a server nobody was asked about from one that changed since
@@ -497,6 +512,8 @@ rewritten. The session's question says *that* the declaration changed and not wh
 digest is kept of what was approved, and a digest names no field.
 
 `verified-by: bravebot_config::mcp::a_digest_covers_the_program_every_argument_the_names_and_the_directory`
+`verified-by: bravebot_config::mcp::a_digest_covers_every_stored_value_and_every_file_it_may_read`
+`verified-by: bravebot_config::mcp::a_declaration_storing_no_value_digests_as_it_did_before_values_could_be_stored`
 `verified-by: bravebot_config::mcp::two_arguments_digest_apart_from_one_holding_the_same_characters`
 `verified-by: bravebot_config::mcp::a_digest_is_the_same_whatever_the_alias_or_the_order_of_the_names`
 `verified-by: bravebot_config::mcp::what_changed_is_named_by_field`
@@ -729,8 +746,8 @@ built-in's name starts with `mcp__`, so none can be shadowed. Two servers whose 
 compose one name are both left without a tool of that name, since which of them a call reached would
 be the order they were listed in. A delegate, and a turn addressed to a definition, is offered the
 tools of only the servers it holds a grant for ([SERVERS-9](#SERVERS-9)). A delegate is put no list
-and is offered what the turn that spawned it settled, and an addressed turn holding no grant is put
-no list.
+and is offered what the turn that spawned it settled. An addressed turn is put the lists of only the
+servers it holds a grant for, and another server's list waits for a turn that holds that grant.
 
 `verified-by: bravebot_mcp::protocol::a_tool_list_is_content`
 `verified-by: bravebot_mcp::protocol::the_name_on_the_wire_is_the_alias_and_the_word`
@@ -784,10 +801,12 @@ server should mean.
 
 The capability names the alias, both transports gate on the one naming the server in front of
 them, and a grant can be withdrawn while the run is going. A session holds one grant for each
-server it started and no other. A delegate it hands work to holds every one of those grants where
-the delegate is a worker whose definition names no tools, and none otherwise
-([DELEGATE-4](delegation.md#DELEGATE-4)): each is a grant for a server a person already said the
-session may use, and a server's tool may do what only a worker may. No delegate holds a grant its
+server it started and no other. A delegate it hands work to holds those of the grants its
+definition selects where the delegate is a worker, which is every one where the definition names
+neither its tools nor its servers, and none where it is a reader or a checker
+([DELEGATE-4](delegation.md#DELEGATE-4), [DELEGATE-24](delegation.md#DELEGATE-24)): each is a
+grant for a server a person already said the session may use, and a server's tool may do what only
+a worker may. No delegate holds a grant its
 parent does not. A turn addressed to a definition holds the session's grants on the same terms
 ([ADDRESS-7](addressing-a-definition.md#ADDRESS-7)). A call to a server's tool is refused where the
 run holds no grant naming that server, and a remote server's handshake runs under a policy holding
@@ -804,41 +823,69 @@ the grant naming that server and no other.
 `verified-by: bravebot_core::policy::a_worker_delegate_holds_the_servers_its_parent_holds_and_no_other`
 `verified-by: bravebot_agent::mcp::a_reader_or_a_checker_delegate_holds_no_server_and_reaches_none`
 `verified-by: bravebot_agent::mcp::a_worker_is_offered_only_the_servers_its_parent_holds`
+`verified-by: bravebot_core::delegate::a_worker_naming_servers_holds_only_those_of_them_its_parent_holds`
+`verified-by: bravebot_core::policy::a_definition_naming_servers_is_delegated_with_only_those_its_parent_holds`
+`verified-by: bravebot_agent::mcp::a_worker_whose_definition_names_one_server_is_offered_only_its_tool`
 
 <a id="SERVERS-10"></a>
-### SERVERS-10: a variable a server needs is named in the declaration, and reaches that server alone
+### SERVERS-10: a variable a server needs is named or stored in the declaration, and reaches that server alone
 
 [MCP-9](mcp.md#MCP-9) empties the environment before a stdio server starts, on every platform, and
 its known cost is that a server needing a variable to work at all does not work. This is that cost
-paid: the declaration lists variable **names**, those names are read from this process's environment
-at launch, and the resulting environment of the server is those values and nothing else, beside
-the `HOME` described below.
+paid: the declaration lists variable **names**, read from this process's environment at launch,
+and may store a value for others, and the resulting environment of the server is those values and
+nothing else, beside the `HOME` described below.
 
-No value is stored. A settings layer supplies none of them, and neither does the declaration: a
-declaration that wrote a value in place of a name is a parse error. `PATH` is a name like any other,
-so a server whose program must be resolved says so.
+A value is stored only where the person gave it: typed at `add` as `-e NAME=value`, or written into
+`~/.bravebot/mcp.json` as an `env` object of names and values. A settings layer supplies none
+([SERVERS-1](#SERVERS-1)). A value written in place of a name in `variables` is a parse error that
+does not repeat it, and so is a name both stored and listed there, which is two answers to where its
+value comes from, and a stored value no environment could hold. `PATH` is a name like any other, so
+a server whose program must be resolved says so.
 
-The names appear at [SERVERS-4](#SERVERS-4)'s prompt. The values appear in no prompt, no log, no
-session record, and no `doctor` output.
+The names appear at [SERVERS-4](#SERVERS-4)'s prompt, a stored one marked as stored. The values,
+stored or read, appear in no prompt, no log, no session record, and no `get`, `list` or `doctor`
+output.
 
-**Why.** Naming a variable rather than holding a secret is the shape
-[BACKEND-1](backends.md#BACKEND-1) already settled for a gateway credential, for the reason that a
-file naming a destination grants nothing while a file holding a token is a token. Passing only the
-named ones keeps [MCP-9](mcp.md#MCP-9)'s property where it matters: this process's own credentials
-are in variables, and a server is code we did not write.
+**Why.** A server's own install line is written for Claude Code's `-e`, and refusing it leaves a
+person nothing to type but an export into the shell, where every program they run reads the key
+rather than the one server that needs it. The value is kept where the declaration already is, in the
+state directory that only its owner can read ([STATE-1](state-directory.md#STATE-1)), and never in a
+settings layer: [BACKEND-1](backends.md#BACKEND-1)'s reasoning holds there, since those are the
+files on the machine that are easiest to write to. Passing only the named and stored ones keeps
+[MCP-9](mcp.md#MCP-9)'s property where it matters: this process's own credentials are in variables,
+and a server is code we did not write.
 
-`--env <name>` adds a name, a name given a value (`--env TOKEN=...`, or an `env` block in the
-file) is refused, and the refusal names the variable and never repeats what it was set to. A
-program `add` is given by a bare name, such as `npx`, has `PATH` added to the names once, whether or
-not it was typed, since the `PATH` a declaration names is the only one such a program is looked for
-in, as the next paragraph says. It is shown at the question as a typed name is, and is part of what
-the digest covers. A program given as a path is declared with only the names typed.
+`-e` and `--env` take the words after them up to the next flag, as Claude Code's do, and `--env=` or
+`-e` joined to a word takes that word alone. Each `NAME=value` stores the value, split at its first
+`=`. A name given alone as the one word its `-e` took is a name read from the environment. Any other
+word, a name in a run of several included, is refused by its place in what was typed and never
+repeated, since `-e TOKEN sk-live` would otherwise store nothing and print the key. An `-e` before
+the alias is refused too, where Claude Code's own run would take the alias as a value, and a name
+given twice is refused by the name. A word holding an `=` where the alias, a `-s` or a `--dir` takes
+its word is refused without being repeated, as a forgotten alias or `-e` leaves one there. A program
+`add` is given by a bare name, such as `npx`, has `PATH` added to the names once, whether or not it
+was typed, unless a `PATH` was stored, since the `PATH` a declaration gives is the only one such a
+program is looked for in, as the next paragraph says. It is shown at the question as a typed name
+is, and is part of what the digest covers. A program given as a path is declared with only the names
+typed.
 
-At launch each named variable this process holds is handed over, and one it does not hold is left
-out rather than set empty. A program named rather than given as a path is looked for in the `PATH`
-the declaration names and in no other, since that is the one the server runs with: without `PATH`
-among the names it is not found, and the line says to declare `--env PATH` or give the program as
-an absolute path. A relative path is refused, since it names a different program in each directory.
+At launch each stored value is handed over as stored, and each named variable this process holds is
+handed over, one it does not hold being left out rather than set empty. A program named rather than
+given as a path is looked for in the `PATH` the declaration gives and in no other, since that is the
+one the server runs with: without `PATH` among the names or the stored values it is not found, and
+the line says to declare `--env PATH` or give the program as an absolute path. A relative path is
+refused, since it names a different program in each directory.
+
+**A file a stored value or an argument names is one the server may read.** A server's install line
+names its key file this way, as brave-search's `-e BRAVE_API_KEY_FILE=/path/to/key`, and a key the
+person keeps in their home directory is otherwise out of the server's reach. `add` takes each stored
+value and each argument that is an absolute path to a file that exists now, with its links followed,
+and where the confinement below would not reach it, records it in the declaration's `reads`, which
+the question shows and the digest covers. A directory is never recorded, since a word naming one is
+too broad a read to infer, and neither is a file in the state directory, so a line copied from
+somewhere else cannot hand a server the person's declarations, approvals or credentials. A relative
+word, a missing path and a file the confinement reaches already record nothing.
 
 The process is confined under [MCP-3](mcp.md#MCP-3), and what it may reach is built for it:
 
@@ -858,6 +905,10 @@ The process is confined under [MCP-3](mcp.md#MCP-3), and what it may reach is bu
   npm from beside it. A `bin` directory directly inside a directory at the top of the home, such as
   `~/.cargo/bin`, brings nothing, for the reason above.
 - The server's own directory, below, which it may read and write.
+- Each file the declaration's `reads` names, read-only and as that one file: never the directory it
+  is in, and nothing where the path is no longer a file, or is a link or is reached through one,
+  which is not the file the person was shown, or is in the state directory, which only a hand edit
+  of the file can have declared.
 - The declared directory, which the server may read and write and starts in. Without one it starts
   in the system temporary directory, and reads nothing of the workspace.
 - A look at any path, and no read or listing beyond the rows above, which is
@@ -895,10 +946,24 @@ A platform with no confinement for this, which is Windows today, starts no stdio
 so, and asks nobody about one it could not start. Where the sandbox cannot be built, the server is
 not started either, and the line says why.
 
-`verified-by: bravebot_config::mcp::a_value_written_in_place_of_a_name_is_refused_without_repeating_it`
-`verified-by: bravebot_config::mcp::an_env_block_or_an_object_of_variables_is_values_and_is_refused`
+`verified-by: bravebot_config::mcp::a_value_is_stored_under_its_name_and_one_written_as_a_name_is_refused_unrepeated`
+`verified-by: bravebot_config::mcp::an_env_block_is_stored_values_and_an_object_of_variables_is_not_a_list_of_names`
+`verified-by: bravebot_config::mcp::a_stored_value_no_environment_could_hold_or_a_second_answer_is_refused_by_its_name`
 `verified-by: bravebot_config::mcp::a_name_that_is_not_one_is_refused`
-`verified-by: bravebot_cli::running::a_value_given_to_a_variable_is_refused_and_never_repeated`
+`verified-by: bravebot_config::mcp::a_remote_server_takes_no_variables_values_reads_or_directory`
+`verified-by: bravebot_config::mcp::a_stored_value_is_debugged_by_its_name_alone`
+`verified-by: bravebot_cli::running::a_value_given_at_add_is_stored_where_only_the_person_reads_it_and_printed_by_nothing`
+`verified-by: bravebot_cli::running::a_value_add_cannot_take_is_refused_and_never_repeated`
+`verified-by: bravebot_cli::running::a_servers_own_install_line_naming_a_key_file_declares_a_read_of_that_file`
+`verified-by: bravebot_cli::mcp::every_way_claude_code_takes_a_value_stores_it`
+`verified-by: bravebot_cli::mcp::a_word_an_env_flag_cannot_read_is_named_by_its_place_and_never_repeated`
+`verified-by: bravebot_cli::mcp::a_value_before_the_alias_is_refused_and_nothing_is_written`
+`verified-by: bravebot_cli::mcp::a_value_where_an_alias_a_scope_or_a_directory_goes_is_refused_and_never_repeated`
+`verified-by: bravebot_cli::mcp::a_stored_value_is_shown_by_its_name_and_never_as_itself`
+`verified-by: bravebot_cli::mcp::a_file_a_value_or_an_argument_names_is_declared_as_a_read_and_nothing_broader_is`
+`verified-by: bravebot_cli::servers::a_stored_value_is_handed_to_the_server_and_the_environment_is_not_read_for_it`
+`verified-by: bravebot_cli::servers::a_declared_read_grants_the_one_file_and_nothing_beside_it`
+`verified-by: bravebot_cli::servers::a_started_server_reads_the_files_it_was_declared_to_and_nothing_beside_them`
 `verified-by: bravebot_cli::mcp::a_program_named_by_a_bare_name_is_declared_with_path`
 `verified-by: bravebot_cli::mcp::the_question_shows_the_path_a_bare_name_was_given`
 `verified-by: bravebot_cli::servers::a_program_is_found_in_the_path_it_names_and_nowhere_else`
@@ -961,14 +1026,36 @@ a prompt rather than a rule.
 relocation is doing the ordinary thing. A boundary that has no answer but no is one a deployment
 works around, and a boundary everybody works around is off.
 
-**The question is unbuilt.** A session reaches an approved remote server as it opens, and its
-handshake passes the egress gate under a policy holding the fetch capability and the grant naming
-that server, and no other. Every call after it passes the same gate. A hop is detected there, and
-the gate allows or refuses and cannot ask, so an approval has to be a grant minted before the call,
-and there is no prompt to mint one. Until there is, a hop that leaves the declared destination,
-whether a call's or the handshake's, is refused and nothing is sent. That is this clause with its
-question unasked rather than a different rule. What is built reads a destination as a host and a
-port together, as above.
+**How it is built.** A session reaches an approved remote server as it opens, and its handshake
+passes the egress gate under a policy holding the fetch capability and the grant naming that server,
+and no other. Every call after it passes the same gate. The gate allows or refuses and cannot ask,
+so a hop that leaves the declared destination, whether a call's or the handshake's, is refused there
+and nothing is sent. The policy keeps where it pointed, as the server's bytes, for the prompt.
+
+The prompt draws the declared url, where the reply pointed, and the host that reaches, with the
+port where the url names one. A
+call's hop is asked during the turn, in the full-screen interface and in lines alike; a handshake's
+is asked at the terminal as the session opens, and `y` is the only yes. Until the yes, the
+destination decides nothing. After it, the url is read as a declaration like any other, so one that
+cannot be declared is refused, and so is one whose host the managed layer refuses
+([SERVERS-12](#SERVERS-12)). The handshake is then made there, and only once it completes is
+`~/.bravebot/mcp.json` rewritten and the new digest recorded in `mcp-approved` in place of the old
+one, so a destination that does not answer is never written down. A declaration edited while the
+person was asked is left as it is, and the server is not moved. The call is then made again where
+the server now is, once: a second hop off the new destination is refused and not asked about. A
+line then says the server moved, since the move outlasts the prompt.
+
+A project entry in `mcp-projects` answers for what a checkout requests and never for where a server
+went, so it does not answer this question. Where the session writes nothing, the prompt says so and a
+yes moves the server until the session ends. A vouched list is not carried to the new declaration,
+since a list is vouched for beside the digest it was read under. The session that moved the server
+goes on offering the list it already offered, and the next session to start the server puts its
+list to the person again.
+
+A no rewrites nothing and sends nothing. A call's hop then says the server stays where it is
+declared, and a handshake's leaves the server unstarted with a line saying why. A one-shot run, a
+session with nobody at the terminal and the mode that skips prompts refuse it unasked
+([SERVERS-13](#SERVERS-13)).
 
 `verified-by: bravebot_mcp::http::mcp_traffic_passes_through_the_network_gate`
 `verified-by: bravebot_mcp::http::a_redirect_to_another_host_is_refused`
@@ -976,6 +1063,19 @@ port together, as above.
 `verified-by: bravebot_mcp::http::a_failed_server_request_stops_confining_the_turns_other_egress`
 `verified-by: bravebot_core::policy::a_rule_does_not_let_a_servers_request_be_redirected_off_its_host`
 `verified-by: bravebot_core::policy::a_servers_request_cannot_be_redirected_to_another_port_on_the_same_host`
+`verified-by: bravebot_core::policy::a_refused_hop_off_a_server_is_kept_untrusted_for_the_prompt`
+`verified-by: bravebot_core::policy::a_server_move_is_promoted_only_through_an_endorsement`
+`verified-by: bravebot_agent::mcp::a_hop_the_person_says_is_a_move_is_declared_and_the_call_reaches_it`
+`verified-by: bravebot_agent::mcp::a_hop_the_person_refuses_sends_nothing_and_the_refusal_names_the_declaration`
+`verified-by: bravebot_agent::mcp::a_move_the_managed_layer_denies_is_refused_whatever_is_answered`
+`verified-by: bravebot_agent::mcp::a_move_in_a_session_that_writes_nothing_lasts_for_the_session`
+`verified-by: bravebot_agent::mcp::a_move_is_recorded_over_the_declaration_asked_about_and_nothing_else`
+`verified-by: bravebot_cli::servers::a_handshake_redirected_off_its_declaration_is_moved_on_a_yes`
+`verified-by: bravebot_cli::servers::a_handshake_redirected_off_its_declaration_starts_nothing_on_a_no`
+`verified-by: bravebot_cli::servers::a_move_in_a_session_that_writes_nothing_is_for_the_session`
+`verified-by: bravebot_cli::servers::a_project_that_answers_for_its_servers_does_not_answer_a_move`
+`verified-by: bravebot_cli::plain::a_move_is_asked_in_lines_and_only_a_yes_moves_the_server`
+`verified-by: bravebot_tui::confirm::a_move_prompt_shows_the_declaration_the_destination_and_what_it_reaches`
 
 <a id="SERVERS-12"></a>
 ### SERVERS-12: the managed layer may keep a server from starting and never add one
@@ -1087,12 +1187,12 @@ Each of the following holds in that mode exactly as it holds outside it:
 | Still in force | Why it is not a prompt |
 |---|---|
 | [MCP-3](mcp.md#MCP-3), a stdio server is not launched without confinement | A server that cannot be confined is not started, in this mode too. Confinement is not a question anybody was being asked. |
-| [MCP-9](mcp.md#MCP-9) and [SERVERS-10](#SERVERS-10), the environment is the named variables and nothing else | The prompt showed the names. Skipping the showing does not widen the set. |
+| [MCP-9](mcp.md#MCP-9) and [SERVERS-10](#SERVERS-10), the environment is the named and stored variables and nothing else | The prompt showed the names. Skipping the showing does not widen the set. |
 | [MCP-1](mcp.md#MCP-1), a result is untrusted | A label is not an approval. Nothing a person could have said at a call would have made what it returned trusted, so there is nothing here for a skipped question to have granted. |
 | [SERVERS-1](#SERVERS-1), only the person's own directory declares a server | An undeclared server does not become declared by nobody being asked about it. A checkout's request still resolves against declarations or resolves to nothing. |
 | [SERVERS-9](#SERVERS-9), the capability | A capability is configuration, not a prompt. A server with no grant is called by nobody in this mode either. |
 | [SERVERS-12](#SERVERS-12), the managed allow and deny lists | An administrator's refusal is not a question being put to the person running the program. |
-| [SERVERS-11](#SERVERS-11), the egress gate and the host in the digest | The gate decides on labels. This mode answers three named questions and not every question, and a hop leaving the declared destination is neither of them, so it is refused here rather than followed. |
+| [SERVERS-11](#SERVERS-11), the egress gate and the host in the digest | The gate decides on labels. This mode answers three named questions and not every question. Whether a server moved is a fourth, and a yes to it would rewrite the declaration, the one file a session cannot write, to a url a server wrote and nobody read. So it is refused unasked and nothing is sent where the hop pointed. |
 
 **Nothing is recorded.** A skipped question leaves no approval, no vouched list, no project path and
 no tool entry behind, so a later run outside the mode asks every question as though this one had not happened. That
@@ -1132,7 +1232,9 @@ Each call from then on is asked.
 a check being made, since nobody would read the check's verdict, and no `tools` line is written. A
 call is made without [SERVERS-7](#SERVERS-7)'s question being drawn, as answer 1 and never answer 2,
 so nothing is written to `mcp-tools`, and out of the mode the next call is asked whatever was
-offered in it. A `deny` rule still refuses a call
+offered in it. A hop off a remote server's declaration is refused without
+[SERVERS-11](#SERVERS-11)'s question being drawn, as the call's or the handshake's, and nothing is
+rewritten. A `deny` rule still refuses a call
 ([MODE-6](permission-modes.md#MODE-6)). Confinement, the named variables and the egress gate are the
 same code in either mode. The display names the mode and the servers the session started. It does
 not say beside each one whether it started unasked because of the mode.
@@ -1140,6 +1242,9 @@ not say beside each one whether it started unasked because of the mode.
 `verified-by: bravebot_cli::servers::skipping_permissions_starts_the_server_unasked_and_records_nothing`
 `verified-by: bravebot_agent::mcp::bypassing_answers_both_prompts_and_records_nothing`
 `verified-by: bravebot_agent::mcp::a_list_offered_in_bypass_stays_offered_and_each_later_call_asks`
+`verified-by: bravebot_agent::mcp::bypassing_refuses_a_hop_and_asks_nobody`
+`verified-by: bravebot_agent::permission_mode::bypassing_refuses_to_move_a_server`
+`verified-by: bravebot_cli::servers::a_redirected_handshake_nobody_is_asked_about_starts_nothing`
 
 <a id="SERVERS-14"></a>
 ### SERVERS-14: what is reachable is visible without running anything
@@ -1273,7 +1378,11 @@ what a person reading a marked result sees, not values this program has vouched 
 | Write `"permissions": { "deny": ["Mcp(weather:get_alerts)"] }` in the home settings | A call to it is refused before anybody is asked, and the others still ask. [SERVERS-7](#SERVERS-7) |
 | Declare a stdio server on a machine where confinement is unavailable | Not launched. [MCP-3](mcp.md#MCP-3), in every mode. [SERVERS-13](#SERVERS-13) |
 | Run in the skip-prompts mode, then run again without it | Every question is asked again; the first run recorded nothing. [SERVERS-13](#SERVERS-13) |
+| Declare a remote server whose calls answer with a redirect to another host, and answer no when asked | Nothing is sent to that host, the planner is told the call was refused at the declared one, and `mcp.json` is unchanged. [SERVERS-11](#SERVERS-11) |
+| The same in the skip-prompts mode | Nobody is asked, nothing is sent to that host, and nothing is rewritten. [SERVERS-13](#SERVERS-13) |
 | Give the server a variable it needs without naming it in the declaration | It does not receive it. [SERVERS-10](#SERVERS-10) |
+| Run `bravebot mcp add brave-search -e BRAVE_API_KEY_FILE=/path/to/key -- npx -y @brave/brave-search-mcp-server`, the server's own install line | Declared with the value stored and shown by its name, and the key file shown as one it may read. [SERVERS-10](#SERVERS-10) |
+| Run `bravebot mcp add weather -e TOKEN sk-live -- npx weather-mcp` | Refused as word 3 after `add`, since a name alone is read only as the one word its `-e` takes, and the key is not repeated. [SERVERS-10](#SERVERS-10) |
 | Write `{"mcp": {"deny": [{"command": ["/opt/weather-mcp", "--stdio"]}]}}` in the machine's `managed.json`, where `weather` runs that argv | The server is not started in any mode, whatever it is called, the session's line names that file and the entry, and `mcp list` says the same. [SERVERS-12](#SERVERS-12) |
 | Write `{"mcp": {"allow": [{"host": "*.corp.example"}]}}` in the machine's `managed.json` | A server whose url names a host under `corp.example` starts as it did; every other server, local ones included, is not started, and the line says the allow list does not name it. [SERVERS-12](#SERVERS-12) |
 | Write `{"mcp": {"weather": {...}}}` in the machine's `managed.json` for a server not declared at home | Nothing is declared, and a request for it still resolves to nothing. [SERVERS-12](#SERVERS-12) |
@@ -1293,9 +1402,9 @@ This spec cannot land without these. Each is named by what the clause says rathe
 | [backends.md](backends.md) | [BACKEND-24](backends.md#BACKEND-24), settings layers resolve a name at a time | Extended. `mcp.request` is a list, and joins the row where every layer's entries are kept, for that row's reason: an entry only ever names something that then has to be approved separately. **Applied** with the session that reads the key. |
 | [permissions.md](permissions.md) | [PERM-1](permissions.md#PERM-1), a rule names a family of tools and matches on routing only, and "four families exist" | Amended. A fifth family, `Mcp`, with `Mcp(weather)` covering a server and `Mcp(weather:get_current_conditions)` one tool of it. The routing field is the alias and the tool name; the arguments are payload and no specifier matches them, which is [SERVERS-7](#SERVERS-7). **Applied**: `Mcp(weather:*)` is `Mcp(weather)`, and a name is matched whole, so `Mcp(weather)` does not cover `weather2`. |
 | [permissions.md](permissions.md) | [PERM-9](permissions.md#PERM-9), three prompts no rule can answer | Extended to four. A call carrying the person's private data asks whatever the rules say, for that clause's own confidentiality reason. A server is further from the person than a local program is, not closer. **Applied** in the policy, and not reached: nothing labels a planner's arguments private yet. |
-| [permission-modes.md](permission-modes.md) | [MODE-4](permission-modes.md#MODE-4)'s list of what bypassing answers | Extended by three prompts, a server, its list and a call, and by nothing else. **Applied**. [SERVERS-13](#SERVERS-13) is the list of what the mode does not reach, which is [MODE-7](permission-modes.md#MODE-7) applied here. That spec's own rule, that nothing approved this way is recorded, covers the new records by its own argument. |
+| [permission-modes.md](permission-modes.md) | [MODE-4](permission-modes.md#MODE-4)'s list of what bypassing answers | Extended by three prompts, a server, its list and a call, and by nothing else, and told of the fourth it refuses, whether a server moved. **Applied**. [SERVERS-13](#SERVERS-13) is the list of what the mode does not reach, which is [MODE-7](permission-modes.md#MODE-7) applied here. That spec's own rule, that nothing approved this way is recorded, covers the new records by its own argument. |
 | [vetting.md](vetting.md) | [CHECK-10](vetting.md#CHECK-10), a check before every prompt that would promote quarantined content | Extended by a fourth prompt, a server's tool list, whose check reads the whole list as it is drawn. **Applied**. |
-| [labels.md](labels.md) | [LABEL-8](labels.md#LABEL-8)'s roads in | Extended by one row: a server's tool list a person vouched for, or the mode that answers for them, is trusted and public. **Applied**. |
+| [labels.md](labels.md) | [LABEL-8](labels.md#LABEL-8)'s roads in | Extended by two rows: a server's tool list a person vouched for, or the mode that answers for them, is trusted and public, and so is where a server's reply pointed once a person says it moved there. **Applied**. |
 | [vetting.md](vetting.md) | the table of routes: `~/.bravebot/vetting` holding one word, and `"vetting": { "auto": true }` read from the home layer only | **Unchanged**, and the precedent this spec's storage copies rather than a spec to amend. A standing answer in the person's own directory, and the key that changes behaviour readable from one layer, are both already settled there. |
 
 ## What is deliberately not adopted

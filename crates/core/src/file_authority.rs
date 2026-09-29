@@ -167,6 +167,26 @@ impl FileAuthority {
         true
     }
 
+    /// Distrust `path` unless a rule about it alone already does, saying whether anything changed.
+    ///
+    /// For a decision made again every time a run starts. Publishing one already in force would
+    /// move the revision, and a command whose output is labelled by the revision it started at
+    /// would have that output quarantined by a decision that changed nothing.
+    pub fn distrust_unless_distrusted(&self, path: &str) -> bool {
+        let mut state = self.state();
+        let key = state.trust.key(path);
+        if state
+            .trust
+            .keyed()
+            .any(|(ruled, integrity)| ruled == key && integrity == Some(Integrity::Untrusted))
+        {
+            return false;
+        }
+        state.trust.distrust(path);
+        state.record_change(key);
+        true
+    }
+
     /// Called under `capture`, immediately before entering a filesystem effect.
     /// Refuses overlapping writers; no approval is held while waiting on another effect.
     fn begin(&self, path: &str) -> Option<FileEffect> {

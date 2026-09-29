@@ -138,8 +138,12 @@ onboarding-no-model = aucun service de modèle n'est encore configuré
 onboarding-subscription-unusable = l'abonnement enregistré n'a pas pu être utilisé : { $problem }
 onboarding-import-one =
     { $source } configure un service de modèle que bravebot peut utiliser : lancez `bravebot import-providers` dans un terminal pour l'importer.
+onboarding-import-running =
+    { $source } tourne ici avec des modèles que bravebot peut utiliser : lancez `bravebot import-providers` dans un terminal pour l'importer.
 onboarding-import-both =
-    { $first } et { $second } configurent des services de modèle que bravebot peut utiliser : lancez `bravebot import-providers` dans un terminal pour les importer.
+    { $first } et { $second } ont chacun un service de modèle que bravebot peut utiliser : lancez `bravebot import-providers` dans un terminal pour les importer.
+onboarding-import-three =
+    { $first }, { $second } et { $third } ont chacun un service de modèle que bravebot peut utiliser : lancez `bravebot import-providers` dans un terminal pour les importer.
 onboarding-name-a-configured-model =
     Un service est configuré, mais le modèle en vigueur est l'un de ceux de Brave : indiquez l'un des vôtres avec la clé `model` dans ~/.bravebot/settings.json, ou avec --model pour une exécution unique. `bravebot doctor` indique ce que propose chaque service configuré.
 onboarding-pick-one = Configurez l'une de ces options, puis relancez bravebot :
@@ -373,11 +377,12 @@ hook-stopped =
     arrêté
 
 
-## Importer un service de modèle configuré par Claude Code ou opencode
+## Importer un service de modèle configuré par Claude Code ou opencode, ou servi par un Ollama lancé
 
 import-found = { $source } configure un service de modèle que bravebot peut utiliser, dans { $files }.
 import-found-exported =
     { $source } configure un service de modèle que bravebot peut utiliser, dans l'environnement de ce processus.
+import-found-running = { $source } tourne à { $url } et sert des modèles que bravebot peut utiliser.
 import-adds = L'import ajoute ceci à { $file } :
 import-adds-gateway = provider.{ $id }, joignable à { $endpoint } : { $entry }
 import-key-held = provider.{ $id } : une clé est détenue pour cette entrée ; elle fait l'objet d'une question à part
@@ -398,6 +403,8 @@ import-left-another-sdk = une entrée qui passe par un SDK autre qu'un SDK compa
 import-left-no-endpoint = aucune adresse joignable n'est indiquée ni connue pour cette entrée
 import-left-substitution =
     sa clé est construite à partir d'une substitution opencode au milieu d'une valeur plus longue, que bravebot ne fait pas
+import-left-elsewhere = désigne un serveur sur une autre machine, qui n'est pas interrogé
+import-left-no-tool-model = tourne là, sans aucun modèle capable d'appeler des outils
 import-question = Importer ceci depuis { $source } ?
 import-key-question =
     Écrire la clé de provider.{ $id } dans { $file }, où elle est gardée en clair, pour l'envoyer à { $endpoint } ?
@@ -405,6 +412,7 @@ import-key-export =
     provider.{ $id } lit sa clé dans { $variables } : exportez-la avant de lancer bravebot.
 import-key-none = provider.{ $id } est écrit sans identifiant.
 import-imported = ce que { $source } configure a été importé dans { $file }
+import-imported-running = ce que { $source } sert a été importé dans { $file }
 import-unset-variable =
     provider.{ $id } dans { $file } lit sa clé dans { $variables }, qui n'est pas définie ici : exportez-la, puis relancez bravebot
 import-unset-variable-later =
@@ -419,7 +427,8 @@ import-changed =
 import-needs-a-terminal = import-providers demande confirmation avant d'écrire quoi que ce soit, il lui faut donc un terminal pour poser la question
 import-not-while-incognito = un import enregistre des réglages sur le disque, ce qu'une session incognito ne fera pas
 import-no-home = il n'y a pas de répertoire personnel où écrire les réglages
-import-nothing-found = ni Claude Code ni opencode ne configure de service de modèle que bravebot puisse utiliser
+import-nothing-found =
+    ni Claude Code ni opencode ne configure de service de modèle que bravebot puisse utiliser, et aucun Ollama qui en serve un ne tourne ici
 import-nothing-new = il ne reste rien à importer : chaque nom trouvé est déjà défini, ou épinglé
 import-takes-nothing-else = import-providers ne prend aucun argument
 
@@ -433,21 +442,37 @@ mcp-needs-an-alias = { $command } a besoin de l'alias d'un serveur
 mcp-unexpected-argument = { $command } ne prend pas { $argument }
 mcp-add-stray-argument =
     le mot { $position } après add n'est pas une option, et n'est pas répété car il peut être une
-    valeur : --env, --dir, --http et -s prennent un mot chacun, et -- prend le reste
+    valeur : -e prend les mots jusqu'à l'option suivante, --dir, --http et -s un chacun, et -- prend
+    le reste
 mcp-scope-needs-a-value = -s a besoin d'une portée : local, project ou user
 mcp-not-a-scope = { $scope } n'est pas une portée : -s prend local, project ou user
+mcp-not-a-scope-unshown =
+    le mot après -s n'est pas une portée, et n'est pas répété car il peut être une valeur : -s prend
+    local, project ou user
 mcp-two-scopes = -s est donné deux fois, et une demande est écrite dans un seul fichier
 mcp-not-an-alias =
     { $alias } ne peut pas nommer un serveur : un alias est fait de lettres, de chiffres, de - et
     de _, commence par une lettre ou un chiffre, et fait au plus 64 caractères
+mcp-not-an-alias-unshown =
+    le mot { $position } après add ne peut pas nommer un serveur, et n'est pas répété car il peut
+    être une valeur : un alias est fait de lettres, de chiffres, de - et de _, commence par une
+    lettre ou un chiffre, et fait au plus 64 caractères
 mcp-needs-a-transport = add a besoin de -- <programme> [arguments...] ou de --http <url>
 mcp-two-transports = add prend un programme après -- ou --http, pas les deux
 mcp-stdio-needs-a-program =
     un programme et ses arguments viennent après un -- seul, comme dans -- npx -y weather-mcp
 mcp-http-needs-a-url = --http a besoin d'une url
-mcp-env-needs-a-name = --env a besoin du nom d'une variable
+mcp-env-needs-a-name =
+    -e a besoin de NOM=valeur, ou du nom d'une variable lue dans votre environnement
+mcp-env-after-the-alias =
+    -e et --env viennent après l'alias, comme dans add weather -e CLE=valeur -- weather-mcp
+mcp-env-word-refused =
+    le mot { $position } après add n'est pas NOM=valeur, et n'est pas répété car il peut être une
+    valeur : un nom seul n'est lu dans votre environnement que s'il est le seul mot que prend son -e
 mcp-dir-needs-a-path = --dir a besoin d'un répertoire
 mcp-dir-not-a-directory = { $path } n'est pas un répertoire
+mcp-dir-not-a-directory-unshown =
+    le mot après --dir n'est pas un répertoire, et n'est pas répété car il peut être une valeur
 mcp-dir-not-text = { $path } ne peut pas être écrit dans mcp.json, qui contient du texte
 mcp-not-added = { $alias } n'a pas été déclaré : { $problem }
 mcp-not-declared = aucun serveur MCP n'est déclaré sous le nom { $alias }
@@ -457,15 +482,15 @@ mcp-problem-alias =
 mcp-problem-not-an-object = l'entrée n'est pas un objet
 mcp-problem-transport = transport manque, ou n'est ni stdio ni http
 mcp-problem-key = { $key } n'est pas une clé qu'une déclaration possède
-mcp-problem-values =
-    elle contient des valeurs : une déclaration donne les noms des variables, et leurs valeurs
-    sont lues dans votre environnement
 mcp-problem-program = argv manque, est vide, ou contient autre chose qu'une chaîne
 mcp-problem-name =
     une variable n'est pas un nom : une lettre ou _, puis des lettres, des chiffres et des _
-mcp-problem-assignment =
-    { $name } reçoit une valeur : une déclaration nomme la variable, et sa valeur est lue dans
-    votre environnement
+mcp-problem-env = env n'est pas un objet de noms et de leurs valeurs
+mcp-problem-value = la valeur qu'env donne à { $name } n'est pas un texte qu'une variable peut contenir
+mcp-problem-twice =
+    { $name } est donnée deux fois : une variable a une valeur, enregistrée ou lue dans votre
+    environnement
+mcp-problem-reads = reads n'est pas une liste de chemins absolus
 mcp-problem-directory = le répertoire n'est pas un chemin absolu
 mcp-problem-url = l'url n'est pas en http ou en https avec un hôte
 mcp-problem-credentials =
@@ -487,6 +512,8 @@ mcp-no-state-directory =
 mcp-not-written = { $path } n'a pas pu être écrit ({ $error })
 mcp-declared = { $alias } déclaré dans { $path }
 mcp-variables = variables : { $names }
+mcp-variable-stored = { $name } (enregistrée)
+mcp-may-read = peut lire : { $path }
 mcp-directory = répertoire : { $path }
 mcp-digest = empreinte : { $digest }
 mcp-changed = champs modifiés : { $fields }
@@ -671,6 +698,40 @@ mcp-call-path-not-one-line = le chemin du projet ne peut pas s'écrire sur une l
 mcp-record-too-large = il est plus grand qu'un registre de réponses n'a de raison de l'être, il a donc été laissé tel quel
 mcp-record-not-read = il n'a pas pu être lu comme du texte, il a donc été laissé tel quel
 
+## Un serveur MCP distant dont la réponse pointe là où il n'est pas déclaré
+
+mcp-move-title = déclarer ce serveur là où pointe sa réponse ?
+mcp-move-declared = { $alias } est déclaré à { $url }
+mcp-move-destination = et sa réponse pointe vers { $url }
+mcp-move-reaching = qui atteint { $authority }
+mcp-move-explained =
+    Rien n'y a été envoyé. Un oui déclare le serveur à cette adresse et lui envoie ce qui était
+    en cours d'envoi, et chaque requête suivante au serveur y va aussi, dans cette session et la
+    suivante. Répondez non à moins de savoir que le serveur a déménagé.
+mcp-move-this-session-only = rien de ce qui est répondu dans cette session n'est enregistré, un oui dure donc jusqu'à sa fin
+mcp-move-yes = Oui, il a déménagé là
+mcp-move-no = Non
+mcp-move-declined =
+    { $alias } reste là où il est déclaré : sa réponse pointait ailleurs, et rien n'y a été envoyé
+mcp-move-not-started =
+    { $alias } n'a pas été démarré : sa réponse à la poignée de main pointait là où il n'est pas
+    déclaré, et rien n'y a été envoyé
+mcp-move-refused-by-managed = { $alias } n'a pas été déplacé là où pointe sa réponse : { $reason }
+mcp-move-undeclarable =
+    { $alias } n'a pas été déplacé : là où pointe sa réponse ne peut pas être déclaré : { $problem }
+mcp-move-moved = { $alias } a été déplacé là où pointait sa réponse
+mcp-move-edited =
+    { $alias } n'a pas été déplacé : sa déclaration a changé pendant que la question vous était
+    posée, elle a donc été laissée telle quelle
+mcp-move-not-recorded =
+    { $alias } est utilisé là où pointait sa réponse dans cette session seulement, car le
+    déplacement n'a pas pu être enregistré : { $error }
+mcp-move-no-handshake =
+    { $alias } n'a pas terminé sa poignée de main là où pointait sa réponse : { $reason }
+mcp-move-again =
+    { $alias } a été redirigé de nouveau, hors de là où il venait d'être déplacé, cela a donc été
+    refusé
+
 ## Approuver un répertoire, demandé une fois quand une session démarre ailleurs
 
 trust-directory-title = faire confiance à ce répertoire ?
@@ -690,6 +751,8 @@ trust-directory-remember-explained =
 trust-directory-remember-exact =
     La question reste posée à une session démarrée dans un répertoire qu'il contient ou qui le contient, ou dans un répertoire supprimé puis recréé ici.
 trust-directory-remember-where = /forget-trust revient dessus, et c'est noté ici :
+trust-directory-remember-unseen = ↑↓ r ne retient rien : ce qu'il écrit n'est pas encore affiché
+trust-directory-remember-too-small = r ne retient rien : ce qu'il écrit dépasse la hauteur du cadre
 quit = quitter
 trust-quit-again = encore
 
@@ -723,6 +786,12 @@ granted-rules-regardless =
     s'appliquent toujours.
 granted-rules-yes = les accorder
 granted-rules-no = continuer à me demander
+granted-rules-unseen =
+    { $count ->
+        [one] ↑↓ y n'accorde rien : { $count } règle pas encore affichée
+       *[other] ↑↓ y n'accorde rien : { $count } règles pas encore affichées
+    }
+granted-rules-too-small = y n'accorde rien : une règle dépasse la hauteur du cadre
 
 
 ## Choisir un thème, un modèle, ou une session à reprendre
@@ -1041,7 +1110,8 @@ expose-explained =
     le modèle peut lire ce fichier, et ce qu'il lit parvient à qui effectue l'inférence.
     L'analyse y a trouvé quelque chose qui ressemble à un identifiant. L'envoyer divulgue
     cette valeur ; refuser garde le texte de ce fichier hors du modèle et ne change rien
-    d'autre. Une réponse couvre ce fichier pour le reste de cette session.
+    d'autre. Une réponse couvre ce fichier jusqu'à la fin de cette session ou un changement
+    de répertoire.
 expose-found = ce que l'analyse a trouvé, sans rien de la valeur :
 expose-yes = l'envoyer quand même
 expose-no = le garder à l'écart
@@ -1405,7 +1475,7 @@ session-trust-forget-incognito =
 session-not-trusting =
     ce répertoire n'est pas approuvé ; chaque écriture vous sera montrée
 session-vouched-for = { $path } approuvé pour cette session
-session-exposed = { $path } montré au modèle pour cette session, identifiant compris
+session-exposed = { $path } montré au modèle jusqu'à la fin de cette session ou un changement de répertoire, identifiant compris
 session-vetting-on =
     une vérification qui ne trouve rien donnera désormais le contenu au modèle sans vous
     demander (~/.bravebot/vetting)
@@ -1707,10 +1777,22 @@ delegate-skills-not-found =
         [one] { $definition } nomme une compétence que cette session n'a pas trouvée, si bien qu'elle n'est pas proposée à son délégué : { $skills }
        *[other] { $definition } nomme des compétences que cette session n'a pas trouvées, si bien qu'elles ne sont pas proposées à son délégué : { $skills }
     }
+delegate-servers-not-found =
+    { $count ->
+        [one] { $definition } nomme un serveur MCP que cette session n'a pas joint, si bien que son délégué s'en passe : { $servers }
+       *[other] { $definition } nomme des serveurs MCP que cette session n'a pas joints, si bien que son délégué s'en passe : { $servers }
+    }
+delegate-servers-declared = { $definition } déclare un serveur MCP dans sa ligne mcpServers, ce que seul ~/.bravebot/mcp.json peut faire, si bien que son délégué n'appelle aucun serveur MCP
 delegate-rounds-not-a-count =
     { $definition } a été ignoré : son nombre de cycles (rounds) doit être un entier supérieur à zéro
 delegate-rounds-held =
     { $definition } demande { $asked } cycles, plus que les { $most } permis à un { $kind } : son délégué en reçoit { $most }
+delegate-memory-not-kept =
+    { $definition } ne garde aucune mémoire : sa ligne memory indique { $value }, et seuls project et local en gardent une
+delegate-memory-not-a-slug =
+    { $definition } ne garde aucune mémoire : une définition qui en garde une doit avoir un nom fait de lettres minuscules et de chiffres, en suites reliées par des tirets simples, de 64 caractères au plus
+delegate-memory-in-home =
+    { $definition } ne garde aucune mémoire ici : dans ce répertoire, sa mémoire serait dans ~/.bravebot, qu'aucune écriture ne peut laisser non fiable
 
 ## Regarder ce que fait un delegue
 

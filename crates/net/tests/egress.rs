@@ -4,6 +4,7 @@
 //! only appears when bytes actually move: that the policy gate runs before the request,
 //! that every redirect hop is revalidated, and that a response body arrives labelled.
 
+use bravebot_core::cancel::Cancel;
 use bravebot_core::capability::{Capability, CapabilitySet};
 use bravebot_core::event::{Event, RecordingSink};
 use bravebot_core::label::Label;
@@ -432,6 +433,109 @@ fn a_reply_still_arriving_is_not_cut_off_for_taking_longer_than_it_took_to_start
     assert_eq!(String::from_utf8_lossy(&body), "one two three four five");
 }
 
+/// A caller that knows how long its reply can run, a model writing to its ceiling, needs that
+/// long, and one bound for every reply is too short for the longest of them.
+#[test]
+fn a_request_stating_how_long_its_reply_may_take_is_given_that_long() {
+    for streamed in [false, true] {
+        let base = serve_trickled(
+            vec!["one ", "two ", "three ", "four ", "five"],
+            Duration::from_millis(120),
+        );
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .expect("policy begins");
+
+        // The whole reply takes twice the bound on a reply of unstated length.
+        let egress = Egress::with_timeouts(Timeouts {
+            idle: Duration::from_secs(5),
+            reply: Duration::from_millis(300),
+            ..Timeouts::default()
+        });
+
+        let request = Request::get(&base);
+        let request = if streamed {
+            request.stream_within(Duration::from_secs(10))
+        } else {
+            request.reply_within(Duration::from_secs(10))
+        };
+        let response = egress
+            .fetch(&mut policy, request, Label::untrusted_public())
+            .unwrap_or_else(|e| {
+                panic!("a reply inside its stated bound failed, streamed: {streamed}: {e:?}")
+            });
+
+        // A body cut short is an error rather than a short body, so this is all of it.
+        assert_eq!(response.status, 200);
+        assert!(!response.truncated);
+    }
+}
+
+/// The bound a request states is a bound, not a floor under the default: a caller stating a
+/// shorter one than the default is held to it. A reply cut there was still being written, so it
+/// is reported as out of time rather than as a connection that gave out, and not as worth another
+/// attempt, which would write it as long again and be billed for it again.
+#[test]
+fn a_reply_outlasting_the_time_its_request_stated_is_given_up_on() {
+    for streamed in [false, true] {
+        // More than a second between pieces, since ureq gives a read begun after its deadline one
+        // more second: a reply whose pieces came closer than that could run on past it.
+        let base = serve_trickled(vec!["one ", "two"], Duration::from_millis(1_200));
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .expect("policy begins");
+
+        let egress = Egress::with_timeouts(Timeouts {
+            idle: Duration::from_secs(5),
+            reply: Duration::from_secs(30),
+            ..Timeouts::default()
+        });
+
+        let bound = Duration::from_millis(600);
+        let error = if streamed {
+            let mut stream = egress
+                .fetch_streaming(
+                    &mut policy,
+                    Request::get(&base).stream_within(bound),
+                    Label::untrusted_public(),
+                    None,
+                )
+                .expect("the reply starts arriving");
+            loop {
+                match stream.next_chunk() {
+                    Ok(Some(_)) => continue,
+                    Ok(None) => panic!("a reply outlasting its bound ended cleanly"),
+                    Err(error) => break error,
+                }
+            }
+        } else {
+            egress
+                .fetch(
+                    &mut policy,
+                    Request::get(&base).reply_within(bound),
+                    Label::untrusted_public(),
+                )
+                .expect_err("a reply outlasting the bound its request stated is not waited on")
+        };
+
+        assert!(
+            matches!(&error, EgressError::OutOfTime { url } if *url == base),
+            "streamed: {streamed}, got {error:?}"
+        );
+        assert!(!error.is_transient(), "streamed: {streamed}");
+    }
+}
+
 /// A server that takes the request, says nothing at all for a while, and only then answers.
 ///
 /// What an endpoint that is thinking looks like on the wire: the request is long gone, the
@@ -519,6 +623,108 @@ fn a_reply_that_takes_longer_than_the_send_bound_to_start_is_not_a_failed_send()
     assert_eq!(
         String::from_utf8_lossy(&body),
         "an answer worth waiting for"
+    );
+}
+
+/// A reply written in full before any of it is sent spends its time before the first byte, so
+/// that wait is what a bound its request states has to lengthen.
+#[test]
+fn a_reply_written_before_any_of_it_is_sent_is_waited_on_as_long_as_its_request_stated() {
+    // Past the send and reply bounds together, by more than the second ureq gives a read begun
+    // after its deadline.
+    let base = serve_after_thinking(Duration::from_millis(2_000));
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy begins");
+
+    let egress = Egress::with_timeouts(Timeouts {
+        send: Duration::from_millis(100),
+        reply: Duration::from_millis(300),
+        ..Timeouts::default()
+    });
+
+    let response = egress
+        .fetch(
+            &mut policy,
+            Request::post(&base, b"{}".to_vec()).reply_within(Duration::from_secs(10)),
+            Label::untrusted_public(),
+        )
+        .expect("a reply that began inside the bound its request stated arrives");
+
+    assert_eq!(response.status, 200);
+    assert!(!response.truncated);
+}
+
+/// The same reply outlasting that bound is cut before any of it arrives, while it is being written,
+/// so it is out of time as surely as one cut part way, and never a request that did not get through.
+#[test]
+fn a_reply_written_before_any_of_it_is_sent_is_out_of_time_when_it_outlasts_its_stated_bound() {
+    let base = serve_after_thinking(Duration::from_millis(2_000));
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy begins");
+
+    let egress = Egress::with_timeouts(Timeouts {
+        reply: Duration::from_secs(30),
+        ..Timeouts::default()
+    });
+
+    let error = egress
+        .fetch(
+            &mut policy,
+            Request::post(&base, b"{}".to_vec()).reply_within(Duration::from_millis(600)),
+            Label::untrusted_public(),
+        )
+        .expect_err("a reply outlasting the bound its request stated is not waited on");
+
+    assert!(
+        matches!(&error, EgressError::OutOfTime { url } if *url == base),
+        "got {error:?}"
+    );
+    assert!(!error.is_transient());
+}
+
+/// A stream sends its first bytes at once, so how long a request says its stream may run says
+/// nothing about how long to wait for them. A server that never begins is given up on as soon as
+/// it would be for any other request.
+#[test]
+fn a_stream_is_waited_on_to_begin_no_longer_whatever_its_request_said() {
+    let base = serve_after_thinking(Duration::from_millis(2_000));
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy begins");
+
+    let egress = Egress::with_timeouts(Timeouts {
+        reply: Duration::from_millis(300),
+        ..Timeouts::default()
+    });
+
+    let error = egress
+        .fetch(
+            &mut policy,
+            Request::post(&base, b"{}".to_vec()).stream_within(Duration::from_secs(10)),
+            Label::untrusted_public(),
+        )
+        .expect_err("a stream that has not begun is not waited on as long as it may run");
+
+    assert!(
+        matches!(error, EgressError::Transport { .. }),
+        "expected a transport failure, got {error:?}"
     );
 }
 
@@ -620,6 +826,232 @@ fn a_reply_that_stops_arriving_is_given_up_on() {
         matches!(error, EgressError::Transport { .. }),
         "expected a transport failure, got {error:?}"
     );
+}
+
+/// A request stating that its reply may take a long time has not said the connection may go
+/// quiet for that long: a dead connection is the same whoever asked.
+#[test]
+fn a_reply_that_stops_arriving_is_given_up_on_however_long_its_request_said_it_may_take() {
+    for streamed in [false, true] {
+        let base = serve_stalled_body();
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .expect("policy begins");
+
+        let egress = Egress::with_timeouts(Timeouts {
+            idle: Duration::from_millis(300),
+            reply: Duration::from_secs(30),
+            ..Timeouts::default()
+        });
+
+        let request = Request::get(&base);
+        let request = if streamed {
+            request.stream_within(Duration::from_secs(20))
+        } else {
+            request.reply_within(Duration::from_secs(20))
+        };
+        let started = std::time::Instant::now();
+        let mut stream = egress
+            .fetch_streaming(&mut policy, request, Label::untrusted_public(), None)
+            .expect("the reply starts arriving");
+
+        let error = loop {
+            match stream.next_chunk() {
+                Ok(Some(_)) => continue,
+                Ok(None) => panic!("the body should not have ended cleanly"),
+                Err(error) => break error,
+            }
+        };
+
+        assert!(
+            matches!(error, EgressError::Transport { .. }),
+            "expected a transport failure, streamed: {streamed}, got {error:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "a silent connection was waited on for {:?}, streamed: {streamed}",
+            started.elapsed()
+        );
+    }
+}
+
+/// A local model writing a tool call, as Ollama sends one: nothing at all while the model thinks,
+/// not even the headers, then a first piece, then nothing again while the call is written, then
+/// the rest.
+fn serve_like_a_local_model(host: &str, silence: Duration) -> String {
+    let listener = TcpListener::bind((host, 0)).expect("bind loopback");
+    let port = listener.local_addr().expect("addr").port();
+
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept");
+        let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+        let mut line = String::new();
+        let mut length = 0;
+        while reader.read_line(&mut line).unwrap_or(0) > 0 {
+            if line == "\r\n" || line == "\n" {
+                break;
+            }
+            let header = line.to_ascii_lowercase();
+            if let Some(value) = header.strip_prefix("content-length:") {
+                length = value.trim().parse().unwrap_or(0);
+            }
+            line.clear();
+        }
+        // Read whole, so closing afterwards is a clean end rather than a reset.
+        let _ = reader.read_exact(&mut vec![0; length]);
+
+        thread::sleep(silence);
+        let (first, rest) = ("a preamble, ", "and then a tool call");
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            first.len() + rest.len()
+        );
+        let _ = stream.write_all(head.as_bytes());
+        let _ = stream.write_all(first.as_bytes());
+        let _ = stream.flush();
+        thread::sleep(silence);
+        let _ = stream.write_all(rest.as_bytes());
+        let _ = stream.flush();
+    });
+
+    format!("http://{host}:{port}")
+}
+
+/// Every bound on a reply is there to tell a slow answer from a connection that died without
+/// saying so, and a connection to this machine cannot: when the server goes, the socket says it
+/// has. A local model can be silent for minutes while it writes a tool call, and a gap bound cut
+/// that silence as though the connection had gone.
+#[test]
+fn a_stream_from_this_machine_that_asks_is_waited_on_through_any_silence() {
+    let stop = Cancel::new();
+    for host in ["127.0.0.1", "localhost"] {
+        for patient in [true, false] {
+            let base = serve_like_a_local_model(host, Duration::from_millis(800));
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing(),
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::WebFetch]),
+                &mut sink,
+            )
+            .expect("policy begins");
+
+            // Each silence outlasts both the wait for the reply and the gap within it.
+            let egress = Egress::with_timeouts(Timeouts {
+                reply: Duration::from_millis(300),
+                idle: Duration::from_millis(300),
+                ..Timeouts::default()
+            });
+            let request = Request::post(&base, b"{}".to_vec());
+            let request = if patient {
+                request.patient_on_this_machine()
+            } else {
+                request
+            };
+
+            // To its end: the server states the body's length, so a clean end is all of it.
+            let read = egress
+                .fetch_streaming(&mut policy, request, Label::untrusted_public(), Some(&stop))
+                .and_then(|mut stream| {
+                    let mut pieces = 0;
+                    while stream.next_chunk()?.is_some() {
+                        pieces += 1;
+                    }
+                    Ok(pieces)
+                });
+
+            if patient {
+                let pieces = read.unwrap_or_else(|error| panic!("{host}: {error:?}"));
+                assert!(pieces >= 2, "{host}: both halves arrive, got {pieces}");
+            } else {
+                assert!(
+                    matches!(read, Err(EgressError::Transport { .. })),
+                    "{host}: without the ask the silence is still cut: {read:?}"
+                );
+            }
+        }
+    }
+}
+
+/// A server here may redirect anywhere, and how long the next hop is waited on is not something
+/// a server gets to lengthen.
+#[test]
+fn a_redirect_from_this_machine_keeps_the_bounds() {
+    let second = serve_like_a_local_model("127.0.0.1", Duration::from_millis(800));
+    let first = serve(vec![redirect_to(&format!("{second}/v1"))]);
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy begins");
+
+    let egress = Egress::with_timeouts(Timeouts {
+        reply: Duration::from_millis(300),
+        idle: Duration::from_millis(300),
+        ..Timeouts::default()
+    });
+    let error = egress
+        .fetch_streaming(
+            &mut policy,
+            Request::get(format!("{first}/v1")).patient_on_this_machine(),
+            Label::untrusted_public(),
+            Some(&Cancel::new()),
+        )
+        .map(|_| ())
+        .expect_err("the hop past a redirect is bounded");
+
+    assert!(
+        matches!(error, EgressError::Transport { .. }),
+        "expected a transport failure, got {error:?}"
+    );
+}
+
+/// With no bound, the only end to a wait on a server here that took the request and hung is
+/// somebody stopping it. A stream fetched without a token cannot be, and a whole reply is read to
+/// its end where no token is looked at, so neither is waited on that way however it asks.
+#[test]
+fn a_wait_that_nobody_can_stop_keeps_the_bounds() {
+    let stop = Cancel::new();
+    for whole in [false, true] {
+        let base = serve_like_a_local_model("127.0.0.1", Duration::from_millis(800));
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .expect("policy begins");
+
+        let egress = Egress::with_timeouts(Timeouts {
+            reply: Duration::from_millis(300),
+            idle: Duration::from_millis(300),
+            ..Timeouts::default()
+        });
+        let request = Request::post(&base, b"{}".to_vec()).patient_on_this_machine();
+        let read = if whole {
+            egress
+                .fetch_watching(&mut policy, request, Label::untrusted_public(), Some(&stop))
+                .map(|_| ())
+        } else {
+            egress
+                .fetch_streaming(&mut policy, request, Label::untrusted_public(), None)
+                .map(|_| ())
+        };
+
+        assert!(
+            matches!(read, Err(EgressError::Transport { .. })),
+            "whole: {whole}: the silence was waited through: {read:?}"
+        );
+    }
 }
 
 /// A buffered read has to tell the difference too. Silently handing back the part that arrived

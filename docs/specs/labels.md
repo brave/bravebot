@@ -15,10 +15,10 @@ guards:
       - crates/agent/src/mcp.rs: 1
       - crates/agent/src/tools.rs: 24
       - crates/agent/src/workspace.rs: 8
-      - crates/agent/tests/workspace.rs: 30
+      - crates/agent/tests/workspace.rs: 32
       - crates/aichat/src/lib.rs: 5
       - crates/bedrock/src/lib.rs: 6
-      - crates/core/src/policy.rs: 100
+      - crates/core/src/policy.rs: 103
       - crates/core/src/slot.rs: 5
       - crates/core/src/value.rs: 7
       - crates/mcp/src/http.rs: 2
@@ -30,7 +30,7 @@ guards:
     sites:
       - crates/agent/src/aside.rs: 2
       - crates/agent/src/manifest.rs: 5
-      - crates/agent/src/mcp.rs: 2
+      - crates/agent/src/mcp.rs: 3
       - crates/agent/src/processor.rs: 1
       - crates/agent/src/tools.rs: 33
       - crates/agent/src/turn.rs: 5
@@ -39,7 +39,8 @@ guards:
       - crates/agent/tests/workspace.rs: 44
       - crates/aichat/tests/client.rs: 2
       - crates/bedrock/src/lib.rs: 2
-      - crates/core/src/policy.rs: 59
+      - crates/cli/src/servers.rs: 1
+      - crates/core/src/policy.rs: 60
       - crates/core/src/value.rs: 1
       - crates/mcp/tests/http.rs: 2
       - crates/mcp/tests/stdio.rs: 4
@@ -55,7 +56,7 @@ guards:
       - crates/agent/src/turn.rs: 5
       - crates/agent/src/workspace.rs: 9
       - crates/tui/tests/sessions.rs: 4
-      - crates/agent/tests/workspace.rs: 170
+      - crates/agent/tests/workspace.rs: 176
       - crates/core/src/policy.rs: 23
       - crates/core/src/value.rs: 3
       - crates/ui-bridge/tests/workspace.rs: 2
@@ -66,7 +67,7 @@ guards:
       - crates/core/src/value.rs: 4
   - symbol: Declassification::authorise
     sites:
-      - crates/core/src/policy.rs: 56
+      - crates/core/src/policy.rs: 57
   - symbol: SlotStore::path_of
     sites:
       - crates/core/src/policy.rs: 5
@@ -109,10 +110,11 @@ guards:
   - symbol: Policy::render_in_place
     sites:
       - crates/agent/src/manifest.rs: 7
-      - crates/agent/src/mcp.rs: 1
+      - crates/agent/src/mcp.rs: 2
       - crates/agent/src/skills.rs: 2
       - crates/agent/src/tools.rs: 25
       - crates/agent/src/turn.rs: 1
+      - crates/cli/src/servers.rs: 1
       - crates/core/src/policy.rs: 6
   - symbol: Policy::render_pair_in_place
     sites:
@@ -146,6 +148,7 @@ guards:
       - crates/agent/src/tools.rs: 1
       - crates/aichat/src/lib.rs: 2
       - crates/aichat/src/models.rs: 2
+      - crates/aichat/src/ollama.rs: 1
       - crates/bedrock/src/lib.rs: 2
       - crates/core/src/policy.rs: 2
       - crates/mcp/src/http.rs: 1
@@ -421,6 +424,7 @@ and the content has no say in it.
 | what a processor produced | taint over the inputs it was given | `verified-by: bravebot_core::policy::an_output_is_labelled_by_taint_over_the_inputs` |
 | one slot's bytes a person read on their screen and vouched for | trusted and private, because a person read them and said so, and the slot itself keeps what it had | `verified-by: bravebot_core::policy::output_a_person_vouched_for_comes_back_trusted` `verified-by: bravebot_core::policy::vetted_content_a_person_vouched_for_comes_back_trusted` |
 | a server's tool list a person vouched for, or the mode that answers for them | trusted and public, because a person read the whole list as it is drawn and said yes, and a digest records which list that was | `verified-by: bravebot_core::policy::a_tool_list_reaches_the_planner_only_through_an_endorsement` `verified-by: bravebot_core::policy::a_recorded_tool_list_is_promoted_only_where_it_is_the_one_vouched_for` |
+| where a remote server's reply pointed, once a person says the server moved there | trusted and public, because a person read the url as it is drawn and the declaration it is written into is theirs | `verified-by: bravebot_core::policy::a_server_move_is_promoted_only_through_an_endorsement` |
 | a picture or a PDF `vet_content` let through | trusted and private on the endorsement that let it through, as promoted text is, and the slot keeps what it had; it goes to the planner in a message of its own rather than joining the user's, so it takes a label where a paste takes none | `verified-by: bravebot_core::policy::a_picture_is_promoted_once_by_any_endorsement_and_attached_as_itself` |
 | a picture pasted at the keyboard | none, because it joins the user's own message, which carries none either, so it is recorded instead | `verified-by: bravebot_core::policy::a_pasted_image_is_recorded_in_the_audit_trail` |
 | a prompt typed while a turn is running | none, for the same reason, and recorded the same way | `verified-by: bravebot_core::policy::an_interjection_is_recorded_in_the_audit_trail` |

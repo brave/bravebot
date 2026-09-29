@@ -391,6 +391,11 @@ impl Confirmer for BridgeConfirmer {
         bravebot_agent::confirm::CallDecision::reject()
     }
 
+    /// Refuses: this application starts no server, so there is none whose reply could move it.
+    fn confirm_move(&mut self, _request: &bravebot_agent::confirm::MoveRequest) -> Decision {
+        Decision::Reject
+    }
+
     fn confirm_server(&mut self, _request: &ServerRequest) -> Decision {
         Decision::Reject
     }

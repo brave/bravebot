@@ -9,8 +9,10 @@
 //! user adds, not one hardcoded host, so a server that redirects elsewhere is a realistic
 //! way to reach an unintended destination. It is a question rather than a rule because a
 //! server that has moved writes the same header as one redirecting a call away, and only
-//! the person who wrote the declaration can tell those apart. There is nowhere to ask yet:
-//! see [`bravebot_core::policy::Policy::before_server_request`] and issue #83.
+//! the person who wrote the declaration can tell those apart. This transport refuses the hop
+//! and sends nothing to where it pointed; the policy keeps that destination for whoever asks
+//! (see [`bravebot_core::policy::Policy::take_server_hop`]), and a yes is a new declaration
+//! and a new [`HttpServer`] rather than this one following the header.
 
 use crate::protocol::{
     Listing, RpcRequest, RpcResponse, ToolResult, call_params, initialize_params, paged,

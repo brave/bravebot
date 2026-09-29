@@ -134,12 +134,18 @@ onboarding-no-model = no model service is configured yet
 # Said beside it where a subscription is stored and could not be read, because somebody in that
 # case is one import away rather than a whole configuration away.
 onboarding-subscription-unusable = the subscription that is stored could not be used: { $problem }
-# Said before the routes where Claude Code or opencode configures a service bravebot can use and
-# nobody was there to be asked about it: a one-shot run, --json, a pipe, or doctor.
+# Said before the routes where Claude Code or opencode configures a service bravebot can use, or a
+# running Ollama serves one, and nobody was there to be asked about it: a one-shot run, --json, a
+# pipe, or doctor.
 onboarding-import-one =
     { $source } configures a model service bravebot can use: run `bravebot import-providers` in a terminal to import it.
+# The same, where the one source is Ollama running on this machine.
+onboarding-import-running =
+    { $source } is running here with models bravebot can use: run `bravebot import-providers` in a terminal to import it.
 onboarding-import-both =
-    { $first } and { $second } configure model services bravebot can use: run `bravebot import-providers` in a terminal to import them.
+    { $first } and { $second } each have a model service bravebot can use: run `bravebot import-providers` in a terminal to import them.
+onboarding-import-three =
+    { $first }, { $second } and { $third } each have a model service bravebot can use: run `bravebot import-providers` in a terminal to import them.
 # Said instead, where a service is configured and only the model in force is Brave's own. A
 # settings block copied out of another tool names its models and names no default, so this is
 # where somebody following that route lands, and what they have to do is name one of their own.
@@ -442,7 +448,7 @@ hook-stopped =
     stopped
 
 
-## Importing a model service Claude Code or opencode configured
+## Importing a model service Claude Code or opencode configured, or a running Ollama serves
 
 # Said above everything an import would write, naming the files it was read from. Every name and
 # value follows before the question, because what is written is what the person approves.
@@ -450,6 +456,8 @@ import-found = { $source } configures a model service bravebot can use, in { $fi
 # Where no file was read: the setup is exported rather than written down.
 import-found-exported =
     { $source } configures a model service bravebot can use, in this process's environment.
+# Where the source is a server that answered rather than a file: Ollama, at the address asked.
+import-found-running = { $source } is running at { $url }, serving models bravebot can use.
 import-adds = Importing it adds these to { $file }:
 # One gateway, with the host its requests go to: that host is where a credential is sent, so it is
 # the part of the entry the question is really about.
@@ -474,6 +482,8 @@ import-left-another-sdk = an entry reached through an SDK other than an OpenAI-c
 import-left-no-endpoint = no reachable endpoint is stated or known for it
 import-left-substitution =
     its key is built from an opencode substitution inside a longer value, which bravebot does not make
+import-left-elsewhere = names a server on another machine, which is not asked
+import-left-no-tool-model = running there, with no model that can call tools
 import-question = Import this from { $source }?
 # Asked on its own, after the import is approved, and never showing the key.
 import-key-question =
@@ -482,6 +492,7 @@ import-key-export =
     provider.{ $id } reads its key from { $variables }: export it before starting bravebot.
 import-key-none = provider.{ $id } is written with no credential.
 import-imported = imported what { $source } configured into { $file }
+import-imported-running = imported what { $source } serves into { $file }
 import-unset-variable =
     provider.{ $id } in { $file } reads its key from { $variables }, which is not set here: export it, then run bravebot again
 # Said where the session opens anyway, because the model it runs on is served by another entry.
@@ -497,7 +508,8 @@ import-changed =
 import-needs-a-terminal = import-providers asks before it writes anything, so it needs a terminal to ask on
 import-not-while-incognito = an import writes settings to disk, which an incognito session will not do
 import-no-home = there is no home directory to write settings in
-import-nothing-found = neither Claude Code nor opencode configures a model service bravebot can use
+import-nothing-found =
+    neither Claude Code nor opencode configures a model service bravebot can use, and no Ollama serving one is running here
 import-nothing-new = nothing is left to import: every name found is already set, or pinned
 import-takes-nothing-else = import-providers takes no arguments
 
@@ -511,39 +523,52 @@ mcp-unknown-command = bravebot mcp has no command { $command }
 mcp-needs-an-alias = { $command } needs the alias of a server
 mcp-unexpected-argument = { $command } does not take { $argument }
 mcp-add-stray-argument =
-    word { $position } after add is not a flag, and is not repeated since it may be a value:
-    --env, --dir, --http and -s take one word each, and -- takes the rest
+    word { $position } after add is not a flag, and is not repeated since it may be a value: -e
+    takes the words up to the next flag, --dir, --http and -s one each, and -- takes the rest
 mcp-scope-needs-a-value = -s needs a scope: local, project or user
 mcp-not-a-scope = { $scope } is not a scope: -s takes local, project or user
+mcp-not-a-scope-unshown =
+    the word after -s is not a scope, and is not repeated since it may be a value: -s takes local,
+    project or user
 mcp-two-scopes = -s is given twice, and a request is written to one file
 mcp-not-an-alias =
     { $alias } cannot name a server: an alias is letters, digits, - and _, starts with a letter or
     a digit, and is at most 64 characters
+mcp-not-an-alias-unshown =
+    word { $position } after add cannot name a server, and is not repeated since it may be a value:
+    an alias is letters, digits, - and _, starts with a letter or a digit, and is at most 64
+    characters
 mcp-needs-a-transport = add needs -- <program> [args...] or --http <url>
 mcp-two-transports = add takes a program after -- or --http, not both
 mcp-stdio-needs-a-program =
     a program and its arguments come after a bare --, as in -- npx -y weather-mcp
 mcp-http-needs-a-url = --http needs a url
-mcp-env-needs-a-name = --env needs the name of a variable
+mcp-env-needs-a-name = -e needs NAME=value, or the name of a variable read from your environment
+mcp-env-after-the-alias =
+    -e and --env come after the alias, as in add weather -e KEY=value -- weather-mcp
+mcp-env-word-refused =
+    word { $position } after add is not NAME=value, and is not repeated since it may be a value: a
+    name alone is read from your environment only as the one word its -e takes
 mcp-dir-needs-a-path = --dir needs a directory
 mcp-dir-not-a-directory = { $path } is not a directory
+mcp-dir-not-a-directory-unshown =
+    the word after --dir is not a directory, and is not repeated since it may be a value
 mcp-dir-not-text = { $path } cannot be written into mcp.json, which holds text
 mcp-not-added = { $alias } was not declared: { $problem }
 mcp-not-declared = no MCP server is declared as { $alias }
 # What is wrong with a declaration, from a flag or from mcp.json. None of these repeats a value: the
-# one that names something names the variable, never what it was set to.
+# ones that name something name the variable, never what it was set to.
 mcp-problem-alias = the alias is not one: letters, digits, - and _, starting with a letter or a digit
 mcp-problem-not-an-object = the entry is not an object
 mcp-problem-transport = transport is missing, or is neither stdio nor http
 mcp-problem-key = { $key } is not a key a declaration has
-mcp-problem-values =
-    it holds values: a declaration lists the names of variables, and their values are read from
-    your environment
 mcp-problem-program = argv is missing or empty, or holds something that is not a string
 mcp-problem-name = a variable is not a name: a letter or _, then letters, digits and _
-mcp-problem-assignment =
-    { $name } is given a value: a declaration names the variable, and its value is read from your
-    environment
+mcp-problem-env = env is not an object of names and their values
+mcp-problem-value = the value env gives { $name } is not text a variable can hold
+mcp-problem-twice =
+    { $name } is given twice: a variable has one value, stored or read from your environment
+mcp-problem-reads = reads is not a list of absolute paths
 mcp-problem-directory = the directory is not an absolute path
 mcp-problem-url = the url is not http or https with a host
 mcp-problem-credentials =
@@ -564,6 +589,10 @@ mcp-no-state-directory =
 mcp-not-written = { $path } could not be written ({ $error })
 mcp-declared = declared { $alias } in { $path }
 mcp-variables = variables: { $names }
+# A variable given its value at add, which is kept in mcp.json and is never shown.
+mcp-variable-stored = { $name } (stored)
+# A file a stored value or an argument names, which the server is let read.
+mcp-may-read = may read: { $path }
 mcp-directory = directory: { $path }
 mcp-digest = digest: { $digest }
 # Where a declaration replaced one that was approved, which of its fields differ.
@@ -751,6 +780,35 @@ mcp-call-path-not-one-line = the project's path cannot be written on one line
 mcp-record-too-large = it is larger than a record of answers has any reason to be, so it was left as it is
 mcp-record-not-read = it could not be read as text, so it was left as it is
 
+## A remote MCP server whose reply pointed somewhere it is not declared
+
+mcp-move-title = declare this server where its reply points?
+mcp-move-declared = { $alias } is declared at { $url }
+mcp-move-destination = and its reply points to { $url }
+mcp-move-reaching = reaching { $authority }
+mcp-move-explained =
+    Nothing was sent there. A yes declares the server at that address and sends it what was being
+    sent, and every later request to the server goes there too, in this session and the next. Say
+    no unless you know the server moved.
+mcp-move-this-session-only = nothing answered in this session is recorded, so a yes lasts until it ends
+mcp-move-yes = Yes, it moved there
+mcp-move-no = No
+mcp-move-declined =
+    { $alias } stays where it is declared: its reply pointed somewhere else, and nothing was sent there
+mcp-move-not-started =
+    { $alias } was not started: its reply to the handshake pointed somewhere it is not declared, and
+    nothing was sent there
+mcp-move-refused-by-managed = { $alias } was not moved where its reply points: { $reason }
+mcp-move-undeclarable = { $alias } was not moved: where its reply points cannot be declared: { $problem }
+mcp-move-moved = { $alias } was moved where its reply pointed
+mcp-move-edited =
+    { $alias } was not moved: its declaration changed while you were asked, so it was left as it is
+mcp-move-not-recorded =
+    { $alias } is used where its reply pointed in this session only, since the move could not be
+    recorded: { $error }
+mcp-move-no-handshake = { $alias } did not complete its handshake where its reply pointed: { $reason }
+mcp-move-again = { $alias } was redirected again, off where it was just moved, so that was refused
+
 ## Vouching for a directory, asked once when a session starts somewhere new
 
 trust-directory-title = trust this directory?
@@ -772,6 +830,12 @@ trust-directory-remember-explained =
 trust-directory-remember-exact =
     A session started inside or above this directory is still asked, and so is one started in a directory deleted and made again here.
 trust-directory-remember-where = /forget-trust takes it back, and it is written down here:
+# Above the keys while the lines saying what r does and where it writes have not been on the screen
+# together, which is when r is not taken. What r does comes first, so a narrow terminal that cuts the
+# line off keeps it.
+trust-directory-remember-unseen = ↑↓ r remembers nothing: what it writes is not shown yet
+# The same where those lines are taller than the box, so no scroll shows them together.
+trust-directory-remember-too-small = r remembers nothing: what it writes is taller than this box
 quit = quit
 trust-quit-again = again
 
@@ -805,6 +869,16 @@ granted-rules-regardless =
     rules in ~/.bravebot/settings.json are your own and always apply.
 granted-rules-yes = grant them
 granted-rules-no = keep asking me
+# Above the keys while a rule has not yet been on the screen with its file, which is when y is not
+# taken: a key that did nothing and said nothing would read as a question that had stopped answering.
+# What y does comes first, so a narrow terminal that cuts the line off keeps it.
+granted-rules-unseen =
+    { $count ->
+        [one] ↑↓ y grants nothing: { $count } rule not shown yet
+       *[other] ↑↓ y grants nothing: { $count } rules not shown yet
+    }
+# The same where a rule not shown yet is taller than the box, so no scroll shows it whole.
+granted-rules-too-small = y grants nothing: a rule is taller than this box
 
 
 ## Choosing a theme, a model, or a session to pick up
@@ -1148,7 +1222,7 @@ expose-explained =
     the model may read this file, and what it reads goes to whoever performs inference.
     The scan found something in it that looks like a credential. Sending it discloses
     that value; declining keeps this file's text from the model and changes nothing else.
-    An answer covers this file for the rest of this session.
+    An answer covers this file until the session ends or you change directory.
 expose-found = what the scan found, without any of the value:
 expose-yes = send it anyway
 expose-no = keep it back
@@ -1619,7 +1693,7 @@ session-trust-forget-incognito =
 session-not-trusting = this directory is not trusted; every write will be shown to you
 session-vouched-for = trusting { $path } for this session
 # Said when a person agrees that a file the scan found a credential in may reach the model.
-session-exposed = showing { $path } to the model for this session, credential and all
+session-exposed = showing { $path } to the model until the session ends or you change directory, credential and all
 # Said when the person pressed the standing key at a vetting prompt. What it changes is that a
 # later prompt does not appear, so it is the one decision here they would otherwise see no record
 # of, and the file is named because that is where they undo it.
@@ -1957,12 +2031,37 @@ delegate-skills-not-found =
         [one] { $definition } names a skill this session did not find, so its delegate is offered without it: { $skills }
        *[other] { $definition } names skills this session did not find, so its delegate is offered without them: { $skills }
     }
+# A definition's mcpServers line named servers this session did not reach. The definition is its
+# file's path and the servers are that file's own words, joined with a comma, both from a
+# vouched-for file. "MCP" is a protocol's name and stays as it is.
+delegate-servers-not-found =
+    { $count ->
+        [one] { $definition } names an MCP server this session did not reach, so its delegate runs without it: { $servers }
+       *[other] { $definition } names MCP servers this session did not reach, so its delegate runs without them: { $servers }
+    }
+# A definition's mcpServers line declared a server inline rather than naming one, so its delegate
+# calls no MCP server. The definition is its file's path. Nothing from the line is shown, since an
+# inline entry can hold a command line and the value of a secret. "MCP", "mcpServers" and the path
+# stay as they are.
+delegate-servers-declared = { $definition } declares an MCP server in its mcpServers line, which only ~/.bravebot/mcp.json may do, so its delegate calls no MCP server
 # A definition's rounds line is not a whole number above zero, so the file did not load. The
 # definition is its file's path.
 delegate-rounds-not-a-count = { $definition } was skipped: its rounds must be a whole number above zero
 # A definition asked for more rounds than its kind may make. The kind is its key's value (reader,
 # checker or worker), left as written because it is typed.
 delegate-rounds-held = { $definition } asks for { $asked } rounds, more than the { $most } a { $kind } may make, so its delegate is given { $most }
+# A definition's memory line named a value other than project or local, so the definition loads
+# keeping no memory. The definition is its file's path and the value is that file's own words, both
+# from a vouched-for file. "memory", "project" and "local" are the key and its values, and stay as
+# they are.
+delegate-memory-not-kept = { $definition } keeps no memory: its memory line says { $value }, and only project and local keep one
+# A definition asked to keep a memory and its name is not one its memory file can be named after.
+# The definition is its file's path.
+delegate-memory-not-a-slug = { $definition } keeps no memory: a definition keeping one needs a name of lowercase letters and digits in runs joined by single hyphens, 64 characters at most
+# A definition asked to keep a memory in a working directory where the memory would fall inside the
+# person's own ~/.bravebot, as it does for a session in the home directory. The definition is its
+# file's path, and ~/.bravebot stays as it is.
+delegate-memory-in-home = { $definition } keeps no memory here: in this directory its memory would be inside ~/.bravebot, which no write can leave untrusted
 
 # Advisory checks shown only in a Bravebot source checkout.
 doctor-development = development environment { $path }

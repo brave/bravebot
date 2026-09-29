@@ -58,7 +58,7 @@ capability probes.
 | the service could not answer | the service is unavailable at the moment |
 | the service rejected the request | the request was refused as invalid |
 | the request did not get through | nothing reached the service, or no reply began: network, proxy or TLS roots |
-| the reply stopped before it was finished | the reply began and was cut off, or went quiet, part way |
+| the reply stopped before it was finished | the reply began and was cut off, went quiet part way, or was still being written when its time ran out |
 | the reply could not be read | a reply arrived that could not be decoded, or the model sent back nothing twice in a row |
 | the model reached its output limit | the reply hit a ceiling, which `BRAVEBOT_OUTPUT_BUDGET` raises |
 | nothing here was configured to send the request | no model service is set up |

@@ -1,8 +1,10 @@
-//! Importing a model service Claude Code or opencode configured (`docs/specs/import.md`).
+//! Importing a model service Claude Code or opencode configured, or a running Ollama serves
+//! (`docs/specs/import.md`).
 //!
-//! What the two programs' files hold is read and mapped in [`bravebot_config::import`]. Here is
-//! the rest: what is shown, the questions, and the write. Every question is put in lines, the way a
-//! session in lines puts one, because each is asked before anything is drawn.
+//! What the two programs' files hold, and what Ollama answers, is read and mapped in
+//! [`bravebot_config::import`]. Here is the rest: what is shown, the questions, and the write.
+//! Every question is put in lines, the way a session in lines puts one, because each is asked
+//! before anything is drawn.
 
 use crate::exit::{Ending, fail};
 use crate::plain::Prompting;
@@ -36,11 +38,21 @@ impl Looked {
     pub(crate) fn command(&self) -> Option<String> {
         match self.importable.as_slice() {
             [] => None,
+            [Source::Ollama] => Some(t!(
+                onboarding_import_running,
+                source = Source::Ollama.name()
+            )),
             [source] => Some(t!(onboarding_import_one, source = source.name())),
-            [first, second, ..] => Some(t!(
+            [first, second] => Some(t!(
                 onboarding_import_both,
                 first = first.name(),
                 second = second.name()
+            )),
+            [first, second, third, ..] => Some(t!(
+                onboarding_import_three,
+                first = first.name(),
+                second = second.name(),
+                third = third.name()
             )),
         }
     }
@@ -105,15 +117,17 @@ fn at_the_start(a_service_is_configured: bool) -> Start {
     let Some(file) = destination_file() else {
         return Start::Refuse(Looked::default());
     };
-    let found = import::found(&import::Places::from_env(), exported);
-    if found.is_empty() {
-        return Start::Refuse(Looked::default());
-    }
-
+    // Opened before the sources are read, since the refusal for a file that cannot be written
+    // reads them itself, and Ollama is asked once per start.
     let mut destination = match Destination::open(&file) {
         Ok(destination) => destination,
         Err(_) => return Start::Refuse(looked(false)),
     };
+    let found = import::found(&import::Places::from_env(), exported, ask_ollama);
+    if found.is_empty() {
+        return Start::Refuse(Looked::default());
+    }
+
     // The process's own stdin, whose buffer is shared with every later reader of it, so an answer
     // typed ahead here reaches whatever asks next rather than a buffer that is dropped.
     let mut asking = Prompting::new(std::io::stdin().lock(), std::io::stderr());
@@ -195,7 +209,7 @@ pub(crate) fn looked(a_service_is_configured: bool) -> Looked {
     };
     let destination = Destination::open(&file);
     let managed = Managed::load();
-    for found in import::found(&import::Places::from_env(), exported) {
+    for found in import::found(&import::Places::from_env(), exported, ask_ollama) {
         let plan = plan(found, destination.as_ref().ok(), &managed, &exported);
         if plan.adds_anything() {
             looked.importable.push(plan.source);
@@ -233,7 +247,7 @@ pub(crate) fn providers(args: &[String]) -> ExitCode {
         Err(why) => return fail(Ending::Failed, unwritable(why, &file)),
     };
 
-    let found = import::found(&import::Places::from_env(), exported);
+    let found = import::found(&import::Places::from_env(), exported, ask_ollama);
     let mut asking = Prompting::new(std::io::stdin().lock(), std::io::stderr());
     let offered = offer(
         &mut asking,
@@ -270,6 +284,14 @@ pub(crate) fn providers(args: &[String]) -> ExitCode {
 
 fn exported(name: &str) -> Option<String> {
     std::env::var(name).ok()
+}
+
+/// What the Ollama at `host` has pulled.
+///
+/// Asked only once there is a settings file to write, so an incognito start opens no socket, and a
+/// trail of its own because no session exists yet whose trail it could join.
+fn ask_ollama(host: &str) -> Option<Vec<import::Installed>> {
+    bravebot_agent::backend::installed_on_ollama(host, &mut bravebot_session::audit::Trail::new())
 }
 
 /// The user's own settings file, or `None` where nothing may be written.
@@ -396,6 +418,7 @@ fn credential<R: BufRead, W: Write>(
 struct Plan {
     source: Source,
     read: Vec<PathBuf>,
+    running_at: Option<String>,
     env: Vec<(String, String)>,
     model: Option<String>,
     gateways: Vec<Gateway>,
@@ -425,6 +448,7 @@ fn plan(
     let mut plan = Plan {
         source: found.source,
         read: found.read,
+        running_at: found.running_at,
         env: Vec::new(),
         model: None,
         gateways: Vec::new(),
@@ -472,6 +496,11 @@ fn plan(
             plan.pinned.push(name);
         } else if holds(&|file| file.holds_gateway(&gateway.id)) {
             plan.kept.push(name);
+        } else if plan.source == Source::Ollama
+            && let Some(id) = destination.and_then(|file| file.serving_locally(&gateway.endpoint))
+        {
+            // The same server under another id: a second entry would list every model twice.
+            plan.kept.push(format!("provider.{id}"));
         } else {
             let taken = tiers
                 .as_ref()
@@ -516,9 +545,14 @@ fn shown(plan: &Plan, destination: &Path, managed: &Managed) -> Vec<String> {
         .map(|path| path.display().to_string())
         .collect::<Vec<_>>()
         .join(", ");
-    let found = match plan.read.is_empty() {
-        true => t!(import_found_exported, source = plan.source.name()),
-        false => t!(
+    let found = match (&plan.running_at, plan.read.is_empty()) {
+        (Some(url), _) => t!(
+            import_found_running,
+            source = plan.source.name(),
+            url = printable(url)
+        ),
+        (None, true) => t!(import_found_exported, source = plan.source.name()),
+        (None, false) => t!(
             import_found,
             source = plan.source.name(),
             files = printable(&read)
@@ -641,6 +675,8 @@ fn left_lines(source: Source, left: &[Left]) -> Vec<String> {
             Reason::AnotherSdk => t!(import_left_another_sdk),
             Reason::NoEndpoint => t!(import_left_no_endpoint),
             Reason::Substitution => t!(import_left_substitution),
+            Reason::Elsewhere => t!(import_left_elsewhere),
+            Reason::NoToolModel => t!(import_left_no_tool_model),
         };
         lines.push(format!("  - {}: {why}", printable(name)));
     }
@@ -648,11 +684,11 @@ fn left_lines(source: Source, left: &[Left]) -> Vec<String> {
 }
 
 fn imported(source: Source, file: &Path) -> String {
-    t!(
-        import_imported,
-        source = source.name(),
-        file = printable(&file.display().to_string())
-    )
+    let file = printable(&file.display().to_string());
+    match source {
+        Source::Ollama => t!(import_imported_running, source = source.name(), file = file),
+        _ => t!(import_imported, source = source.name(), file = file),
+    }
 }
 
 fn unwritable(why: import::Unwritable, file: &Path) -> String {
@@ -774,7 +810,7 @@ mod tests {
         fn found(&self) -> Vec<Found> {
             let home = self.path.display().to_string();
             let lookup = |name: &str| (name == "HOME").then(|| home.clone());
-            import::found(&Places::from_lookup(lookup), lookup)
+            import::found(&Places::from_lookup(lookup), lookup, |_| None)
         }
     }
 
@@ -892,7 +928,7 @@ mod tests {
             "AWS_REGION" => Some("us-west-2".to_string()),
             _ => None,
         };
-        let found = import::found(&Places::from_lookup(lookup), lookup);
+        let found = import::found(&Places::from_lookup(lookup), lookup, |_| None);
 
         let (said, _) = asked_about(&scratch, found, "", &Managed::default(), &lookup);
 
@@ -1027,7 +1063,7 @@ mod tests {
             "ANTHROPIC_DEFAULT_OPUS_MODEL" => Some(OPUS.to_string()),
             _ => None,
         };
-        let found = import::found(&Places::from_lookup(lookup), lookup);
+        let found = import::found(&Places::from_lookup(lookup), lookup, |_| None);
 
         let (said, _) = asked_about(&scratch, found, "y\n", &Managed::default(), &lookup);
 
@@ -1266,5 +1302,88 @@ mod tests {
         let file = written(&scratch);
         assert!(!file.contains("AWS_REGION"), "{file}");
         assert!(!file.contains("provider"), "{file}");
+    }
+
+    /// What a running Ollama at the default address serves, one model that can call tools.
+    fn ollama_running() -> Found {
+        import::running(
+            "http://localhost:11434",
+            vec![import::Installed {
+                name: "qwen3-coder:30b".to_string(),
+                modified_at: "2026-09-18T14:07:58-04:00".to_string(),
+                capabilities: Some(vec!["completion".to_string(), "tools".to_string()]),
+            }],
+        )
+    }
+
+    /// IMPORT-10: an entry for the same server under an id of its own already lists every model it
+    /// serves, and a second would list each of them twice.
+    #[test]
+    fn an_ollama_already_configured_under_another_id_is_not_offered_again() {
+        let scratch = Scratch::new("cli-import-ollama-kept");
+        let own =
+            r#"{"provider": {"local": {"options": {"baseURL": "http://127.0.0.1:11434/v1"}}}}"#;
+        scratch.write(".bravebot/settings.json", own);
+
+        let (said, offered) = asked_about(
+            &scratch,
+            vec![ollama_running()],
+            "y\n",
+            &Managed::default(),
+            &|_| None,
+        );
+
+        assert!(!offered.asked, "{said}");
+        let kept = said.find("Left as they are").expect("the entry was named");
+        assert!(said[kept..].contains("provider.local"), "{said}");
+        assert_eq!(
+            std::fs::read_to_string(scratch.settings()).expect("read"),
+            own
+        );
+
+        // Another port is another server.
+        let other =
+            r#"{"provider": {"local": {"options": {"baseURL": "http://127.0.0.1:8080/v1"}}}}"#;
+        scratch.write(".bravebot/settings.json", other);
+        let (said, offered) = asked_about(
+            &scratch,
+            vec![ollama_running()],
+            "y\n",
+            &Managed::default(),
+            &|_| None,
+        );
+        assert_eq!(offered.imported, [Source::Ollama], "{said}");
+        let file = written(&scratch);
+        assert!(
+            file.contains(r#""ollama":{"name":"Ollama(local)","options":{"baseURL":"http://localhost:11434/v1"}}"#),
+            "{file}"
+        );
+        assert!(
+            file.contains(r#""model":"ollama/qwen3-coder:30b""#),
+            "{file}"
+        );
+    }
+
+    /// IMPORT-10: the opencode entry for a local Ollama is asked about first, and once written the
+    /// running server has nothing left to add.
+    #[test]
+    fn an_opencode_entry_for_the_same_server_leaves_the_ollama_source_with_nothing_to_add() {
+        let scratch = Scratch::new("cli-import-ollama-opencode");
+        scratch.write(
+            ".config/opencode/opencode.json",
+            r#"{"provider": {"mine": {"options": {"baseURL": "http://[::1]:11434/v1"}}}}"#,
+        );
+        let mut found = scratch.found();
+        found.push(ollama_running());
+
+        let (said, offered) = asked_about(&scratch, found, "y\n", &Managed::default(), &|_| None);
+
+        assert_eq!(offered.imported, [Source::Opencode], "{said}");
+        assert!(!said.contains("Import this from Ollama?"), "{said}");
+        let running = said
+            .find("Left as they are")
+            .expect("the entry the first answer wrote was named");
+        assert!(said[running..].contains("provider.mine"), "{said}");
+        assert!(!written(&scratch).contains("ollama"), "{said}");
     }
 }

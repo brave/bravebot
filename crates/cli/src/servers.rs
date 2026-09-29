@@ -14,12 +14,13 @@
 
 use crate::mcp::{self as command, Home, Person, say, shown};
 use bravebot_agent::SessionScratch;
-use bravebot_agent::mcp::{Connection, Session};
+use bravebot_agent::mcp::{Connection, Session, Unmoved, managed_refusal};
 use bravebot_config::mcp::{self, Approvals, Declaration, Declarations, Digest, Projects};
-use bravebot_config::{Managed, Refusal, Rule, Server};
+use bravebot_config::{Managed, Server};
 use bravebot_core::capability::{Capability, CapabilitySet, ServerAlias};
 use bravebot_core::event::RecordingSink;
 use bravebot_core::policy::{Policy, ReleasePlan, Routing};
+use bravebot_core::value::Labelled;
 use bravebot_i18n::t;
 use bravebot_mcp::{HttpServer, McpError, McpResult, StdioServer};
 use bravebot_sandbox::base::{Prelude, base};
@@ -154,16 +155,223 @@ pub(crate) fn reach<R: BufRead, W: Write>(
         Prelude::current(),
         &mut notes,
     );
-    let started = start(plans, home, diagnostics, &mut notes);
+    let mut hops = Vec::new();
+    let mut started = start(plans, home, diagnostics, &mut notes, &mut hops);
+    let moving = moves(hops, home, managed, asking, person, &mut notes);
+    if !moving.is_empty() {
+        let plans = moving
+            .iter()
+            .map(|moving| {
+                let plan = Plan::Http {
+                    url: moving.url.clone(),
+                    declared: moving.declaration.digest(),
+                };
+                (moving.alias.clone(), plan)
+            })
+            .collect();
+        let mut again = Vec::new();
+        let reached = start(plans, home, diagnostics, &mut notes, &mut again);
+        notes.extend(
+            again
+                .iter()
+                .map(|hop| t!(mcp_move_again, alias = hop.alias.as_str()).to_string()),
+        );
+        for server in reached {
+            let Some(moving) = moving.iter().find(|moving| moving.alias == server.alias()) else {
+                continue;
+            };
+            if moved(home, moving, &mut notes) {
+                started.push(server);
+            }
+        }
+        started.sort_by(|one, other| one.alias().cmp(other.alias()));
+    }
     let session = (!started.is_empty()).then(|| {
         Session::new(
             started,
             project.to_path_buf(),
             home.directory.clone(),
             home.writable,
+            managed.clone(),
         )
     });
     Reached { session, notes }
+}
+
+/// A remote server whose handshake was redirected off where it is declared (SERVERS-11).
+struct Hop {
+    alias: String,
+    /// The url the declaration names.
+    url: String,
+    /// The digest of that declaration.
+    declared: Digest,
+    /// Where the reply pointed: the server's own bytes, until a person says it moved there.
+    destination: Labelled<String>,
+}
+
+/// A server a person said moved, with the declaration a yes rewrites it to.
+struct Moving {
+    alias: String,
+    /// The digest of the declaration it was started from.
+    from: Digest,
+    url: String,
+    declaration: Declaration,
+}
+
+/// Put each handshake that was redirected off its declaration to the person, and say where each
+/// one they said moved is to be reached (SERVERS-11).
+///
+/// Only a person answers. Bypassing every check refuses the move, as a one-shot run and a session
+/// with nobody at the terminal do, since a move rewrites a declaration (SERVERS-13). The destination
+/// is drawn and decides nothing before the yes: only then is it read as a url and held to the
+/// machine's managed layer.
+fn moves<R: BufRead, W: Write>(
+    hops: Vec<Hop>,
+    home: &Home,
+    managed: &Managed,
+    asking: Asking,
+    person: &mut Person<R, W>,
+    notes: &mut Vec<String>,
+) -> Vec<Moving> {
+    let mut moving = Vec::new();
+    for hop in hops {
+        let alias = hop.alias.as_str();
+        if asking != Asking::Person || !person.present {
+            notes.push(t!(mcp_move_not_started, alias = alias).to_string());
+            continue;
+        }
+        let mut sink = RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("server", alias);
+        let Ok(mut policy) = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::default(),
+            &mut sink,
+        ) else {
+            continue;
+        };
+        let shaped = policy.render_in_place("mcp_move", &hop.destination, |url| {
+            let authority = bravebot_core::url::authority_of(&url).unwrap_or_default();
+            (url, authority)
+        });
+        let (destination, authority) = {
+            let proof = policy.authorise_display_release("where an MCP server's reply pointed");
+            shaped.declassify(&proof)
+        };
+        if !asked_to_move(
+            person,
+            alias,
+            &hop.url,
+            &destination,
+            &authority,
+            home.writable,
+        ) {
+            notes.push(t!(mcp_move_not_started, alias = alias).to_string());
+            continue;
+        }
+        policy.endorse_server_move(alias);
+        let Ok(Ok(url)) = policy
+            .promote_a_server_move(alias, &hop.destination)
+            .map(Labelled::into_trusted)
+        else {
+            continue;
+        };
+        let declaration = match Declaration::http(url.clone()) {
+            Ok(declaration) => declaration,
+            Err(problem) => {
+                notes.push(
+                    t!(
+                        mcp_move_undeclarable,
+                        alias = alias,
+                        problem = command::problem(&problem)
+                    )
+                    .to_string(),
+                );
+                continue;
+            }
+        };
+        if let Some(reason) = managed_refusal(managed, Server::Remote(&url)) {
+            notes.push(t!(mcp_move_refused_by_managed, alias = alias, reason = reason).to_string());
+            continue;
+        }
+        moving.push(Moving {
+            alias: hop.alias,
+            from: hop.declared,
+            url,
+            declaration,
+        });
+    }
+    moving
+}
+
+/// Draw where a server's reply pointed and read the answer. Only a yes moves it, and the end of the
+/// input is a no.
+fn asked_to_move<R: BufRead, W: Write>(
+    person: &mut Person<R, W>,
+    alias: &str,
+    declared: &str,
+    destination: &str,
+    authority: &str,
+    may_record: bool,
+) -> bool {
+    say(person, "");
+    say(
+        person,
+        format!(
+            "  {}",
+            t!(mcp_move_declared, alias = alias, url = shown(declared))
+        ),
+    );
+    say(
+        person,
+        format!("  {}", t!(mcp_move_destination, url = shown(destination))),
+    );
+    say(
+        person,
+        format!("  {}", t!(mcp_move_reaching, authority = shown(authority))),
+    );
+    say(person, format!("  {}", t!(mcp_move_explained)));
+    if !may_record {
+        say(person, format!("  {}", t!(mcp_move_this_session_only)));
+    }
+    say(person, "");
+    let _ = write!(
+        person.screen,
+        "  {} {} ",
+        t!(mcp_move_title),
+        t!(line_answer)
+    );
+    let _ = person.screen.flush();
+    let mut typed = String::new();
+    match person.answers.read_line(&mut typed) {
+        Ok(0) | Err(_) => false,
+        Ok(_) => typed.trim().to_lowercase() == t!(line_answer_yes),
+    }
+}
+
+/// Rewrite a moved server's declaration where the session may write, now that it answered where it
+/// moved to. Whether it is used.
+fn moved(home: &Home, moving: &Moving, notes: &mut Vec<String>) -> bool {
+    let alias = moving.alias.as_str();
+    let (Some(directory), true) = (&home.directory, home.writable) else {
+        notes.push(t!(mcp_move_moved, alias = alias).to_string());
+        return true;
+    };
+    match bravebot_agent::mcp::record_a_move(directory, alias, &moving.from, &moving.declaration) {
+        Ok(()) => {
+            notes.push(t!(mcp_move_moved, alias = alias).to_string());
+            true
+        }
+        Err(Unmoved::Edited) => {
+            notes.push(t!(mcp_move_edited, alias = alias).to_string());
+            false
+        }
+        Err(Unmoved::NotWritten(error)) => {
+            notes.push(t!(mcp_move_not_recorded, alias = alias, error = error).to_string());
+            true
+        }
+    }
 }
 
 /// How a requested server is to be started, once the question about it is answered.
@@ -176,6 +384,8 @@ enum Plan {
         variables: Variables,
         /// The directories the named `PATH` searches, which the program may need to read.
         searched: Vec<PathBuf>,
+        /// The files the declaration says it may read.
+        reads: Vec<PathBuf>,
         directory: Option<PathBuf>,
         /// The digest of the declaration, which a vouch for the server's list is recorded beside.
         declared: Digest,
@@ -443,16 +653,17 @@ pub(crate) fn named(file: &Path, project: &Path) -> String {
         .to_string()
 }
 
-/// What a declaration starts, read against this process's environment for the variables it names.
+/// What a declaration starts, read against this process's environment for the variables it names
+/// and with the value it stores for each of the others.
 ///
-/// A program named rather than given as a path is looked for in the `PATH` the declaration names,
-/// and in no other: the server runs with that one, so a program found in this process's own
+/// A program named rather than given as a path is looked for in the `PATH` the declaration gives
+/// it, and in no other: the server runs with that one, so a program found in this process's own
 /// would be a program the server's environment does not lead to.
 fn planned(
     declaration: &Declaration,
     environment: &dyn Fn(&str) -> Option<OsString>,
 ) -> Result<Plan, String> {
-    let (argv, names, directory) = match declaration {
+    let (argv, names, env, reads, directory) = match declaration {
         Declaration::Http { url } => {
             return Ok(Plan::Http {
                 url: url.clone(),
@@ -462,15 +673,21 @@ fn planned(
         Declaration::Stdio {
             argv,
             variables,
+            env,
+            reads,
             directory,
-        } => (argv, variables, directory),
+        } => (argv, variables, env, reads, directory),
     };
+    // A stored name is never in `variables`, so the environment is not read for it.
     let variables = names
         .iter()
         .filter_map(|name| environment(name).map(|value| (name, value)))
         .fold(Variables::new(), |variables, (name, value)| {
             variables.with(name.as_str(), value)
         });
+    let variables = env.iter().fold(variables, |variables, (name, value)| {
+        variables.with(name.as_str(), value.as_str())
+    });
     let path = variables
         .iter()
         .find(|(name, _)| name == "PATH")
@@ -492,9 +709,46 @@ fn planned(
         arguments: arguments.to_vec(),
         variables,
         searched,
+        reads: reads.iter().map(PathBuf::from).collect(),
         directory: directory.as_ref().map(PathBuf::from),
         declared: declaration.digest(),
     })
+}
+
+/// Of `files`, the ones the confinement `declaration` would start under does not let it read, which
+/// are the ones a read has to be granted for.
+///
+/// Read against that confinement with no file granted and the temporary directory as its own, since
+/// its own directory is made only when it starts. A program that is not found yet is taken as
+/// named, which grants less and so keeps more files. Where this platform has no base, every file is
+/// one, since nothing is known to reach it.
+pub(crate) fn unreached(
+    declaration: &Declaration,
+    files: Vec<PathBuf>,
+    environment: &dyn Fn(&str) -> Option<OsString>,
+) -> Vec<PathBuf> {
+    let Declaration::Stdio {
+        argv, directory, ..
+    } = declaration
+    else {
+        return files;
+    };
+    let (program, searched) = match planned(declaration, environment) {
+        Ok(Plan::Stdio {
+            program, searched, ..
+        }) => (program, searched),
+        _ => (PathBuf::from(&argv[0]), Vec::new()),
+    };
+    let directory = directory.as_deref().map(Path::new);
+    let Some(policy) =
+        confinement_here(&program, &searched, &[], directory, &temporary_directory())
+    else {
+        return files;
+    };
+    files
+        .into_iter()
+        .filter(|file| !policy.readable.iter().any(|row| file.starts_with(row)))
+        .collect()
 }
 
 /// Why the machine's managed layer keeps `plan` from starting, where it does (SERVERS-12).
@@ -506,9 +760,9 @@ fn refused(managed: &Managed, plan: &Plan) -> Option<String> {
             let argv: Vec<String> = std::iter::once(program.to_string_lossy().into_owned())
                 .chain(arguments.iter().cloned())
                 .collect();
-            refusal(managed, Server::Local(&argv))
+            managed_refusal(managed, Server::Local(&argv))
         }
-        Plan::Http { url, .. } => refusal(managed, Server::Remote(url)),
+        Plan::Http { url, .. } => managed_refusal(managed, Server::Remote(url)),
     }
 }
 
@@ -523,30 +777,8 @@ pub(crate) fn refused_declaration(
 ) -> Option<String> {
     match (planned(declaration, environment), declaration) {
         (Ok(plan), _) => refused(managed, &plan),
-        (Err(_), Declaration::Stdio { argv, .. }) => refusal(managed, Server::Local(argv)),
-        (Err(_), Declaration::Http { url }) => refusal(managed, Server::Remote(url)),
-    }
-}
-
-/// The reason the managed layer gives for `server`, naming its file, where it gives one.
-fn refusal(managed: &Managed, server: Server<'_>) -> Option<String> {
-    let (path, refusal) = managed.refuses(server)?;
-    let path = path.display().to_string();
-    Some(match refusal {
-        Refusal::NotAllowed => t!(managed_not_allowed, path = path).to_string(),
-        Refusal::Denied(rule) => t!(managed_denied, path = path, entry = entry(rule)).to_string(),
-        Refusal::HostUnread => t!(managed_host_unread, path = path).to_string(),
-    })
-}
-
-/// A managed entry as its file's author would find it again.
-fn entry(rule: &Rule) -> String {
-    match rule {
-        Rule::Host(host) => format!("host {}", shown(host)),
-        Rule::Command(argv) => {
-            let words: Vec<String> = argv.iter().map(|word| shown(word)).collect();
-            format!("command {}", words.join(" "))
-        }
+        (Err(_), Declaration::Stdio { argv, .. }) => managed_refusal(managed, Server::Local(argv)),
+        (Err(_), Declaration::Http { url }) => managed_refusal(managed, Server::Remote(url)),
     }
 }
 
@@ -887,21 +1119,31 @@ fn package(arguments: &[String], ecosystem: Ecosystem) -> Result<Option<String>,
 }
 
 /// Start every planned server, and wait for their handshakes until [`HANDSHAKE`] has passed.
+///
+/// A remote server whose handshake was redirected off its declaration is not started, and is in
+/// `hops` for the person to be asked about.
 fn start(
     plans: Vec<(String, Plan)>,
     home: &Home,
     diagnostics: Stream,
     notes: &mut Vec<String>,
+    hops: &mut Vec<Hop>,
 ) -> Vec<bravebot_agent::mcp::Reached> {
     if plans.is_empty() {
         return Vec::new();
     }
-    let (sender, received) = mpsc::channel::<(String, McpResult<bravebot_agent::mcp::Reached>)>();
+    let (sender, received) =
+        mpsc::channel::<(String, McpResult<bravebot_agent::mcp::Reached>, Option<Hop>)>();
     let mut waiting: Vec<String> = Vec::new();
     let sandbox = plans
         .iter()
         .any(|(_, plan)| matches!(plan, Plan::Stdio { .. }))
         .then(bravebot_sandbox::for_current_platform);
+    // A declaration's file can be edited by hand, so `add` keeping reads out of here is not enough.
+    let state = home
+        .directory
+        .as_deref()
+        .map(|state| state.canonicalize().unwrap_or_else(|_| state.to_path_buf()));
 
     for (alias, plan) in plans {
         let sender = sender.clone();
@@ -911,9 +1153,11 @@ fn start(
                 arguments,
                 variables,
                 searched,
+                mut reads,
                 directory,
                 declared,
             } => {
+                reads.retain(|file| state.as_ref().is_none_or(|state| !file.starts_with(state)));
                 let sandbox = match &sandbox {
                     Some(Ok(sandbox)) => sandbox,
                     Some(Err(error)) => {
@@ -945,7 +1189,7 @@ fn start(
                     }
                 };
                 let Some(policy) =
-                    confinement_here(&program, &searched, directory.as_deref(), &own)
+                    confinement_here(&program, &searched, &reads, directory.as_deref(), &own)
                 else {
                     notes.push(t!(servers_no_confinement_here, alias = alias).to_string());
                     continue;
@@ -983,14 +1227,20 @@ fn start(
                             Some(throwaway) => reached.holding(throwaway),
                             None => reached,
                         });
-                    let _ = sender.send((alias, outcome));
+                    let _ = sender.send((alias, outcome, None));
                 });
             }
             Plan::Http { url, declared } => {
                 waiting.push(alias.clone());
                 std::thread::spawn(move || {
-                    let outcome = handshake_remote(&alias, url, declared);
-                    let _ = sender.send((alias, outcome));
+                    let (outcome, hop) = handshake_remote(&alias, url.clone(), declared);
+                    let hop = hop.map(|destination| Hop {
+                        alias: alias.clone(),
+                        url,
+                        declared,
+                        destination,
+                    });
+                    let _ = sender.send((alias, outcome, hop));
                 });
             }
         }
@@ -1000,15 +1250,16 @@ fn start(
     let deadline = Instant::now() + HANDSHAKE;
     let mut started = Vec::new();
     while !waiting.is_empty() {
-        let Ok((alias, outcome)) =
+        let Ok((alias, outcome, hop)) =
             received.recv_timeout(deadline.saturating_duration_since(Instant::now()))
         else {
             break;
         };
         waiting.retain(|waited| *waited != alias);
-        match outcome {
-            Ok(server) => started.push(server),
-            Err(error) => notes.push(
+        match (outcome, hop) {
+            (Ok(server), _) => started.push(server),
+            (Err(_), Some(hop)) => hops.push(hop),
+            (Err(error), None) => notes.push(
                 t!(
                     servers_no_handshake,
                     alias = alias,
@@ -1047,7 +1298,8 @@ fn handshake_local(
     ))
 }
 
-/// A remote server's handshake, through the one egress gate every request passes.
+/// A remote server's handshake, through the one egress gate every request passes, with where it
+/// was redirected where a hop off its declaration is what refused it.
 ///
 /// Under a policy holding the fetch capability and the grant naming this server, and no other:
 /// the handshake is a request to one declared destination, and a hop off it is refused.
@@ -1055,11 +1307,14 @@ fn handshake_remote(
     alias: &str,
     url: String,
     declared: Digest,
-) -> McpResult<bravebot_agent::mcp::Reached> {
+) -> (
+    McpResult<bravebot_agent::mcp::Reached>,
+    Option<Labelled<String>>,
+) {
     let mut sink = RecordingSink::new();
     let mut routing = Routing::new();
     routing.insert_trusted("server", alias);
-    let mut policy = Policy::begin(
+    let mut policy = match Policy::begin(
         routing,
         ReleasePlan::new(),
         CapabilitySet::from_iter([
@@ -1067,12 +1322,29 @@ fn handshake_remote(
             Capability::McpCall(ServerAlias::new(alias)),
         ]),
         &mut sink,
-    )
-    .map_err(McpError::Denied)?;
+    ) {
+        Ok(policy) => policy,
+        Err(denial) => return (Err(McpError::Denied(denial)), None),
+    };
     let egress = bravebot_net::Egress::new();
+    let reached = handshake_at(&mut policy, &egress, alias, url, declared);
+    let hop = match &reached {
+        Err(McpError::Denied(_)) => policy.take_server_hop(),
+        _ => None,
+    };
+    (reached, hop)
+}
+
+fn handshake_at(
+    policy: &mut Policy<'_, RecordingSink>,
+    egress: &bravebot_net::Egress,
+    alias: &str,
+    url: String,
+    declared: Digest,
+) -> McpResult<bravebot_agent::mcp::Reached> {
     let mut server = HttpServer::new(alias, url);
-    server.initialize(&mut policy, &egress, "bravebot", env!("CARGO_PKG_VERSION"))?;
-    let listing = bravebot_mcp::listed_or_none(alias, server.list_tools(&mut policy, &egress))?;
+    server.initialize(policy, egress, "bravebot", env!("CARGO_PKG_VERSION"))?;
+    let listing = bravebot_mcp::listed_or_none(alias, server.list_tools(policy, egress))?;
     Ok(bravebot_agent::mcp::Reached::new(
         Connection::Http(server),
         listing,
@@ -1094,6 +1366,7 @@ fn temporary_directory() -> PathBuf {
 fn confinement_here(
     program: &Path,
     searched: &[PathBuf],
+    reads: &[PathBuf],
     directory: Option<&Path>,
     own: &Path,
 ) -> Option<SandboxPolicy> {
@@ -1101,6 +1374,7 @@ fn confinement_here(
         Prelude::current(),
         program,
         searched,
+        reads,
         directory,
         own,
         &temporary_directory(),
@@ -1152,13 +1426,17 @@ fn at_home(variables: Variables, own: &Path) -> Variables {
 /// it, since `~/.cargo` holds a registry token beside `~/.cargo/bin`. The program's own `bin`
 /// directory is the exception where it sits deeper in the home than that, as `nvm` installs one,
 /// since that parent is the installation the program came from. `own` is the server's own
-/// directory, which it may read and write. The declared directory may be written too, and is where
-/// it starts; without one it starts in the temporary directory, and reads nothing of the workspace.
+/// directory, which it may read and write. `reads` are the files the declaration says it may read,
+/// each granted as the one file it is while it is one at the path recorded, and never the directory
+/// it is in. The
+/// declared directory may be written too, and is where it starts; without one it starts in the
+/// temporary directory, and reads nothing of the workspace.
 #[allow(clippy::too_many_arguments)]
 fn confinement(
     prelude: Option<Prelude>,
     program: &Path,
     searched: &[PathBuf],
+    reads: &[PathBuf],
     directory: Option<&Path>,
     own: &Path,
     temporary: &Path,
@@ -1206,6 +1484,14 @@ fn confinement(
         }
         policy = policy.allow_read(directory);
     }
+    // A recorded read is resolved already, so one that resolves elsewhere now is a file replaced by
+    // a link since it was shown, or reached through a directory that was, and not the file shown.
+    for file in reads {
+        let resolved = file.canonicalize().is_ok_and(|resolved| &resolved == file);
+        if resolved && file.is_file() {
+            policy = policy.allow_read(file);
+        }
+    }
     Some(match directory {
         Some(directory) => {
             let directory = canonical(directory);
@@ -1221,6 +1507,8 @@ fn confinement(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bravebot_agent::mcp::entry;
+    use bravebot_config::Rule;
 
     /// A state directory of its own under the build directory, emptied first.
     fn scratch(name: &str) -> PathBuf {
@@ -2042,6 +2330,7 @@ mod tests {
                 home.clone(),
                 root.clone(),
             ],
+            &[],
             Some(&work),
             &kept,
             &temporary,
@@ -2079,6 +2368,7 @@ mod tests {
             Some(Prelude::MacOs),
             &program,
             &[],
+            &[],
             None,
             &kept,
             &temporary,
@@ -2086,7 +2376,19 @@ mod tests {
         )
         .expect("a policy");
         assert_eq!(undirected.starting_in.as_deref(), Some(temporary.as_path()));
-        assert!(confinement(None, &program, &[], None, &kept, &temporary, Some(&home)).is_none());
+        assert!(
+            confinement(
+                None,
+                &program,
+                &[],
+                &[],
+                None,
+                &kept,
+                &temporary,
+                Some(&home)
+            )
+            .is_none()
+        );
     }
 
     /// `/tmp` is a link to `/private/tmp` on macOS, and a home under it was named as given while
@@ -2105,6 +2407,7 @@ mod tests {
             Some(Prelude::MacOs),
             &program,
             &[linked.join(".cargo/bin"), linked.clone()],
+            &[],
             None,
             &root.join("kept"),
             &root.join("tmp"),
@@ -2129,8 +2432,14 @@ mod tests {
         let own = profile.join(".cargo").join("bin");
 
         let kept = scratch("cli-servers-kept-here");
-        let policy = confinement_here(&own.join("server"), std::slice::from_ref(&own), None, &kept)
-            .expect("a policy");
+        let policy = confinement_here(
+            &own.join("server"),
+            std::slice::from_ref(&own),
+            &[],
+            None,
+            &kept,
+        )
+        .expect("a policy");
 
         let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         assert!(
@@ -2157,6 +2466,7 @@ mod tests {
             Some(Prelude::MacOs),
             &program,
             &[node.join("bin")],
+            &[],
             None,
             &root.join("kept"),
             &root.join("tmp"),
@@ -2175,6 +2485,99 @@ mod tests {
         );
         assert!(!reads(&policy, &home.join(".nvm")));
         assert!(!reads(&policy, &home));
+    }
+
+    /// SERVERS-10: a file the declaration says it may read is granted as that one file while it is
+    /// one, and read-only: never the directory it is in, and nothing where the path is a directory,
+    /// is missing, is a link, or is reached through one, which is not the file that was shown.
+    #[cfg(unix)]
+    #[test]
+    fn a_declared_read_grants_the_one_file_and_nothing_beside_it() {
+        // Resolved, as `add` records a read.
+        let root = scratch("cli-servers-reads")
+            .canonicalize()
+            .expect("the scratch directory resolves");
+        let home = root.join("home");
+        let keys = home.join("keys");
+        std::fs::create_dir_all(&keys).expect("keys");
+        let key = keys.join("brave-api-key");
+        std::fs::write(&key, "k").expect("the key");
+        let linked = keys.join("linked");
+        std::os::unix::fs::symlink(&key, &linked).expect("link the key");
+        let through = home.join("linked-keys");
+        std::os::unix::fs::symlink(&keys, &through).expect("link the keys directory");
+        let program = installed(&root.join("opt/bin"), "npx");
+
+        let policy = confinement(
+            Some(Prelude::MacOs),
+            &program,
+            &[],
+            &[
+                key.clone(),
+                keys.clone(),
+                keys.join("missing"),
+                linked.clone(),
+                through.join("brave-api-key"),
+            ],
+            None,
+            &root.join("kept"),
+            &root.join("tmp"),
+            Some(&home),
+        )
+        .expect("a policy");
+
+        assert!(reads(&policy, &key));
+        assert!(!writes(&policy, &key));
+        let in_home: Vec<&PathBuf> = policy
+            .readable
+            .iter()
+            .filter(|row| row.starts_with(&home))
+            .collect();
+        assert_eq!(in_home, [&key], "more of the home directory was granted");
+    }
+
+    /// SERVERS-10: a stored value reaches the server as the declaration holds it, and this
+    /// process's environment is read only for the names it declares. A stored `PATH` is the one a
+    /// bare name is looked for in.
+    #[test]
+    fn a_stored_value_is_handed_to_the_server_and_the_environment_is_not_read_for_it() {
+        let root = scratch("cli-servers-stored");
+        let bin = root.join("bin");
+        let program = installed(&bin, "weather-mcp");
+        let env = [
+            ("PATH".to_string(), bin.to_str().unwrap().to_string()),
+            ("WEATHER_TOKEN".to_string(), "stored".to_string()),
+        ]
+        .into();
+        let declaration = Declaration::stdio(words(&["weather-mcp"]), words(&["REGION"]), None)
+            .and_then(|declaration| declaration.storing(env))
+            .expect("a declaration");
+        let asked = std::cell::RefCell::new(Vec::new());
+        let environment = |name: &str| {
+            asked.borrow_mut().push(name.to_string());
+            Some(OsString::from(format!("from {name}")))
+        };
+
+        let Ok(Plan::Stdio {
+            program: found,
+            variables,
+            searched,
+            ..
+        }) = planned(&declaration, &environment)
+        else {
+            panic!("no local plan");
+        };
+
+        assert_eq!(found, program);
+        assert_eq!(searched, std::slice::from_ref(&bin));
+        assert_eq!(
+            variables,
+            Variables::new()
+                .with("REGION", "from REGION")
+                .with("PATH", &bin)
+                .with("WEATHER_TOKEN", "stored")
+        );
+        assert_eq!(asked.into_inner(), ["REGION"]);
     }
 
     fn digested(argv: &[&str]) -> Digest {
@@ -2294,6 +2697,7 @@ done
             arguments: Vec::new(),
             variables: Variables::new(),
             searched: Vec::new(),
+            reads: Vec::new(),
             directory: Some(work.to_path_buf()),
             declared: digested(&["weather-mcp"]),
         };
@@ -2302,6 +2706,7 @@ done
             home,
             Stream::Null,
             notes,
+            &mut Vec::new(),
         ))
     }
 
@@ -2363,5 +2768,377 @@ done
         assert_eq!(std::fs::read_dir(&state).expect("state").count(), 0);
         drop(started);
         assert!(!own.exists(), "{} outlived its server", own.display());
+    }
+
+    /// A server at a port of its own answering each request with `answer`, and every body it was
+    /// sent.
+    fn serving(answer: fn(&str, &str) -> String, to: String) -> (String, mpsc::Receiver<String>) {
+        use std::io::Read;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            while let Ok((mut stream, _)) = listener.accept() {
+                let mut reader = std::io::BufReader::new(stream.try_clone().expect("clone"));
+                let mut length = 0;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some((name, value)) = line.split_once(':')
+                        && name.eq_ignore_ascii_case("content-length")
+                    {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut body = vec![0; length];
+                let _ = reader.read_exact(&mut body);
+                let body = String::from_utf8_lossy(&body).into_owned();
+                let _ = sender.send(body.clone());
+                let _ = stream.write_all(answer(&body, &to).as_bytes());
+                let _ = stream.flush();
+            }
+        });
+        (format!("http://127.0.0.1:{port}/mcp"), receiver)
+    }
+
+    /// The weather server's reply to `body`, which names its method and, where it wants an
+    /// answer, its numeric id.
+    fn weather(body: &str, _: &str) -> String {
+        let id: String = body
+            .split_once(r#""id":"#)
+            .map(|(_, rest)| rest.chars().take_while(char::is_ascii_digit).collect())
+            .unwrap_or_else(|| "null".to_string());
+        let result = if body.contains(r#""initialize""#) {
+            r#"{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"weather","version":"1"}}"#
+        } else if body.contains(r#""tools/list""#) {
+            r#"{"tools":[{"name":"get_forecast","description":"the forecast","inputSchema":{"type":"object"}}]}"#
+        } else {
+            "{}"
+        };
+        let reply = format!(r#"{{"jsonrpc":"2.0","id":{id},"result":{result}}}"#);
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+            reply.len()
+        )
+    }
+
+    /// A redirect of every request to `to`, which is what a server that moved answers and what a
+    /// server sending its traffic somewhere else answers too (SERVERS-11).
+    fn redirecting(_: &str, to: &str) -> String {
+        format!(
+            "HTTP/1.1 307 Temporary Redirect\r\nLocation: {to}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )
+    }
+
+    /// A weather server declared and approved at a url that redirects its handshake to a second
+    /// one, and what that second one is sent.
+    struct Redirected {
+        home: PathBuf,
+        project: PathBuf,
+        declared: Declaration,
+        declared_url: String,
+        moved_to: String,
+        first: mpsc::Receiver<String>,
+        second: mpsc::Receiver<String>,
+    }
+
+    fn redirected(name: &str) -> Redirected {
+        let root = scratch(name);
+        let home = root.join("home");
+        let project = root.join("project");
+        std::fs::create_dir_all(&home).expect("home");
+        std::fs::create_dir_all(project.join(".bravebot")).expect("project");
+        let (moved_to, second) = serving(weather, String::new());
+        let (declared_url, first) = serving(redirecting, moved_to.clone());
+        let declared = Declaration::http(declared_url.clone()).expect("declaration");
+        let mut declarations = Declarations::default();
+        declarations.insert("weather", &declared);
+        std::fs::write(mcp::declarations_file(&home), declarations.to_text()).expect("mcp.json");
+        let mut approvals = Approvals::default();
+        approvals.approve("weather", declared.digest());
+        std::fs::write(mcp::approvals_file(&home), approvals.to_text()).expect("mcp-approved");
+        Redirected {
+            home,
+            project,
+            declared,
+            declared_url,
+            moved_to,
+            first,
+            second,
+        }
+    }
+
+    /// Reach the redirected server with `typed` at the terminal, and what was drawn there.
+    fn reached_redirected(
+        redirected: &Redirected,
+        asking: Asking,
+        present: bool,
+        writable: bool,
+        typed: &str,
+    ) -> (Reached, String) {
+        let requested = vec![(
+            redirected.project.join(".bravebot/settings.json"),
+            "weather".to_string(),
+        )];
+        let home = Home {
+            directory: Some(redirected.home.clone()),
+            writable,
+        };
+        let mut person = Person {
+            answers: typed.as_bytes(),
+            screen: Vec::new(),
+            present,
+        };
+        let reached = reach(
+            &requested,
+            &redirected.project,
+            &home,
+            &Managed::at(&managed_beside(&redirected.home)),
+            asking,
+            &mut person,
+            Stream::Null,
+        );
+        (reached, String::from_utf8(person.screen).expect("screen"))
+    }
+
+    fn declared_in(home: &Path) -> Declaration {
+        Declarations::read(home)
+            .expect("mcp.json")
+            .get("weather")
+            .expect("weather is declared")
+            .declaration
+            .expect("a declaration")
+    }
+
+    /// SERVERS-11: a handshake redirected off the declaration is put to the person with where it
+    /// points and what that reaches, and a yes starts the server there, rewrites its declaration
+    /// and approves it in the same write.
+    #[test]
+    fn a_handshake_redirected_off_its_declaration_is_moved_on_a_yes() {
+        let redirected = redirected("cli-servers-move-yes");
+
+        let (reached, screen) = reached_redirected(&redirected, Asking::Person, true, true, "y\n");
+
+        assert_eq!(reached.aliases(), vec!["weather"], "{:?}", reached.notes);
+        assert_eq!(
+            reached.notes,
+            vec![t!(mcp_move_moved, alias = "weather").to_string()]
+        );
+        let authority = redirected
+            .moved_to
+            .trim_start_matches("http://")
+            .trim_end_matches("/mcp");
+        for drawn in [
+            t!(
+                mcp_move_declared,
+                alias = "weather",
+                url = redirected.declared_url.as_str()
+            ),
+            t!(mcp_move_destination, url = redirected.moved_to.as_str()),
+            t!(mcp_move_reaching, authority = authority),
+            t!(mcp_move_title).to_string(),
+        ] {
+            assert!(
+                screen.contains(drawn.as_str()),
+                "{drawn} is not drawn in {screen}"
+            );
+        }
+        assert!(!screen.contains(t!(mcp_move_this_session_only)));
+        let second: Vec<String> = redirected.second.try_iter().collect();
+        assert!(
+            second
+                .first()
+                .is_some_and(|body| body.contains(r#""initialize""#)),
+            "the server was not started where it moved: {second:?}"
+        );
+        let now = Declaration::http(redirected.moved_to.clone()).expect("moved");
+        assert_eq!(declared_in(&redirected.home), now);
+        let approvals = Approvals::read(&redirected.home);
+        assert!(approvals.approves(&now.digest()));
+        assert!(!approvals.approves(&redirected.declared.digest()));
+    }
+
+    /// SERVERS-11: a no starts nothing, sends nothing where the reply pointed and rewrites
+    /// nothing.
+    #[test]
+    fn a_handshake_redirected_off_its_declaration_starts_nothing_on_a_no() {
+        let redirected = redirected("cli-servers-move-no");
+        let approved =
+            std::fs::read_to_string(mcp::approvals_file(&redirected.home)).expect("approvals");
+
+        let (reached, screen) = reached_redirected(&redirected, Asking::Person, true, true, "n\n");
+
+        assert!(screen.contains(t!(mcp_move_title)), "{screen}");
+        assert!(reached.aliases().is_empty());
+        assert_eq!(
+            reached.notes,
+            vec![t!(mcp_move_not_started, alias = "weather").to_string()]
+        );
+        assert!(redirected.second.try_iter().next().is_none());
+        assert_eq!(declared_in(&redirected.home), redirected.declared);
+        assert_eq!(
+            std::fs::read_to_string(mcp::approvals_file(&redirected.home)).expect("approvals"),
+            approved
+        );
+    }
+
+    /// SERVERS-13: bypassing every check refuses the move unasked, as a one-shot run and a session
+    /// with nobody at the terminal do.
+    #[test]
+    fn a_redirected_handshake_nobody_is_asked_about_starts_nothing() {
+        for (asking, present) in [
+            (Asking::Bypass, true),
+            (Asking::OneShot, true),
+            (Asking::Person, false),
+        ] {
+            let redirected = redirected("cli-servers-move-unasked");
+
+            let (reached, screen) = reached_redirected(&redirected, asking, present, true, "y\n");
+
+            assert_eq!(screen, "", "{asking:?} asked");
+            assert!(reached.aliases().is_empty(), "{asking:?}");
+            assert_eq!(
+                reached.notes,
+                vec![t!(mcp_move_not_started, alias = "weather").to_string()],
+                "{asking:?}"
+            );
+            assert_eq!(
+                redirected.first.try_iter().count(),
+                1,
+                "{asking:?}: the handshake was not tried where it is declared"
+            );
+            assert!(
+                redirected.second.try_iter().next().is_none(),
+                "{asking:?} sent something where the reply pointed"
+            );
+            assert_eq!(
+                declared_in(&redirected.home),
+                redirected.declared,
+                "{asking:?}"
+            );
+        }
+    }
+
+    /// SERVERS-11: a project a person said to use every server in answers for what the checkout
+    /// requests and not for where a server went, so the move is still asked, and a yes approves
+    /// where it moved in `mcp-approved` rather than leaving it to the project.
+    #[test]
+    fn a_project_that_answers_for_its_servers_does_not_answer_a_move() {
+        let redirected = redirected("cli-servers-move-project");
+        std::fs::remove_file(mcp::approvals_file(&redirected.home)).expect("unapproved");
+        let mut projects = Projects::default();
+        projects.add(&redirected.project);
+        std::fs::write(mcp::projects_file(&redirected.home), projects.to_text()).expect("project");
+
+        let (reached, screen) = reached_redirected(&redirected, Asking::Person, true, true, "y\n");
+
+        assert!(screen.contains(t!(mcp_move_title)), "{screen}");
+        assert_eq!(reached.aliases(), vec!["weather"], "{:?}", reached.notes);
+        let now = Declaration::http(redirected.moved_to.clone()).expect("moved");
+        assert_eq!(declared_in(&redirected.home), now);
+        assert!(Approvals::read(&redirected.home).approves(&now.digest()));
+    }
+
+    /// A session that writes nothing says so on the prompt, and a yes starts the server where it
+    /// moved for the session only.
+    #[test]
+    fn a_move_in_a_session_that_writes_nothing_is_for_the_session() {
+        let redirected = redirected("cli-servers-move-unwritable");
+
+        let (reached, screen) = reached_redirected(&redirected, Asking::Person, true, false, "y\n");
+
+        assert!(screen.contains(t!(mcp_move_this_session_only)), "{screen}");
+        assert_eq!(reached.aliases(), vec!["weather"], "{:?}", reached.notes);
+        assert_eq!(
+            reached.notes,
+            vec![t!(mcp_move_moved, alias = "weather").to_string()]
+        );
+        assert_eq!(declared_in(&redirected.home), redirected.declared);
+    }
+
+    /// SERVERS-10: a started server reads the files its declaration says it may, a key file a
+    /// stored value names and one an argument names, and nothing beside them. It exits before it
+    /// answers where it cannot read either. A read in the state directory, which only a hand edit
+    /// of the file can declare, is not granted.
+    #[cfg(unix)]
+    #[test]
+    fn a_started_server_reads_the_files_it_was_declared_to_and_nothing_beside_them() {
+        let root = scratch("cli-servers-started-reads")
+            .canonicalize()
+            .expect("the scratch directory resolves");
+        if Prelude::current().is_none() || bravebot_sandbox::for_current_platform().is_err() {
+            eprintln!("SKIPPED (no confinement here)");
+            return;
+        }
+        let keys = root.join("keys");
+        std::fs::create_dir_all(&keys).expect("keys");
+        let key = keys.join("brave-api-key");
+        std::fs::write(&key, "the key").expect("the key");
+        std::fs::write(keys.join("beside"), "not granted").expect("a file beside it");
+        let argument = root.join("argument");
+        std::fs::write(&argument, "the argument").expect("the argument");
+        // Not in a `bin` directory, which would bring its parent and every file above.
+        let program = installed(&root.join("server"), "weather-mcp");
+        let (_, answering) = HOME_WRITING_SERVER
+            .split_once("while ")
+            .expect("the server answers in a loop");
+        let reading = [
+            "#!/bin/sh",
+            r#"cat "$KEY_FILE" > key-was || exit 1"#,
+            r#"cat "$1" > argument-was || exit 1"#,
+            r#"if cat "${KEY_FILE%/*}/beside" > /dev/null 2>&1; then touch beside-read; fi"#,
+            r#"if cat "$STATE_FILE" > /dev/null 2>&1; then touch state-read; fi"#,
+        ];
+        std::fs::write(
+            &program,
+            format!("{}\nwhile {answering}", reading.join("\n")),
+        )
+        .expect("write the server");
+        let work = root.join("work");
+        std::fs::create_dir_all(&work).expect("work");
+        let state = root.join("state");
+        std::fs::create_dir_all(&state).expect("state");
+        let approvals = state.join("mcp-approvals.json");
+        std::fs::write(&approvals, "{}").expect("a file in the state directory");
+        let home = Home {
+            directory: Some(state),
+            writable: true,
+        };
+        let plan = Plan::Stdio {
+            program,
+            arguments: vec![argument.to_str().unwrap().to_string()],
+            variables: Variables::new()
+                .with("KEY_FILE", &key)
+                .with("STATE_FILE", &approvals),
+            searched: Vec::new(),
+            reads: vec![key.clone(), argument.clone(), approvals.clone()],
+            directory: Some(work.clone()),
+            declared: digested(&["weather-mcp"]),
+        };
+        let mut notes = Vec::new();
+
+        let started = start(
+            vec![("weather".to_string(), plan)],
+            &home,
+            Stream::Null,
+            &mut notes,
+            &mut Vec::new(),
+        );
+
+        assert_eq!(notes, Vec::<String>::new());
+        assert_eq!(started.len(), 1);
+        let read = |name: &str| std::fs::read_to_string(work.join(name)).expect("what it read");
+        assert_eq!(read("key-was"), "the key");
+        assert_eq!(read("argument-was"), "the argument");
+        assert!(
+            !work.join("beside-read").exists(),
+            "the server read a file beside the one it was granted"
+        );
+        assert!(
+            !work.join("state-read").exists(),
+            "the server read a file in the state directory"
+        );
     }
 }

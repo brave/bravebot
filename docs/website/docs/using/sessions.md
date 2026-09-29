@@ -342,7 +342,7 @@ inside a round, so a call is never separated from its results.
 bravebot --incognito
 ```
 
-An incognito session runs like any other and adds nothing to `~/.bravebot`, apart from the one file
+An incognito session runs like any other and adds nothing to `~/.bravebot`, apart from the two files
 [below](#what-it-does-not-cover). No prompt reaches the history, no session record and no title are
 written, no audit trail is kept, and a model, theme or effort level chosen inside it applies for
 that session without being recorded. The sessions directory is not created either, since an empty
@@ -373,7 +373,7 @@ bare invocation alike. It cannot be turned off once the session has started.
 
 ### What it does not cover
 
-Six things still reach the filesystem:
+Seven things still reach the filesystem:
 
 - **Your project.** `write_file` and `edit_file` go on editing it. Those edits are the work rather
   than a trace of it.
@@ -400,6 +400,11 @@ Six things still reach the filesystem:
   fetched for the same subscription and written to the same file, rather than thrown away when you
   exit. What ends up in the file is credentials for a subscription you imported before the session
   and which of them are spent, and nothing about the project or what you asked.
+- **A memory left untrusted.** Where the session writes something nobody vouched for into a
+  [delegate definition's memory](../customize/agents.md#memory),
+  the path is recorded under `~/.bravebot/untrusted`, so that your next session does not read it as
+  trusted. The record names the file and nothing else, though that does say you worked in the
+  project.
 
 [`import-leo-creds`](../customize/premium.md) is refused rather than quietly skipped, since a
 credential that did not outlive the session would not be an import. `--forget` still works, because

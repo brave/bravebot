@@ -26,7 +26,7 @@
 //! same single-use endorsements, so a person sees the path and the diff whoever proposed them.
 //! What a delegate saves is context, never approval.
 
-use crate::capability::{Capability, CapabilitySet};
+use crate::capability::{Capability, CapabilitySet, ServerAlias};
 
 /// A kind of delegate: what it may hold, and how long it may go on.
 ///
@@ -113,11 +113,12 @@ impl Kind {
         }
     }
 
-    /// Whether this kind holds every MCP server its parent holds.
+    /// Whether this kind may hold the MCP servers its parent holds.
     ///
     /// A worker only. What a server's tool does is the server's to say, so a call to one may write
     /// or run anything, and a worker is the one kind already let write and run. No kind names a
-    /// server, since which servers a session reached is not known until it starts.
+    /// server, since which servers a session reached is not known until it starts; a definition
+    /// may name which of them its worker keeps.
     pub fn holds_servers(self) -> bool {
         matches!(self, Self::Worker)
     }
@@ -231,13 +232,14 @@ pub fn gating_capability(tool: &str) -> Option<Capability> {
 /// delegate is offered reaches the first, so what a definition narrows is what remains.
 const HELD_WHATEVER_IT_NAMED: [Capability; 2] = [Capability::WebFetch, Capability::FileRead];
 
-/// The tools a replacement is confined to: its own `tools:` line met with the one it replaced.
+/// What a replacement is confined to: its own `tools:` line, or the servers it selects, met with
+/// the one it replaced.
 ///
-/// `None` means the kind's whole set, so it is the wider of the two and loses to any list at all,
+/// `None` means everything, so it is the wider of the two and loses to any list at all,
 /// including to an empty one. Two lists meet name by name in the replacement's order, so a
 /// replacement written for another agent, whose names are that agent's vocabulary, comes out with
 /// nothing in common rather than with either side's list.
-fn meet_tools(asked: Option<&[String]>, replaced: Option<&[String]>) -> Option<Vec<String>> {
+fn meet(asked: Option<&[String]>, replaced: Option<&[String]>) -> Option<Vec<String>> {
     match (asked, replaced) {
         (None, None) => None,
         (Some(only), None) | (None, Some(only)) => Some(only.to_vec()),
@@ -292,11 +294,23 @@ pub struct Definition {
     /// turn did not find selects nothing: a skill is guidance a planner may load, and a list of
     /// them chooses what a delegate is told about rather than anything it may do.
     skills: Option<Vec<String>>,
+    /// The MCP servers the definition asked to call, where it asked for any.
+    ///
+    /// `None` is every server the parent holds, unless a `tools:` line was written, which names
+    /// no server's tool. `Some` selects out of the parent's by alias, so a name the parent holds
+    /// no grant for selects nothing, and a kind holding no server holds none whatever this says.
+    servers: Option<Vec<String>>,
     /// The rounds the definition asked for, where it asked for a number.
     ///
     /// `None` is the kind's own bound. Held to the kind's ceiling where it is read rather than
     /// where it is set, so a replacement loaded as a narrower kind is held to that kind's.
     rounds: Option<usize>,
+    /// Whether a run under it keeps a memory, a file in the working directory named after it.
+    ///
+    /// Set only for a name a path segment can be made of, which is decided where the file is read.
+    /// Taken over with the body by a later definition of the same name, since a memory changes
+    /// what a run knows and never what it may do.
+    memory: bool,
     /// The standing part of what a delegate of this name is told about itself.
     ///
     /// Empty where the file had no body. Carried rather than read: the kernel never branches on
@@ -317,7 +331,9 @@ impl Definition {
             model: None,
             tools: None,
             skills: None,
+            servers: None,
             rounds: None,
+            memory: false,
             prompt: String::new(),
             origin: "built-in".to_string(),
         }
@@ -339,7 +355,9 @@ impl Definition {
             model: None,
             tools,
             skills: None,
+            servers: None,
             rounds: None,
+            memory: false,
             prompt: prompt.into(),
             origin: origin.into(),
         }
@@ -387,6 +405,17 @@ impl Definition {
         self
     }
 
+    /// The MCP servers it asked to call, before its kind and the parent's grants narrow them.
+    pub fn servers(&self) -> Option<&[String]> {
+        self.servers.as_deref()
+    }
+
+    /// Let this delegate call only the servers of these aliases that its parent holds.
+    pub fn with_servers(mut self, servers: Vec<String>) -> Self {
+        self.servers = Some(servers);
+        self
+    }
+
     /// How many rounds its delegate may make: the number it asked for held to its kind's
     /// ceiling, or its kind's own where it asked for none.
     pub fn rounds(&self) -> usize {
@@ -405,6 +434,17 @@ impl Definition {
     /// Ask for this many rounds, which its kind's ceiling still holds.
     pub fn with_rounds(mut self, rounds: usize) -> Self {
         self.rounds = Some(rounds);
+        self
+    }
+
+    /// Whether a run under it keeps a memory.
+    pub fn keeps_memory(&self) -> bool {
+        self.memory
+    }
+
+    /// Keep a memory for runs under it. The caller has held the name to a slug.
+    pub fn with_memory(mut self) -> Self {
+        self.memory = true;
         self
     }
 
@@ -442,29 +482,70 @@ impl Definition {
             .collect()
     }
 
-    /// Whether a run of this definition holds the MCP servers of the run it is carved from.
+    /// The servers this definition selects, or `None` for every one its parent holds.
     ///
-    /// Where its kind does and it named no tools. A `tools:` line names this program's tools and
-    /// no server's, so a definition that wrote one asked for none of them.
-    pub fn holds_servers(&self) -> bool {
-        self.kind.holds_servers() && self.tools.is_none()
+    /// An `mcpServers:` line where it wrote one. Otherwise a `tools:` line selects none, since it
+    /// names this program's tools and no server's, so a definition that wrote one asked for none.
+    fn servers_named(&self) -> Option<&[String]> {
+        match (self.servers.as_deref(), self.tools.as_deref()) {
+            (Some(named), _) => Some(named),
+            (None, Some(_)) => Some(&[]),
+            (None, None) => None,
+        }
+    }
+
+    /// Whether a run of this definition holds the grant for this server, where its parent does.
+    ///
+    /// Where its kind holds servers and the definition selects this one. The alias is compared as
+    /// written, which is the one comparison a definition's words take part in, and they may:
+    /// the file came from a source somebody vouched for.
+    pub fn holds_server(&self, alias: &ServerAlias) -> bool {
+        self.kind.holds_servers()
+            && self
+                .servers_named()
+                .is_none_or(|named| named.iter().any(|name| name == alias.as_str()))
     }
 
     /// What a run of this definition holds out of `parent`, the set of the run it is carved from.
     ///
     /// What [`Definition::capabilities`] asks for that `parent` holds, and every server `parent`
-    /// holds where [`Definition::holds_servers`]. Only ever a part of `parent`, so a definition
+    /// holds that [`Definition::holds_server`]. Only ever a part of `parent`, so a definition
     /// takes away and never adds, and a server nobody put to the person for the parent is one
-    /// this run cannot hold either.
+    /// this run cannot hold either, whatever its definition named.
     pub fn held_out_of(&self, parent: &CapabilitySet) -> CapabilitySet {
         let wanted = self.capabilities();
-        let servers = self.holds_servers();
         parent
             .iter()
             .filter(|capability| match capability {
-                Capability::McpCall(_) => servers,
+                Capability::McpCall(alias) => self.holds_server(alias),
                 other => wanted.contains(other),
             })
+            .collect()
+    }
+
+    /// The servers it named where its kind calls none, for the trail to say what was dropped.
+    pub fn servers_beyond_its_kind(&self) -> &[String] {
+        match self.servers.as_deref() {
+            Some(named) if !self.kind.holds_servers() => named,
+            _ => &[],
+        }
+    }
+
+    /// The servers it named that `parent` holds no grant for, for the trail to say what was
+    /// dropped.
+    ///
+    /// A name here is a server this session did not reach or one somebody's narrowing already
+    /// took from the parent, and the run holds neither: a definition selects out of its parent's
+    /// grants and cannot put a new one to anybody.
+    pub fn servers_not_held(&self, parent: &CapabilitySet) -> Vec<&str> {
+        if !self.kind.holds_servers() {
+            return Vec::new();
+        }
+        self.servers
+            .iter()
+            .flatten()
+            .filter(|name| !parent.contains(&Capability::McpCall(ServerAlias::new(name.as_str()))))
+            .map(String::as_str)
             .collect()
     }
 
@@ -506,7 +587,7 @@ pub enum Admitted {
 /// What a replacement asked for and did not get, for whoever wrote it to be told.
 ///
 /// The words are the loader's: this is the kernel, and what it has to hand over is which of the
-/// two axes moved rather than a sentence about it. [`Admitted::Narrowed`] is answered only where
+/// three axes moved rather than a sentence about it. [`Admitted::Narrowed`] is answered only where
 /// one of them did, so a value of this always has something to say.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Narrowing {
@@ -519,6 +600,11 @@ pub struct Narrowing {
     /// `None` where its own `tools:` line stands, which includes the case of neither file
     /// naming one. An empty list is the two lists having no name in common.
     pub confined_to: Option<Vec<String>>,
+    /// The MCP servers it is confined to, where the one it replaced selected fewer than it did.
+    ///
+    /// `None` where what it selected stands, and wherever it is loaded as a kind that calls no
+    /// server, since the kind has already said that. An empty list is no server at all.
+    pub servers_confined_to: Option<Vec<String>>,
     /// Where the definition that cut it down came from.
     pub replaced: String,
 }
@@ -555,27 +641,31 @@ impl Definitions {
     /// [INSTR-4]: https://github.com/brave/bravebot/blob/main/docs/specs/instructions.md
     ///
     /// **Last word about what a name is for, and never about what it may do.** A replacement
-    /// takes over the description, the body, the model, the skills and the rounds, and is cut
-    /// down on the two fields that decide what it may do: it is loaded as the narrower of the two kinds, and its
-    /// `tools:` line is met with the one it replaced. So a project cannot turn a `reader` a
-    /// person wrote into a `worker`, and cannot hand back a tool that person's own `tools:` line
-    /// had taken away. Widening it would make the checked-in file the author of authority rather
-    /// than the person who vouched for the checkout, which is the sentence [`Definition`] is
-    /// built around, and the vouch that let the file be read at all is a decision about the
-    /// project rather than about this name.
+    /// takes over the description, the body, the model, the skills, the rounds and the memory,
+    /// and is cut down on the three fields that decide what it may do: it is loaded as the
+    /// narrower of the two kinds, its `tools:` line is met with the one it replaced, and so are
+    /// the servers it selects. So a project cannot turn a `reader` a person wrote into a `worker`, and cannot
+    /// hand back a tool or a server that person's own definition had taken away. Widening it
+    /// would make the checked-in file the author of authority rather than the person who
+    /// vouched for the checkout, which is the sentence [`Definition`] is built around, and the
+    /// vouch that let the file be read at all is a decision about the project rather than about
+    /// this name.
     ///
     /// The skills are taken over rather than met because a skill is guidance, as the body is: a
     /// list of them chooses which of the turn's own skills a delegate is told about, and the turn
     /// found every one of those whichever file named them.
     ///
+    /// The memory is taken over for the same reason as the body: it changes what a run knows and
+    /// never what it may do, since keeping one adds no tool.
+    ///
     /// The rounds are taken over because a bound is not authority: a gate refuses on the last
     /// round what it refuses on the first. They are still held to the ceiling of the kind the
     /// replacement is loaded as, so a narrower kind brings its lower ceiling with it.
     ///
-    /// **Both fields rather than a ceiling beside them**, so that what a definition holds is
-    /// still read off the definition, and the trail a delegate leaves names the kind and the
-    /// tools it actually got. What it asked for and did not get comes back instead, so whoever
-    /// wrote it is told rather than left to find the narrowing by running it.
+    /// **The fields rather than a ceiling beside them**, so that what a definition holds is
+    /// still read off the definition, and the trail a delegate leaves names the kind, the tools
+    /// and the servers it actually got. What it asked for and did not get comes back instead, so
+    /// whoever wrote it is told rather than left to find the narrowing by running it.
     ///
     /// A name one of the three kinds already goes by is **refused**, so the three the program
     /// wrote are in every set and a `reader` is a reader wherever a session runs. A file free to
@@ -600,8 +690,14 @@ impl Definitions {
         // two rather than only the second.
         let named = definition.kind;
         let loaded = named.min(existing.kind);
+        // Read before the tools are met, because a `tools:` line is itself a selection of no
+        // server, and stored whole so the one this replaces reads the same afterwards.
+        let asked_servers = definition.servers_named().map(<[String]>::to_vec);
+        let servers = meet(asked_servers.as_deref(), existing.servers_named());
+        let servers_confined_to = (loaded.holds_servers() && servers != asked_servers)
+            .then(|| servers.clone().unwrap_or_default());
         let asked = definition.tools.take();
-        let tools = meet_tools(asked.as_deref(), existing.tools.as_deref());
+        let tools = meet(asked.as_deref(), existing.tools.as_deref());
         // `None` is the kind's whole set, so it differs from any list at all, and a replacement
         // that named no tools and inherited one has been confined as surely as one whose own
         // list was cut down.
@@ -610,15 +706,17 @@ impl Definitions {
 
         definition.kind = loaded;
         definition.tools = tools;
+        definition.servers = servers;
         *existing = definition;
 
-        if named == loaded && confined_to.is_none() {
+        if named == loaded && confined_to.is_none() && servers_confined_to.is_none() {
             return Admitted::AsWritten;
         }
         Admitted::Narrowed(Narrowing {
             named,
             loaded,
             confined_to,
+            servers_confined_to,
             replaced,
         })
     }
@@ -649,6 +747,14 @@ impl Definitions {
 
     pub fn iter(&self) -> impl Iterator<Item = &Definition> {
         self.entries.iter()
+    }
+
+    /// Keep no memory for any of them, where the directory a memory would be kept in is one no
+    /// write could leave untrusted.
+    pub fn keep_no_memory(&mut self) {
+        for entry in &mut self.entries {
+            entry.memory = false;
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -803,6 +909,8 @@ pub struct DelegateSpec {
     skills: Option<Vec<String>>,
     /// The standing part of what it is told about itself, from the definition that selected it.
     prompt: String,
+    /// Whether the definition that selected it keeps a memory.
+    memory: bool,
     task: String,
     capabilities: CapabilitySet,
     rounds: usize,
@@ -837,6 +945,7 @@ impl DelegateSpec {
             tools,
             skills: definition.skills().map(<[String]>::to_vec),
             prompt: definition.prompt().to_string(),
+            memory: definition.keeps_memory(),
             task: task.into(),
             capabilities,
             rounds,
@@ -898,6 +1007,11 @@ impl DelegateSpec {
     /// is said by its kind, and a file cannot tell one it may do what its kind cannot.
     pub fn prompt(&self) -> &str {
         &self.prompt
+    }
+
+    /// Whether its definition keeps a memory, which the file of [`Self::definition`]'s name is.
+    pub fn keeps_memory(&self) -> bool {
+        self.memory
     }
 
     /// The delegate's name in the audit trail. Driver-minted, never derived from content.
@@ -973,6 +1087,7 @@ pub struct Addressed {
     kind: Kind,
     model: Option<String>,
     prompt: String,
+    memory: bool,
     held: CapabilitySet,
     tools: Vec<String>,
 }
@@ -984,6 +1099,7 @@ impl Addressed {
             kind: definition.kind(),
             model: definition.model().map(str::to_string),
             prompt: definition.prompt().to_string(),
+            memory: definition.keeps_memory(),
             held,
             tools,
         }
@@ -1011,6 +1127,11 @@ impl Addressed {
     /// The definition's standing instruction, empty where its file had no body.
     pub fn prompt(&self) -> &str {
         &self.prompt
+    }
+
+    /// Whether the definition keeps a memory, which the file of [`Self::name`]'s name is.
+    pub fn keeps_memory(&self) -> bool {
+        self.memory
     }
 
     /// Every tool this turn is offered, already narrowed by what it holds and by what the
@@ -1209,9 +1330,9 @@ mod tests {
     }
 
     /// A `tools:` line names this program's tools and no server's, so a worker that wrote one
-    /// asked for no server, however wide the line is.
+    /// and no `mcpServers:` line asked for no server, however wide the tools line is.
     #[test]
-    fn a_worker_naming_its_tools_holds_no_server() {
+    fn a_worker_naming_its_tools_and_no_server_holds_none() {
         let named = Definition::from_file(
             "editor",
             "edits",
@@ -1220,10 +1341,151 @@ mod tests {
             "",
             "test",
         );
-        assert!(!named.holds_servers());
         assert!(servers_in(&named.held_out_of(&holding_two_servers())).is_empty());
         let empty = Definition::from_file("idle", "idles", Kind::Worker, Some(vec![]), "", "test");
         assert!(servers_in(&empty.held_out_of(&holding_two_servers())).is_empty());
+    }
+
+    /// A worker's `mcpServers:` line selects out of its parent's grants by alias. The server it
+    /// named and the parent holds is held, the one it left off is not, and the one the parent
+    /// holds no grant for is still not held: the line narrows and never grants.
+    #[test]
+    fn a_worker_naming_servers_holds_only_those_of_them_its_parent_holds() {
+        let named =
+            Definition::from_file("forecaster", "forecasts", Kind::Worker, None, "", "test")
+                .with_servers(vec!["weather".into(), "calendar".into()]);
+        let held = named.held_out_of(&holding_two_servers());
+        assert_eq!(servers_in(&held), ["mcp_call:weather"]);
+        assert_eq!(named.servers_not_held(&holding_two_servers()), ["calendar"]);
+        assert!(named.servers_beyond_its_kind().is_empty());
+        // Everything else the kind holds is untouched by which servers it named.
+        let unnamed = Definition::from_file("worker", "built in", Kind::Worker, None, "", "test");
+        let others = |set: &CapabilitySet| -> Vec<Capability> {
+            set.iter()
+                .filter(|capability| !matches!(capability, Capability::McpCall(_)))
+                .collect()
+        };
+        assert_eq!(
+            others(&held),
+            others(&unnamed.held_out_of(&holding_two_servers()))
+        );
+    }
+
+    /// An `mcpServers:` line on a kind that calls no server selects nothing, and the names it
+    /// wrote are what the trail reports: the line chooses among what a worker would hold, and a
+    /// reader or a checker holds none of it.
+    #[test]
+    fn a_reader_or_a_checker_naming_servers_holds_none() {
+        for kind in [Kind::Reader, Kind::Checker] {
+            let named = Definition::from_file("looker", "looks", kind, None, "", "test")
+                .with_servers(vec!["weather".into()]);
+            assert!(
+                servers_in(&named.held_out_of(&holding_two_servers())).is_empty(),
+                "{kind}"
+            );
+            assert_eq!(named.servers_beyond_its_kind(), ["weather"], "{kind}");
+            assert!(
+                named.servers_not_held(&CapabilitySet::none()).is_empty(),
+                "{kind}"
+            );
+        }
+    }
+
+    /// Naming tools and naming servers are two lines, and neither empties the other: a worker
+    /// confined to reading keeps the one server it named, and an empty `mcpServers:` line is a
+    /// selection of no server even where no `tools:` line was written.
+    #[test]
+    fn a_servers_line_selects_servers_whatever_the_tools_line_says() {
+        let both = Definition::from_file(
+            "note-reader",
+            "reads notes",
+            Kind::Worker,
+            Some(vec!["read_file".into()]),
+            "",
+            "test",
+        )
+        .with_servers(vec!["notes".into()]);
+        let held = both.held_out_of(&holding_two_servers());
+        assert_eq!(servers_in(&held), ["mcp_call:notes"]);
+        assert!(!held.contains(&Capability::FileWrite));
+
+        let none = Definition::from_file("offline", "offline", Kind::Worker, None, "", "test")
+            .with_servers(Vec::new());
+        assert!(servers_in(&none.held_out_of(&holding_two_servers())).is_empty());
+        assert!(
+            none.held_out_of(&holding_two_servers())
+                .contains(&Capability::FileWrite)
+        );
+    }
+
+    /// A replacement's servers are met with those of the one it replaces, as its tools are: a
+    /// project cannot hand back a server a person's own definition left off, whether that one
+    /// named its servers or only its tools, and says which it is loaded with.
+    #[test]
+    fn a_later_definition_cannot_hand_back_a_server_the_one_it_replaces_left_off() {
+        let mut definitions = Definitions::default();
+        definitions.insert(
+            Definition::from_file("forecaster", "home", Kind::Worker, None, "", "~/a.md")
+                .with_servers(vec!["weather".into(), "notes".into()]),
+        );
+        let admitted = definitions.insert(
+            Definition::from_file("forecaster", "project", Kind::Worker, None, "", ".b.md")
+                .with_servers(vec!["notes".into(), "calendar".into()]),
+        );
+        let found = definitions.get("forecaster").expect("selectable");
+        assert_eq!(found.servers(), Some(["notes".to_string()].as_slice()));
+        assert_eq!(
+            servers_in(&found.held_out_of(&holding_two_servers())),
+            ["mcp_call:notes"]
+        );
+        assert_eq!(
+            admitted,
+            Admitted::Narrowed(Narrowing {
+                named: Kind::Worker,
+                loaded: Kind::Worker,
+                confined_to: None,
+                servers_confined_to: Some(vec!["notes".to_string()]),
+                replaced: "~/a.md".to_string(),
+            })
+        );
+
+        // A person's `tools:` line selected no server, so a project naming one gets none.
+        let mut definitions = Definitions::default();
+        definitions.insert(Definition::from_file(
+            "forecaster",
+            "home",
+            Kind::Worker,
+            Some(vec!["read_file".into()]),
+            "",
+            "~/a.md",
+        ));
+        let admitted = definitions.insert(
+            Definition::from_file("forecaster", "project", Kind::Worker, None, "", ".b.md")
+                .with_servers(vec!["weather".into()]),
+        );
+        let found = definitions.get("forecaster").expect("selectable");
+        assert!(servers_in(&found.held_out_of(&holding_two_servers())).is_empty());
+        assert_eq!(
+            admitted,
+            Admitted::Narrowed(Narrowing {
+                named: Kind::Worker,
+                loaded: Kind::Worker,
+                confined_to: Some(vec!["read_file".to_string()]),
+                servers_confined_to: Some(Vec::new()),
+                replaced: "~/a.md".to_string(),
+            })
+        );
+
+        // And a replacement asking for no more than the one before it is admitted as written.
+        let admitted = definitions.insert(Definition::from_file(
+            "forecaster",
+            "third",
+            Kind::Worker,
+            Some(vec!["read_file".into()]),
+            "",
+            ".c.md",
+        ));
+        assert_eq!(admitted, Admitted::AsWritten);
     }
 
     /// Every kind is bounded. An unbounded delegate has nothing watching it: the person is
@@ -1574,6 +1836,7 @@ mod tests {
                 named: Kind::Worker,
                 loaded: Kind::Reader,
                 confined_to: None,
+                servers_confined_to: None,
                 replaced: "~/.bravebot/agents/rule-reviewer.md".to_string(),
             })
         );
@@ -1613,12 +1876,16 @@ mod tests {
         assert!(held.contains(&Capability::FileRead));
         assert!(!held.contains(&Capability::FileWrite));
         assert!(!held.contains(&Capability::ShellExec));
+        // Its own file selected every server its parent holds, and the `tools:` line it
+        // inherited selects none, so that is said too rather than left to the tools phrase.
+        assert!(servers_in(&found.held_out_of(&holding_two_servers())).is_empty());
         assert_eq!(
             admitted,
             Admitted::Narrowed(Narrowing {
                 named: Kind::Worker,
                 loaded: Kind::Worker,
                 confined_to: Some(vec!["read_file".to_string()]),
+                servers_confined_to: Some(Vec::new()),
                 replaced: "~/.bravebot/agents/rule-reviewer.md".to_string(),
             })
         );
@@ -1664,6 +1931,7 @@ mod tests {
                 named: Kind::Reader,
                 loaded: Kind::Reader,
                 confined_to: Some(vec!["read_file".to_string()]),
+                servers_confined_to: None,
                 replaced: "~/.bravebot/agents/rule-reviewer.md".to_string(),
             })
         );
@@ -1704,6 +1972,7 @@ mod tests {
                 named: Kind::Worker,
                 loaded: Kind::Worker,
                 confined_to: Some(Vec::new()),
+                servers_confined_to: None,
                 replaced: "~/.bravebot/agents/rule-reviewer.md".to_string(),
             })
         );
@@ -2030,6 +2299,67 @@ mod tests {
             definitions.get("reviewer").expect("selectable").skills(),
             None
         );
+    }
+
+    /// MEMORY-2: whether a memory is kept is the latest definition's, in both directions, because
+    /// keeping one changes what a run knows and adds nothing it may do. A project keeping none
+    /// stops a person's own habit from writing into its checkout, and one keeping a memory its
+    /// replaced definition did not starts one.
+    #[test]
+    fn a_later_definition_takes_over_whether_a_memory_is_kept() {
+        let mut definitions = Definitions::default();
+        definitions.insert(
+            Definition::from_file("reviewer", "global", Kind::Reader, None, "", "home")
+                .with_memory(),
+        );
+        let admitted = definitions.insert(Definition::from_file(
+            "reviewer",
+            "project",
+            Kind::Reader,
+            None,
+            "",
+            "project",
+        ));
+        assert_eq!(admitted, Admitted::AsWritten);
+        assert!(
+            !definitions
+                .get("reviewer")
+                .expect("selectable")
+                .keeps_memory()
+        );
+
+        let admitted = definitions.insert(
+            Definition::from_file("reviewer", "again", Kind::Reader, None, "", "again")
+                .with_memory(),
+        );
+        assert_eq!(admitted, Admitted::AsWritten, "keeping one widens nothing");
+        assert!(
+            definitions
+                .get("reviewer")
+                .expect("selectable")
+                .keeps_memory()
+        );
+    }
+
+    /// MEMORY-2: a working directory whose memory would sit in the person's own directory keeps
+    /// none for any definition, and every other field of each stays as it was.
+    #[test]
+    fn keeping_no_memory_clears_it_from_every_definition_and_nothing_else() {
+        let mut definitions = Definitions::default();
+        definitions.insert(
+            Definition::from_file("reviewer", "d", Kind::Reader, None, "", "home").with_memory(),
+        );
+        definitions.insert(
+            Definition::from_file("migrator", "d", Kind::Worker, None, "body", "home")
+                .with_memory(),
+        );
+
+        definitions.keep_no_memory();
+
+        assert!(definitions.iter().all(|d| !d.keeps_memory()));
+        let migrator = definitions.get("migrator").expect("still selectable");
+        assert_eq!(migrator.kind(), Kind::Worker);
+        assert_eq!(migrator.prompt(), "body");
     }
 
     /// A number says where its delegate sits, so a trail and a screen can name a grandchild

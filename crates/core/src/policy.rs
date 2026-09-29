@@ -340,6 +340,9 @@ pub struct Policy<'sink, S: Sink> {
     /// rule about a host: a machine runs many services on one address, and the declaration named
     /// one of them.
     calling_server: Option<String>,
+    /// Where the hop the egress gate last refused off a declared server was bound, until
+    /// [`Policy::take_server_hop`] hands it to whoever asks the person. A server's own bytes.
+    server_hop: Option<String>,
     /// The integrity of every observation this turn has made, met together.
     ///
     /// Starts trusted, since the task is the user's own words, and drops to untrusted the moment
@@ -444,6 +447,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             exposed: crate::credentials::Exposed::new(),
             fetching: None,
             calling_server: None,
+            server_hop: None,
             context: Integrity::Trusted,
         })
     }
@@ -559,6 +563,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             // would be writing them into whatever formats that refusal. The declared destination
             // is what a person wrote down, so a refusal names that.
             if crate::url::authority_of(url).unwrap_or_default() != declared {
+                // Kept for the prompt and nothing else: see `take_server_hop`.
+                self.server_hop = Some(url.to_string());
                 return Err(self.deny(
                     "network",
                     Principle::IntegrityGate,
@@ -697,12 +703,13 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// No rule widens this, which is the other difference from a fetch. A `WebFetch` rule says
     /// which websites the planner may reach, and that is not a statement that one server's
-    /// traffic may be sent somewhere else. An approval would widen it, and there is none to give:
-    /// a gate allows or refuses and cannot ask, so the question needs a prompt before the call and
-    /// a declaration to write the answer back into, and issue #83 is where both are. Until then a
-    /// hop that leaves the declared destination is refused and nothing is sent.
+    /// traffic may be sent somewhere else. Nor does an answer widen it: a gate allows or refuses
+    /// and cannot ask, so the hop is refused and nothing is sent to where it pointed, and
+    /// [`Policy::take_server_hop`] hands that destination to whoever puts it to the person. A yes
+    /// rewrites the declaration, and the request is made again to the url it now names.
     pub fn before_server_request(&mut self, url: &str) {
         self.calling_server = Some(crate::url::authority_of(url).unwrap_or_default());
+        self.server_hop = None;
     }
 
     /// Say that the request to a declared server has finished, however it went.
@@ -711,6 +718,52 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// turn's egress confined to a server's host.
     pub fn server_request_finished(&mut self) {
         self.calling_server = None;
+    }
+
+    /// Where the last request to a declared server was redirected off it, if it was.
+    ///
+    /// Taken rather than read, so one refusal is asked about once. `(U,pub)`: the url came out of
+    /// a `Location` header and is the server's own bytes, so it may be drawn for a person and
+    /// decides nothing until one of them says it is where the server now is (SERVERS-11).
+    pub fn take_server_hop(&mut self) -> Option<Labelled<String>> {
+        self.server_hop
+            .take()
+            .map(|url| Labelled::new(url, Label::untrusted_public()))
+    }
+
+    /// Record that a person approved the destination `alias`'s request was redirected to.
+    ///
+    /// Only a person mints this. Bypassing every check answers no question about a move, since a
+    /// move rewrites a declaration and the mode records nothing (SERVERS-13).
+    pub fn endorse_server_move(&mut self, alias: &str) {
+        self.issue_grant("mcp_move", "alias", alias.to_string());
+    }
+
+    /// Take a person's word that `destination` is where the server declared as `alias` now is.
+    ///
+    /// A promotion road of its own (LABEL-8). What is promoted is the url as it was drawn at the
+    /// prompt, which a yes rewrites the declaration to, so a server's bytes become a url somebody
+    /// wrote down only once somebody has read them. `(T,pub)`, so the url may be parsed, written
+    /// and connected to from then on.
+    pub fn promote_a_server_move(
+        &mut self,
+        alias: &str,
+        destination: &Labelled<String>,
+    ) -> Gated<Labelled<String>> {
+        self.consume_grant("mcp_move", "alias", alias)?;
+        let was = destination.label();
+        let proof =
+            Declassification::authorise("a destination a person approved a server moving to");
+        let url = destination.clone().declassify(&proof);
+        let label = Label::trusted_public();
+        self.allow(
+            "mcp_move",
+            format!(
+                "where {alias} was redirected was {was}; the user approved it as where the server \
+                 now is, so it is declared at {label}"
+            ),
+        );
+        Ok(Labelled::new(url, label))
     }
 
     /// Refuse a call to a server's tool a `deny` rule covers, before anybody is asked about it.
@@ -2697,14 +2750,13 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         about: Option<SlotId>,
         slots: &crate::slot::SlotStore,
     ) -> Gated<crate::processor::ProcessorSpec> {
+        // Not named by `id`: that is made from the references it reads, and here there are none.
         if reads.is_empty() {
             return Err(self.deny(
                 "processor",
                 Principle::Confinement,
-                format!(
-                    "{id} names no references to read, so there is nothing quarantined for it \
-                     to work on"
-                ),
+                "a processor that names no references to read has nothing quarantined to work on"
+                    .to_string(),
             ));
         }
 
@@ -2820,7 +2872,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// authority and never creates it, so the intersection is taken here rather than trusted to
     /// be empty: a kind asking for something the parent lacks gets a delegate without it, and the
     /// trail says what was dropped. A kind that holds servers carries every server this run holds
-    /// and no other, so a delegate can call what the turn already may (SERVERS-9).
+    /// that its definition selects and no other, so a delegate can call what the turn already may
+    /// and never more (SERVERS-9).
     ///
     /// The number is minted here, beneath this run's own, and a refusal spends one as a delegate
     /// would. Two bounds are this call's to keep: a run at [`MAX_DEPTH`] spawns nothing, and a
@@ -2936,6 +2989,20 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             );
         }
 
+        let servers = selected.servers_beyond_its_kind();
+        if !servers.is_empty() {
+            self.allow(
+                "delegate",
+                format!(
+                    "{id}: {} names the MCP servers {} which a {} does not call, so it is \
+                     delegated without them",
+                    selected.name(),
+                    servers.join(", "),
+                    selected.kind()
+                ),
+            );
+        }
+
         let wanted = selected.capabilities();
         let held = selected.held_out_of(&self.capabilities);
         let dropped: Vec<&str> = wanted
@@ -2951,6 +3018,18 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                      delegated without them",
                     selected.name(),
                     dropped.join(", ")
+                ),
+            );
+        }
+        let servers = selected.servers_not_held(&self.capabilities);
+        if !servers.is_empty() {
+            self.allow(
+                "delegate",
+                format!(
+                    "{id}: {} names the MCP servers {} which this run holds no grant for, so it \
+                     is delegated without them",
+                    selected.name(),
+                    servers.join(", ")
                 ),
             );
         }
@@ -2992,12 +3071,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// composes what steers a new run, and here the person did: the name and the task are both
     /// their line, so nothing this context has met reaches either (ADDRESS-4).
     ///
-    /// The turn keeps only what it holds that the definition also asks for, and its servers only
-    /// where the definition holds servers, so a definition can take away and never add
-    /// (ADDRESS-7). What stays offered is `offered` less every tool whose
-    /// capability is gone and every tool the definition did not name. [`NEVER_DELEGATED`] plays
-    /// no part, because this is the person's own turn and not a delegate (ADDRESS-8). Both
-    /// narrowings are recorded, so the trail says what the definition cost.
+    /// The turn keeps only what it holds that the definition also asks for, and only the servers
+    /// the definition selects, so a definition can take away and never add (ADDRESS-7). What
+    /// stays offered is `offered` less every tool whose capability is gone and every tool the
+    /// definition did not name. [`NEVER_DELEGATED`] plays no part, because this is the person's
+    /// own turn and not a delegate (ADDRESS-8). Every narrowing is recorded, so the trail says
+    /// what the definition cost.
     ///
     /// [`NEVER_DELEGATED`]: crate::delegate::NEVER_DELEGATED
     pub fn address(&mut self, offered: &[&str]) -> Gated<Option<crate::delegate::Addressed>> {
@@ -3048,6 +3127,29 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 format!(
                     "{name} asks for {} which this turn does not hold, so it runs without them",
                     not_held.join(", ")
+                ),
+            );
+        }
+        let beyond = selected.servers_beyond_its_kind();
+        if !beyond.is_empty() {
+            self.allow(
+                "address",
+                format!(
+                    "{name} names the MCP servers {} which a {} does not call, so it runs \
+                     without them",
+                    beyond.join(", "),
+                    selected.kind()
+                ),
+            );
+        }
+        let not_reached = selected.servers_not_held(&self.capabilities);
+        if !not_reached.is_empty() {
+            self.allow(
+                "address",
+                format!(
+                    "{name} names the MCP servers {} which this turn holds no grant for, so it \
+                     runs without them",
+                    not_reached.join(", ")
                 ),
             );
         }
@@ -4686,8 +4788,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
     /// Record that a person, having read the question, agreed to this file reaching the planner.
     ///
-    /// Only ever called because somebody answered. The path is the one the trust map is keyed by,
-    /// so the spelling a planner used does not decide whether the question comes back.
+    /// Only ever called because somebody answered. The path is the name the workspace reduces a
+    /// planner's spelling to, relative to the working directory for a file inside it, so the
+    /// spelling a planner used does not decide whether the question comes back.
     pub fn allow_exposing_read(&mut self, path: &str) {
         self.exposed.allow(path);
         self.allow(
@@ -4758,6 +4861,21 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             "trust",
             format!("{path} trusted: the user named it in their own line"),
         );
+    }
+
+    /// Record that `path` is untrusted because a write in an earlier session left it so.
+    ///
+    /// The path comes from a record kept in the person's own directory rather than in the
+    /// checkout it names, so nothing in the checkout decides it, and it can only lower the map.
+    /// Every run starting reads the record again, so a path already distrusted by a rule of its
+    /// own is left as it is, and said once.
+    pub fn distrust_remembered(&mut self, path: &str) {
+        if self.trust.distrust_unless_distrusted(path) {
+            self.allow(
+                "trust",
+                format!("{path} untrusted: a write in an earlier session left it so"),
+            );
+        }
     }
 
     /// Vouch for `path` only if nothing has decided about it since `shown_at`.
@@ -9424,9 +9542,9 @@ five
 
     /// A declared server is one destination and a redirect names another, so the hop is refused
     /// whatever the settings say. A `WebFetch` rule is a person naming websites the planner may
-    /// reach, which is not consent to send a server's call to a different service. What could
-    /// widen this is an approval of where that one server went, which is a prompt nothing raises
-    /// yet, so a rule remaining inert here is the whole of the behaviour and not half of it.
+    /// reach, which is not consent to send a server's call to a different service. What widens
+    /// this is a person approving where that one server went, which rewrites the declaration
+    /// rather than letting this hop through.
     #[test]
     fn a_rule_does_not_let_a_servers_request_be_redirected_off_its_host() {
         let mut sink = RecordingSink::new();
@@ -9475,6 +9593,77 @@ five
             !denial.message.contains("2375"),
             "the refusal repeated what a server chose: {}",
             denial.message
+        );
+    }
+
+    /// The destination a refused hop named is kept for the prompt, as the server's bytes, and
+    /// handed out once. A request that stayed where it was declared leaves nothing to ask about.
+    #[test]
+    fn a_refused_hop_off_a_server_is_kept_untrusted_for_the_prompt() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+
+        policy.before_server_request("https://mcp.example/api");
+        policy
+            .before_network("https://mcp.example/api")
+            .expect("the declared destination");
+        policy.server_request_finished();
+        assert!(policy.take_server_hop().is_none());
+
+        policy.before_server_request("https://mcp.example/api");
+        assert!(policy.before_network("https://moved.example/api").is_err());
+        policy.server_request_finished();
+        let hop = policy.take_server_hop().expect("the refused hop");
+        assert_eq!(hop.label(), Label::untrusted_public());
+        assert!(
+            policy.take_server_hop().is_none(),
+            "one refusal was handed out twice"
+        );
+
+        // Nor does a hop refused before survive a request that was not redirected.
+        assert!(policy.before_network("https://moved.example/api").is_ok());
+        policy.before_server_request("https://mcp.example/api");
+        assert!(policy.before_network("https://moved.example/api").is_err());
+        policy.before_server_request("https://mcp.example/api");
+        assert!(policy.take_server_hop().is_none());
+    }
+
+    /// Where a server was redirected becomes a url somebody wrote down only through a person's
+    /// yes about that server, and no other server's.
+    #[test]
+    fn a_server_move_is_promoted_only_through_an_endorsement() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let destination = Labelled::new(
+            "https://moved.example/api".to_string(),
+            Label::untrusted_public(),
+        );
+
+        assert!(
+            policy
+                .promote_a_server_move("weather", &destination)
+                .is_err()
+        );
+        policy.endorse_server_move("news");
+        assert!(
+            policy
+                .promote_a_server_move("weather", &destination)
+                .is_err()
+        );
+        policy.endorse_server_move("weather");
+        let promoted = policy
+            .promote_a_server_move("weather", &destination)
+            .expect("endorsed");
+        assert_eq!(promoted.label(), Label::trusted_public());
+        assert_eq!(
+            promoted.into_trusted().expect("trusted"),
+            "https://moved.example/api"
+        );
+        assert!(
+            policy
+                .promote_a_server_move("weather", &destination)
+                .is_err(),
+            "one yes promoted two moves"
         );
     }
 
@@ -11757,6 +11946,54 @@ five
         );
     }
 
+    /// MEMORY-5: every run that starts distrusts the recorded memories again, a delegate's
+    /// included. A path a rule of its own already distrusts is left alone: the revision stays
+    /// where it was, so a command started earlier is not quarantined by a decision that changed
+    /// nothing, and the trail says it once. A path with no rule of its own, or one trusting it,
+    /// is distrusted.
+    #[test]
+    fn a_remembered_path_already_distrusted_is_left_as_it_is_and_said_once() {
+        let mut sink = RecordingSink::new();
+        let mut policy = policy_trusting(&mut sink, &[]);
+        let authority = policy.file_authority();
+
+        let before = authority.revision();
+        policy.distrust_remembered(".bravebot/memory/notes.md");
+        let once = authority.revision();
+        assert_ne!(
+            once, before,
+            "a path nothing ruled on was left without a rule"
+        );
+        policy.distrust_remembered("/work/.bravebot/memory/notes.md");
+        assert_eq!(
+            authority.revision(),
+            once,
+            "a decision already in force moved the revision"
+        );
+        authority.publish("/work", Integrity::Trusted);
+        assert!(
+            policy.read_is_quarantined(".bravebot/memory/notes.md"),
+            "trusting the directory later trusted a recorded memory"
+        );
+
+        authority.publish(".bravebot/memory/notes.md", Integrity::Trusted);
+        policy.distrust_remembered(".bravebot/memory/notes.md");
+        assert!(
+            policy.read_is_quarantined(".bravebot/memory/notes.md"),
+            "a rule trusting the path was taken for one distrusting it"
+        );
+        drop(policy);
+
+        let said = sink
+            .events()
+            .iter()
+            .filter(|e| {
+                matches!(e, Event::GatePassed { gate: "trust", detail } if detail.contains("left it so"))
+            })
+            .count();
+        assert_eq!(said, 2, "{:?}", sink.events());
+    }
+
     /// Model output is labelled at its context's integrity. With a clean context that is
     /// trusted, which is what makes silent writes possible at all.
     #[test]
@@ -13219,6 +13456,58 @@ five
             }
         }
 
+        /// SERVERS-9 through DELEGATE-24. A worker whose definition names its servers is handed
+        /// those of them its parent holds and no other, and a reader naming one is handed none.
+        /// The trail names each server the definition asked for and did not get, and why.
+        #[test]
+        fn a_definition_naming_servers_is_delegated_with_only_those_its_parent_holds() {
+            let weather = Capability::McpCall(ServerAlias::new("weather"));
+            let notes = Capability::McpCall(ServerAlias::new("notes"));
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing_with("task", "look into it"),
+                ReleasePlan::new(),
+                all_capabilities()
+                    .iter()
+                    .chain([weather.clone(), notes.clone()])
+                    .collect(),
+                &mut sink,
+            )
+            .unwrap();
+            let mut definitions = crate::delegate::Definitions::default();
+            for (name, kind) in [("forecaster", Kind::Worker), ("looker", Kind::Reader)] {
+                definitions.insert(
+                    crate::delegate::Definition::from_file(name, "looks it up", kind, None, "", "")
+                        .with_servers(vec!["weather".into(), "calendar".into()]),
+                );
+            }
+            policy.install_delegates(definitions);
+
+            let spec = policy
+                .before_delegate(&argument("forecaster"), &argument("look it up"))
+                .expect("a resolved definition may be selected");
+            assert!(spec.capabilities().contains(&weather));
+            assert!(
+                !spec.capabilities().contains(&notes),
+                "a worker was handed a server its definition left off"
+            );
+            let spec = policy
+                .before_delegate(&argument("looker"), &argument("look it up"))
+                .expect("a resolved definition may be selected");
+            assert!(!spec.capabilities().contains(&weather));
+
+            let trail = format!("{:?}", sink.events());
+            for said in [
+                "forecaster names the MCP servers calendar which this run holds no grant for",
+                "looker names the MCP servers weather, calendar which a reader does not call",
+            ] {
+                assert!(
+                    trail.contains(said),
+                    "the trail does not say '{said}': {trail}"
+                );
+            }
+        }
+
         /// The bound belongs to the definition, so nothing about a call can lengthen it. A
         /// planner that could set it would be setting its own delegate's budget from a sentence it
         /// wrote.
@@ -13910,6 +14199,90 @@ five
                 });
                 assert_eq!(gave_up, !keeps, "{name}: {trail}");
             }
+        }
+
+        /// ADDRESS-7 for a definition naming its servers. The turn keeps those of them the
+        /// session holds and gives up the rest, the gate refuses a call to a server given up, and
+        /// the trail says which named server the session holds no grant for.
+        #[test]
+        fn an_addressed_worker_naming_its_servers_keeps_only_those() {
+            let weather = Capability::McpCall(ServerAlias::new("weather"));
+            let notes = Capability::McpCall(ServerAlias::new("notes"));
+            let mut sink = RecordingSink::new();
+            let mut routing = routing_with("task", "look into it");
+            routing.insert_trusted(ADDRESSED, "forecaster");
+            let session = all_capabilities()
+                .iter()
+                .chain([weather.clone(), notes.clone()])
+                .collect();
+            let mut policy =
+                Policy::begin(routing, ReleasePlan::new(), session, &mut sink).unwrap();
+            let mut definitions = Definitions::default();
+            definitions.insert(
+                Definition::from_file("forecaster", "forecasts", Kind::Worker, None, "", "")
+                    .with_servers(vec!["weather".into(), "calendar".into()]),
+            );
+            policy.install_delegates(definitions);
+
+            let addressed = policy
+                .address(&OFFERED)
+                .expect("a resolved name is addressed")
+                .expect("the line named a definition");
+            assert!(addressed.capabilities().contains(&weather));
+            assert!(!addressed.capabilities().contains(&notes));
+            assert!(policy.before_capability(weather).is_ok());
+            assert!(
+                policy.before_capability(notes).is_err(),
+                "a server the definition left off still answers"
+            );
+            assert!(
+                addressed.tools().iter().any(|tool| tool == "write_file"),
+                "naming servers took a tool away"
+            );
+            let trail = trail(&sink);
+            for said in [
+                "runs without mcp_call:notes",
+                "forecaster names the MCP servers calendar which this turn holds no grant for",
+            ] {
+                assert!(
+                    trail.contains(said),
+                    "the trail does not say '{said}': {trail}"
+                );
+            }
+        }
+
+        /// ADDRESS-7 for a reader naming its servers. A reader calls no server, so naming one
+        /// hands it nothing, and the trail says the line was spent on a kind that cannot use it.
+        #[test]
+        fn an_addressed_reader_naming_servers_holds_none_and_the_trail_says_why() {
+            let weather = Capability::McpCall(ServerAlias::new("weather"));
+            let mut sink = RecordingSink::new();
+            let mut routing = routing_with("task", "look into it");
+            routing.insert_trusted(ADDRESSED, "looker");
+            let session = all_capabilities().iter().chain([weather.clone()]).collect();
+            let mut policy =
+                Policy::begin(routing, ReleasePlan::new(), session, &mut sink).unwrap();
+            let mut definitions = Definitions::default();
+            definitions.insert(
+                Definition::from_file("looker", "looks", Kind::Reader, None, "", "")
+                    .with_servers(vec!["weather".into()]),
+            );
+            policy.install_delegates(definitions);
+
+            let addressed = policy
+                .address(&OFFERED)
+                .expect("a resolved name is addressed")
+                .expect("the line named a definition");
+            assert!(!addressed.capabilities().contains(&weather));
+            assert!(
+                policy.before_capability(weather).is_err(),
+                "a reader naming a server still calls it"
+            );
+            let trail = trail(&sink);
+            assert!(
+                trail.contains("looker names the MCP servers weather which a reader does not call"),
+                "the trail does not say why the named server was dropped: {trail}"
+            );
         }
 
         /// ADDRESS-7 one level down. A delegate is cut from what the turn holds, so a worker an

@@ -225,6 +225,11 @@ from the rule a yes writes and from no other: a path an earlier session's writes
 directory it opened, a file it vouched for, and a no given inside the tree are all left behind with
 that session, as they are when the person presses `y` again.
 
+[MEMORY-5](definition-memory.md#MEMORY-5) specifies one path that is not left behind: a
+definition's memory a write left untrusted is recorded outside the session, and before every turn in
+that directory the path is untrusted whatever the person answered, until a write leaves it trusted
+or a person vouches for it.
+
 **What the record keeps is the name, not the key.** A rule inside the project is written down
 relative to it and a rule outside is written down in full, and a resume reads the relative ones
 under the directory it is resuming into. The map holds full paths (TRUST-2), and a record of those
@@ -500,6 +505,15 @@ the person typed the path, and a later decision replaces an earlier one.
 The permission rules do not travel. They are read again for the new directory, and an `allow` rule
 granted for the checkout left behind stays with it ([PERM-15](permissions.md#PERM-15)).
 
+Nor do the answers to the credential question ([CRED-15](credential-protection.md#CRED-15)). One
+about a file inside the working directory is kept under the file's name from there, and from a new
+one that name is another file, so every answer is dropped and such a file is asked about again.
+
+The commands vouched for do travel. Each names the tree it was given in
+([RUN-8](tools/run.md#RUN-8)), so after the move it covers that tree and no other, the new working
+directory included. So does the list of run prompts already drawn, which grants nothing
+([RUN-20](tools/run.md#RUN-20)).
+
 **Why.** A yes given for one project must not become a yes for another, and a no given inside the
 old one must not be forgotten. Both follow from a rule naming the file rather than the directory it
 was written from, and neither grants nor withdraws anything, which is what makes this something
@@ -520,8 +534,10 @@ them.
 `verified-by: bravebot_agent::workspace::moving_leaves_an_unrelated_added_directory_open`
 `verified-by: bravebot_tui::app::changing_directory_moves_the_workspace_and_vouches_for_where_it_moved`
 `verified-by: bravebot_tui::app::changing_directory_leaves_the_previous_answer_where_it_was_given`
+`verified-by: bravebot_tui::app::moving_keeps_the_programs_vouched_for_and_the_prompts_already_drawn`
 `verified-by: bravebot_tui::app::moving_into_a_directory_keeps_the_answers_given_inside_it`
 `verified-by: bravebot_tui::app::a_rule_granted_in_one_checkout_is_not_in_force_after_moving_to_another`
+`verified-by: bravebot_tui::app::an_answer_to_show_a_file_does_not_cover_the_file_by_that_name_after_moving`
 
 ## A scratch directory outside the workspace
 
@@ -942,6 +958,8 @@ The one record under `~/.bravebot` that decides what is trusted rather than whet
 asked. Every other one ([tools/run.md](tools/run.md#RUN-19), [permissions.md](permissions.md#PERM-15))
 stops a prompt appearing and leaves the labels alone. This one sets the label of every file in a
 tree, which is why it is narrower than the answer it keeps.
+[MEMORY-5](definition-memory.md#MEMORY-5) keeps a second, which can only take trust away: the paths
+of definitions' memories a write left untrusted.
 
 <a id="TRUST-23"></a>
 ### TRUST-23: a remembered yes answers for later sessions started in exactly that directory
@@ -961,7 +979,10 @@ working directory is resolved past), the filesystem says when the directory was 
 session is not incognito. One check decides that for every front end, so none keeps or honours an
 answer another would refuse. The question says what remembering does, that the directory has to be
 this one exactly, how to take it back, and the file it writes, since nobody can endorse a record they
-were not shown. An answer to remember that the question did not offer, or given with a no, is
+were not shown. Where the box is too short for those lines they scroll below the keys, and `r` in the
+terminal interface is taken only once they have all been on the screen in one draw; until then the
+row above the keys says why it does nothing, or that they do not fit where they are taller than the
+box, and `y` still answers. An answer to remember that the question did not offer, or given with a no, is
 refused and writes nothing; the question once answered offers nothing more.
 
 **Kept.** Choosing it writes the rule a yes writes, for this session, and appends one line to
@@ -974,7 +995,8 @@ leaves the answer as a yes for this session, and the session says so and names t
 **Honoured.** A later session started in that directory, fresh, by `/clear`, by a new session in the
 desktop interface, by a session in lines, or by a resume or reopening whose record keeps no map, is
 not asked. It starts from the rule a yes writes and from nothing else
-([TRUST-6](#TRUST-6)), and says as it opens that it is trusting the directory because the person
+([TRUST-6](#TRUST-6)), less the memories [MEMORY-5](definition-memory.md#MEMORY-5) keeps
+untrusted, and says as it opens that it is trusting the directory because the person
 said to remember it, when, and how to be asked again. A session in lines has no `/forget-trust`, so
 it names that command in the interface that draws, and the file holding the answer with the lines
 naming the directory as what to delete, since a directory whose path is spelled alike shares the
@@ -1036,6 +1058,9 @@ yes writes rather than everything the session went on to record.
 `verified-by: bravebot_cli::plain::an_answer_in_lines_is_asked_for_and_never_kept`
 `verified-by: bravebot_cli::plain::the_mode_that_asks_about_nothing_is_not_asked_about_the_directory`
 `verified-by: bravebot_tui::trust_prompt::the_prompt_offering_to_remember_names_the_record_it_writes`
+`verified-by: bravebot_tui::trust_prompt::r_remembers_nothing_until_the_record_it_writes_has_been_on_the_screen`
+`verified-by: bravebot_tui::trust_prompt::a_question_not_offering_to_remember_never_takes_r`
+`verified-by: bravebot_tui::trust_prompt::the_hint_says_when_no_scroll_can_show_what_a_key_waits_for`
 `verified-by: bravebot_tui::trust_prompt::the_keys_stay_on_screen_when_the_offer_lengthens_the_question`
 `verified-by: bravebot_tui::trust_prompt::a_tiny_terminal_offering_to_remember_still_renders`
 
@@ -1134,7 +1159,9 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   gone, so a file one session marked untrusted is read as trusted by the next session that vouches
   for the directory. The alternative is a per-directory map, which is a directory that trusts
   itself. If a file holds content you do not trust, the answer is to say no to the directory, or
-  to not leave it there.
+  to not leave it there. A definition's memory is the exception
+  [MEMORY-5](definition-memory.md#MEMORY-5) makes, since every later run under the definition is
+  told to read it without anybody asking for it.
 - **A file another process drops into a trusted directory is trusted.** TRUST-2 makes the rule
   about the path, so `npm install`, `git pull`, an editor, a background daemon, or a program the
   agent was allowed to run can all put a file inside a vouched-for tree and it will be read as
@@ -1168,6 +1195,7 @@ Accepted deliberately. Do not "fix" one without changing this spec first.
   has just pulled a branch or added a dependency might have answered `n`. The line the session opens
   with, `/status` and `/forget-trust` are what is left of it. Keeping the paths earlier sessions
   marked untrusted beside the answer would close the second half, and is not built.
+  [MEMORY-5](definition-memory.md#MEMORY-5) keeps it for definitions' memories alone.
 - **A directory is told from the one before it at the same path by what the filesystem keeps.**
   Where the filesystem does not say when a directory was made, `r` is not offered and every session
   there is asked, as before. Linux gives a freed number to the next directory made, so there the

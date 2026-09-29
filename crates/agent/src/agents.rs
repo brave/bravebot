@@ -52,8 +52,13 @@ const WORKSPACE_AGENTS: &str = ".bravebot/agents";
 
 /// What a file turned out to be.
 enum Read {
-    /// A definition, ready to go into the set.
-    Definition(Box<Definition>),
+    /// A definition, ready to go into the set, and whether its `mcpServers:` line declared a
+    /// server rather than naming one.
+    Definition {
+        definition: Box<Definition>,
+        declares_servers: bool,
+        no_memory: Option<NoMemory>,
+    },
     /// Not a definition at all: no `name`, so nothing claimed to be one.
     ///
     /// Silent. A directory of definitions is a place a person also keeps a README, and a note
@@ -66,6 +71,14 @@ enum Read {
     /// Apart from [`Read::Skipped`] because it is said as a message of the catalogue's, whole,
     /// rather than as an English reason placed into one.
     NotACount,
+}
+
+/// Why a definition that asked to keep a memory keeps none, which its author is told.
+enum NoMemory {
+    /// Its `memory:` value is neither `project` nor `local`, as the file wrote it.
+    Value(String),
+    /// Its name is not one a file can be named after.
+    Name,
 }
 
 /// Read one definition out of the text of a file.
@@ -120,6 +133,17 @@ fn read_definition(text: &str, origin: &str) -> Read {
         definition = definition.with_skills(names_in(skills));
     }
 
+    // The key other agents' definitions spell it with, so a file ported from one selects the
+    // same servers here. No alias holds a colon, so one in the line is a server declared inline,
+    // whose entry may hold an argv and a variable's value: the line then selects no server, and
+    // nothing in it is repeated anywhere.
+    let mut declares_servers = false;
+    if let Some(servers) = declared.get("mcpServers") {
+        let names = names_in(servers);
+        declares_servers = names.iter().any(|name| name.contains(':'));
+        definition = definition.with_servers(if declares_servers { Vec::new() } else { names });
+    }
+
     // Refused rather than left at the kind's own, because its author believes the number is in
     // force. Zero goes with the rest: the bound is checked after a round, so it would be one.
     if let Some(written) = declared
@@ -133,7 +157,30 @@ fn read_definition(text: &str, origin: &str) -> Read {
         definition = definition.with_rounds(rounds);
     }
 
-    Read::Definition(Box::new(definition))
+    // `project` and `local` are one file here, since whether it is committed is the person's to
+    // decide. Any other value, `user` included, loads the definition keeping nothing, because a
+    // definition written for another agent would otherwise be lost over where its notes go, and
+    // is said, because its author believes a memory is kept.
+    let mut no_memory = None;
+    if let Some(value) = declared
+        .get("memory")
+        .map(String::as_str)
+        .filter(|m| !m.is_empty())
+    {
+        match value {
+            "project" | "local" if crate::memory::is_a_slug(name) => {
+                definition = definition.with_memory();
+            }
+            "project" | "local" => no_memory = Some(NoMemory::Name),
+            other => no_memory = Some(NoMemory::Value(other.to_string())),
+        }
+    }
+
+    Read::Definition {
+        definition: Box::new(definition),
+        declares_servers,
+        no_memory,
+    }
 }
 
 /// The count a `rounds:` value names, or nothing where it names none above zero.
@@ -177,7 +224,7 @@ const FOLDS_TO_A_COLON: [char; 5] = [
     '\u{ff1a}', // FULLWIDTH COLON
 ];
 
-/// The names a `tools:` or a `skills:` value lists.
+/// The names a `tools:`, a `skills:` or an `mcpServers:` value lists.
 ///
 /// A comma and a space both separate, so a YAML scalar (`read_file, list_files`) and a YAML
 /// sequence (`- read_file` on its own line) both arrive here as something this splits the same
@@ -243,6 +290,18 @@ pub fn discover<S: Sink>(
     }
     discover_workspace(policy, workspace, &mut definitions, &mut notices);
     notices.extend(rounds_held_to_their_kind(&definitions));
+    // Asked once every file is in, since a later definition of a name takes its key over. A
+    // memory inside the person's own directory is one the map does not govern, so no write and no
+    // record could leave it untrusted.
+    if crate::memory::kept_in_home(workspace.root(), home) {
+        for definition in definitions.iter().filter(|d| d.keeps_memory()) {
+            notices.push(Notice::from_message(t!(
+                delegate_memory_in_home,
+                definition = definition.origin()
+            )));
+        }
+        definitions.keep_no_memory();
+    }
 
     (definitions, notices)
 }
@@ -371,18 +430,42 @@ fn admit(read: Read, origin: &str, definitions: &mut Definitions, notices: &mut 
         // asked about it already, so a refusal here is a rule this loader missed rather than a
         // file. Reported rather than dropped: silence would be the one case where somebody's
         // file does nothing and nothing says so.
-        Read::Definition(definition) => match definitions.insert(*definition) {
-            Admitted::AsWritten => return,
-            // A later source narrows a name and never widens it, and what it asked for and did
-            // not get is said rather than dropped quietly: a narrowing nobody is told about
-            // reads to whoever wrote the file as one still in force. Both files can be named
-            // because by here each came from a source somebody vouched for.
-            Admitted::Narrowed(narrowing) => {
-                notices.push(Notice::from_message(narrowed(origin, &narrowing)));
-                return;
+        Read::Definition {
+            definition,
+            declares_servers,
+            no_memory,
+        } => {
+            if declares_servers {
+                notices.push(Notice::from_message(t!(
+                    delegate_servers_declared,
+                    definition = origin
+                )));
             }
-            Admitted::Refused => "its name is one of the kinds' own",
-        },
+            match no_memory {
+                Some(NoMemory::Value(value)) => notices.push(Notice::from_message(t!(
+                    delegate_memory_not_kept,
+                    definition = origin,
+                    value = value
+                ))),
+                Some(NoMemory::Name) => notices.push(Notice::from_message(t!(
+                    delegate_memory_not_a_slug,
+                    definition = origin
+                ))),
+                None => {}
+            }
+            match definitions.insert(*definition) {
+                Admitted::AsWritten => return,
+                // A later source narrows a name and never widens it, and what it asked for and
+                // did not get is said rather than dropped quietly: a narrowing nobody is told
+                // about reads to whoever wrote the file as one still in force. Both files can be
+                // named because by here each came from a source somebody vouched for.
+                Admitted::Narrowed(narrowing) => {
+                    notices.push(Notice::from_message(narrowed(origin, &narrowing)));
+                    return;
+                }
+                Admitted::Refused => "its name is one of the kinds' own",
+            }
+        }
         Read::NotOne => return,
         Read::NotACount => {
             notices.push(Notice::from_message(t!(
@@ -419,9 +502,9 @@ fn rounds_held_to_their_kind(definitions: &Definitions) -> Vec<Notice> {
 
 /// What to tell whoever wrote a definition that the one of the same name before it cut down.
 ///
-/// The words are here rather than in the kernel, which hands over which of the two axes moved
-/// and nothing about how to say it. Both halves where both moved, because a person told only
-/// about the kind would go on believing their `tools:` line was the one in force.
+/// The words are here rather than in the kernel, which hands over which of the three axes moved
+/// and nothing about how to say it. Every one that moved, because a person told only about the
+/// kind would go on believing their `tools:` line was the one in force.
 fn narrowed(origin: &str, narrowing: &Narrowing) -> String {
     let mut said = Vec::new();
     if narrowing.named != narrowing.loaded {
@@ -434,6 +517,16 @@ fn narrowed(origin: &str, narrowing: &Narrowing) -> String {
         said.push(match confined_to {
             [] => "it is loaded with no tools at all".to_string(),
             tools => format!("it is loaded confined to {}", tools.join(", ")),
+        });
+    }
+    if let Some(servers) = narrowing.servers_confined_to.as_deref() {
+        said.push(match servers {
+            [] => "it is loaded calling no MCP server".to_string(),
+            [server] => format!("it is loaded calling only the MCP server {server}"),
+            servers => format!(
+                "it is loaded calling only the MCP servers {}",
+                servers.join(", ")
+            ),
         });
     }
     format!(
@@ -467,6 +560,34 @@ pub fn skills_not_found(definitions: &Definitions, skills: &Catalogue) -> Vec<No
                 definition = definition.origin(),
                 count = missing.len(),
                 skills = missing.join(", ")
+            )))
+        })
+        .collect()
+}
+
+/// What to tell whoever wrote a definition naming an MCP server this session did not reach.
+///
+/// Such a name selects nothing, as a `skills:` name nothing found does, and silence would leave a
+/// misspelt alias, or a server another agent defines inline, reading to its author as one the
+/// delegate calls. Only an alias the session reached is a server any run of it can hold.
+pub fn servers_not_found(definitions: &Definitions, reached: &[String]) -> Vec<Notice> {
+    definitions
+        .iter()
+        .filter_map(|definition| {
+            let mut missing: Vec<&str> = Vec::new();
+            for name in definition.servers()? {
+                if !reached.contains(name) && !missing.contains(&name.as_str()) {
+                    missing.push(name);
+                }
+            }
+            if missing.is_empty() {
+                return None;
+            }
+            Some(Notice::from_message(t!(
+                delegate_servers_not_found,
+                definition = definition.origin(),
+                count = missing.len(),
+                servers = missing.join(", ")
             )))
         })
         .collect()
@@ -508,7 +629,7 @@ mod tests {
 
     fn definition_of(text: &str) -> Definition {
         match read_definition(text, "test") {
-            Read::Definition(definition) => *definition,
+            Read::Definition { definition, .. } => *definition,
             Read::NotOne => panic!("not read as a definition at all"),
             Read::NotACount => panic!("skipped: its rounds are not a count"),
             Read::Skipped(why) => panic!("skipped: {why}"),
@@ -764,6 +885,114 @@ mod tests {
         );
     }
 
+    /// `mcpServers:` is read the way `skills:` is, under the key other agents spell it with.
+    /// An empty line selects no server and an absent one leaves every server the parent holds,
+    /// and the two have to stay apart for the reason they do for skills.
+    #[test]
+    fn a_definition_reads_the_servers_it_names() {
+        let servers_of = |line: &str| {
+            definition_of(&format!(
+                "---\nname: forecaster\ndescription: forecasts\nkind: worker\n{line}---\n\nbody\n"
+            ))
+            .servers()
+            .map(<[String]>::to_vec)
+        };
+        let both = Some(vec!["weather".to_string(), "notes".to_string()]);
+
+        assert_eq!(servers_of("mcpServers: weather, notes\n"), both);
+        assert_eq!(servers_of("mcpServers:\n  - weather\n  - notes\n"), both);
+        assert_eq!(servers_of("mcpServers:\n"), Some(Vec::new()));
+        assert_eq!(servers_of(""), None);
+        assert_eq!(servers_of("mcp_servers: weather\n"), None);
+    }
+
+    /// A server named twice that this session did not reach is said once and in the singular,
+    /// and a server it did reach is not said at all.
+    #[test]
+    fn a_server_named_twice_and_reached_nowhere_is_said_once() {
+        let mut definitions = Definitions::default();
+        definitions.insert(definition_of(
+            "---\nname: forecaster\ndescription: forecasts\nkind: worker\nmcpServers: wether, \
+             weather, wether\n---\n\nbody\n",
+        ));
+
+        let said: Vec<String> = servers_not_found(&definitions, &["weather".to_string()])
+            .into_iter()
+            .map(|notice| notice.message)
+            .collect();
+
+        assert_eq!(
+            said,
+            [
+                "test names an MCP server this session did not reach, so its delegate runs \
+                 without it: wether"
+            ]
+        );
+    }
+
+    /// The servers a replacement is cut down to are said in the number there are, so a person
+    /// confined to one reads one, and one cut to none is told it calls nothing.
+    #[test]
+    fn a_server_narrowing_is_said_in_the_number_it_leaves() {
+        let said = |servers: &[&str]| {
+            narrowed(
+                "project.md",
+                &Narrowing {
+                    named: Kind::Worker,
+                    loaded: Kind::Worker,
+                    confined_to: None,
+                    servers_confined_to: Some(servers.iter().map(|s| s.to_string()).collect()),
+                    replaced: "home.md".to_string(),
+                },
+            )
+        };
+
+        assert_eq!(
+            said(&[]),
+            "project.md does not widen home.md: it is loaded calling no MCP server"
+        );
+        assert_eq!(
+            said(&["weather"]),
+            "project.md does not widen home.md: it is loaded calling only the MCP server weather"
+        );
+        assert_eq!(
+            said(&["weather", "notes"]),
+            "project.md does not widen home.md: it is loaded calling only the MCP servers \
+             weather, notes"
+        );
+    }
+
+    /// Another agent's definition may declare a server inline under the same key, with its argv
+    /// and a variable's value. Its names would otherwise reach the screen as servers nothing
+    /// reached, the value among them, and `weather` beside it would still be selected.
+    #[test]
+    fn a_server_declared_inline_selects_none_and_repeats_nothing_of_the_line() {
+        let mut definitions = Definitions::default();
+        let mut notices = Vec::new();
+        let text = "---\nname: forecaster\ndescription: forecasts\nkind: worker\nmcpServers:\n  - \
+                    weather\n  - github:\n      command: npx\n      env:\n        GITHUB_TOKEN: \
+                    ghp_secret\n---\n\nbody\n";
+
+        admit(
+            read_definition(text, "test"),
+            "test",
+            &mut definitions,
+            &mut notices,
+        );
+        notices.extend(servers_not_found(&definitions, &[]));
+
+        let definition = definitions.get("forecaster").expect("loaded");
+        assert_eq!(definition.servers(), Some(&[][..]));
+        let said: Vec<String> = notices.into_iter().map(|notice| notice.message).collect();
+        assert_eq!(
+            said,
+            [
+                "test declares an MCP server in its mcpServers line, which only \
+                 ~/.bravebot/mcp.json may do, so its delegate calls no MCP server"
+            ]
+        );
+    }
+
     #[test]
     fn a_definition_naming_inherit_names_no_model() {
         for written in ["inherit", "Inherit"] {
@@ -864,6 +1093,134 @@ mod tests {
                 "test asks for 500 rounds, more than the 120 a reader may make, so its delegate is \
               given 120"
             ]
+        );
+    }
+
+    /// What a file with one `memory:` line is admitted as, and what its author is told of it.
+    fn admitted_with_memory(name: &str, line: &str) -> (Option<bool>, Vec<String>) {
+        let origin = format!(".bravebot/agents/{name}.md");
+        let mut definitions = Definitions::default();
+        let mut notices = Vec::new();
+        admit(
+            read_definition(
+                &format!("---\nname: {name}\ndescription: d\nkind: worker\n{line}---\n\nbody\n"),
+                &origin,
+            ),
+            &origin,
+            &mut definitions,
+            &mut notices,
+        );
+        (
+            definitions.get(name).map(Definition::keeps_memory),
+            notices.into_iter().map(|notice| notice.message).collect(),
+        )
+    }
+
+    /// MEMORY-2: `project` and `local` both keep a memory, since whether the file is committed is
+    /// the person's to decide, and an empty or absent line keeps none and says nothing.
+    #[test]
+    fn a_definition_keeping_its_memory_in_the_project_or_locally_keeps_one() {
+        for line in [
+            "memory: project\n",
+            "memory: local\n",
+            "memory:   local  \n",
+        ] {
+            assert_eq!(
+                admitted_with_memory("notes-keeper", line),
+                (Some(true), vec![]),
+                "{line}"
+            );
+        }
+        for line in ["memory:\n", ""] {
+            assert_eq!(
+                admitted_with_memory("notes-keeper", line),
+                (Some(false), vec![]),
+                "{line:?}"
+            );
+        }
+    }
+
+    /// MEMORY-2: any other value, `user` included, loads the definition keeping nothing, so one
+    /// written for another agent still runs, and says so, since its author believes a memory is
+    /// kept. The value is said as written, so a case slip is visible.
+    #[test]
+    fn a_memory_value_nothing_here_keeps_loads_the_definition_and_says_it_keeps_none() {
+        for value in ["user", "Project", "yes", "true", "project local"] {
+            assert_eq!(
+                admitted_with_memory("notes-keeper", &format!("memory: {value}\n")),
+                (
+                    Some(false),
+                    vec![format!(
+                        ".bravebot/agents/notes-keeper.md keeps no memory: its memory line says \
+                         {value}, and only project and local keep one"
+                    )]
+                ),
+                "{value}"
+            );
+        }
+    }
+
+    /// MEMORY-3: the name becomes the memory's file name, so a definition whose name is no slug
+    /// loads keeping none rather than naming a file somewhere else, and says why.
+    #[test]
+    fn a_definition_whose_name_is_no_slug_keeps_no_memory_and_says_why() {
+        for name in ["Notes", "notes_keeper", "notes--keeper", "n\u{f6}tes"] {
+            assert_eq!(
+                admitted_with_memory(name, "memory: project\n"),
+                (
+                    Some(false),
+                    vec![format!(
+                        ".bravebot/agents/{name}.md keeps no memory: a definition keeping one \
+                         needs a name of lowercase letters and digits in runs joined by single \
+                         hyphens, 64 characters at most"
+                    )]
+                ),
+                "{name}"
+            );
+        }
+    }
+
+    /// MEMORY-2: a session whose working directory puts the memory inside `~/.bravebot` keeps
+    /// none, since the map does not govern that directory and no record could leave it
+    /// untrusted. One beside it keeps its memory where it is.
+    #[test]
+    fn a_memory_that_would_sit_in_the_state_directory_is_kept_in_home() {
+        let root = crate::testutil::scratch_dir("memory-kept-in-home");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        let home = root.join(".bravebot");
+        std::fs::create_dir_all(&home).unwrap();
+
+        let kept = crate::memory::kept_in_home(&root, Some(&home));
+        let beside = crate::memory::kept_in_home(&root.join("sub"), Some(&home));
+        let nowhere = crate::memory::kept_in_home(&root, None);
+        #[cfg(unix)]
+        let linked = {
+            use std::os::unix::fs::symlink;
+            let through = root.join("through");
+            symlink(&root, &through).unwrap();
+            std::fs::create_dir_all(root.join("project")).unwrap();
+            symlink(&home, root.join("project/.bravebot")).unwrap();
+            std::fs::create_dir_all(root.join("checkout/.bravebot")).unwrap();
+            std::fs::create_dir_all(home.join("kept")).unwrap();
+            symlink(home.join("kept"), root.join("checkout/.bravebot/memory")).unwrap();
+            [
+                crate::memory::kept_in_home(&through, Some(&home)),
+                crate::memory::kept_in_home(&root, Some(&through.join(".bravebot"))),
+                crate::memory::kept_in_home(&root.join("project"), Some(&home)),
+                crate::memory::kept_in_home(&root.join("checkout"), Some(&home)),
+            ]
+        };
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert!(kept, "the home directory's memory is inside ~/.bravebot");
+        assert!(!beside, "a subdirectory's memory is its own");
+        assert!(!nowhere, "with no state directory nothing is inside one");
+        #[cfg(unix)]
+        assert_eq!(
+            linked, [true; 4],
+            "a memory reaching ~/.bravebot through a link was not seen as inside it: the \
+             directory, the state directory, .bravebot and .bravebot/memory each through one"
         );
     }
 }

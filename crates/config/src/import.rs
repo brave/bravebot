@@ -1,15 +1,18 @@
-//! What Claude Code's and opencode's own configuration holds that this program can use.
+//! What Claude Code's and opencode's own configuration holds, and what a running Ollama serves, that
+//! this program can use.
 //!
 //! Read and mapped here, and never written: the question and the write belong to the front end that
 //! asks (`docs/specs/import.md`). Only files in the person's profile directory are opened, because a
 //! checkout's files are whatever the repository's author wrote, and a host and a credential name
-//! taken from one would let a clone decide where the person's key is sent.
+//! taken from one would let a clone decide where the person's key is sent. Ollama is asked by the
+//! caller, and only where it listens on this machine.
 
 use crate::Secret;
 use crate::bedrock::{Bedrock, Tier};
 use crate::env_var;
 use crate::provider::{self, AWS_PROVIDER_ID, Provider};
 use serde_json::{Map, Value};
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
 /// The most of a source file worth reading.
@@ -42,11 +45,21 @@ const BEDROCK_NAMES: [&str; 5] = [
     env_var::BEDROCK_HAIKU_MODEL,
 ];
 
-/// The two programs whose configuration is read.
+/// Where Ollama's own client is told the server is.
+pub const OLLAMA_HOST: &str = "OLLAMA_HOST";
+/// The port Ollama listens on where `OLLAMA_HOST` names none and no scheme.
+const OLLAMA_PORT: u16 = 11434;
+/// The id the gateway is written under, which is the one the configuration guide's block uses.
+const OLLAMA_ID: &str = "ollama";
+/// The capability a model must report for a session's tools to reach it.
+const TOOLS: &str = "tools";
+
+/// The two programs whose configuration is read, and the server that is asked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
     ClaudeCode,
     Opencode,
+    Ollama,
 }
 
 impl Source {
@@ -55,11 +68,112 @@ impl Source {
         match self {
             Self::ClaudeCode => "Claude Code",
             Self::Opencode => "opencode",
+            Self::Ollama => "Ollama",
         }
     }
 }
 
-/// The files each source is read from.
+/// Where Ollama listens, as its own client reads `OLLAMA_HOST`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Ollama {
+    /// On this machine, at this base URL, which ends in no slash.
+    Here(String),
+    /// On another machine, which is never asked: a start would otherwise reach whatever host the
+    /// variable names before the person has agreed to anything.
+    Elsewhere,
+}
+
+impl Ollama {
+    /// Where `OLLAMA_HOST` says Ollama is, read as Ollama's client reads it: surrounding space and
+    /// quotes dropped, `http` and port 11434 where it names no scheme, the scheme's own port where it
+    /// names one and no port, and any path kept.
+    ///
+    /// Unset, or set to nothing, is the address the configuration guide's block names. `0.0.0.0` and
+    /// `::` are what a server is told to listen on, and name this machine to a client.
+    pub fn from_value(value: Option<&str>) -> Self {
+        let value = value
+            .unwrap_or_default()
+            .trim()
+            .trim_matches(['"', '\''])
+            .trim();
+        if value.is_empty() {
+            return Self::Here(format!("http://localhost:{OLLAMA_PORT}"));
+        }
+        // Another scheme is kept, as Ollama's client keeps it, and asking there fails.
+        let (scheme, rest, default_port) = match value.split_once("://") {
+            None => ("http", value, OLLAMA_PORT),
+            Some(("http", rest)) => ("http", rest, 80),
+            Some(("https", rest)) => ("https", rest, 443),
+            Some((scheme, rest)) => (scheme, rest, OLLAMA_PORT),
+        };
+        let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+        let (host, port) = match split_host_port(authority) {
+            Some((host, port)) => (host, port.parse::<u16>().unwrap_or(default_port)),
+            None => (authority.trim_matches(['[', ']']), default_port),
+        };
+        let Some(host) = this_machine(host) else {
+            return Self::Elsewhere;
+        };
+        let path = path.trim_end_matches('/');
+        let path = match path.is_empty() {
+            true => String::new(),
+            false => format!("/{path}"),
+        };
+        Self::Here(format!("{scheme}://{host}:{port}{path}"))
+    }
+}
+
+/// A host and port as Go's `net.SplitHostPort` splits them, or `None` where it would refuse:
+/// a bracketed IPv6 address with no port after it, or a value with no colon or more than one.
+fn split_host_port(authority: &str) -> Option<(&str, &str)> {
+    if let Some(bracketed) = authority.strip_prefix('[') {
+        let (host, after) = bracketed.split_once(']')?;
+        return Some((host, after.strip_prefix(':')?));
+    }
+    let (host, port) = authority.split_once(':')?;
+    (!port.contains(':')).then_some((host, port))
+}
+
+/// The host as a URL names it, where it is this machine.
+///
+/// An empty host is what Ollama's client reaches as `127.0.0.1`. A name other than `localhost` is
+/// never taken to be this machine, since what it resolves to is up to whoever answers the lookup.
+fn this_machine(host: &str) -> Option<String> {
+    if host.is_empty() {
+        return Some("127.0.0.1".to_string());
+    }
+    if host.eq_ignore_ascii_case("localhost") {
+        return Some("localhost".to_string());
+    }
+    match host.parse::<IpAddr>().ok()?.to_canonical() {
+        IpAddr::V4(address) if address.is_unspecified() => Some("127.0.0.1".to_string()),
+        IpAddr::V6(address) if address.is_unspecified() => Some("[::1]".to_string()),
+        IpAddr::V4(address) if address.is_loopback() => Some(address.to_string()),
+        IpAddr::V6(address) if address.is_loopback() => Some(format!("[{address}]")),
+        _ => None,
+    }
+}
+
+/// The port an `http` or `https` URL reaches on this machine, or `None` where it names another
+/// machine or cannot be read.
+pub fn local_port(url: &str) -> Option<u16> {
+    let (scheme, rest) = url.trim().split_once("://")?;
+    let default_port = match scheme.to_ascii_lowercase().as_str() {
+        "http" => 80,
+        "https" => 443,
+        _ => return None,
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let (host, port) = match split_host_port(authority) {
+        Some((host, port)) => (host, port.parse::<u16>().ok()?),
+        None => (authority.trim_matches(['[', ']']), default_port),
+    };
+    this_machine(host)
+        .filter(|_| !host.is_empty())
+        .map(|_| port)
+}
+
+/// The files each source is read from, and where Ollama is asked.
 ///
 /// Resolved from the variables each program itself reads, so a person who moved one program's
 /// directory is read where they moved it. A relative value is never resolved: against the working
@@ -72,6 +186,8 @@ pub struct Places {
     pub opencode: Vec<PathBuf>,
     /// opencode's `auth.json`.
     pub opencode_auth: Option<PathBuf>,
+    /// Where Ollama listens.
+    pub ollama: Option<Ollama>,
 }
 
 impl Places {
@@ -118,6 +234,7 @@ impl Places {
             claude_code,
             opencode,
             opencode_auth: Some(data.join("auth.json")),
+            ollama: Some(Ollama::from_value(lookup(OLLAMA_HOST).as_deref())),
         }
     }
 
@@ -137,6 +254,8 @@ pub struct Found {
     pub source: Source,
     /// The files that were read, for the line naming where this came from.
     pub read: Vec<PathBuf>,
+    /// The server that answered, for that line where no file was read.
+    pub running_at: Option<String>,
     /// Names under `env`, with their values.
     pub env: Vec<(String, String)>,
     /// The top-level `model` key.
@@ -300,20 +419,195 @@ pub enum Reason {
     /// A key built from an opencode substitution inside a longer value, which this program does not
     /// make, so the value as written is not the key.
     Substitution,
+    /// `OLLAMA_HOST` names another machine, which is not asked.
+    Elsewhere,
+    /// A running Ollama with no model that can call tools, which a session could not use.
+    NoToolModel,
 }
 
-/// Everything the sources hold, Claude Code first.
+/// One model a running Ollama lists, as its `/api/tags` names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Installed {
+    pub name: String,
+    /// When it was pulled, in RFC 3339.
+    pub modified_at: String,
+    /// What it can do, or `None` where the listing reported nothing, which an Ollama older than
+    /// the field does.
+    pub capabilities: Option<Vec<String>>,
+}
+
+/// Everything the sources hold, Claude Code first and Ollama last.
 ///
 /// `environment` is the process environment. A Claude Code Bedrock setup is often exported rather
 /// than written down, and a name already there is read from there at run time, so it is not copied.
-pub fn found(places: &Places, environment: impl Fn(&str) -> Option<String>) -> Vec<Found> {
+///
+/// `ollama` asks the server at a base URL for its listing, and answers `None` where nothing
+/// listens there or what came back could not be read. It is called only where the server is on
+/// this machine, and after every file has been read.
+pub fn found(
+    places: &Places,
+    environment: impl Fn(&str) -> Option<String>,
+    ollama: impl FnOnce(&str) -> Option<Vec<Installed>>,
+) -> Vec<Found> {
     let environment = |name: &str| environment(name).filter(|value| !value.trim().is_empty());
     let mut found = Vec::new();
     if let Some(path) = &places.claude_code {
         found.extend(claude_code(path, &environment));
     }
     found.extend(opencode(&places.opencode, places.opencode_auth.as_deref()));
+    match &places.ollama {
+        None => {}
+        Some(Ollama::Elsewhere) => found.push(ollama_left(OLLAMA_HOST, Reason::Elsewhere, None)),
+        Some(Ollama::Here(host)) => found.extend(ollama(host).map(|listed| running(host, listed))),
+    }
     found
+}
+
+/// What a running Ollama at `host` serves, as the configuration guide's block for it: a gateway
+/// needing no key, and the newest model that can call tools.
+///
+/// Where no model reports what it can do, the newest model is taken, since an Ollama older than
+/// the field would otherwise be offered nothing at all.
+pub fn running(host: &str, listed: Vec<Installed>) -> Found {
+    let reported = listed.iter().any(|model| model.capabilities.is_some());
+    let chosen = listed
+        .into_iter()
+        .filter(|model| !model.name.trim().is_empty())
+        .filter(|model| {
+            !reported
+                || model
+                    .capabilities
+                    .as_ref()
+                    .is_some_and(|can| can.iter().any(|capability| capability == TOOLS))
+        })
+        .max_by_key(|model| moment(&model.modified_at));
+    let Some(chosen) = chosen else {
+        return ollama_left(host, Reason::NoToolModel, Some(host));
+    };
+
+    let endpoint = format!("{host}/v1");
+    let mut options = Map::new();
+    options.insert("baseURL".to_string(), Value::from(endpoint.as_str()));
+    let mut entry = Map::new();
+    entry.insert("name".to_string(), Value::from("Ollama (local)"));
+    entry.insert("options".to_string(), Value::Object(options));
+    Found {
+        source: Source::Ollama,
+        read: Vec::new(),
+        running_at: Some(host.to_string()),
+        env: Vec::new(),
+        model: Some(format!("{OLLAMA_ID}/{}", chosen.name)),
+        model_gateway: Some(OLLAMA_ID.to_string()),
+        gateways: vec![Gateway {
+            id: OLLAMA_ID.to_string(),
+            endpoint,
+            entry,
+            key: Key::Named,
+        }],
+        left: Vec::new(),
+    }
+}
+
+/// An Ollama that offers nothing, and why.
+fn ollama_left(name: &str, reason: Reason, running_at: Option<&str>) -> Found {
+    Found {
+        source: Source::Ollama,
+        read: Vec::new(),
+        running_at: running_at.map(str::to_string),
+        env: Vec::new(),
+        model: None,
+        model_gateway: None,
+        gateways: Vec::new(),
+        left: vec![Left {
+            name: name.to_string(),
+            reason,
+        }],
+    }
+}
+
+/// An RFC 3339 time as seconds and nanoseconds since the epoch, or `None` where it is not one.
+///
+/// Compared as a time rather than as text, because each carries its own offset: a model pulled
+/// later in New York can read as earlier than one pulled in Paris. Anything unreadable is `None`,
+/// which sorts before every time.
+fn moment(text: &str) -> Option<(i64, u32)> {
+    let bytes = text.as_bytes();
+    let digits = |range: std::ops::Range<usize>| {
+        let part = text.get(range)?;
+        part.bytes()
+            .all(|byte| byte.is_ascii_digit())
+            .then(|| part.parse::<i64>().ok())
+            .flatten()
+    };
+    if [4, 7].iter().any(|&at| bytes.get(at) != Some(&b'-'))
+        || !matches!(bytes.get(10), Some(b'T' | b't'))
+        || [13, 16].iter().any(|&at| bytes.get(at) != Some(&b':'))
+    {
+        return None;
+    }
+    let (year, month, day) = (digits(0..4)?, digits(5..7)?, digits(8..10)?);
+    let (hour, minute, second) = (digits(11..13)?, digits(14..16)?, digits(17..19)?);
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour > 23
+        || minute > 59
+        || second > 60
+    {
+        return None;
+    }
+
+    let mut at = 19;
+    let mut nanos = 0;
+    if bytes.get(at) == Some(&b'.') {
+        let start = at + 1;
+        at = start;
+        while bytes.get(at).is_some_and(u8::is_ascii_digit) {
+            at += 1;
+        }
+        let fraction = text
+            .get(start..at)
+            .filter(|fraction| !fraction.is_empty())?;
+        let mut padded: String = fraction.chars().take(9).collect();
+        while padded.len() < 9 {
+            padded.push('0');
+        }
+        nanos = padded.parse::<u32>().ok()?;
+    }
+    let offset = match text.get(at..)? {
+        "Z" | "z" => 0,
+        zone => {
+            let sign = match zone.as_bytes().first() {
+                Some(b'+') => 1,
+                Some(b'-') => -1,
+                _ => return None,
+            };
+            if zone.len() != 6 || zone.as_bytes()[3] != b':' {
+                return None;
+            }
+            let (hours, minutes) = (digits(at + 1..at + 3)?, digits(at + 4..at + 6)?);
+            if hours > 23 || minutes > 59 {
+                return None;
+            }
+            sign * (hours * 3600 + minutes * 60)
+        }
+    };
+    let days = days_from_civil(year, month, day);
+    Some((
+        days * 86_400 + hour * 3600 + minute * 60 + second - offset,
+        nanos,
+    ))
+}
+
+/// Days since 1970-01-01 for a civil date: Howard Hinnant's `days_from_civil`, which shifts the
+/// epoch to 0000-03-01 so leap days fall at the end of the year and the arithmetic needs no table.
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let shifted_month = if month > 2 { month - 3 } else { month + 9 };
+    let day_of_year = (153 * shifted_month + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
 }
 
 /// A parse of a source file, which clears itself when it goes: a source may hold a key.
@@ -524,6 +818,7 @@ fn claude_code(path: &Path, environment: &dyn Fn(&str) -> Option<String>) -> Opt
     let found = Found {
         source: Source::ClaudeCode,
         read: file.map(|_| path.to_path_buf()).into_iter().collect(),
+        running_at: None,
         env,
         model,
         model_gateway: None,
@@ -661,6 +956,7 @@ fn opencode(configs: &[PathBuf], auth: Option<&Path>) -> Option<Found> {
     let found = Found {
         source: Source::Opencode,
         read: read_from,
+        running_at: None,
         env: Vec::new(),
         model,
         model_gateway,
@@ -978,6 +1274,22 @@ impl Destination {
         }
     }
 
+    /// The id of an entry under `provider` whose `options.baseURL` reaches the server `endpoint`
+    /// does on this machine, whatever the entry is called.
+    ///
+    /// By port alone, since `localhost`, `127.0.0.1` and `[::1]` are one server, and a second entry
+    /// for it would list every one of its models twice.
+    pub fn serving_locally(&self, endpoint: &str) -> Option<&str> {
+        let port = local_port(endpoint)?;
+        let Some(Value::Object(block)) = self.root.0.get("provider") else {
+            return None;
+        };
+        block.iter().find_map(|(id, entry)| {
+            let base = entry.get("options")?.get("baseURL")?.as_str()?;
+            (local_port(base) == Some(port)).then_some(id.as_str())
+        })
+    }
+
     /// Whether the file already names a model, as the settings reader reads one.
     pub fn holds_model(&self) -> bool {
         crate::settings::word(&self.root.0, "model").is_some()
@@ -1141,7 +1453,7 @@ mod tests {
 
     fn found_in(home: &Path, set: &[(&str, &str)]) -> Vec<Found> {
         let lookup = environment(home, set);
-        found(&Places::from_lookup(&lookup), &lookup)
+        found(&Places::from_lookup(&lookup), &lookup, |_| None)
     }
 
     fn one(home: &Path, set: &[(&str, &str)], source: Source) -> Found {
@@ -1997,5 +2309,243 @@ mod tests {
             ]
         );
         assert!(!format!("{found:?}").contains("Bearer"), "{found:?}");
+    }
+
+    fn installed(name: &str, modified_at: &str, capabilities: Option<&[&str]>) -> Installed {
+        Installed {
+            name: name.to_string(),
+            modified_at: modified_at.to_string(),
+            capabilities: capabilities.map(|can| can.iter().map(|it| it.to_string()).collect()),
+        }
+    }
+
+    /// The listing an Ollama with three models pulled answers, as `/api/tags` reports it.
+    fn three_pulled() -> Vec<Installed> {
+        vec![
+            installed(
+                "qwen3-coder-oc:latest",
+                "2026-09-16T14:08:37.311476-04:00",
+                Some(&["completion", "tools"]),
+            ),
+            installed(
+                "qwen3-coder:30b",
+                "2026-09-16T14:07:58.84902-04:00",
+                Some(&["completion", "tools"]),
+            ),
+            installed(
+                "llama3:latest",
+                "2024-06-05T09:46:42.558935-04:00",
+                Some(&["completion"]),
+            ),
+        ]
+    }
+
+    /// What a start finds with `set` exported and `listed` as Ollama's answer, and every base URL
+    /// Ollama was asked at.
+    fn with_ollama(
+        set: &[(&str, &str)],
+        listed: Option<Vec<Installed>>,
+    ) -> (Vec<Found>, Vec<String>) {
+        // Never made, so no file is found and Ollama is the only source.
+        let home = crate::testutil::scratch_dir("import-ollama-no-home");
+        let lookup = environment(&home, set);
+        let asked = std::cell::RefCell::new(Vec::new());
+        let found = found(&Places::from_lookup(&lookup), &lookup, |host| {
+            asked.borrow_mut().push(host.to_string());
+            listed
+        });
+        (found, asked.into_inner())
+    }
+
+    /// IMPORT-10: nothing configured and Ollama running is the case the configuration guide
+    /// answers with a block to paste, so the import writes that block rather than one of its own:
+    /// the same id, the same name, the same `baseURL`, and no key, which Ollama does not want.
+    #[test]
+    fn a_running_ollama_is_offered_as_the_documented_block() {
+        let (found, asked) = with_ollama(&[], Some(three_pulled()));
+
+        assert_eq!(asked, ["http://localhost:11434"]);
+        let [found] = found.as_slice() else {
+            panic!("not one source: {found:?}");
+        };
+        assert_eq!(found.source, Source::Ollama);
+        assert!(found.read.is_empty(), "{:?}", found.read);
+        assert_eq!(found.running_at.as_deref(), Some("http://localhost:11434"));
+        assert!(found.env.is_empty() && found.left.is_empty(), "{found:?}");
+        // The block under "A local Ollama, or another gateway that wants no key" in
+        // docs/website/docs/customize/configuration.md.
+        let documented: Value = serde_json::from_str(
+            r#"{"name": "Ollama (local)", "options": {"baseURL": "http://localhost:11434/v1"}}"#,
+        )
+        .expect("json");
+        let gateway = gateway(found, "ollama");
+        assert_eq!(Value::Object(gateway.entry.clone()), documented);
+        assert_eq!(gateway.endpoint, "http://localhost:11434/v1");
+        assert!(matches!(gateway.key, Key::Named), "{:?}", gateway.key);
+        assert_eq!(found.model.as_deref(), Some("ollama/qwen3-coder-oc:latest"));
+        assert_eq!(found.model_gateway.as_deref(), Some("ollama"));
+    }
+
+    /// IMPORT-10: a session's tools reach only a model that can call them, and each listed time
+    /// carries its own offset, so the newest is found by comparing times. Compared as text, the
+    /// model pulled at 20:00 in Paris would beat the one pulled eight minutes later in New York.
+    #[test]
+    fn the_default_model_is_the_newest_that_can_call_tools() {
+        let listed = vec![
+            installed(
+                "unreadable-time",
+                "yesterday",
+                Some(&["completion", "tools"]),
+            ),
+            installed(
+                "new-york",
+                "2026-09-16T14:08:37-04:00",
+                Some(&["completion", "tools"]),
+            ),
+            installed(
+                "paris",
+                "2026-09-16T20:00:00.5+02:00",
+                Some(&["tools", "completion"]),
+            ),
+            installed(
+                "newest-without-tools",
+                "2026-09-17T00:00:00Z",
+                Some(&["completion"]),
+            ),
+            installed("", "2026-09-18T00:00:00Z", Some(&["tools"])),
+        ];
+
+        let (found, _) = with_ollama(&[], Some(listed));
+
+        let found = found.first().expect("a source");
+        assert_eq!(found.model.as_deref(), Some("ollama/new-york"), "{found:?}");
+    }
+
+    /// IMPORT-10: an Ollama older than the capabilities field reports none for any model, and
+    /// reading that as "none can call tools" would offer such a person nothing.
+    #[test]
+    fn an_ollama_reporting_no_capabilities_defaults_to_its_newest_model() {
+        let listed = vec![
+            installed("older", "2026-01-01T00:00:00Z", None),
+            installed("newer", "2026-02-01T00:00:00Z", None),
+        ];
+
+        let (found, _) = with_ollama(&[], Some(listed));
+
+        let found = found.first().expect("a source");
+        assert_eq!(found.model.as_deref(), Some("ollama/newer"), "{found:?}");
+        assert_eq!(ids(found), ["ollama"]);
+    }
+
+    /// IMPORT-4: a gateway whose every model fails the session's first tool call is not a working
+    /// configuration, so it is not offered, and the start says why rather than saying nothing.
+    #[test]
+    fn an_ollama_with_no_model_that_can_call_tools_is_left_and_said() {
+        let without_tools = vec![
+            installed(
+                "llama3:latest",
+                "2024-06-05T09:46:42Z",
+                Some(&["completion"]),
+            ),
+            installed(
+                "nomic-embed-text",
+                "2024-06-06T09:46:42Z",
+                Some(&["embedding"]),
+            ),
+        ];
+        for listed in [without_tools, Vec::new()] {
+            let (found, _) = with_ollama(&[], Some(listed.clone()));
+
+            let [found] = found.as_slice() else {
+                panic!("not one source for {listed:?}: {found:?}");
+            };
+            assert!(!found.importable(), "{found:?}");
+            assert_eq!(
+                left(found),
+                [("http://localhost:11434", Reason::NoToolModel)],
+                "{listed:?}"
+            );
+            assert_eq!(found.running_at.as_deref(), Some("http://localhost:11434"));
+        }
+    }
+
+    /// IMPORT-10: Ollama's own client reads `OLLAMA_HOST`, so a person who moved the server told
+    /// both programs in one place. Each value is read as Ollama reads it, and the written
+    /// `baseURL` is the address that answered.
+    #[test]
+    fn ollama_host_moves_where_ollama_is_asked() {
+        for (value, host) in [
+            ("", "http://localhost:11434"),
+            ("  ", "http://localhost:11434"),
+            ("127.0.0.1", "http://127.0.0.1:11434"),
+            ("127.0.0.1:8080", "http://127.0.0.1:8080"),
+            ("127.0.0.2", "http://127.0.0.2:11434"),
+            (":1234", "http://127.0.0.1:1234"),
+            ("0.0.0.0", "http://127.0.0.1:11434"),
+            ("0.0.0.0:9000", "http://127.0.0.1:9000"),
+            ("::1", "http://[::1]:11434"),
+            ("[::1]", "http://[::1]:11434"),
+            ("[::1]:9000", "http://[::1]:9000"),
+            ("::", "http://[::1]:11434"),
+            ("[::ffff:127.0.0.1]:7", "http://127.0.0.1:7"),
+            ("http://localhost", "http://localhost:80"),
+            ("https://localhost", "https://localhost:443"),
+            ("http://127.0.0.1:11434/", "http://127.0.0.1:11434"),
+            ("localhost:11434/ollama/", "http://localhost:11434/ollama"),
+            (" 'LOCALHOST:7' ", "http://localhost:7"),
+            ("\"localhost\"", "http://localhost:11434"),
+            ("localhost:99999", "http://localhost:11434"),
+        ] {
+            let (found, asked) = with_ollama(&[(OLLAMA_HOST, value)], Some(three_pulled()));
+
+            assert_eq!(asked, [host], "{value:?}");
+            let found = found.first().expect("a source");
+            assert_eq!(found.running_at.as_deref(), Some(host), "{value:?}");
+            assert_eq!(
+                gateway(found, "ollama").endpoint,
+                format!("{host}/v1"),
+                "{value:?}"
+            );
+        }
+
+        let (_, asked) = with_ollama(&[], None);
+        assert_eq!(asked, ["http://localhost:11434"], "unset");
+    }
+
+    /// IMPORT-10: a start asks before anyone has agreed to anything, so it reaches no machine but
+    /// this one: another host would learn that this program started, and could choose the gateway
+    /// the person is offered. What `OLLAMA_HOST` names is said instead.
+    #[test]
+    fn an_ollama_host_off_this_machine_is_left_and_not_asked() {
+        for value in [
+            "192.168.1.5",
+            "10.0.0.1:11434",
+            "example.com",
+            "ollama.com",
+            "https://example.com/ollama",
+            "localhost.example.com",
+            "[2001:db8::1]:11434",
+            "::ffff:8.8.8.8",
+            "http://[fe80::1]:11434",
+        ] {
+            let (found, asked) = with_ollama(&[(OLLAMA_HOST, value)], Some(three_pulled()));
+
+            assert!(asked.is_empty(), "{value:?} was asked at {asked:?}");
+            let [found] = found.as_slice() else {
+                panic!("not one source for {value:?}: {found:?}");
+            };
+            assert!(!found.importable(), "{value:?}: {found:?}");
+            assert_eq!(left(found), [(OLLAMA_HOST, Reason::Elsewhere)], "{value:?}");
+        }
+    }
+
+    /// IMPORT-10: an Ollama that is not running is the ordinary case, and a start that said so
+    /// every time would be noise about a program the person may never have installed.
+    #[test]
+    fn an_ollama_that_does_not_answer_is_no_source() {
+        let (found, asked) = with_ollama(&[], None);
+
+        assert_eq!(asked.len(), 1);
+        assert!(found.is_empty(), "{found:?}");
     }
 }

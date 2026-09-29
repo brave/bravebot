@@ -231,6 +231,13 @@ impl bravebot_agent::Confirmer for AskedAboutServers {
         bravebot_agent::confirm::CallDecision::reject()
     }
 
+    fn confirm_move(
+        &mut self,
+        _request: &bravebot_agent::confirm::MoveRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn ask_user(
         &mut self,
         _asking: &bravebot_core::ask::Asking,
@@ -323,6 +330,7 @@ fn a_server_approved_in_one_turn_answers_the_next() {
         &mut trust,
         &target,
         &mut servers,
+        None,
     );
     assert!(refused.is_empty());
     assert!(servers.is_none());

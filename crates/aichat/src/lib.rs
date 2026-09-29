@@ -17,6 +17,7 @@
 #![forbid(unsafe_code)]
 
 pub mod models;
+pub mod ollama;
 pub mod protocol;
 
 use bravebot_config::{Config, Secret};
@@ -676,7 +677,12 @@ impl<'a> AichatClient<'a> {
             return Err(ChatError::Cancelled);
         }
 
-        let http = self.prepare(request)?.header("accept", "text/event-stream");
+        // A model on this machine may send nothing at all for minutes while it writes a tool call,
+        // Ollama not even its headers, and this wait can be stopped at any moment of it.
+        let http = self
+            .prepare(request)?
+            .header("accept", "text/event-stream")
+            .patient_on_this_machine();
 
         self.attempts += 1;
         let stream = self.egress.fetch_streaming(
@@ -724,11 +730,19 @@ impl<'a> AichatClient<'a> {
         let mut malformed = false;
         // One envelope, arriving in frames, so it is authorised once rather than once a frame.
         let decoding = policy.decode_transport("chat stream", Label::untrusted_public());
+        // Whether any of the body has arrived, which is a fact about the connection and not about
+        // what the body said.
+        let mut began = false;
 
         loop {
             let piece = match arriving.recv_timeout(WAKE) {
                 Ok(Ok(Some(piece))) => piece,
                 Ok(Ok(None)) => break,
+                // The request got through: part of the answer is here. Reported as a connection
+                // failure, the turn said so to a person whose model had been writing for minutes.
+                Ok(Err(EgressError::Transport { .. })) if began => {
+                    return Err(ChatError::Incomplete);
+                }
                 Ok(Err(e)) => return Err(e.into()),
                 // Nothing has arrived yet, which is the whole point of waiting with a limit: it
                 // is the only chance to look at anything while a reply is still being waited for.
@@ -742,6 +756,7 @@ impl<'a> AichatClient<'a> {
                 // connection that died leaves, and is answered as one below.
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             };
+            began = true;
 
             // A stream is read and nothing else, so there is nothing part written to leave behind
             // by stopping here, and the caller is throwing the reply away regardless.

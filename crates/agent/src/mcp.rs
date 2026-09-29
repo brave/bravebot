@@ -12,20 +12,23 @@
 //! that list.
 
 use crate::confirm::{
-    CallDecision, Confirmer, Decision, ListedTool, McpCallRequest, ToolListRequest,
+    CallDecision, Confirmer, Decision, ListedTool, McpCallRequest, MoveRequest, ToolListRequest,
 };
 use crate::processor::Chat;
 use crate::report::Reporter;
 use crate::scratch::SessionScratch;
 use bravebot_aichat::protocol::{Tool, Usage};
-use bravebot_config::mcp::{self as records, Approvals, Digest, Standing};
+use bravebot_config::mcp::{
+    self as records, Approvals, Declaration, Declarations, Digest, Problem, Standing,
+};
+use bravebot_config::{Managed, Refusal, Rule};
 use bravebot_core::capability::{Capability, CapabilitySet, ServerAlias};
 use bravebot_core::event::Sink;
 use bravebot_core::policy::Policy;
 use bravebot_core::value::Labelled;
 use bravebot_core::vetting::{Endorsed, Verdict};
 use bravebot_i18n::t;
-use bravebot_mcp::{HttpServer, Listing, McpResult, StdioServer, wire_name};
+use bravebot_mcp::{HttpServer, Listing, McpError, McpResult, StdioServer, wire_name};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
@@ -160,7 +163,8 @@ impl Argument {
 /// One server, for as long as the session runs.
 struct Server {
     alias: String,
-    declaration: Digest,
+    /// Replaced when the person moves the server where its reply pointed (SERVERS-11).
+    declaration: Mutex<Digest>,
     /// Whether this is a process the session confined, read once so nothing asking waits on a call.
     local: bool,
     /// Locked for a question's length only, so a screen asking how things stand is never kept
@@ -181,6 +185,9 @@ struct Shared {
     directory: Option<PathBuf>,
     /// Whether anything may be written into it, which an incognito session may not.
     writable: bool,
+    /// What this machine's administrator allows, which a server moved anywhere is held to as one
+    /// started there is (SERVERS-12).
+    managed: Managed,
 }
 
 /// The servers a session reached. Cloned into every turn of it, and every clone is the one set.
@@ -249,18 +256,19 @@ fn held<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 impl Session {
     /// `project` is the workspace root. `directory` is the state directory, and `writable` whether
-    /// this session may write into it.
+    /// this session may write into it. `managed` is what this machine's administrator allows.
     pub fn new(
         reached: Vec<Reached>,
         project: PathBuf,
         directory: Option<PathBuf>,
         writable: bool,
+        managed: Managed,
     ) -> Self {
         let servers = reached
             .into_iter()
             .map(|reached| Server {
                 alias: reached.alias().to_string(),
-                declaration: reached.declaration,
+                declaration: Mutex::new(reached.declaration),
                 local: matches!(reached.connection, Connection::Stdio(_)),
                 state: Mutex::new(State::Unasked(reached.listing)),
                 connection: Mutex::new(reached.connection),
@@ -272,6 +280,7 @@ impl Session {
             project: Mutex::new(project),
             directory,
             writable,
+            managed,
         }))
     }
 
@@ -319,7 +328,11 @@ impl Session {
             .collect()
     }
 
-    /// Settle every list nobody has been asked about yet (SERVERS-8, SERVERS-13).
+    /// Settle every list nobody has been asked about yet of a server `holding` grants a call to
+    /// (SERVERS-8, SERVERS-13).
+    ///
+    /// A server the turn holds no grant for is one it is offered nothing of, so its list waits
+    /// for a turn that does rather than being put to a person who could not use the answer here.
     ///
     /// A list that is the one somebody vouched for under this declaration before is offered with
     /// nobody asked. Every other list is checked, unless every check is being bypassed, and put to
@@ -334,11 +347,17 @@ impl Session {
         confirmer: &mut C,
         reporter: &mut R,
         mode: crate::PermissionMode,
+        holding: &CapabilitySet,
     ) -> Settled {
         let mut settled = Settled::default();
         for server in &self.0.servers {
             if stopped(chat) {
                 break;
+            }
+            if !holding.contains(&Capability::McpCall(ServerAlias::new(
+                server.alias.as_str(),
+            ))) {
+                continue;
             }
             // Taken out rather than held, so nothing is locked while the person reads the list.
             let listing = {
@@ -376,11 +395,9 @@ impl Session {
     ) -> (State, Usage) {
         let alias = server.alias.as_str();
         let refused = listing.refused();
-        let recorded = self
-            .0
-            .directory
-            .as_deref()
-            .and_then(|directory| Approvals::read(directory).vouched_list(&server.declaration));
+        let recorded = self.0.directory.as_deref().and_then(|directory| {
+            Approvals::read(directory).vouched_list(&held(&server.declaration))
+        });
 
         let (list, changed) = match recorded {
             Some(recorded) => match policy.promote_a_recorded_tool_list(
@@ -472,7 +489,7 @@ impl Session {
         let written = Approvals::to_change(directory)
             .map_err(|why| unreadable_record(&why))
             .and_then(|mut approvals| {
-                approvals.vouch_list(server.declaration, Digest::of_list(&text));
+                approvals.vouch_list(*held(&server.declaration), Digest::of_list(&text));
                 replace(&records::approvals_file(directory), approvals.to_text())
                     .map_err(|error| error.to_string())
             });
@@ -553,6 +570,232 @@ impl Session {
             Connection::Stdio(server) => server.call_tool(policy, tool, arguments),
             Connection::Http(server) => server.call_tool(policy, egress, tool, arguments),
         }
+    }
+
+    /// Put where `alias`'s reply pointed to the person, and on a yes move the server there
+    /// (SERVERS-11). Whether it moved, so the request may be made again to where it now is.
+    ///
+    /// The destination is the server's own bytes, so it is drawn and decides nothing until the
+    /// person says it is where the server now is: only then is it read as a url, held to the
+    /// managed layer, and reached. The handshake there comes before the declaration is rewritten,
+    /// so a destination that does not answer is not written down.
+    #[allow(clippy::too_many_arguments)]
+    fn moved<S: Sink, C: Confirmer, R: Reporter>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        egress: &bravebot_net::Egress,
+        confirmer: &mut C,
+        reporter: &mut R,
+        alias: &str,
+        hop: &Labelled<String>,
+    ) -> bool {
+        let Some(server) = self.0.servers.iter().find(|server| server.alias == alias) else {
+            return false;
+        };
+        let declared = match &*held(&server.connection) {
+            Connection::Http(http) => http.url().to_string(),
+            Connection::Stdio(_) => return false,
+        };
+        let from = *held(&server.declaration);
+        let shaped = policy.render_in_place("mcp_move", hop, |url| {
+            let authority = bravebot_core::url::authority_of(&url).unwrap_or_default();
+            (url, authority)
+        });
+        let (destination, authority) = {
+            let proof = policy.authorise_display_release("where an MCP server's reply pointed");
+            shaped.declassify(&proof)
+        };
+        let request = MoveRequest {
+            alias: alias.to_string(),
+            declared,
+            destination,
+            authority,
+            may_record: self.may_stand(),
+        };
+        if confirmer.confirm_move(&request) == Decision::Reject {
+            reporter.notice(t!(mcp_move_declined, alias = alias));
+            return false;
+        }
+
+        policy.endorse_server_move(alias);
+        let Ok(Ok(url)) = policy
+            .promote_a_server_move(alias, hop)
+            .map(Labelled::into_trusted)
+        else {
+            return false;
+        };
+        let declaration = match Declaration::http(url.clone()) {
+            Ok(declaration) => declaration,
+            Err(problem) => {
+                reporter.notice(t!(
+                    mcp_move_undeclarable,
+                    alias = alias,
+                    problem = undeclarable(&problem)
+                ));
+                return false;
+            }
+        };
+        if let Some(reason) =
+            managed_refusal(&self.0.managed, bravebot_config::Server::Remote(&url))
+        {
+            reporter.notice(t!(
+                mcp_move_refused_by_managed,
+                alias = alias,
+                reason = reason
+            ));
+            return false;
+        }
+
+        let mut moved = HttpServer::new(alias, url.as_str());
+        if let Err(error) = moved.initialize(policy, egress, "bravebot", env!("CARGO_PKG_VERSION"))
+        {
+            match policy.take_server_hop() {
+                Some(_) => reporter.notice(t!(mcp_move_again, alias = alias)),
+                None => reporter.notice(t!(
+                    mcp_move_no_handshake,
+                    alias = alias,
+                    reason = error.to_string()
+                )),
+            }
+            return false;
+        }
+
+        if let (Some(directory), true) = (&self.0.directory, self.0.writable) {
+            match record_a_move(directory, alias, &from, &declaration) {
+                Ok(()) => reporter.notice(t!(mcp_move_moved, alias = alias)),
+                Err(Unmoved::Edited) => {
+                    reporter.notice(t!(mcp_move_edited, alias = alias));
+                    return false;
+                }
+                Err(Unmoved::NotWritten(error)) => {
+                    reporter.notice(t!(mcp_move_not_recorded, alias = alias, error = error));
+                }
+            }
+        } else {
+            reporter.notice(t!(mcp_move_moved, alias = alias));
+        }
+        *held(&server.connection) = Connection::Http(moved);
+        *held(&server.declaration) = declaration.digest();
+        true
+    }
+}
+
+/// Why a url a person approved a server moving to cannot be declared. [`Declaration::http`] refuses
+/// one for nothing else.
+fn undeclarable(problem: &Problem) -> String {
+    match problem {
+        Problem::Credentials => t!(mcp_problem_credentials).to_string(),
+        _ => t!(mcp_problem_url).to_string(),
+    }
+}
+
+/// Why rewriting a server's declaration to where it moved was not done.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Unmoved {
+    /// The declaration is no longer the one the server was started from, so what the person was
+    /// asked about is not what the file says, and the file is left as it is.
+    Edited,
+    /// A file could not be read or written. The sentence says which, and why.
+    NotWritten(String),
+}
+
+/// Rewrite `alias`'s declaration from `from` to `to`, and approve `to` in the same write
+/// (SERVERS-11).
+///
+/// The approval is recorded in the approvals file whatever answered for the declaration it
+/// replaces: a project a person said to use every server in answers for what a checkout requests,
+/// and never for where a server went. Declarations first, then approvals, as every rewrite of the
+/// pair is, so a write that stops between them leaves a declaration nobody approved, which asks.
+pub fn record_a_move(
+    directory: &Path,
+    alias: &str,
+    from: &Digest,
+    to: &Declaration,
+) -> Result<(), Unmoved> {
+    let mut declarations = Declarations::read(directory).map_err(|why| {
+        Unmoved::NotWritten(
+            t!(
+                mcp_unreadable,
+                path = shown(&records::declarations_file(directory).display().to_string()),
+                reason = unreadable(&why)
+            )
+            .to_string(),
+        )
+    })?;
+    let still = declarations
+        .get(alias)
+        .and_then(|entry| entry.declaration.ok())
+        .is_some_and(|declaration| declaration.digest() == *from);
+    if !still {
+        return Err(Unmoved::Edited);
+    }
+    let mut approvals = Approvals::to_change(directory).map_err(|why| {
+        Unmoved::NotWritten(
+            t!(
+                mcp_unreadable,
+                path = shown(&records::approvals_file(directory).display().to_string()),
+                reason = unreadable_record(&why)
+            )
+            .to_string(),
+        )
+    })?;
+    declarations.insert(alias, to);
+    approvals.keep_only(&declarations);
+    approvals.approve(alias, to.digest());
+    replace(
+        &records::declarations_file(directory),
+        declarations.to_text(),
+    )
+    .and_then(|()| replace(&records::approvals_file(directory), approvals.to_text()))
+    .map_err(|error| Unmoved::NotWritten(error.to_string()))
+}
+
+/// The reason the machine's managed layer gives for keeping `server` from starting, naming its
+/// file, where it gives one (SERVERS-12).
+pub fn managed_refusal(managed: &Managed, server: bravebot_config::Server<'_>) -> Option<String> {
+    let (path, refusal) = managed.refuses(server)?;
+    let path = path.display().to_string();
+    Some(match refusal {
+        Refusal::NotAllowed => t!(managed_not_allowed, path = path).to_string(),
+        Refusal::Denied(rule) => t!(managed_denied, path = path, entry = entry(rule)).to_string(),
+        Refusal::HostUnread => t!(managed_host_unread, path = path).to_string(),
+    })
+}
+
+/// A managed entry as its file's author would find it again.
+pub fn entry(rule: &Rule) -> String {
+    match rule {
+        Rule::Host(host) => format!("host {}", shown(host)),
+        Rule::Command(argv) => {
+            let words: Vec<String> = argv.iter().map(|word| shown(word)).collect();
+            format!("command {}", words.join(" "))
+        }
+    }
+}
+
+/// A word as it is safe to draw: as it is where every character is one a terminal draws as itself
+/// and none would blur where the word ends, and quoted with its escapes otherwise.
+pub fn shown(word: &str) -> String {
+    let plain = !word.is_empty()
+        && word.chars().all(|c| match c.is_ascii() {
+            true => c.is_ascii_graphic() && !matches!(c, '"' | '\'' | '\\'),
+            false => c.is_alphanumeric(),
+        });
+    match plain {
+        true => word.to_string(),
+        false => format!("{word:?}"),
+    }
+}
+
+/// Why the declarations file cannot be read, and so cannot be rewritten either.
+pub fn unreadable(why: &records::Unreadable) -> String {
+    match why {
+        records::Unreadable::TooLarge => t!(mcp_unreadable_too_large).to_string(),
+        records::Unreadable::NotRead => t!(mcp_unreadable_not_read).to_string(),
+        records::Unreadable::NotJson => t!(mcp_unreadable_not_json).to_string(),
+        records::Unreadable::NotAnObject => t!(mcp_unreadable_not_an_object).to_string(),
+        records::Unreadable::Servers => t!(mcp_unreadable_servers).to_string(),
+        records::Unreadable::Key(key) => t!(mcp_unreadable_key, key = shown(key)).to_string(),
     }
 }
 
@@ -788,9 +1031,24 @@ pub(crate) fn call<S: Sink, C: Confirmer, R: Reporter>(
         Ok(arguments) => arguments,
         Err(denial) => return Called::Problem(format!("refused: {denial}")),
     };
-    match session.call(policy, egress, alias, tool, arguments) {
+    let answered = match session.call(policy, egress, alias, tool, arguments.clone()) {
+        // A reply that pointed off the declaration is put to the person, and on a yes the call is
+        // made once more, to where the server now is. A second hop is refused as the first was.
+        Err(McpError::Denied(denial)) => match policy.take_server_hop() {
+            Some(hop) if session.moved(policy, egress, confirmer, reporter, alias, &hop) => {
+                let again = session.call(policy, egress, alias, tool, arguments);
+                if matches!(again, Err(McpError::Denied(_))) && policy.take_server_hop().is_some() {
+                    reporter.notice(t!(mcp_move_again, alias = alias));
+                }
+                again
+            }
+            _ => Err(McpError::Denied(denial)),
+        },
+        other => other,
+    };
+    match answered {
         Ok(result) => Called::Answered(result),
-        Err(bravebot_mcp::McpError::ToolFailed { detail, .. }) => Called::Failed(detail),
+        Err(McpError::ToolFailed { detail, .. }) => Called::Failed(detail),
         Err(error) => Called::Problem(format!("error: calling {name} failed: {error}")),
     }
 }

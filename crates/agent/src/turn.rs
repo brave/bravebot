@@ -1142,7 +1142,7 @@ impl Task {
 /// narrowed by whatever the run that spawned it held. Taken from the spec rather than recomputed
 /// here, because a second computation of the same thing is a second answer waiting to disagree
 /// with the one the trail recorded. The servers it holds are there too, where its kind holds
-/// servers, and are every one its parent held.
+/// servers, and are those its parent held that its definition selects.
 fn held(task: &Task) -> CapabilitySet {
     match &task.delegate {
         Some(spec) => spec.capabilities().clone(),
@@ -2430,6 +2430,10 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     let began = Instant::now();
     let mut spent = Elapsed::default();
 
+    // Every route into a file this turn takes goes through this copy, so a write that leaves a
+    // definition's memory untrusted is recorded wherever it comes from (MEMORY-5).
+    let workspace = &workspace.clone().keeping_memories(task.home.clone());
+
     let mut routing = Routing::new();
     routing.insert_trusted("task", task.prompt.clone());
     for (index, file) in task.files.iter().enumerate() {
@@ -2481,6 +2485,10 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         policy = policy.within(spec);
     }
 
+    // Before every turn rather than as a session opens, since a session's map is made at a start,
+    // a clear and a resume and moved by `/cd` (MEMORY-5).
+    crate::memory::distrust_recorded(&mut policy, workspace, task.home.as_deref());
+
     // Keep the policy outside all fallible context loading and execution. Locals in this
     // closure, including child scopes and jobs, are cleaned up before decisions are copied.
     let mut outcome = (|| {
@@ -2523,6 +2531,12 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             crate::agents::discover(&mut policy, workspace, task.home.as_deref());
         notices.extend(delegate_notices);
         notices.extend(crate::agents::skills_not_found(&delegates, &catalogue));
+        let reached = task
+            .mcp
+            .as_ref()
+            .map(|mcp| mcp.aliases())
+            .unwrap_or_default();
+        notices.extend(crate::agents::servers_not_found(&delegates, &reached));
         policy.install_delegates(delegates.clone());
 
         // A delegate whose definition named skills is offered those of them this turn found, and is
@@ -2664,12 +2678,17 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // nobody is watching the writes. Only plan mode says anything: see
         // `PermissionMode::instruction`.
         let mode = task.permission_mode.instruction().unwrap_or_default();
+        let memory = |keeps: bool, name: &str| match keeps {
+            true => crate::memory::told(&policy, workspace, name),
+            false => String::new(),
+        };
         let system = match &task.delegate {
             Some(spec) => format!(
                 "{}{}{mode}",
                 crate::delegate::prompt_for(
                     spec.capabilities(),
                     spec.prompt(),
+                    &memory(spec.keeps_memory(), spec.definition()),
                     spec.may_delegate()
                 ),
                 preamble.text
@@ -2686,7 +2705,10 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                 preamble.for_a_person,
                 addressed
                     .as_ref()
-                    .map(crate::delegate::addressed_prompt)
+                    .map(|addressed| crate::delegate::addressed_prompt(
+                        addressed,
+                        &memory(addressed.keeps_memory(), addressed.name())
+                    ))
                     .unwrap_or_default(),
                 preamble.text
             ),
@@ -2706,7 +2728,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             // The rule goes under the name the map keys on: `@` takes the word the user typed, so a
             // file in the project can arrive spelled absolutely, and a rule under that spelling would
             // leave the read below asking about the relative one and finding nothing.
-            policy.vouch_for_named_path(&workspace.trust_key(&path));
+            crate::memory::vouch_for_named(&mut policy, workspace, &path);
             let contents = workspace.read(&mut policy, &Labelled::trusted(path.clone()))?;
             admit_context_file(&mut policy, conversation, &path, &contents)?;
         }
@@ -2719,7 +2741,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             // Keyed as the read below keys it. A drop usually arrives from outside the project, where
             // the name stands as it is, but one from inside it has a relative name and that is the one
             // the read will ask about.
-            policy.vouch_for_named_path(&workspace.trust_key(&path));
+            crate::memory::vouch_for_named(&mut policy, workspace, &path);
             let contents =
                 workspace.read_dropped_text(&mut policy, &Labelled::trusted(path.clone()))?;
             admit_context_file(&mut policy, conversation, &path, &contents)?;
@@ -2773,7 +2795,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
 
                 // Attaching the file is the grant, exactly as naming one with `@` is. Recorded before
                 // the read so the read sees it, and under the name the read will ask about.
-                policy.vouch_for_named_path(&workspace.trust_key(&path));
+                crate::memory::vouch_for_named(&mut policy, workspace, &path);
 
                 let contents = workspace.read_dropped_attachment(
                     &mut policy,
@@ -2864,8 +2886,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // for, a tick of their loop included, which is where there is a person to put a list to
         // (SERVERS-8). A delegate settles none, since it puts no question to a person (DELEGATE-12),
         // and is offered what its parent's turn already settled. Every run is offered the tools of the
-        // servers it holds a grant for and no other, so a run of a definition that holds no servers is
-        // offered none and, being put no list, is asked about none either (ADDRESS-7).
+        // servers it holds a grant for and no other, and is put the lists of those alone, so a run
+        // of a definition that holds no servers is offered none and asked about none either
+        // (ADDRESS-7).
         let holding = match (&task.delegate, &addressed) {
             (Some(spec), _) => spec.capabilities().clone(),
             (None, Some(addressed)) => addressed.capabilities().clone(),
@@ -2895,6 +2918,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     &mut confirmer,
                     &mut reporter,
                     task.permission_mode,
+                    &holding,
                 );
                 notices.extend(
                     settled
@@ -3828,11 +3852,20 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 _ => None,
                             };
 
+                            // Nothing to keep from anybody, so no reference to it and no advice about
+                            // one. From the size the slot states, which the reference would have put
+                            // in front of the planner as "0 bytes" anyway, so no byte is read to decide.
+                            let printed_nothing = output.printed_by.is_some()
+                                && matches!(
+                                    &presented,
+                                    Presentation::Quarantined(reference) if reference.bytes == Some(0)
+                                );
+
                             // Only where the result is workspace content. A read of a file the planner
                             // already holds a reference to answers with a sentence the driver wrote, and
                             // reporting that the model has read *that* is true, useless, and read by a
                             // person as a claim about their file.
-                            if output.content {
+                            if output.content && !printed_nothing {
                                 reporter.landed(match (&presented, &output.deferred) {
                                     (_, Some(_)) => crate::report::Landing::Reserved,
                                     (Presentation::Visible(_), _) => {
@@ -3916,6 +3949,20 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                     }
                                     format!(
                                         "{TOOL_RESULT_PREFIX}{}:\n\n{ended}{text}{rest}",
+                                        output.tool
+                                    )
+                                }
+                                // Told a mkdir's empty output was quarantined, with the ways to
+                                // process, vet or read it, a planner went looking for something to
+                                // do with nothing.
+                                Presentation::Quarantined(_) if printed_nothing => {
+                                    let nothing = if output.tool == "run" {
+                                        "It printed nothing."
+                                    } else {
+                                        "It has printed nothing new."
+                                    };
+                                    format!(
+                                        "{TOOL_RESULT_PREFIX}{}:\n\n{ended}{nothing}",
                                         output.tool
                                     )
                                 }

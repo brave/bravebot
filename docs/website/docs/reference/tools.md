@@ -631,6 +631,11 @@ at the prompt, and it takes every rule a write takes: the permission rules, the 
 for that path, and the confinement that keeps a write inside the workspace. `>>` is a write, and
 `2>&1` renames a stream and touches no file.
 
+**`> /dev/null` discards, so it is not a write.** Sending a stream to `/dev/null` (with `>`, `>>`,
+`2>`, `2>>` or `&>`) writes no file, so the path joins no write set and no write rule is asked about
+it; the prompt still shows where the stream went. Only that exact spelling counts: `/dev/../dev/null`,
+or a link to the device, is an ordinary path and is refused as one outside the workspace.
+
 **A redirection also records what it wrote.** Where the line's output is untrusted, every file the line
 opened for writing becomes untrusted, which is what stops a program's output being read back as
 trusted. Where the output is trusted the map is left as it was, because `>>` keeps whatever the file
@@ -690,6 +695,10 @@ running them, which is not what happened: the label is about who answered for th
 shown the output and a run the mode approved vouches for nothing: the planner is told that
 `read_output` hands it back as text it can read, and, on a run's result, that `read: true` returns it
 in the same result. The advice does not name the mode, which the planner is told only in plan mode.
+
+A command that printed nothing, such as a `mkdir`, has nothing to keep back. The planner is told it
+printed nothing, with no reference and no advice, and the transcript does not mark it as kept from
+the planner. That is decided from the size of the output alone.
 
 **Every result says how the run ended**, in front of what the program printed: that every step
 exited zero, which step did not and with what code, or that the line outstayed

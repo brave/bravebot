@@ -243,6 +243,8 @@ enum Attempt {
     Frames(Vec<String>),
     /// Complete SSE frames followed by an unfinished HTTP chunked body.
     BrokenFrames(Vec<String>),
+    /// Headers for a chunked stream, then hang up before any of the body.
+    BrokenBeforeBody,
 }
 
 /// Serve one behaviour per connection, in order, recording what each request carried.
@@ -309,6 +311,12 @@ fn serve_attempts(attempts: Vec<Attempt>) -> (String, mpsc::Receiver<Captured>) 
                     write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{:x}\r\n{}\r\n", body.len(), body).unwrap();
                     stream.flush().unwrap();
                     // No terminating HTTP chunk: the protocol can finish before transport fails.
+                }
+                Attempt::BrokenBeforeBody => {
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+                    );
+                    let _ = stream.flush();
                 }
                 Attempt::Frames(frames) => {
                     let _ = stream.write_all(
@@ -865,6 +873,156 @@ fn a_stream_that_stops_before_the_server_says_it_is_finished_is_not_a_reply() {
             .to_string()
             .contains("before the server said it was finished"),
         "got: {failed}"
+    );
+}
+
+/// A stream whose connection fails after part of the reply arrived is a reply that stopped. The
+/// request got through, so reporting it as one that did not told a person whose model had been
+/// writing for minutes that the service could not be reached.
+#[test]
+fn a_stream_that_breaks_after_it_began_is_a_reply_that_stopped() {
+    let begun = || {
+        Attempt::BrokenFrames(vec![frame(
+            r#"{"choices":[{"delta":{"content":"Let me"}}]}"#,
+        )])
+    };
+    let (endpoint, received) = serve_attempts(vec![begun(), begun(), begun()]);
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let mut client = AichatClient::new(&config, &egress);
+    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
+    let failed = client.complete_streaming(&mut policy, &request, |_| {});
+
+    assert!(matches!(failed, Err(ChatError::Incomplete)), "{failed:?}");
+    assert_eq!(
+        client.attempts(),
+        3,
+        "a reply that stopped is asked for again"
+    );
+    assert_eq!(received.try_iter().count(), 3);
+}
+
+/// A model on this machine goes quiet while it writes a tool call, for minutes where it is large,
+/// and the stream carrying it is not given up on for that. Cut at the gap bound, the turn failed
+/// with the call half written.
+#[test]
+fn a_model_on_this_machine_that_goes_quiet_while_it_writes_is_waited_for() {
+    let endpoint = serve_stream_paced(
+        vec![
+            frame(r#"{"choices":[{"delta":{"content":"Let me write it."}}]}"#),
+            frame(r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#),
+        ],
+        Duration::from_millis(800),
+    );
+    let config = config_for(&endpoint);
+    let egress = Egress::with_timeouts(bravebot_net::Timeouts {
+        reply: Duration::from_millis(300),
+        idle: Duration::from_millis(300),
+        ..bravebot_net::Timeouts::default()
+    });
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let mut client = AichatClient::new(&config, &egress).with_cancel(Cancel::new());
+    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
+    client
+        .complete_streaming(&mut policy, &request, |_| {})
+        .expect("a quiet local model is waited for");
+
+    assert_eq!(client.attempts(), 1);
+}
+
+/// The same silence, to a client nobody can stop, is still cut at its bounds. `/compact`, `/btw`
+/// and a goal check are such clients, and a local server that took their request and hung would
+/// otherwise hold the screen with no way out but killing the process.
+#[test]
+fn a_quiet_local_model_is_not_waited_on_without_bound_by_a_client_nobody_can_stop() {
+    let endpoint = serve_stream_paced(
+        vec![
+            frame(r#"{"choices":[{"delta":{"content":"Let me write it."}}]}"#),
+            frame(r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#),
+        ],
+        Duration::from_millis(800),
+    );
+    let config = config_for(&endpoint);
+    let egress = Egress::with_timeouts(bravebot_net::Timeouts {
+        reply: Duration::from_millis(300),
+        idle: Duration::from_millis(300),
+        ..bravebot_net::Timeouts::default()
+    });
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let mut client = AichatClient::new(&config, &egress);
+    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
+    let failed = client.complete_streaming(&mut policy, &request, |_| {});
+
+    // The whole-reply bound, which counts from the request having gone and so runs out before the
+    // gap after the first piece does.
+    assert!(
+        matches!(
+            failed,
+            Err(ChatError::Egress(
+                bravebot_net::EgressError::OutOfTime { .. }
+            ))
+        ),
+        "{failed:?}"
+    );
+}
+
+/// The same failure with none of the body arrived is still the connection's, so the reply that
+/// stopped is told apart by what arrived and not by the stream having been opened.
+#[test]
+fn a_stream_that_breaks_before_any_of_it_arrived_is_still_a_connection_failure() {
+    let (endpoint, _received) = serve_attempts(vec![
+        Attempt::BrokenBeforeBody,
+        Attempt::BrokenBeforeBody,
+        Attempt::BrokenBeforeBody,
+    ]);
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let mut client = AichatClient::new(&config, &egress);
+    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
+    let failed = client.complete_streaming(&mut policy, &request, |_| {});
+
+    assert!(
+        matches!(
+            failed,
+            Err(ChatError::Egress(
+                bravebot_net::EgressError::Transport { .. }
+            ))
+        ),
+        "{failed:?}"
     );
 }
 

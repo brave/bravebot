@@ -75,6 +75,10 @@ pub struct Timeouts {
     /// its time, and none of that is a fault. It is the only bound on the wait before the reply
     /// starts, since nothing has arrived yet for a gap to be measured between, and it bounds the
     /// body again from the moment the headers arrive rather than counting the two together.
+    ///
+    /// A request that knows how long its reply can run states its own in place of this one
+    /// ([`Request::reply_within`], [`Request::stream_within`]), since no one figure fits a reply
+    /// of every length.
     pub reply: Duration,
     /// The longest gap between two pieces of a reply that is still arriving.
     ///
@@ -118,6 +122,13 @@ pub enum EgressError {
         /// timeout, a reset, or a name that did not resolve are facts about the connection.
         transient: bool,
     },
+    /// The reply was still arriving when the time it was given ran out.
+    ///
+    /// Not a transport failure, because the two are answered differently: a connection that went
+    /// quiet may be dead and another attempt may get past it, where a reply cut at its deadline was
+    /// being written, and another attempt writes it as long and is billed for it again. Decided
+    /// from which of the transport's bounds ended the read, never from anything a server sent.
+    OutOfTime { url: String },
     /// The server returned a non-success status.
     Status { url: String, status: u16 },
     /// The caller asked to stop while the request was still being waited on.
@@ -141,6 +152,9 @@ impl fmt::Display for EgressError {
             Self::Transport { url, detail, .. } => {
                 write!(f, "request to {url} failed: {detail}")
             }
+            Self::OutOfTime { url } => {
+                write!(f, "the reply from {url} ran past the time it was given")
+            }
             Self::Status { url, status } => write!(f, "{url} returned HTTP {status}"),
             Self::Stopped { url } => write!(f, "the request to {url} was stopped"),
         }
@@ -163,6 +177,8 @@ impl EgressError {
             | Self::InvalidUrl { .. }
             // The same chain answers the same way, so another attempt is the same downgrade.
             | Self::InsecureRedirect { .. }
+            // The same reply takes as long again and is billed again.
+            | Self::OutOfTime { .. }
             // The one error that says the reply is not wanted. Sending it again would be
             // answering a request somebody withdrew.
             | Self::Stopped { .. } => false,
@@ -186,6 +202,7 @@ impl EgressError {
             Self::TooManyRedirects { .. } => Self::TooManyRedirects { url },
             Self::MissingLocation { .. } => Self::MissingLocation { url },
             Self::Stopped { .. } => Self::Stopped { url },
+            Self::OutOfTime { .. } => Self::OutOfTime { url },
             Self::Status { status, .. } => Self::Status { url, status },
             // The detail here is this crate's own sentence about a shape, so it survives.
             Self::InvalidUrl { detail, .. } => Self::InvalidUrl { url, detail },
@@ -293,11 +310,7 @@ impl Streamed<'_> {
                 }
                 Ok(Some(Labelled::new(buffer, self.label)))
             }
-            Err(e) => Err(EgressError::Transport {
-                url: self.requested.clone(),
-                detail: e.to_string(),
-                transient: is_transient_io(&e),
-            }),
+            Err(e) => Err(body_failure(&self.requested, e)),
         }
     }
 
@@ -330,6 +343,23 @@ pub struct Request {
     pub url: String,
     pub headers: Vec<(String, String)>,
     pub body: Option<Vec<u8>>,
+    /// How long the reply may take, where the request says. Otherwise [`Timeouts::reply`].
+    pub reply: Option<ReplyBound>,
+    /// Whether a reply from this machine is waited on for as long as it takes. See
+    /// [`Request::patient_on_this_machine`].
+    pub patient_on_this_machine: bool,
+}
+
+/// How long a reply may take, stated by the request that asks for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplyBound {
+    /// The wait for the reply to begin, and then the whole of it: a reply written in full before
+    /// any of it is sent.
+    Whole(Duration),
+    /// The reply from the moment it begins: a stream, whose first bytes are sent at once. The wait
+    /// for them stays [`Timeouts::reply`], so a server that never answers is given up on no later
+    /// than any other.
+    Begun(Duration),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -345,6 +375,8 @@ impl Request {
             url: url.into(),
             headers: Vec::new(),
             body: None,
+            reply: None,
+            patient_on_this_machine: false,
         }
     }
 
@@ -354,6 +386,8 @@ impl Request {
             url: url.into(),
             headers: Vec::new(),
             body: Some(body),
+            reply: None,
+            patient_on_this_machine: false,
         }
     }
 
@@ -361,11 +395,42 @@ impl Request {
         self.headers.push((name.into(), value.into()));
         self
     }
+
+    /// Give the reply `bound` rather than [`Timeouts::reply`], and no longer.
+    ///
+    /// For a caller that knows how long its reply can run. The gap allowed between two pieces of
+    /// it stays [`Timeouts::idle`], because what that bound catches is the same connection
+    /// whatever was asked for.
+    pub fn reply_within(mut self, bound: Duration) -> Self {
+        self.reply = Some(ReplyBound::Whole(bound));
+        self
+    }
+
+    /// As [`Request::reply_within`], for a reply that begins at once and may then run for `bound`.
+    pub fn stream_within(mut self, bound: Duration) -> Self {
+        self.reply = Some(ReplyBound::Begun(bound));
+        self
+    }
+
+    /// Where the URL names this machine and no proxy carries it, wait on the reply for as long as
+    /// it takes: no bound on its start, its length, or the gaps in it. Resolving and connecting
+    /// keep theirs, and so does every hop past a redirect.
+    ///
+    /// Honoured only by [`Egress::fetch_streaming`] given a [`Cancel`], since a server here that
+    /// never answers is then waited on until somebody stops it. The caller reading the stream has
+    /// to look at the token between pieces for that to be true.
+    pub fn patient_on_this_machine(mut self) -> Self {
+        self.patient_on_this_machine = true;
+        self
+    }
 }
 
 /// The one way out of the process.
 pub struct Egress {
     agent: ureq::Agent,
+    /// What the agent was configured with, so a request stating its own reply bound can have the
+    /// phases that carry it worked out again the same way.
+    timeouts: Timeouts,
 }
 
 impl Default for Egress {
@@ -381,8 +446,9 @@ impl Egress {
 
     /// As [`Egress::new`], with different bounds on how long a request may take.
     ///
-    /// Exists so the bounds can be exercised in a test at a scale a test can wait for. Nothing in
-    /// the product changes them: the defaults are the product's.
+    /// Exists so the bounds can be exercised in a test at a scale a test can wait for, and for the
+    /// one request a start waits on before it has said anything: asking a local Ollama what it
+    /// serves (`bravebot_aichat::ollama`). Every other request takes the defaults.
     pub fn with_timeouts(timeouts: Timeouts) -> Self {
         Self::with_transport(timeouts, Transport::shared())
     }
@@ -429,6 +495,7 @@ impl Egress {
             .build();
         Self {
             agent: config.into(),
+            timeouts,
         }
     }
 
@@ -458,14 +525,11 @@ impl Egress {
         label: Label,
         cancel: Option<&Cancel>,
     ) -> Result<Response, EgressError> {
-        let (status, content_type, reader) = self.fetch_checked(policy, &request, cancel)?;
+        // Never stoppable: the body is read to its end below, where no token is looked at.
+        let (status, content_type, reader) = self.fetch_checked(policy, &request, cancel, false)?;
         // The URL the caller asked for, not the one the body is arriving from: a redirect chain
         // ends somewhere a server chose, and this failure is reported to whoever asked.
-        let (body, truncated) = read_capped(reader).map_err(|e| EgressError::Transport {
-            url: request.url.clone(),
-            detail: e.to_string(),
-            transient: is_transient_io(&e),
-        })?;
+        let (body, truncated) = read_capped(reader).map_err(|e| body_failure(&request.url, e))?;
 
         Ok(Response {
             status,
@@ -489,7 +553,8 @@ impl Egress {
         label: Label,
         cancel: Option<&Cancel>,
     ) -> Result<Streamed<'static>, EgressError> {
-        let (status, content_type, reader) = self.fetch_checked(policy, &request, cancel)?;
+        let (status, content_type, reader) =
+            self.fetch_checked(policy, &request, cancel, cancel.is_some())?;
 
         Ok(Streamed {
             status,
@@ -518,12 +583,27 @@ impl Egress {
         policy: &mut Policy<'_, S>,
         request: &Request,
         cancel: Option<&Cancel>,
+        stoppable: bool,
     ) -> Result<(u16, Option<String>, Box<dyn std::io::Read + Send>), EgressError> {
         let mut redirected = false;
-        match self.follow(policy, request, cancel, &mut redirected) {
+        match self.follow(policy, request, cancel, stoppable, &mut redirected) {
             Err(error) if redirected => Err(error.into_a_failure_of(&request.url)),
             outcome => outcome,
         }
+    }
+
+    /// Whether a connection to `url` would end on this machine: its host is one, and no proxy
+    /// stands between.
+    fn reaches_here(&self, url: &str) -> bool {
+        let Ok(uri) = url.parse::<ureq::http::Uri>() else {
+            return false;
+        };
+        let proxied = self
+            .agent
+            .config()
+            .proxy()
+            .is_some_and(|proxy| !proxy.is_no_proxy(&uri));
+        !proxied && uri.host().is_some_and(names_this_machine)
     }
 
     /// The redirect loop itself: send, revalidate, follow, and hand back the body reader unread.
@@ -533,6 +613,7 @@ impl Egress {
         policy: &mut Policy<'_, S>,
         request: &Request,
         cancel: Option<&Cancel>,
+        stoppable: bool,
         redirected: &mut bool,
     ) -> Result<(u16, Option<String>, Box<dyn std::io::Read + Send>), EgressError> {
         let mut url = request.url.clone();
@@ -542,9 +623,16 @@ impl Egress {
             require_http_scheme(&url)?;
             policy.before_network(&url)?;
 
+            // The caller's URL only. A hop past it is somewhere a server named, and how long to
+            // wait on it is not the server's to lengthen. And only a caller that can walk away from
+            // the wait and the body both, since with no bound nothing else ends a server that hung.
+            let patient = request.patient_on_this_machine
+                && stoppable
+                && hops == 0
+                && self.reaches_here(&url);
             let response = match cancel {
-                Some(cancel) => self.send_watching(request, &url, cancel)?,
-                None => send(&self.agent, request, &url)?,
+                Some(cancel) => self.send_watching(request, &url, patient, cancel)?,
+                None => send(&self.agent, self.timeouts, request, &url, patient)?,
             };
             let status = response.0;
 
@@ -579,7 +667,7 @@ impl Egress {
     /// name resolution, the connection, the request going out and the endpoint's first byte all
     /// happen inside a single call that cannot be asked to return. Left on this thread, a stop
     /// pressed while an endpoint is still quiet could not be noticed until it answered or the
-    /// bound on the reply ran out, which is ten minutes.
+    /// bound on the reply ran out, which is ten minutes or more.
     ///
     /// Nothing on the other thread holds a policy or a workspace: every gate has been passed
     /// before it starts, and it sends bytes and hands back a reader. So a request walked away
@@ -589,13 +677,15 @@ impl Egress {
         &self,
         request: &Request,
         url: &str,
+        patient: bool,
         cancel: &Cancel,
     ) -> Result<Sent, EgressError> {
         let (answered, waiting) = std::sync::mpsc::channel();
         let (agent, hop, target) = (self.agent.clone(), request.clone(), url.to_string());
+        let timeouts = self.timeouts;
         std::thread::spawn(move || {
             // A send that fails means the caller stopped, so there is nobody left to answer.
-            let _ = answered.send(send(&agent, &hop, &target));
+            let _ = answered.send(send(&agent, timeouts, &hop, &target, patient));
         });
 
         loop {
@@ -633,7 +723,13 @@ type Sent = (
 ///
 /// Owns nothing of the caller's, so the whole of it can be handed to a thread that is allowed to
 /// outlive the wait for it.
-fn send(agent: &ureq::Agent, request: &Request, url: &str) -> Result<Sent, EgressError> {
+fn send(
+    agent: &ureq::Agent,
+    timeouts: Timeouts,
+    request: &Request,
+    url: &str,
+    patient: bool,
+) -> Result<Sent, EgressError> {
     // GET and POST builders have different types in ureq, so the header loop is
     // repeated rather than abstracted over them.
     let result = match request.method {
@@ -642,13 +738,14 @@ fn send(agent: &ureq::Agent, request: &Request, url: &str) -> Result<Sent, Egres
             for (name, value) in &request.headers {
                 builder = builder.header(name, value);
             }
-            builder.call()
+            within(builder, timeouts, request.reply, patient).call()
         }
         Method::Post => {
             let mut builder = agent.post(url);
             for (name, value) in &request.headers {
                 builder = builder.header(name, value);
             }
+            let builder = within(builder, timeouts, request.reply, patient);
             match &request.body {
                 Some(bytes) => builder.send(&bytes[..]),
                 None => builder.send_empty(),
@@ -660,6 +757,16 @@ fn send(agent: &ureq::Agent, request: &Request, url: &str) -> Result<Sent, Egres
         Ok(r) => r,
         // A redirect with max_redirects(0) is returned as a response, not an
         // error, so anything here is a genuine transport failure.
+        // A reply asked for whole is written before any of it is sent, so its deadline can pass
+        // while its headers are still awaited, and it was being written then as surely as one cut
+        // part way. Any other reply that never began is the connection's.
+        Err(ureq::Error::Timeout(ureq::Timeout::RecvResponse))
+            if matches!(request.reply, Some(ReplyBound::Whole(_))) =>
+        {
+            return Err(EgressError::OutOfTime {
+                url: url.to_string(),
+            });
+        }
         Err(e) => {
             return Err(EgressError::Transport {
                 url: url.to_string(),
@@ -688,6 +795,47 @@ fn send(agent: &ureq::Agent, request: &Request, url: &str) -> Result<Sent, Egres
     ))
 }
 
+/// `builder` with the bound the request states on its reply, where it states one.
+///
+/// A whole reply sets the same three phases [`Egress::with_transport`] sets from
+/// [`Timeouts::reply`], for the reason given there: each bounds the phases after it, so leaving one
+/// at the agent's figure would cut the reply off there. The body's is `send` longer than the
+/// reply's, so the wait for the reply ends on the reply's own bound and is named for it, which is
+/// what [`send`] tells a reply out of time from a request that did not get through by. A begun one
+/// sets only the last, which ureq counts from the headers arriving, and the two before it keep the
+/// wait for them at the agent's.
+///
+/// A patient one lifts every bound from the request going out onwards, since each carries into the
+/// phases after it. Connecting keeps its bound, which carries only into sending the headers.
+fn within<B>(
+    builder: ureq::RequestBuilder<B>,
+    timeouts: Timeouts,
+    reply: Option<ReplyBound>,
+    patient: bool,
+) -> ureq::RequestBuilder<B> {
+    if patient {
+        return builder
+            .config()
+            .timeout_send_request(None)
+            .timeout_send_body(None)
+            .timeout_recv_response(None)
+            .timeout_recv_body(None)
+            .build();
+    }
+    match reply {
+        None => builder,
+        Some(ReplyBound::Whole(bound)) => builder
+            .config()
+            .timeout_send_request(Some(timeouts.send + bound))
+            .timeout_send_body(Some(timeouts.send + bound))
+            .timeout_recv_response(Some(bound))
+            .build(),
+        Some(ReplyBound::Begun(bound)) => {
+            builder.config().timeout_recv_response(Some(bound)).build()
+        }
+    }
+}
+
 /// How often a thread waiting on a reply looks at whether the caller has stopped.
 const STOP_CHECK: Duration = Duration::from_millis(50);
 
@@ -701,6 +849,30 @@ fn is_transient_call(error: &ureq::Error) -> bool {
         ureq::Error::Timeout(_) | ureq::Error::ConnectionFailed | ureq::Error::HostNotFound => true,
         ureq::Error::Io(e) => is_transient_io(e),
         _ => false,
+    }
+}
+
+/// What a read of a reply's body that failed is reported as.
+///
+/// ureq names the reply's own deadline, [`Timeouts::reply`] or the bound its request stated, as
+/// the wait for the response, which it keeps counting from the headers while the body arrives. Any
+/// other failure, the gap bound among them, is the connection's.
+fn body_failure(url: &str, error: std::io::Error) -> EgressError {
+    let cause = error
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<ureq::Error>());
+    if matches!(
+        cause,
+        Some(ureq::Error::Timeout(ureq::Timeout::RecvResponse))
+    ) {
+        return EgressError::OutOfTime {
+            url: url.to_string(),
+        };
+    }
+    EgressError::Transport {
+        url: url.to_string(),
+        detail: error.to_string(),
+        transient: is_transient_io(&error),
     }
 }
 
@@ -721,6 +893,20 @@ fn is_transient_io(error: &std::io::Error) -> bool {
 
 fn is_redirect(status: u16) -> bool {
     (300..400).contains(&status)
+}
+
+/// Whether a URL's host is this machine: `localhost` or a loopback address.
+///
+/// No other name, since what one resolves to is up to whoever answers the lookup.
+fn names_this_machine(host: &str) -> bool {
+    let host = host
+        .strip_prefix('[')
+        .and_then(|inner| inner.strip_suffix(']'))
+        .unwrap_or(host);
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.to_canonical().is_loopback())
 }
 
 /// Reject anything that is not http(s) before it reaches the client, so a `file://` or
@@ -834,6 +1020,47 @@ mod tests {
             config.tls_config().root_certs(),
             ureq::tls::RootCerts::WebPki
         ));
+    }
+
+    /// Only a connection that ends here is waited on without bounds. A name that merely sounds
+    /// local, or an address on the local network, is another machine that can go quiet for good.
+    #[test]
+    fn only_this_machine_is_this_machine() {
+        let direct = Egress::with_transport(
+            Timeouts::default(),
+            &Transport::stated(TrustRoots::Bundled, None, None),
+        );
+        for here in [
+            "http://localhost:11434/v1/chat/completions",
+            "http://LOCALHOST:11434",
+            "http://127.0.0.1:11434",
+            "http://127.1.2.3",
+            "http://[::1]:11434",
+            "http://[::ffff:127.0.0.1]:11434",
+            "https://localhost/v1",
+        ] {
+            assert!(direct.reaches_here(here), "{here}");
+        }
+        for elsewhere in [
+            "https://api.example.com/v1",
+            "http://192.168.1.20:11434",
+            "http://10.0.0.1",
+            "http://localhost.example.com",
+            "http://mylocalhost:11434",
+            "http://0.0.0.0:11434",
+            "http://[::]:11434",
+            "not a url",
+        ] {
+            assert!(!direct.reaches_here(elsewhere), "{elsewhere}");
+        }
+
+        // Through a proxy the connection ends at the proxy, wherever the URL points.
+        let proxied = Egress::with_transport(
+            Timeouts::default(),
+            &Transport::stated(TrustRoots::Bundled, Some("http://proxy.corp:3128"), None),
+        );
+        assert!(!proxied.reaches_here("http://localhost:11434/v1"));
+        assert!(!proxied.reaches_here("http://127.0.0.1:11434/v1"));
     }
 
     /// The classification a retry rests on. Getting it wrong in one direction repeats a request

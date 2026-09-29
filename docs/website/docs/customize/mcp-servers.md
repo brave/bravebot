@@ -57,27 +57,39 @@ argument, and a flag of bravebot's own among them, such as `--settings`, is the 
 
 | Flag | What it does |
 |---|---|
-| `--env <name>` | pass this variable to the server, by name; repeatable |
+| `-e`, `--env <name>=<value>...` | store this value for the server under this name; repeatable, and one flag takes every word up to the next flag |
+| `-e`, `--env <name>` | pass this variable to the server from your environment, by name; one name to each flag |
 | `--dir <path>` | the directory the server runs in, kept as the absolute path it resolves to |
 | `-- <program> [args...]` | a program on this machine; `--stdio --` means the same |
-| `--http <url>` | a service at this url; takes neither `--env` nor `--dir` |
+| `--http <url>` | a service at this url; takes neither `-e` nor `--dir` |
 | `-s <scope>` | which settings file [asks for the server](#asking-for-one-from-a-checkout) once you approve it: `local`, the default, `project` or `user`; it may come before the alias |
 
-### A server gets only the variables you name
+### A server gets only the variables you give it
 
-A server starts with an empty environment. `--env WEATHER_TOKEN` names one variable to hand it, and
-its value is read from your own environment when the server starts. A program given by name rather
-than as a path, such as `npx`, is found through `PATH`, so `add` names `PATH` for it, and you see it
-at the question below.
+A server starts with an empty environment. `-e WEATHER_TOKEN=...` stores a value for it, the way a
+server's own install line for Claude Code gives one, and `-e WEATHER_TOKEN` alone names a variable
+whose value is read from your own environment when the server starts. A program given by name
+rather than as a path, such as `npx`, is found through `PATH`, so `add` names `PATH` for it unless
+you stored one, and you see it at the question below.
 
-**A value is never written down.** `--env WEATHER_TOKEN=...` is refused, and so is an `env` block in
-the file, and the refusal names the variable without repeating what it was set to:
+**A stored value is kept in `~/.bravebot/mcp.json`**, which only you can read, and never in a
+settings file. It is shown by its name and never as itself, by `add`, `get`, `list` and `doctor`
+alike, and one that names a file is shown as the file it may read:
 
 ```
-BB1002: weather was not declared: WEATHER_TOKEN is given a value: a declaration names the variable, and its value is read from your environment
+            variables: BRAVE_API_KEY_FILE (stored), PATH
+            may read: /Users/you/keys/brave-api-key
 ```
 
-A url carrying a user or a password is refused for the same reason.
+A value that names a file, such as brave-search's `BRAVE_API_KEY_FILE`, is one the server may read,
+and so is an argument that does: `add` records that one file, shows it as `may read`, and the server
+is let read it and nothing beside it. A directory, and anything in `~/.bravebot`, is never recorded.
+
+A word `-e` cannot read is refused by its place and not repeated, since it may be a key:
+`-e WEATHER_TOKEN sk-live` stores nothing, and the refusal says a name alone is read from your
+environment only as the one word its `-e` takes. So is an `-e` before the alias, a `NAME=value`
+typed where the alias, `-s` or `--dir` expects its word, and a name given twice. A url carrying a
+user or a password is refused as well.
 
 ## Approving one
 
@@ -272,8 +284,12 @@ server's own words. No built-in tool can be shadowed by one, since no built-in's
 `mcp__`.
 
 A [delegate](../reference/tools.md#spawn_agent) is offered the same tools where it is a `worker`
-whose [definition](agents.md) names no tools, and is put no list of its own. A `reader` or a
-`checker` is offered none of them, and nor is a delegate of a turn that holds none.
+whose [definition](agents.md) names no tools, and is put no list of its own. A definition may name
+the servers its `worker` calls with an `mcpServers` line, and its delegate is then offered those
+servers' tools alone. A `reader` or a `checker` is offered none of them, and nor is a delegate of a
+turn that holds none. A turn you address to a definition with
+[`/agent`](../reference/commands.md#agent-name-task) asks you about the lists of only the servers it
+calls.
 
 ## Each call
 
@@ -374,7 +390,9 @@ the list, and records nothing: a later run without it asks each question again.
 A program server is started confined, and on a platform with no confinement for one, which is
 Windows today, it is not started. It gets:
 
-- the variables you named with `--env`, read from your environment as it starts, and no others;
+- the values you stored with `-e NAME=value`, and the variables you named with `-e NAME`, read from
+  your environment as it starts, and no others;
+- read access to each file `add` showed as one it `may read`, and nothing beside it;
 - a home directory of its own, which `HOME` names unless you named `HOME` yourself, to read and
   write: `~/.bravebot/mcp-home/<digest>`, one for each declaration, where a runner such as `npx`
   keeps its cache between sessions;
@@ -389,11 +407,32 @@ Windows today, it is not started. It gets:
 
 It does not get your home directory, other than a `PATH` entry inside it such as `~/.local/bin` and
 the installation its program came from, and it does not get the workspace unless `--dir` names it. A program named without a path is looked for
-only in the `PATH` you named: without `--env PATH` it is not found, and the session says to name it
+only in the `PATH` you gave: without `-e PATH` it is not found, and the session says to name it
 or give the program's full path.
 
-A service server is reached through the same network gate as everything else the session sends, and
-a redirect off the host and port you declared is refused.
+A service server is reached through the same network gate as everything else the session sends. A
+redirect off the host and port you declared is not followed. Nothing is sent there, and you are
+asked whether the server moved:
+
+```
+  docs is declared at https://docs.example.com/mcp
+  and its reply points to https://mcp.example.net/mcp
+  reaching mcp.example.net
+  Nothing was sent there. A yes declares the server at that address and sends it what was being
+  sent, and every later request to the server goes there too, in this session and the next. Say
+  no unless you know the server moved.
+
+  declare this server where its reply points? [y/N]
+```
+
+A redirect met during a turn is asked about there. One met as the session starts the server is
+asked at the terminal before the session opens. A yes makes the handshake at the new address and
+only then rewrites the entry in `~/.bravebot/mcp.json` and approves it. Its list of tools is put to
+you again when a session next starts it, since the list you said yes to was read at the old
+address. A yes does not move it to an address a declaration cannot hold, or to a host your
+organization's settings refuse. A no changes nothing: the call is refused, or the server is not
+started. A one-shot run, a session with nobody at the terminal, and
+`--dangerously-skip-permissions` refuse the redirect without asking.
 
 ## Seeing what a session started
 
