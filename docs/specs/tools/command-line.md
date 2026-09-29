@@ -321,7 +321,16 @@ state the first half left behind.
 A stage that does not run because a branch was not taken is not an effect and needs no separate
 answer. It was still endorsed, and that is the conservative direction.
 
+**So a line cannot run a program an earlier step in it creates.** Every step's program is found
+when the line is compiled, before anything runs, so `python3 -m venv v && v/bin/python x.py` is
+refused for `v/bin/python`. The refusal for a program named by a path says nothing is runnable at
+that path and that the step creating it has to run on its own first. It does not mention `$PATH`,
+which a path does not consult. Whether the name is a path is read from the planner's own word, which
+is trusted.
+
 `verified-by: bravebot_agent::cmdline::every_branch_that_could_run_is_in_the_plan`
+`verified-by: bravebot_agent::cmdline::a_program_named_by_a_path_that_is_not_there_says_to_create_it_first`
+`verified-by: bravebot_agent::cmdline::a_program_that_cannot_be_found_is_refused`
 `verified-by: bravebot_core::command::a_plan_lists_every_step_that_could_run`
 `verified-by: bravebot_core::policy::an_endorsement_does_not_authorise_a_differently_joined_plan`
 `verified-by: bravebot_agent::exec::the_right_side_of_and_runs_only_when_the_left_succeeded`

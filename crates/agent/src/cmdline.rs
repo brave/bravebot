@@ -243,6 +243,8 @@ pub enum Reason {
     NotOneProgram,
     /// A program name nothing on `$PATH` matches.
     NotFound,
+    /// A program named by a path where nothing runnable is.
+    NotAtPath,
     /// A redirection target that is not exactly one file.
     NotOnePath,
     /// An invocation that would want a terminal, with what to do instead.
@@ -314,6 +316,9 @@ impl fmt::Display for Reason {
             ),
             Self::NotFound => f.write_str(
                 "is not a program that could be found. `$PATH` decides what a bare name means, and nothing on it matches",
+            ),
+            Self::NotAtPath => f.write_str(
+                "is not a program that could be found: nothing runnable is at that path. Every program in a line is found before any step runs, so if an earlier step in this line creates it, run that step on its own first",
             ),
             Self::NotOnePath => f.write_str(
                 "a redirection has to name exactly one file. A destination worked out from what is on disk is a destination that moves when the tree does",
@@ -1876,11 +1881,17 @@ impl Compiler<'_, '_> {
         // happens to have installed.
         (self.rules)(program, &args).map_err(Stopped::Rule)?;
 
+        // Which refusal is decided by the planner's own word, which is trusted: a path is looked
+        // for where it points, so what `$PATH` holds says nothing about it.
         let resolved =
             crate::programs::resolve(program, self.directory).ok_or_else(|| Refused {
                 span: word.span,
                 text: program.clone(),
-                reason: Reason::NotFound,
+                reason: if crate::programs::has_separator(program) {
+                    Reason::NotAtPath
+                } else {
+                    Reason::NotFound
+                },
             })?;
 
         let mut routes = Vec::new();
@@ -2904,10 +2915,30 @@ mod tests {
     #[test]
     fn a_program_that_cannot_be_found_is_refused() {
         let tree = Tree::new("missing");
-        assert_eq!(
-            compile_refused("bravebot-no-such-program-anywhere x", &tree.root).reason,
-            Reason::NotFound
+        let refused = compile_refused("bravebot-no-such-program-anywhere x", &tree.root);
+        assert_eq!(refused.reason, Reason::NotFound);
+        assert!(refused.to_string().contains("`$PATH`"), "{refused}");
+    }
+
+    /// A line that makes a program and runs it, such as a venv created and its interpreter run,
+    /// is refused because every program in it is found before any step runs (CMDLINE-6). The
+    /// refusal used to explain `$PATH`, which a path never consults, and said nothing about what
+    /// to do. It says to run the step that creates the program on its own first.
+    #[test]
+    fn a_program_named_by_a_path_that_is_not_there_says_to_create_it_first() {
+        let tree = Tree::new("missing-at-path");
+        tree.executable("make-venv.sh");
+        let refused = compile_refused("./make-venv.sh && venv/bin/python render.py", &tree.root);
+        assert_eq!(refused.text, "venv/bin/python");
+        assert_eq!(refused.reason, Reason::NotAtPath);
+        let said = refused.to_string();
+        assert!(
+            said.contains(
+                "if an earlier step in this line creates it, run that step on its own first"
+            ),
+            "{said}"
         );
+        assert!(!said.contains("$PATH"), "{said}");
     }
 
     /// A rule is a decision about the line, so it answers before `$PATH` is asked what the name

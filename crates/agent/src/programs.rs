@@ -53,7 +53,7 @@ pub fn resolve(program: &str, working: &Path) -> Option<PathBuf> {
 }
 
 /// Whether the name is a path rather than something to look up.
-fn has_separator(program: &str) -> bool {
+pub(crate) fn has_separator(program: &str) -> bool {
     program.contains('/') || (cfg!(windows) && program.contains('\\'))
 }
 
