@@ -315,8 +315,9 @@ impl TrustStore {
 /// name has no such spelling rather than handing over a name that would be read under the working
 /// directory (TRUST-18).
 ///
-/// Permission patterns keep the two apart as namespaces of their own, which is a rule about what
-/// a person wrote rather than about what this map holds (PERM-3).
+/// A permission rule keys the path it is asked about the same way before matching it, and its
+/// patterns keep the two apart as namespaces of their own, which is a rule about what a person
+/// wrote rather than about what this map holds (PERM-3).
 pub fn is_absolute_key(key: &str) -> bool {
     key.starts_with('/')
 }

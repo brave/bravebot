@@ -455,11 +455,14 @@ impl Permissions {
 
     /// What the rules say about reading or editing `path`.
     ///
-    /// Spelled from `/` before anything is matched against it, which is how the patterns were read
-    /// (PERM-3). Here rather than at each gate, so a path reaches the rules one way whichever gate
-    /// it came through and a gate added later cannot be the one that forgot.
+    /// Spelled from `/` before anything is matched against it, which is how the patterns were read,
+    /// and a name rooted at a drive letter is keyed the way the trust map keys it, so it reads as
+    /// the full path it is (PERM-3), on its drive whichever case the letter was written in. Here
+    /// rather than at each gate, so a path reaches the rules one way whichever gate it came through
+    /// and a gate added later cannot be the one that forgot.
     pub fn for_path(&self, subject: Subject, path: &str) -> Decision {
-        let path = crate::spelling::to_slash(path, self.backslash_separates);
+        let keyed = crate::spelling::to_key(path, self.backslash_separates);
+        let path = drive_in_upper_case(&keyed, self.backslash_separates);
         self.decide(|rule, restricting| {
             rule.subject == subject && rule.covers_path(&path, restricting)
         })
@@ -570,7 +573,8 @@ fn tool_pattern(specifier: &str) -> Option<Pattern> {
 ///
 /// The four shapes Claude Code has, which differ only in where they start from:
 /// `//x` the filesystem root, `~/x` the home directory, `/x` the directory the settings file sits
-/// in, and `x` or `./x` the workspace.
+/// in, and `x` or `./x` the workspace. Where a backslash separates there is a fifth, `D:\x`, a full
+/// path spelled the way the host spells one.
 ///
 /// Spelled from `/` first, on the same terms as the path it will be matched against: somebody
 /// writing a rule on a host that separates with a backslash writes the separator their own shell
@@ -581,25 +585,55 @@ fn tool_pattern(specifier: &str) -> Option<Pattern> {
 ///
 /// A pattern is stored folded where the filesystem folds case, since the path arrives folded at
 /// match time and both sides have to be in the one spelling.
+///
+/// A name rooted at a drive letter is keyed the way [`Permissions::for_path`] keys the path, both
+/// as the directory a `~/` or `/` pattern is anchored at and as a specifier written without `//`,
+/// since the host spells a full path that way and the path it names reads as one.
 fn path_pattern(specifier: &str, anchors: &Anchors) -> Option<Pattern> {
-    let specifier = &*crate::spelling::to_slash(specifier, anchors.backslash_separates);
-    if let Some(rest) = specifier.strip_prefix("//") {
-        return Some(Pattern::Absolute(PathPattern::rooted(&fold(rest))));
+    use crate::spelling::{to_key, to_slash};
+    let backslash_separates = anchors.backslash_separates;
+    let rooted = |key: &str| {
+        let key = drive_in_upper_case(key, backslash_separates);
+        Some(Pattern::Absolute(PathPattern::rooted(&fold(&key))))
+    };
+    let specifier = &*to_slash(specifier, backslash_separates);
+    if specifier.starts_with("//") {
+        return rooted(&specifier[1..]);
     }
     if let Some(rest) = specifier.strip_prefix("~/") {
-        let home = anchors.home.as_deref()?;
-        return Some(Pattern::Absolute(PathPattern::rooted(&fold(&join(
-            home, rest,
-        )))));
+        let home = to_key(anchors.home.as_deref()?, backslash_separates);
+        return rooted(&join(&home, rest));
     }
     if let Some(rest) = specifier.strip_prefix('/') {
-        let base = anchors.settings_dir.as_deref()?;
-        return Some(Pattern::Absolute(PathPattern::rooted(&fold(&join(
-            base, rest,
-        )))));
+        let base = to_key(anchors.settings_dir.as_deref()?, backslash_separates);
+        return rooted(&join(&base, rest));
+    }
+    let keyed = to_key(specifier, backslash_separates);
+    if is_absolute_key(&keyed) {
+        return rooted(&keyed);
     }
     let rest = specifier.strip_prefix("./").unwrap_or(specifier);
     Some(Pattern::Relative(PathPattern::relative(&fold(rest))))
+}
+
+/// `key` with the drive letter it is rooted at in upper case, where a backslash separates.
+///
+/// That host never tells `d:` from `D:`, whatever it does with the rest of a name, so a rule and a
+/// path that differ only there are about one drive. Where a slash is the only separator `/d:` is a
+/// directory like any other, and its name is kept as written.
+fn drive_in_upper_case(key: &str, backslash_separates: bool) -> std::borrow::Cow<'_, str> {
+    let bytes = key.as_bytes();
+    let rooted_at_a_lower_case_drive = backslash_separates
+        && bytes.first() == Some(&b'/')
+        && bytes.get(1).is_some_and(u8::is_ascii_lowercase)
+        && bytes.get(2) == Some(&b':')
+        && matches!(bytes.get(3), None | Some(b'/'));
+    if !rooted_at_a_lower_case_drive {
+        return std::borrow::Cow::Borrowed(key);
+    }
+    let mut folded = key.to_string();
+    folded[1..2].make_ascii_uppercase();
+    std::borrow::Cow::Owned(folded)
 }
 
 /// Join two path pieces with a single slash, whatever slashes they came with.
@@ -1503,24 +1537,154 @@ mod tests {
         }
     }
 
-    /// A path carrying a root of its own stays one opaque name. A root here is a leading slash, a
-    /// drive letter is not one, and a name cut into segments while still reading as relative would
-    /// be matched against the patterns written about the workspace: a rule anchored at the project
-    /// would then grant a file that is not in the project, which is the direction that fails open.
+    /// A path carrying a root of its own never reads as a name below the workspace, and a
+    /// drive-letter name reads as the full path it is. Cut into segments while still reading as
+    /// relative, it would be matched against the patterns written about the workspace: a rule
+    /// anchored at the project would then grant a file that is not in the project, which is the
+    /// direction that fails open.
     #[test]
     fn a_workspace_rule_does_not_reach_a_path_carrying_a_root_of_its_own() {
-        let permissions =
-            rules_where_a_backslash_separates(&[], &[], &["Read(.env)", "Read(Desktop/**)"]);
+        let permissions = rules_where_a_backslash_separates(
+            &[],
+            &[],
+            &["Read(.env)", "Read(Desktop/**)", "Edit(*.md)"],
+        );
 
+        for named in [
+            "C:\\Users\\someone\\Desktop\\.env",
+            "D:\\added\\.env",
+            "D:/added/.env",
+        ] {
+            assert_eq!(
+                permissions.for_path(Subject::Read, named),
+                Decision::Unmatched,
+                "a rule anchored at the workspace granted '{named}', which is outside it"
+            );
+        }
         assert_eq!(
-            permissions.for_path(Subject::Read, "C:\\Users\\someone\\Desktop\\.env"),
+            permissions.for_path(Subject::Edit, "D:\\added\\a.md"),
             Decision::Unmatched,
-            "a rule anchored at the workspace granted a file outside it"
+            "a rule about the workspace's names granted a file on another drive"
         );
         assert_eq!(
             permissions.for_path(Subject::Read, "Desktop\\.env"),
             Decision::Ruled(Ruling::Allow),
             "a name below the workspace root stopped being respelled"
+        );
+    }
+
+    /// A rule about a full path on a drive has to meet that file however the host spells it, or a
+    /// `deny` written about a directory outside the project refuses nothing. The spelling a person
+    /// types, the one with forward slashes and the one the platform canonicalises to are one file.
+    #[test]
+    fn a_rule_about_a_full_path_on_a_drive_covers_the_file_it_names() {
+        let permissions = rules_where_a_backslash_separates(&["Read(//D:/added/**)"], &[], &[]);
+
+        for named in [
+            "D:\\added\\secret",
+            "D:/added/secret",
+            "/D:/added/secret",
+            "\\\\?\\D:\\added\\secret",
+        ] {
+            assert_eq!(
+                permissions.for_path(Subject::Read, named),
+                Decision::Ruled(Ruling::Deny),
+                "a deny rule about D:/added did not reach '{named}'"
+            );
+        }
+        assert_eq!(
+            permissions.for_path(Subject::Read, "D:\\other\\secret"),
+            Decision::Unmatched,
+            "a rule about one directory reached another on the same drive"
+        );
+    }
+
+    /// Where there are drive letters the home directory is on one, so a `~/` rule is about a full
+    /// path on that drive, and so is a `/` rule about the settings directory below it. Anchored at
+    /// a directory spelled any other way, the rule most people write first, the one fencing their
+    /// keys, refuses nothing.
+    #[test]
+    fn a_rule_anchored_at_a_home_on_a_drive_covers_the_file_it_names() {
+        let anchors = Anchors {
+            home: Some("C:\\Users\\someone".to_string()),
+            settings_dir: Some("C:\\Users\\someone/.bravebot".to_string()),
+            backslash_separates: true,
+        };
+        let permissions = read_with(
+            &anchors,
+            &["Read(~/.ssh/**)", "Read(/secrets/**)"],
+            &[],
+            &[],
+        );
+
+        for named in [
+            "C:\\Users\\someone\\.ssh\\id_ed25519",
+            "C:/Users/someone/.ssh/id_ed25519",
+            "/C:/Users/someone/.ssh/id_ed25519",
+            "C:\\Users\\someone\\.bravebot\\secrets\\key",
+        ] {
+            assert_eq!(
+                permissions.for_path(Subject::Read, named),
+                Decision::Ruled(Ruling::Deny),
+                "a rule anchored at the home or settings directory did not reach '{named}'"
+            );
+        }
+    }
+
+    /// A person on a host with drive letters writes a full path the way their shell spells one,
+    /// without the `//`. Read as a pattern about the workspace such a rule meets no file on the
+    /// drive, so a `deny` written that way would refuse nothing.
+    #[test]
+    fn a_rule_written_from_a_drive_letter_is_about_the_full_path_it_names() {
+        let permissions = rules_where_a_backslash_separates(
+            &["Read(D:\\added\\**)", "Read(E:/kept/**)"],
+            &[],
+            &[],
+        );
+
+        for named in [
+            "D:\\added\\secret",
+            "D:/added/secret",
+            "E:\\kept\\secret",
+            "/E:/kept/secret",
+        ] {
+            assert_eq!(
+                permissions.for_path(Subject::Read, named),
+                Decision::Ruled(Ruling::Deny),
+                "a deny rule written from a drive letter did not reach '{named}'"
+            );
+        }
+    }
+
+    /// A host with drive letters never tells `d:` from `D:`, so a rule written with one case has to
+    /// meet a path named with the other, in either direction, or a `deny` refuses a file under one
+    /// spelling and hands it over under the other. A host where a slash is the only separator has
+    /// no drive letters, and there `/d:` and `/D:` are two directories.
+    #[test]
+    fn a_drive_letter_names_one_drive_whichever_case_it_is_written_in() {
+        let permissions = rules_where_a_backslash_separates(
+            &["Read(//D:/added/**)", "Read(//e:/kept/**)"],
+            &[],
+            &[],
+        );
+        for named in [
+            "d:\\added\\secret",
+            "d:/added/secret",
+            "E:\\kept\\secret",
+            "/E:/kept/secret",
+        ] {
+            assert_eq!(
+                permissions.for_path(Subject::Read, named),
+                Decision::Ruled(Ruling::Deny),
+                "a deny rule about a drive did not reach '{named}', the same drive in another case"
+            );
+        }
+
+        let slash_only = rules(&["Read(//D:/added/**)"], &[], &[]);
+        assert_eq!(
+            slash_only.for_path(Subject::Read, "/d:/added/secret"),
+            Decision::Unmatched,
+            "a directory named d: was read as D: where a slash is the only separator"
         );
     }
 

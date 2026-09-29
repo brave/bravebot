@@ -22,9 +22,9 @@ use std::borrow::Cow;
 /// ([`crate::trust::is_absolute_key`]), a drive letter is not one, and a name respelled into
 /// several segments while still reading as relative would be matched against the rules written
 /// about the workspace, so a pattern anchored at the project would reach a file outside it. Leaving
-/// it whole keeps that name exactly as opaque as it was. A permission pattern keeps a drive letter
-/// as a namespace of its own that way (PERM-3), and a trust key is spelled by [`to_key`] instead,
-/// which gives it the root the map reads it under (TRUST-18).
+/// it whole keeps that name exactly as opaque as it was. A path a permission rule is asked about
+/// and a trust key are spelled by [`to_key`] instead, which gives a drive-letter name the root
+/// both read it under (PERM-3, TRUST-18).
 ///
 /// Borrowed where there is nothing to change, which is every call on a host that separates with a
 /// slash alone and most calls on one that does not.
@@ -35,13 +35,16 @@ pub fn to_slash(path: &str, backslash_separates: bool) -> Cow<'_, str> {
     }
 }
 
-/// `path` spelled the way the trust map holds a key, for a name that may carry a root.
+/// `path` spelled the way the trust map holds a key and a permission rule reads a path, for a name
+/// that may carry a root.
 ///
 /// Where a backslash separates, a name rooted at a drive letter is spelled from `/` with the drive
 /// as its first segment, so `C:\work` and `\\?\C:\work`, the form the platform canonicalises it
 /// to, are both `/C:/work`. The map reads a name without a leading `/` under the working directory
 /// ([`crate::trust::is_absolute_key`]), so a drive-letter name left as it arrived is decided by the
-/// rule the answer about the project wrote, wherever on the disk it points (TRUST-18).
+/// rule the answer about the project wrote, wherever on the disk it points (TRUST-18). A
+/// permission rule reads the same line, so left as it arrived such a name is out of reach of a
+/// rule written about a full path (PERM-3).
 ///
 /// Every other name is spelled as [`to_slash`] spells it, which leaves a share, a device path and a
 /// name starting at `\` whole, since none of those has a `/`-spelling. `C:work` is not rooted
