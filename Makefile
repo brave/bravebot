@@ -18,7 +18,7 @@ RELEASE_REMOTE = $(or $(shell git config bravebot.releaseRemote),origin)
 # it. Docker goes by the digest and ignores the tag beside it, so check-msrv refuses to run while
 # the two disagree rather than building against a minimum nobody declared.
 MSRV = $(shell sed -nE 's/^rust-version[[:space:]]*=[[:space:]]*"([0-9.]+)".*/\1/p' Cargo.toml | head -n 1)
-MSRV_IMAGE = rust:1.88-slim@sha256:38bc5a86d998772d4aec2348656ed21438d20fcdce2795b56ca434cf21430d89
+MSRV_IMAGE = rust:1.90-slim@sha256:7fa728f3678acf5980d5db70960cf8491aff9411976789086676bdf0c19db39e
 # The stable the check targets run, and the image the cross-build is built on, which `make strip`
 # runs a second time over the finished assets.
 STABLE_IMAGE = rust:1.98-slim@sha256:f47a8de237dcbb0b0ce1099901e60a89728e3d51f24e664b40e947171538ade7
