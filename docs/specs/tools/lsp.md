@@ -272,6 +272,12 @@ dependency sources, runs the build tooling of its ecosystem, and for Rust that m
 proc macros out of `Cargo.lock` execute. That is code from the dependency tree running with the
 user's access. It is the same thing `cargo test` does and the same thing `run` does after
 [RUN-7](run.md#RUN-7), and it must be asked for in those terms rather than described as a lookup.
+TypeScript and Python are asked about in the same terms. Given no `tsserver.path`,
+typescript-language-server runs the `tsserver.js` in the nearest `typescript/lib` under
+`node_modules`, `.yarn/sdks`, `.pnpm/sdks` or `.vscode/pnpify`, looking in the workspace and then
+each directory above it, before its own copy, so what starts is the project's TypeScript. pyright
+runs the `python3` on `PATH` without `-S`, so the `.pth` files of that interpreter's environment run
+when it starts, and with the project's virtual environment active those come from its dependencies.
 
 **What does not change, and this is the important half.** The safety property here was never the
 sandbox. It is the label on what comes back: [RUN-4](run.md#RUN-4)'s reasoning applies unchanged, so
@@ -291,6 +297,8 @@ assigns. The server's sentence is not carried at all.
 `verified-by: bravebot_lsp::server::a_server_is_not_asked_about_twice_in_a_session`
 `verified-by: bravebot_agent::lsp::a_server_approved_in_one_turn_answers_the_next`
 `verified-by: bravebot_lsp::server::a_server_failure_reports_a_code_and_not_the_servers_words`
+`verified-by: bravebot_lsp::server::the_prompt_says_which_servers_run_build_tooling`
+`verified-by: bravebot_lsp::server::typescript_and_python_servers_are_put_to_a_person_as_running_the_projects_code`
 
 <a id="LSP-6"></a>
 ### LSP-6: no server means no answer, and says which
@@ -503,9 +511,10 @@ incognito has already accepted.
 
 - **A server runs the dependency tree's code, and that is the price of the tool working at all.**
   [LSP-5](#LSP-5) grants a server the user's own access, so for Rust `build.rs` and proc macros out of
-  `Cargo.lock` execute. The alternative is not a safer tool but no tool, since a server whose index
-  never settles answers only that it is unsure. What bounds this is that the user is asked in those
-  words, and that nothing about the label on the output depends on their answer.
+  `Cargo.lock` execute, for TypeScript the `tsserver.js` the workspace carries, and for Python the
+  `.pth` files of the environment on `PATH`. The alternative is not a safer tool but no tool, since a
+  server whose index never settles answers only that it is unsure. What bounds this is that the user
+  is asked in those words, and that nothing about the label on the output depends on their answer.
 
 - **An index survives between sessions, and nothing prunes it.** [LSP-10](#LSP-10) keeps a cache per
   workspace under `~/.bravebot`, which is what makes the second session fast. It is not small: this

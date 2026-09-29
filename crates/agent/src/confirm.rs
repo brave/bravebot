@@ -515,12 +515,12 @@ pub struct ServerRequest {
     pub program: String,
     /// The workspace it will index.
     pub workspace: String,
-    /// Whether starting it runs the ecosystem's build tooling, and so code out of the dependency
-    /// tree.
+    /// Whether starting it runs code the project or its dependencies carry.
     ///
     /// Told to the person rather than left for them to infer: for Rust this means `build.rs` and proc
-    /// macros execute, which is the part of LSP-5 that has to be said out loud rather than left
-    /// inside the phrase "with your own access".
+    /// macros execute, for TypeScript the `tsserver.js` the workspace carries, and for Python the
+    /// `.pth` files of the environment on `PATH`. That is the part of LSP-5 that has to be said out
+    /// loud rather than left inside the phrase "with your own access".
     pub runs_build_tooling: bool,
 }
 

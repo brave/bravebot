@@ -1240,8 +1240,8 @@ server-title = start a language server?
 server-verb = Start
 server-workspace = to index { $workspace }
 server-build-tooling =
-    this runs the build tooling of its ecosystem, so code from your dependencies runs with
-    your own access, the way cargo test does. it stays running for this session.
+    this runs code from your project and its dependencies with your own access, the way
+    building or testing the project does. it stays running for this session.
 server-reads-only =
     it reads the project and stays running for this session. nothing is written to your
     project.
